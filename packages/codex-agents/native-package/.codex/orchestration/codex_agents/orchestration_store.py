@@ -93,7 +93,7 @@ class OrchestrationOwner:
                 return None
             raise HistoryError('history_orchestration_unavailable')
         if row['scope_digest'] != self._scope_digest(scope):
-            raise HistoryError('history_not_authorized')
+            raise HistoryError('history_orchestration_other_scope')  # R8a: not another host class
         if not valid_integer(row['sequence'], minimum=1, maximum=MAX_JOURNAL_EVENTS):
             raise HistoryError('history_incompatible')
         latest = self._db.execute('SELECT sequence FROM project_orchestration_checkpoints '

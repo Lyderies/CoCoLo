@@ -31,6 +31,32 @@ _HOST_FIELDS = ('project_id', 'handle_digest', 'run_id', 'assignment_digest', 't
 
 BRIDGE_PROVIDERS = frozenset({'codex', 'claude'})
 
+# OP-1: a project's open requests in flight, pending and not past their own deadline (a pending request past it
+# can never commit: _fresh_admission refuses it). Finished, committed and expired requests never count, and the
+# partial index account_open_requests_in_flight keeps the work to the requests in flight. Parameters: the
+# project, the time and the limit; ')' closes it. learning-status counts with the same rule (OP-3).
+IN_FLIGHT_OPENS = ("SELECT COUNT(*) FROM (SELECT 1 FROM account_open_requests WHERE project_id=? "
+                   "AND state='pending' AND observation_deadline_at_ms>? LIMIT ?")
+# OP-2 (B0 revision 3 item 5): a finished open, purged with its binding and receipt. Only an open that opened a
+# run, whose binding the register has released (that released row stays, and is how a replay is told apart),
+# with no run slot held, no unreleased capacity and no live binding, past its retention. Bounded; the partial
+# index account_open_requests_finished reads only committed requests old enough.
+FINISHED_OPENS = (
+    "SELECT q.project_id,q.request_key,q.handle_digest FROM account_open_requests q "
+    "WHERE q.state='committed' AND q.opened_at_ms<:opened AND q.observation_deadline_at_ms<:deadline "
+    "AND EXISTS(SELECT 1 FROM account_open_receipts c WHERE c.project_id=q.project_id "
+    "AND c.handle_digest=q.handle_digest AND c.request_key=q.request_key AND c.run_id IS NOT NULL) "
+    "AND EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=q.project_id AND r.kind='binding' "
+    "AND r.identity=q.handle_digest AND r.state='released') "
+    "AND NOT EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=q.project_id AND r.kind='run_slot' "
+    "AND r.identity=q.handle_digest AND r.state<>'released') "
+    "AND NOT EXISTS(SELECT 1 FROM active_run_capacity a WHERE a.project_id=q.project_id "
+    "AND a.handle_digest=q.handle_digest AND a.released_at_ms IS NULL) "
+    "AND NOT EXISTS(SELECT 1 FROM host_run_bindings h WHERE h.project_id=q.project_id "
+    "AND h.handle_digest=q.handle_digest AND (h.history_owner<>'project' "
+    "OR (h.binding_state='pending' AND h.expires_at_ms>:now))) "
+    "LIMIT :limit")
+
 
 @dataclass(frozen=True, repr=False)
 class OpenExecution:
@@ -77,11 +103,15 @@ class OriginalOpenRequest:
     journal_seal: str | None = None
 
 
+# S1-U10: the stored open journal, receipt and admission checks below answer open_state_inconsistent;
+# a misuse or wiring fault open_failed; a write already in progress open_account_busy.
+
+
 def _owner(ledger):
     origin = getattr(ledger, '_connection_origin', None)
     if (type(origin) is not tuple or len(origin) != 2 or origin[0] != os.getpid()
             or origin[1] is not threading.current_thread()):
-        raise OpenError('open_unavailable')
+        raise OpenError('open_failed')
     ledger._connection._read_owner()
 
 
@@ -193,15 +223,16 @@ def request_journal(ledger, request):
     if row is None:
         return None
     data = dict(row)
-    if (any(data[n] != getattr(request, n) for n in ('project_id', 'request_key', 'original_key', 'parameters_digest', 'handle_digest', 'run_id'))
-            or type(data['state']) is not str or data['state'] not in {'pending', 'committed'}
+    if any(data[n] != getattr(request, n) for n in ('project_id', 'request_key', 'original_key', 'parameters_digest', 'handle_digest', 'run_id')):
+        raise OpenError('open_conflict')  # the same request identity with different inputs
+    if (type(data['state']) is not str or data['state'] not in {'pending', 'committed'}
             or not valid_integer(data['opened_at_ms'])
             or not valid_integer(data['observation_deadline_at_ms'], minimum=data['opened_at_ms']+1)
             or (data['receipt_digest'] is None) != (data['state'] == 'pending')
             or (data['receipt_digest'] is not None and not matches(data['receipt_digest'], _DIGEST))
             or not matches(data['request_seal'], _DIGEST)
             or data['request_seal'] != _journal_seal(ledger.state.digest_key(), data)):
-        raise OpenError('open_conflict')
+        raise OpenError('open_state_inconsistent')  # S1-U10e: the stored journal does not verify
     return data
 
 
@@ -211,18 +242,19 @@ def _receipt(ledger, request, journal):
         (request.project_id, request.handle_digest)).fetchone()
     if header is None:
         if journal is not None and journal['state'] == 'committed':
-            raise OpenError('open_unavailable')
+            raise OpenError('open_state_inconsistent')
         return None
     if journal is None or journal['state'] != 'committed':
-        raise OpenError('open_unavailable')
-    if (any(header[n] != getattr(request, n) for n in ('project_id', 'handle_digest', 'request_key', 'scope_digest', 'parameters_digest'))
-            or not valid_integer(header['content_bytes'], minimum=1, maximum=MAX_ACCOUNT_OPEN_RECEIPT_BYTES)
-            or not matches(header['content_seal'], _DIGEST) or header['content_seal'] != journal['receipt_digest']):
+        raise OpenError('open_state_inconsistent')
+    if any(header[n] != getattr(request, n) for n in ('project_id', 'handle_digest', 'request_key', 'scope_digest', 'parameters_digest')):
         raise OpenError('open_conflict')
+    if (not valid_integer(header['content_bytes'], minimum=1, maximum=MAX_ACCOUNT_OPEN_RECEIPT_BYTES)
+            or not matches(header['content_seal'], _DIGEST) or header['content_seal'] != journal['receipt_digest']):
+        raise OpenError('open_state_inconsistent')
     raw = bytes(ledger._connection.execute('SELECT content FROM account_open_receipts WHERE project_id=? AND handle_digest=?',
         (request.project_id, request.handle_digest)).fetchone()[0])
     if keyed_digest(ledger.state.digest_key(), _RECEIPT_DOMAIN+raw) != header['content_seal']:
-        raise OpenError('open_conflict')
+        raise OpenError('open_state_inconsistent')
     data = parse_bounded_json(raw, max_bytes=MAX_ACCOUNT_OPEN_RECEIPT_BYTES)
     if (type(data) is not dict or data.keys() != {'schema_version', 'scope_digest', 'parameters_digest', 'original_key',
             'view', 'host', 'launch', 'admission', 'scope', 'orchestration_digest', 'start_event', 'verification_binding'}
@@ -244,7 +276,7 @@ def _receipt(ledger, request, journal):
         if (binding is None or type(data['host']) is not dict or data['host'].keys() != set(_HOST_FIELDS)
                 or canonical_json(dict(binding)) != canonical_json(data['host']) or binding['history_owner'] != 'project'
                 or view['run_id'] != request.run_id or view['observation_deadline_at_ms'] != journal['observation_deadline_at_ms']):
-            raise OpenError('open_unavailable')
+            raise OpenError('open_state_inconsistent')
         if (data['start_event'] != start_metadata(ledger, request, journal['opened_at_ms'])
                 or data['verification_binding'] != verification_metadata(request, journal['opened_at_ms'])):
             raise OpenError('open_conflict')
@@ -259,7 +291,7 @@ def _receipt(ledger, request, journal):
                 or canonical_json(dict(inputs)) != canonical_json(data['launch'])
                 or provenance is None or tuple(provenance) != ('bridge-v1', request.handle_digest, journal['opened_at_ms'])
                 or session is None or session[0] != journal['opened_at_ms']):
-            raise OpenError('open_unavailable')
+            raise OpenError('open_state_inconsistent')
     elif binding is not None or data['host'] is not None or data['launch'] is not None:
         raise OpenError('open_conflict')
     elif data['start_event'] is not None or data['verification_binding'] is not None:
@@ -269,13 +301,45 @@ def _receipt(ledger, request, journal):
             or admission['record_id'] != view['admission_record_id'] or content_digest(admission) != view['admission_content_digest']
             or admission['reason_code'] != view['reason_code'] or admission['run_id'] != view['run_id']
             or (admission['decision'] == 'pass') != (view['state'] == 'opened')):
-        raise OpenError('open_conflict')
+        raise OpenError('open_state_inconsistent')  # the stored receipt and its admission disagree
     stored = ledger._connection.execute('SELECT source,content_digest,content FROM records WHERE project_id=? AND record_id=?',
         (request.project_id, view['admission_record_id'])).fetchone()
     if (stored is None or stored['source'] != 'lifecycle' or stored['content_digest'] != view['admission_content_digest']
             or bytes(stored['content']) != canonical_json(admission)):
-        raise OpenError('open_unavailable')
+        raise OpenError('open_state_inconsistent')
     return view
+
+
+def _purged(ledger, request):
+    """OP-2: this request's open was purged past its retention. Its binding is gone, and the hold register keeps
+    the binding's released row (a tombstone keyed by the handle, which only this request's key derives)."""
+    if ledger._connection.execute('SELECT 1 FROM host_run_bindings WHERE project_id=? AND handle_digest=?',
+                                  (request.project_id, request.handle_digest)).fetchone() is not None:
+        return False
+    return ledger._connection.execute("SELECT 1 FROM run_holds WHERE project_id=? AND kind='binding' AND identity=? "
+                                      "AND state='released'", (request.project_id, request.handle_digest)).fetchone() is not None
+
+
+def purge_finished_opens(ledger, now, limit):
+    """OP-2: remove up to `limit` finished opens past their retention, each request with its receipt and binding
+    in one transaction (B0 revision 3 item 5). The binding's register row stays released, so a replay answers
+    open_expired. An open that opened no run (denied, or never finished) has no such row to tell its replay
+    apart, so it is kept: it counts against nothing (OP-1). Returns how many went. The caller holds the ledger
+    lock outside any transaction."""
+    from .learning_store import HOST_RUN_TTL_MS, OPEN_REQUEST_RETENTION_MS
+    rows = ledger._connection.execute(FINISHED_OPENS, {
+        'opened': now - HOST_RUN_TTL_MS - OPEN_REQUEST_RETENTION_MS, 'deadline': now - OPEN_REQUEST_RETENTION_MS,
+        'now': now, 'limit': limit}).fetchall()
+    if rows:
+        with ledger._account_transaction():
+            for project, key, handle in rows:
+                ledger._connection.execute('DELETE FROM account_open_receipts WHERE project_id=? AND handle_digest=? '
+                                           'AND request_key=?', (project, handle, key))
+                ledger._connection.execute("DELETE FROM account_open_requests WHERE project_id=? AND request_key=? "
+                                           "AND state='committed'", (project, key))
+                ledger._connection.execute("DELETE FROM host_run_bindings WHERE project_id=? AND handle_digest=? "
+                                           "AND history_owner='project'", (project, handle))
+    return len(rows)
 
 
 def current_open_request(ledger, request):
@@ -284,11 +348,13 @@ def current_open_request(ledger, request):
         raise OpenError('open_not_authorized')
     project = ledger._connection.execute('SELECT status FROM projects WHERE project_id=?', (request.project_id,)).fetchone()
     if project is None or project[0] != 'active':
-        raise OpenError('open_unavailable')
+        raise OpenError('open_project_inactive')
     journal = request_journal(ledger, request)
     known = _receipt(ledger, request, journal)
     if known is not None:
         return journal, known
+    if journal is None and _purged(ledger, request):
+        raise OpenError('open_expired')  # OP-2: a purged open never reopens
     # Neither another request ID nor another assignment label can reopen the
     # same original task stage/attempt. A verified reconnaissance promotion has
     # its own routed stage, rather than resetting the original task identity.
@@ -299,14 +365,14 @@ def current_open_request(ledger, request):
     for table in ('host_run_bindings', 'launch_inputs', 'launch_claims', 'active_run_capacity'):
         if ledger._connection.execute('SELECT 1 FROM '+table+' WHERE project_id=? AND handle_digest=? LIMIT 1',
                 (request.project_id, request.handle_digest)).fetchone() is not None:
-            raise OpenError('open_unavailable')
+            raise OpenError('open_state_inconsistent')
     if ledger._connection.execute('SELECT 1 FROM run_provenance WHERE project_id=? AND run_id=? LIMIT 1',
             (request.project_id, request.run_id)).fetchone() is not None:
-        raise OpenError('open_unavailable')
+        raise OpenError('open_state_inconsistent')
     if ledger._connection.execute("SELECT 1 FROM records WHERE project_id=? AND record_type IN "
             "('admission_decision','event','verification_binding') AND json_extract(CAST(content AS TEXT),'$.run_id')=? LIMIT 1",
             (request.project_id, request.run_id)).fetchone() is not None:
-        raise OpenError('open_unavailable')
+        raise OpenError('open_state_inconsistent')
     return journal, None
 
 
@@ -318,9 +384,9 @@ def preflight_open(ledger, project_id, *, runtime_digest, caller_scope, request_
     before_commit()
     _owner(ledger)
     try:
-        with ledger._lock:
+        with ledger._held():
             if ledger._connection.in_transaction:
-                raise OpenError('open_unavailable')
+                raise OpenError('open_failed')  # nesting is a misuse; contention waits elsewhere
             journal, known = ledger._connection.read_call(work_limits, lambda: current_open_request(ledger, captured))
             if known is not None:
                 before_commit()
@@ -336,22 +402,21 @@ def preflight_open(ledger, project_id, *, runtime_digest, caller_scope, request_
                         raise OpenError('open_conflict')
                     return captured, known
                 if journal is None:
-                    positions = ledger._connection.transaction_read_call(work_limits, lambda: ledger._connection.execute(
-                        'SELECT state FROM account_open_requests WHERE project_id=? LIMIT ?',
-                        (project_id, limits.max_retained+1)).fetchall())
-                    if (len(positions) >= limits.max_retained
-                            or sum(row[0] == 'pending' for row in positions) >= limits.max_pending):
-                        raise OpenError('open_busy')
                     opened = ledger._clock_ms()
+                    # OP-1: only requests in flight count; OP-4: a full cap names itself, it is not a busy moment.
+                    in_flight = ledger._connection.transaction_read_call(work_limits, lambda: ledger._connection.execute(
+                        IN_FLIGHT_OPENS + ')', (project_id, opened, limits.max_pending)).fetchone()[0])
+                    if in_flight >= limits.max_pending:
+                        raise OpenError('open_capacity_full')
                     seconds = captured.observation_seconds
                     created = ledger._connection.transaction_read_call(work_limits, lambda: ledger._connection.execute(
                         'SELECT created_at_ms FROM projects WHERE project_id=?', (project_id,)).fetchone())
                     if (created is None or not valid_integer(created[0]) or not valid_integer(opened, minimum=created[0])
                             or not valid_integer(seconds, minimum=1)):
-                        raise OpenError('open_unavailable')
+                        raise OpenError('open_state_inconsistent')
                     deadline = opened+seconds*1000
                     if not valid_integer(deadline, minimum=opened+1):
-                        raise OpenError('open_unavailable')
+                        raise OpenError('open_state_inconsistent')
                     journal = {n: getattr(captured, n) for n in ('project_id', 'request_key', 'original_key', 'parameters_digest', 'handle_digest', 'run_id')}
                     journal.update(state='pending', opened_at_ms=opened, observation_deadline_at_ms=deadline, receipt_digest=None)
                     journal['request_seal'] = _journal_seal(ledger.state.digest_key(), journal)
@@ -364,8 +429,8 @@ def preflight_open(ledger, project_id, *, runtime_digest, caller_scope, request_
                     raise OpenError('open_conflict')
             return replace(captured, opened_at_ms=journal['opened_at_ms'],
                 observation_deadline_at_ms=journal['observation_deadline_at_ms'], journal_seal=journal['request_seal']), None
-    except SQLReadError:
-        raise OpenError('open_busy') from None
+    except SQLReadError as error:  # S1-U10b
+        raise OpenError('open_account_busy' if error.reason_code == 'sql_read_busy' else 'open_failed') from None
 
 
 def _returned_admission(ledger, request, pool, handle):
@@ -373,7 +438,7 @@ def _returned_admission(ledger, request, pool, handle):
     intake = getattr(ledger, '_signature_job_intake', None)
     if (type(pool) is not SignatureWorkerPool or intake is None or pool._intake is not intake
             or getattr(intake, '_signature_worker_pool', None) is not pool or intake._views._ledger is not ledger):
-        raise OpenError('open_unavailable')
+        raise OpenError('open_failed')
     pool._owner()
     result = pool.result(handle)
     inputs = intake.returned_inputs(handle)
@@ -381,7 +446,7 @@ def _returned_admission(ledger, request, pool, handle):
     if (inputs.origin is not ledger._attestation_origin or inputs.project_id != request.project_id
             or snapshot.origin is not intake._views._admission_capture_origin or snapshot.project_id != request.project_id
             or snapshot.provider != _provider(request) or inputs.provider != _provider(request)):
-        raise OpenError('open_unavailable')
+        raise OpenError('open_failed')
     return intake, result, inputs, snapshot, work_limits
 
 
@@ -423,7 +488,7 @@ def finish_open_from_signature_job(ledger, request, pool, handle, *, before_comm
     from .admission_metadata import API_KEY_VARIABLES
     from .claim_admission import PreparedClaimAdmission, admission_signature_rows
     from .account_open_admission import open_admission_inputs, evaluate_original_open
-    from .learning_store import HOST_RUN_TTL_MS, MAX_PENDING_HOST_RUNS
+    from .learning_store import HOST_RUN_TTL_MS, LIVE_BINDINGS, MAX_PENDING_HOST_RUNS
     _owner(ledger)
     if (type(request) is not OriginalOpenRequest or request.origin is not ledger._attestation_origin
             or request.journal_seal is None or not callable(before_commit)):
@@ -432,9 +497,9 @@ def finish_open_from_signature_job(ledger, request, pool, handle, *, before_comm
     before_commit()
     _owner(ledger)
     try:
-        with ledger._lock:
+        with ledger._held():
             if ledger._connection.in_transaction:
-                raise OpenError('open_unavailable')
+                raise OpenError('open_failed')  # nesting is a misuse; contention waits elsewhere
             journal, known = ledger._connection.read_call(work_limits, lambda: current_open_request(ledger, request))
             if known is not None:
                 before_commit()
@@ -464,7 +529,7 @@ def finish_open_from_signature_job(ledger, request, pool, handle, *, before_comm
             if (journal is None or journal['state'] != 'pending' or journal['request_seal'] != request.journal_seal
                     or journal['opened_at_ms'] != request.opened_at_ms
                     or journal['observation_deadline_at_ms'] != request.observation_deadline_at_ms):
-                raise OpenError('open_unavailable')
+                raise OpenError('open_state_inconsistent')
             now = _fresh_admission(ledger, request, intake, snapshot, work_limits)
             # Only presence markers are copied. The daemon environment is an
             # additional refusal guard, never native child/key-free proof.
@@ -473,10 +538,12 @@ def finish_open_from_signature_job(ledger, request, pool, handle, *, before_comm
             passed = decision['decision'] == 'pass'
             if passed:
                 pending = ledger._connection.transaction_read_call(work_limits, lambda: ledger._connection.execute(
-                    "SELECT handle_digest FROM host_run_bindings WHERE project_id=? AND binding_state='pending' LIMIT ?",
-                    (request.project_id, MAX_PENDING_HOST_RUNS)).fetchall())
+                    # O0b B0-1 (narrowed): only live bindings count, pending and not past their expiry, so
+                    # expired ones never fill a project for good (O0b RS-A round 2 G12: from held register rows).
+                    "SELECT h.handle_digest " + LIVE_BINDINGS + " LIMIT ?",
+                    (request.project_id, now, MAX_PENDING_HOST_RUNS)).fetchall())
                 if len(pending) >= MAX_PENDING_HOST_RUNS:
-                    raise OpenError('open_busy')
+                    raise OpenError('open_capacity_full')  # OP-4: live bindings at their limit, not a busy moment
                 expires = request.opened_at_ms+HOST_RUN_TTL_MS
                 if not valid_integer(expires, minimum=now+1):
                     raise OpenError('open_preparation_stale')
@@ -513,7 +580,7 @@ def finish_open_from_signature_job(ledger, request, pool, handle, *, before_comm
                 'start_event': start if passed else None, 'verification_binding': verification if passed else None}
             raw = canonical_json(data)
             if not 0 < len(raw) <= MAX_ACCOUNT_OPEN_RECEIPT_BYTES:
-                raise OpenError('open_unavailable')
+                raise OpenError('open_failed')
             seal = keyed_digest(ledger.state.digest_key(), _RECEIPT_DOMAIN+raw)
             ledger._connection.execute('INSERT INTO account_open_receipts VALUES(?,?,?,?,?,?,?,?)',
                 (request.project_id, request.handle_digest, request.run_id if passed else None, request.request_key,
@@ -534,8 +601,8 @@ def finish_open_from_signature_job(ledger, request, pool, handle, *, before_comm
             if current != final or reply is None:
                 raise OpenError('open_conflict')
         return {**reply, 'known': False}
-    except SQLReadError:
-        raise OpenError('open_busy') from None
+    except SQLReadError as error:  # S1-U10b: a busy database is the account's; anything else failed
+        raise OpenError('open_account_busy' if error.reason_code == 'sql_read_busy' else 'open_failed') from None
 
 
 def managed_open_metadata(ledger, expected):
@@ -571,7 +638,7 @@ def _managed_open_metadata(ledger, expected):
             raise OpenError('open_conflict')
         return None
     if host is None or host['history_owner'] != 'project' or receipt is None or journal is None:
-        raise OpenError('open_unavailable')
+        raise OpenError('open_state_inconsistent')
     journal = dict(journal)
     if (journal['project_id'] != expected.project_id or journal['handle_digest'] != handle
             or journal['state'] != 'committed' or journal['run_id'] != expected.run_id
@@ -579,7 +646,7 @@ def _managed_open_metadata(ledger, expected):
             or any(receipt[n] != journal[n] for n in ('request_key', 'parameters_digest', 'run_id'))
             or not valid_integer(receipt['size'], minimum=1, maximum=MAX_ACCOUNT_OPEN_RECEIPT_BYTES)
             or not matches(receipt['content_seal'], _DIGEST) or receipt['content_seal'] != journal['receipt_digest']):
-        raise OpenError('open_conflict')
+        raise OpenError('open_state_inconsistent')  # the stored journal and receipt do not verify together
     original_handle = 'hrn_'+keyed_digest(key, b'account-original-open-handle-v1\0'+journal['request_key'].encode())[:48]
     if original_handle != expected.run_handle or external_id(key, 'run', original_handle) != expected.run_id:
         raise OpenError('open_conflict')
@@ -635,11 +702,11 @@ def _managed_open_metadata(ledger, expected):
             or event['model'] != inputs['model'] or event['effort'] != inputs['effort']
             or event['record_id'] != external_id(key, 'evt', f"{expected.run_id}\0{event['assignment_id']}\0started")
             or event['task_slice'].split('-')[0] != event['task_family']):
-        raise OpenError('open_conflict')
+        raise OpenError('open_state_inconsistent')  # stored launch facts disagree with the receipt
     stored = ledger._connection.execute('SELECT source,content,content_digest FROM records WHERE project_id=? AND record_id=?',
         (expected.project_id, admission['record_id'])).fetchone()
     if stored is None or tuple(stored) != ('lifecycle', canonical_json(admission), content_digest(admission)):
-        raise OpenError('open_unavailable')
+        raise OpenError('open_state_inconsistent')
     verification = data['verification_binding']
     if verification is not None:
         verification = validate_learning_record(verification)
@@ -658,5 +725,5 @@ def original_orchestration_digest(ledger, expected):
         'ON o.project_id=h.project_id AND o.orchestration_id=h.orchestration_id WHERE h.project_id=? AND h.handle_digest=?',
         (expected.project_id, keyed_digest(ledger.state.digest_key(), expected.run_handle))).fetchone()
     if row is None:
-        raise OpenError('open_unavailable')
+        raise OpenError('open_state_inconsistent')
     return row[0]

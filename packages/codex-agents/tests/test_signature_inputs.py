@@ -380,7 +380,12 @@ class SignatureInputOwnerTests(unittest.TestCase):
         try:
             locker.execute("BEGIN EXCLUSIVE")
             started = time.monotonic()
-            self.assert_capture_error("signature_capture_work_limit", self.capture)
+            # M4b E1a-2 (revision 2, item 3): a busy ledger passes through as busy, answered as
+            # account_busy at the reply, no longer as a work limit (requirement-driven, recorded).
+            from codex_agents.sql_read_budget import SQLReadError
+            with self.assertRaises(SQLReadError) as refused:
+                self.capture()
+            self.assertEqual("sql_read_busy", refused.exception.reason_code)
             elapsed = time.monotonic() - started
         finally:
             locker.rollback()

@@ -36,6 +36,17 @@ class AccountObservationSchemaTests(unittest.TestCase):
         db.execute('DROP TABLE account_billing_probe_origins')
         db.execute('DROP TABLE account_observation_requests')
         db.execute('DROP TABLE account_observation_origins')
+        db.execute('DROP INDEX IF EXISTS records_observed_at')  # O10 AP: 0.4.0's additive index is newer
+        db.execute('DROP INDEX IF EXISTS records_type_project')  # O10 AP5: likewise
+        db.execute('DROP INDEX IF EXISTS host_run_bindings_live')  # O0b B0-1: likewise
+        db.execute('DROP INDEX IF EXISTS billing_probes_in_progress')  # O0b B0-5: likewise
+        db.execute('DROP INDEX IF EXISTS account_open_requests_in_flight')  # OP-1: likewise
+        db.execute('DROP INDEX IF EXISTS account_open_requests_finished')  # OP-2: likewise
+        from codex_agents.run_holds_schema import RUN_HOLDS_OBJECTS  # O0b RS-A: schema 15's register, likewise
+        for kind, name, _ in RUN_HOLDS_OBJECTS:
+            if kind == 'trigger':
+                db.execute(f'DROP TRIGGER IF EXISTS {name}')
+        db.execute('DROP TABLE IF EXISTS run_holds')
         db.execute('PRAGMA user_version=11')
         expected = json.loads((Path(__file__).parent / 'fixtures/learning/schema11-layout.json').read_text())
         actual = {kind + ':' + name: hashlib.sha256(' '.join(sql.replace('"', '').split()).encode()).hexdigest()
@@ -68,14 +79,14 @@ class AccountObservationSchemaTests(unittest.TestCase):
         self.assertEqual(original, hashlib.sha256(self.state.database.read_bytes()).hexdigest())
         upgraded = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = upgraded
-        self.assertEqual(14, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(15, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(upgraded)
         for name in ('account_observation_origins', 'account_observation_requests'):
             self.assertEqual(0, upgraded._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0])
         project = self.fixture.projects[0]
         upgraded.create_sanitized_backup(project, file_id='schema13', expires_at_ms=time.time_ns() // 1_000_000 + 600_000)
         verified = upgraded.verify_sanitized_backup(project, file_id='schema13')
-        self.assertEqual(14, verified['ledger_schema_version'])
+        self.assertEqual(15, verified['ledger_schema_version'])  # O0b RS-A (requirement)
         self.assertEqual(0, verified['counts']['account_observation_requests'])
         self.assertEqual(0, verified['counts']['account_billing_probe_origins'])
         self.assertEqual(0, verified['counts']['account_billing_probe_requests'])
@@ -99,7 +110,7 @@ class AccountObservationSchemaTests(unittest.TestCase):
             Cut(self.state, allow_schema_upgrade=True)
         recovered = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = recovered
-        self.assertEqual(14, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(15, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(recovered)
 
     def twelve(self, *, backups=True):
@@ -129,7 +140,7 @@ class AccountObservationSchemaTests(unittest.TestCase):
         self.assertEqual(original, self.state.database.read_bytes())
         upgraded = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = upgraded
-        self.assertEqual(14, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(15, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(upgraded)
         for name in ('account_billing_probe_origins', 'account_billing_probe_requests'):
             self.assertEqual(0, upgraded._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0])
@@ -160,5 +171,5 @@ class AccountObservationSchemaTests(unittest.TestCase):
                 "'billing_probe_active_machine','billing_probe_active_account')").fetchall())
         recovered = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = recovered
-        self.assertEqual(14, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(15, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(recovered)

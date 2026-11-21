@@ -69,6 +69,76 @@ class ResultPersistenceTests(unittest.TestCase):
         self.addCleanup(self.stop_lane, lane)
         return lane
 
+    def test_R6_7_reporting_writes_have_their_own_room_and_never_take_the_writers(self):
+        release = threading.Event()
+
+        def slow_history():
+            release.wait(10)
+            return self.open_history()
+
+        lane = ResultPersistenceLane(self.fixture.owner, self.fixture.pool, mock.Mock(side_effect=slow_history),
+                                     max_entries=1, retained_bytes=MAX_PERSISTENCE_ENTRY_BYTES,
+                                     allow_local_execution_reference=True)
+        try:
+            for _ in range(result_persistence.REPORT_SLOTS):
+                lane.report_failed_before_open('hrn_' + 'a' * 48, 1, 'run_failed')
+            with self.assertRaisesRegex(HistoryError, 'history_writer_busy'):  # waits; fails nothing
+                lane.report_failed_before_open('hrn_' + 'a' * 48, 1, 'run_failed')
+            # Room is left for the lane's one job and its close marker.
+            self.assertGreaterEqual(lane._incoming.maxsize - lane._incoming.qsize(), 2)
+            lane.close()
+        finally:
+            release.set()
+        lane._writer.join(6)
+        self.assertFalse(lane._writer.is_alive())
+
+    def test_R6_14_earlier_requests_have_their_own_room_too_and_the_close_marker_always_fits(self):
+        release = threading.Event()
+
+        def slow_history():
+            release.wait(10)
+            return self.open_history()
+
+        lane = ResultPersistenceLane(self.fixture.owner, self.fixture.pool, mock.Mock(side_effect=slow_history),
+                                     max_entries=1, retained_bytes=MAX_PERSISTENCE_ENTRY_BYTES,
+                                     allow_local_execution_reference=True)
+        try:
+            for _ in range(result_persistence.EARLIER_SLOTS):
+                lane.expire_results()
+            with self.assertRaisesRegex(HistoryError, 'history_writer_busy'):
+                lane.expire_results()
+            for _ in range(result_persistence.REPORT_SLOTS):
+                lane.report_failed_before_open('hrn_' + 'a' * 48, 1, 'run_failed')
+            # The lane's one job and its close marker still fit.
+            self.assertGreaterEqual(lane._incoming.maxsize - lane._incoming.qsize(), 2)
+            lane.close()
+        finally:
+            release.set()
+        lane._writer.join(6)
+        self.assertFalse(lane._writer.is_alive())
+
+    def test_R6_19_a_stopped_writer_fails_every_queued_request_and_a_closed_lane_says_so_before_busy(self):
+        # The fault is in place before anything is queued, and holds until every request is (review 040-s1-r6-4).
+        queued = threading.Event()
+
+        def fault(request):
+            queued.wait(10)
+            raise RuntimeError('fixture writer fault')
+
+        lane = ResultPersistenceLane(self.fixture.owner, self.fixture.pool, self.factory,
+                                     max_entries=1, retained_bytes=MAX_PERSISTENCE_ENTRY_BYTES,
+                                     allow_local_execution_reference=True)
+        lane._earlier = fault
+        requests = [lane.report_failed_before_open('hrn_' + 'a' * 48, 1, 'run_failed')
+                    for _ in range(result_persistence.REPORT_SLOTS)]
+        requests += [lane.expire_results() for _ in range(result_persistence.EARLIER_SLOTS)]
+        queued.set()
+        lane._writer.join(6)
+        self.assertFalse(lane._writer.is_alive())
+        self.assertEqual({('failed', 'history_service_unavailable')}, {(r.state, r.reason) for r in requests})
+        with self.assertRaisesRegex(HistoryError, 'history_service_unavailable'):  # before the full quota
+            lane.report_failed_before_open('hrn_' + 'a' * 48, 1, 'run_failed')
+
     def stop_lane(self, lane):
         lane.close()
         lane._writer.join(6)
@@ -497,6 +567,81 @@ class ResultPersistenceTests(unittest.TestCase):
                     self.lane.submit(handle)
             resume.set()
             self.committed(handle)
+
+    def test_O10_D13_the_lane_says_when_its_writer_faulted_and_never_after_a_normal_close(self):
+        """O10 D13: the service stops itself on a writer fault, so the lane says so (and only then)."""
+        class WriterFault(BaseException):
+            pass
+
+        def fault(history, *args, **kwargs):
+            raise WriterFault("the writer stopped")
+        self.assertFalse(self.lane.faulted())
+        self.stop_lane(self.lane)
+        self.assertFalse(self.lane.faulted(), "a closed lane is not a faulted one")
+        lane = self.new_lane()
+        with mock.patch.object(ProjectHistory, "expire_results", fault):
+            lane.expire_results()
+            lane._writer.join(6)
+        self.assertFalse(lane._writer.is_alive())
+        self.assertTrue(lane.faulted())
+
+    def test_O10_D13_an_invalid_reason_code_in_an_earlier_request_never_faults_the_writer(self):
+        """O10 D13 (second path): the writer's handler rebuilds `HistoryError(error.reason_code)`; an
+        invalid code becomes `history_invalid_input` there, it does not raise, so the lane goes on."""
+        error = HistoryError("history_unavailable")
+        error.reason_code = "PRIVATE-INJECTED-REASON-CANARY"
+        with mock.patch.object(ProjectHistory, "expire_results", side_effect=error):
+            request = self.lane.expire_results()
+            self.wait(lambda: request.state != "queued")
+        self.assertEqual(("failed", "history_invalid_input"), (request.state, request.reason))
+        self.assertTrue(self.lane._writer.is_alive())
+        self.assertFalse(self.lane._fault)
+        self.answered(self.lane.expire_results())
+
+    def answered(self, request):
+        self.wait(lambda: request.state != "queued")
+        self.assertEqual("done", request.state, request.reason)
+        return request.result
+
+    def test_O10_D1_the_writer_pass_releases_an_earlier_services_unarmed_lease_past_its_time(self):
+        """O10 D1: `expire_result_leases` had no production caller, so the unarmed lease of a service that
+        stopped was never released. The service's own periodic writer pass now releases it."""
+        from tests.learning_support import assignment
+        from tests.test_project_history import binding
+        from codex_agents.result_contracts import LEASE_SCOPE_FIELDS, ResultLeaseBinding
+        target = binding(1, project=self.project)
+        lease = ResultLeaseBinding(**{name: getattr(target, name) for name in LEASE_SCOPE_FIELDS},
+                                   claim_request_id="claim-request-1", claim_request_digest="1" * 64)
+        earlier = self.open_history()  # the earlier service, which stopped before arming its lease
+        try:
+            until = earlier.reserve_result_lease(lease, assignment()).reserved_until_ms
+        finally:
+            earlier.close()
+        self._wall_origin_ns += (until + 1) * 1_000_000 - self.fixture_time_ns()  # past its time
+        self.answered(self.lane.expire_results())
+        self.stop_lane(self.lane)
+        store = self.open_history()
+        try:
+            self.assertEqual("expired", store.result_lease(lease).state)
+        finally:
+            store.close()
+
+    def test_O10_D2_a_restarted_service_settles_the_registrations_its_previous_run_left(self):
+        """O10 D2: the instance compared was the project's durable supervisor id, the same after a restart,
+        so rows a stopped service left were never marked. A restarted service (same project, same
+        durable scope) now marks them `service_stopped`, and leaves its own alone."""
+        self.answered(self.lane.report_registered_run("orc_" + "a" * 48, "hrn_" + "1" * 48, "run-1", 1))
+        self.stop_lane(self.lane)
+        successor = self.new_lane()
+        self.answered(successor.report_registered_run("orc_" + "a" * 48, "hrn_" + "2" * 48, "run-2", 1))
+        self.answered(successor.expire_results())
+        self.stop_lane(successor)
+        store = self.open_history()
+        try:
+            rows = dict(store._connection.execute("SELECT run_id,failed_reason FROM project_registered_runs"))
+        finally:
+            store.close()
+        self.assertEqual({"run-1": "service_stopped", "run-2": None}, rows)
 
 
 if __name__ == "__main__":

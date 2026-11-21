@@ -1,0 +1,1592 @@
+{
+ "note": "Every count-based limit in the runtime: file::function -> checks, how what it counts ends, and its past-the-limit test. Maintained by hand; see test_lifetime_cap_guard.py.",
+ "schema": 1,
+ "sites": {
+  "account_api.py::__init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_api.py::decode_account_request": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_api.py::decode_account_response": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_api.py::encode_account_request": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_api.py::integer": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_billing_admission.py::_reply": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_billing_admission.py::admit": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_billing_admission.py::close_expired_reserved": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_billing_admission.py::reserve": {
+   "checks": 5,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_billing_jobs.py::submit": {
+   "checks": 1,
+   "ends": "O0c M9: a job ends when taken ready; one left unknown faults the billing lane, and the self-restart (H1c) ends it once every child is proven gone",
+   "test": "test_M9_two_unknown_billing_jobs_in_a_project_restart_the_account_and_a_probe_succeeds"
+  },
+  "account_claim_contracts.py::checked_claim_receipt": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_claim_jobs.py::_drive_steps": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_claim_jobs.py::submit": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_claim_jobs.py::submit_open": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_cleanup.py::live_cleanup_receipts": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
+   "test": "test_P1_5_more_lost_and_crashed_runs_than_the_limit_never_stop_a_normal_run"
+  },
+  "account_cleanup.py::reserve_cleanup": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_ingress.py::_wire": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_ingress.py::pump_owner": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_observation.py::_retained_records": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_observation.py::purge_old_observations": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_observation.py::reserve": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_observation.py::run_observation_probe": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_observation_failure.py::record_observation_failure": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_observation_jobs.py::__post_init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_observation_jobs.py::submit": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_open_contracts.py::checked_account_open_reply": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_open_contracts.py::snapshot": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_original_open.py::<module>": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
+   "test": "test_OP_1_more_finished_opens_than_every_open_limit_never_refuse"
+  },
+  "account_original_open.py::_capture": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_original_open.py::finish_open_from_signature_job": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_original_open.py::preflight_open": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_restart.py::_stuck": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_restart.py::decide": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_run_provenance.py::_record": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_service.py::__post_init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_service.py::_capture_admission_rows_locked": {
+   "checks": 5,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_service.py::_capture_signature_inputs_locked": {
+   "checks": 8,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_service.py::_handle_request": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_service.py::_owner_key_view": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "admission_input_decode.py::_preflight": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "admission_input_decode.py::_signer": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "admission_inputs.py::__post_init__": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "admission_metadata.py::_headroom_state": {
+   "checks": 5,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "admission_metadata.py::_window_live": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "admission_metadata.py::evaluate_admission": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "admission_metadata.py::evaluate_launch": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "admission_metadata.py::paid_usage_digest": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "admission_metadata.py::spend_control_digest": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "billing_probe_contracts.py::checked_billing_probe_reply": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "billing_probe_worker.py::_normalized": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "billing_probe_worker.py::prepare": {
+   "checks": 1,
+   "ends": "O0c M10: a worker is freed when its job retires; one held unknown faults the probe worker lane; its admitted row is settled once its child is proven gone, and the self-restart (H1c) frees the worker",
+   "test": "test_M10_M5_an_unknown_probe_execution_keeps_its_records_restarts_and_the_next_probe_reuses_them"
+  },
+  "billing_probe_worker.py::probe_payload": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "bridge.py::_check_claude_init": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "bridge.py::_client_diagnostics": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "bridge.py::_result_object": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "bridge.py::_token_count": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "bridge.py::_unrecordable": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "bridge.py::committed_export_manifest": {
+   "checks": 4,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "bridge.py::dispatch": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "bridge.py::on_frame": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "bridge.py::place_worker_result": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "bridge.py::run_child": {
+   "checks": 4,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "bridge.py::run_codex": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "bridge_liveness.py::bind": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "capacity_status_contracts.py::checked_capacity_status": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "catalog.py::_claude_agent_candidate": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "claim_denial.py::verify_denial_closure": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "claim_storage.py::_verify_historical_storage_evidence": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "claim_storage.py::capture_storage_evidence": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "claim_storage.py::encode_storage_evidence": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "claim_storage.py::verify_storage_evidence": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "claude_activity.py::_count": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "claude_activity.py::_partial": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "claude_host.py::_settings": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "cleanup_contracts.py::encode_cleanup_evidence": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "cleanup_contracts.py::verify_cleanup_evidence": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "cli_reports.py::_analysis_summary": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "cli_reports.py::learning_cycle_summary": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "client_runtime.py::record_codex_result_client": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "codex_activity.py::observe": {
+   "checks": 2,
+   "ends": "O0c M5: only items in progress count; a completed item moves to a recent window of the same size whose oldest entry is dropped quietly",
+   "test": "test_a_long_run_of_completed_items_never_reaches_the_cap"
+  },
+  "codex_preparation.py::_build": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "codex_preparation.py::preparation_payload": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "codex_preparation.py::submit": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "codex_worker.py::_decode_input": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "codex_worker.py::_execute": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "codex_worker.py::_safe_report": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "codex_worker.py::prepare": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "collector_client.py::health": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "collector_exit.py::checked": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "collector_exit.py::read_exit": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "collector_runtime.py::_client_health_data": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
+   "test": "test_P11_client_health_never_fills_and_drops_the_oldest_project"
+  },
+  "collector_runtime.py::_client_health_payload": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
+   "test": "test_P11_client_health_never_fills_and_drops_the_oldest_project"
+  },
+  "container_runtime.py::_spec_problems": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "control_api.py::__init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "control_api.py::decode_control_request": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "control_api.py::decode_control_response": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "control_api.py::encode_control_request": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "control_loop.py::__post_init__": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "control_loop.py::_attach": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "control_loop.py::_step": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "control_service.py::__post_init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "control_service.py::handle": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "dispatch_api.py::__init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "dispatch_api.py::decode_dispatch_request": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "dispatch_api.py::decode_dispatch_response": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "dispatch_api.py::encode_dispatch_request": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "egress_proxy.py::_read_head": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "egress_proxy.py::write": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "evaluation.py::evaluate": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "event_shapes.py::_room": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
+   "test": "test_P12_a_full_folder_drops_its_oldest_records_and_keeps_recording"
+  },
+  "event_shapes.py::frame": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "execution_activity.py::_sample": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "execution_activity.py::publish": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "execution_grant.py::encode": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "execution_grant.py::verify_execution_grant": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "gate_policy.py::_patch_ops": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "gate_policy.py::argv": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "gate_policy.py::nested": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "gate_policy.py::record_row": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "gate_policy.py::runner": {
+   "checks": 1,
+   "ends": "per request: how deeply one command nests a runner (MAX_NESTING); computed for one hook request, nothing kept"
+  },
+  "gate_policy.py::sequence": {
+   "checks": 1,
+   "ends": "per request: brace alternatives of one Glob/Grep pattern (MAX_PATTERN_ALTERNATIVES); the list lives only for that request"
+  },
+  "gate_policy.py::shell": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "hardened_git.py::_call_problem": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "hardened_git.py::build_candidate_tree": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "hardened_git.py::git_version_problem": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "health_containers.py::_sweep": {
+   "checks": 1,
+   "ends": "HM-1: MAX_STOPS_PER_PASS counts orphan stops in one pass only; the count starts again at every pass, the orphans left over are reported waiting and stopped at the next pass",
+   "test": "test_HM_1_8_more_orphans_than_one_pass_stops_wait_for_the_next_pass_and_are_all_removed"
+  },
+  "health_monitor.py::__post_init__": {
+   "checks": 1,
+   "ends": "a finding's text length: a field of one record that is never stored apart from the record, which the pass replaces at the next pass",
+   "test": "test_HM_0_7_a_finding_is_a_closed_record_with_no_content"
+  },
+  "health_monitor.py::_checked": {
+   "checks": 1,
+   "ends": "HM-0: one check's findings per pass: more are cut and one findings_truncated finding says so; the pass's findings are replaced by the next pass, and the fixed ones kept are the newest RECENT_FIXED (a deque that drops its oldest)",
+   "test": "test_HM_0_2_too_many_findings_from_one_check_are_cut_and_said_so"
+  },
+  "health_monitor.py::register": {
+   "checks": 1,
+   "ends": "HM-0: registered checks, set at start-up by code (none are added at run time by input); a pass runs at most max_checks of them, the rest first at the next pass",
+   "test": "test_HM_0_1_one_pass_runs_at_most_max_checks_and_every_check_gets_its_turn"
+  },
+  "health_monitor.py::run": {
+   "checks": 1,
+   "ends": "HM-0: a time gap in sweep intervals, not a count of stored things; nothing accumulates",
+   "test": "test_HM_0_5_the_built_in_self_check_is_quiet_on_a_healthy_collector_and_reports_a_late_pass"
+  },
+  "history_api.py::__init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "history_api.py::decode_history_request": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "history_api.py::encode_history_request": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "history_service.py::__post_init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "history_service.py::_wire_operation": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "history_service.py::handle": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "hook_config.py::parse_local_manifest": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "host_commands.py::_manifest_files": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "host_commands.py::unexpected_entries": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "host_open_contracts.py::checked_open_provenance": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "host_open_contracts.py::snapshot": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "host_open_contracts.py::verify_open_provenance": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "host_result_contracts.py::snapshot": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "launch_journal.py::_checked_container_entry": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "launch_journal.py::_confirmed": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "launch_journal.py::_read_entry": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "launch_journal.py::_read_recovery": {
+   "checks": 1,
+   "ends": "C4: the recovery report is one file replaced whole on every pass (orphans cut to the newest 16, details to 600 characters), so it never accumulates",
+   "test": "test_a_report_past_its_size_limit_is_not_written_and_the_last_one_stays"
+  },
+  "launch_journal.py::_window": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "launch_journal.py::_write": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "launch_journal.py::prune": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "launch_journal.py::write_recovery": {
+   "checks": 1,
+   "ends": "C4: the recovery report is one file replaced whole on every pass (orphans cut to the newest 16, details to 600 characters), so it never accumulates",
+   "test": "test_a_report_past_its_size_limit_is_not_written_and_the_last_one_stays"
+  },
+  "learning_analysis.py::analyze_outcomes": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_contracts.py::parse_bounded_json_value": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_contracts.py::validate_client_diagnostics": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_contracts.py::validate_learning_record": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_contracts.py::validate_provider_usage": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_cycle_core.py::_snapshot": {
+   "checks": 2,
+   "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
+   "test": "test_P7_more_cases_mined_over_the_retention_than_the_case_limit_never_fail_the_cycle"
+  },
+  "learning_cycle_core.py::plan_learning_cycle": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_cycle_core.py::select_mining_outcomes": {
+   "checks": 1,
+   "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
+   "test": "test_P7_more_cases_mined_over_the_retention_than_the_case_limit_never_fail_the_cycle"
+  },
+  "learning_eligibility.py::check_candidate_eligibility": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_engine.py::_bounded_tree_size": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_engine.py::_claude_agent_definition": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_engine.py::_committed_and_clean": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_engine.py::_copy_and_digest_runtime_tree": {
+   "checks": 6,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_engine.py::_homebrew_runtime_paths": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_engine.py::_read_managed_bytes": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_engine.py::_runtime_library_identities": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_engine.py::_snapshot_runtime_libraries": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_engine.py::_wait_for_qa_process": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_engine.py::calibrate_grader": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_engine.py::compare_candidate": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_source_image.py::_digest": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_source_image.py::_page": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_accept_project_terminal": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_attestation_rows_locked": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_check_active_capacity_locked": {
+   "checks": 6,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_claim_commit": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_claim_commit_header": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_claim_context_locked": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_claim_observation_window": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_claim_preflight": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_claim_scalar_context_locked": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_connect": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_dispatch": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_expired_event_window": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_fence_claim_request_locked": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_handle": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_holds_account_restrictions_locked": {
+   "checks": 5,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_migrate": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_migrate_layout_locked": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_owner_generation_locked": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_owner_signer_bytes": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_plan_project_backups": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_read_worker_result_locked": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_release_active_capacity": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_release_due_locked": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_schema_behind": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_settle_unlaunched": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_write_streamed_backup": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::_write_worker_result": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::account_capacity": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::account_holds_status": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::account_slot_health": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::acquire": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::budget": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::close_orchestration": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::commit_host_result": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::commit_upgrade_reconciliation": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::earlier_version_runs": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::ingestion_snapshot": {
+   "checks": 4,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::issue_operational_check_receipt": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::issue_result_repair_receipt": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::legacy_signers_digest": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::migrate_legacy_state": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::open_host_run": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::prepare_upgrade_reconciliation": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::record_claude_rate_limit_event": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::recorded_owner_key": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::run_learning_cycle": {
+   "checks": 4,
+   "ends": "O0c P8: the legacy ledger cycle reads outcomes of the retention window and the cases and candidates of it plus the kept ones; the collector sweep (learning_store.sweep_learning_retention, bounded batches, only projects whose learning has not moved to the project store) removes unpromoted, unreferenced cases and candidates past it; outcomes still go by the owner's learning-expire",
+   "test": "test_P8_more_cases_mined_over_the_retention_than_the_case_limit_never_fail_the_cycle"
+  },
+  "learning_store.py::sweep_learning_retention": {
+   "checks": 1,
+   "ends": "O0c P8: the legacy ledger cycle reads outcomes of the retention window and the cases and candidates of it plus the kept ones; the collector sweep (learning_store.sweep_learning_retention, bounded batches, only projects whose learning has not moved to the project store) removes unpromoted, unreferenced cases and candidates past it; outcomes still go by the owner's learning-expire",
+   "test": "test_P8_the_collector_sweep_removes_unpromoted_cases_and_candidates_past_the_retention"
+  },
+  "liveness_clock.py::_integer": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "liveness_clock.py::received": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "open_scope_contracts.py::checked_open_scope": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "open_scope_contracts.py::snapshot": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "operational_qa_contracts.py::checked_operational_qa": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "orchestration_api.py::__init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "orchestration_api.py::decode_orchestration_request": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "orchestration_api.py::decode_orchestration_response": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "orchestration_api.py::encode_orchestration_request": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "orchestration_service.py::__post_init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "orchestration_service.py::handle": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "orchestration_store.py::_positions": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "orchestration_store.py::apply": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "orchestration_store.py::end_earlier": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "orchestration_store.py::purge_closed": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "owned_execution.py::issue": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "owned_execution.py::retain_cleanup": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "owner_key_contracts.py::checked_public_key": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "owner_key_contracts.py::owner_public_key_from_line": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "prepared_dispatch.py::handle": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "process_tree.py::_linux_environment": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "process_tree.py::_remember_cleanup": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_backup.py::estimate_bytes": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_backup.py::verify": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_capacity_report.py::capacity_report": {
+   "checks": 4,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_cleanup.py::reserve_cleanup": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_driver.py::_advance": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_driver.py::_authorize_dispatch": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_driver.py::_fence_earlier": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_driver.py::_fence_later": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_driver.py::_forget_retired": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_driver.py::_hold": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_driver.py::_read_intake": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_driver.py::_recorded": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_driver.py::_register": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_driver.py::_retry_cleanup": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_driver.py::exhausted": {
+   "checks": 2,
+   "ends": "O0c M3: MAX_RUNS and DISPATCH_SLOTS as audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); stuck_slots() >= PREPARATION_SLOTS is not a limit on new work but the trigger that replaces the host: the replacement ends every stuck hold (the stopping service settles its runs on kernel evidence, the next starts with all slots free)",
+   "test": "test_M3_with_every_slot_stuck_the_host_is_replaced_at_once_when_no_run_is_under_way"
+  },
+  "project_driver.py::handle": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_driver.py::record_claude_rate_limit_event": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_driver.py::stuck_slots": {
+   "checks": 1,
+   "ends": "O0c M4: counts given-back preparations whose removal was asked MAX_CLEANUP_ATTEMPTS times; each is retired once its retried removal finishes, and all end when the host they hold is replaced once idle",
+   "test": "test_M4_a_preparation_whose_removal_was_given_up_is_kept_and_counted_stuck"
+  },
+  "project_history.py::_checked_record": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::_lease_binding": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::_read_result_file": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::_result_binding": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::_result_counts": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::_result_file_info": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::attest_bound_result_lease": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::candidates": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::learning_outcome_page": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::pending_terminals": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::record_registered_run": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::settle_earlier_registrations": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::window": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_holds_schema.py::custody_consistent": {
+   "checks": 1,
+   "ends": "D1: the custody validator checks each live context's size and the live total against their limits, over live rows only (partial index); the rows it checks end as the budget's do",
+   "test": "test_O5_the_live_context_budget_admits_exactly_what_fits_and_a_refusal_leaves_nothing"
+  },
+  "project_ingress.py::__post_init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_ingress.py::_step": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_ingress.py::attach": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_activation.py::derived_records": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_activation.py::staged_imports": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_activation.py::written_since": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_chunks.py::record_chunk_membership": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_corpus.py::_prepare_chunk": {
+   "checks": 5,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_corpus.py::begin_import": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_corpus.py::import_attestations": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_corpus.py::import_records": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_identity.py::_outcomes": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_identity.py::_references": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_identity.py::prepare_candidate": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_live.py::append_learning_records": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_live.py::cycle": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_live.py::read_cycle_rows": {
+   "checks": 8,
+   "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
+   "test": "test_P7_candidates_past_the_retention_do_not_count_against_the_corpus_limit"
+  },
+  "project_learning_live.py::take": {
+   "checks": 1,
+   "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
+   "test": "test_P7_more_cases_mined_over_the_retention_than_the_case_limit_never_fail_the_cycle"
+  },
+  "project_learning_owner.py::corpus_records": {
+   "checks": 2,
+   "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept (case review reads cases after now minus the retention, plus every promoted one)",
+   "test": "test_P7_case_review_reads_a_window_not_all_cases"
+  },
+  "project_learning_owner.py::purge_old_learning": {
+   "checks": 1,
+   "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
+   "test": "test_P7_the_cleanup_pass_removes_unpromoted_cases_and_candidates_past_the_retention"
+  },
+  "project_learning_owner.py::record_feedback": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_qa.py::_entry": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_qa.py::_page": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_qa.py::_prepare": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_qa.py::stage_qa_chunk": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_learning_source.py::stage_image_chunk": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_monitor.py::__init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_monitor.py::_sample_clock": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_monitor.py::register": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_orchestration_report.py::_orchestration": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR",
+   "test": "test_P10_the_report_finds_its_orchestration_however_many_the_project_has"
+  },
+  "project_orchestration_report.py::orchestration_report": {
+   "checks": 7,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_qa_checks.py::_report": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_qa_checks.py::issue_check_receipt": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_qa_checks.py::purge_old_qa": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_qa_commit.py::commit_operational_qa": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_release_ack.py::record_account_release": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_request_queue.py::__post_init__": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_request_queue.py::execute": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_request_queue.py::prepare": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_result_contexts.py::_check_budget": {
+   "checks": 1,
+   "ends": "D1 (RS-D-8, SH-6): live context bytes are summed from the rows not `ended` or `expired`; a context ends with its lease when the attempt ends unfinished (custody `lost_with_reservation`) or retires with its result (`retention`, `orchestration_closed`), so only live custody is ever charged",
+   "test": "test_O5_the_live_context_budget_admits_exactly_what_fits_and_a_refusal_leaves_nothing"
+  },
+  "project_result_contexts.py::prepare": {
+   "checks": 1,
+   "ends": "D1 (RS-D-8): a size check of one context's bytes, not a count; nothing accumulates",
+   "test": "test_O5_a_context_at_its_size_limit_is_kept_and_one_byte_over_is_refused_before_the_arm"
+  },
+  "project_runtime.py::__post_init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_usage_report.py::_by_run": {
+   "checks": 1,
+   "ends": "a read-only report over a caller-chosen window: its rows are never kept and never written; each statement reads at most the row limit (default 500, at most 2,000) plus one, and a window with more says truncated",
+   "test": "test_a_window_past_the_row_limit_is_truncated_not_refused"
+  },
+  "project_usage_report.py::_record": {
+   "checks": 1,
+   "ends": "a read-only report over a caller-chosen window: its rows are never kept and never written; each statement reads at most the row limit (default 500, at most 2,000) plus one, and a window with more says truncated",
+   "test": "test_a_window_past_the_row_limit_is_truncated_not_refused"
+  },
+  "project_usage_report.py::_rows": {
+   "checks": 2,
+   "ends": "a read-only report over a caller-chosen window: its rows are never kept and never written; each statement reads at most the row limit (default 500, at most 2,000) plus one, and a window with more says truncated",
+   "test": "test_a_window_past_the_row_limit_is_truncated_not_refused"
+  },
+  "project_usage_report.py::usage_report": {
+   "checks": 1,
+   "ends": "a read-only report over a caller-chosen window: its rows are never kept and never written; each statement reads at most the row limit (default 500, at most 2,000) plus one, and a window with more says truncated",
+   "test": "test_a_window_past_the_row_limit_is_truncated_not_refused"
+  },
+  "provider_observation_contracts.py::checked_observation_reply": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "providers.py::_response": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "providers.py::parse_client_version": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "rate_limit_contracts.py::__post_init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "rate_limit_contracts.py::_scalar": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "rate_limit_contracts.py::bounded_rate_limit_info": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "release_contracts.py::capture_cleanup_evidence": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_contracts.py::__post_init__": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_contracts.py::as_data": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_contracts.py::assignment_bytes": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_contracts.py::checked_result_body": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_persistence.py::__init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_persistence.py::_prepare_entry": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_persistence.py::acknowledge_release": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_persistence.py::acknowledge_terminal": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_persistence.py::consume_execution": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_persistence.py::record_host_open": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_persistence.py::settle_denial": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_persistence.py::settle_earlier_lease": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_read_api.py::__init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_read_api.py::decode_result_read_request": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_read_api.py::decode_result_read_response": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_read_api.py::encode_result_read_request": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "result_read_service.py::handle": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "routing.py::_read_project_regular": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "routing.py::_validate_admission_settings": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "routing.py::_validate_escalation": {
+   "checks": 1,
+   "ends": "policy validation: the number of rungs one escalation ladder may list (MAX_LADDER_RUNGS), checked when a policy file is loaded; nothing accumulates"
+  },
+  "run_provenance.py::checked_run_provenance": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "service_enrollment.py::__init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "service_enrollment.py::_consume_proof": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "service_enrollment.py::_subject": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "service_enrollment.py::enrollment_preamble": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "service_enrollment.py::prune_proofs": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "service_enrollment.py::verify": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "service_host.py::__init__": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "service_host.py::_enroll": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "service_host.py::listen": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "service_protocol.py::canonical_request_bytes": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "service_protocol.py::decode_service_request": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "service_queue.py::__post_init__": {
+   "checks": 5,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "service_queue.py::offer": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "service_transport.py::exchange_frame": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "session_guard.py::_day_folders": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "session_guard.py::_first_record": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "session_guard.py::_last_turn_context": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "session_guard.py::_names": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "session_guard.py::bound_projects": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "session_guard.py::scan_recent_sessions": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "signature_execution.py::_exchange": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "signature_input_wire.py::__post_init__": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "signature_input_wire.py::add": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "signature_input_wire.py::charge": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "signature_input_wire.py::decode_signature_inputs": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "signature_input_wire.py::encode_signature_inputs": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "signature_input_wire.py::text": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "signature_inputs.py::__post_init__": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "signature_job_intake.py::__post_init__": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "signature_job_intake.py::_reserve": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "signature_job_intake.py::_validate_inputs": {
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "signature_job_intake.py::select_next": {
+   "checks": 1,
+   "ends": "O0c M8: a job ends when its worker confirms it stopped; one whose execution is unconfirmed faults the signature lane, and the account's self-restart (H1c) ends it once every child is proven gone",
+   "test": "test_M8_two_unconfirmed_signature_executions_restart_the_account_and_a_claim_succeeds"
+  },
+  "signature_payloads.py::_check_payload": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "signature_payloads.py::decode_signature_payloads": {
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "sql_read_budget.py::_before_statement": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "sql_read_budget.py::_track": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "sql_read_budget.py::progress": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "terminal_delivery.py::capture_terminal_evidence": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "write_merge.py::_merge_locked": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "write_merge.py::_merge_prepared": {
+   "checks": 1,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  }
+ }
+}

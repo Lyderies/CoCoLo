@@ -32,7 +32,7 @@ def attest_open_provenance(ledger, project_id, *, runtime_digest, caller_scope, 
             or expected.run_handle != request.run_handle):
         raise ClaimError('claim_execution_invalid')
     try:
-        with ledger._lock:
+        with ledger._held():
             connection = ledger._connection
             if connection.in_transaction:
                 raise ClaimError('claim_execution_unavailable')
@@ -41,7 +41,9 @@ def attest_open_provenance(ledger, project_id, *, runtime_digest, caller_scope, 
                 return connection.transaction_read_call(limits, lambda: _snapshot(ledger, request, lease))
             finally:
                 connection.execute('ROLLBACK')
-    except SQLReadError:
+    except SQLReadError as error:
+        if passes_busy(error):
+            raise
         raise ClaimError('claim_execution_unavailable') from None
 
 
@@ -120,3 +122,8 @@ def _snapshot(ledger, request, lease):
         'verification_record_id': None if verification is None else verification['record_id'],
         'verification_content_digest': None if verification is None else content_digest(verification),
     })
+
+
+def passes_busy(error) -> bool:
+    """M4b E1a-2: a busy ledger passes through to the reply as busy, not as claim_execution_unavailable."""
+    return isinstance(error, SQLReadError) and error.reason_code == 'sql_read_busy'

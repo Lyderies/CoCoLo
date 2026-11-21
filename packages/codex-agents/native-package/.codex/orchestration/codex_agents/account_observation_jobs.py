@@ -8,11 +8,14 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 import queue
+import subprocess
 import threading
 import time
 
+from . import lane_health
 from .account_observation import AccountObservationOwner, ObservationContext, ProbeCompletion, run_observation_probe
 from .history_contracts import _DIGEST, _ID, _PROJECT, matches
+from .process_tree import create_child, end_child
 from .provider_observation_contracts import ObservationError, ObservationInput
 
 OBSERVATION_JOB_BYTES = 128 * 1024
@@ -44,6 +47,35 @@ class _Slot:
         self.outgoing = queue.Queue(maxsize=1)
         self.ready, self.stop, self.fault = threading.Event(), threading.Event(), threading.Event()
         self.thread = threading.Thread(target=_worker, args=(self,), name='account-observation', daemon=True)
+        # O0c review M4: under `custody`, whether a probe is running and every provider CLI it started
+        # that is not yet proven gone (a Popen, or None for a start in doubt with no handle).
+        self.custody = threading.Lock()
+        self.executing = False
+        self.children = []
+
+    def popen(self, arguments, **options):
+        """The probe's process factory: each child is kept until it is proven gone (review M4)."""
+        process, error, child_left = create_child(subprocess.Popen, arguments, options)
+        if process is not None or child_left:
+            with self.custody:
+                self.children.append(process)
+        if error is not None:
+            raise error
+        return process
+
+
+def _end_children(slot, children, *, wait_s, right_after):
+    """End and prove gone the given children of this slot; keep the rest. Returns what is not proven."""
+    pending = []
+    for process in children:
+        why = 'no_handle' if process is None else end_child(process, wait_s=wait_s, end_group_after_reap=right_after)
+        if why is None:
+            with slot.custody:
+                if process in slot.children:
+                    slot.children.remove(process)
+        else:
+            pending.append({'pid': None if process is None else process.pid, 'why': why})
+    return pending
 
 
 def _worker(slot):
@@ -55,18 +87,41 @@ def _worker(slot):
             if slot.stop.is_set():
                 return
             continue
+        with slot.custody:
+            slot.executing = True
+            started = len(slot.children)
         try:
             if slot.stop.is_set():
                 reply = ProbeCompletion(capture, None, 'observation_unavailable')
             else:
-                reply = run_observation_probe(capture)
+                reply = run_observation_probe(capture, popen=slot.popen)
+            _end_this_probe(slot, started)
             slot.outgoing.put_nowait((ticket, reply))
-        except BaseException:
+        except BaseException as error:
             # No completion is manufactured after unknown worker/cleanup state.
+            lane_health.safely(lambda: slot.note.publish(faulted=True, kept=frozenset({slot.health_token})))  # S1-H1a, by this worker
+            lane_health.safely(lambda error=error: slot.lane.note_failure(slot.note, 'observation_worker_failed', error))
+            _end_this_probe(slot, started)
             slot.fault.set()
             return
         if slot.stop.is_set():
             return
+
+
+def _end_this_probe(slot, started):
+    """O0c review M4: right after its probe, end what it started: each child's group is killed when it
+    was not reaped, and what is left in a reaped child's group (its id cannot have been reused yet) is
+    killed too; each is then reaped and its group checked empty. Unproven ones stay for the restart's
+    check. Never raises; the probe is no longer running afterwards."""
+    try:
+        with slot.custody:
+            children = slot.children[started:]
+        _end_children(slot, children, wait_s=5, right_after=True)
+    except Exception:  # noqa: BLE001 - what is not proven stays listed
+        pass
+    finally:
+        with slot.custody:
+            slot.executing = False
 
 
 @dataclass(repr=False)
@@ -95,6 +150,24 @@ class ObservationJobReply:
 
 
 class AccountObservationJobs:
+    def unproven_children(self):
+        """O0c review M4: the provider CLIs these workers started that are not proven gone, as
+        [{'pid', 'why'}]; [] when none can still run. A probe still running may hold one (`running`);
+        a kept child is ended now (its group killed while it is unreaped, then reaped without waiting)
+        and is proven once reaped with its group empty. Owner thread; never raises."""
+        try:
+            pending = []
+            for slot in self._slots:
+                with slot.custody:
+                    executing, children = slot.executing, list(slot.children)
+                if executing:
+                    pending.append({'pid': None, 'why': 'running'})
+                    continue
+                pending.extend(_end_children(slot, children, wait_s=0, right_after=False))
+            return pending
+        except Exception:
+            return [{'pid': None, 'why': 'unchecked'}]
+
     def __init__(self, owner, limits):
         if type(owner) is not AccountObservationOwner or type(limits) is not ObservationJobLimits:
             raise ObservationError('observation_invalid_request')
@@ -108,6 +181,14 @@ class AccountObservationJobs:
         self._queues, self._active, self._active_projects = {}, {}, set()
         self._rotation = deque()
         self._slots = [_Slot() for _ in range(limits.workers)]
+        # S1-H1a: published notes (reporting only); a slot kept after a fault or an invalid reply
+        # holds its one job for good, so one token per slot counts it once.
+        self.health = lane_health.Lane('observations')
+        self._note = self.health.slot('owner')
+        self._mismatched = set()
+        for index, slot in enumerate(self._slots):
+            slot.lane, slot.note = self.health, self.health.slot(f'worker-{index}')
+            slot.health_token = lane_health.new_token()
         self._slot_rotation = deque(self._slots)
         self._started = self._closing = self._faulted = self._busy = False
         self._ingress_owner = None
@@ -140,10 +221,13 @@ class AccountObservationJobs:
                     if not slot.ready.wait(5):
                         raise ObservationError('observation_unavailable')
                 self._started = True
-            except BaseException:
+            except BaseException as error:
                 self._faulted = self._closing = True
                 for slot in self._slots:
                     slot.stop.set()
+                lane_health.safely(lambda error=error: self.health.note_failure(  # S1-H1a C4
+                    self._note, 'observation_start_failed', error))
+                self._publish_health()
                 raise
 
     def _job(self, ticket):
@@ -170,6 +254,7 @@ class AccountObservationJobs:
         self._counts[project] -= 1
         if not self._counts[project]:
             del self._counts[project]
+        self._publish_health()  # S1-H1a C5
 
     def submit(self, project, runtime, caller, identity, request, context, before_publish, *, _ingress=None,
                _billing_parent=None):
@@ -220,6 +305,7 @@ class AccountObservationJobs:
                         self._queues[project] = deque()
                         self._rotation.append(project)
                     self._queues[project].append(ticket)
+                self._publish_health()  # S1-H1a C5: counted before the owner drives
                 return ticket
             except BaseException:
                 self._drop(ticket, job)
@@ -232,7 +318,31 @@ class AccountObservationJobs:
         else:
             job.state, job.result, job.reason = 'ready', result, reason
 
+    def _reply_mismatch(self, slot):
+        """S1-H1a: an invalid reply keeps its slot; noted once, with no exception."""
+        def record():
+            if slot not in self._mismatched:
+                self._mismatched.add(slot)
+                self.health.note_failure(self._note, 'reply_mismatch', None)
+        lane_health.safely(record)  # C1: the whole update, set included
+
+    def _publish_health(self):
+        """S1-H1a: this owner's note: active slots busy, faulted or mismatched ones kept, queued jobs.
+        Reporting only; never raises."""
+        try:
+            kept = {slot.health_token for slot in self._active
+                    if slot.fault.is_set() or slot in self._mismatched}
+            lane_health.safely(lambda: self._note.publish(faulted=self._faulted, kept=frozenset(kept), busy_tokens=frozenset(slot.health_token for slot in self._active), queued=sum(len(queue_) for queue_ in self._queues.values())))
+        except Exception:
+            pass
+
     def _drive(self):
+        try:
+            self._drive_steps()
+        finally:
+            self._publish_health()
+
+    def _drive_steps(self):
         now = time.monotonic_ns()
         for ticket, job in tuple(self._jobs.items()):
             if job.state == 'queued' and (self._closing or job.cancelled or now >= job.deadline_ns):
@@ -257,10 +367,12 @@ class AccountObservationJobs:
                 continue
             if actual is not ticket:
                 self._faulted = True
+                self._reply_mismatch(slot)
                 continue
             job = self._job(ticket)
             if type(reply) is not ProbeCompletion or reply.capture is not job.reservation.capture:
                 self._faulted = True
+                self._reply_mismatch(slot)
                 continue
             completed += 1
             del self._active[slot]
@@ -274,7 +386,8 @@ class AccountObservationJobs:
                 result = self._owner.complete(job.reservation, reply)
             except ObservationError as error:
                 self._finish(ticket, job, reason=error.reason_code)
-            except Exception:
+            except Exception as error:
+                lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'observation_commit_failed', error))  # S1-H1a C7
                 self._finish(ticket, job, reason='observation_unavailable')
             else:
                 self._finish(ticket, job, result=result)
@@ -335,7 +448,8 @@ class AccountObservationJobs:
                                               job.before_publish, job.result)
                 except ObservationError as error:
                     reason = error.reason_code
-                except Exception:
+                except Exception as error:
+                    lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'observation_recheck_failed', error))  # S1-H1a C7
                     reason = 'observation_unavailable'
             reply = ObservationJobReply(job.key, job.request, job.result if reason is None else None,
                                         reason, job.before_publish)

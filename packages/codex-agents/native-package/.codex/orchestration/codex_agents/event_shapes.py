@@ -28,7 +28,7 @@ FOLDER = "event-shapes"
 SCHEMA = 1
 MAX_LINES = 50_000  # Per run; more than the bridge's stream cap lets a client send.
 MAX_RUN_BYTES = 16 * 1024 * 1024
-MAX_FILES = 512  # In the folder; the owner deletes records to make room.
+MAX_FILES = 512  # In the folder; the oldest records rotate out (O0c P12).
 MAX_FOLDER_BYTES = 256 * 1024 * 1024
 MAX_BLOCKS = 32
 _VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}")
@@ -279,16 +279,31 @@ def _enabled(directory):
             and stat.S_ISREG(flag.st_mode) and flag.st_uid == owner and flag.st_nlink == 1)
 
 
+_RECORD = re.compile(r"(?:claude|codex)-([0-9]{1,20})-[0-9a-f]{8}\.jsonl")
+
+
 def _room(folder):
-    """Whether the folder is still under its limits of files and bytes."""
-    files = size = 0
+    """Make the folder fit under its limits of files and bytes, dropping the oldest records this module wrote
+    (O0c P12: nothing else ever removed them). Anything else in the folder is never touched; if it alone fills
+    the folder, recording stops."""
+    files, size, ours = 0, 0, []
+    owner = os.getuid()
     with os.scandir(folder) as entries:
         for entry in entries:
-            files += 1
-            size += entry.stat(follow_symlinks=False).st_size
-            if files >= MAX_FILES or size >= MAX_FOLDER_BYTES:
-                return False
-    return True
+            info = entry.stat(follow_symlinks=False)
+            files, size = files + 1, size + info.st_size
+            match = _RECORD.fullmatch(entry.name)
+            if match and stat.S_ISREG(info.st_mode) and info.st_uid == owner:
+                ours.append((int(match.group(1)), entry.name, info.st_size))
+    for _, name, length in sorted(ours):
+        if files < MAX_FILES and size < MAX_FOLDER_BYTES:
+            break
+        try:
+            os.unlink(folder / name)
+        except FileNotFoundError:
+            pass
+        files, size = files - 1, size - length
+    return files < MAX_FILES and size < MAX_FOLDER_BYTES
 
 
 def recorder(provider, *, requested, effort, tools=()):

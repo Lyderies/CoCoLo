@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 
+from .client_runtime import runtime_directory
 from .collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient
 from .collector_paths import CollectorPaths, StateError, _assert_no_symlink_components, _canonical_project_root, _check_owner_mode
 from .history_contracts import AttemptBinding, HistoryError, valid_integer
@@ -31,6 +32,7 @@ from .learning_contracts import canonical_json, keyed_digest
 from .orchestration_api import ORCHESTRATION_OPERATIONS, OrchestrationScope, orchestration_request_digest
 from .orchestration_service import OrchestrationAuthorization
 from .control_api import ControlScope, encode_control_request
+from .service_transport import refusal_frame
 from .control_service import ControlAuthorization
 from .service_protocol import service_request_digest
 from .history_api import history_request_digest
@@ -54,6 +56,12 @@ OWNER_HISTORY_OPERATIONS = frozenset({'history.learning_cycle', 'history.learnin
                                       'history.learning_feedback', 'history.learning_review_case',
                                       'history.orchestration_report', 'history.capacity_report'})
 DRIVER_ENDPOINT = 'run.sock'  # Beside the control socket; client_runtime uses the same name.
+# D1: refusals of the stored record context a caller is told as they are; any other failure is "not authorized".
+_PLAIN_CONTEXT_REFUSALS = frozenset({'history_worker_context_unavailable', 'history_result_expired',
+                                     'history_result_not_ready'})
+# O0d R1: what the record command's lookup of a published attempt also names plainly: no such dispatch, and
+# original inputs that differ from the stored ones (a conflict of input, not a refusal of the caller).
+_PLAIN_REFERENCE_REFUSALS = _PLAIN_CONTEXT_REFUSALS | {'history_not_found', 'history_conflict'}
 
 
 @dataclass(frozen=True)
@@ -81,6 +89,7 @@ class _Pending:
     connection: socket.socket
     kind: str
     deadline_ns: int
+    refusal: str | None = None  # R7b: the fixed reason sent before the close, if any
 
 
 @dataclass(frozen=True)
@@ -109,9 +118,34 @@ def _peer_is_owner(connection):
     return uid == os.getuid()
 
 
-def runtime_directory(state, project_root):
-    """Short private socket directory; the keyed digest keeps project paths out of it."""
-    return state.root / 'rt' / keyed_digest(state.digest_key(), str(project_root))[:16]
+def _refuse(pending):
+    """Best effort, never blocking: the refusal line, if any, before the close (R7b). Only a peer of
+    this account reached this point (checked at accept); a write that does not fit is simply dropped."""
+    if pending.refusal is None:
+        return
+    try:
+        pending.connection.send(refusal_frame(pending.refusal))
+    except OSError:
+        pass
+
+
+def _exclusive_hint_lock(directory):
+    """The project's hint lock (`project_host_client.HINT_LOCK`), held exclusively: its descriptor,
+    which the caller closes to release it. Its holders keep it briefly, so a few seconds' retries."""
+    descriptor = os.open(directory / 'hint.lock', os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        for attempt in range(500):
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return descriptor
+            except BlockingIOError:
+                if attempt == 499:
+                    raise HistoryError('history_writer_busy') from None
+                time.sleep(0.01)
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 def write_owner_file(path, body):
@@ -161,20 +195,22 @@ class EnrolledFrontend:
     def listen(self, path, kind):
         if len(os.fsencode(path)) > MAX_SOCKET_PATH_BYTES:
             raise HistoryError('history_invalid_input')
+        # O10 UP-1: no umask change here; the umask is process-wide, so another thread's mkdir(0o700)
+        # during this bind came out 0o600 and its owner-only check refused it. Nobody else can reach
+        # the socket before the chmod below: its directory must be the owner's alone.
+        _assert_no_symlink_components(path.parent)
+        _check_owner_mode(path.parent, directory=True)
         try:
             if stat.S_ISSOCK(path.lstat().st_mode):
                 path.unlink()  # Left by an earlier start; the caller holds the owner lock now.
         except FileNotFoundError:
             pass
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        previous = os.umask(0o177)
         try:
             listener.bind(str(path))
         except BaseException:
             listener.close()
             raise
-        finally:
-            os.umask(previous)
         self._listeners.append((listener, kind, path))
         path.chmod(0o600)
         listener.listen(min(64, self._limits.pending_connections))
@@ -210,6 +246,7 @@ class EnrolledFrontend:
         """Return True once this connection has been attached or must be closed."""
         connection = pending.connection
         if self._clock_ns() >= pending.deadline_ns:
+            pending.refusal = 'service_refused_late'
             return True  # Absolute: a line that completes late is still late.
         try:
             seen = connection.recv(MAX_PREAMBLE_BYTES, socket.MSG_PEEK)
@@ -220,6 +257,8 @@ class EnrolledFrontend:
         newline = seen.find(b'\n')
         if newline < 0:
             # Bytes without a line end never extend the absolute deadline.
+            if seen and len(seen) >= MAX_PREAMBLE_BYTES:
+                pending.refusal = 'service_refused_enrollment'
             return not seen or len(seen) >= MAX_PREAMBLE_BYTES
         try:
             # Consume exactly the preamble; the request frame stays queued for the service.
@@ -227,21 +266,27 @@ class EnrolledFrontend:
             if line != seen[:newline + 1]:
                 return True
             enrolled = self._verifier.verify(line[:-1])
-        except (EnrollmentError, OSError):
+        except EnrollmentError:
+            pending.refusal = 'service_refused_enrollment'  # never why: the reason is fixed
+            return True
+        except OSError:
             return True
         token = object()
         now = self._clock_ns()
         with self._lock:
             self._release_locked(now)
             if self._closed or len(self._contexts) >= self._limits.contexts:
+                pending.refusal = 'service_refused_unavailable' if self._closed else 'service_refused_busy'
                 return True
             self._contexts[token] = EnrolledContext(enrolled, pending.kind, now + self._limits.context_lifetime_ns,
                                                     connection)
         try:
             self._attach(pending.kind, connection, token)
-        except Exception:
+        except Exception as error:
             with self._lock:
                 self._contexts.pop(token, None)
+            pending.refusal = ('service_refused_busy' if getattr(error, 'reason_code', None) == 'account_busy'
+                               else 'service_refused_unavailable')
             return True
         pending.connection = None  # Custody moved to the service.
         self.last_enrolled_ns = now
@@ -266,6 +311,7 @@ class EnrolledFrontend:
         for pending in self._pending:
             if self._enroll(pending):
                 if pending.connection is not None:
+                    _refuse(pending)
                     pending.connection.close()
             else:
                 remaining.append(pending)
@@ -279,6 +325,8 @@ class EnrolledFrontend:
             self._contexts.clear()
         for pending in self._pending:
             if pending.connection is not None:
+                pending.refusal = 'service_refused_unavailable'
+                _refuse(pending)
                 pending.connection.close()
         self._pending = []
         for listener, _, path in self._listeners:
@@ -325,24 +373,31 @@ class ProjectServiceHost:
             # Sockets, hint and capability are keyed by the project root, the
             # writer lock by its history. This lock makes the root exclusive
             # too, whatever history a second host was handed.
-            descriptor = os.open(directory / 'host.lock', os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
-            os.fchmod(descriptor, 0o600)
-            self._lock_fd = descriptor
-            # A client's liveness probe holds a shared lock for an instant; a
-            # live host holds this one for good. Retry briefly to tell them apart.
-            for attempt in range(20):
-                try:
-                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if attempt == 19:
-                        raise HistoryError('history_writer_busy') from None
-                    time.sleep(0.01)
-            # A dead host's hint would make this one look served before it listens.
+            # CI2: from before it takes the host lock until a dead host's hint is withdrawn, this host
+            # holds the hint lock, which a client reading the hint with its host's liveness shares:
+            # no client sees the dead host's hint with this host's lock and takes them for a service.
+            hint_lock = _exclusive_hint_lock(directory)
             try:
-                self._hint.unlink()
-            except FileNotFoundError:
-                pass
+                descriptor = os.open(directory / 'host.lock', os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+                os.fchmod(descriptor, 0o600)
+                self._lock_fd = descriptor
+                # A client's liveness probe holds a shared lock for an instant; a
+                # live host holds this one for good. Retry briefly to tell them apart.
+                for attempt in range(20):
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if attempt == 19:
+                            raise HistoryError('history_writer_busy') from None
+                        time.sleep(0.01)
+                # A dead host's hint would make this one look served before it listens.
+                try:
+                    self._hint.unlink()
+                except FileNotFoundError:
+                    pass
+            finally:
+                os.close(hint_lock)
             proofs = proof_directory(self._endpoints['project'])
             prepare_proof_directory(proofs)
             key = issue_capability(state, self._project_root, 'host')
@@ -415,18 +470,8 @@ class ProjectServiceHost:
             pass
         # Publication and a client's withdrawal of another version's hint take this
         # lock in turn, so a hint published here is never the one being withdrawn.
-        descriptor = os.open(self._endpoints['control'].parent / 'hint.lock',
-                             os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        descriptor = _exclusive_hint_lock(self._endpoints['control'].parent)
         try:
-            os.fchmod(descriptor, 0o600)
-            for attempt in range(500):
-                try:
-                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if attempt == 499:
-                        raise HistoryError('history_writer_busy') from None
-                    time.sleep(0.01)
             write_owner_file(self._hint, canonical_json(value))
         finally:
             os.close(descriptor)
@@ -446,13 +491,28 @@ class ProjectServiceHost:
         return OrchestrationAuthorization(self._scope, orchestration_request_digest(request),
                                           entry.enrolled.host_client, ORCHESTRATION_OPERATIONS)
 
+    def _stored(self, read, *, plain=False):
+        """D1 (RS-D-2): a run's record context, read from the project store on the writer thread (where every
+        authorizer of this host's project services runs), never from the driver's memory. None when it is not this
+        host class's or does not verify; with `plain`, a refusal worth naming is raised as it is."""
+        if self._driver is None or self._runtime is None:
+            return None
+        try:
+            return read(self._runtime.persistence)
+        except HistoryError as error:
+            if plain and error.reason_code in (_PLAIN_CONTEXT_REFUSALS if plain is True else plain):
+                raise
+            return None
+        except Exception:
+            return None
+
     def _authorize_result(self, request, token):
-        """A run's own result, read by the host class that dispatched it."""
+        """A run's own result, read by the host class that dispatched it (its stored context names that class)."""
         entry = self._frontend.context(token) if self._frontend is not None else None
-        if (entry is None or entry.kind != 'project' or entry.enrolled.role != 'host' or self._driver is None
+        if (entry is None or entry.kind != 'project' or entry.enrolled.role != 'host'
                 or entry.enrolled.host_client == OWNER_CLIENT
-                or not (self._driver.owns_binding(request.binding, entry.enrolled.host_client)
-                        or self._driver.retains_worker(request.binding, entry.enrolled.host_client))):
+                or self._stored(lambda lane: lane.stored_result_context(request.binding,
+                                                                        entry.enrolled.host_client)) is None):
             return None
         return ResultReadAuthorization(request.binding, request.result_digest, result_read_request_digest(request))
 
@@ -469,9 +529,10 @@ class ProjectServiceHost:
         if request.operation == 'history.admit_host_result':
             try:
                 binding = decode_host_result_reference(request.payload).binding
-                original = None if self._driver is None else self._driver.result_context(binding, entry.enrolled.host_client)
             except Exception:
                 return None
+            original = self._stored(lambda lane: lane.stored_result_context(binding, entry.enrolled.host_client),
+                                    plain=True)
             if original is None:
                 return None
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
@@ -482,8 +543,11 @@ class ProjectServiceHost:
             # The project's own learning: any enrolled primary of this project may run and
             # read it. Reviewing a case is the owner's command, by the same convention as
             # every earlier version (the installed deny rules keep it from model sessions).
+            # O0c M1, M3: the capacity report also says which run slots this host can no longer free.
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
-                                        frozenset({request.operation}))
+                                        frozenset({request.operation}),
+                                        run_slots=self.stuck_run_slots()
+                                        if request.operation == 'history.capacity_report' else None)
         if request.operation == 'history.learning_feedback':
             # The authority is the owner's signature over this record, checked by the
             # account owner that holds the owner key; this process never reads that key.
@@ -497,23 +561,34 @@ class ProjectServiceHost:
                 return None
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
                                         frozenset({request.operation}))
+        if request.operation == 'history.result_reference':
+            # D1: a published attempt of this host class, named by its run handle, attempt and open inputs.
+            payload = request.payload
+            original = self._stored(lambda lane: lane.stored_attempt_context(
+                payload['run_handle'], payload['attempt'], entry.enrolled.host_client, payload['inputs_digest']),
+                plain=_PLAIN_REFERENCE_REFUSALS)
+            if original is None:
+                return None
+            return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
+                                        frozenset({request.operation}), host_result_context=original)
         if request.operation in {'history.worker_input', 'history.routing_evidence'}:
-            # About a run this host class recorded: its originals are the ones kept here.
-            worker = None if self._driver is None else self._driver.worker_context(
-                None, request.payload.get('host_outcome_digest'), entry.enrolled.host_client)
+            # About a run this host class recorded: its originals are the ones the store keeps for it.
+            worker = self._stored(lambda lane: lane.stored_worker_context(
+                request.payload.get('host_outcome_digest'), entry.enrolled.host_client))
             if worker is None:
                 return None
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
                                         frozenset({request.operation}), host_result_context=worker)
         if request.operation in {'history.qa_scope', 'history.issue_qa_checks', 'history.commit_qa', 'history.qa_details'}:
             # QA of a worker and its verifier, both recorded by this host class: the
-            # originals are the ones this host kept, never request JSON.
+            # originals are the ones the store keeps for them, never request JSON.
             try:
-                pair = [self._driver.retained_context(AttemptBinding(**request.payload[name + '_binding']),
-                                                      entry.enrolled.host_client) for name in ('worker', 'verifier')]
+                bindings = [AttemptBinding(**request.payload[name + '_binding']) for name in ('worker', 'verifier')]
             except Exception:
                 return None
-            if self._driver is None or None in pair:
+            pair = [self._stored(lambda lane, binding=binding: lane.stored_result_context(
+                binding, entry.enrolled.host_client, recorded=True)) for binding in bindings]
+            if None in pair:
                 return None
             qa = OperationalQAContext(*pair)
             check = None
@@ -541,8 +616,8 @@ class ProjectServiceHost:
             digest = original['task'].get('verification_for_outcome') if type(original['task']) is dict else None
             worker = None
             if digest is not None:
-                worker = None if self._driver is None else self._driver.worker_context(
-                    original['orchestration_handle'], digest, entry.enrolled.host_client)
+                worker = self._stored(lambda lane: lane.stored_worker_context(
+                    digest, entry.enrolled.host_client, orchestration_handle=original['orchestration_handle']))
                 if worker is None:
                     return None
             prospective = OpenScopeContext(self._scope, original['orchestration_handle'], original['assignment'],
@@ -582,9 +657,19 @@ class ProjectServiceHost:
         self._owner()
         return self._driver is not None and self._driver.exhausted()
 
-    def retaining(self):
+    def replacing(self):
+        """O0c M3: this host holds slots it will never free and no run is under way; it stops once idle."""
         self._owner()
-        return self._driver is not None and self._driver.retaining()
+        return self._driver is not None and self._driver.replace_when_idle()
+
+    def client_idle_ns(self):
+        """Time since the last enrolled connection, whatever this host holds."""
+        return max(0, self._clock_ns() - self._frontend.last_enrolled_ns)
+
+    def stuck_run_slots(self):
+        """O0c M1, M3: (slots held that nothing here will free, the run slots there are), for status."""
+        from .project_driver import PREPARATION_SLOTS
+        return (0 if self._driver is None else self._driver.stuck_slots(), PREPARATION_SLOTS)
 
     def holding(self):
         """Whether any run or unfinished work for one is held here."""
@@ -592,6 +677,18 @@ class ProjectServiceHost:
         runtime = self._runtime
         return bool(len(runtime.pool._jobs) or len(runtime.persistence._jobs)
                     or (self._driver is not None and self._driver.busy()))
+
+    def faulted(self):
+        """O10 D13: whether this host's result writer faulted; it then stops and settles nothing itself."""
+        self._owner()
+        persistence = self._runtime.persistence
+        return persistence is not None and persistence.faulted()
+
+    def settle_lost_runs_later(self):
+        """O10 D13: once closed with every thread stopped, free the journal lock and settle nothing here:
+        the next host settles this one's runs as those of a stopped instance."""
+        if self._driver is not None and self.threads_stopped():
+            self._driver.settle_on_exit(settle=False)
 
     def idle_ns(self):
         """Time since the last enrolled connection, or 0 while any run is held."""

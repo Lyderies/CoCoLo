@@ -62,10 +62,15 @@ class LegacyRunsFixture:
 class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
     def test_old_runs_from_an_earlier_version_neither_hold_capacity_nor_block_the_move(self):
         ledger = self.upgrade_with_runs(30 * 24 * HOUR, 3 * 24 * HOUR, 2 * learning_store.LEGACY_RUN_MAX_MS)
+        # O0b RS-A round 1 F1 (requirement, design draft 3b item 2): a slot today's rule already frees is
+        # released `crashed` by the upgrade, a written decision; no completion is invented for it.
         rows = ledger._connection.execute(
-            "SELECT COUNT(*) FROM active_run_capacity WHERE kind='legacy_unknown' AND released_at_ms IS NULL"
-        ).fetchone()[0]
-        self.assertEqual(3, rows)  # Kept, unreleased: no cleanup is invented.
+            "SELECT COUNT(*) FROM active_run_capacity a JOIN run_holds r ON r.kind='run_slot' "
+            "AND r.identity=a.handle_digest WHERE a.kind='legacy_unknown' AND r.release_kind='crashed' "
+            "AND a.release_digest=r.receipt").fetchone()[0]
+        self.assertEqual(3, rows)
+        self.assertEqual(0, ledger._connection.execute(
+            "SELECT COUNT(*) FROM capacity_completions WHERE released_at_ms IS NOT NULL").fetchone()[0])
         self.assertEqual(0, self.counted(ledger))
         self.assertTrue(ledger.drained())
 
@@ -77,6 +82,14 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
         ledger._clock_ms = lambda: later
         self.assertEqual(0, self.counted(ledger))
         self.assertTrue(ledger.drained())
+
+    def test_RS_A_F8_a_recent_earlier_run_is_eligible_a_day_after_its_claim(self):
+        ledger = self.upgrade_with_runs(learning_store.HOUR if hasattr(learning_store, "HOUR") else HOUR)
+        claimed = ledger._connection.execute(
+            "SELECT claimed_at_ms FROM active_run_capacity WHERE kind='legacy_unknown' AND released_at_ms IS NULL"
+        ).fetchone()[0]
+        status = ledger.account_holds_status(self.project)["run_slot"]
+        self.assertEqual(claimed + learning_store.LEGACY_RUN_MAX_MS + 1, status["next_eligible"])
 
     def test_the_bound_is_a_cautious_day(self):
         # Not a proof: a native 0.2.x child had no enforced deadline, and a bridged one
@@ -118,7 +131,6 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
         server._stop.set.assert_called_once()
 
 
-
 class EarlierVersionRunsStatusTests(LegacyRunsFixture, unittest.TestCase):
     """Status says how many slots runs from an earlier version hold, and until when (F2)."""
 
@@ -150,6 +162,39 @@ class EarlierVersionRunsStatusTests(LegacyRunsFixture, unittest.TestCase):
                     client, "_request", return_value={**answer, "earlier_version_runs": bad}), \
                     self.assertRaises(CollectorError):
                 client.learning_migration(Path("/srv/project"))
+
+
+class UpgradePhaseTests(LegacyRunsFixture, unittest.TestCase):
+    """S3-P3: an upgrade says what it is doing, as fixed phase lines, only when setup asks."""
+
+    def upgrade_output(self, environ):
+        import contextlib
+        import io
+        stream = io.StringIO()
+        with mock.patch.dict("os.environ", environ, clear=False), contextlib.redirect_stderr(stream):
+            self.upgrade_with_runs(30 * 24 * HOUR)
+        return stream.getvalue()
+
+    def test_S3_P3a_P3b_an_upgrade_reports_each_backup_and_the_upgrade(self):
+        lines = self.upgrade_output({"COCOLO_PHASES": "1"}).splitlines()
+        projects = len([line for line in lines if line.startswith("cocolo-phase: backing up project ")])
+        self.assertGreaterEqual(projects, 1)
+        self.assertIn(f"cocolo-phase: backing up project 1 of {projects}", lines)
+        self.assertIn("cocolo-phase: upgrading the records", lines)
+        # Fixed text only: never a path, identifier or value.
+        self.assertTrue(all(line.startswith("cocolo-phase: ") and "/" not in line for line in lines if "phase" in line))
+
+    def test_S3_P4_a_failing_standard_error_never_stops_the_upgrade(self):
+        # S3-P4: the review found a failed phase write deleted this run's backups and stopped the upgrade.
+        from tests.test_phase_report import FailingStream
+        with mock.patch.dict("os.environ", {"COCOLO_PHASES": "1"}, clear=False), \
+                mock.patch("sys.stderr", FailingStream()):
+            ledger = self.upgrade_with_runs(30 * 24 * HOUR)
+        version = ledger._connection.execute("PRAGMA user_version").fetchone()[0]
+        self.assertEqual(version, learning_store.LEDGER_SCHEMA_VERSION)
+
+    def test_S3_P3a_nothing_extra_is_written_unless_asked(self):
+        self.assertNotIn("cocolo-phase:", self.upgrade_output({"COCOLO_PHASES": ""}))
 
 
 if __name__ == "__main__":

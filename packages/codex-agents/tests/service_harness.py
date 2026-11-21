@@ -61,6 +61,49 @@ class ServiceHarness:
             patcher = mock.patch.object(module, '_start_collector_locked', self.start_collector)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # How each result-persistence lane started, for the failure message (0.4.0 O5): on GitHub's
+        # runners a project service sometimes refused to start with history_service_unavailable, which
+        # the lane reports both for a writer not ready in time and for a fault while opening the store.
+        from codex_agents import result_persistence
+        self.lane_starts = []
+        original_init, original_open = (result_persistence.ResultPersistenceLane.__init__,
+                                        result_persistence.ResultPersistenceLane._history)
+
+        def init(lane, *arguments, **options):
+            began = time.monotonic()
+            try:
+                return original_init(lane, *arguments, **options)
+            except BaseException as error:
+                self.lane_starts.append(('lane refused', round(time.monotonic() - began, 2),
+                                         'fault' if getattr(lane, '_fault', False) else 'not ready', repr(error)))
+                raise
+
+        def opened(lane, *arguments, **options):
+            try:
+                return original_open(lane, *arguments, **options)
+            except BaseException as error:
+                self.lane_starts.append(('store open failed', type(error).__name__, getattr(error, 'reason_code', '')))
+                raise
+        for name, value in (('__init__', init), ('_history', opened)):
+            patcher = mock.patch.object(result_persistence.ResultPersistenceLane, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        # The checks serve_project makes before the lane, which it reports only as unavailable.
+        from codex_agents import project_service
+        from codex_agents.collector_paths import CollectorPaths as StatePaths
+
+        def recorded(label, function):
+            def call(*arguments, **options):
+                try:
+                    return function(*arguments, **options)
+                except BaseException as error:
+                    self.lane_starts.append((label, type(error).__name__, str(error)[:160]))
+                    raise
+            return call
+        for owner, name in ((project_service, '_owned_directory'), (StatePaths, 'digest_key')):
+            patcher = mock.patch.object(owner, name, recorded(name, getattr(owner, name)))
+            patcher.start()
+            self.addCleanup(patcher.stop)
         # Where a run stopped, for the failure message; the driver itself keeps only a reason code.
         self.stopped_runs, original_fail = [], project_driver.RunDriver._fail
 
@@ -127,7 +170,11 @@ class ServiceHarness:
         patcher = mock.patch.object(project_driver.RunDriver, '_advance', driver_advance)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.threads = [threading.Thread(target=self.collector, name='test-collector')]
+        # HT-1: a cleanup, not only tearDown, which unittest skips when setUp fails after this point;
+        # added last, so it runs before the patches above are undone.
+        self.addCleanup(self._end_services, self.stop)
+        # HT-1: daemon, so a thread that a stop cannot reach never keeps the interpreter alive.
+        self.threads = [threading.Thread(target=self.collector, name='test-collector', daemon=True)]
         self.threads[0].start()
         self.wait_for(lambda: capability_path(self.paths, None, 'account').exists())
         if project_host:
@@ -192,18 +239,20 @@ class ServiceHarness:
             self.failures.append(repr(error))
 
     def start_project_host(self, project, stop=None):
-        stopped = (stop or self.stop).is_set
+        # HT-1: the harness's stop ends this host too, so a test that fails before its own stop never leaves it.
+        def stopped():
+            return self.stop.is_set() or (stop is not None and stop.is_set())
 
         def serve():
             try:
                 report = serve_project(self.state.root, project, stopped=stopped, bundle_root=self.bundle,
                                        **({} if self.liveness is None else {'liveness': self.liveness}))
                 if not report.get('ready'):
-                    self.failures.append('project host refused: %r' % (report,))
+                    self.failures.append('project host refused: %r; lane starts: %r' % (report, self.lane_starts))
             except BaseException as error:
                 self.failures.append(repr(error))
 
-        thread = threading.Thread(target=serve, name='test-project-host-' + project.name)
+        thread = threading.Thread(target=serve, name='test-project-host-' + project.name, daemon=True)
         self.threads.append(thread)
         thread.start()
         self.wait_for(lambda: runtime_hint_path(self.paths, project).exists())
@@ -216,6 +265,12 @@ class ServiceHarness:
             code = cli.main()
         self.assertEqual(expected, code, stdout.getvalue())
         return json.loads(stdout.getvalue())
+
+    def _end_services(self, stop):
+        """Stop and join whatever this test's services left, however setUp or the test ended."""
+        stop.set()
+        for thread in reversed(self.threads):
+            thread.join(20)
 
     def stop_services(self):
         self.stop.set()

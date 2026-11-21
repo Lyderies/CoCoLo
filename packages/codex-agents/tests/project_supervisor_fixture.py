@@ -154,7 +154,19 @@ def main():
                         operations = {'history.open_scope'} if prospective is not None else set()
                         original_result = None
                         if data.get('client_result', False):
-                            operations |= {'history.admit_host_result', 'history.read_record'}
+                            operations |= {'history.admit_host_result', 'history.read_record',
+                                           'history.result_reference'}
+                            if request.operation == 'history.result_reference':
+                                # D1: as the product host does, the stored context of the named attempt authorizes it;
+                                # an attempt that was never opened is refused as not found (O0d R1).
+                                payload = request.payload
+                                if not (root/'launches').exists():
+                                    # The fixture leases at open, where the product driver leases when it dispatches:
+                                    # before any launch there is no dispatch to find.
+                                    raise HistoryError('history_not_found')
+                                original_result = lane.stored_attempt_context(
+                                    payload['run_handle'], payload['attempt'], data.get('primary_client', 'codex-host-v1'),
+                                    payload['inputs_digest'])
                             if request.operation != 'history.open_scope':
                                 original_result = HostResultContext(binding, data['assignment'], data['task'],
                                                                     data['route'], data['client_capability'])
@@ -190,8 +202,8 @@ def main():
                 retained_bytes=2*MAX_PERSISTENCE_ENTRY_BYTES if api_options else MAX_PERSISTENCE_ENTRY_BYTES,
                 allow_local_execution_reference=not data.get('with_provenance', False), **api_options)
 
-        def until(predicate):
-            end = time.monotonic() + 12
+        def until(predicate, seconds=12):
+            end = time.monotonic() + seconds
             while not predicate():
                 if time.monotonic() >= end:
                     raise RuntimeError("fixture_progress_timeout")
@@ -224,7 +236,11 @@ def main():
 
         def next_message():
             if data.get('client_dispatch', False):
-                until(lambda: bool(select.select([sys.stdin], [], [], 0)[0]))
+                # Serve the product meanwhile, but the 12 s progress limit is for the product's progress, not for the
+                # parent test: while it runs the client commands that precede this message (about 6 s idle, over
+                # 12 s on a loaded CI runner) this child must not exit. A parent that is gone closes stdin, which
+                # also ends the wait.
+                until(lambda: bool(select.select([sys.stdin], [], [], 0)[0]), seconds=120)
             return receive()
 
         def start_ingress():
@@ -278,7 +294,10 @@ def main():
             lease_scope = ResultLeaseBinding(**next_message()['scope'])
             if any(getattr(lease_scope, name) != value for name, value in asdict(scope).items()):
                 raise RuntimeError('fixture_foreign_original_open')
-        handle = lane.prepare_lease(lease_scope, worker)
+        # D1: as the project driver does, the lease stores the run's record context (its host class and capability).
+        stored_context = ({'host_class': data.get('primary_client', 'codex-host-v1'),
+                           'client_capability': data['client_capability']} if data.get('client_result', False) else None)
+        handle = lane.prepare_lease(lease_scope, worker, record_context=stored_context)
         until(lambda: lane.snapshot(handle)["state"] != "preparing")
         lane.arm(handle)
         until(lambda: lane.snapshot(handle)["state"] != "arming")

@@ -1,4 +1,6 @@
 """Closed fixed billing-probe values; no native or execution authority."""
+import re
+
 from .admission_metadata import _headroom_state
 from .contracts import ContractError
 from .history_contracts import valid_integer
@@ -10,10 +12,24 @@ BILLING_PROBE_REASONS = frozenset({'probe_invalid_request', 'probe_invalid_respo
     # Which step stopped a probe before it launched (0.3.2): preparing it, its worker, another step.
     'probe_preparation_failed', 'probe_preparation_unknown', 'probe_worker_failed', 'probe_step_failed',
     # No probe worker can free without a restart (0.3.3, C9c).
-    'probe_worker_unavailable'})
+    'probe_worker_unavailable',
+    # The reply failed its own contract (the probe ran or was reused; its answer could not be sent).
+    'probe_reply_invalid'})
 PROBE_STEP_REASONS = frozenset({'probe_preparation_failed', 'probe_preparation_unknown', 'probe_worker_failed',
-    'probe_step_failed', 'probe_worker_unavailable'})
-PROBE_COMPLETION_REASONS = frozenset({'probe_incomplete', 'probe_invalid_events', 'probe_no_events'})
+    'probe_step_failed', 'probe_worker_unavailable',
+    'probe_unlaunched_expired'})  # O0b RS-A-2: a reserved probe past its deadline, closed by the supervisor
+# CI-3: why the init-frame check stopped a probe (the bridge's `init_*` outcomes); kept as the reply's reason
+# instead of probe_incomplete.
+PROBE_INIT_REASONS = frozenset({'init_api_key_source', 'init_model_mismatch', 'init_plugin_not_allowed',
+    'init_plugin_not_disabled', 'init_mcp_server_loaded', 'init_tool_not_allowed', 'init_permission_mode_mismatch',
+    'init_additional_directories_present'})
+PROBE_COMPLETION_REASONS = frozenset({'probe_incomplete', 'probe_invalid_events', 'probe_no_events'}) | PROBE_INIT_REASONS
+_CLIENT_VERSION = re.compile(r'\d+\.\d+\.\d+')
+
+
+def valid_client_version(value):
+    """CI-4: the client version an init frame reported with the probe, or None when none could be read."""
+    return value is None or (type(value) is str and _CLIENT_VERSION.fullmatch(value) is not None)
 
 
 class BillingProbeError(RuntimeError):
@@ -35,7 +51,8 @@ def decode_billing_probe_input(value):
 def checked_billing_probe_reply(value):
     try:
         fields = {'probe', 'reason_code', 'records', 'known', 'observed_at_ms'}
-        if (type(value) is not dict or value.keys() not in (fields, fields | {'billing_waivers'})
+        if (type(value) is not dict or value.keys() - {'billing_waivers', 'client_version'} != fields
+                or not valid_client_version(value.get('client_version'))
                 or type(value['probe']) is not str or value['probe'] not in {'reused', 'denied', 'completed'}
                 or type(value['known']) is not bool or not valid_integer(value['observed_at_ms'])
                 or type(value['records']) is not list or len(value['records']) > 3):

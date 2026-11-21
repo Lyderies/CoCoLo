@@ -28,6 +28,41 @@ class AccountStoreRecoveryTests(unittest.TestCase):
         self.assertTrue(self.ledger.verify_sanitized_backup(self.fixture.project_a_id, file_id="recovery_backup")["verified"])
         return path, path.read_bytes()
 
+    def backup_files(self):
+        partition = self.state.backups / self.fixture.project_a_id
+        return sorted(path.name for path in partition.iterdir()) if partition.exists() else []
+
+    def test_O10_L1_a_file_appearing_at_the_final_name_is_never_replaced(self):
+        from codex_agents import project_backup
+        final = self.state.backups / self.fixture.project_a_id / ("recovery_backup" + project_backup.SUFFIX)
+        verify = LearningLedger._verify_streamed_backup
+
+        def then_someone_writes_it(ledger, *args, **kwargs):
+            result = verify(ledger, *args, **kwargs)
+            final.write_bytes(b"not this backup")
+            return result
+
+        with mock.patch.object(LearningLedger, "_verify_streamed_backup", then_someone_writes_it), \
+                self.assertRaisesRegex(LedgerError, "stored file already exists"):
+            self.ledger.create_sanitized_backup(self.fixture.project_a_id, file_id="recovery_backup",
+                                                expires_at_ms=time.time_ns() // 1_000_000 + 60_000)
+        self.assertEqual(b"not this backup", final.read_bytes())
+        self.assertEqual([final.name], self.backup_files())
+
+    def test_O10_L2_a_failure_after_publication_leaves_no_unregistered_backup(self):
+        import stat
+        fsync = os.fsync
+
+        def directory_fails(descriptor):
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError("fixture: directory sync failed")
+            return fsync(descriptor)
+
+        with mock.patch.object(os, "fsync", directory_fails), self.assertRaises(OSError):
+            self.ledger.create_sanitized_backup(self.fixture.project_a_id, file_id="recovery_backup",
+                                                expires_at_ms=time.time_ns() // 1_000_000 + 60_000)
+        self.assertEqual([], self.backup_files())
+
     def assert_reopen_refuses_and_preserves_backup(self, *, empty=False, same_state=False):
         path, contents = self.backup()
         key = self.state.key_path.read_bytes()

@@ -2,6 +2,204 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
+## 0.4.0 (in progress)
+
+- Two commands that came together on a project whose service was not running could leave one of them reporting
+  `orchestration_client_unavailable`: the start that lost to the other's service ended before that service
+  held its lock and did not wait for it. It now waits up to 3 s while no host lock is held, within the start timeout, for the winning service.
+- A billing probe asked within five minutes after a Claude child finished was refused as "billing probe
+  unavailable": it reused the child's own rate-limit records (tagged with a run), which the reply contract rejects.
+  Reuse now takes only the probe's own records, and a newer run record that is more restrictive (overage in use,
+  paid usage usable, headroom not ample) stops reuse and re-evaluates
+  admission, so a probe launches only if admitted (otherwise a named denial). A reply that fails its own
+  contract is now `probe_reply_invalid` and is recorded in the billing lane's last failure.
+- Claude Code 2.1.323 lists one built-in plugin, `cc-plugin-privacy`, in its init frame even when no plugin is
+  installed (captured under COCOLO's own child settings), so the check that no plugin loads stopped every Claude
+  child and the billing probe. The check now accepts that one plugin, only with exactly the keys `name`,
+  `path` (`builtin`) and `source` (`cc-plugin-privacy@builtin`); its only effect is a hook that can restrict a
+  tool call. A built-in COCOLO's settings disable (`cc-plugin-agents-md`, `cc-plugin-telemetry`,
+  `cc-plugin-plugin-authoring`, `cc-plugin-easel`) that is listed means the settings did not apply and stops the
+  child (`init_plugin_not_disabled`); any other plugin stops it too (`init_plugin_not_allowed`, renamed from
+  `init_plugin_loaded`). Tools, MCP servers, the key source and the model are held as before, and a client that
+  reports a `permissionMode` other than the one COCOLO sets, or any `additional_directories`, is stopped
+  (`init_permission_mode_mismatch`, `init_additional_directories_present`). A billing probe stopped by the init
+  check now reports that reason (in `provider-observe --billing-probe`) instead of `probe_incomplete`, and a
+  probe records the client version its init frame reported (`client_version` in its reply). Package 0.8.40.
+- The router can now read a task's risk and its failed attempts, and the verifier can follow the worker's risk,
+  but only where the routing policy says so. Three optional policy entries do it: `risk_candidates` (a candidate
+  list per risk band; high and critical may never go below the cell's first choice), `escalation` (a retry after
+  a counted failure moves once to the next candidate up for work with an executable check, stays put for
+  judgment work, and goes to the strongest candidate from the third attempt) and per-risk verifier settings
+  (`by_risk`). A route that used one says so in `routing_basis`. The shipped policy has none of them, so every
+  route is unchanged.
+- A new read-only command, `learning-usage-report --project-root <root> --since <ISO> --until <ISO> [--limit N]`,
+  reports what a window of children used: per provider and model, the runs, the runs with complete usage and
+  the input, output, cache-creation and cache-read tokens, and per run an opaque run id, time, model, effort,
+  role, outcome and tokens. It reads the project's store and the old ledger read-only: it starts no service and
+  writes nothing, and names no task text, path or store identifier. It lists at most 500 runs (`--limit`, at
+  most 2,000) and says when a window had more.
+- A run's usage counted as unknown unless all eight usage fields were known, and a bridged child never reports
+  model calls, tool calls, latency or cost, so `learning-status` counted every run as `host_usage_unknown` and
+  `learning-orchestration-report` never said `child_attribution: complete`. A run is now complete when its
+  input, cached-input and output token counts are known. Runs already recorded keep the flag they had; the new
+  report decides each run from its own usage record.
+- A result can be recorded after its service stopped. What a record, a verifier and QA need of a run (its assignment,
+  task, route, client capability and host class) is now kept in the project's records with the run, from before
+  its claim, instead of only in the service's memory, so a restarted service records a result left on disk, opens
+  its verifier and runs QA on it. The record no longer has to come within an hour of the run's release, a service
+  no longer forgets workers after 64, and a service holding recorded workers stops after the ordinary 15 idle
+  minutes instead of 12 hours. A result kept from before this version is still kept to its deadline, but cannot be
+  recorded, verified or run through QA (`history_worker_context_unavailable`), as after a restart before.
+- Claims, opens and probes no longer stop machine-wide after two account executions end unconfirmed. An
+  unconfirmed signature execution, a billing job left unknown or a probe worker held unknown now faults its
+  account lane, so the account restarts itself at its next check; unknown work held in one lane no longer stops
+  another lane's restart. The restart first proves every child the account started is gone (each signature
+  helper reaped, each probe's process tree confirmed empty or never started) and waits, naming the lane, while
+  one may still run. An unknown probe whose child is proven gone has its admitted row settled at once, so it no
+  longer holds the machine's probe capacity. A claim, open or probe that could only wait for a stuck signature
+  lane is refused at once (`claim_unavailable`, `open_unavailable`, `probe_unavailable`).
+- The learning cycle and case review read the last 90 days, not all time. Before, every case and candidate a
+  project ever mined counted for good against 30,000 records (the project store) or 20,000 cases (the old
+  ledger), and a project that reached them got `learning_capacity` on every cycle; only the owner's
+  `learning-expire` removed any. Now unpromoted cases and candidates past 90 days are removed in small batches by
+  the project service's cleanup pass (the collector's sweep for a project still in the old ledger). Kept
+  however old: cases in a controlled corpus, candidates past `proposed`, and anything a later record names.
+  The 90 days is one setting (`LEARNING_RETENTION_MS`), the same window outcomes and operational QA already use.
+  another lane's restart. The restart first proves every process the account started is gone: each signature
+  helper reaped (inside the macOS sandbox that refuses every new process, or with its group and session empty
+  on Linux), each probe's process tree confirmed empty or never started, and each provider CLI the observation
+  lane started reaped with its process group empty (its group is killed first). A start that failed with no
+  process left is not in doubt. While one cannot be proven, `learning-status` names the process, the command
+  that checks it and the next step (restart the collector once nothing is listed). An unknown probe whose model
+  is proven gone is settled at once (retried while the records are busy): one that ran keeps its billing
+  records, so the next probe reuses them; one that never ran is settled as a denial. A claim, open or probe that
+  could only wait for a stuck signature lane is refused at once (`claim_unavailable`, `open_unavailable`,
+  `probe_unavailable`).
+- A project's run opens no longer stop for good after 256: the account counted every open request ever made
+  (and refused the next with `open_busy`), in every release since the open journal was added. Only opens in
+  progress count now (four at once), and a full limit says so (`open_capacity_full`, with its next step).
+  Finished opens are removed, with their run binding and receipt, a week after the run's expiry; replaying one
+  answers `open_expired`. `learning-status` shows `account_capacity.open_requests`.
+- The project's records keep a register of every result lease and reservation, written together with it: what is
+  held, what released it (withdrawn before its claim, denied, fenced, bound to its claim, completed) and when. A
+  project opened with a lease or reservation missing from the register is refused. A new service releases at once
+  the unarmed leases a stopped service left, instead of waiting for their deadline. A reservation the account never
+  released is no longer removed with the finished rows.
+- The project's records gain format 18: four empty tables for the run supervisor's project-side holds, kept
+  results' contexts, prepared publications and account settlements, with checks that run at every open and
+  inside the upgrade. The service upgrades a project when it starts, keeping a copy as it was
+  (`history.sqlite3.before-18.<time>`); a failed check leaves format 17 untouched. An earlier 0.4.0 build
+  refuses a format-18 project.
+- `learning-status` shows launches the service cannot settle (`unresolved_launches`: how many, the oldest's age, and
+  up to 16 by run and state), instead of keeping them out of sight. The launch journal now reads every entry however
+  many there are, and removes lock files a stopped service left behind.
+- `dispatch` refuses, plainly, a route the project service does not run (`dispatch refused`, exit 2); the old direct
+  path, which no route could reach, is removed.
+- A result whose publication fails while the service is running is retried until it is recorded or the run's
+  deadline passes, instead of waiting until the service stops.
+- Leases a stopped service left are released by the service's own regular pass; a restarted service recognises what
+  its predecessor left; leases that were never admitted no longer use up cleanup slots.
+- Claim and capacity lookups stay fast as a project's history grows.
+- A run the account settled as lost, or released as crashed, no longer keeps a cleanup receipt counted against
+  the project's limit of 4,096 (`learning-status` -> `account_capacity.cleanup_receipts`); before, each such run
+  counted for good, and at the limit every new run of the project was refused `claim_cleanup_unavailable`.
+  Runs lost or crashed before the update stop counting too. A late release for such a run is refused plainly
+  (`claim_cleanup_conflict`).
+- A collector's stop signal is never lost, whatever it was doing when the signal arrived.
+- The setup wizard is now Python. `./setup.sh` is a short launcher: it checks `python3` before it
+  runs, as before, then starts the wizard, which shows the same screens, asks the same questions and
+  keeps every safeguard. Path prompts take typing, Backspace, Ctrl-U, Ctrl-W, Ctrl-V and Tab to
+  complete a path; moving the cursor inside a typed path is no longer offered.
+- `./setup.sh --update <project>` (and the menu's first entry, "Update this project") updates an
+  installed project with no menu: providers, profile and commands rule stay as they were, the install
+  is committed, the collector registered, and attest.py asks for the passphrase. It stops plainly,
+  changing nothing, on a failed check, a client not signed in, uncommitted managed files, or earlier
+  records that need your choice.
+- After the project is chosen, setup offers the recommended way first. A new project: "Set up
+  (recommended)" runs every step and asks only your own choices (providers, committing, earlier
+  records, the Codex profile and the commands rule; attest.py still asks for the passphrase), with no
+  do-it-now menus or pauses; "Configure step by step" asks every question as before. An installed
+  project: "Update this project (recommended)", or "Configure" for the full menu as before.
+- An update skips the billing attestation, and so the passphrase, when every enabled provider is
+  observed again and already has an attestation for its current account. Anything else (a provider
+  that cannot be observed, a missing attestation, a status that cannot be read) runs it as before;
+  an answers file and "Re-run the billing attestation only" always run it.
+- `./setup.sh --answers FILE` installs a project with no menu from a JSON answers file
+  (docs/setup-wizard.md); a missing, unknown or invalid answer is refused by name before anything
+  changes.
+- Setup starts the project's own service once the collector is ready, so it closes what an earlier
+  service left at once, not when the next child runs. `learning-start-project-service` does the same
+  from the command line.
+- A service that will not take a connection now says why before closing it: too late, an enrolment
+  that did not verify, too busy, or unavailable (`service_refused_*`), instead of closing silently.
+- An orchestration opened under an earlier service or version is refused
+  `history_orchestration_other_scope`, no longer reported as `host_client_mismatch`.
+- A refused run open now says why instead of `open_unavailable`: the account is still starting
+  (`open_account_starting`) or closing (`open_account_closing`), its database stayed busy
+  (`open_account_busy`), the project's service is not running (`open_service_not_running`), is an
+  earlier version's (`open_service_other_version`) or cannot be reached (`open_service_unreachable`), its
+  hint is not this account's private file (`open_service_hint_refused`), the
+  project is not active (`open_project_inactive`), stored open records disagree
+  (`open_state_inconsistent`), or something else failed (`open_failed`). Codex package 0.8.33.
+- `learning-status` shows how long each collector start-up phase took (`collector_startup_ms`).
+- When the account services are stuck (a part has failed, or the billing probe worker has been held for
+  over ten minutes) and nothing is running anywhere, the collector restarts them by itself, at most
+  once an hour, and its exit record says why (`account_restart`). While anything runs it never
+  restarts; `learning-status` says so and what is held.
+- `learning-review worker|verify|finish` runs one review (the worker, its verifier, then operational QA)
+  as a COCOLO command, saving each step's reply; it stops at a refused step, or when a child gave no
+  verdict.
+- Every refusal the command line prints now carries `next_step`: what to do next, in plain words, for its
+  reason code (`reason_code` and `error` are unchanged).
+- `learning-status` shows the account's own health (`account_health`): `ok`, `degraded` (work kept
+  after an error, a held probe worker, or a slot past its deadline), `faulted` (a lane that failed,
+  with its fixed cause and error type), or `unknown` with the reason, and an `attention` list in
+  plain words. It is read from notes each account lane publishes, so a stuck lane or a busy account
+  cannot stop it; `ready` keeps its meaning. While the account services start, status says
+  `status_account_starting`.
+- An orchestration report counts a run that failed before its open: `runs.admitted`,
+  `runs.failed_before_open` and `failed_before_open_reasons` (fixed reasons only), and such a run is
+  `abandoned`, no longer missing. `runs.opened` still counts real opens. The project's records gain
+  schema 17 (one small reporting table); setup upgrades them as before.
+- Tests are sorted into stages: `unit`, `integration` and `e2e` (`scripts/test-stages.json`).
+  `scripts/parallel_tests.py --stage unit` runs only the unit tests; a unit test that starts a
+  process, opens a socket or sleeps fails. `scripts/measure_test_behaviour.py` measures each module.
+- A setup step that runs a while shows how many seconds it has run, and after ten seconds says it can
+  take a few minutes, so an upgrade backing up large records no longer looks stuck.
+- That step also shows what it is doing, such as `backing up project 2 of 5` and then `upgrading the
+  records`. Setup asks the commands it runs for these lines (`COCOLO_PHASES=1`); they are fixed text
+  with counts only, never paths or names. A phase line that cannot be written is dropped, and the
+  upgrade carries on as before; the progress line fits the terminal's width. Codex package 0.8.23.
+- CI runs by stage: pull requests run unit tests on Linux and macOS and integration tests on Linux;
+  `main`, tags and a nightly run add the rest on both systems. Each job uses every core.
+- A wait for the account's records is bounded: at most 750 ms each, 800 ms for one whole request. A
+  request that cannot get them in time is answered `account_busy` (or `open_account_busy` for a run open)
+  with a next step, never a hang or another failure; `learning-status` counts these refusals, even while
+  the records are busy (`ledger_waits`). Codex package 0.8.34 to 0.8.37.
+- Recording a hook event no longer reads all of the project's records (on a 418 MB ledger it took 889 ms;
+  now under a millisecond), and the collector's start-up check reads only the record types it needs. Both
+  come from indexes the ledger gains when it opens; nothing else in it changes.
+- The project's service upgrades its own records when it starts (format 16 to 17), under its own lock,
+  keeping a copy of the store as it was first (`history.sqlite3.before-17.<time>`, owner-only). A learning
+  move that fails while the service starts is kept, shown by `learning-status`, and cleared by the next
+  start that succeeds; a service that stops at once reports its own reason to setup.
+- A service started by setup from a clone prepares children from the project's own files, so Claude
+  children can be prepared again.
+- A run refused because running children hold the space for results is answered
+  `result_capacity_busy` (wait for them), no longer "the store is full"; `learning-status` shows the
+  results in flight (`results_in_flight`).
+- `dispatch` survives a slow service: a status check or result read the service did not answer in time is
+  tried again until the run's own wait ends; a service that is gone still ends the wait at once.
+- A Claude child's result is held to the result schema, as a Codex child's is (`--json-schema`), so an
+  extra field no longer loses the whole result; a run that gives no schema-valid result is refused
+  `structured_output_missing`. Claude Code 2.1.311 or later is needed.
+- The skills say what to do when a dispatch loses its reply: wait for the run to end, then close.
+- Expired run bookings and finished billing probes no longer count against their limits (4,096 each per
+  project), so neither can fill for good; `learning-status` shows both against their limits
+  (`account_capacity.pending_bindings`, `account_capacity.billing_probes`). Codex package 0.8.38.
+- A collector asked to stop always ends within 18 s: after 15 s its exit record names the step it was
+  stuck in (`cause: stop_forced`, `stalled_in`), and a kernel alarm ends it whatever it is doing.
+
 ## 0.3.4: no limit fills for good (Codex package 0.8.32)
 
 - A project could record only 64 results in its whole life. After that every child ended

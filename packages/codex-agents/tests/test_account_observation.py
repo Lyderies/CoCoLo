@@ -2,7 +2,6 @@
 from dataclasses import replace
 import threading
 import unittest
-from pathlib import Path
 from unittest import mock
 
 import tests.support  # noqa: F401
@@ -245,9 +244,10 @@ class AccountObservationTests(unittest.TestCase):
 
     def test_034_R6_the_collector_runs_the_account_retention_sweep(self):
         from codex_agents import learning_store
-        source = Path(learning_store.__file__).read_text()
-        loop = source[source.index('next_sweep = time.monotonic() + WORKER_RESULT_SWEEP_SECONDS'):]
-        self.assertIn('self.ledger.sweep_account_retention()', loop[:loop.index('listener.accept()')])
+        import inspect
+        # S1-H1a-6b: the sweeps moved from the request loop to the collector's sweep cycle.
+        cycle = inspect.getsource(learning_store.CollectorServer._sweep_cycle)
+        self.assertIn('self.ledger.sweep_account_retention', cycle)
 
     def test_durable_quota_survives_abort_and_known_reply_still_works_at_capacity(self):
         with mock.patch.object(account_observation, 'MAX_OBSERVATION_REQUESTS', 1):

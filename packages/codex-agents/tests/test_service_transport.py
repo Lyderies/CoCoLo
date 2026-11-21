@@ -53,6 +53,8 @@ class FakeSocket:
         self.now += self.costs[1]
         if self.failure == "send":
             raise TimeoutError("CANARY-SEND")
+        if self.failure == "send_broken":  # the service refused and closed before the request was written
+            raise BrokenPipeError("CANARY-PIPE")
 
     def recv(self, size):
         self.read_sizes.append(size)
@@ -90,6 +92,27 @@ class ServiceTransportTests(unittest.TestCase):
                 self.assertEqual(1, len(client.connections))
                 self.assertEqual(sorted(client.timeouts, reverse=True), client.timeouts)
                 self.assertTrue(all(value > 0 for value in client.timeouts))
+
+    def test_R7b_a_service_refusal_line_is_its_own_reason(self) -> None:
+        for reason in ("service_refused_late", "service_refused_enrollment", "service_refused_busy", "service_refused_unavailable"):
+            with self.subTest(reason=reason):
+                client = FakeSocket([b'{"refused":"%s"}\n' % reason.encode()])
+                with self.assertRaises(transport.ServiceTransportError) as raised:
+                    self.exchange(client)
+                self.assertEqual(reason, raised.exception.reason_code)
+        # A refusal sent before the request was written is not read: the write failure stays generic.
+        with self.assertRaises(transport.ServiceTransportError) as raised:
+            self.exchange(FakeSocket([b'{"refused":"service_refused_busy"}\n'], failure="send_broken"))
+        self.assertEqual("transport_unavailable", raised.exception.reason_code)
+
+    def test_R7b_anything_but_an_exact_known_refusal_stays_an_ordinary_reply(self) -> None:
+        for line in (b'{"refused":"service_other"}', b'{"refused":"service_refused_busy","more":1}',
+                     b'{"refused": 1}', b'{"refused":"service_refused_busy"'):
+            with self.subTest(line=line):
+                self.assertEqual(line, self.exchange(FakeSocket([line + b"\n"])))
+        with self.assertRaises(transport.ServiceTransportError) as raised:  # a partial line then EOF
+            self.exchange(FakeSocket([b'{"refused":"service_bu'], failure="send_broken"))
+        self.assertEqual("transport_unavailable", raised.exception.reason_code)
 
     def test_one_deadline_covers_connect_send_and_drip_receives(self) -> None:
         for costs, expected_sends in (((1.25, 0, 0), 0), ((0, 1.25, 0), 1), ((0.25, 0.25, 0.25), 1)):

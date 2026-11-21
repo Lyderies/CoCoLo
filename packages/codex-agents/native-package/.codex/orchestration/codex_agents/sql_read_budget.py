@@ -167,13 +167,16 @@ class SQLReadConnection(sqlite3.Connection):
         # A scope refuses every other thread's statement, so every scope holds it:
         # another thread's locked statement then waits instead of being refused.
         self._sql_owner_lock = None
+        self._sql_lock_waits = None  # M4b E1a-3: where a refused wait is counted
         super().__init__(*args, **kwargs)
 
-    def share_with_lock(self, lock) -> None:
-        """Every read scope then holds `lock` (reentrant) for its whole length."""
+    def share_with_lock(self, lock, *, waits=None) -> None:
+        """Every read scope then holds `lock` (reentrant) for its whole length; `waits` counts the
+        scopes refused for want of it (M4b E1a-3)."""
         if self._sql_owner_lock is not None or type(lock) is not type(threading.RLock()):
             raise SQLReadError("sql_read_unavailable")
         self._sql_owner_lock = lock
+        self._sql_lock_waits = waits
 
     def _usable(self) -> None:
         if self._sql_unusable:
@@ -338,8 +341,12 @@ class SQLReadConnection(sqlite3.Connection):
         # inside the try, so an exception once it is held releases exactly this hold.
         acquired = False
         try:
-            acquired = lock.acquire(timeout=limits.max_duration_ms / 1000)
+            # M4b E1a-1: never longer than the ledger's own limit or the request's deadline either.
+            from .ledger_waits import wait_seconds
+            acquired = lock.acquire(timeout=wait_seconds(limits.max_duration_ms / 1000))
             if not acquired:
+                if self._sql_lock_waits is not None:
+                    self._sql_lock_waits.refused("read_call")
                 raise SQLReadError("sql_read_busy")
             mode = self.in_transaction if transaction is None else transaction
             return self._scoped_read(limits, operation, transaction=mode)

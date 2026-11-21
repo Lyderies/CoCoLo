@@ -105,12 +105,37 @@ class AccountIngressTests(unittest.TestCase):
         self.assertEqual(b"", trailing)
         return decode_account_response(frame, request)
 
+    def test_H1a_a_descriptor_kept_after_a_failed_cleanup_is_published_by_the_front(self):
+        ingress = self.start()
+        self.pair()
+        self.wait(lambda: ingress.snapshot()['ordinary'] == 1)
+        with mock.patch.object(ingress, '_drop', side_effect=OSError('a secret descriptor detail')):
+            ingress.request_close()
+            end = time.monotonic() + 8
+            while ingress.health.view()['kept'] < 1:  # published by the front, not the owner
+                self.assertLess(time.monotonic(), end)
+                time.sleep(.002)
+        view = ingress.health.view()
+        self.assertEqual((True, 'ingress_cleanup_failed', 'OSError'),
+                         (view['faulted'], view['last_failure']['cause'], view['last_failure']['type']))
+        self.assertNotIn('secret', repr(view))
+        self.ingress = None  # its descriptor is kept for an explicit shutdown: nothing to drain here
+        self.jobs.request_close()
+
+    def test_C5_a_request_waiting_and_then_answered_shows_in_the_lane_notes(self):
+        ingress = self.start()
+        client = self.pair(self.request('c5'))
+        self.wait(lambda: ingress.snapshot()['queued'] == 1, pump=False)
+        ingress.pump_owner()
+        self.assertEqual(1, ingress.health.view()['busy'] + ingress.health.view()['queued'])
+        self.read(client, self.request('c5'))
+
     def test_partial_request_saturation_keeps_reserved_health_off_owner(self):
         self.start(ordinary=2, timeout_ns=300_000_000)
         first, second = self.pair(), self.pair()
         first.sendall(b'{"protocol_version":')
         second.sendall(b"{")
-        with self.assertRaisesRegex(AccountError, "account_unavailable"):
+        with self.assertRaisesRegex(AccountError, "account_busy"):
             self.pair()
         health = self.request("reserved", operation="account.health")
         with mock.patch.object(self.service._views, "project", side_effect=AssertionError("health SQL")), \
@@ -159,7 +184,7 @@ class AccountIngressTests(unittest.TestCase):
                 self.assertEqual(b"", claim.recv(1))
                 self.assertEqual(1, self.ingress.snapshot()["health"])
                 self.assertFalse(self.ingress.snapshot()["faulted"])
-                with self.assertRaisesRegex(AccountError, "account_unavailable"):
+                with self.assertRaisesRegex(AccountError, "account_busy"):
                     self.pair(health=True)
                 resume.set()
                 self.wait(lambda: self.ingress.snapshot()["health"] == 0, pump=False)
@@ -177,7 +202,7 @@ class AccountIngressTests(unittest.TestCase):
         client.close()
         self.wait(lambda: self.ingress.snapshot()["disconnected"] == 1, pump=False)
         self.assertEqual(1, self.ingress.snapshot()["ordinary"])
-        with self.assertRaisesRegex(AccountError, "account_unavailable"):
+        with self.assertRaisesRegex(AccountError, "account_busy"):
             self.pair()
         with mock.patch.object(self.service, "begin", side_effect=AssertionError("disconnected request")):
             self.ingress.pump_owner()
@@ -441,7 +466,7 @@ class AccountIngressTests(unittest.TestCase):
         self.addCleanup(server.close)
         self.addCleanup(client.close)
         server.settimeout(.7)
-        with self.assertRaisesRegex(AccountError, "account_unavailable"):
+        with self.assertRaisesRegex(AccountError, "account_busy"):
             self.ingress.attach(server, self.fixture.token)
         self.assertEqual(.7, server.gettimeout())
         self.assertGreaterEqual(server.fileno(), 0)

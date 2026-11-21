@@ -75,7 +75,7 @@ class LearningSourceImageTests(unittest.TestCase):
         before = self.settings()
         changes = self.connection.total_changes
         result = self.capture()
-        self.assertEqual(30, len(result['counts']))
+        self.assertEqual(31, len(result['counts']))  # O0b RS-A (requirement): the hold register is backed up
         self.assertTrue(all(n == 0 for _, n in result['counts']))
         self.assertEqual(changes, self.connection.total_changes)
         self.assertEqual(before, self.settings())
@@ -210,9 +210,10 @@ class LearningSourceImageTests(unittest.TestCase):
         self.refuse('history_conflict')
 
     def test_schema_version_columns_and_primary_key_are_exact(self):
-        self.connection.execute('PRAGMA user_version=15').close()
+        # O0b RS-A (requirement): the image is taken at schema 15, so 16 is the newer one refused.
+        self.connection.execute('PRAGMA user_version=16').close()
         self.refuse('history_incompatible')
-        self.connection.execute('PRAGMA user_version=14').close()
+        self.connection.execute('PRAGMA user_version=15').close()
         self.connection.execute('ALTER TABLE sessions ADD COLUMN unexpected TEXT').close()
         self.refuse('history_incompatible')
 
@@ -318,12 +319,14 @@ class LearningSourceImageTests(unittest.TestCase):
         self.assertIs(False, self.capture()['learning_ready'])
 
     def test_callback_budget_bounds_global_pending_scan_and_preserves_owner(self):
+        # Corrected for O0b B0-1 (requirement): the live-binding index means the pending scan reads only
+        # pending rows, so the rows that load it are pending (and expired), not consumed.
         for number in range(200):
             self.connection.execute('INSERT INTO host_run_bindings(project_id,handle_digest,run_id,'
                 'assignment_digest,task_digest,route_digest,configuration_digest,client_version,'
                 'created_at_ms,expires_at_ms,binding_state) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                 (self.fixture.project_b_id, str(number).zfill(64), str(number), 'b' * 64, 'c' * 64,
-                 'd' * 64, 'e' * 64, 'fixture', 1, 2, 'consumed')).close()
+                 'd' * 64, 'e' * 64, 'fixture', 1, 2, 'pending')).close()
         before = self.settings()
         self.refuse('history_learning_capacity', lambda: self.capture(limits=SQLReadLimits(1, 1000, 1_048_576)))
         self.assertEqual(before, self.settings())

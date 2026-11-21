@@ -53,7 +53,7 @@ def attest_run_provenance(ledger, project_id, *, runtime_digest, caller_scope, r
         if (known is None or known['state'] != 'claimed' or known['bridge_run_id'] != registration.bridge_run_id
                 or known['receipt_digest'] != registration.claim_digest):
             raise ClaimError('claim_execution_unavailable')
-        with ledger._lock:
+        with ledger._held():
             connection = ledger._connection
             if connection.in_transaction:
                 raise ClaimError('claim_execution_unavailable')
@@ -63,7 +63,9 @@ def attest_run_provenance(ledger, project_id, *, runtime_digest, caller_scope, r
             finally:
                 connection.execute('ROLLBACK')
         return value
-    except SQLReadError:
+    except SQLReadError as error:
+        if passes_busy(error):
+            raise
         raise ClaimError('claim_execution_unavailable') from None
 
 
@@ -177,3 +179,8 @@ def _legacy_original_records(connection, context, expected):
         raise ClaimError('claim_execution_unavailable')
     event = _record(starts[0], 'event', 'host', expected.run_id)
     return admission, event, decisions
+
+
+def passes_busy(error) -> bool:
+    """M4b E1a-2: a busy ledger passes through to the reply as busy, not as claim_execution_unavailable."""
+    return isinstance(error, SQLReadError) and error.reason_code == 'sql_read_busy'

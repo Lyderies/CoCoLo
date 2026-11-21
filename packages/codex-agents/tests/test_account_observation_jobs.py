@@ -32,6 +32,7 @@ class AccountObservationJobTests(unittest.TestCase):
         self.token, self.allowed = object(), True
         self.contexts = {project: ObservationContext(str(root)) for project, root in zip(self.projects, self.roots)}
         self.gates = []
+        self.keeps_custody = False
         self.jobs = AccountObservationJobs(self.backend.owner, ObservationJobLimits(2, 2, 2, 1))
         self.jobs.bootstrap()
         self.addCleanup(self.stop_jobs)
@@ -50,6 +51,8 @@ class AccountObservationJobTests(unittest.TestCase):
         for gate in self.gates:
             gate.set()
         self.jobs.request_close()
+        if self.keeps_custody:
+            return  # a faulted worker keeps its custody for good: nothing to drain
         end = time.monotonic() + 8
         while not self.jobs.drain():
             self.assertLess(time.monotonic(), end, 'fixture observation workers did not drain')
@@ -91,6 +94,38 @@ class AccountObservationJobTests(unittest.TestCase):
                     raise AssertionError('fixture observation release expired')
             return original(root, **kwargs)
         return entered, resume, mock.patch.object(providers, 'observe_codex', new=held)
+
+    def test_H1a_a_worker_fault_is_published_by_the_worker_while_the_owner_does_not_drive(self):
+        from codex_agents import account_observation_jobs as jobs_module
+        with mock.patch.object(jobs_module, 'run_observation_probe', side_effect=RuntimeError('a secret')):
+            self.begin()
+            self.wait(lambda: bool(self.jobs._active))  # handed to a worker; the owner then stops
+            end = time.monotonic() + 8
+            while not self.jobs.health.view()['faulted']:
+                self.assertLess(time.monotonic(), end)
+                time.sleep(.002)
+        view = self.jobs.health.view()
+        self.assertEqual((1, 'observation_worker_failed', 'RuntimeError'),
+                         (view['kept'], view['last_failure']['cause'], view['last_failure']['type']))
+        self.assertNotIn('secret', repr(view))
+        self.service.drive_claims()  # the owner sees it too: still counted once
+        self.assertEqual(1, self.jobs.health.view()['kept'])
+        self.keeps_custody = True
+
+    def test_C4_an_invalid_reply_faults_the_lane_notes_once(self):
+        from codex_agents import account_observation_jobs as jobs_module
+        with mock.patch.object(jobs_module, 'run_observation_probe', return_value='not a completion'):
+            self.begin()
+            self.wait(lambda: self.jobs.health.view()['faulted'])
+        view = self.jobs.health.view()
+        self.assertEqual(('reply_mismatch', 'invariant', 1),
+                         (view['last_failure']['cause'], view['last_failure']['type'], view['kept']))
+        self.keeps_custody = True
+
+    def test_C5_a_submitted_observation_is_counted_before_the_owner_drives(self):
+        self.begin()
+        view = self.jobs.health.view()
+        self.assertEqual(1, view['queued'] + view['busy'])
 
     def test_held_project_probe_cannot_block_second_project_probe_or_account_read(self):
         entered, resume, held = self.hold_first_project()

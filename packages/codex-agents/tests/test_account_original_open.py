@@ -38,7 +38,7 @@ class OriginalAccountOpenPendingTests(unittest.TestCase):
         self.base.setUp()
         self.addCleanup(self.base.doCleanups)
         self.ledger = self.base.ledger
-        self.limits = OpenOwnerLimits(4, 16, 1_048_576)
+        self.limits = OpenOwnerLimits(4, 1_048_576)  # OP-1: no cap on finished requests (0.8.38 kept 16 here)
         self.work = SQLReadLimits(100_000, 1000, 2*1_048_576)
         self.refresh_context()
 
@@ -144,21 +144,23 @@ class OriginalAccountOpenPendingTests(unittest.TestCase):
     def test_tampered_original_window_is_refused_without_resealing_or_refresh(self):
         captured, _ = self.preflight()
         self.ledger._connection.execute('UPDATE account_open_requests SET observation_deadline_at_ms=observation_deadline_at_ms+1')
+        # S1-U10e: a stored journal whose seal no longer verifies is inconsistent, not a conflicting request.
         with (mock.patch.object(self.ledger, '_clock_ms', side_effect=AssertionError('new clock')),
-                self.assertRaisesRegex(OpenError, 'open_conflict')):
+                self.assertRaisesRegex(OpenError, 'open_state_inconsistent')):
             self.preflight()
         self.assertEqual(captured.observation_deadline_at_ms+1, self.pending()[0]['observation_deadline_at_ms'])
 
     def test_retained_and_pending_caps_preserve_existing_identity(self):
+        # Corrected for OP-1 and OP-4 (requirement): the cap on every request kept (a lifetime cap) is gone, and
+        # the in-flight cap's refusal names itself (open_capacity_full, not open_busy).
         self.preflight()
         self.base.task = {**self.base.task, 'id': 'independent-second-verifier'}
         self.base.route = {**self.base.route, 'task_id': self.base.task['id']}
         self.base.assignment = {**self.base.assignment, 'task_id': self.base.task['id'], 'assignment_id': 'second-verifier'}
         self.base.context = replace(self.base.context, task=self.base.task, route=self.base.route, assignment=self.base.assignment)
         self.refresh_context()
-        for limits in (OpenOwnerLimits(1, 16, 1_048_576), OpenOwnerLimits(1, 1, 1_048_576)):
-            with self.subTest(limits=limits), self.assertRaisesRegex(OpenError, 'open_busy'):
-                self.preflight(request_id='second-open', limits=limits)
+        with self.assertRaisesRegex(OpenError, 'open_capacity_full'):
+            self.preflight(request_id='second-open', limits=OpenOwnerLimits(1, 1_048_576))
         self.assertEqual(1, len(self.pending()))
 
     def test_native_context_and_copied_byte_quota_refuse_before_clock_or_request_write(self):
@@ -166,7 +168,7 @@ class OriginalAccountOpenPendingTests(unittest.TestCase):
             with self.assertRaisesRegex(OpenError, 'open_invalid_request'):
                 self.preflight(context=None)
             with self.assertRaisesRegex(OpenError, 'open_busy'):
-                self.preflight(limits=OpenOwnerLimits(1, 4, 1))
+                self.preflight(limits=OpenOwnerLimits(1, 1))  # OP-1: the class has no retained cap
         self.assertEqual([], self.pending())
 
 @unittest.skipUnless((sys.platform.startswith('linux') or (sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file())), 'fixed macOS signature worker guard')
@@ -206,6 +208,49 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
             self.assertLess(time.monotonic()-started, 10, 'original open signature worker did not finish')
             time.sleep(.002)
 
+    def another_task(self, name):
+        base = self.reference.base
+        base.task = {**base.task, 'id': name}
+        base.route = {**base.route, 'task_id': name}
+        base.assignment = {**base.assignment, 'task_id': name, 'assignment_id': name + '-assignment'}
+        base.context = replace(base.context, task=base.task, route=base.route, assignment=base.assignment)
+        self.reference.refresh_context()
+
+    def test_B0_1_an_expired_pending_binding_does_not_count_against_the_binding_cap(self):
+        """O0b B0-1 (narrowed): the cap on pending bindings, checked when an open finishes, counts only live
+        ones (pending and not past expiry), so expired bindings never fill a project for good. Corrected
+        before code: the first version of this test hit the preflight request cap instead."""
+        from codex_agents import learning_store
+        held = self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM host_run_bindings WHERE binding_state='pending'").fetchone()[0]  # the fixture's own
+        self.enterContext(mock.patch.object(learning_store, 'MAX_PENDING_HOST_RUNS', held + 1))
+        self.assertIsNone(self.pump(self.submit()).reason)  # the cap's last live place
+        self.another_task('second-verifier')
+        refused = self.pump(self.submit(request_id='second-open'))
+        # Corrected for OP-4 (requirement): live bindings at their limit is a full cap, not a busy moment.
+        self.assertEqual('open_capacity_full', refused.reason)  # control: a live binding still counts
+        self.ledger._connection.execute("UPDATE host_run_bindings SET expires_at_ms=1 WHERE binding_state='pending'")
+        self.another_task('third-verifier')
+        self.assertIsNone(self.pump(self.submit(request_id='third-open')).reason)  # the expired one does not
+
+    def test_RS_A_G12_the_binding_cap_reads_held_register_rows(self):
+        """O0b RS-A round 2 G12: by query plan, the cap counts from held register rows (run_holds_due), so a clock
+        rollback over released claimed history is a bounded lookup, never a scan of pending source bindings."""
+        statements = []
+        self.ledger._connection.set_trace_callback(statements.append)
+        try:
+            self.assertIsNone(self.pump(self.submit()).reason)
+        finally:
+            self.ledger._connection.set_trace_callback(None)
+        # The cap's statement, found by what it reads, not by its FROM clause (corrected with the code: the first
+        # filter named the old statement's 'FROM host_run_bindings h'; the requirement, the plan, is unchanged).
+        cap = [s for s in statements if 'host_run_bindings h' in s and "binding_state='pending'" in s
+               and 'expires_at_ms>' in s and s.lstrip().startswith('SELECT')]
+        self.assertEqual(1, len(cap), statements)
+        plan = ' | '.join(r[3] for r in self.ledger._connection.execute('EXPLAIN QUERY PLAN ' + cap[0]))
+        self.assertIn('run_holds_due', plan)
+        self.assertNotIn('host_run_bindings_live', plan)
+
     def test_actual_registered_signature_return_commits_minimal_original_open_without_central_history_copy(self):
         before = {table: self.ledger._connection.execute('SELECT COUNT(*) FROM '+table).fetchone()[0]
             for table in ('orchestrations', 'orchestration_checkpoints', 'active_run_capacity', 'capacity_executions')}
@@ -232,14 +277,15 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
             known = self.jobs.take(self.submit())
         self.assertEqual({**reply.result, 'known': True}, known.result)
 
-    def wire_service(self, *, configured=True, authorizer=True):
+    def wire_service(self, *, configured=True, authorizer=True, open_context=True):
         self.enabled = True
         self.token = object()
         def authorize(request, token):
             if token is not self.token or not self.enabled:
                 return None
             return AccountAuthorization(request.project_id, request.runtime_digest, account_request_digest(request),
-                'host', frozenset({'account.open_host_run'}), 'a'*64, open_context=self.reference.context)
+                'host', frozenset({'account.open_host_run'}), 'a'*64,
+                open_context=self.reference.context if open_context else None)
         service = AccountService(self.reference.base.scope.runtime_digest, self.jobs._views,
             authorizer=authorize if authorizer else None, claim_jobs=self.jobs if configured else None)
         self.addCleanup(service.close)
@@ -428,15 +474,32 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
     def test_wire_default_denial_unconfigured_and_synchronous_paths_never_open_or_prepare(self):
         request = self.wire_command()
         raw = encode_account_request(request)
-        for configured, authorizer, expected in ((True, False, 'account_not_authorized'), (False, True, 'open_unavailable')):
+        # S1-U10a: open workers not configured yet answer open_account_starting (was open_unavailable).
+        for configured, authorizer, expected in ((True, False, 'account_not_authorized'), (False, True, 'open_account_starting')):
             service, _ = self.wire_service(configured=configured, authorizer=authorizer)
             with self.subTest(configured=configured), self.assertRaisesRegex(AccountError, expected):
                 decode_account_response(service.begin(raw, self.token), request)
         service, _ = self.wire_service()
-        with self.assertRaisesRegex(AccountError, 'open_unavailable'):
+        with self.assertRaisesRegex(AccountError, 'open_failed'):  # S1-U10f: an open is never synchronous
             decode_account_response(service.handle(raw, self.token), request)
         self.assertEqual([], self.reference.pending())
         self.assertEqual(0, self.jobs.snapshot()['tickets'])
+
+    def test_S1_U10a_an_open_without_its_authorization_context_is_refused_before_readiness_is_told(self):
+        request = self.wire_command()
+        for configured in (True, False):
+            service, _ = self.wire_service(configured=configured, open_context=False)
+            with self.subTest(configured=configured), self.assertRaisesRegex(AccountError, '^open_not_authorized$'):
+                decode_account_response(self.pump_wire(service, service.begin(encode_account_request(request), self.token)),
+                                        request)
+
+    def test_S1_U10a_an_account_that_is_closing_says_so(self):
+        request = self.wire_command()
+        service, _ = self.wire_service()
+        self.jobs.request_close()
+        with self.assertRaisesRegex(AccountError, '^open_account_closing$'):
+            decode_account_response(self.pump_wire(service, service.begin(encode_account_request(request), self.token)), request)
+        self.assertEqual([], self.reference.pending())
 
     def test_client_lost_reply_requires_explicit_same_identity_and_does_not_repeat_admission(self):
         service, _ = self.wire_service()

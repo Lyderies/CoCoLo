@@ -56,6 +56,26 @@ class ResultLifetimeTests(DriverHarness):
         self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
 
 
+    def test_RC_1_space_held_by_running_results_says_to_wait(self):
+        """O10 RC-1: a run refused because running results hold the space is told to wait for them,
+        not that the store is full."""
+        from unittest import mock
+        from codex_agents import project_history
+        from codex_agents.history_contracts import HistoryError
+        context, route_path, _, run_handle = self.open_run()
+        with mock.patch.object(project_history.ProjectHistory, '_check_result_capacity',
+                               side_effect=HistoryError('history_result_capacity_busy')):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('result_capacity_busy', refused['reason_code'], refused)
+        self.assertIn('running', refused['error'])
+        self.assertNotIn('full', refused['error'])
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
+
+    def test_RC_2_status_shows_the_results_in_flight_against_the_space_for_them(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        capacity = self.cli('learning-status')['project_capacity']
+        self.assertEqual({'live': 0, 'limit': 3}, capacity['results_in_flight'])  # 3 MiB, 1 MiB each
+
     def test_034_R9_status_shows_each_project_limit_with_its_live_count(self):
         """R9: learning-status shows, for this project's store, how near each limit is."""
         context, route_path, orchestration, run_handle = self.open_run()
@@ -63,8 +83,9 @@ class ResultLifetimeTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
         capacity = self.cli('learning-status')['project_capacity']
-        self.assertEqual({'results', 'orchestrations', 'cleanup_reservations', 'operational_qa', 'qa_check_receipts'},
-                         set(capacity))
+        # Corrected for O10 RC-2 (requirement): status also shows the results in flight.
+        self.assertEqual({'results', 'results_in_flight', 'orchestrations', 'cleanup_reservations', 'operational_qa',
+                          'qa_check_receipts'}, set(capacity))
         for name, limit in (('results', 64), ('orchestrations', 256), ('cleanup_reservations', 4096),
                             ('operational_qa', 16_384), ('qa_check_receipts', 16_384)):
             self.assertEqual(limit, capacity[name]['limit'], name)
@@ -83,9 +104,13 @@ class ResultLifetimeTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
         capacity = self.cli('learning-status')['account_capacity']
-        self.assertEqual({'observations', 'cleanup_receipts'}, set(capacity))
+        # Corrected for O0b B0 (narrowed, requirement): status also shows the run bindings and billing
+        # probes still held, against their limits.
+        # Corrected for OP-3 (requirement): and the open requests in flight, against their own limit of 4.
+        self.assertEqual({'observations', 'cleanup_receipts', 'pending_bindings', 'billing_probes', 'open_requests'},
+                         set(capacity))
         for name in capacity:
-            self.assertEqual(4096, capacity[name]['limit'], name)
+            self.assertEqual(4 if name == 'open_requests' else 4096, capacity[name]['limit'], name)
             self.assertIs(int, type(capacity[name]['live']), name)
 
 

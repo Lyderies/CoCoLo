@@ -31,6 +31,7 @@ from .learning_store import (
     _owner_key_identity, _signer_fingerprint,
 )
 from .owner_key_contracts import owner_public_key_from_line
+from . import ledger_waits, lane_health
 from .sql_read_budget import SQLReadError, SQLReadLimits
 from .signature_inputs import (
     SignatureCaptureError, SignatureCaptureLimits, SignatureInputSnapshot, signature_input_size,
@@ -185,7 +186,7 @@ class AccountOwnerViews:
 
     def project(self, project_id: str) -> dict:
         self._guard()
-        with self._ledger._lock:
+        with self._ledger._held():
             self._ledger.state.harden_database_files()
             return self._project_locked(project_id)
 
@@ -205,7 +206,7 @@ class AccountOwnerViews:
 
     def capacity_status(self, project_id: str, status: CapacityStatusInput) -> dict:
         self._guard()
-        with self._ledger._lock:
+        with self._ledger._held():
             if self._ledger._connection.in_transaction:
                 raise AccountError("account_unavailable")
             self._project_locked(project_id)
@@ -324,7 +325,7 @@ class AccountOwnerViews:
         reason = "admission_capture_unavailable"
         try:
             work_limits.__post_init__()
-            with self._ledger._lock:
+            with self._ledger._held():
                 connection = self._ledger._connection
                 connection._read_owner()
                 unavailable = connection._sql_scope is not None or connection._sql_foreign_progress
@@ -350,6 +351,8 @@ class AccountOwnerViews:
             if getattr(self._ledger._connection, "_sql_unusable", False) is not True:
                 raise
         except SQLReadError as error:
+            if error.reason_code == "sql_read_busy":
+                raise  # M4b E1a-2: busy, not admission_capture_unavailable
             if error.reason_code == "sql_read_invalid_limits":
                 reason = "admission_capture_invalid_request"
             elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit"}:
@@ -522,7 +525,7 @@ class AccountOwnerViews:
         reason = "signature_capture_unavailable"
         try:
             work_limits.__post_init__()
-            with self._ledger._lock:
+            with self._ledger._held():
                 # read_call guards unusable connections and outer transactions.
                 return self._ledger._connection.read_call(
                     work_limits, lambda: self._capture_signature_inputs_locked(project_id, provider, limits),
@@ -531,9 +534,11 @@ class AccountOwnerViews:
             if getattr(self._ledger._connection, "_sql_unusable", False) is not True:
                 raise
         except SQLReadError as error:
+            if error.reason_code == "sql_read_busy":
+                raise  # M4b E1a-2: busy, not a work limit
             if error.reason_code == "sql_read_invalid_limits":
                 reason = "signature_capture_invalid_request"
-            elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit", "sql_read_busy"}:
+            elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit"}:
                 reason = "signature_capture_work_limit"
         except (StateError, OSError, UnicodeError):
             pass
@@ -633,7 +638,7 @@ class AccountOwnerViews:
 
     def _owner_key_view(self, project_id: str, *, include_public_key: bool) -> dict:
         self._guard()
-        with self._ledger._lock:
+        with self._ledger._held():
             self._ledger.state.harden_database_files()
             self._project_locked(project_id)
             try:
@@ -789,7 +794,13 @@ class AccountService:
             records = result['records']
             waivers = self._observation_jobs._owner.billing_waivers(project, records) if records else {}
             raw = self._reply(labels, result={**result, 'billing_waivers': waivers})
-            decode_account_response(raw, request)
+            try:
+                decode_account_response(raw, request)
+            except AccountError:
+                # R3: the reply failed its own contract: say so, and record it in the billing lane.
+                lane_health.safely(lambda: self._billing_jobs.health.note_failure(
+                    self._billing_jobs._note, 'probe_reply_invalid', None))
+                raise ProbeAdmissionError('probe_reply_invalid') from None
             if before_publish() is not True:
                 raise ProbeAdmissionError('probe_not_authorized')
             current = self._observation_jobs._owner.billing_waivers(project, records) if records else {}
@@ -803,10 +814,18 @@ class AccountService:
                 return raw
         except ProbeAdmissionError as error:
             return self._reply(labels, reason=error.reason_code)
+        except SQLReadError as error:  # M4b E1a-2
+            return self._reply(labels, reason='account_busy' if error.reason_code == 'sql_read_busy'
+                               else 'probe_unavailable')
         except Exception:
             return self._reply(labels, reason='probe_unavailable')
 
     def take_claim_reply(self, ticket, *, _ingress=None):
+        """Deferred publication has its own request deadline (M4b E1a revision 3)."""
+        with ledger_waits.request():
+            return self._take_claim_reply(ticket, _ingress=_ingress)
+
+    def _take_claim_reply(self, ticket, *, _ingress=None):
         if self._billing_jobs is not None and type(ticket) is object and ticket in self._billing_jobs._jobs:
             reply = self._billing_jobs.take(ticket, _ingress=_ingress)
             if reply is None:
@@ -818,7 +837,7 @@ class AccountService:
             if reply.reason is not None:
                 return self._reply(labels, reason=reply.reason if reply.reason in {
                     'probe_invalid_request', 'probe_not_authorized', 'probe_unavailable', 'probe_conflict',
-                    'probe_full', 'probe_busy', 'probe_not_ready', *ADMISSION_CAPTURE_PUBLIC_REASONS,
+                    'probe_full', 'probe_busy', 'probe_not_ready', 'probe_reply_invalid', 'account_busy', *ADMISSION_CAPTURE_PUBLIC_REASONS,
                     *PROBE_STEP_REASONS, *OBSERVATION_REASONS}
                     else 'probe_unavailable')
             return self._billing_reply(reply.key, reply.result, reply.context, reply.before_publish)
@@ -848,6 +867,9 @@ class AccountService:
                     return raw
             except ObservationError as error:
                 return self._reply(labels, reason=error.reason_code)
+            except SQLReadError as error:  # M4b E1a-2
+                return self._reply(labels, reason='account_busy' if error.reason_code == 'sql_read_busy'
+                                   else 'observation_unavailable')
             except Exception:
                 return self._reply(labels, reason='observation_unavailable')
         if self._claim_jobs is None:
@@ -887,16 +909,28 @@ class AccountService:
                 self._provenance_live()
                 with self._front_lock:
                     if self._closed:
-                        raise OpenError('open_not_authorized')
+                        raise OpenError('open_account_closing')  # S1-U10a (verifier of review 040-s1-u10)
                     return raw
             except OpenError as error:
                 return self._reply(labels, reason=error.reason_code)
-            except Exception:
-                return self._reply(labels, reason='open_unavailable')
+            except SQLReadError as error:  # S1-U10b
+                return self._reply(labels, reason='open_account_busy' if error.reason_code == 'sql_read_busy'
+                                   else 'open_failed')
+            except AccountError as error:  # an authorization or service refusal keeps its own reason
+                return self._reply(labels, reason=error.reason_code)
+            except Exception:  # S1-U10f
+                return self._reply(labels, reason='open_failed')
         return raw
 
     def _handle(self, raw: bytes, transport_context: object, *, deferred: bool, ingress=None):
+        """M4b E1a (revision 3): every ledger wait in one request shares one deadline, set here, where
+        both handle() and begin() arrive, and restored on return."""
+        with ledger_waits.request():
+            return self._handle_request(raw, transport_context, deferred=deferred, ingress=ingress)
+
+    def _handle_request(self, raw: bytes, transport_context: object, *, deferred: bool, ingress=None):
         labels = {"request_id": None, "project_id": None, "runtime_digest": None, "request_digest": None}
+        operation = None  # known once decoded; chooses the busy answer
         try:
             request = decode_account_request(raw)
             digest = account_request_digest(request)
@@ -1014,6 +1048,10 @@ class AccountService:
                         self._provenance_live()
                         self._views._guard()
                         return True
+                    except SQLReadError as error:
+                        if error.reason_code == 'sql_read_busy':
+                            raise  # M4b E1a-2: busy, answered at the reply, never "not authorized"
+                        raise ObservationError('observation_not_authorized') from None
                     except Exception:
                         raise ObservationError('observation_not_authorized') from None
 
@@ -1032,11 +1070,13 @@ class AccountService:
                 return self._observation_jobs.submit(project, runtime, caller, identity, observation,
                     context, authorize_observation, _ingress=ingress)
             elif operation == 'account.open_host_run':
-                if not deferred or self._claim_jobs is None or self._claim_jobs._open_limits is None:
-                    raise OpenError('open_unavailable')
+                if not deferred:  # An open is always deferred; a synchronous call is a misuse (S1-U10f).
+                    raise OpenError('open_failed')
                 self._provenance_live()
-                if authorization.open_context is None:
+                if authorization.open_context is None:  # Authorization before anything about readiness.
                     raise OpenError('open_not_authorized')
+                if self._claim_jobs is None or self._claim_jobs._open_limits is None:
+                    raise OpenError('open_account_starting')  # S1-U10a
                 original_context, captured = authorization.open_context.snapshot()
                 expected_context = AccountOpenContext.from_snapshot(captured)
                 caller = authorization.caller_scope
@@ -1056,11 +1096,23 @@ class AccountService:
                             raise ValueError()
                         self._provenance_live()
                         self._views._guard()
+                    except SQLReadError as error:
+                        if error.reason_code == 'sql_read_busy':
+                            raise  # M4b E1a-2
+                        raise OpenError('open_not_authorized') from None
                     except Exception:
                         raise OpenError('open_not_authorized') from None
 
-                return self._claim_jobs.submit_open(project, runtime_digest=runtime, caller_scope=caller,
-                    request_id=identity, request=opening, context=expected_context, before_commit=authorize_open, _ingress=ingress)
+                try:
+                    return self._claim_jobs.submit_open(project, runtime_digest=runtime, caller_scope=caller,
+                        request_id=identity, request=opening, context=expected_context, before_commit=authorize_open,
+                        _ingress=ingress)
+                except SQLReadError as error:  # S1-U10b: the database, as the open's own reason
+                    raise OpenError('open_account_busy' if error.reason_code == 'sql_read_busy' else 'open_failed') from None
+                except Exception as error:
+                    if type(getattr(error, 'reason_code', None)) is str:
+                        raise  # a refusal with its own public reason (admission capture, claims) stays as it is
+                    raise OpenError('open_failed') from None  # S1-U10f: nothing unexplained is account_unavailable
             elif operation == "account.claim_launch":
                 from .claim_storage import capture_storage_evidence
 
@@ -1224,6 +1276,8 @@ class AccountService:
             reason = exc.reason_code
         except AdmissionCaptureError as exc:
             reason = public_capture_reason(exc)
+        except SQLReadError as exc:  # M4b E1a-2: a busy ledger is answered as busy
+            reason = busy_reason(operation) if exc.reason_code == "sql_read_busy" else "account_unavailable"
         except Exception:
             reason = "account_unavailable"
         return self._reply(labels, reason=reason)
@@ -1240,3 +1294,9 @@ class AccountService:
             raise AccountError("account_wrong_owner")
         with self._front_lock:
             self._closed = True
+
+
+def busy_reason(operation) -> str:
+    """M4b E1a-2: the public answer to a busy ledger; an open's own busy reason on open paths
+    (review 040-m4b-e1a-code)."""
+    return "open_account_busy" if operation == "account.open_host_run" else "account_busy"

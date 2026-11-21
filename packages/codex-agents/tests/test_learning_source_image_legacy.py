@@ -65,7 +65,7 @@ class LearningSourceImageLegacyTests(unittest.TestCase):
                 mock.patch.object(self.fixture.state, 'digest_key', side_effect=outside_snapshot):
             image = self.capture()
             self.assertEqual(image, self.capture())
-        self.assertEqual(30, len(image['counts']))
+        self.assertEqual(31, len(image['counts']))  # O0b RS-A (requirement): schema 15, the register backed up
         self.assertEqual((23, 2, 1), tuple(dict(image['counts'])[n] for n in
                                          ('records', 'owner_attestations', 'operational_qa')))
         self.assertEqual(self.backup, image['archive'].path)

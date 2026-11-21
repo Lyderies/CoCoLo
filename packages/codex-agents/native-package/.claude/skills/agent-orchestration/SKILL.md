@@ -49,10 +49,12 @@ markers, never set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, and never pass `--ba
      returns the same fenced result, which you record. If that is no longer possible,
      close the orchestration anyway once the run is released: the run is counted
      abandoned. A `dispatch` that fails after launch with no result leaves nothing to
-     record: pause the orchestration, classify that run abandoned
-     (`host_confirmed_gone`), and resume.
+     record: run `learning-run-status` until the run has ended, then close the
+     orchestration (the run is counted abandoned). Only a run that never took a lease
+     is classified abandoned instead (pause, `learning-classify-host-run-abandoned
+     --reason host_confirmed_gone`, resume); for any other run that is refused.
      While `dispatch` waits, another command can run
-     `learning-run-status --orchestration-handle <orc> --run-handle <handle>` for the
+     `learning-run-status --project-root <exact-root> --orchestration-handle <orc> --run-handle <handle>` for the
      child's health (`starting`, `active`, `quiet`, `stale`, then `stopping` or
      `terminal`), or `learning-cancel-run` with the same arguments to stop it.
      A cancellation reply is a request, not confirmed cleanup; `dispatch` then returns
@@ -116,6 +118,9 @@ markers, never set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, and never pass `--ba
    recorded worker only while it runs (it stops after twelve idle hours, or when the
    owner migrates or updates the project), and its result at most seven days, so
    verify and run operational QA in the same working session, before closing.
+   For a review, `learning-review worker|verify|finish --project-root <exact-root> --spec <file>
+   --work-dir <folder>` runs steps 2 to 9 in this order for one worker and its verifier, saving each
+   reply, and stops (with the reason and next step) at a refused step or a result with no verdict.
 8. **Operational QA.** With both digests, run
    `learning-run-operational-checks --project-root <exact-root>
    --host-outcome-digest <worker host_outcome_digest>

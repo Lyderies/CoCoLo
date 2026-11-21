@@ -486,8 +486,99 @@ class CleanupEvidenceTests(unittest.TestCase):
             records[20001] = (*records[20001][:3], True)
             self.assertFalse(tree.cleanup_after_owned_wait(root))
         with mock.patch.object(process_tree, "MAX_CLEANUP_IDENTITIES", 1):
-            tree, records, root = self.identified(child_exited=True)
+            tree, records, root = self.identified()  # Root and child both unproven: more than the limit.
+        self.assertTrue(tree._cleanup_incomplete)
+        records[20001] = (*records[20001][:3], True)
         with mock.patch.object(process_tree, "process_record", side_effect=records.get):
+            self.assertFalse(tree.cleanup_after_owned_wait(root))
+
+    def waves(self, tree, records, count, width, root=20000):
+        """Children in waves of `width` live at once; the wave before exits when the next starts."""
+        previous = []
+        for wave in range(count // width):
+            current = [root + 1 + wave * width + number for number in range(width)]
+            for pid in previous:
+                records[pid] = (root, root, f"c{pid}", True)
+            for pid in current:
+                records[pid] = (root, root, f"c{pid}", False)
+            tree.update({root: 1, **{pid: root for pid in current}})
+            previous = current
+        for pid in previous:
+            records[pid] = (root, root, f"c{pid}", True)
+        tree.update({root: 1})
+
+    def test_a_tree_of_more_processes_than_the_limit_is_confirmed_when_few_are_live_at_once(self):
+        # O0c M2: only identities not yet proven stopped count toward the limit.
+        root = 20000
+        records = {root: (1, root, "root", False)}
+        tree = process_tree.ProcessTree(root)
+        with mock.patch.object(process_tree, "MAX_CLEANUP_IDENTITIES", 8), \
+                mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "process_gone", return_value=False):
+            self.assertTrue(tree.identify({root: 1}))
+            self.waves(tree, records, 20, 5)
+            self.assertFalse(tree._cleanup_incomplete)
+            self.assertLessEqual(len(tree._cleanup_seen), 8)
+            self.assertTrue(tree.cleanup_after_owned_wait(SimpleNamespace(pid=root, returncode=0)))
+            records[root] = (1, root, "root", True)
+            self.assertTrue(tree.cleanup_confirmed())
+
+    def test_more_live_unproven_processes_than_the_limit_still_refuse_confirmation_for_good(self):
+        root = 20000
+        records = {root: (1, root, "root", False)}
+        tree = process_tree.ProcessTree(root)
+        with mock.patch.object(process_tree, "MAX_CLEANUP_IDENTITIES", 8), \
+                mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "process_gone", return_value=False):
+            self.assertTrue(tree.identify({root: 1}))
+            self.waves(tree, records, 20, 20)  # Twenty live at once, then all exit.
+            self.assertTrue(tree._cleanup_incomplete)
+            self.assertFalse(tree.cleanup_after_owned_wait(SimpleNamespace(pid=root, returncode=0)))
+
+    def tagged_tree(self):
+        root, child = 20000, 20001
+        records = {root: (1, root, "root", False), child: (root, root, "child", True)}
+        tree = process_tree.ProcessTree(root, "tag")
+        with mock.patch.object(process_tree, "process_record", side_effect=records.get):
+            self.assertTrue(tree.identify({root: 1, child: root}))
+        return tree, records, SimpleNamespace(pid=root, returncode=0)
+
+    def test_one_failed_snapshot_is_retried_and_cleanup_is_confirmed(self):
+        # O0c M2: a failed process_table() no longer fails cleanup for good.
+        tree, records, root = self.tagged_tree()
+        with mock.patch.object(bridge, "process_table", return_value=None):
+            bridge._track(tree)
+        with mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "tagged_process_running", return_value=False), \
+                mock.patch.object(process_tree, "process_table",
+                                  side_effect=[None, {20000: 1, 20001: 20000}, {20000: 1, 20001: 20000}]), \
+                mock.patch.object(process_tree.time, "sleep"):
+            self.assertTrue(tree.cleanup_after_owned_wait(root))
+            records[20000] = (1, 20000, "root", True)
+            self.assertTrue(tree.cleanup_confirmed())
+
+    def test_a_snapshot_that_keeps_failing_refuses_confirmation_after_bounded_attempts(self):
+        tree, records, root = self.tagged_tree()
+        with mock.patch.object(bridge, "process_table", return_value=None):
+            bridge._track(tree)
+        table = mock.Mock(return_value=None)
+        with mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "tagged_process_running", return_value=False), \
+                mock.patch.object(process_tree, "process_table", table), \
+                mock.patch.object(process_tree.time, "sleep"):
+            self.assertFalse(tree.cleanup_after_owned_wait(root))
+            self.assertFalse(tree.cleanup_confirmed())
+        self.assertGreaterEqual(table.call_count, 2)
+        self.assertLessEqual(table.call_count, 20)
+
+    def test_a_failed_snapshot_without_a_run_marker_stays_unproven(self):
+        # Nothing but the marker covers a descendant that left its parent during the gap.
+        tree, records, root = self.identified(child_exited=True)
+        with mock.patch.object(bridge, "process_table", return_value=None):
+            bridge._track(tree)
+        with mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "process_table", return_value={20000: 1, 20001: 20000}), \
+                mock.patch.object(process_tree.time, "sleep"):
             self.assertFalse(tree.cleanup_after_owned_wait(root))
 
 
@@ -778,6 +869,14 @@ class OwnedExecutionRegistryTests(unittest.TestCase):
                 registry.key(ticket, cleaned=True)
 
 
+def _flatten(value, prefix=""):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _flatten(item, f"{prefix}{key}")
+    else:
+        yield prefix, value
+
+
 class CapacityCompletionTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixtures.CodexBridgeTests("test_happy_path_observes_before_and_after")
@@ -814,6 +913,40 @@ class CapacityCompletionTests(unittest.TestCase):
         self.ledger.close()
         self.fixture.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
         self.addCleanup(self.fixture.ledger.close)
+
+    def test_RS_A_F5_a_completed_slot_s_register_receipt_is_its_release_digest(self):
+        self.run_one()
+        row = self.ledger._connection.execute(
+            "SELECT a.release_digest, r.receipt, r.release_kind FROM active_run_capacity a JOIN run_holds r "
+            "ON r.kind='run_slot' AND r.identity=a.handle_digest").fetchone()
+        self.assertEqual((row[0], "completed"), (row[1], row[2]))
+        self.assertIsNotNone(row[0])
+
+    def completed_then(self, change):
+        """O0b RS-A round 2 G1: an ordinary completed slot whose register row is then changed."""
+        from tests.test_run_holds import assert_refused_everywhere
+        self.run_one()
+        with self.ledger._account_transaction():
+            self.ledger._connection.execute(change)
+        assert_refused_everywhere(self, self.ledger, self.fixture.project_id, self.fixture.state.root, self.reopen)
+
+    def test_RS_A_G1_a_completed_slot_s_register_time_must_be_its_release_time(self):
+        self.completed_then("UPDATE run_holds SET released_at_ms=released_at_ms+1 WHERE kind='run_slot'")
+
+    def test_RS_A_G1_a_completed_slot_s_register_receipt_must_be_its_release_digest(self):
+        self.completed_then("UPDATE run_holds SET receipt='" + "f" * 64 + "' WHERE kind='run_slot'")
+
+    def test_RS_A_G1_a_slot_s_register_kind_must_be_a_slot_s_release_kind(self):
+        self.completed_then("UPDATE run_holds SET release_kind='unlaunched' WHERE kind='run_slot'")
+
+    def test_RS_A_G10_a_completed_slot_relabelled_as_a_decision_with_pruned_evidence_is_refused(self):
+        """Round 2 G10: its receipt and time still match the slot; only the missing evidence tells."""
+        self.completed_then("UPDATE run_holds SET release_kind='crashed',evidence=NULL WHERE kind='run_slot'")
+
+    def test_RS_A_G1_a_completed_slot_still_verifies_and_opens(self):
+        from tests.test_run_holds import assert_accepted_everywhere
+        self.run_one()
+        assert_accepted_everywhere(self.ledger, self.fixture.project_id, self.fixture.state.root, self.reopen)
 
     def test_three_completed_owned_runs_release_default_slots_without_relaunch(self):
         for _ in range(3):
@@ -938,6 +1071,51 @@ class CapacityCompletionTests(unittest.TestCase):
                                            reviewed=True, terminal_state=None)
         self.assertEqual("held", self.ledger._finish_owned_execution(ticket)["state"])
         self.assertEqual(1, self.held())
+
+    def test_RS_A_2_a_late_normal_release_after_a_crashed_one_keeps_the_written_decision(self):
+        """O0b RS-A-2 (draft 2): a late terminal and cleanup for a slot already released `crashed` are stored
+        as its completion; the release decision, its time and its kind stay as written."""
+        original = learning_store.LearningLedger._release_active_capacity
+        decided = {}
+
+        def crashed_first(ledger, ticket):
+            with ledger._account_transaction():
+                row = ledger._connection.execute(
+                    "SELECT handle_digest FROM active_run_capacity WHERE released_at_ms IS NULL").fetchone()
+                decided["handle"] = row["handle_digest"]
+                ledger._release_slot_locked(self.fixture.project_id, row["handle_digest"], "crashed",
+                                            ledger._clock_ms(), ledger._capacity_clock_reference())
+                decided["at"] = ledger._connection.execute(
+                    "SELECT released_at_ms FROM active_run_capacity WHERE handle_digest=?",
+                    (row["handle_digest"],)).fetchone()[0]
+            return original(ledger, ticket)
+        with mock.patch.object(learning_store.LearningLedger, "_release_active_capacity", crashed_first):
+            handle, output = self.run_one()
+        self.assertEqual("result", output["bridge_report"]["outcome"])
+        kind, at, completions = self.ledger._connection.execute(
+            "SELECT r.release_kind,a.released_at_ms,(SELECT COUNT(*) FROM capacity_completions c "
+            "WHERE c.handle_digest=a.handle_digest) FROM active_run_capacity a JOIN run_holds r "
+            "ON r.kind='run_slot' AND r.identity=a.handle_digest WHERE a.handle_digest=?",
+            (decided["handle"],)).fetchone()
+        self.assertEqual(("crashed", decided["at"]), (kind, at))  # the first decision stands
+        self.assertEqual(1, completions)  # the late completion is kept
+        terminal = [v for k, v in _flatten(self.ledger.ingestion_snapshot(self.fixture.project_id))
+                    if k.endswith("terminal")]
+        self.assertIn(1, terminal)  # round 1 F11: the late completion counts the run as terminal
+        self.reopen()  # and the ledger still opens (the coverage checks accept both)
+
+    def test_RS_A_status_never_counts_a_crashed_release_as_a_finished_run(self):
+        handle, intent, ticket = self.prepare_claim()
+        before = self.ledger.ingestion_snapshot(self.fixture.project_id)
+        with self.ledger._account_transaction():
+            row = self.ledger._connection.execute(
+                "SELECT handle_digest FROM active_run_capacity WHERE released_at_ms IS NULL").fetchone()
+            self.ledger._release_slot_locked(self.fixture.project_id, row["handle_digest"], "crashed",
+                                             self.ledger._clock_ms(), self.ledger._capacity_clock_reference())
+        after = self.ledger.ingestion_snapshot(self.fixture.project_id)
+        def terminal(snapshot):  # the design: a run is terminal only from completion evidence
+            return [value for key, value in _flatten(snapshot) if key.endswith("terminal")]
+        self.assertEqual(terminal(before), terminal(after))
 
     def test_known_release_survives_restart_and_clock_rollback(self):
         handle, output = self.run_one()

@@ -127,6 +127,10 @@ class InstallRefused(RuntimeError):
     """The target is not in a state where packages may be changed."""
 
 
+class CommittedIndexStale(InstallRefused):
+    """The commit was made, but the project's own index could not be updated to match it."""
+
+
 def _git_binary(target: Path) -> str:
     """The real git binary at a fixed, trusted location (never macOS's xcrun shim), outside
     the project and every temporary folder."""
@@ -155,7 +159,7 @@ def _git(target: Path, *args: str) -> str:
     result = _git_run(target, *args)
     if result.returncode != 0:
         raise InstallRefused(f"target is not a usable Git working tree: {target}")
-    return result.stdout.strip()
+    return result.stdout.rstrip("\n")  # Only the line ending: a path may end in spaces.
 
 
 def _require_plain_repository(target: Path) -> None:
@@ -174,6 +178,19 @@ def _records(output: bytes) -> list[str]:
 def _blob_id(data: bytes, object_format: str) -> str:
     digest = hashlib.sha256 if object_format == "sha256" else hashlib.sha1
     return digest(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+WORKTREE_READ_LIMIT = 64 * 1024 * 1024  # A managed file larger than this is refused, not read whole.
+
+
+def _write_all(handle: int, content: bytes) -> None:
+    """Every byte, or OSError: os.write may write fewer than it was given."""
+    view = memoryview(content)
+    while view:
+        written = os.write(handle, view)
+        if written <= 0:
+            raise OSError("no progress writing a file")
+        view = view[written:]
 
 
 def _worktree_entry(root_fd: int, relative: str) -> tuple[str, bytes] | None:
@@ -203,8 +220,15 @@ def _worktree_entry(root_fd: int, relative: str) -> tuple[str, bytes] | None:
             return "", b""
         handle = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
         try:
-            chunks = []
+            # Checked on the opened file and read within a bound, so a file swapped in after the
+            # check, or one that keeps growing, cannot hang or exhaust setup (review 040-s5-wizard-2 c).
+            if not stat.S_ISREG(os.fstat(handle).st_mode):
+                return "", b""
+            chunks, size = [], 0
             while chunk := os.read(handle, 1 << 20):
+                size += len(chunk)
+                if size > WORKTREE_READ_LIMIT:
+                    raise InstallRefused(f"{relative} is larger than setup reads (64 MiB), so it was not checked")
                 chunks.append(chunk)
         finally:
             os.close(handle)
@@ -304,23 +328,41 @@ def commit_paths(target: Path, message: str, detail: str, paths: list[str]) -> s
         seeded = _git_run(target, "read-tree", *((head,) if head else ("--empty",)), index=private_index)
         if seeded.returncode != 0:
             raise InstallRefused("Git could not read the project's last commit")
-        records = []
+        entries: list[tuple[str, tuple[str, bytes] | None]] = []
         root_fd = os.open(os.path.realpath(target), os.O_RDONLY | os.O_DIRECTORY)
         try:
             for path in paths:
                 entry = None if path in LOCAL_ONLY else _worktree_entry(root_fd, path)
-                if entry is None:
-                    records.append(f"0 {zero}\t{path}\0")
-                    continue
-                if not entry[0]:
+                if entry is not None and not entry[0]:
                     raise InstallRefused(f"{path} is not a file Git can commit")
-                written = _git_run(target, "hash-object", "-w", "--no-filters", "--stdin",
-                                   input=entry[1], text=False)
-                if written.returncode != 0:
-                    raise InstallRefused("Git could not store a file")
-                records.append(f"{entry[0]} {written.stdout.decode().strip()}\t{path}\0")
+                entries.append((path, entry))
         finally:
             os.close(root_fd)
+        # Every blob in one hash-object: the bytes already read (never through a link) go to private
+        # copies, which Git stores without filters; each id is checked against those bytes.
+        blobs = [(path, entry) for path, entry in entries if entry is not None]
+        ids: dict[str, str] = {}
+        if blobs:
+            copies = []
+            for number, (path, (_mode, content)) in enumerate(blobs):
+                copy = scratch / f"blob-{number}"
+                descriptor = os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                try:
+                    _write_all(descriptor, content)
+                finally:
+                    os.close(descriptor)
+                copies.append(str(copy))
+            written = _git_run(target, "hash-object", "-w", "--no-filters", "--stdin-paths",
+                               input="\n".join(copies) + "\n")
+            stored = written.stdout.split() if written.returncode == 0 else []
+            if len(stored) != len(blobs):
+                raise InstallRefused("Git could not store a file")
+            for (path, (_mode, content)), blob in zip(blobs, stored):
+                if blob != _blob_id(content, object_format):
+                    raise InstallRefused("Git stored a file differently from what setup read")
+                ids[path] = blob
+        records = [f"0 {zero}\t{path}\0" if entry is None else f"{entry[0]} {ids[path]}\t{path}\0"
+                   for path, entry in entries]
         info = "".join(records).encode("utf-8", "surrogateescape")
         if _git_run(target, "update-index", "-z", "--index-info", input=info, index=private_index,
                     text=False).returncode != 0:
@@ -342,7 +384,7 @@ def commit_paths(target: Path, message: str, detail: str, paths: list[str]) -> s
         if moved.returncode != 0:
             raise InstallRefused("the branch moved while setup ran, so nothing was committed")
         if _git_run(target, "update-index", "-z", "--index-info", input=info, text=False).returncode != 0:
-            raise InstallRefused("the commit was made, but Git could not update the project's index; "
+            raise CommittedIndexStale("the commit was made, but Git could not update the project's index; "
                                  "run git status and stage the committed files yourself")
         return "committed"
     finally:
@@ -637,11 +679,20 @@ class _Project:
 def _write_new(directory: int, name: str, content: bytes, mode: int) -> None:
     handle = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=directory)
     try:
-        os.write(handle, content)
+        _write_all(handle, content)
         os.fchmod(handle, mode)
         os.fsync(handle)
-    finally:
+    except BaseException:
         os.close(handle)
+        handle = -1
+        try:
+            os.unlink(name, dir_fd=directory)  # No partial file is left behind (review 040-s5-wizard-3 d).
+        except OSError:
+            print(f"Warning: a partial file, {name}, could not be removed; delete it.", file=sys.stderr)
+        raise
+    finally:
+        if handle >= 0:
+            os.close(handle)
 
 
 class OwnerState:
@@ -1107,10 +1158,24 @@ def git_tool(argv: list[str]) -> int:
 
     ``changes PROJECT [PATH...]`` prints, NUL-delimited, the paths with uncommitted changes
     (project_changes); ``commit PROJECT MESSAGE DETAIL PATH...`` commits exactly those paths
-    (commit_paths) and exits 3 when there was nothing to commit. A refusal exits 2 with its
+    (commit_paths) and exits 3 when there was nothing to commit, 4 when the commit was made but the
+    project's index could not be updated. A refusal exits 2 with its
     reason on stderr; any other failure exits 1.
     """
 
+    import signal
+
+    def unwind(signum, frame):  # SIGTERM or SIGHUP: unwind, so commit_paths' cleanup still runs.
+        raise SystemExit(128 + signum)
+    previous = {number: signal.signal(number, unwind) for number in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        return _git_tool(argv)
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
+def _git_tool(argv: list[str]) -> int:
     try:
         if len(argv) >= 2 and argv[0] == "changes":
             found = project_changes(Path(argv[1]), argv[2:] or list(MANAGED_PATHS))
@@ -1118,6 +1183,9 @@ def git_tool(argv: list[str]) -> int:
             return 0
         if len(argv) >= 5 and argv[0] == "commit":
             return 0 if commit_paths(Path(argv[1]), argv[2], argv[3], argv[4:]) == "committed" else 3
+    except CommittedIndexStale as exc:
+        print(exc, file=sys.stderr)
+        return 4
     except InstallRefused as exc:
         print(exc, file=sys.stderr)
         return 2

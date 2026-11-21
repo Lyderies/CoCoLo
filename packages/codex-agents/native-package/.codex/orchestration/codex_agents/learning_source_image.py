@@ -34,8 +34,9 @@ class SourceArchive:
     size: int
 
 # The ledger schema the image is taken at. 14 added only the admission evidence
-# index, which is not part of a project's backup, so the image's tables are 13's.
-SCHEMA_VERSION = 14
+# index (not in a project's backup: derived from what is); 15 added the hold
+# register (O0b RS-A), which is in it, since a crashed release cannot be derived.
+SCHEMA_VERSION = 15
 # The registered backup is a streamed (format 3) SQLite file, read one batch at a
 # time; this bounds its size, not memory. It matches the ledger's own limit.
 MAX_BACKUP_BYTES = 16 * 1024 ** 3
@@ -65,6 +66,7 @@ _KEYS = {
     "account_observation_requests": ("request_key",),
     "account_billing_probe_origins": ("request_key",),
     "account_billing_probe_requests": ("request_key",),
+    "run_holds": ("kind", "identity"),
     "host_run_bindings": ("handle_digest",),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("orchestration_id",),
@@ -108,7 +110,7 @@ def _owner(ledger):
     connection._read_owner()
     if ledger._allow_schema_upgrade is not True:
         raise HistoryError("history_not_authorized")
-    if (ledger._collector_active is not False or ledger._active_readers != 0
+    if (ledger._collector_active is not False or ledger._readers() != 0
             or connection.in_transaction or connection._sql_scope is not None
             or connection._sql_foreign_progress):
         raise HistoryError("history_unavailable")
@@ -355,7 +357,7 @@ def _capture(ledger, project_id, file_id, expected_domain_digest, limits):
     from . import learning_store as store
 
     _owner(ledger)
-    with ledger._lock:
+    with ledger._held():
         custody = _owner(ledger)
         connection = ledger._connection
         _schema(connection, store)

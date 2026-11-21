@@ -528,6 +528,15 @@ def child(directory, name):
         if "sleep" in frame:
             time.sleep(frame["sleep"])
             continue
+        if "wait_for" in frame:  # Hold until the test creates this file (at most 60 s).
+            deadline = time.monotonic() + 60
+            while not os.path.exists(frame["wait_for"]) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            if not os.path.exists(frame["wait_for"]):
+                # Never carry on past a gate the test did not open: the order it guards is not met.
+                sys.stderr.write("fake client: wait_for gate never opened\\n")
+                sys.exit(97)
+            continue
         print(frame["raw"] if "raw" in frame else json.dumps(frame), flush=True)
     last = os.path.join(directory, name + "-last-message.json")
     if "-o" in sys.argv and os.path.exists(last):
@@ -546,7 +555,8 @@ arguments = sys.argv[3:]
 if arguments == ["--version"]:
     # Answers from <name>-version.txt, or a version inside the reviewed range.
     version = os.path.join(directory, name + "-version.txt")
-    default = {"claude": "2.1.200 (Claude Code)", "codex": "codex-cli 0.164.0"}[name]
+    # Corrected for O10 VF-6 (requirement): the fake Claude client is one that holds results to the schema.
+    default = {"claude": "2.1.311 (Claude Code)", "codex": "codex-cli 0.164.0"}[name]
     sys.stdout.write(open(version).read() if os.path.exists(version) else default + "\\n")
 elif name == "claude" and arguments[:2] == ["auth", "status"]:
     sys.stdout.write(open(os.path.join(directory, "claude-status.json")).read())

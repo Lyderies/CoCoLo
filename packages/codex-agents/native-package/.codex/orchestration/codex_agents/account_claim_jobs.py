@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import lane_health
 from .account_api import _DIGEST, _ID, _PROJECT, matches
 from .account_claim_contracts import ClaimError, LaunchClaimInput
 from .account_open_contracts import AccountOpenInput, AccountOpenContext, OpenError, OpenOwnerLimits
@@ -44,6 +45,13 @@ class _Job:
     cancelled: bool = False
     kind: str = 'claim'
     before_commit: object = None
+    provider: str | None = None
+    stale_preparations: int = 0
+
+
+# How many times a claim whose prepared admission went stale is captured and prepared again before it
+# is refused (0.4.0 FR1): sibling claims dispatched at once add decisions that change each other's rows.
+MAX_STALE_PREPARATIONS = 3
 
 
 class AccountClaimJobs:
@@ -70,12 +78,14 @@ class AccountClaimJobs:
         self._views = views
         self._allow_unleased_reference = allow_unleased_claim_reference
         self._open_limits = None if open_limits is None else OpenOwnerLimits(
-            open_limits.max_pending, open_limits.max_retained, open_limits.max_context_bytes)
+            open_limits.max_pending, open_limits.max_context_bytes)
         self._work_limits = SQLReadLimits(work_limits.max_callbacks, work_limits.max_duration_ms,
                                          work_limits.max_value_bytes)
         self._intake = SignatureJobIntake(views, intake_limits)
         self._pool = SignatureWorkerPool(self._intake, worker_limits)
         self._jobs: dict[object, _Job] = {}
+        self.health = lane_health.Lane('claims')  # S1-H1a: published notes, reporting only
+        self._note = self.health.slot('owner')
         self._requests: dict[tuple[str, str, str, str], object] = {}
         self._open_requests: dict[tuple[str, str, str, str], object] = {}
         self._counts: dict[str, int] = {}
@@ -102,9 +112,27 @@ class AccountClaimJobs:
         try:
             self._pool.bootstrap()
             self._started = True
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
+            self._note_fault(error)
             raise
+
+    def _note_fault(self, error, cause='claim_owner_failed'):
+        """S1-H1a: note a fault with its cause and type only, then republish. Never raises."""
+        lane_health.safely(lambda error=error: self.health.note_failure(self._note, cause, error))
+        self._publish_health()
+
+    def _publish_health(self):
+        """S1-H1a: this owner's note: faulted, and its jobs (kept while faulted, else busy). O0c M8: a job
+        whose signature work is held unconfirmed is kept too: it waits on the stuck lane, runs nothing."""
+        try:
+            tokens = frozenset(id(job) for job in self._jobs.values())
+            held = self._pool.unknown_handles()
+            kept = tokens if self._faulted else frozenset(
+                id(job) for job in self._jobs.values() if job.signature_handle in held)
+            lane_health.safely(lambda: self._note.publish(faulted=self._faulted, kept=kept, busy=len(tokens - kept)))
+        except Exception:
+            pass
 
     def _job(self, ticket):
         if type(ticket) is not object or ticket not in self._jobs:
@@ -120,6 +148,7 @@ class AccountClaimJobs:
         else:
             self._counts[job.key[0]] = count - 1
         del self._jobs[ticket]
+        self._publish_health()
 
     def submit(self, project_id, *, runtime_digest, caller_scope, request_id, launch, _ingress=None,
                storage_binding=None, storage_evidence=None):
@@ -149,6 +178,10 @@ class AccountClaimJobs:
                 # quota/custody and require an explicit retry after cleanup.
                 raise ClaimError("claim_busy")
             return existing
+        if self._pool.stuck():
+            # O0c M8: no signature worker can free before the account restarts itself; say so at once
+            # (retryable) instead of queueing work that would hold that restart.
+            raise ClaimError("claim_unavailable")
         limits = self._intake._limits
         count = self._counts.get(project_id, 0)
         if (count >= limits.max_jobs_per_project
@@ -176,10 +209,12 @@ class AccountClaimJobs:
             else:
                 # Anchored at the run's open, so the capture keeps the run's own
                 # admission and the identity it cited however late the launch is.
+                job.provider = provider
                 job.signature_handle = self._intake.capture_admission(
                     project_id, provider, self._work_limits, claim_anchor_ms(context))
                 self._signatures[job.signature_handle] = ticket
                 job.state = "pending"
+            self._publish_health()  # S1-H1a C5
             return ticket
         except BaseException:
             try:
@@ -193,8 +228,9 @@ class AccountClaimJobs:
                     self._counts[project_id] = count
                 else:
                     self._counts.pop(project_id, None)
-            except BaseException:
+            except BaseException as error:
                 self._faulted = True
+                self._note_fault(error, 'claim_cleanup_failed')
             raise
 
     def submit_open(self, project_id, *, runtime_digest, caller_scope, request_id, request, context,
@@ -203,8 +239,10 @@ class AccountClaimJobs:
         from .account_original_open import preflight_open
         self._guard()
         self._delivery(_ingress)
-        if not self._started or self._closing or self._open_limits is None:
-            raise OpenError('open_unavailable')
+        if self._closing:
+            raise OpenError('open_account_closing')  # S1-U10a
+        if not self._started or self._open_limits is None:
+            raise OpenError('open_account_starting')
         if (not matches(project_id, _PROJECT) or not matches(runtime_digest, _DIGEST)
                 or not matches(caller_scope, _DIGEST) or not matches(request_id, _ID)
                 or type(request) is not AccountOpenInput or type(context) is not AccountOpenContext
@@ -223,6 +261,8 @@ class AccountClaimJobs:
                 raise OpenError('open_busy')
             before_commit()
             return existing
+        if self._pool.stuck():
+            raise OpenError('open_unavailable')  # O0c M8, as for a claim
         limits, count = self._intake._limits, self._counts.get(project_id, 0)
         if (count >= limits.max_jobs_per_project
                 or (not count and len(self._counts) >= limits.max_projects)
@@ -245,12 +285,13 @@ class AccountClaimJobs:
                 job.signature_handle = self._intake.capture_admission(project_id, _provider(captured), self._work_limits)
                 self._signatures[job.signature_handle] = ticket
                 job.state = 'pending'
+            self._publish_health()  # S1-H1a C5
             return ticket
         except BaseException:
             try:
                 if job.signature_handle is not None:
                     if self._pool.cancel(job.signature_handle) != 'released':
-                        raise OpenError('open_unavailable')
+                        raise OpenError('open_failed')
                     self._signatures.pop(job.signature_handle, None)
                 self._open_requests.pop(key, None)
                 self._jobs.pop(ticket, None)
@@ -258,11 +299,18 @@ class AccountClaimJobs:
                     self._counts[project_id] = count
                 else:
                     self._counts.pop(project_id, None)
-            except BaseException:
+            except BaseException as error:
                 self._faulted = True
+                self._note_fault(error)
             raise
 
     def drive(self):
+        try:
+            self._drive_steps()
+        finally:
+            self._publish_health()  # S1-H1a C5
+
+    def _drive_steps(self):
         self._guard()
         if not self._started:
             raise ClaimError("claim_unavailable")
@@ -283,6 +331,7 @@ class AccountClaimJobs:
                     # subscriber loss must win before any final SQL claim; it
                     # need not wait behind the owner's ordinary request batch.
                     job.cancelled = True
+                again = False
                 if job.cancelled:
                     job.reason = 'open_cancelled' if job.kind == 'open' else "claim_cancelled"
                 else:
@@ -296,9 +345,35 @@ class AccountClaimJobs:
                     except OpenError as error:
                         job.reason = error.reason_code
                     except ClaimError as error:
-                        job.reason = error.reason_code
-                    except Exception:
-                        job.reason = 'open_unavailable' if job.kind == 'open' else "claim_unavailable"
+                        again = (error.reason_code == "claim_preparation_stale" and job.kind == 'claim'
+                                 and not getattr(error, "run_changed", False)
+                                 and job.provider is not None and job.stale_preparations < MAX_STALE_PREPARATIONS)
+                        job.reason = None if again else error.reason_code
+                    except Exception as error:  # S1-U10b/f
+                        if completion_fault(error):
+                            lane_health.safely(lambda error=error: self.health.note_failure(  # S1-H1a C7
+                                self._note, 'claim_completion_failed', error))
+                        job.reason = completion_reason(error, job.kind)
+                if again:
+                    # Captured and prepared again from the run's open, verified in full as the first was
+                    # (0.4.0 FR1); the job keeps its place, quota and identity.
+                    self._pool.discard(notice.handle)
+                    del self._signatures[notice.handle]
+                    job.signature_handle = None
+                    job.stale_preparations += 1
+                    try:
+                        job.signature_handle = self._intake.capture_admission(
+                            job.context.project_id, job.provider, self._work_limits, claim_anchor_ms(job.context))
+                    except ClaimError as error:
+                        job.reason, job.state = error.reason_code, "ready"  # Its own reason, as a first capture.
+                        continue
+                    except Exception as error:
+                        if completion_fault(error):
+                            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'claim_capture_failed', error))  # S1-H1a C7
+                        job.reason, job.state = completion_reason(error, 'claim'), "ready"
+                        continue
+                    self._signatures[job.signature_handle] = ticket
+                    continue
                 # Publish the bounded reply before releasing returned inputs.
                 # Any interruption/fault fences the coordinator without replay.
                 job.state = "ready"
@@ -311,8 +386,9 @@ class AccountClaimJobs:
                 for _ in range(self._pool._limits.max_workers):
                     if self._pool.offer_next() is None:
                         break
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
+            self._note_fault(error)
             raise
 
     def take(self, ticket, *, _ingress=None):
@@ -326,8 +402,9 @@ class AccountClaimJobs:
                               job.before_commit if job.kind == 'open' else None)
         try:
             self._drop(ticket)
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
+            self._note_fault(error)
             raise
         return reply
 
@@ -347,8 +424,9 @@ class AccountClaimJobs:
                 job.signature_handle = None
                 job.reason, job.state = ('open_cancelled' if job.kind == 'open' else "claim_cancelled"), "ready"
             return state
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
+            self._note_fault(error)
             raise
 
     def request_close(self):
@@ -363,8 +441,9 @@ class AccountClaimJobs:
             if self._billing is not None:
                 self._billing.request_close()
             self._pool.request_close()
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
+            self._note_fault(error)
             raise
 
     def drain(self):
@@ -392,8 +471,9 @@ class AccountClaimJobs:
             self._counts.clear()
             self._signatures.clear()
             return True
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
+            self._note_fault(error)
             raise
 
     def snapshot(self):
@@ -403,3 +483,20 @@ class AccountClaimJobs:
                 "ready": sum(job.state == "ready" for job in self._jobs.values()),
                 "closing": self._closing, "faulted": self._faulted,
                 "workers_closed": self._pool.snapshot()["closed"]}
+
+
+def _busy(error) -> bool:
+    return getattr(error, "reason_code", None) == "sql_read_busy"
+
+
+def completion_reason(error, kind) -> str:
+    """The reply for an unexpected error completing (or recapturing) a job: a busy ledger is answered
+    as busy (M4b E1a-2), anything else as before."""
+    if kind == 'open':
+        return "open_account_busy" if _busy(error) else "open_failed"
+    return "account_busy" if _busy(error) else "claim_unavailable"
+
+
+def completion_fault(error) -> bool:
+    """A busy ledger is expected contention, not a lane fault (M4b E1a-2)."""
+    return not _busy(error)

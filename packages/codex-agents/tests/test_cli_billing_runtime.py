@@ -152,6 +152,33 @@ class CliBillingRuntimeTests(unittest.TestCase):
         self.assertTrue(known['known'])
         self.assertEqual(1, len(self.launches()))
 
+    def test_T2_a_probe_after_a_finished_claude_run_is_ready_and_reused_with_probe_records_only(self):
+        """R1 end to end: the child's own run-tagged records must not make the next probe unavailable."""
+        from codex_agents.providers import claude_rate_limit_records
+        code, first = self.take(self.start())
+        self.assertEqual(0, code, first)
+        fingerprint = next(r for r in first['records'] if r['record_type'] == 'provider_identity')['account_fingerprint']
+        now = int(time.time()*1000)
+        run = claude_rate_limit_records({'status': 'allowed', 'isUsingOverage': False, 'overageStatus': 'rejected',
+            'overageDisabledReason': 'org_level_disabled'}, account_fingerprint=fingerprint, observed_at_ms=now,
+            run_id='run-finished-1')
+        self.ledger._store_provider_observations(self.fixture.project_id, run, timestamp=now)
+        code, second = self.take(self.start())
+        self.assertEqual(0, code, second)
+        self.assertTrue(second['ready'])
+        self.assertEqual('reused', second['probe'])
+        self.assertTrue(all(r.get('run_id') is None and r.get('phase') is None for r in second['records']))
+        self.assertEqual(1, len(self.launches()))
+
+    def test_T4_a_reply_that_fails_its_own_contract_is_named_and_recorded_in_the_billing_lane(self):
+        """R3: no bare probe_unavailable for a reply-decode failure; the lane's last_failure says why."""
+        from codex_agents.account_api import AccountError
+        with mock.patch('codex_agents.account_service.decode_account_response',
+                        side_effect=AccountError('account_invalid_response')):
+            code, failed = self.take(self.start())
+        self.assertEqual((2, 'probe_reply_invalid'), (code, failed['reason_code']))
+        self.assertEqual('probe_reply_invalid', self.billing.health.view()['last_failure']['cause'])
+
     def test_paid_usage_failure_is_fixed_and_recovery_does_not_refresh_clean_billing(self):
         self.fixture.frames('claude', [bridge_fixtures.PROBE_INIT, bridge_fixtures.OVERAGE, {'sleep': 3}])
         code, failed = self.take(self.start(identity='paid-failure'))

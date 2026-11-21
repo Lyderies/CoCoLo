@@ -286,20 +286,14 @@ class AccountCleanupReleaseTests(unittest.TestCase):
             self.assertEqual(1, transport.call_count)
 
     def test_registered_backup_preserves_original_release_journal_and_standalone_restore(self):
-        import runpy
-        from tests.support import REPOSITORY_ROOT
         self.call()
         original = tuple(self.ledger._connection.execute('SELECT * FROM account_cleanup_receipts').fetchone())
         path = self.ledger.create_sanitized_backup(self.binding.project_id, file_id='cleanup_release_backup',
             expires_at_ms=self.base.fixture.base.stamp+60_000)
         body = backup_body(path, self.binding.project_id)
-        self.assertEqual(14, body['ledger_schema_version'])
+        self.assertEqual(15, body['ledger_schema_version'])  # O0b RS-A (requirement)
         self.assertEqual(1, body['counts']['account_cleanup_receipts'])
         self.assertTrue(self.ledger.verify_sanitized_backup(self.binding.project_id, file_id='cleanup_release_backup')['verified'])
-        tool = runpy.run_path(str(REPOSITORY_ROOT/'scripts/backup_installed_project.py'))
-        from codex_agents.learning_contracts import validate_learning_record, content_digest
-        tool['_verify_relational_restore'](self.ledger._connection, body,
-            validate_learning_record=validate_learning_record, content_digest=content_digest)
         self.assertEqual(original, tuple(self.ledger._connection.execute('SELECT * FROM account_cleanup_receipts').fetchone()))
 
     def test_release_capacity_reservation_failure_happens_before_account_registration(self):

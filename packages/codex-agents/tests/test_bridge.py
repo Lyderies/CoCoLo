@@ -96,14 +96,25 @@ def init_frame(**changes) -> dict:
     return {
         "type": "system", "subtype": "init", "session_id": "session-1",
         "apiKeySource": "none", "model": "claude-opus-5-5", "plugins": [],
-        "mcp_servers": [], "tools": ["Read", "Glob", "Grep"], **changes,
+        # Corrected for O10 VF (requirement): a client held to --json-schema also advertises its output tool.
+        # and reports its version (O10 VF-6: a schema-held run refuses an init with none).
+        "claude_code_version": "2.1.311",
+        "mcp_servers": [], "tools": ["StructuredOutput", "Read", "Glob", "Grep"], **changes,
     }
 
 
 def result_frame(text: str | None = None) -> dict:
+    text = text if text is not None else json.dumps(result())
+    try:
+        structured = json.loads(text)
+    except ValueError:
+        structured = None
+    # Corrected for O10 VF (requirement): under --json-schema the client gives the validated object as
+    # structured_output; text that is not one object gives none.
+    extra = {"structured_output": structured} if type(structured) is dict else {}
     return {
-        "type": "result", "subtype": "success", "is_error": False,
-        "result": text if text is not None else json.dumps(result()),
+        "type": "result", "subtype": "success", "is_error": False, **extra,
+        "result": text,
         "usage": {"input_tokens": 120, "output_tokens": 30,
                   "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
         "total_cost_usd": 0.42,
@@ -472,7 +483,7 @@ class ClaudeBridgeTests(BridgeTestCase):
         cases = {
             "init_api_key_source": init_frame(apiKeySource="ANTHROPIC_API_KEY"),
             "init_model_mismatch": init_frame(model="claude-sonnet-5-5"),
-            "init_plugin_loaded": init_frame(plugins=[{"name": "cc-plugin-easel"}]),
+            "init_plugin_not_allowed": init_frame(plugins=[{"name": "cc-plugin-easel"}]),
             "init_mcp_server_loaded": init_frame(mcp_servers=[{"name": "x"}]),
             "init_tool_not_allowed": init_frame(tools=["Read", "Bash"]),
             "missing_init_frame": result_frame(),
@@ -513,7 +524,9 @@ class ClaudeBridgeTests(BridgeTestCase):
     def test_unparseable_output_fails_closed(self) -> None:
         for frames, reason in (
             ([init_frame(), {"raw": "not json"}], "unparseable_stream"),
-            ([init_frame(), result_frame("I could not finish.")], "unparseable_result"),
+            # Corrected for O10 VF-5 (requirement): text is never the result; without a structured
+            # output the run is invalid_result (structured_output_missing), checked in VF's own tests.
+            ([init_frame(), result_frame("I could not finish.")], "invalid_result"),
             ([init_frame()], "missing_result"),
             ([init_frame(), {**result_frame(), "is_error": True}], "child_reported_error"),
         ):
@@ -537,9 +550,9 @@ class ClaudeBridgeTests(BridgeTestCase):
         self.assertEqual([], self.workspace_entries())
 
     def test_client_change_before_launch_aborts(self) -> None:
-        # Admitted on 2.1.200; an upgrade inside the range still differs.
+        # Admitted on 2.1.311; an upgrade inside the range still differs.
         for version, message in (
-            ("2.1.201 (Claude Code)", "differs from the admitted client"),
+            ("2.1.312 (Claude Code)", "differs from the admitted client"),
             ("", "differs from the admitted client"),
             ("2.2.0 (Claude Code)", "differs from the admitted client"),
         ):
@@ -2953,11 +2966,13 @@ class BridgeLifecycleTests(CliTestCase):
         self.assertFalse(committed["outcome"]["accepted"])
 
     def test_invalid_utf8_result_text_keeps_the_parse_failure_outcome(self) -> None:
+        # Corrected for O10 VF-5 (requirement): the text is no longer read, so text that cannot be
+        # parsed leaves no structured output, and the run is refused with that fixed reason.
         route, assigned, handle = self.claude_run()
         self.frames("claude", [init_frame(), RATE_LIMIT, result_frame("\ud800")])
         output = self.dispatch(route, assigned, handle)
-        self.assertEqual("unparseable_result", output["bridge_report"]["outcome"])
-        self.assertNotIn("result_validation_reason_code", output["bridge_report"])
+        self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
+        self.assertEqual("structured_output_missing", output["bridge_report"]["result_validation_reason_code"])
         committed = self.commit(route, assigned, handle, output["result"], "failed")
         self.assertFalse(committed["outcome"]["accepted"])
 
@@ -3516,6 +3531,48 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
             self.assertEqual(
                 "paid_usage_usable", self.open_claude(expected=2)["reason_code"]
             )
+
+    def test_CI_3_each_init_reason_reaches_the_reply_and_survives_a_replay(self) -> None:
+        # Through the services: the worker's packet, the committed row, the CLI reply and a replay of it.
+        from codex_agents.billing_probe_contracts import PROBE_INIT_REASONS
+        from tests.test_claude_init_plugins import PRIVACY, builtin, frame_2_1_323
+        cases = {
+            "init_plugin_not_allowed": frame_2_1_323(plugins=[builtin("cc-plugin-sec-default")]),
+            "init_plugin_not_disabled": frame_2_1_323(plugins=[PRIVACY, builtin("cc-plugin-telemetry")]),
+            "init_api_key_source": frame_2_1_323(apiKeySource="ANTHROPIC_API_KEY"),
+            "init_model_mismatch": frame_2_1_323(model="claude-sonnet-5-5"),
+            "init_mcp_server_loaded": frame_2_1_323(mcp_servers=[{"name": "x"}]),
+            "init_tool_not_allowed": frame_2_1_323(tools=["Read"]),
+            "init_permission_mode_mismatch": frame_2_1_323(permissionMode="bypassPermissions"),
+            "init_additional_directories_present": frame_2_1_323(additional_directories=["/x"]),
+        }
+        self.assertEqual(PROBE_INIT_REASONS, set(cases))
+        for reason, init in cases.items():
+            with self.subTest(reason=reason):
+                self.setUp_fresh_project()
+                before = self.launches()
+                with self.stale_evidence():
+                    self.frames("claude", [init, RATE_LIMIT, result_frame("OK")])
+                    failed = self.cli("provider-observe", "--provider", "claude", "--billing-probe", expected=2)
+                    self.assertEqual(reason, failed["reason_code"])
+                    self.assertEqual(before + 1, self.launches())
+                    # The same request again reads the committed row: the same reason, no second launch.
+                    again = self.cli("provider-observe", "--provider", "claude", "--billing-probe",
+                                     "--request-id", failed["request_id"], expected=2)
+                self.assertEqual(reason, again["reason_code"])
+                self.assertEqual(before + 1, self.launches())
+
+    def test_CI_4_a_real_settings_probe_completes_and_a_replay_keeps_the_client_version(self) -> None:
+        from tests.test_claude_init_plugins import frame_2_1_323
+        self.admit("claude")
+        self.frames("claude", [frame_2_1_323(), FAVOURABLE, result_frame("OK")])
+        observed = self.cli("provider-observe", "--provider", "claude", "--billing-probe")
+        self.assertEqual(("launched", "2.1.323"), (observed["probe"], observed["client_version"]))
+        before = self.launches()
+        again = self.cli("provider-observe", "--provider", "claude", "--billing-probe",
+                         "--request-id", observed["request_id"])
+        self.assertEqual((True, "2.1.323"), (again["known"], again["client_version"]))
+        self.assertEqual(before, self.launches())
 
     def test_probe_is_admitted_like_a_run(self) -> None:
         # Without an owner attestation nothing is launched.
@@ -4265,6 +4322,28 @@ class BridgedUsageTests(BridgeTestCase):
         self.assertEqual(
             "unavailable", committed["outcome"]["usage_sources"]["model_calls"]["source"]
         )
+
+    def test_a_bridged_run_with_its_token_counts_recorded_is_usage_complete(self) -> None:
+        # RT-8: `usage_complete` required all eight outcome usage fields, and a bridged child never reports
+        # model calls, tool calls, latency or cost, so no run was ever complete (242 of 242 unknown in the
+        # control project). A run whose provider reported its token counts is complete.
+        route, assigned, handle = self.claude_run()
+        frame = result_frame()
+        frame["usage"] = {"input_tokens": 120, "output_tokens": 30,
+                          "cache_read_input_tokens": 400, "cache_creation_input_tokens": 80}
+        self.frames("claude", [init_frame(), RATE_LIMIT, frame])
+        output = self.dispatch(route, assigned, handle)
+        self.ledger.commit_host_result(
+            self.project_id, assignment=assigned, task=self.task(), route=route,
+            result=output["result"],
+            observation={"run_handle": handle, "result_attempts": ACCEPTED},
+            execution_configuration=route["execution_configuration"],
+        )
+        complete = self.ledger._connection.execute(
+            "SELECT usage_complete FROM host_run_bindings WHERE project_id=? AND consumed_at_ms IS NOT NULL",
+            (self.project_id,)
+        ).fetchall()
+        self.assertEqual([(1,)], [tuple(row) for row in complete])
 
     def test_a_bridged_run_without_recorded_usage_stays_unknown(self) -> None:
         route, assigned, handle = self.claude_run(timeout_seconds=1)

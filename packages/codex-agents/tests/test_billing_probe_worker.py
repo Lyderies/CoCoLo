@@ -8,6 +8,8 @@ import unittest
 from unittest import mock
 
 from tests import test_bridge as fixtures
+from tests.test_claude_init_plugins import PRIVACY, builtin, frame_2_1_323
+from codex_agents.billing_probe_contracts import PROBE_INIT_REASONS
 from codex_agents import billing_probe_worker as workers, bridge
 from codex_agents.learning_contracts import parse_bounded_json_value
 from codex_agents.owned_execution import ExecutionCustodyError, OwnedExecutionRegistry
@@ -63,6 +65,41 @@ class BillingProbeProtocolTests(unittest.TestCase):
                 self.assertEqual(1, len(infos))
                 self.assertEqual(expected, reason)
 
+    def test_CI_1_a_2_1_323_probe_completes(self):
+        infos, reason = self.probe([frame_2_1_323(), fixtures.FAVOURABLE, fixtures.result_frame('OK')])
+        self.assertEqual((1, None), (len(infos), reason))
+
+    def init_cases(self):
+        return {
+            'init_plugin_not_allowed': frame_2_1_323(plugins=[builtin('cc-plugin-sec-default')]),
+            'init_plugin_not_disabled': frame_2_1_323(plugins=[PRIVACY, builtin('cc-plugin-telemetry')]),
+            'init_api_key_source': frame_2_1_323(apiKeySource='ANTHROPIC_API_KEY'),
+            'init_model_mismatch': frame_2_1_323(model='claude-sonnet-5-5'),
+            'init_mcp_server_loaded': frame_2_1_323(mcp_servers=[{'name': 'x'}]),
+            'init_tool_not_allowed': frame_2_1_323(tools=['Read']),
+            'init_permission_mode_mismatch': frame_2_1_323(permissionMode='bypassPermissions'),
+            'init_additional_directories_present': frame_2_1_323(additional_directories=['/x']),
+        }
+
+    def test_CI_3_each_init_violation_is_the_probe_reason(self):
+        cases = self.init_cases()
+        self.assertEqual(PROBE_INIT_REASONS, set(cases))  # every reason the contract names is driven here
+        for reason, init in cases.items():
+            with self.subTest(reason=reason):
+                infos, failure = self.probe([init, fixtures.FAVOURABLE, fixtures.result_frame('OK')])
+                self.assertEqual((0, reason), (len(infos), failure))
+
+    def test_CI_3_normalization_keeps_each_init_reason_and_the_version_and_nothing_else(self):
+        for reason in PROBE_INIT_REASONS:
+            with self.subTest(reason=reason):
+                body, got = workers._normalized([], reason, {}, 5, '2.1.323')
+                self.assertEqual(reason, got)
+                self.assertEqual({'records': [], 'observed_at_ms': 5, 'reason_code': reason,
+                                  'client_version': '2.1.323'}, json.loads(body))
+        for failure in ('probe_tool_not_allowed', 'missing_init_frame', 'probe_clock_changed', 'init_client_unsupported',
+                        'init_other', 'PRIVATE text'):
+            with self.subTest(failure=failure):
+                self.assertEqual('probe_incomplete', workers._normalized([], failure, {}, 5, None)[1])
 
 class BillingProbeWorkerTests(unittest.TestCase):
     """Actual inert Popen/tree/watchdog custody; no native or account release claim."""
@@ -115,6 +152,29 @@ class BillingProbeWorkerTests(unittest.TestCase):
         self.until(lambda: self.pool.snapshot(handle)['state'] in {'returned', 'unknown'})
         self.assertEqual('returned', self.pool.snapshot(handle)['state'])
         return self.pool.packet(handle)
+
+    def test_CI_3_the_packet_keeps_the_init_reason_instead_of_probe_incomplete(self):
+        handle, _, _, _ = self.launch([frame_2_1_323(plugins=[builtin('cc-plugin-sec-default')]),
+                                       fixtures.FAVOURABLE, fixtures.result_frame('OK')])
+        packet = self.returned(handle)
+        self.assertEqual('init_plugin_not_allowed', packet.reason_code)
+        self.assertEqual([], json.loads(packet.body)['records'])
+
+    def test_CI_3_a_failure_that_is_not_an_init_reason_is_still_probe_incomplete(self):
+        handle, _, _, _ = self.launch([fixtures.PROBE_INIT, fixtures.FAVOURABLE,
+                                       {'type': 'tool_use', 'name': 'Bash'}])
+        self.assertEqual('probe_incomplete', self.returned(handle).reason_code)
+
+    def test_CI_4_the_client_version_from_init_is_recorded_with_the_probe_evidence(self):
+        handle, _, _, _ = self.launch([frame_2_1_323(), fixtures.FAVOURABLE, fixtures.result_frame('OK')])
+        packet = self.returned(handle)
+        self.assertIsNone(packet.reason_code)
+        self.assertEqual('2.1.323', json.loads(packet.body)['client_version'])
+
+    def test_CI_4_the_version_is_kept_when_the_init_check_stops_the_probe(self):
+        handle, _, _, _ = self.launch([frame_2_1_323(plugins=[builtin('cc-plugin-sec-default')]),
+                                       fixtures.FAVOURABLE, fixtures.result_frame('OK')])
+        self.assertEqual('2.1.323', json.loads(self.returned(handle).body)['client_version'])
 
     def test_real_process_return_requires_original_cleanup_before_local_retirement(self):
         with mock.patch.object(sqlite3, 'connect', side_effect=AssertionError('worker SQL')):
@@ -307,6 +367,113 @@ class BillingProbeWorkerTests(unittest.TestCase):
         with self.assertRaises(workers.ProbeWorkerError):
             self.pool.packet(handle)
         self.assertEqual(workers.PROBE_SLOT_BYTES, self.pool._charged)
+
+    def payload(self):
+        return workers.probe_payload(self.fixture.project_id, 'a'*64, self.fixture.project, self.identity,
+                                     deadline_ns=time.monotonic_ns()+30_000_000_000,
+                                     created_at_ms=time.time_ns()//1_000_000)
+
+    def test_H1a_normal_work_is_busy_and_never_kept_or_held(self):
+        handle, _ = self.prepare()
+        view = self.pool.health.view()
+        self.assertEqual((1, 0, False, None), (view['busy'], view['kept'], view['faulted'], view['held_since_ms']))
+        self.pool.discard(handle)
+        self.until(lambda: self.pool.snapshot(handle)['state'] == 'cleaned')
+        self.pool.retire(handle)
+        view = self.pool.health.view()
+        self.assertEqual((0, 0, None), (view['busy'], view['kept'], view['held_since_ms']))
+
+    def test_H1a_M10_an_unknown_preparation_is_kept_held_and_faults_the_lane(self):
+        with mock.patch.object(workers, '_prepare', return_value=(None, None, True)):
+            handle = self.pool.prepare(self.payload())
+            self.until(lambda: self.pool.snapshot(handle)['state'] == 'unknown')
+        view = self.pool.health.view()
+        # O0c M10 (replacing H1a's "without a fault"): unknown work faults its lane, so the account's
+        # self-restart fires.
+        self.assertEqual((1, True), (view['kept'], view['faulted']))
+        self.assertIs(int, type(view['held_since_ms']))
+        self.assertEqual(('probe_preparation_unknown', 'invariant'),
+                         (view['last_failure']['cause'], view['last_failure']['type']))
+
+    def test_H1a_a_worker_exception_is_faulted_kept_and_held_with_its_type(self):
+        with mock.patch.object(workers, '_prepare', side_effect=RuntimeError('a secret path /x')):
+            handle = self.pool.prepare(self.payload())
+            self.until(lambda: self.pool.snapshot(handle)['state'] == 'unknown')
+        view = self.pool.health.view()
+        self.assertEqual((True, 1), (view['faulted'], view['kept']))
+        self.assertIs(int, type(view['held_since_ms']))
+        self.assertEqual(('probe_worker_failed', 'RuntimeError'),
+                         (view['last_failure']['cause'], view['last_failure']['type']))
+        self.assertNotIn('secret', repr(view))
+
+    def test_H1a_a_worker_fault_is_published_while_the_registry_lock_is_held(self):
+        # Round-5 verifier: the note must not wait for a lock a blocked owner may hold. The worker is
+        # inside its preparation when the lock is taken, then fails.
+        started, go = threading.Event(), threading.Event()
+
+        def failing(payload):
+            started.set()
+            go.wait(5)
+            raise RuntimeError('fixture')
+        with mock.patch.object(workers, '_prepare', side_effect=failing):
+            self.pool.prepare(self.payload())
+            self.assertTrue(started.wait(5))
+            with self.registry._lock:
+                go.set()
+                self.until(lambda: self.pool.health.view()['faulted'])
+                self.assertEqual(1, self.pool.health.view()['kept'])
+
+    def test_C7_a_preparation_failure_caught_inside_the_helper_keeps_its_type(self):
+        from codex_agents import bridge
+        with mock.patch.object(bridge, 'private_workspace', side_effect=PermissionError('a secret path')):
+            handle = self.pool.prepare(self.payload())
+            self.until(lambda: self.pool.snapshot(handle)['state'] in {'failed', 'unknown'})
+        failure = self.pool.health.view()['last_failure']
+        self.assertEqual('PermissionError', failure['type'])
+        self.assertIn(failure['cause'], {'probe_preparation_failed', 'probe_preparation_unknown'})
+        self.assertNotIn('secret', repr(self.pool.health.view()))
+
+    def test_C6_an_unknown_preparation_is_published_while_the_registry_lock_is_held(self):
+        started, go = threading.Event(), threading.Event()
+
+        def unknown(payload):
+            started.set()
+            go.wait(5)
+            return None, None, True
+        with mock.patch.object(workers, '_prepare', side_effect=unknown):
+            self.pool.prepare(self.payload())
+            self.assertTrue(started.wait(5))
+            with self.registry._lock:
+                go.set()
+                self.until(lambda: self.pool.health.view()['kept'] == 1)
+                self.assertIs(int, type(self.pool.health.view()['held_since_ms']))
+
+    def test_C1_building_a_note_that_fails_never_changes_what_prepare_returns(self):
+        with mock.patch.object(workers, 'frozenset', side_effect=MemoryError(), create=True):
+            handle = self.pool.prepare(self.payload())  # still a handle to a queued job
+        self.until(lambda: self.pool.snapshot(handle)['state'] != 'preparing')
+        self.pool.discard(handle)
+        self.until(lambda: self.pool.snapshot(handle)['state'] == 'cleaned')
+        self.pool.retire(handle)
+        self.assertEqual(0, self.pool._charged)
+
+    def test_C6_a_probe_cancelled_during_an_unknown_preparation_and_then_cleaned_is_no_longer_held(self):
+        started, go = threading.Event(), threading.Event()
+
+        def unknown(payload):
+            started.set()
+            go.wait(5)
+            return None, None, True
+        with mock.patch.object(workers, '_prepare', side_effect=unknown):
+            handle = self.pool.prepare(self.payload())
+            self.assertTrue(started.wait(5))
+            self.pool.discard(handle)  # cancelled while it prepares
+            go.set()
+            self.until(lambda: self.pool.snapshot(handle)['state'] == 'cleaned')
+        self.pool.retire(handle)
+        view = self.pool.health.view()
+        self.assertEqual((0, None), (view['kept'], view['held_since_ms']))
+        self.assertIsNotNone(view['last_failure'])  # what happened is still noted
 
     def test_unbound_preparation_holds_slot_until_actual_discard(self):
         handle, prepared = self.prepare()

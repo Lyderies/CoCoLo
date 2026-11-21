@@ -18,7 +18,8 @@ from .account_billing_jobs import AccountBillingJobs, BillingJobLimits
 from .account_claim_jobs import AccountClaimJobs
 from .account_ingress import AccountIngress, AccountIngressLimits
 from .account_observation import AccountObservationOwner, ObservationContext
-from .account_open_contracts import MAX_ACCOUNT_OPEN_CONTEXT_BYTES, AccountOpenContext, OpenOwnerLimits
+from .account_open_contracts import (MAX_ACCOUNT_OPEN_CONTEXT_BYTES, OPEN_REQUESTS_IN_FLIGHT, AccountOpenContext,
+                                     OpenOwnerLimits)
 from .account_observation_jobs import AccountObservationJobs, ObservationJobLimits
 from .account_service import AccountAuthorization, AccountOwnerViews, AccountService
 from .result_contracts import ResultLeaseBinding
@@ -36,7 +37,7 @@ from .service_enrollment import (
 from .service_host import EnrolledFrontend, ServiceHostLimits
 from .signature_job_intake import SignatureIntakeLimits
 from .signature_worker_pool import SignatureWorkerLimits
-from .sql_read_budget import SQLReadLimits
+from .sql_read_budget import SQLReadError, SQLReadLimits
 
 SECOND = 1_000_000_000
 # What an enrolled primary may ask the account owner. Owner-only operations are
@@ -74,6 +75,34 @@ ACCOUNT_INTAKE_LIMITS = SignatureIntakeLimits(8, 3, 4096, 2 * 1_048_576, 4)
 ACCOUNT_WORKER_LIMITS = SignatureWorkerLimits(2, 32 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000)
 
 
+def unended_processes(pool, workers, observations=None):
+    """O0c M8-M10: per account lane, the processes it started that are not proven gone, as
+    {lane: [{'pid', 'why'}]} (a lane is absent once all are), asked by the self-restart before it frees
+    what the account holds in memory. Three lanes start children here, each in a session of its own,
+    so the collector's own exit ends none of them: the signature helper (reaped inside its no-fork
+    confinement), the probe's model (its tree confirmed empty, or never possible) and, review M4, the
+    observation lane's provider CLIs (their group killed, reaped, and the group empty). Owner thread;
+    never raises."""
+    pending = {}
+    for lane, owner in (('signature', pool), ('probe_worker', workers), ('observations', observations)):
+        if owner is None:
+            continue
+        try:
+            items = owner.unproven_children()
+            if type(items) is not list:
+                raise ValueError()
+        except Exception:
+            items = [{'pid': None, 'why': 'unchecked'}]
+        if items:
+            pending[lane] = items
+    return pending
+
+
+def unended_children(pool, workers, observations=None):
+    """O0c M8-M10: the account lanes whose children are not proven gone ([] when every one is)."""
+    return sorted(unended_processes(pool, workers, observations))
+
+
 def account_endpoint(state):
     return account_endpoint_path(state)
 
@@ -96,7 +125,7 @@ class AccountServiceHost:
             self._views = AccountOwnerViews(ledger)
             limits = ACCOUNT_READ_LIMITS
             self._claims = AccountClaimJobs(self._views, ACCOUNT_INTAKE_LIMITS, ACCOUNT_WORKER_LIMITS, limits,
-                open_limits=OpenOwnerLimits(4, 256, MAX_ACCOUNT_OPEN_CONTEXT_BYTES))
+                open_limits=OpenOwnerLimits(OPEN_REQUESTS_IN_FLIGHT, MAX_ACCOUNT_OPEN_CONTEXT_BYTES))
             self._observations = AccountObservationJobs(AccountObservationOwner(self._views, limits),
                                                         ObservationJobLimits(8, 3, 3, 3))
             self._workers = BillingProbeWorkers(OwnedExecutionRegistry(), ProbeWorkerLimits(1, PROBE_SLOT_BYTES))
@@ -158,6 +187,10 @@ class AccountServiceHost:
         try:
             if self._views._ledger.project_for_root(Path(root)) != request.project_id:
                 return None
+        except SQLReadError as error:
+            if error.reason_code == 'sql_read_busy':
+                raise  # M4b E1a-2: a busy ledger is answered as busy, never as "not authorized"
+            return None
         except Exception:
             return None
         # One context object per connection: the owner compares its identity
@@ -212,6 +245,20 @@ class AccountServiceHost:
             return opening
         except Exception:
             return None
+
+    def health_notes(self):
+        """S1-H1a: each account lane's published notes, for the collector's health reply. Reads only
+        immutable values: no lock, owner thread or lane method."""
+        lanes = {'signature': self._claims and self._claims._pool.health, 'claims': self._claims and self._claims.health,
+                 'observations': self._observations and self._observations.health,
+                 'ingress': self._ingress and self._ingress.health, 'billing': self._billing and self._billing.health,
+                 'probe_worker': self._workers and self._workers.health}
+        return {name: lane.view() for name, lane in lanes.items() if lane is not None}
+
+    def unended_children(self):
+        """O0c M8-M10: see `unended_processes`; the self-restart asks this on the owner thread."""
+        self._owner()
+        return unended_processes(self._claims and self._claims._pool, self._workers, self._observations)
 
     def serve_once(self):
         self._owner()

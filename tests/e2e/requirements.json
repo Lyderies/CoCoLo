@@ -1,0 +1,359 @@
+{
+ "schema_version": 1,
+ "about": "COCOLO 0.4.0 strict lifecycle end-to-end requirements (PLAN-0.4.0.md T7). Every requirement names the checks in scripts/e2e_lifecycle.py that prove it; a requirement with no check, or a check naming no requirement, fails tests/test_e2e_requirements.py.",
+ "flows": {
+  "L1": "Fresh install and setup again",
+  "L2": "Owner key",
+  "L3": "Observation and billing",
+  "L4": "Routing",
+  "L5": "Run lifecycle",
+  "L6": "Containment",
+  "L7": "Liveness and stopping",
+  "L8": "Crash recovery",
+  "L9": "Capacity",
+  "L10": "Learning",
+  "L11": "Backups",
+  "L12": "Updates",
+  "L13": "Session guard and rule",
+  "L14": "Status and diagnostics",
+  "L15": "Project deletion"
+ },
+ "requirements": [
+  {
+   "id": "L1.1",
+   "flow": "L1",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "A fresh install through the scripted setup (S1 answers file and passphrase) finishes with every step ok, the protected command rule installed and the collector ready.",
+   "checks": []
+  },
+  {
+   "id": "L1.2",
+   "flow": "L1",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Setup run again on an installed project changes nothing: same files, same digests, no new records except its own checks.",
+   "checks": []
+  },
+  {
+   "id": "L2.1",
+   "flow": "L2",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "The owner key is configured; a wrong passphrase is refused with its fixed reason and changes nothing.",
+   "checks": []
+  },
+  {
+   "id": "L2.2",
+   "flow": "L2",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Replacing the owner key refuses signatures made with the old key and accepts the new one's.",
+   "checks": []
+  },
+  {
+   "id": "L3.1",
+   "flow": "L3",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "provider-observe succeeds for both fake clients, and the Claude billing probe succeeds.",
+   "checks": []
+  },
+  {
+   "id": "L3.2",
+   "flow": "L3",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Billing attestation is recorded and admission accepts it.",
+   "checks": []
+  },
+  {
+   "id": "L3.3",
+   "flow": "L3",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Paid usage on is refused with paid_usage_usable; an API key in the environment with provider_api_key_present; an unreviewed client version with client_version_unreviewed; a signed-out client with observation_unavailable.",
+   "checks": []
+  },
+  {
+   "id": "L4.1",
+   "flow": "L4",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Routing for a Codex primary and a Claude primary returns the policy's role, model, effort, agent and sandbox, and the child runs with exactly those.",
+   "checks": []
+  },
+  {
+   "id": "L4.2",
+   "flow": "L4",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "A route edited after learning-route is refused.",
+   "checks": []
+  },
+  {
+   "id": "L5.1",
+   "flow": "L5",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "For each primary, readiness, assignment and result preflight and export preflight pass.",
+   "checks": []
+  },
+  {
+   "id": "L5.2",
+   "flow": "L5",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Open, dispatch, validate (with one structural repair on a native path where one applies) and record the result succeed; the worker's answer values match the oracle and each required evidence outcome is pass or observed.",
+   "checks": []
+  },
+  {
+   "id": "L5.3",
+   "flow": "L5",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "The verifier opened for the worker's outcome digest passes every required evidence item with no discrepancy and verdict pass or ready; operational checks pass and QA records accepted: true; the orchestration closes and its report is right.",
+   "checks": []
+  },
+  {
+   "id": "L6.1",
+   "flow": "L6",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "A child that tries to read outside its export, write anywhere or use the network is stopped, and its result says so.",
+   "checks": []
+  },
+  {
+   "id": "L6.2",
+   "flow": "L6",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Uncommitted read paths are refused before admission.",
+   "checks": []
+  },
+  {
+   "id": "L7.1",
+   "flow": "L7",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "learning-cancel-run stops a running child; it ends cancelled with its capacity released.",
+   "checks": []
+  },
+  {
+   "id": "L7.2",
+   "flow": "L7",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "A child that goes silent is stopped at the cutoff (controllable clock) and ends with work_silence and its capacity released.",
+   "checks": []
+  },
+  {
+   "id": "L7.3",
+   "flow": "L7",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "A hard timeout stops a child and ends it with the right terminal state and released capacity.",
+   "checks": []
+  },
+  {
+   "id": "L8.1",
+   "flow": "L8",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Killing the project service mid-run: the next service settles the run (run_lost), frees its slot and records nothing twice.",
+   "checks": []
+  },
+  {
+   "id": "L8.2",
+   "flow": "L8",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Killing the collector mid-run: the same, once it is back.",
+   "checks": []
+  },
+  {
+   "id": "L8.3",
+   "flow": "L8",
+   "source": "PLAN-0.4.0.md T7 L8b (control project, 2026-11-16)",
+   "statement": "A project service replaced while its dispatch runs (another project's setup restarting the shared collector) leaves no run in limbo: the run ends run_lost with its slot freed, the dispatching CLI says so plainly instead of dispatch_not_authorized, and the orchestration can close.",
+   "checks": []
+  },
+  {
+   "id": "L9.1",
+   "flow": "L9",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Two children at once run; a third is refused with claim_busy and the probe with probe_busy.",
+   "checks": []
+  },
+  {
+   "id": "L9.2",
+   "flow": "L9",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Capacity is released after each terminal, shown by a supported per-run read.",
+   "checks": []
+  },
+  {
+   "id": "L9.3",
+   "flow": "L9",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Two projects share one collector, each with its own runs and capacity.",
+   "checks": []
+  },
+  {
+   "id": "L10.1",
+   "flow": "L10",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Hook events are ingested with recording on and not with it off (S2).",
+   "checks": []
+  },
+  {
+   "id": "L10.2",
+   "flow": "L10",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "The learning history moves to the project store; learning-run-cycle runs.",
+   "checks": []
+  },
+  {
+   "id": "L10.3",
+   "flow": "L10",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Retention removes expired raw events and keeps their summaries (controllable clock).",
+   "checks": []
+  },
+  {
+   "id": "L11.1",
+   "flow": "L11",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "learning-backup-project and learning-verify-backup succeed.",
+   "checks": []
+  },
+  {
+   "id": "L11.2",
+   "flow": "L11",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "A failed upgrade forced part-way leaves the records unchanged, learning-rollback works and the next attempt succeeds.",
+   "checks": []
+  },
+  {
+   "id": "L12.1",
+   "flow": "L12",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "From each earlier release tag (v0.3.1 on), with history built on it, an update to HEAD succeeds and the full run passes again.",
+   "checks": []
+  },
+  {
+   "id": "L12.2",
+   "flow": "L12",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "A one-command update with an admitted-never-launched run and 0.2.x leftovers present needs no manual stop.",
+   "checks": []
+  },
+  {
+   "id": "L12.3",
+   "flow": "L12",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "An update with a child really running refuses plainly and changes nothing.",
+   "checks": []
+  },
+  {
+   "id": "L12.4",
+   "flow": "L12",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "An update with uncommitted managed files is refused.",
+   "checks": []
+  },
+  {
+   "id": "L12.5",
+   "flow": "L12",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "A second project updated after the first works (no other project stops working).",
+   "checks": []
+  },
+  {
+   "id": "L12.6",
+   "flow": "L12",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "History built on an earlier release with more than 512 admission records, runs left by 0.2.x and a project over 128 MiB still opens, dispatches and upgrades (the four live-test bugs: unbounded admission history, a masked busy probe, 0.2.x leftovers blocking updates, a protected copy without role files).",
+   "checks": []
+  },
+  {
+   "id": "L12.7",
+   "flow": "L12",
+   "source": "DESIGN-0.3.3-claim-capture.md",
+   "statement": "A dispatch refused at its claim on a project with long history closes by itself, and after an update from the release before, the next service closes any such run an earlier version left (0.3.3 C2, C3, C3f).",
+   "checks": []
+  },
+  {
+   "id": "L13.1",
+   "flow": "L13",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "A session with danger-full-access, an unknown host, or opened above the project is refused with its reason.",
+   "checks": []
+  },
+  {
+   "id": "L13.2",
+   "flow": "L13",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "The protected copy refuses a project it is not bound to.",
+   "checks": []
+  },
+  {
+   "id": "L14.1",
+   "flow": "L14",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "learning-status, learning-run-status, earlier_version_runs and learning-orchestration-report give the right values at each phase, and none is private.",
+   "checks": []
+  },
+  {
+   "id": "L15.1",
+   "flow": "L15",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "learning-delete-project removes the project's records and services and leaves another project untouched.",
+   "checks": []
+  },
+  {
+   "id": "G1",
+   "flow": "all",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Every step exits 0, or refuses with a reason the step expects; a bare run_unavailable, account_unavailable or probe_unavailable is a failure.",
+   "checks": []
+  },
+  {
+   "id": "G2",
+   "flow": "all",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Worker: every answer value matches the oracle; each required evidence outcome is pass or observed.",
+   "checks": []
+  },
+  {
+   "id": "G3",
+   "flow": "all",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Verifier: opened for the worker's digest; each required evidence outcome is pass; no discrepancy; verdict pass or ready.",
+   "checks": []
+  },
+  {
+   "id": "G4",
+   "flow": "all",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Operational QA: accepted: true.",
+   "checks": []
+  },
+  {
+   "id": "G5",
+   "flow": "all",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Capacity: after close, a supported per-run read shows every claimed run released, and the next billing probe gets a slot; final statistics show zero active or pending runs.",
+   "checks": []
+  },
+  {
+   "id": "G6",
+   "flow": "all",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "An update never needs the collector stopped by hand, and finishes with the collector healthy on the new build.",
+   "checks": []
+  },
+  {
+   "id": "G7",
+   "flow": "all",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "Records keep their history across every update: counts by kind, never content.",
+   "checks": []
+  },
+  {
+   "id": "G8",
+   "flow": "all",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "No private value appears in any output: keys, fingerprints, paths under the temporary HOME.",
+   "checks": []
+  },
+  {
+   "id": "G9",
+   "flow": "all",
+   "source": "PLAN-0.4.0.md T7",
+   "statement": "A content-free JSON report with phases, seconds, reason codes and pass or fail per requirement is written, kept as the CI artifact.",
+   "checks": []
+  }
+ ]
+}

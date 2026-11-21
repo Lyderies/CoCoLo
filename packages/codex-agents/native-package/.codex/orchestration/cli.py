@@ -72,8 +72,6 @@ if os.path.lexists(RUNTIME_BINDING) and not _copy_holds_only_its_runtime():
 sys.path.append(str(ORCHESTRATION_ROOT))
 
 from codex_agents.bridge import BridgeRefused  # noqa: E402
-from codex_agents.bridge import signal_guard as bridge_signal_guard  # noqa: E402
-from codex_agents.bridge import dispatch as dispatch_bridge  # noqa: E402
 from codex_agents.bridge import dispatch_preflight  # noqa: E402
 from codex_agents.catalog import CatalogError, discover, load_discovery_policy  # noqa: E402
 from codex_agents.contracts import (  # noqa: E402
@@ -123,6 +121,8 @@ from codex_agents.learning_engine import (  # noqa: E402
 )
 from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient  # noqa: E402
 from codex_agents.collector_paths import UNMOVED_STATE, CollectorPaths  # noqa: E402
+from codex_agents.project_usage_report import DEFAULT_ROWS as USAGE_REPORT_ROWS  # noqa: E402
+from codex_agents.project_usage_report import UsageReportError, usage_report  # noqa: E402
 from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
@@ -133,7 +133,7 @@ from codex_agents.client_runtime import (  # noqa: E402
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
 from codex_agents.history_contracts import HistoryError  # noqa: E402
 from codex_agents.project_host_client import (  # noqa: E402
-    ensure_project_host, other_version_host, project_host_serving, withdraw_project_host,
+    SERVICE_START_REASONS, ensure_project_host, other_version_host, project_host_serving, withdraw_project_host,
 )
 from codex_agents.admission_metadata import api_keys_present  # noqa: E402
 from codex_agents.host_paths import PYTHON_ISOLATION_FLAGS  # noqa: E402
@@ -210,6 +210,7 @@ from codex_agents.routing import (  # noqa: E402
     load_effective_policy,
     load_policy,
     route_task,
+    verifier_setting,
 )
 from codex_agents.runtime_files import RELEASES_FILE  # noqa: E402
 from codex_agents.session_guard import (  # noqa: E402
@@ -286,7 +287,34 @@ def _bounded_json_input(path: str) -> dict:
 
 
 def _print(data: object) -> None:
+    if type(data) is dict and data.get("ready") is False and type(data.get("reason_code")) is str:
+        from codex_agents.refusal_steps import next_step
+        # S1-H1b: what to do next for every refusal with a reason code, always the table's fixed text
+        # (never a supplied value). A not-ready reply without one is a report, not a refusal.
+        data = {**data, "next_step": next_step(data["reason_code"])}
     print(json.dumps(data, indent=2, sort_keys=True))
+
+
+def _usage_report(args: argparse.Namespace) -> dict:
+    """The usage report of one window, or a refusal with a fixed reason code; reads only."""
+    import datetime
+
+    def moment(text):
+        try:
+            value = datetime.datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+        except ValueError:
+            raise UsageReportError("usage_window_invalid") from None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=datetime.timezone.utc)
+        return int(value.timestamp() * 1000)
+
+    try:
+        return {"ready": True, **usage_report(CollectorPaths(args.state_root), args.project_root,
+                                              moment(args.since), moment(args.until), args.limit)}
+    except UsageReportError as refusal:
+        return {"ready": False, "reason_code": refusal.reason_code}
+    except StateError:
+        return {"ready": False, "reason_code": "usage_state_unavailable"}
 
 
 def _print_command_report(args: argparse.Namespace, report: dict) -> None:
@@ -364,7 +392,7 @@ def _close_ledger(ledger: LearningLedger | _RestartingLedger) -> None:
 # Codex's sandbox blocks the collector's socket and state, so a sandboxed primary
 # gets this alongside the unchanged error.
 BILLING_ATTESTATION_HINT = (
-    'Run ./setup.sh for this project and choose "Re-run the billing attestation only".'
+    'Run ./setup.sh for this project and choose Configure, then "Re-run the billing attestation only".'
 )
 
 CODEX_SANDBOX_HINT = (
@@ -495,6 +523,30 @@ def _replace_other_version_host(args):
     return replaced
 
 
+from codex_agents.learning_migration import START_REASONS, clear_start_failure, record_start_failure  # noqa: E402
+
+
+def _start_reply(serving, migration_failure):
+    """learning-start-project-service's reply; a start-time migration failure is part of it (O10 HS-8)."""
+    report = {"ready": serving, "serving": serving}
+    if migration_failure is not None:
+        report["learning_migration_failure"] = migration_failure
+    return report
+
+
+def _service_slots(slots):
+    """learning-status: the project service's run slots it can no longer free (O0c M1, M3), with one plain line."""
+    stuck, limit = slots['stuck'], slots['limit']
+    if stuck == 0:
+        summary = f"Project service: none of its {limit} run slots is stuck."
+    else:
+        summary = (f"Project service: {stuck} of its {limit} run slots {'is' if stuck == 1 else 'are'} held by "
+                   "runs it cannot finish (a run failed after its claim, or a child's end could not be confirmed). "
+                   "It keeps them, since a child may still run, and it will be replaced by a fresh service once "
+                   "no run is under way and it has been idle; the new service settles them.")
+    return {'stuck_run_slots': stuck, 'limit': limit, 'replaced_when_idle': stuck > 0, 'summary': summary}
+
+
 def _start_project_host(args):
     """Start this project's service unless one serves; first settle where its learning lives.
 
@@ -520,12 +572,29 @@ def _start_project_host(args):
                     client.learning_moved_if_empty(args.project_root)
                 elif (not snapshot["moved"] or snapshot["activation_pending"]) and snapshot["drained"]:
                     # Not yet moved, or retired by a migration that stopped before
-                    # switching the copy on: run (or finish) it now.
-                    _migrate_learning(argparse.Namespace(
-                        state_root=args.state_root, project_root=args.project_root, status=False, rollback=False))
+                    # switching the copy on: run (or finish) it now. O10 HS-3: its outcome is kept for
+                    # learning-status, never thrown away.
+                    state = CollectorPaths(args.state_root)
+                    began_ms = time.time_ns() // 1_000_000
+                    try:
+                        report = _migrate_learning(argparse.Namespace(
+                            state_root=args.state_root, project_root=args.project_root, status=False, rollback=False))
+                    except Exception:
+                        report = {"ready": False, "reason_code": "migration_failed"}
+                    if type(report) is dict and report.get("ready") is False:
+                        # HS-8: in this start's reply as well as kept, so it shows even if keeping it fails.
+                        reason = report.get("reason_code")
+                        args.learning_migration_failure = (reason if type(reason) is str and reason in START_REASONS
+                                                           else "migration_failed")
+                        record_start_failure(state, args.project_root, args.learning_migration_failure)
+                    else:
+                        clear_start_failure(state, args.project_root, since_ms=began_ms)
     except Exception:
         pass
-    return ensure_project_host(args.state_root, ORCHESTRATION_ROOT, args.project_root)
+    # O10 HS-4: a service that ends at once hands back its own fixed reason.
+    args.service_start_report = {}
+    return ensure_project_host(args.state_root, ORCHESTRATION_ROOT, args.project_root,
+                               report=args.service_start_report)
 
 
 _MOVED_LEARNING_COMMANDS = frozenset({
@@ -1423,6 +1492,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     learning_serve.add_argument("--state-root", type=Path)
 
+    learning_start_service = subparsers.add_parser(
+        "learning-start-project-service",
+        help="start this project's service now, as the next child would (S1-U8: setup runs it after an update)",
+    )
+    learning_start_service.add_argument("--state-root", type=Path)
+    learning_start_service.add_argument("--project-root", required=True, type=Path)
+
     learning_status = subparsers.add_parser(
         "learning-status", help="report persistent collector and redacted client health"
     )
@@ -1604,6 +1680,13 @@ def build_parser() -> argparse.ArgumentParser:
     learning_orchestration_status.add_argument('--orchestration-handle', required=True)
     learning_orchestration_status.add_argument('--request-id')
 
+    review = subparsers.add_parser('learning-review',
+        help='run one review: worker, verify or finish (S1-H1d)')
+    review.add_argument('stage', choices=('worker', 'verify', 'finish'))
+    _add_learning_project(review)
+    review.add_argument('--spec', required=True, type=Path)
+    review.add_argument('--work-dir', required=True, type=Path)
+    review.add_argument('--status', default='completed', help='the status finish closes the orchestration with')
     run_status = subparsers.add_parser('learning-run-status',
         help="read a running child's live status through its project host")
     run_cancel = subparsers.add_parser('learning-cancel-run',
@@ -1620,6 +1703,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_learning_project(learning_orchestration_report)
     learning_orchestration_report.add_argument("--orchestration-id", required=True)
+
+    learning_usage_report = subparsers.add_parser(
+        "learning-usage-report",
+        help="read-only usage of the children a project ran in a window, per provider and model and per run",
+    )
+    _add_learning_project(learning_usage_report)
+    learning_usage_report.add_argument("--since", required=True, help="window start, ISO 8601 (inclusive)")
+    learning_usage_report.add_argument("--until", required=True, help="window end, ISO 8601 (exclusive)")
+    learning_usage_report.add_argument("--limit", type=int, default=USAGE_REPORT_ROWS,
+                                       help="runs listed at most (default %(default)s)")
 
     learning_bind_agent = subparsers.add_parser(
         "learning-bind-host-agent",
@@ -2283,6 +2376,17 @@ def main() -> int:
             sys.stdout.flush()
             os.execv(sys.executable, [sys.executable, *PYTHON_ISOLATION_FLAGS,
                                       str(ORCHESTRATION_ROOT / "collector_host.py"), "--state-root", str(state.root)])
+        elif args.command == "learning-start-project-service":
+            # As every command that needs it: an idle earlier version's service is replaced and a
+            # project with history is moved first when nothing runs (S1-U8).
+            serving = _start_project_host(args) is True
+            report = _start_reply(serving, getattr(args, "learning_migration_failure", None))
+            if not serving:
+                reason = getattr(args, "service_start_report", {}).get("reason_code")
+                report.update(reason_code=reason if reason in SERVICE_START_REASONS else "project_service_unavailable",
+                              error="this project's service did not start; run learning-status for the collector")
+                _print(report)
+                return 2
         elif args.command == "learning-status":
             _start_collector_quietly(args)
             report = status_client(args.state_root, args.project_root)
@@ -2292,6 +2396,10 @@ def main() -> int:
                 label = OWNER_CLIENT
             # How near each limit of this project's store is (0.3.4 R9); None while its service is not running.
             report['project_capacity'] = capacity_report_client(args.state_root, args.project_root, host_client=label)
+            # O0c M1, M3: the run slots this project's service can no longer free, said plainly.
+            slots = (report['project_capacity'] or {}).pop('run_slots', None)
+            if slots is not None:
+                report['project_service'] = _service_slots(slots)
             if report.get('reason_code') == 'status_collector_transport_unavailable':
                 _COLLECTOR_UNREACHED = True
                 report = _with_codex_hint(args.command, report)
@@ -2516,54 +2624,9 @@ def main() -> int:
                     expected_export_commit=args.expected_export_commit)}
                 _print_command_report(args, report)
                 return 0
-            ledger, project_id = _learning_ledger(args)
-            completed_dispatch = None
-            try:
-                try:
-                    _require_host_owner(
-                        ledger, project_id, run_handle=args.run_handle
-                    )
-                    # A termination signal kills the child's process group before
-                    # this process exits, and the export is still removed.
-                    with bridge_signal_guard():
-                        completed_dispatch = {
-                            "ready": True,
-                            **dispatch_bridge(
-                                ledger,
-                                project_id,
-                                project_root=args.project_root.resolve(),
-                                bundle_root=BUNDLE_ROOT,
-                                task=task,
-                                route=route,
-                                assignment=assignment,
-                                parent_grant=parent_grant,
-                                run_handle=args.run_handle,
-                                expected_export_commit=args.expected_export_commit,
-                                result_schema=(
-                                    ORCHESTRATION_ROOT / "schemas" / "result.schema.json"
-                                ).read_bytes(),
-                            ),
-                        }
-                finally:
-                    _close_ledger(ledger)
-            except CollectorRestartError:
-                if completed_dispatch is None:
-                    raise
-                # The bridge already bound this exact validated/fenced result.
-                # Preserve it while reporting the distinct recovery failure;
-                # never normalize its contents, drop a fence or launch again.
-                _print_command_report(args, {
-                    **completed_dispatch,
-                    "ready": False,
-                    "error": _COMPLETED_LEDGER_RESTART_ERROR,
-                    "dispatch_completed": True,
-                    "post_operation_error": {
-                        "reason_code": "collector_restart_failed",
-                        "recovery_required": True,
-                    },
-                })
-                return 2
-            report = completed_dispatch
+            # O10 D9: the bridge runs only routes the project host drives (bridge.dispatch refuses
+            # every other one), so no child is ever started here.
+            raise BridgeRefused("route is not run by the project host")
         elif args.command == "provider-observe":
             if api_keys_present(os.environ) and not args.billing_probe:
                 # The account service observes with a clean environment; a session that
@@ -2638,6 +2701,20 @@ def main() -> int:
                 goal_time_used_seconds=getattr(args, 'goal_time_used_seconds', None), status=getattr(args, 'status', None))
             _print_command_report(args, report)
             return 0
+        elif args.command == 'learning-review':
+            from codex_agents.review_runner import ReviewError, run as run_review
+            try:
+                spec = json.loads(args.spec.read_text())
+            except (OSError, ValueError):
+                spec = None
+            try:
+                summary = run_review(args.stage, spec, args.work_dir, args.project_root, status=args.status)
+            except ReviewError as stopped:
+                _print({'ready': False, 'error': 'review stopped', 'reason_code': stopped.reason_code,
+                        **({'step': stopped.detail} if stopped.detail else {})})
+                return 2
+            _print({'ready': True, 'stage': args.stage, **summary})
+            return 0
         elif args.command in {'learning-run-status', 'learning-cancel-run'}:
             report = run_control_client(args.state_root, args.project_root,
                 'project.status' if args.command == 'learning-run-status' else 'project.cancel',
@@ -2667,6 +2744,11 @@ def main() -> int:
                     }
                 finally:
                     _close_ledger(ledger)
+        elif args.command == "learning-usage-report":
+            # Read-only: no service is started and nothing is written (RT-8).
+            report = _usage_report(args)
+            _print(report)
+            return 0 if report["ready"] else 2
         elif args.command == "learning-bind-host-agent":
             _refuse_bridged_run(args, args.run_handle, "a bridged run binds only its dispatched child")
             ledger, project_id = _learning_ledger(args)
@@ -2925,12 +3007,15 @@ def main() -> int:
                     expected_role = policy["roles"].get(task["family"])
                     if selected["role"] != expected_role:
                         raise ContractError("evaluation trial role differs from policy")
+                    verifier_model, verifier_banded = verifier_setting(
+                        policy, "codex", task["risk"]
+                    )
                     verifier = (
                         {
                             "role": policy["verification"]["role"],
-                            "model": policy["verification"]["model"],
-                            "effort": policy["verification"]["effort"],
+                            **verifier_model,
                             "sandbox_mode": "read-only",
+                            **({"risk_band": task["risk"]} if verifier_banded else {}),
                         }
                         if expected_role != "codex_agents_verification_worker" else None
                     )
@@ -3872,6 +3957,9 @@ def main() -> int:
         if exc.reason_code == "result_capacity_full":
             error = ("the project's result store is full: close finished orchestrations "
                      "(learning-close-orchestration), or wait for their results to pass their retention")
+        elif exc.reason_code == "result_capacity_busy":  # O10 RC-1
+            error = ("the space for results is held by children still running in this project: "
+                     "wait for them to finish, then dispatch again")
         _print({"ready": False, "error": error, "reason_code": exc.reason_code})
         return 2
     except RuntimeOpenError as exc:

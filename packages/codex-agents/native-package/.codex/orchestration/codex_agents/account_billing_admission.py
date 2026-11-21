@@ -7,15 +7,17 @@ Native authentication, launch containment and confirmed return are separate gate
 from dataclasses import dataclass, replace
 import hmac
 import os
+import threading
 import time
 
 from .account_claim_contracts import ClaimError
 from .admission_inputs import AdmissionCaptureLimits
-from .admission_metadata import API_KEY_VARIABLES, evaluate_admission
+from .admission_metadata import API_KEY_VARIABLES, evaluate_admission, headroom_state
 from .account_observation import ObservationContext
 from .account_open_admission import open_admission_inputs
 from .billing_probe_schema import assert_billing_probe_schema
-from .billing_probe_contracts import PROBE_STEP_REASONS, ProbeAdmissionError
+from .billing_probe_contracts import (PROBE_COMPLETION_REASONS, PROBE_STEP_REASONS, ProbeAdmissionError,
+    valid_client_version)
 from .claim_admission import PreparedClaimAdmission, admission_signature_rows, same_admission_inputs
 from .history_contracts import _DIGEST, _ID, _PROJECT, matches, valid_integer
 from .learning_contracts import canonical_json, content_digest, parse_bounded_json_value, validate_learning_record
@@ -87,6 +89,10 @@ class AccountBillingAdmission:
         self._pid, self._key, self._timeout = os.getpid(), ledger.state.digest_key(), timeout_ms
         self._limits = SQLReadLimits(work_limits.max_callbacks, work_limits.max_duration_ms, work_limits.max_value_bytes)
         self._pending, self._signatures, self._permits, self._execution_inputs, self._reserved_inputs = {}, {}, {}, {}, {}
+        # O0b RS-A round 2 G3: set (from any thread) once a sweep has committed expired probes; read on the owner.
+        self._closed_notice = threading.Event()
+        # O0b RS-A round 2 G9: closed originals a live billing job still holds; that job ends them.
+        self._closed_live = set()
         ledger._billing_admission_owner = self
 
     def _guard(self):
@@ -168,6 +174,9 @@ class AccountBillingAdmission:
                     self._authorize(context, snapshot, before_commit)
                     if self._project(project, context) != root or self._row(project, key) != row:
                         raise ProbeAdmissionError('probe_conflict')
+                    # O0b RS-A round 2 G3: a replay of a request the sweep closed frees its memory (its row
+                    # was committed by an earlier transaction, so this one rolling back cannot undo it).
+                    self._forget_closed_contained()
                     return reply
                 original = self._pending.get((project, key))
                 if original is None:
@@ -176,10 +185,13 @@ class AccountBillingAdmission:
                     raise ProbeAdmissionError('probe_conflict')
                 self._authorize(context, snapshot, before_commit)
                 return original
-            count = self._one('SELECT COUNT(*) FROM (SELECT 1 FROM account_billing_probe_origins '
-                'WHERE project_id=? LIMIT ?)', (project, MAX_PROBE_REQUESTS+1))[0]
+            # O0b B0-5 (narrowed): only probes in progress count, so finished ones never fill a project
+            # for good; their records stay, so a replay still finds its stored answer.
+            count = self._one("SELECT COUNT(*) FROM (SELECT 1 FROM account_billing_probe_requests "
+                "WHERE project_id=? AND state<>'committed' LIMIT ?)", (project, MAX_PROBE_REQUESTS+1))[0]
             if count >= MAX_PROBE_REQUESTS:
                 raise ProbeAdmissionError('probe_full')
+            self._forget_closed_contained()
             if (len(self._pending) >= MAX_PENDING_PROBES
                     or sum(p == project for p, _ in self._pending) >= MAX_PENDING_PROJECT_PROBES):
                 raise ProbeAdmissionError('probe_full')
@@ -273,6 +285,18 @@ class AccountBillingAdmission:
             raise ProbeAdmissionError('probe_conflict')
         return current.captured_at_ms
 
+    @staticmethod
+    def _newer_run_restricts(latest, billing, headroom, fingerprint, now):
+        """R2: a run record newer than the probe's latest billing that is more restrictive (paid usage usable,
+        overage in use, or headroom that is not ample) means the probe's favourable reading is not enough."""
+        since = latest['observed_at_ms']
+        if any(r.get('run_id') is not None and r['observed_at_ms'] >= since
+               and (r.get('paid_usage_usable') is True or r.get('is_using_overage') is True) for r, _ in billing):
+            return True
+        newer = [(r, d) for r, d in headroom if r['account_fingerprint'] == fingerprint
+                 and r.get('run_id') is not None and r['observed_at_ms'] >= since]
+        return bool(newer) and headroom_state('claude', fingerprint, newer, [], now)[0] != 'ample'
+
     def admit(self, reservation):
         row = self._original(reservation)
         if row['state'] == 'admitted':
@@ -311,10 +335,19 @@ class AccountBillingAdmission:
                     and execution_owner._prepared_identity(reservation) != canonical_json(identity)):
                 raise ProbeAdmissionError('probe_conflict')
             fingerprint = identity['account_fingerprint']
-            latest = max((r for r, _ in prepared['billing'] if r['account_fingerprint'] == fingerprint),
+            # A probe's own records carry no run; a finished child's records (run_id, phase 'during') are not
+            # probe evidence and the reply contract rejects them. Reuse takes the probe's records only, and a
+            # newer run record that is more restrictive stops reuse: admission is re-evaluated and the probe
+            # launches only if admitted (otherwise a named denial).
+            mine = [(r, d) for r, d in prepared['billing'] if r['account_fingerprint'] == fingerprint]
+            latest = max((r for r, _ in mine if r.get('run_id') is None and r.get('phase') is None),
                          key=lambda r: r['observed_at_ms'], default=None)
-            if latest is not None and 0 <= now-latest['observed_at_ms'] < PROBE_REUSE_MS:
-                heads = [r for r, _ in prepared['headroom'] if r['account_fingerprint'] == fingerprint]
+            if latest is not None and (not 0 <= now-latest['observed_at_ms'] < PROBE_REUSE_MS
+                    or self._newer_run_restricts(latest, mine, prepared['headroom'], fingerprint, now)):
+                latest = None
+            if latest is not None:
+                heads = [r for r, _ in prepared['headroom']
+                         if r['account_fingerprint'] == fingerprint and r.get('run_id') is None and r.get('phase') is None]
                 selected = [identity, *heads[-1:], latest]
                 final = self._commit_reply(row, 'reused', None, selected, result.prepared.rows)
                 appended = None
@@ -413,6 +446,37 @@ class AccountBillingAdmission:
         self._reserved_inputs.pop(reservation, None)
         self._signatures.pop(reservation, None)
 
+    def settle_ended(self, reservation, reason):
+        """O0c M10: settle an admitted probe left unknown once no model it launched can still be running.
+
+        As settle_unlaunched, but where a ticket was issued: only when the execution owner proves its
+        child gone (`child_ended`: the ticket confirmed cleaned or never started). The row becomes a
+        committed denial naming the failed step, so it stops holding the machine's and the account's
+        probe capacity and the self-restart; its admission record stays, so the cooldown still applies."""
+        self._guard()
+        execution_owner = getattr(self, '_execution_owner', None)
+        if (type(reservation) is not _Reservation or reason not in PROBE_STEP_REASONS or execution_owner is None
+                or self._pending.get((reservation.project, reservation.key)) is not reservation):
+            raise ProbeAdmissionError('probe_conflict')
+        with self._ledger._account_transaction():
+            row = self._row(reservation.project, reservation.key)  # Sealed rows only; no callback runs.
+            if (row is None or row['state'] != 'admitted' or row['parameters_digest'] != reservation.parameters
+                    or row['created_at_ms'] != reservation.created or row['deadline_at_ms'] != reservation.deadline):
+                raise ProbeAdmissionError('probe_conflict')
+            # Checked last, with nothing reentrant between this and the write.
+            if not execution_owner.child_ended(reservation):
+                raise ProbeAdmissionError('probe_conflict')
+            final = self._update(row, state='committed', references_json=canonical_json(
+                {'probe': 'denied', 'reason_code': reason, 'records': []}).decode())
+            if self._row(reservation.project, reservation.key) != final:
+                raise ProbeAdmissionError('probe_conflict')
+        permit = self._permits.pop(reservation, None)
+        if permit is not None:
+            self._execution_inputs.pop(permit, None)
+        self._pending.pop((reservation.project, reservation.key), None)
+        self._reserved_inputs.pop(reservation, None)
+        self._signatures.pop(reservation, None)
+
     def release_committed(self, reservation):
         """Drop the memory of a reservation whose row is already committed (0.3.3, C9d).
 
@@ -430,6 +494,73 @@ class AccountBillingAdmission:
         self._pending.pop((reservation.project, reservation.key))
         self._reserved_inputs.pop(reservation, None)
         self._signatures.pop(reservation, None)
+
+    def _forget_closed(self):
+        """Forget the originals the supervisor closed (their rows already committed, by the sweep's expiry),
+        with their pooled signature work, so they never fill this owner's memory. Memory goes only after the
+        durable commit, so a rolled-back close keeps it. At most MAX_PENDING_PROBES rows read.
+        O0b RS-A F6: run when a new reservation arrives. Round 2 G3: also on the owner's step after a committed
+        sweep (forget_expired) and on a replay of the closed request. Round 2 G9: an original a live billing job
+        still holds is left to that job (noted in _closed_live), which ends it with the stored answer and drops
+        its own handle mapping in the same step; known_reply forgets as reserve()'s replay does.
+        Round 3: an original's pooled work goes first, and the original and its handle mapping only once that
+        has worked, so a pool failure leaves them as the retry target; work the pool cannot release yet (a
+        running job, still to confirm its stop) keeps them too. Returns whether nothing was left."""
+        jobs = getattr(self, '_billing_jobs', None)
+        held = jobs.held_reservations() if jobs is not None else frozenset()
+        left = False
+        for (project, key), reservation in list(self._pending.items()):
+            if reservation in self._permits:
+                continue
+            row = self._row(project, key)
+            if row is None or row['state'] != 'committed':
+                continue
+            if reservation in held:
+                self._closed_live.add(reservation)
+                continue
+            handle = self._signatures.get(reservation)
+            if handle is not None:  # returned work is discarded; queued or running work is cancelled
+                if handle in self._pool._returned:
+                    self._pool.discard(handle)
+                elif self._pool.cancel(handle) != 'released':
+                    left = True  # its stop is confirmed later; it is discarded once returned
+                    continue
+                self._signatures.pop(reservation)
+            self._pending.pop((project, key))
+            self._reserved_inputs.pop(reservation, None)
+        return not left
+
+    def _forget_closed_contained(self):
+        """RS-A code round 3 verifier M2: forgetting inside a request (reserve's replay, a new reservation,
+        known_reply) must never turn a valid answer into an error. A failure leaves the originals as the
+        retry target and sets the notice, so the owner's next step tries again and notes any failure."""
+        try:
+            if not self._forget_closed():
+                self._closed_notice.set()
+        except Exception:
+            self._closed_notice.set()
+
+    def probes_closed(self):
+        """O0b RS-A round 2 G3: told by the ledger after a sweep's transaction has committed expired probes
+        (never on rollback). Any thread may call this; only the owner thread touches memory or the pool, here
+        at once when the sweep ran on it, else at its next forget_expired() step."""
+        self._closed_notice.set()
+        if self._pid == os.getpid() and self._pool._thread is threading.current_thread():
+            self.forget_expired()
+
+    def forget_expired(self):
+        """O0b RS-A round 2 G3: the owner's step, run from each drive with or without a request: after a
+        committed sweep, forget the originals it closed and their signature work (see _forget_closed)."""
+        self._guard()
+        if not self._closed_notice.is_set():
+            return
+        self._closed_notice.clear()  # cleared first, so a sweep committing meanwhile is seen next step
+        try:
+            if not self._forget_closed():
+                self._closed_notice.set()  # round 3: work still stopping is tried again at the next step
+        except BaseException:
+            self._closed_notice.set()  # tried again at the next step
+            raise
 
     def known_reply(self, project, runtime, caller, identity, context, *, before_commit):
         """Read a committed original even after a local post-commit fault.
@@ -456,7 +587,17 @@ class AccountBillingAdmission:
             self._authorize(context, snapshot, before_commit)
             if self._project(project, context) != root or self._row(project, key) != row:
                 raise ProbeAdmissionError('probe_conflict')
+            self._forget_closed_contained()  # O0b RS-A round 2 G9: as reserve()'s replay does
             return reply
+
+    @staticmethod
+    def closed_unlaunched(row):
+        """O0b RS-A round 2 G9: whether this committed row is the sweep's close of an expired reservation."""
+        if row is None or row['state'] != 'committed' or type(row['references_json']) is not str:
+            return False
+        value = parse_bounded_json_value(row['references_json'].encode(), max_bytes=4096)
+        return type(value) is dict and value.get('probe') == 'denied' and value.get(
+            'reason_code') == 'probe_unlaunched_expired'
 
     def _execution(self, permit, *, launching=False):
         """Original owner data only. Native launch authority is checked by its adapter."""
@@ -512,11 +653,14 @@ class AccountBillingAdmission:
         from .learning_store import DEFAULT_RETENTION_MS
         value = parse_bounded_json_value(row['references_json'].encode(), max_bytes=4096)
         completed = type(value) is dict and value.get('probe') == 'completed'
-        if (type(value) is not dict or value.keys() != ({'probe', 'reason_code', 'records', 'completion_digest'}
+        # CI-4: a completed probe's row also keeps the client version its init frame reported (rows from
+        # before it have none).
+        if (type(value) is not dict or value.keys() - {'client_version'} != ({'probe', 'reason_code', 'records', 'completion_digest'}
                 if completed else {'probe', 'reason_code', 'records'})
+                or ('client_version' in value and not (completed and valid_client_version(value['client_version'])))
                 or value['probe'] not in {'reused', 'denied', 'completed'} or type(value['records']) is not list
                 or (completed and (not matches(value['completion_digest'], _DIGEST)
-                    or value['reason_code'] not in {None, 'probe_incomplete', 'probe_invalid_events', 'probe_no_events'}))
+                    or value['reason_code'] not in {None, *PROBE_COMPLETION_REASONS}))
                 or len(value['records']) > 3):
             raise ProbeAdmissionError('probe_conflict')
         now, records = self._now(), []
@@ -536,6 +680,8 @@ class AccountBillingAdmission:
             records.append(record)
         reply = {'probe': value['probe'], 'reason_code': value['reason_code'], 'records': records,
             'known': known, 'observed_at_ms': row['created_at_ms']}
+        if value.get('client_version') is not None:
+            reply['client_version'] = value['client_version']
         if len(canonical_json(reply)) > MAX_PROBE_REPLY_BYTES:
             raise ProbeAdmissionError()
         return reply
@@ -544,3 +690,29 @@ class AccountBillingAdmission:
 def keyed(key, domain, value):
     from .learning_contracts import keyed_digest
     return keyed_digest(key, domain+canonical_json(value))
+
+
+def close_expired_reserved(ledger, now_ms, limit):
+    """O0b RS-A-2: close every `reserved` probe request past its deadline as a committed denial
+    (`probe_unlaunched_expired`), inside the caller's account transaction. A reserved request was never
+    admitted, so no model could have started for it. Its origin stays; its new state is sealed exactly as
+    the probe owner seals it; its register row is released `unlaunched`. Returns how many were closed."""
+    if not ledger._connection.in_transaction:
+        raise ProbeAdmissionError('probe_conflict')
+    key = ledger.state.digest_key()
+    rows = [dict(row) for row in ledger._connection.execute(
+        "SELECT * FROM account_billing_probe_requests WHERE state='reserved' AND deadline_at_ms<? LIMIT ?",
+        (now_ms, limit)).fetchall()]
+    names = [n for n in _FIELDS if n not in {'project_id', 'request_key'}]
+    for row in rows:
+        final = {**{n: row[n] for n in _FIELDS}, 'state': 'committed', 'references_json': canonical_json(
+            {'probe': 'denied', 'reason_code': 'probe_unlaunched_expired', 'records': []}).decode()}
+        final['state_seal'] = keyed(key, b'billing-probe-state-v1\0', {n: final[n] for n in _FIELDS})
+        ledger._connection.execute(
+            "UPDATE run_holds SET release_kind='unlaunched' WHERE kind='probe' AND project_id=? AND identity=? "
+            "AND state='held'", (row['project_id'], row['request_key']))
+        ledger._connection.execute(
+            'UPDATE account_billing_probe_requests SET ' + ','.join(n + '=?' for n in (*names, 'state_seal'))
+            + " WHERE project_id=? AND request_key=? AND state='reserved'",
+            (*(final[n] for n in (*names, 'state_seal')), row['project_id'], row['request_key']))
+    return len(rows)

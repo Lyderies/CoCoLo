@@ -5,7 +5,7 @@ capability and enrollment step are the only way in. The CLI wrapper used here
 disables the protected-entry and own-roots checks, so those are not exercised;
 `test_project_service_startup` drives the unmodified CLI.
 """
-from tests.support import assert_dropped
+from tests.support import assert_refused
 from dataclasses import asdict
 import hashlib
 import json
@@ -17,13 +17,15 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest import mock
 
 from tests.support import TEMP_ROOT
 from codex_agents.client_runtime import runtime_hint_path
 from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST
-from codex_agents.collector_paths import CollectorPaths
+from codex_agents.collector_paths import CollectorPaths, StateError
 from codex_agents.learning_contracts import canonical_json
 from codex_agents.orchestration_api import OrchestrationRequest, OrchestrationScope, encode_orchestration_request
 from codex_agents.history_contracts import HistoryError
@@ -31,6 +33,8 @@ from codex_agents.service_enrollment import (
     EnrollmentError, EnrollmentVerifier, _mac, capability_path, enrollment_preamble, prepare_proof_directory,
     proof_directory, read_capability, withdraw_proof,
 )
+from codex_agents import service_host
+from codex_agents.project_service import _owned_directory
 from codex_agents.service_host import EnrolledFrontend, ServiceHostLimits
 
 
@@ -208,7 +212,10 @@ class ServiceHostTests(unittest.TestCase):
         }
         for name, payload in refused.items():
             with self.subTest(name):
-                self.assertEqual(b'', self.send(endpoint, payload, wait=4))  # Closed by the host, not timed out.
+                # R7b: refused by the host with its fixed reason, then closed; never timed out. A verified
+                # preamble for another request is refused later, by the service, without a line.
+                expected = b'' if name == 'another request' else b'{"refused":"service_refused_enrollment"}\n'
+                self.assertEqual(expected, self.send(endpoint, payload, wait=4))
         # A verified preamble with no request behind it is held, never answered.
         self.assertIsNone(self.send(endpoint, self.preamble(key, frame, endpoint)+b'\n', wait=1))
 
@@ -218,7 +225,8 @@ class ServiceHostTests(unittest.TestCase):
         self.assertTrue(reply['ready'])
         self.assertEqual((1, False, 'codex-host-v1'), (reply['result']['current']['snapshot']['sequence'],
             reply['result']['known'], reply['result']['current']['snapshot']['client_version']))
-        self.assertEqual(b'', self.send(endpoint, accepted, wait=4))  # Captured bytes cannot be replayed.
+        # Captured bytes cannot be replayed: the spent proof is refused like any other.
+        self.assertEqual(b'{"refused":"service_refused_enrollment"}\n', self.send(endpoint, accepted, wait=4))
         self.assertFalse((proofs/('c'*32)).exists())  # The accepted proof was consumed.
 
         # A correctly enrolled other host class still cannot change this orchestration.
@@ -263,7 +271,8 @@ class ServiceHostTests(unittest.TestCase):
         self.start(generation=2)
         orphaned = self.cli('learning-orchestration-status', '--orchestration-handle', opened['orchestration_handle'],
                             expected=2)
-        self.assertEqual('host_client_mismatch', orphaned['reason_code'])  # Reported as such; the cause is the generation.
+        # R8a: the cause is named now (it was reported as host_client_mismatch); closing it after an update is R8b.
+        self.assertEqual('history_orchestration_other_scope', orphaned['reason_code'])
 
     def test_restart_replaces_the_capability_and_keeps_history(self):
         first, ready = self.start()
@@ -276,7 +285,7 @@ class ServiceHostTests(unittest.TestCase):
         new = read_capability(self.paths, self.project, 'host')
         self.assertNotEqual(old, new)
         # A capability from before the restart is dead even inside its freshness window.
-        self.assertEqual(b'', self.send(again['project'],
+        self.assertEqual(b'{"refused":"service_refused_enrollment"}\n', self.send(again['project'],
             self.enrolled(old, self.frame('orchestration.open', 'stale-open'), again['project']), wait=4))
         status = self.cli('learning-orchestration-status', '--orchestration-handle', opened['orchestration_handle'])
         self.assertEqual(('active', 1, 'codex-host-v1'), (status['status'], status['sequence'], status['client_version']))
@@ -296,7 +305,11 @@ class ServiceHostTests(unittest.TestCase):
         self.assertLess(time.monotonic()-started, 8)
         for client in stalled:
             client.settimeout(3)
-            assert_dropped(self, client)
+            # R7b: told it was late, then dropped (Linux may reset instead, as unread input remains).
+            try:
+                self.assertIn(client.recv(64), (b'{"refused":"service_refused_late"}\n', b''))
+            except ConnectionResetError:
+                pass
 
     def test_finished_exchanges_free_their_context_slots(self):
         _, ready = self.start()
@@ -368,7 +381,7 @@ class EnrolledFrontendTests(unittest.TestCase):
         self.frontend.step()
         self.assertEqual([], self.attached)
         client.settimeout(2)
-        assert_dropped(self, client)
+        assert_refused(self, client, 'service_refused_late')
 
     def test_a_closed_connection_releases_its_context_at_once(self):
         for _ in range(5):  # Two context slots; each exchange closes before the next enrolls.
@@ -394,7 +407,7 @@ class EnrolledFrontendTests(unittest.TestCase):
         client.sendall(self.line())
         refusing.step()
         client.settimeout(2)
-        self.assertEqual(b'', client.recv(1))
+        assert_refused(self, client, 'service_refused_unavailable')
         self.assertEqual({}, refusing._contexts)
         accepted = self.connect()
         accepted.sendall(self.line())
@@ -452,6 +465,76 @@ class EnrollmentProofTests(unittest.TestCase):
         with self.assertRaises(EnrollmentError) as replayed:
             verifier.verify(valid)
         self.assertEqual('enrollment_replayed', replayed.exception.reason_code)
+
+
+class OwnerDirectoryWhileListeningTests(unittest.TestCase):
+    """O10 UP-1: a state directory COCOLO makes is owner-only even while another thread of the same
+    process opens a listener (CI run 44705995602: the collector's account listener and a project host
+    shared the harness process, and the project host refused `history_service_unavailable`); a path
+    that really is unsafe is still refused."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        proofs = self.root/'proofs'
+        prepare_proof_directory(proofs)
+        self.frontend = EnrolledFrontend(EnrollmentVerifier(b'k'*32, 'host', 1, proofs),
+            ServiceHostLimits(2, 1_000_000_000, 2, 60_000_000_000, 30_000, 64), lambda *_: None, proofs)
+        self.addCleanup(self.frontend.close)
+
+    def test_UP1_a_directory_made_while_another_thread_binds_a_listener_is_owner_only(self):
+        binding, release, real_socket = threading.Event(), threading.Event(), socket.socket
+
+        class HeldBind(real_socket):
+            def bind(self, address):
+                binding.set()
+                release.wait(10)
+                return super().bind(address)
+
+        failures = []
+
+        def listen():
+            try:
+                self.frontend.listen(self.root/'p.sock', 'project')
+            except BaseException as error:
+                failures.append(error)
+
+        made = self.root/'projects'
+        with mock.patch.object(service_host.socket, 'socket', HeldBind):
+            thread = threading.Thread(target=listen, daemon=True)
+            thread.start()
+            try:
+                self.assertTrue(binding.wait(10), 'listener never reached bind')
+                _owned_directory(made)  # The project host's own step, during the other thread's bind.
+            finally:
+                release.set()
+                thread.join(10)
+        self.assertEqual([], failures)
+        self.assertEqual(0o700, stat.S_IMODE(made.lstat().st_mode))
+        self.assertEqual(0o600, stat.S_IMODE((self.root/'p.sock').lstat().st_mode))
+
+    def test_UP1_a_listener_is_refused_in_a_directory_others_can_enter(self):
+        shared = self.root/'shared'
+        shared.mkdir(mode=0o700)
+        shared.chmod(0o755)
+        with self.assertRaises(StateError):
+            self.frontend.listen(shared/'p.sock', 'project')
+        self.assertFalse((shared/'p.sock').exists())
+
+    def test_UP1_a_really_unsafe_state_directory_is_still_refused(self):
+        for mode in (0o755, 0o770, 0o707):
+            with self.subTest(mode=oct(mode)):
+                path = self.root/('d%o' % mode)
+                path.mkdir(mode=0o700)
+                path.chmod(mode)
+                with self.assertRaisesRegex(StateError, 'unsafe permissions'):
+                    _owned_directory(path)
+        target = self.root/'target'
+        target.mkdir(mode=0o700)
+        (self.root/'link').symlink_to(target)
+        with self.assertRaises(StateError):
+            _owned_directory(self.root/'link')
 
 
 if __name__ == '__main__':

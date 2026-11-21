@@ -61,7 +61,7 @@ class AccountOpenSchemaTests(unittest.TestCase):
 
     def test_fresh_layout_has_explicit_origin_and_independent_original_journals(self):
         db = self.ledger._connection
-        self.assertEqual(14, db.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(15, db.execute('PRAGMA user_version').fetchone()[0])
         db.execute('INSERT INTO host_run_bindings(project_id,handle_digest,run_id,assignment_digest,task_digest,'
             'route_digest,configuration_digest,client_version,created_at_ms,expires_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?)',
             (self.project, 'a'*64, 'run:'+'b'*64, 'c'*64, 'd'*64, 'e'*64, 'f'*64, 'bridge-v1', 1, 2))
@@ -89,7 +89,7 @@ class AccountOpenSchemaTests(unittest.TestCase):
     def test_explicit_old_upgrade_preserves_original_partition_and_never_invents_opens(self):
         self.old_nine()
         self.ledger = LearningLedger(self.state, allow_schema_upgrade=True)
-        self.assertEqual(14, self.ledger._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(15, self.ledger._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assertTrue(self.ledger.verify_sanitized_backup(self.project, file_id='old_nine')['verified'])
         for table in ('account_open_receipts', 'account_open_requests'):
             self.assertEqual(0, self.ledger._connection.execute('SELECT COUNT(*) FROM '+table).fetchone()[0])
@@ -108,7 +108,7 @@ class AccountOpenSchemaTests(unittest.TestCase):
         self.assertEqual([], self.offline("SELECT name FROM sqlite_master WHERE name LIKE 'account_open_%'"))
         self.assertNotIn('history_owner', {row[1] for row in self.offline('PRAGMA table_info(host_run_bindings)')})
         self.ledger = LearningLedger(self.state, allow_schema_upgrade=True)
-        self.assertEqual(14, self.ledger._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(15, self.ledger._connection.execute('PRAGMA user_version').fetchone()[0])
 
     def test_missing_or_changed_current_journal_schema_is_never_reconstructed(self):
         self.ledger._connection.execute('DROP TABLE account_open_requests')
@@ -120,7 +120,7 @@ class AccountOpenSchemaTests(unittest.TestCase):
     def test_latest_backup_preserves_new_manifests_and_original_origin(self):
         self.ledger.create_sanitized_backup(self.project, file_id='latest', expires_at_ms=time.time_ns()//1_000_000+60_000)
         checked = self.ledger.verify_sanitized_backup(self.project, file_id='latest')
-        self.assertEqual(14, checked['ledger_schema_version'])
+        self.assertEqual(15, checked['ledger_schema_version'])  # O0b RS-A (requirement)
         self.assertEqual(0, checked['counts']['account_open_receipts'])
         self.assertEqual(0, checked['counts']['account_open_requests'])
 

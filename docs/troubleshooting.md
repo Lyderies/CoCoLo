@@ -20,7 +20,7 @@ whose `.pub` file beside it matches the owner key on record is found by itself, 
 
 Seen only with the first 0.3.0 test build: commands run from your own terminal (setup, status and the
 billing attestation) were refused by the orchestrator's account service. This release lets your terminal
-read status and observe providers. Update this repository (`git pull`), then run `./setup.sh` and choose
+read status and observe providers. Update this repository (`git pull`), then run `./setup.sh` and choose Configure, then
 "Update the install and walk through every step".
 
 ## "the owner key must be a file in your own ~/.ssh folder"
@@ -31,9 +31,9 @@ If it then says the key file has another link elsewhere, make a fresh copy in `~
 
 ## I lost my owner key passphrase
 
-Run `./setup.sh`, pick the project and choose "Replace a lost owner key". It creates a new key with a new
+Run `./setup.sh`, pick the project and choose Configure, then "Replace a lost owner key". It creates a new key with a new
 passphrase, then signs for that project. If the wizard says the project's orchestrator differs from this
-setup, choose "Update the install and walk through every step" first and skip the attestation step.
+setup, choose Configure, then "Update the install and walk through every step" first and skip the attestation step.
 
 Replacing the key cancels every billing statement the old key signed, in every project, so each project's
 children are refused with `billing_attestation_missing` until you choose "Re-run the billing attestation
@@ -50,11 +50,11 @@ signature is the old key's: release those candidates again, or empty the registr
 
 The owner key file in your records no longer matches the key the ledger recorded, so nothing can be signed
 and billing statements stop counting. If you did not change it, a program may have, so find out what ran
-before going further. To go on, choose "Replace a lost owner key" in `./setup.sh`.
+before going further. To go on, choose Configure, then "Replace a lost owner key" in `./setup.sh`.
 
 ## Codex reports the collector unreachable or "filesystem operation failed"
 
-The command ran inside Codex's sandbox. Run `./setup.sh`, choose "Update the install and walk through every
+The command ran inside Codex's sandbox. Run `./setup.sh`, choose Configure, then "Update the install and walk through every
 step", and allow the rule in step 8 (Commands): the default there is "No, not now", so press Down once to
 "Yes, allow these commands" before Enter. Then start a new Codex session in the project's folder.
 
@@ -70,7 +70,7 @@ on this machine or project.
 
 ## The Codex rule is "stale" after a Python or package upgrade
 
-The rule names the exact Python build and runtime copy. Run `./setup.sh`, choose "Update the install and
+The rule names the exact Python build and runtime copy. Run `./setup.sh`, choose Configure, then "Update the install and
 walk through every step", and choose "Replace it" in step 8. The learning hooks name that Python too: the
 update renders them again, so trust them again in Codex's `/hooks` afterwards.
 
@@ -105,7 +105,7 @@ It works only in your account's real `~/.codex`: set `HOME` to your own home fol
 
 ## "the learning state is still in its old macOS folder"
 
-Your records are still in `~/Library/Application Support/codex-agents`. Run `./setup.sh`, choose "Update
+Your records are still in `~/Library/Application Support/codex-agents`. Run `./setup.sh`, choose Configure, then "Update
 the install and walk through every step", and approve the move in step 5 (Collector) after checking the
 creation date and owner key it shows. Until then every orchestrator command refuses. If it says the state
 exists in both folders, keep the one in use, move the other out of both places, and run it again.
@@ -124,7 +124,7 @@ primary to cancel it, and run the command again.
 ## `ledger_upgrade_required`, or "these records were written by an earlier version"
 
 Your orchestrator records come from an earlier version. Nothing was stopped or changed. Run `./setup.sh`
-for the project, choose "Update the install and walk through every step", and answer "Yes, upgrade them"
+for the project, choose Configure, then "Update the install and walk through every step", and answer "Yes, upgrade them"
 in step 5 (Collector). It keeps a checked copy first and says where. Then run setup for every other
 project on this machine: they share the records and need this version too.
 
@@ -165,13 +165,13 @@ start afterwards. Run `./setup.sh` again and repeat step 5 (Collector).
 
 Every project on the machine shares one set of records and one collector. Once one project is updated,
 the others are refused (the collector "differs from the owner-authorized runtime", or a newer ledger)
-until you run `./setup.sh` for each of them and choose "Update the install and walk through every step".
+until you run `./setup.sh` for each of them and choose Configure, then "Update the install and walk through every step".
 
 ## "collector did not become healthy"
 
 The shared collector was started and did not answer within 20 seconds, which happens only on a very
 busy machine or when it cannot start at all. It keeps starting by itself: run the command again. If it
-keeps failing, run `./setup.sh` and choose "Update the install and walk through every step"; step 5
+keeps failing, run `./setup.sh` and choose Configure, then "Update the install and walk through every step"; step 5
 (Collector) says what is wrong.
 
 ## A dispatch refused with `preparation_...` or `run_client_changed`
@@ -205,8 +205,9 @@ Release 0.3.1 and earlier said only `run_unavailable` for all of these.
 The account service closed the connection without answering, usually because the collector stopped
 while the call was in flight; the next command starts it again. Try the command again. Run
 `learning-status`: `collector_previous_exit` says how the last collector stopped (`signal`, `requested`,
-`state_removed`, `thread_ended`, or `error` with the error's type and code locations). Report an
-`error` with those fields. Releases before 0.3.3 said `account_invalid_response` for this.
+`state_removed`, `thread_ended`, `stop_forced`, or `error` with the error's type and code locations). Report an
+`error` with those fields. `stop_forced` means a stop took longer than 15 s and was ended; its
+`stalled_in` names the step it was stuck in. Report that too. Releases before 0.3.3 said `account_invalid_response` for this.
 
 On 0.8.28, an `error` of `SQLReadError` passing through `bind_session` was an account read colliding
 with a hook's session bind. Codex package 0.8.29 fixes it: update.
@@ -224,6 +225,17 @@ The probe names the step that stopped it before launching anything:
 - `probe_worker_unavailable`: the machine's probe worker is held by a probe whose cleanup could not be
   confirmed, or has stopped, and only a restart frees it. Restart the collector (`setup.sh` repairs it),
   then probe again.
+
+## "the account is stuck … and waits to restart itself until it can prove the processes it started have ended"
+
+An account lane (signature checks, billing probes or provider observations) holds work whose end it could not
+confirm, so it restarts its own services, but only once it has proved that no process it started can still be
+running. The line names each process it is waiting for and the command that checks it (`ps -p <pid>`,
+`pgrep -g <pid>` for a process group, `pgrep -s <pid>` for a session). It checks again every minute and
+restarts by itself once they are gone. If one stays listed, look at it: a leftover COCOLO helper can be stopped
+(`kill <pid>`). Once nothing is listed, restart the collector (`./setup.sh` repairs it). A lane that "may have
+started a process whose id it does not have" cannot name one: check `ps -ax` for a leftover COCOLO helper
+before restarting the collector.
 
 ## `probe_busy`
 
@@ -260,6 +272,13 @@ service, which starts with the project's next command, as soon as nothing of the
 service cannot tell (its records of the run are missing or damaged) is the place freed one hour after
 that run's deadline. After an upgrade from 0.2.x, runs that version left can hold slots for a day; see
 `earlier_version_runs` under `learning_migration` stays `pending`, below.
+
+`learning-status` shows what this project holds on the account in `account_holds`: run slots, run
+bindings (runs opened but not yet started) and billing probes, each with how many are held, how many are
+past due (freed at the next check), and when the next can be freed. `account_holds.summary` says it in one
+line, for example `Account holds: 1 run slot held (next can be freed at 2027-01-15 08:05 UTC; deadline
+2027-01-15 08:00 UTC), 0 bindings, 0 probes.` An earlier collector does not report them
+(`not reported by this collector version`).
 
 ## `project_service_other_version`
 
@@ -321,7 +340,7 @@ bridged children have hooks disabled: their run lifecycle comes from the managed
 `provider_attestations` shows `present`, `missing` or `identity_missing` for each provider, using the
 latest observed account and admission's owner-verified project lookup. `unavailable` means the collector
 could not report it. This is attestation status, not admission: fresh identity, billing, headroom and the
-other gates still apply. For `billing_attestation_missing`, choose "Re-run the billing attestation only"
+other gates still apply. For `billing_attestation_missing`, choose Configure, then "Re-run the billing attestation only"
 for that project in `./setup.sh`.
 
 ## Operational QA fails without test output
@@ -349,6 +368,30 @@ results: those of open orchestrations, and those still inside their seven-day re
 - Before 0.3.4, every result a project had ever stored counted, so a project could record only 64 in
   its whole life and then failed every child with `run_failed`. Updating fixes that; a full store
   recovers by itself at the project service's first cleanup.
+
+## A dispatch refused with `result_capacity_busy`
+
+Nothing is full: children still running in this project hold the space their results may need (about
+two at once). Wait for them to finish, then dispatch again. `learning-status` shows
+`project_capacity.results_in_flight` against how many fit. Closing orchestrations does not help here.
+
+## A run's open refused with `open_capacity_full` (or `open_busy` before 0.4.0)
+
+This project already has as many runs being opened, or opened and not yet claimed, as the account allows:
+up to four opens in progress at once, and up to 4,096 runs opened and not yet started.
+
+- `learning-status` shows `account_capacity.open_requests` (opens in progress) and
+  `account_capacity.pending_bindings` (runs opened and not yet claimed), each with its limit.
+- Wait for those runs to start or finish, then open the run again. An open that never finishes stops
+  counting at its own deadline, and an opened run that is never claimed at its expiry (a day).
+- Before 0.4.0, every open request a project had ever made counted, so a project could open only 256 runs
+  in its whole life and then every open failed with `open_busy`. Updating fixes that: finished requests
+  no longer count, and finished opens are removed a week after their run's expiry.
+
+## A replayed open refused with `open_expired`
+
+The open was finished more than a week ago and the account has removed its record. A run handle is never
+reopened: open a new run for the task.
 
 ## An orchestration will not close: `history_orchestration_pending`
 

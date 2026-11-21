@@ -6,8 +6,14 @@ into units: a test module, or for a module that takes long, small groups of its 
 classes. Units run in separate Python processes, at most --jobs at a time, longest first,
 each with its own temporary folder, so no two units share files, sockets or state.
 
-Usage: parallel_tests.py [--jobs N] [--suite root|codex|claude ...] [--module SUITE:MODULE ...]
-                         [--save-timings FILE]
+Usage: parallel_tests.py [--jobs N] [--suite root|codex|claude ...] [--stage unit|integration|e2e ...]
+                         [--module SUITE:MODULE ...] [--save-timings FILE]
+
+Every test module has a stage in scripts/test-stages.json ({"suite:module": stage}):
+unit (no process, socket or sleep; enforced: such a test fails), integration (real
+services, children, sockets, git, sandboxes) or e2e (the setup wizard and the installer
+run as programs). --stage runs only those stages; by default every stage runs. --module
+runs only the named modules, whatever their stage, and is not combined with --suite or --stage.
 
 The schedule comes from scripts/test-timings.json ({"suite:unit": seconds} from an earlier
 run). --save-timings writes this run's measurements to FILE (pass that path again to
@@ -44,9 +50,26 @@ _RESULT = re.compile(r"^(OK|FAILED)(?: \((.*)\))?$", re.M)
 # run names it and shows where it waits instead of hanging silently (the slowest takes ~1 min).
 UNIT_SECONDS = 600
 PROGRESS_SECONDS = 60
+# With COCOLO_TEST_STAGE=unit, starting a process, opening a socket or sleeping raises, so
+# a unit test that does any of them fails and names what it did.
 _RUNNER = (
-    "import faulthandler, sys, unittest\n"
+    "import faulthandler, os, sys, unittest\n"
     f"faulthandler.dump_traceback_later({UNIT_SECONDS}, exit=True)\n"
+    "if os.environ.get('COCOLO_TEST_STAGE') == 'unit':\n"
+    "    import time\n"
+    "    _DENIED = {'subprocess.Popen': 'start a process', 'os.posix_spawn': 'start a process',\n"
+    "               'os.spawn': 'start a process', 'os.exec': 'start a process', 'os.fork': 'start a process',\n"
+    "               'os.forkpty': 'start a process', 'os.system': 'start a process',\n"
+    "               'socket.connect': 'open a socket', 'socket.bind': 'open a socket'}\n"
+    "    def _unit_only(event, args):\n"
+    "        if event in _DENIED:\n"
+    "            raise RuntimeError(f'a unit test must not {_DENIED[event]} ({event}); '\n"
+    "                               'tag its module integration in scripts/test-stages.json')\n"
+    "    def _no_sleep(seconds):\n"
+    "        raise RuntimeError('a unit test must not sleep; '\n"
+    "                           'tag its module integration in scripts/test-stages.json')\n"
+    "    sys.addaudithook(_unit_only)\n"
+    "    time.sleep = _no_sleep\n"
     "sys.path.insert(0, '.')\n"
     "sys.path.insert(0, 'tests')\n"
     "unittest.main(module=None, argv=['tests', *sys.argv[1:]])\n"
@@ -104,20 +127,57 @@ def units(suite: str, timings: dict[str, float],
 
 
 TIMINGS = ROOT / "scripts" / "test-timings.json"
+STAGES = ROOT / "scripts" / "test-stages.json"
+STAGE_NAMES = ("unit", "integration", "e2e")
+
+
+def stage_of(suite: str, unit: str, stages: dict[str, str]) -> str:
+    """A module with no stage yet counts as integration: it runs, but is not held to the unit rules."""
+    return stages.get(f"{suite}:{unit.split('#')[0]}", "integration")
+
+
+def select(planned: list[tuple[float, str, list[str]]], suite: str, wanted: set[str],
+           stages: dict[str, str] | None = None) -> list[tuple[float, str, list[str]]]:
+    """Only the units whose module is in one of the wanted stages."""
+    stages = json.loads(STAGES.read_text()) if stages is None else stages
+    return [unit for unit in planned if stage_of(suite, unit[1], stages) in wanted]
+
+
+def shard(queue: list, index: int, count: int) -> list:
+    """The units of shard `index` of `count` (PLAN T4a): longest first into the shard with the least
+    recorded time, ties by name, so every runner computes the same split. Order is kept within a shard."""
+    totals, members = [0.0] * count, [[] for _ in range(count)]
+    for unit in sorted(queue, key=lambda unit: (-unit[0], unit[1], unit[2])):
+        lightest = min(range(count), key=lambda position: (totals[position], position))
+        totals[lightest] += unit[0]
+        members[lightest].append(unit)
+    return sorted(members[index - 1], reverse=True)
+
+
+def parse_shard(text: str) -> tuple[int, int]:
+    index, _, count = text.partition("/")
+    if not (index.isdigit() and count.isdigit()) or not 1 <= int(index) <= int(count) <= 16:
+        raise argparse.ArgumentTypeError(f"--shard wants K/N with 1 <= K <= N <= 16, got {text!r}")
+    return int(index), int(count)
 
 
 def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
-        modules: dict[str, set[str]] | None = None) -> int:
-    """Run the suites; with `modules` ({suite: module names}), only those modules of each."""
+        wanted: set[str] = frozenset(STAGE_NAMES), modules: dict[str, set[str]] | None = None,
+        part: tuple[int, int] = (1, 1)) -> int:
+    """Run the suites' units in the wanted stages; with `modules` ({suite: module names}), only those."""
     timings = json.loads(TIMINGS.read_text()) if TIMINGS.is_file() else {}
+    stages = json.loads(STAGES.read_text())
     if modules is not None:
         unknown = sorted(f"{suite}:{module}" for suite in suites for module in modules[suite] - set(discover(suite)))
         if unknown:
             print(f"no such test module: {', '.join(unknown)}", file=sys.stderr)
             return 2
     queue = sorted(((seconds, suite, name, names) for suite in suites
-                    for seconds, name, names in units(suite, timings, None if modules is None else modules[suite])),
+                    for seconds, name, names in select(
+                        units(suite, timings, None if modules is None else modules[suite]), suite, wanted, stages)),
                    reverse=True)
+    if part != (1, 1):
+        queue = shard(queue, *part)
     base = Path(tempfile.mkdtemp(prefix="pt", dir="/private/tmp" if sys.platform == "darwin" else None))
     running, results, started = {}, [], time.monotonic()
     environment = {k: v for k, v in os.environ.items()
@@ -134,7 +194,8 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
             handle = log.open("wb")
             process = subprocess.Popen(
                 [sys.executable, "-B", "-c", _RUNNER, *names], cwd=SUITES[suite],
-                env={**environment, **EXTRA_ENV.get(suite, {}), "TMPDIR": str(folder)},
+                env={**environment, **EXTRA_ENV.get(suite, {}), "TMPDIR": str(folder),
+                     "COCOLO_TEST_STAGE": stage_of(suite, name, stages)},
                 stdout=handle, stderr=subprocess.STDOUT)
             running[process] = (suite, name, names, log, handle, time.monotonic(), folder)
         time.sleep(0.05)
@@ -178,7 +239,8 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
         save.write_text(json.dumps(measured, indent=1, sort_keys=True) + "\n")
     failed = [r for r in results if r["returncode"] != 0]
     totals = {suite: sum(r["tests"] for r in results if r["suite"] == suite) for suite in suites}
-    print(json.dumps({"elapsed_seconds": round(elapsed, 1), "jobs": jobs, "units": len(results),
+    print(json.dumps({"elapsed_seconds": round(elapsed, 1), "jobs": jobs, "stages": sorted(wanted),
+                      "units": len(results),
                       "tests": totals, "failed_units": [f"{r['suite']}:{r['unit']}" for r in failed],
                       "slowest_units": [(f"{r['suite']}:{r['unit']}", round(r["seconds"], 1))
                                         for r in sorted(results, key=lambda r: -r["seconds"])[:8]],
@@ -192,16 +254,19 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     parser.add_argument("--suite", action="append", choices=sorted(SUITES))
+    parser.add_argument("--stage", action="append", choices=STAGE_NAMES, help="run only these stages")
     parser.add_argument("--save-timings", type=Path, help="write this run's measurements here")
     parser.add_argument("--keep", action="store_true", help="keep every unit's folder and log")
+    parser.add_argument("--shard", type=parse_shard, default=(1, 1), metavar="K/N",
+                        help="run only shard K of N, balanced by recorded time (CI)")
     parser.add_argument("--module", action="append", metavar="SUITE:MODULE",
                         help="run only this test module (repeatable), for example codex:tests.test_bridge")
     args = parser.parse_args(argv)
     suites = args.suite or sorted(SUITES)
     modules = None
     if args.module:
-        if args.suite:
-            parser.error("--module names its own suite; do not combine it with --suite")
+        if args.suite or args.stage:
+            parser.error("--module names its own suite and runs whatever its stage; do not combine it with --suite or --stage")
         modules = {suite: set() for suite in SUITES}
         for item in args.module:
             suite, _, module = item.partition(":")
@@ -209,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error(f"--module wants SUITE:MODULE, got {item!r}")
             modules[suite].add(module)
         suites = [suite for suite in suites if modules[suite]]
-    return run(args.jobs, suites, args.save_timings, args.keep, modules)
+    return run(args.jobs, suites, args.save_timings, args.keep, set(args.stage or STAGE_NAMES), modules, args.shard)
 
 
 if __name__ == "__main__":

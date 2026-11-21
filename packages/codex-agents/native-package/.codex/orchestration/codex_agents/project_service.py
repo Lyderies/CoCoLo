@@ -41,11 +41,9 @@ MAX_ROUTE_TIMEOUT_SECONDS = 21_600  # config/routing-policy.json; a test keeps t
 RESULT_RESERVATION_MS = (MAX_ROUTE_TIMEOUT_SECONDS + 1_800) * 1000
 # A host is started on demand, so one with no run and no client for this long
 # stops; the next command starts another. Its journals and scope are durable.
+# D1: a recorded run's originals are in the project store, so a host keeps nothing a later verifier or QA needs and
+# stops on this one rule (the 12-hour rule for a host holding recorded workers is gone).
 IDLE_STOP_NS = 900 * SECOND
-# Recorded runs' originals for verification and QA are kept in this process only,
-# so a host that holds any waits much longer before it stops: a primary may take
-# its time between recording a worker and verifying it.
-RETAINING_IDLE_STOP_NS = 12 * 3600 * SECOND
 ORCHESTRATIONS = OrchestrationLimits(256, 4_096)
 
 
@@ -103,29 +101,40 @@ def open_offline_history(state, project_id):
 
 
 def service_bundle_root(orchestration_root, project_root):
-    """The bundle children are prepared from: the project, as for the CLI.
+    """The bundle children are prepared from: always the project being served.
 
     A child's role is the project's agent file, checked against the digest its
-    route recorded. A service started from the owner's protected runtime copy
-    sits in the copy, which holds only runtime code, so it uses the project the
-    copy is bound to, exactly as the CLI does (`cli.BUNDLE_ROOT`); a copy serves
-    no other project. Elsewhere it is the install this service runs from.
+    route recorded. A service may run from the project's own install, from the
+    owner's protected runtime copy (which holds only runtime code and serves only
+    the project it is bound to), or from a clone, as setup starts it (O10 SB):
+    in every case its children's files are the project's.
     """
     try:
         bound = bound_project_root(Path(orchestration_root))
     except HostCommandError:
         raise HistoryError('history_not_authorized') from None
     if bound is None:
-        return Path(orchestration_root).resolve().parents[1]
+        # O10 SB: the project being served, whatever this service runs from. A service setup starts runs
+        # from the clone, whose tree holds no install (preparation_failed_at_role_prompt); from the
+        # project's own install this is the same folder as before.
+        return Path(project_root).resolve()
     if bound != Path(project_root).resolve():
         raise HistoryError('history_not_authorized')
     return bound
 
 
-def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_STOP_NS, bundle_root=None,
-                  liveness=LIVENESS, retaining_idle_stop_ns=RETAINING_IDLE_STOP_NS):
-    """Run the host until a signal, idleness or withdrawal; return a closed report."""
+def service_history(directory, project_id, **options):
+    """O10 HS-1: the project's own service opens its store and upgrades an earlier format, under the
+    store's exclusive writer lock (what makes the offline path safe; the service holds it too), whether
+    or not the project's learning has moved. The store keeps a copy of itself first (HS-5)."""
     from .project_history import ProjectHistory
+
+    return ProjectHistory(directory, project_id, allow_schema_upgrade=True, **options)
+
+
+def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_STOP_NS, bundle_root=None,
+                  liveness=LIVENESS):
+    """Run the host until a signal, idleness, withdrawal or a writer fault; return a closed report."""
 
     state = CollectorPaths(state_root)
     root = _canonical_project_root(Path(project_root))
@@ -143,8 +152,8 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
         return {'ready': False, 'reason_code': 'history_service_unavailable'}
 
     def open_history():
-        return ProjectHistory(directory, project_id, result_key=key, orchestration_limits=ORCHESTRATIONS,
-                              result_capacity=_result_capacity())
+        return service_history(directory, project_id, result_key=key, orchestration_limits=ORCHESTRATIONS,
+                               result_capacity=_result_capacity())
 
     try:
         # Children are prepared from the project's installed package (see service_bundle_root).
@@ -154,7 +163,7 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
                                   if bundle_root is None else Path(bundle_root))
     except HistoryError as error:
         return {'ready': False, 'reason_code': error.reason_code}
-    stopping, checked = [], [0.0]
+    stopping, checked, faulted = [], [0.0], []
     if stopped is None:
         for signum in (signal.SIGTERM, signal.SIGINT):
             signal.signal(signum, lambda *_: stopping.append(True))
@@ -163,15 +172,26 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
     def finished():
         if stopped():
             return True
+        if host.faulted():
+            # O10 D13: its result writer faulted, so every later store call is refused for good.
+            # It stops, holding or not, by the normal stop path below, after one more step: the lane
+            # marked its jobs `unknown` with the fault, so that step ends the runs waiting on it
+            # (run_unavailable, O10 D12) and their status shows the fault before the service goes.
+            if faulted:
+                return True
+            faulted.append(True)
+            return False
         if time.monotonic() - checked[0] >= 1:
             checked[0] = time.monotonic()
             # Stop when idle, or when the state under this host has been removed.
-            limit = max(idle_stop_ns, retaining_idle_stop_ns) if host.retaining() else idle_stop_ns
             if host.withdrawn():
                 # Asked to stop (its hint was withdrawn): never from under a run it
                 # holds. It finishes that run first; no new client can find it meanwhile.
                 return not host.holding()
-            return host.exhausted() or host.idle_ns() >= limit
+            # O0c M3: a host holding slots it will never free is replaced once idle (no run under way
+            # and no client for the idle period), whatever those holds; at once if none is left.
+            return (host.exhausted() or host.idle_ns() >= idle_stop_ns
+                    or (host.replacing() and host.client_idle_ns() >= idle_stop_ns))
         return False
 
     try:
@@ -181,7 +201,14 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
         end = time.monotonic() + 10
         while not host.threads_stopped() and time.monotonic() < end:
             time.sleep(0.01)
-        # A run it still held (a running child it stopped, a finished one not yet
-        # released) is settled now on kernel evidence, or by the next host.
-        host.settle_lost_runs()
+        if faulted:
+            # Nothing is settled or released by a service whose writer faulted: what its store
+            # committed is not known here. The next host settles its runs and reconciles the store.
+            host.settle_lost_runs_later()
+        else:
+            # A run it still held (a running child it stopped, a finished one not yet
+            # released) is settled now on kernel evidence, or by the next host.
+            host.settle_lost_runs()
+    if faulted:
+        return {'ready': True, 'stopped': True, 'reason_code': 'writer_fault'}
     return {'ready': True, 'stopped': True}

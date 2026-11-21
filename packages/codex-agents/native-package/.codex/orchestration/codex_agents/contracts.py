@@ -67,6 +67,11 @@ ONE_EVIDENCE_ENTRY_RULE = (
     "it in that entry's details, and set its outcome to the most severe of them ("
     + ", then ".join(EVIDENCE_OUTCOME_SEVERITY) + ")"
 )
+# O10 VF-3: the exact fields of an evidence entry (the validator's evidence_fields).
+EVIDENCE_FIELDS_RULE = (
+    "each evidence entry has exactly the fields criterion_id, type, outcome, reference and details: "
+    "put severity, impact, corrections and anything else in details"
+)
 FAILURE_REASONS = {
     "result_contract",
     "transient",
@@ -94,6 +99,16 @@ RESULT_VALIDATION_REASON_CODES = {
     "unknown_criterion",
     "unknown_fields",
     "inconsistent_axes",
+    # RV1: which evidence rule a result broke, each a fixed, content-free code.
+    "evidence_missing_fields",
+    "evidence_unknown_fields",
+    "evidence_unsupported_type",
+    "evidence_empty_criterion",
+    "evidence_empty_reference",
+    "evidence_unsupported_outcome",
+    "evidence_details_not_text",
+    # O10 VF-2: a Claude child's client gave no schema-valid result.
+    "structured_output_missing",
 }
 # Durable bridge diagnostics also cover validators that raise an untyped error.
 # Never add exception text or caller-selected values to this vocabulary.
@@ -841,6 +856,7 @@ def result_preflight(assignment: Any) -> dict[str, Any]:
             "accepted admission requires completed execution; verdict remains independent",
             "completed execution must cover every required criterion",
             ONE_EVIDENCE_ENTRY_RULE,
+            EVIDENCE_FIELDS_RULE,
             "negative verdicts may contain fail or not_run evidence",
         ],
     }
@@ -983,23 +999,23 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
         missing_evidence_fields = sorted(evidence_fields - item.keys())
         if missing_evidence_fields:
             raise ResultContractError(
-                "invalid_evidence",
+                "evidence_missing_fields",
                 f"evidence[{index}] missing required fields",
             )
         unknown_evidence = sorted(item.keys() - evidence_fields)
         if unknown_evidence:
             raise ResultContractError(
-                "invalid_evidence",
+                "evidence_unknown_fields",
                 f"evidence[{index}] has unknown fields: {', '.join(unknown_evidence)}"
             )
         if not isinstance(item["type"], str) or item["type"] not in EVIDENCE_TYPES:
             raise ResultContractError(
-                "invalid_evidence", f"evidence[{index}].type is unsupported"
+                "evidence_unsupported_type", f"evidence[{index}].type is unsupported"
             )
         try:
             _nonempty_string(item["criterion_id"], f"evidence[{index}].criterion_id")
         except ContractError as exc:
-            raise ResultContractError("invalid_evidence", str(exc)) from exc
+            raise ResultContractError("evidence_empty_criterion", str(exc)) from exc
         if item["criterion_id"] not in required_criteria:
             raise ResultContractError(
                 "unknown_criterion",
@@ -1014,17 +1030,17 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
         try:
             _nonempty_string(item["reference"], f"evidence[{index}].reference")
         except ContractError as exc:
-            raise ResultContractError("invalid_evidence", str(exc)) from exc
+            raise ResultContractError("evidence_empty_reference", str(exc)) from exc
         if (
             not isinstance(item["outcome"], str)
             or item["outcome"] not in EVIDENCE_OUTCOMES
         ):
             raise ResultContractError(
-                "invalid_evidence", f"evidence[{index}].outcome is unsupported"
+                "evidence_unsupported_outcome", f"evidence[{index}].outcome is unsupported"
             )
         if not isinstance(item["details"], str):
             raise ResultContractError(
-                "invalid_evidence", f"evidence[{index}].details must be a string"
+                "evidence_details_not_text", f"evidence[{index}].details must be a string"
             )
     if (
         execution_state == "completed"

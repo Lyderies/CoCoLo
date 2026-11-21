@@ -1,14 +1,12 @@
 """Real registered signature returns; model launch/native enrollment remain gated."""
 from copy import copy
 from pathlib import Path
-import runpy
 import sys
 import time
 import unittest
 from unittest import mock
 
 import tests.support  # noqa: F401
-from tests.support import REPOSITORY_ROOT
 from tests import test_providers as fixtures
 
 from codex_agents.account_billing_admission import AccountBillingAdmission, ProbeAdmission, ProbeAdmissionError
@@ -99,6 +97,207 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertEqual(0, self.ledger._connection.execute('SELECT COUNT(*) FROM launch_claims').fetchone()[0])
         self.assertNotIn(b'client_path', canonical_json(self.rows()))
 
+    def earlier_probes(self, count, state):
+        """`count` earlier probe requests of this project, finished ('committed') or still in progress."""
+        connection = self.ledger._connection
+        with self.ledger._lock, connection:
+            for number in range(count):
+                key = f'{state}-{number}'.ljust(64, '0')
+                connection.execute('INSERT INTO account_billing_probe_origins VALUES(?,?,?,?,?)',
+                                   (self.fixture.project_id, key, 'p' * 64, 1, 's' * 64))
+                connection.execute('INSERT INTO account_billing_probe_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (self.fixture.project_id, key, 'p' * 64, 'r' * 64, 'c' * 64, 1, 2, state, None, None, None,
+                     '[]' if state == 'committed' else None, 's' * 64))
+
+    def test_B0_5_finished_probes_do_not_count_against_the_probe_cap_and_still_replay(self):
+        """O0b B0-5 (narrowed): only probes in progress count, so finished ones never fill a project for
+        good; a finished probe still replays its stored answer (review 040-b0n-code: through the real flow)."""
+        from codex_agents import account_billing_admission
+        original = self.reserve()
+        self.prepared(original)
+        self.owner.admit(original)  # in progress: admitted
+        second = self.reserve('second')
+        self.prepared(second)
+        denied = self.owner.admit(second)  # finished: committed with its stored answer
+        self.assertEqual(['admitted', 'committed'], [r['state'] for r in self.rows()])
+        self.enterContext(mock.patch.object(account_billing_admission, 'MAX_PROBE_REQUESTS', 2))
+        self.reserve('third')  # one in progress, so a second fits; the finished one does not count
+        self.assertEqual({**denied, 'known': True}, self.reserve('second'))  # the replay is unchanged
+
+    def test_B0_5_probes_in_progress_still_fill_the_cap(self):
+        from codex_agents import account_billing_admission
+        self.enterContext(mock.patch.object(account_billing_admission, 'MAX_PROBE_REQUESTS', 2))
+        self.earlier_probes(2, 'reserved')
+        with self.assertRaisesRegex(ProbeAdmissionError, 'probe_full'):
+            self.reserve()
+
+    def test_RS_A_2_a_reserved_probe_past_its_deadline_is_closed_unlaunched_and_stops_counting(self):
+        """O0b RS-A-2: a probe never admitted could not have started a model; past its deadline the
+        supervisor closes it with a fixed denial, its origin kept, and it no longer counts."""
+        original = self.reserve()
+        self.assertEqual(['reserved'], [r['state'] for r in self.rows()])
+        self.clock = original.deadline + 1
+        with mock.patch.object(self.ledger, '_capacity_clock_reference', return_value=0):
+            self.assertEqual(1, self.ledger.release_due_account_holds(limit=64))
+        row = self.rows()[0]
+        self.assertEqual('committed', row['state'])
+        self.assertEqual(1, self.ledger._connection.execute(
+            'SELECT COUNT(*) FROM account_billing_probe_origins').fetchone()[0])  # the origin is kept
+        self.assertEqual(0, self.ledger.account_capacity(self.fixture.project_id)['billing_probes']['live'])
+        replay = self.reserve()  # the same request now replays its stored answer
+        self.assertEqual(('denied', 'probe_unlaunched_expired', True),
+                         (replay['probe'], replay['reason_code'], replay['known']))
+
+    def test_RS_A_F5_an_expired_probe_records_the_time_it_was_closed(self):
+        """Round 1 F5: the register's release time is the decision's, never the probe's creation time."""
+        original = self.reserve()
+        self.clock = original.deadline + 1
+        with mock.patch.object(self.ledger, '_capacity_clock_reference', return_value=0):
+            self.ledger.release_due_account_holds(limit=64)
+        self.assertEqual(self.clock, self.ledger._connection.execute(
+            "SELECT released_at_ms FROM run_holds WHERE kind='probe'").fetchone()[0])
+
+    def test_RS_A_F6_expired_probes_free_their_owner_memory_so_new_ones_fit(self):
+        """Round 1 F6: a project's eight expired reservations, prepared or not, never block a ninth."""
+        from codex_agents.account_billing_admission import MAX_PENDING_PROJECT_PROBES
+        originals = [self.reserve('probe-%d' % n) for n in range(MAX_PENDING_PROJECT_PROBES)]
+        self.prepared(originals[0])  # one with pooled signature work
+        with self.assertRaises(ProbeAdmissionError):
+            self.reserve('one-too-many')
+        self.clock = max(o.deadline for o in originals) + 1
+        with mock.patch.object(self.ledger, '_capacity_clock_reference', return_value=0):
+            self.assertEqual(MAX_PENDING_PROJECT_PROBES, self.ledger.release_due_account_holds(limit=64))
+        fresh = self.reserve('after-expiry')
+        self.assertEqual('reserved', next(r for r in self.rows() if r['state'] == 'reserved')['state'])
+        self.assertEqual([fresh], list(self.owner._reserved_inputs))
+        self.assertEqual({}, self.owner._signatures)
+
+    def expiring_with_work(self):
+        """O0b RS-A round 2 G3: two reservations, one whose signature work has returned and one whose work is
+        queued (prepared, never offered); the clock then passes both deadlines."""
+        returned_original, queued_original = self.reserve('probe-returned'), self.reserve('probe-queued')
+        returned = self.prepared(returned_original)
+        queued = self.owner.prepare(queued_original)
+        self.assertIn(queued, self.intake._jobs)
+        self.clock = max(returned_original.deadline, queued_original.deadline) + 1
+        return returned, queued
+
+    def sweep(self, *, thread=False):
+        def run():
+            with mock.patch.object(self.ledger, '_capacity_clock_reference', return_value=0):
+                outcome.append(self.ledger.release_due_account_holds(limit=64))
+        outcome = []
+        if not thread:
+            run()
+        else:  # the collector's sweep thread, not the owner's
+            import threading
+            worker = threading.Thread(target=run)
+            worker.start()
+            worker.join(10)
+            self.assertFalse(worker.is_alive())
+        return outcome[0] if outcome else None
+
+    def assertForgotten(self, returned, queued):
+        self.assertEqual(({}, {}, {}), (self.owner._pending, self.owner._reserved_inputs, self.owner._signatures))
+        self.assertNotIn(returned, self.pool._returned)  # returned work discarded
+        self.assertNotIn(queued, self.intake._jobs)  # queued work cancelled
+        self.assertNotIn(queued, self.pool._returned)
+
+    def assertKept(self, returned, queued):
+        self.assertEqual(2, len(self.owner._pending))
+        self.assertEqual(2, len(self.owner._reserved_inputs))
+        self.assertEqual({returned, queued}, set(self.owner._signatures.values()))
+        self.assertIn(returned, self.pool._returned)
+        self.assertIn(queued, self.intake._jobs)
+
+    def test_RS_A_G3_a_committed_sweep_frees_owner_memory_with_no_later_request(self):
+        """Round 2 G3: right after the sweep commits the expired probes, the owner has forgotten them and their
+        signature work, with no further request (F6 alone waited for a new reservation)."""
+        returned, queued = self.expiring_with_work()
+        self.assertEqual(2, self.sweep())
+        self.assertEqual(['committed', 'committed'], [r['state'] for r in self.rows()])
+        self.assertForgotten(returned, queued)
+
+    def test_RS_A_G3_a_sweep_on_another_thread_is_forgotten_on_the_owner_s_next_step(self):
+        """Round 2 G3: the collector sweeps on its own thread; the owner touches its memory and the pool only on
+        its own thread, at its next step, with no request."""
+        returned, queued = self.expiring_with_work()
+        self.assertEqual(2, self.sweep(thread=True))
+        self.assertKept(returned, queued)  # nothing touched from the sweep's thread
+        self.owner.forget_expired()
+        self.assertForgotten(returned, queued)
+
+    def test_RS_A_G3_a_replay_of_the_expired_request_alone_frees_owner_memory(self):
+        """Round 2 G3: a replay of the expired request (no new reservation) frees the memory too."""
+        returned, queued = self.expiring_with_work()
+        self.assertEqual(2, self.sweep(thread=True))
+        replay = self.reserve('probe-returned')
+        self.assertEqual(('denied', 'probe_unlaunched_expired', True),
+                         (replay['probe'], replay['reason_code'], replay['known']))
+        self.assertForgotten(returned, queued)
+
+    def test_RS_A_G9_a_known_reply_for_the_expired_request_frees_owner_memory(self):
+        """Round 2 G9 (3): reading the expired request's known reply frees the memory, as reserve()'s replay does."""
+        returned, queued = self.expiring_with_work()
+        self.assertEqual(2, self.sweep(thread=True))
+        reply = self.owner.known_reply(self.fixture.project_id, 'a'*64, 'b'*64, 'probe-returned', self.context,
+                                       before_commit=lambda: self.allowed)
+        self.assertEqual(('denied', 'probe_unlaunched_expired', True),
+                         (reply['probe'], reply['reason_code'], reply['known']))
+        self.assertForgotten(returned, queued)
+
+    def test_RS_A_G3_a_rolled_back_sweep_keeps_owner_memory(self):
+        """Round 2 G3: when the sweep's transaction rolls back after closing the probes, the rows stay reserved
+        and the owner keeps their memory and work, on the sweep and on the owner's next step."""
+        from codex_agents import account_billing_admission
+        returned, queued = self.expiring_with_work()
+        real = account_billing_admission.close_expired_reserved
+
+        def close_then_fail(*args, **kwargs):
+            real(*args, **kwargs)
+            raise RuntimeError('injected after the close')
+        with mock.patch.object(account_billing_admission, 'close_expired_reserved', side_effect=close_then_fail):
+            with self.assertRaisesRegex(RuntimeError, 'injected'):
+                self.sweep()
+        self.assertEqual(['reserved', 'reserved'], [r['state'] for r in self.rows()])
+        self.assertKept(returned, queued)
+        self.owner.forget_expired()
+        self.assertKept(returned, queued)
+
+    def failing_once(self, name):
+        """The pool's `name` raises on its first call, then works (a transient pool fault)."""
+        real, calls = getattr(self.pool, name), []
+
+        def call(handle):
+            calls.append(handle)
+            if len(calls) == 1:
+                raise RuntimeError(f'injected {name} failure')
+            return real(handle)
+        return mock.patch.object(self.pool, name, side_effect=call), calls
+
+    def assertForgetRetried(self, name, handle, returned, queued):
+        """Round 3 (review 040-rsa-code-r3-2): a pool failure while forgetting keeps the original and its
+        handle mapping (the retry target) and the notice, so the next step retries and frees the work."""
+        patch, calls = self.failing_once(name)
+        with patch:
+            with self.assertRaisesRegex(RuntimeError, f'injected {name}'):
+                self.owner.forget_expired()
+            self.assertIn(handle, self.owner._signatures.values())  # kept for the retry
+            self.assertTrue(self.owner._closed_notice.is_set())
+            self.owner.forget_expired()
+        self.assertEqual(2, calls.count(handle))
+        self.assertForgotten(returned, queued)
+
+    def test_RS_A_G9_a_failed_discard_while_forgetting_keeps_its_handle_and_is_retried(self):
+        returned, queued = self.expiring_with_work()
+        self.assertEqual(2, self.sweep(thread=True))
+        self.assertForgetRetried('discard', returned, returned, queued)
+
+    def test_RS_A_G9_a_failed_cancel_while_forgetting_keeps_its_handle_and_is_retried(self):
+        returned, queued = self.expiring_with_work()
+        self.assertEqual(2, self.sweep(thread=True))
+        self.assertForgetRetried('cancel', queued, returned, queued)
+
     def test_second_request_cannot_take_the_account_bootstrap_or_refresh_original_deadline(self):
         original = self.reserve()
         self.prepared(original)
@@ -152,6 +351,112 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertEqual(0, self.ledger._connection.execute(
             "SELECT COUNT(*) FROM records WHERE record_type='probe_admission'").fetchone()[0])
 
+    def store_probe_then_run(self, run_info, *, probe_age=2000, run_age=500):
+        """A probe's records, then a finished Claude child's own (run-tagged) records, both inside the reuse window."""
+        fingerprint = self.identity['account_fingerprint']
+        favourable = {'status': 'allowed', 'isUsingOverage': False,
+            'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'}
+        probe = claude_rate_limit_records(favourable, account_fingerprint=fingerprint, observed_at_ms=self.clock-probe_age)
+        run = claude_rate_limit_records(run_info, account_fingerprint=fingerprint, observed_at_ms=self.clock-run_age,
+                                        run_id='run-finished-1')
+        self.ledger._store_provider_observations(self.fixture.project_id, probe, timestamp=self.clock-probe_age)
+        self.ledger._store_provider_observations(self.fixture.project_id, run, timestamp=self.clock-run_age)
+        return probe, run
+
+    def test_T1_a_finished_childs_favourable_records_do_not_break_reuse_of_the_probe_records(self):
+        """R1: the child's run-tagged records are not probe evidence; the reply holds the probe's records only."""
+        probe, run = self.store_probe_then_run({'status': 'allowed', 'isUsingOverage': False,
+            'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'})
+        original = self.reserve()
+        self.prepared(original)
+        reused = self.owner.admit(original)
+        self.assertEqual('reused', reused['probe'])
+        self.assertEqual([self.identity, *probe], reused['records'])
+        self.assertTrue(all(r.get('run_id') is None and r.get('phase') is None for r in reused['records']))
+
+    def test_T3_a_newer_more_restrictive_run_record_stops_reuse_and_admission_is_re_evaluated(self):
+        """R2 (safety): overage in use / paid usage usable / non-ample headroom in a newer run record stops reuse;
+        admission is re-evaluated and the probe launches only if admitted, otherwise a named denial."""
+        cases = {'overage in use': ({'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'},
+                                    'paid_usage_usable'),
+                 'headroom rejected': ({'status': 'rejected', 'isUsingOverage': False, 'overageStatus': 'rejected',
+                                        'overageDisabledReason': 'org_level_disabled'}, 'provider_exhausted')}
+        for name, (info, reason) in cases.items():
+            with self.subTest(name):
+                self.tearDown_probe_state()
+                self.store_probe_then_run(info)
+                original = self.reserve(f'probe-{name}'.replace(' ', '-'))
+                self.prepared(original)
+                result = self.owner.admit(original)
+                self.assertIs(type(result), dict, result)
+                self.assertEqual('denied', result['probe'])
+                self.assertEqual(reason, result['reason_code'], result)
+
+    def test_T3b_paid_usage_usable_alone_in_a_newer_run_record_stops_reuse(self):
+        """R2 isolation: only paid_usage_usable is set (not overage in use, headroom ample)."""
+        _, run = self.store_probe_then_run({'status': 'allowed', 'isUsingOverage': False, 'overageStatus': 'allowed'})
+        billing = [r for r in run if r.get('record_type') == 'provider_billing' or 'paid_usage_usable' in r]
+        self.assertEqual(1, len(billing), run)
+        self.assertIs(True, billing[0]['paid_usage_usable'])
+        self.assertIs(False, billing[0]['is_using_overage'])
+        self.assertEqual('during', billing[0]['phase'])
+        original = self.reserve('probe-paid-usable-only')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), dict, result)
+        self.assertNotEqual('reused', result['probe'])
+        self.assertEqual('denied', result['probe'])
+        self.assertEqual('paid_usage_usable', result['reason_code'], result)
+
+    def test_T3c_constrained_headroom_in_a_newer_run_record_stops_reuse_and_the_probe_launches_fresh(self):
+        """R2: headroom that is not ample (allowed_warning) stops reuse; admission passes, so a fresh probe is launched."""
+        _, run = self.store_probe_then_run({'status': 'allowed_warning', 'isUsingOverage': False,
+            'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'})
+        billing = [r for r in run if 'paid_usage_usable' in r]
+        headroom = [r for r in run if 'paid_usage_usable' not in r and r.get('status') is not None]
+        self.assertEqual(1, len(billing), run)
+        self.assertIs(False, billing[0]['paid_usage_usable'])
+        self.assertIs(False, billing[0]['is_using_overage'])
+        self.assertEqual('during', billing[0]['phase'])
+        self.assertEqual(['allowed_warning'], [r['status'] for r in headroom], run)
+        original = self.reserve('probe-constrained')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), ProbeAdmission, result)
+
+    def test_T5_a_run_record_in_the_same_millisecond_as_the_probe_record_stops_reuse(self):
+        """R2 boundary: observed_at equal to the probe's own reading is not older, so it still restricts."""
+        self.store_probe_then_run({'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'},
+                                  probe_age=1000, run_age=1000)
+        original = self.reserve('probe-same-ms')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), dict, result)
+        self.assertNotEqual('reused', result['probe'])
+        self.assertEqual('paid_usage_usable', result['reason_code'], result)
+
+    def test_T5b_a_same_millisecond_constrained_headroom_run_record_stops_reuse_and_the_probe_launches_fresh(self):
+        """R2 boundary on headroom alone: equal ages, allowed_warning, both billing flags false."""
+        _, run = self.store_probe_then_run({'status': 'allowed_warning', 'isUsingOverage': False,
+            'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'},
+            probe_age=1000, run_age=1000)
+        billing = [r for r in run if 'paid_usage_usable' in r]
+        headroom = [r for r in run if 'paid_usage_usable' not in r and r.get('status') is not None]
+        self.assertEqual(1, len(billing), run)
+        self.assertIs(False, billing[0]['paid_usage_usable'])
+        self.assertIs(False, billing[0]['is_using_overage'])
+        self.assertEqual('during', billing[0]['phase'])
+        self.assertEqual(['allowed_warning'], [r['status'] for r in headroom], run)
+        original = self.reserve('probe-same-ms-constrained')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), ProbeAdmission, result)
+
+    def tearDown_probe_state(self):
+        connection = self.ledger._connection
+        with self.ledger._lock, connection:
+            connection.execute("DELETE FROM records WHERE record_type IN ('provider_billing','provider_headroom')")
+
     def test_default_denial_and_tampered_journal_cannot_start_signature_work(self):
         with self.assertRaisesRegex(ProbeAdmissionError, 'probe_not_authorized'):
             self.reserve(before_commit=None)
@@ -201,7 +506,6 @@ class AccountBillingAdmissionTests(unittest.TestCase):
 
     def test_standalone_backup_preserves_genuine_sealed_admission_and_rejects_missing_request(self):
         from copy import deepcopy
-        from codex_agents.learning_contracts import content_digest, validate_learning_record
         original = self.reserve()
         self.prepared(original)
         self.owner.admit(original)
@@ -209,17 +513,13 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         path = self.ledger.create_sanitized_backup(self.fixture.project_id, file_id='original_probe',
             expires_at_ms=time.time_ns()//1_000_000+60_000)
         body = backup_body(path, self.fixture.project_id)
-        self.assertEqual(14, body['ledger_schema_version'])
+        self.assertEqual(15, body['ledger_schema_version'])  # O0b RS-A (requirement)
         self.assertTrue(self.ledger.verify_sanitized_backup(self.fixture.project_id, file_id='original_probe')['verified'])
-        tool = runpy.run_path(str(REPOSITORY_ROOT/'scripts/backup_installed_project.py'))
-        tool['_verify_relational_restore'](self.ledger._connection, body,
-            validate_learning_record=validate_learning_record, content_digest=content_digest)
         broken = deepcopy(body)
         broken['tables']['account_billing_probe_requests'] = []
         broken['counts']['account_billing_probe_requests'] = 0
-        with self.assertRaises(RuntimeError):
-            tool['_verify_relational_restore'](self.ledger._connection, broken,
-                validate_learning_record=validate_learning_record, content_digest=content_digest)
+        with self.assertRaises(learning_store.LedgerError):  # F3-10: moved from the removed format-2 check
+            learning_store._verify_project_backup_body(broken)
         self.assertEqual(before, self.rows())
 
     def test_restart_preserves_admitted_unknown_without_recreating_a_launchable_original(self):

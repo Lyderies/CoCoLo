@@ -1,17 +1,45 @@
 #!/usr/bin/env python3
-"""Create and verify a project-partition backup with the installed runtime."""
+"""Create and verify a project-partition backup with the installed runtime.
+
+The backup is the streamed format-3 file (one private SQLite copy of the
+partition) that the ledger itself writes before an upgrade (PLAN F3). It is
+written and checked by this clone's own project_backup in a separate isolated
+Python, so a runtime without a streamed writer (0.2.x, 0.3.0) can be backed up
+at any size; the installed runtime holds the collector's maintenance lock
+throughout and registers the finished file in its own ledger.
+"""
 
 from __future__ import annotations
 
 import argparse
-import base64
+import contextlib
 import hashlib
 import json
 import os
+import re
 import secrets
+import signal
+import stat
+import subprocess
 import sys
+import threading
 import time
+import urllib.parse
 from pathlib import Path
+
+SCRIPT = Path(__file__).resolve()
+# This clone's runtime package: its project_backup writes and checks the copy.
+CLONE_PACKAGE = SCRIPT.parents[1] / "native-package" / ".codex" / "orchestration"
+# The ledger's own limit for one project's backup (learning_store.MAX_PROJECT_BACKUP_BYTES).
+BACKUP_LIMIT_BYTES = 16 * 1024 ** 3
+# How long the copy and its checks may take; a hung child must not hold the collector stopped (F3-9).
+CHILD_SECONDS = 4 * 3600
+_FILE_ID = re.compile(r"[A-Za-z0-9_]{1,160}")
+
+
+class QuiesceLeftStopped(RuntimeError):
+    """Quiescing failed after the authorization file was replaced, and the earlier one could not be put
+    back: the collector stays stopped (F3-12)."""
 
 
 def _canonical_json(value: object) -> bytes:
@@ -40,7 +68,16 @@ def _quiesce_collector_authorization(path: Path) -> None:
         or any(character not in "0123456789abcdef" for character in value["runtime_digest"])
     ):
         raise RuntimeError("collector runtime authorization is invalid")
+    if quiesced:  # Already as asked: nothing to change (F3-17).
+        return
     value["quiesced_for_upgrade"] = True
+    _write_authorization(path, _canonical_json(value) + b"\n")
+
+
+def _write_authorization(path: Path, content: bytes) -> None:
+    """Replace the authorization file with `content`; a failure after the replacement puts the previous
+    file back (F3-12), and if that fails too, says the collector is left stopped."""
+    previous = path.read_bytes()
     temporary = path.parent / f".collector-authorization.{secrets.token_hex(8)}.tmp"
     descriptor = os.open(
         temporary,
@@ -49,21 +86,42 @@ def _quiesce_collector_authorization(path: Path) -> None:
     )
     try:
         with os.fdopen(descriptor, "wb") as handle:
-            handle.write(_canonical_json(value) + b"\n")
+            handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
-        os.chmod(path, 0o600)
-        root_descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
-            os.fsync(root_descriptor)
-        finally:
-            os.close(root_descriptor)
+            os.chmod(path, 0o600)
+            root_descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(root_descriptor)
+            finally:
+                os.close(root_descriptor)
+        except BaseException as error:
+            restore = path.parent / f".collector-authorization.{secrets.token_hex(8)}.tmp"
+            try:
+                restore.write_bytes(previous)
+                restore.chmod(0o600)
+                os.replace(restore, path)
+            except BaseException as failed:
+                outcome = QuiesceLeftStopped(f"{error}; the earlier authorization could not be put back: {failed}")
+                try:
+                    restore.unlink(missing_ok=True)
+                except OSError as stuck:
+                    outcome = QuiesceLeftStopped(f"{outcome}; {stuck}: {restore} remains")
+                raise outcome from error
+            try:
+                restore.unlink(missing_ok=True)  # F3-17: no temporary copy left behind
+            except OSError:
+                pass  # The rollback itself succeeded; a stray copy is harmless
+            raise
     finally:
-        temporary.unlink(missing_ok=True)
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass  # Never replaces the outcome above; a stray copy changes nothing the collector reads.
 
 
-_BYTES_KEY = "$codex_agents_bytes_base64"
 _PROJECT_COLUMNS = (
     "project_id", "canonical_root", "root_digest", "status", "created_at_ms",
     "deleted_at_ms",
@@ -113,6 +171,8 @@ _TABLE_COLUMNS = {
     "account_billing_probe_requests": ('request_key', 'parameters_digest', 'runtime_digest', 'caller_scope',
         'created_at_ms', 'deadline_at_ms', 'state', 'account_fingerprint', 'admission_record_id',
         'admission_digest', 'references_json', 'state_seal'),
+    "run_holds": ("kind", "identity", "state", "generation", "taken_at_ms", "released_at_ms", "release_kind",
+                  "receipt", "evidence", "next_check_ms"),
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -169,6 +229,7 @@ _TABLE_ORDER = {
     "account_observation_requests": ("request_key",),
     "account_billing_probe_origins": ("request_key",),
     "account_billing_probe_requests": ("request_key",),
+    "run_holds": ("kind", "identity"),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -181,6 +242,8 @@ _TABLE_ORDER = {
 
 
 def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 15 and table == "run_holds":
+        return ()
     if schema_version < 13 and table in {'account_billing_probe_origins', 'account_billing_probe_requests'}:
         return ()
     if schema_version < 12 and table in {'account_observation_origins', 'account_observation_requests'}:
@@ -208,7 +271,7 @@ def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
 
 
 def _tables(schema_version: int) -> tuple[str, ...]:
-    if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14}:
+    if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}:
         raise RuntimeError("installed ledger schema does not support this backup")
     return tuple(table for table in _TABLE_COLUMNS
                  if (schema_version >= 7 or table != "launch_claims")
@@ -218,156 +281,335 @@ def _tables(schema_version: int) -> tuple[str, ...]:
                  and (schema_version >= 10 or table not in {'account_open_receipts', 'account_open_requests'})
                  and (schema_version >= 11 or table != 'account_cleanup_receipts')
                  and (schema_version >= 12 or table not in {'account_observation_origins', 'account_observation_requests'})
-                 and (schema_version >= 13 or table not in {'account_billing_probe_origins', 'account_billing_probe_requests'}))
+                 and (schema_version >= 13 or table not in {'account_billing_probe_origins', 'account_billing_probe_requests'})
+                 and (schema_version >= 15 or table != 'run_holds'))
 
 
-def _encode(value: object) -> object:
-    if isinstance(value, (bytes, bytearray, memoryview)):
-        return {_BYTES_KEY: base64.b64encode(bytes(value)).decode("ascii")}
-    return value
+_STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+_DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
-def _decode(value: object) -> object:
-    if isinstance(value, dict) and set(value) == {_BYTES_KEY}:
-        encoded = value[_BYTES_KEY]
-        if not isinstance(encoded, str):
-            raise RuntimeError("project backup byte encoding is invalid")
+class _Stopped(BaseException):
+    """A termination signal arrived during the backup."""
+
+
+def _private_folder(path: Path, *, owner_only: bool) -> None:
+    info = os.lstat(path)
+    if stat.S_ISLNK(info.st_mode):
+        raise RuntimeError(f"a folder on the way to the backup is a link: {path}")
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or (owner_only and info.st_mode & 0o077):
+        raise RuntimeError(f"a folder on the way to the backup is not a private folder of this account: {path}")
+
+
+def _identity(info: os.stat_result) -> list[int]:
+    return [info.st_dev, info.st_ino]
+
+
+def _checked_report(child: object) -> dict[str, object]:
+    """Every field the child must report, checked before anything is published (F3-3c)."""
+    if (not isinstance(child, dict)
+            or not isinstance(child.get("backup_sha256"), str) or not _DIGEST.fullmatch(child["backup_sha256"])
+            or not isinstance(child.get("manifest_sha256"), str) or not _DIGEST.fullmatch(child["manifest_sha256"])
+            or not isinstance(child.get("counts"), dict)
+            or not all(isinstance(k, str) and type(v) is int for k, v in child["counts"].items())
+            or not isinstance(child.get("identity"), list) or len(child["identity"]) != 2
+            or not all(type(part) is int for part in child["identity"])
+            or not isinstance(child.get("columns"), dict)
+            or not all(isinstance(k, str) and isinstance(v, list) for k, v in child["columns"].items())):
+        raise RuntimeError("the backup copy's check did not report everything it must")
+    return child
+
+
+def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: int,
+                     expires_at_ms: int) -> dict[str, object]:
+    """Write, check and register one partition's format-3 backup (PLAN F3-1 to F3-3).
+
+    `ledger` is the installed runtime's open ledger, whose collector the caller
+    holds stopped. The copy is made in a separate isolated Python with this
+    clone's project_backup, which checks it through one descriptor and equal to
+    the live partition and reports the file's identity and digest. Only that
+    file, reopened without following links, is published (never replacing
+    anything) and registered. Whatever fails, a termination signal included,
+    the child is stopped and reaped and nothing this run created is left.
+    """
+    if not _FILE_ID.fullmatch(file_id):
+        raise RuntimeError("backup file id must be 1 to 160 letters, digits or underscores")
+    root = ledger.state.root
+    backups = ledger.state.backups
+    partition = backups / project_id
+    if backups.parent != root or partition.parent != backups:
+        raise RuntimeError("the backup folder is not inside the records folder")
+    _private_folder(root, owner_only=False)
+    _private_folder(backups, owner_only=True)
+    with contextlib.suppress(FileExistsError):
+        os.mkdir(partition, 0o700)
+    _private_folder(partition, owner_only=True)
+    folder = os.open(partition, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+    final_name, partial_name = f"{file_id}.sqlite3", f".{file_id}.partial"
+    created = published = None
+    child = None
+    # F3-15: stop signals are held throughout and released only while the child runs. A stop held
+    # after registration is taken off the queue and noted instead.
+    found_mask = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)
+    committed, late_stop, previous = [], [], {}
+    try:
+        if threading.current_thread() is threading.main_thread():
+            def stop(signum, frame):
+                if committed:
+                    late_stop.append(signum)
+                    return
+                raise _Stopped()
+            for number in _STOP_SIGNALS:
+                previous[number] = signal.signal(number, stop)
+        if os.path.lexists(partition / final_name):
+            raise RuntimeError("a backup with this file id already exists")
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(partial_name, dir_fd=folder)  # Left by a backup that was stopped; never registered.
+        descriptor = os.open(partial_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                             0o600, dir_fd=folder)
         try:
-            return base64.b64decode(encoded, validate=True)
-        except (ValueError, TypeError) as exc:
-            raise RuntimeError("project backup byte encoding is invalid") from exc
-    return value
+            created = _identity(os.fstat(descriptor))
+        finally:
+            os.close(descriptor)
+        argv = [sys.executable, "-I", "-B", "-S", str(SCRIPT), "--stream-child", str(ledger.state.database),
+                str(partition / partial_name), project_id, str(schema_version), str(BACKUP_LIMIT_BYTES),
+                f"{created[0]}:{created[1]}"]
+        child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True)
+        try:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, _STOP_SIGNALS)  # The one window a stop acts in.
+            out, err = child.communicate(timeout=CHILD_SECONDS)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"the backup copy was stopped at its time limit ({CHILD_SECONDS} s)") from None
+        finally:
+            signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)
+        try:
+            report = json.loads(out)
+        except ValueError:
+            report = None
+        if child.returncode != 0:
+            if isinstance(report, dict) and report.get("error"):
+                raise RuntimeError(str(report["error"]))
+            last = [line for line in (err or "").splitlines() if line.strip()][-1:]
+            raise RuntimeError("the backup copy could not be written or checked"
+                               + (f": {last[0][:300]}" if last else f" (exit {child.returncode})"))
+        report = _checked_report(report)
+        # The copy has exactly the columns this script checked against the installed schema (F3-6).
+        expected = {table: list(_expected_columns(schema_version, table)) for table in _tables(schema_version)}
+        if report["columns"] != expected:
+            raise RuntimeError("the backup copy's columns differ from the installed schema's columns")
+        # The file published is the file the child checked: same identity, same bytes.
+        descriptor = os.open(partial_name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=folder)
+        try:
+            info = os.fstat(descriptor)
+            if (_identity(info) != created or report["identity"] != created or not stat.S_ISREG(info.st_mode)
+                    or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600):
+                raise RuntimeError("the backup copy is not the file that was checked")
+            hasher = hashlib.sha256()
+            while chunk := os.read(descriptor, 1_048_576):
+                hasher.update(chunk)
+            if hasher.hexdigest() != report["backup_sha256"]:
+                raise RuntimeError("the backup copy changed after it was checked")
+        finally:
+            os.close(descriptor)
+        # Published by a new name for the same file: never replaces anything that appeared meanwhile.
+        try:
+            os.link(partial_name, final_name, src_dir_fd=folder, dst_dir_fd=folder, follow_symlinks=False)
+            published = created
+        except FileExistsError:
+            raise RuntimeError("a backup with this file id appeared while it was written") from None
+        os.unlink(partial_name, dir_fd=folder)
+        os.fsync(folder)
+        path = partition / final_name
+        ledger._register_stored_file(project_id, file_id=file_id, kind="backup", path=path,
+                                     digest=report["backup_sha256"], expires_at_ms=expires_at_ms)
+        committed.append(True)
+        if previous:  # A stop held since the child ended is taken now, and only noted.
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, _STOP_SIGNALS)
+            signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)
+        return {**({"stopped_after_registration": True} if late_stop else {}),
+            "ready": True,
+            "project_id": project_id,
+            "file_id": file_id,
+            "path": str(path),
+            "format": 3,
+            "ledger_schema_version": schema_version,
+            "backup_sha256": report["backup_sha256"],
+            "manifest_sha256": report["manifest_sha256"],
+            "counts": report["counts"],
+            "isolated_restore_integrity": "ok",
+            "isolated_restore_foreign_keys": "ok",
+        }
+    except BaseException as error:
+        signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # A second stop cannot cut cleanup short.
+        if child is not None and child.poll() is None:
+            child.kill()
+            child.wait()
+        # Remove only what this run created: a name whose file is still ours.
+        remaining = []
+        for name, ours in ((final_name, published), (partial_name, created)):
+            if ours is None:
+                continue
+            try:
+                if _identity(os.stat(name, dir_fd=folder, follow_symlinks=False)) == ours:
+                    os.unlink(name, dir_fd=folder)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                remaining.append(str(partition / name))
+        if remaining:  # F3-14: say what is left rather than claim nothing was kept.
+            raise RuntimeError(f"{'stopped by a signal' if isinstance(error, _Stopped) else error}; these files "
+                               f"could not be removed: {', '.join(remaining)}") from None
+        if isinstance(error, _Stopped):
+            raise RuntimeError("the backup was stopped by a signal; nothing was kept") from None
+        raise
+    finally:
+        try:
+            os.close(folder)
+        except OSError:
+            pass  # A folder descriptor that will not close changes nothing on disk.
+        finally:
+            for number, handler in previous.items():
+                signal.signal(number, handler)
+            signal.pthread_sigmask(signal.SIG_SETMASK, found_mask)
 
 
-def _verify_relational_restore(
-    source: object,
-    body: dict[str, object],
-    *,
-    validate_learning_record: object,
-    content_digest: object,
-) -> None:
+def finish_backup(report: dict[str, object], *, leave_quiesced: bool, quiesce) -> tuple[dict[str, object], int]:
+    """The final report and exit status once the backup is registered (F3-3e).
+
+    With `leave_quiesced`, the collector is quiesced only now; if that fails the
+    backup stays made and registered, the report says the collector was not
+    left stopped, and the status is 3.
+    """
+    if not leave_quiesced:
+        return {**report, "collector_quiesced": False}, 0
+    try:
+        quiesce()
+    except QuiesceLeftStopped as exc:  # F3-12: replaced and not put back, so it is stopped
+        return {**report, "collector_quiesced": True, "quiesce_error": str(exc)}, 3
+    except Exception as exc:
+        return {**report, "collector_quiesced": False, "quiesce_error": str(exc)}, 3
+    return {**report, "collector_quiesced": True}, 0
+
+
+def conclude(*, report: dict[str, object] | None, code: int, error: BaseException | None, close,
+             resume) -> tuple[dict[str, object], int]:
+    """F3-16: the one ending. The ledger is closed and the collector restarted (unless it stays stopped as
+    asked) whatever failed before; every later error goes into the one report. Exit 0 only when all
+    succeeded; 3 when the backup was made but something after it failed; 2 when it was not made."""
+    made = report is not None
+    final = dict(report) if made else {"ready": False, "error": str(error)}
+    if made and error is not None:
+        final["error"], code = str(error), 3
+    elif not made:
+        code = 2
+    try:
+        close()
+    except BaseException as exc:  # An interrupt here still lets the collector restart (F3-16).
+        final["close_error"] = str(exc) or type(exc).__name__
+        code = code or 3
+    if not final.get("collector_quiesced"):
+        try:
+            resume()
+        except BaseException as exc:
+            final["restart_error"] = f"the installed collector did not restart: {exc}"
+            code = code or 3
+    return final, code
+
+
+def settle_maintenance(final: dict[str, object], code: int, *, resume) -> tuple[dict[str, object], int]:
+    """F3-13: restart the collector unless it stays stopped as asked, before the one report is printed;
+    a restart that fails is in that report (status 3), the backup still made and registered."""
+    if final.get("collector_quiesced"):
+        return final, code
+    try:
+        resume()
+    except Exception as exc:
+        return {**final, "restart_error": f"the installed collector did not restart: {exc}"}, 3
+    return final, code
+
+
+def _peak_memory_bytes(resource) -> int:
+    """This process's own peak memory. Linux keeps ru_maxrss across fork and exec, so it would report
+    the parent's peak; VmHWM belongs to this address space alone."""
+    try:
+        with open("/proc/self/status", encoding="ascii") as status:
+            for line in status:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == "darwin" else 1024)
+
+
+def _stream_child(argv: list[str]) -> int:
+    """`--stream-child DATABASE PARTIAL PROJECT SCHEMA LIMIT DEV:INO`: copy and check with this clone's package.
+
+    Runs as `python -I -B -S`; reads the ledger read-only while the installed
+    collector is stopped, writes the copy into the empty PARTIAL file the script
+    created (DEV:INO), checks it through one descriptor completely and against
+    the live partition, confirms the path is still that file, and prints its
+    identity, digest, manifest digest, counts and this process's peak memory.
+    """
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, _STOP_SIGNALS)  # Held by the script; nothing else changed.
+    database, partial, project_id, schema, limit, expected = argv
+    expected_identity = [int(part) for part in expected.split(":")]
+    sys.path.insert(0, str(CLONE_PACKAGE))
+    import resource
     import sqlite3
 
-    source_connection = source
-    restored = sqlite3.connect(":memory:")
-    restored.row_factory = sqlite3.Row
-    restored.execute("PRAGMA foreign_keys = ON")
+    from codex_agents import project_backup  # noqa: PLC0415
+
+    path = Path(partial)
+    if _identity(os.lstat(path)) != expected_identity or not stat.S_ISREG(os.lstat(path).st_mode):
+        raise RuntimeError("the backup copy is not the file the script created")
+    from codex_agents import learning_store  # noqa: PLC0415
+
+    connection = sqlite3.connect("file:" + urllib.parse.quote(database) + "?mode=ro", uri=True,
+                                 isolation_level=None)
+    connection.row_factory = sqlite3.Row
     try:
-        for table in ("projects", *_tables(body["ledger_schema_version"])):
-            schema = source_connection.execute(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
-            ).fetchone()
-            if schema is not None:
-                restored.execute(str(schema[0]))
-        if body["ledger_schema_version"] >= 8:
-            parent_index = source_connection.execute(
-                "SELECT sql FROM sqlite_master WHERE type='index' AND name='launch_receipt_parent'"
-            ).fetchone()
-            if parent_index is None:
-                raise RuntimeError("project backup launch receipt parent is unavailable")
-            restored.execute(str(parent_index[0]))
-        if body["ledger_schema_version"] >= 9:
-            parent_index = source_connection.execute(
-                "SELECT sql FROM sqlite_master WHERE type='index' AND name='active_capacity_parent'"
-            ).fetchone()
-            if parent_index is None:
-                raise RuntimeError("project backup active capacity parent is unavailable")
-            restored.execute(str(parent_index[0]))
-        project = body["project"]
-        restored.execute(
-            f"INSERT INTO projects({','.join(_PROJECT_COLUMNS)}) VALUES(?,?,?,?,?,?)",
-            [_decode(project[name]) for name in _PROJECT_COLUMNS],
-        )
-        project_id = project["project_id"]
-        for table in _tables(body["ledger_schema_version"]):
-            columns = body["columns"][table]
-            rows = body["tables"][table]
-            if body["counts"][table] != len(rows):
-                raise RuntimeError("project backup count manifest is invalid")
-            if not columns:
-                if rows:
-                    raise RuntimeError("project backup row shape is invalid")
-                continue
-            placeholders = ",".join("?" for _ in range(len(columns) + 1))
-            for row in rows:
-                if set(row) != set(columns):
-                    raise RuntimeError("project backup row shape is invalid")
-                values = [_decode(row[name]) for name in columns]
-                if table == "records":
-                    record = validate_learning_record(json.loads(bytes(
-                        values[columns.index("content")]
-                    )))
-                    if content_digest(record) != values[columns.index("content_digest")]:
-                        raise RuntimeError("project backup record verification failed")
-                restored.execute(
-                    f"INSERT INTO {table}(project_id,{','.join(columns)}) "
-                    f"VALUES({placeholders})",
-                    [project_id, *values],
-                )
-        if restored.execute("PRAGMA foreign_key_check").fetchall():
-            raise RuntimeError("project backup foreign-key verification failed")
-        if body["ledger_schema_version"] >= 9 and restored.execute(
-            "SELECT 1 FROM launch_claims c LEFT JOIN active_run_capacity a "
-            "ON a.project_id=c.project_id AND a.handle_digest=c.handle_digest "
-            "WHERE a.run_id IS NULL OR a.run_id<>c.run_id OR a.bridge_run_id IS NOT c.bridge_run_id LIMIT 1"
-        ).fetchone() is not None:
-            raise RuntimeError("project backup capacity coverage is incomplete")
-        if body["ledger_schema_version"] >= 9 and restored.execute(
-            "SELECT 1 FROM active_run_capacity a LEFT JOIN capacity_completions c "
-            "ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest "
-            "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
-            "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
-            "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
-            "WHERE a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
-            "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL) LIMIT 1"
-        ).fetchone() is not None:
-            raise RuntimeError("project backup completion coverage is incomplete")
-        if body['ledger_schema_version'] >= 11:
-            missing = restored.execute('SELECT 1 FROM capacity_executions e LEFT JOIN account_cleanup_receipts c '
-                'ON c.project_id=e.project_id AND c.reservation_digest=e.cleanup_reservation_digest '
-                'WHERE e.cleanup_reservation_digest IS NOT NULL AND '
-                '(c.handle_digest IS NULL OR c.handle_digest<>e.handle_digest OR c.run_id<>e.run_id '
-                'OR c.bridge_run_id<>e.bridge_run_id OR c.registration_digest<>e.owner_digest) LIMIT 1').fetchone()
-            orphan = restored.execute('SELECT 1 FROM account_cleanup_receipts c LEFT JOIN capacity_executions e '
-                'ON e.project_id=c.project_id AND e.handle_digest=c.handle_digest '
-                'WHERE e.cleanup_reservation_digest IS NULL OR e.cleanup_reservation_digest<>c.reservation_digest LIMIT 1').fetchone()
-            if missing is not None or orphan is not None:
-                raise RuntimeError('project backup cleanup coverage is incomplete')
-        if body['ledger_schema_version'] >= 12 and restored.execute(
-            'SELECT 1 FROM account_observation_origins o LEFT JOIN account_observation_requests r '
-            'ON r.project_id=o.project_id AND r.request_key=o.request_key WHERE r.request_key IS NULL OR '
-            'r.parameters_digest<>o.parameters_digest OR r.observed_at_ms<>o.observed_at_ms UNION ALL '
-            'SELECT 1 FROM account_observation_requests r LEFT JOIN account_observation_origins o '
-            'ON o.project_id=r.project_id AND o.request_key=r.request_key WHERE o.request_key IS NULL LIMIT 1'
-        ).fetchone() is not None:
-            raise RuntimeError('project backup observation coverage is incomplete')
-        if body['ledger_schema_version'] >= 13 and restored.execute(
-            'SELECT 1 FROM account_billing_probe_origins o LEFT JOIN account_billing_probe_requests r '
-            'ON r.project_id=o.project_id AND r.request_key=o.request_key WHERE r.request_key IS NULL OR '
-            'r.parameters_digest<>o.parameters_digest OR r.created_at_ms<>o.created_at_ms UNION ALL '
-            'SELECT 1 FROM account_billing_probe_requests r LEFT JOIN account_billing_probe_origins o '
-            'ON o.project_id=r.project_id AND o.request_key=r.request_key WHERE o.request_key IS NULL LIMIT 1'
-        ).fetchone() is not None:
-            raise RuntimeError('project backup billing probe coverage is incomplete')
-        if restored.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-            raise RuntimeError("project backup integrity verification failed")
-        for table in _tables(body["ledger_schema_version"]):
-            columns = body["columns"][table]
-            if not columns:
-                continue
-            actual = [
-                {name: _encode(row[name]) for name in columns}
-                for row in restored.execute(
-                    f"SELECT {','.join(columns)} FROM {table} WHERE project_id=?",
-                    (project_id,),
-                ).fetchall()
-            ]
-            if sorted(_canonical_json(row) for row in actual) != sorted(
-                _canonical_json(row) for row in body["tables"][table]
-            ):
-                raise RuntimeError("project backup relational roundtrip changed rows")
+        connection.execute("BEGIN")  # One snapshot for the plan, the copy and the comparison (F3-8).
+        schema_version = int(schema)
+        # Planned before anything is written, as the ledger plans its own backups (F3-7).
+        planned = project_backup.estimate_bytes(connection, project_id, schema_version)
+        if planned > int(limit):
+            raise RuntimeError(f"the project's backup is planned at {planned} bytes, over the limit of {limit}")
+        free = os.statvfs(path.parent)
+        needed = planned * learning_store.BACKUP_SPACE_FACTOR + learning_store.BACKUP_SPACE_MARGIN_BYTES
+        if needed > free.f_bavail * free.f_frsize:
+            raise RuntimeError(f"the project's backup is planned at {planned} bytes and needs {needed} bytes free; "
+                               "not enough disk space")
+        manifest = project_backup.write(connection, path, project_id, schema_version, limit_bytes=int(limit))
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            before = os.fstat(descriptor)
+            if (_identity(before) != expected_identity or not stat.S_ISREG(before.st_mode)
+                    or before.st_uid != os.getuid() or stat.S_IMODE(before.st_mode) != 0o600):
+                raise RuntimeError("the backup copy is not the private file the script created")
+            if before.st_size > int(limit):  # The plan is an estimate; the file is the fact.
+                raise RuntimeError("the project's backup is over the ledger's backup limit")
+            os.fsync(descriptor)
+            digest = project_backup.file_digest(descriptor)
+            result = project_backup.verify(path, project_id=project_id, schema_version=schema_version,
+                                           compare=connection)
+            # The path was read again by name: it must still be the file that was hashed.
+            if (_identity(os.lstat(path)) != expected_identity
+                    or _identity(os.fstat(descriptor)) != expected_identity
+                    or project_backup.file_digest(descriptor) != digest):
+                raise RuntimeError("the backup copy changed while it was checked")
+        finally:
+            os.close(descriptor)
     finally:
-        restored.close()
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        connection.close()
+    peak = _peak_memory_bytes(resource)
+    print(json.dumps({"backup_sha256": digest, "manifest_sha256": result["manifest_sha256"],
+                      "counts": result["counts"], "identity": expected_identity, "peak_rss_bytes": peak,
+                      "columns": manifest["columns"]},
+                     sort_keys=True))
+    return 0
 
 
 def _main() -> int:
@@ -394,10 +636,6 @@ def _main() -> int:
         raise RuntimeError("installed orchestration runtime is unavailable")
     sys.path.insert(0, str(orchestration_root))
 
-    from codex_agents.learning_contracts import (  # noqa: PLC0415
-        content_digest,
-        validate_learning_record,
-    )
     from codex_agents.learning_store import (  # noqa: PLC0415
         CollectorMaintenance,
         LearningLedger,
@@ -405,139 +643,77 @@ def _main() -> int:
     )
 
     state = LearningState(args.state_root, create=False)
-    maintenance = CollectorMaintenance.acquire(state, cli_path, target)
-    ledger = None
-    operation_completed = False
+    found_mask = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # F3-15: held to the end
     try:
-        ledger = LearningLedger(state)
-        project_id = ledger.project_for_root(target)
-        connection = ledger._connection
-        schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14}:
-            raise RuntimeError("installed ledger schema does not support this backup")
-        project_columns = {
-            str(row[1])
-            for row in connection.execute("PRAGMA table_info(projects)").fetchall()
-        }
-        if project_columns != set(_PROJECT_COLUMNS):
-            raise RuntimeError("project backup cannot represent projects exactly")
-        project = connection.execute(
-            f"SELECT {','.join(_PROJECT_COLUMNS)} "
-            "FROM projects WHERE project_id=? AND status='active'",
-            (project_id,),
-        ).fetchone()
-        if project is None:
-            raise RuntimeError("project binding is not active")
-        tables: dict[str, list[dict[str, object]]] = {}
-        columns_manifest: dict[str, list[str]] = {}
-        for table in _tables(schema_version):
-            exists = connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
-            ).fetchone()
-            available = (
-                {str(row[1]) for row in connection.execute(
-                    f"PRAGMA table_info({table})"
-                ).fetchall()}
-                if exists is not None else set()
-            )
-            columns = list(_expected_columns(schema_version, table))
-            expected_available = {"project_id", *columns} if columns else set()
-            if available != expected_available:
-                raise RuntimeError(
-                    f"project backup cannot represent {table} exactly"
-                )
-            columns_manifest[table] = columns
-            if not columns:
-                tables[table] = []
-                continue
-            ordering = ",".join(name for name in _TABLE_ORDER[table] if name in available)
-            query = (
-                f"SELECT {','.join(columns)} FROM {table} WHERE project_id=?"
-                + (f" ORDER BY {ordering}" if ordering else "")
-            )
-            values = []
-            for row in connection.execute(query, (project_id,)).fetchall():
-                value = {column: _encode(row[column]) for column in columns}
-                values.append(value)
-            tables[table] = values
-
-        body = {
-            "schema_version": 2,
-            "ledger_schema_version": schema_version,
-            "project": {column: _encode(project[column]) for column in _PROJECT_COLUMNS},
-            "columns": columns_manifest,
-            "tables": tables,
-            "counts": {name: len(rows) for name, rows in tables.items()},
-        }
-        body_bytes = _canonical_json(body)
-        payload = _canonical_json(
-            {
-                "backup_sha256": hashlib.sha256(body_bytes).hexdigest(),
-                "body": body,
-            }
-        )
-        if len(payload) > 128 * 1024 * 1024:
-            raise RuntimeError("project backup is oversized")
-        expires_at_ms = (
-            time.time_ns() // 1_000_000 + args.expires_in_seconds * 1000
-        )
-        path = ledger._write_owner_file("backup", project_id, args.file_id, payload)
+        maintenance = CollectorMaintenance.acquire(state, cli_path, target)
+        ledger = report = error = None
+        code = 0
         try:
-            ledger._register_stored_file(
-                project_id,
-                file_id=args.file_id,
-                kind="backup",
-                path=path,
-                digest=hashlib.sha256(payload).hexdigest(),
-                expires_at_ms=expires_at_ms,
-            )
-        except Exception:
-            path.unlink(missing_ok=True)
-            raise
-
-        decoded = json.loads(path.read_bytes())
-        if (
-            hashlib.sha256(_canonical_json(decoded["body"])).hexdigest()
-            != decoded["backup_sha256"]
-        ):
-            raise RuntimeError("project backup verification failed")
-        _verify_relational_restore(
-            connection,
-            decoded["body"],
-            validate_learning_record=validate_learning_record,
-            content_digest=content_digest,
-        )
-        if args.leave_quiesced:
-            _quiesce_collector_authorization(state.collector_authorization)
-        operation_completed = True
-        print(json.dumps({
-            "ready": True,
-            "project_id": project_id,
-            "file_id": args.file_id,
-            "path": str(path),
-            "ledger_schema_version": schema_version,
-            "backup_sha256": hashlib.sha256(payload).hexdigest(),
-            "manifest_sha256": decoded["backup_sha256"],
-            "counts": body["counts"],
-            "isolated_restore_integrity": "ok",
-            "isolated_restore_foreign_keys": "ok",
-            "collector_quiesced": args.leave_quiesced,
-        }, indent=2, sort_keys=True))
-        return 0
-    finally:
-        if ledger is not None:
-            ledger.close()
-        if not args.leave_quiesced or not operation_completed:
-            try:
-                maintenance.resume()
-            except Exception:
-                if operation_completed:
+            ledger = LearningLedger(state)
+            project_id = ledger.project_for_root(target)
+            connection = ledger._connection
+            schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}:
+                raise RuntimeError("installed ledger schema does not support this backup")
+            project_columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(projects)").fetchall()
+            }
+            if project_columns != set(_PROJECT_COLUMNS):
+                raise RuntimeError("project backup cannot represent projects exactly")
+            project = connection.execute(
+                f"SELECT {','.join(_PROJECT_COLUMNS)} "
+                "FROM projects WHERE project_id=? AND status='active'",
+                (project_id,),
+            ).fetchone()
+            if project is None:
+                raise RuntimeError("project binding is not active")
+            # The installed ledger must hold exactly the tables and columns its schema has, so the
+            # copy (written by this clone's package for that schema) represents it exactly.
+            for table in _tables(schema_version):
+                exists = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+                ).fetchone()
+                available = (
+                    {str(row[1]) for row in connection.execute(
+                        f"PRAGMA table_info({table})"
+                    ).fetchall()}
+                    if exists is not None else set()
+                )
+                columns = list(_expected_columns(schema_version, table))
+                expected_available = {"project_id", *columns} if columns else set()
+                if available != expected_available:
                     raise RuntimeError(
-                        "backup completed but the installed collector did not restart"
+                        f"project backup cannot represent {table} exactly"
                     )
-
+            expires_at_ms = (
+                time.time_ns() // 1_000_000 + args.expires_in_seconds * 1000
+            )
+            report = backup_partition(ledger, project_id, args.file_id, schema_version=schema_version,
+                                      expires_at_ms=expires_at_ms)
+            report, code = finish_backup(
+                report, leave_quiesced=args.leave_quiesced,
+                quiesce=lambda: _quiesce_collector_authorization(state.collector_authorization))
+        except BaseException as exc:  # Every exit after the preflight goes through the one ending.
+            error = exc
+        # F3-16: one ending, then one report.
+        final, code = conclude(report=report, code=code, error=error,
+                               close=ledger.close if ledger is not None else (lambda: None),
+                               resume=maintenance.resume)
+        if set(signal.sigpending()) & set(_STOP_SIGNALS):  # It acts once the report is out.
+            final["stopped_after_registration" if report is not None else "stopped"] = True
+        print(json.dumps(final, indent=2, sort_keys=True))
+        return code
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, found_mask)
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--stream-child"]:
+        try:
+            raise SystemExit(_stream_child(sys.argv[2:]))
+        except Exception as exc:
+            print(json.dumps({"error": str(exc)}))
+            raise SystemExit(2)
     try:
         raise SystemExit(_main())
     except Exception as exc:

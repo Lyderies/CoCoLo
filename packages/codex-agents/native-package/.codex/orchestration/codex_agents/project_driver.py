@@ -29,9 +29,41 @@ kernel shows nothing of that run still running, this driver asks the account
 to settle it (`account.settle_lost_run`): it ends abandoned, with an unknown
 outcome, and no longer counts against the limits. A service that stops
 gracefully settles its own runs this way after its threads have stopped.
+
+C2 (behind `container_launch.SETTINGS`, off as shipped): with containers switched
+on, the run's container intent is written to the journal before its claim is
+sent (no intent, no claim), the admitted claim is recorded on it, and the child
+is launched in that container (`container_launch`). Such entries are never
+settled by the process rule above: C4's recovery (`container_recovery`) settles
+an earlier instance's container runs at start and on each sweep, once the OS
+says each container is gone (stopping it first), and an intent never admitted
+through the account's fence; podman unreachable settles nothing.
+
+C3: every stop of a run's container goes through the launcher's one stop action;
+a stop that did not prove the container gone is retried by the sweep. A run of
+this service that failed after its claim was admitted is settled by this service
+itself once the OS says its container is gone (`_settle_own_ended`): the account
+settles it as lost, its entry is `settled` and its preparation given back, with
+no wait for the service to stop. At its own stop the service stops its containers
+not yet gone once more (`service_close`) and settles those gone.
+
+O0c M1, M3, M4, M7: every way a run ends gives back every host slot it took. An
+execution that provably never launched is clean once its worker returns, so the
+normal release frees it; a preparation whose removal did not finish at retirement
+is given back and its removal retried. What nothing here can free (a run failed
+after its claim was admitted, a child whose cleanup is unconfirmed, a removal or a
+monitor slot given up) keeps its slot, since a process may live, and is counted
+(`stuck_slots`, shown in learning-status): the host is then replaced once idle, at
+once if no slot is left, and the stopping service settles those runs on the
+kernel's evidence, or the next one does.
+
+D1 (RS-D D5): nothing a later record, verifier or QA needs is kept here. The run's record context (its assignment,
+task, route, the client capability it was prepared with and its host class) is stored with its lease by the project
+writer, and the service's authorizers read it back from the store; so a successor service of the same runtime records
+a result a stopped one left on disk, and this service may stop when idle. `run.recorded` is only a hint.
 """
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import hashlib
 import json
 import math
@@ -43,6 +75,7 @@ import time
 
 from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountClient, AccountError, AccountRequest, account_request_digest
 from .account_claim_contracts import CLAIM_DENIAL_CODES, LaunchClaimInput
+from .run_failure_reasons import FAILED_BEFORE_OPEN_REASONS
 from .claim_denial import CloseDeniedInput, FenceClaimInput
 from .preparation_reasons import PREPARATION_STAGE_REASONS
 from .codex_preparation import (
@@ -50,6 +83,8 @@ from .codex_preparation import (
     preparation_payload,
 )
 from .collector_client import COLLECTOR_RUNTIME_DIGEST
+from . import container_launch
+from .container_recovery import ContainerRecovery
 from .control_api import ControlScope
 from .dispatch_api import dispatch_request_digest
 from .execution_grant import ExecutionRegistrationInput, checked_execution_grant
@@ -57,6 +92,7 @@ from .history_contracts import AttemptBinding, HistoryError, _DIGEST, _ID, match
 from .host_open_contracts import OpenProvenanceInput
 from .hosts import HOST_CLIENTS
 from .launch_journal import JournalError, LaunchJournal, tree_state
+from .launch_journal import entry_key as launch_journal_key
 from .learning_contracts import canonical_json, content_digest, parse_bounded_json
 from .lost_run_contracts import SettleLostInput
 from .open_scope_contracts import OpenScopeContext, open_inputs_digest
@@ -75,9 +111,9 @@ MAX_RUNS = 16
 MAX_INTAKE = 32  # Driver connections whose one line has not yet arrived.
 INTAKE_SECONDS = 2.0  # Absolute time for that line.
 DISPATCH_SLOTS = 64  # Lifetime dispatch slots of one host, the dispatch service's maximum.
-# Local custody of a released run waits for its primary to record the result,
-# or this long; dispatch status and the result read need that custody.
-RECORD_GRACE_SECONDS = 3_600
+# D1: a released run's dispatch view stays answerable this long (or until its record), for the dispatching command
+# that reads it once published. Its record, result read, verifier and QA no longer need the run here at all.
+PUBLISHED_VIEW_SECONDS = 120
 # Runs this host may have prepared at once: as many as the project may run at once, so one run
 # waiting for its record (or one that failed) never turns the next away.
 PREPARATION_SLOTS = 3  # project_service.MAX_ACTIVE_ATTEMPTS
@@ -89,11 +125,16 @@ ACCOUNT_RETRY_INTERVAL = 0.5
 RATE_LIMIT_TIMEOUT_SECONDS = 10  # One event; the child's stream waits for it.
 MAX_PENDING_RATE_LIMITS = 64  # The account keeps at most this many per run.
 MAX_RUN_RATE_LIMIT_EVENTS = 1_000
-# Recorded workers whose originals a verifier open may still bind, per host (newest kept).
-MAX_RETAINED_WORKERS = 64
 # Retired runs whose status this host still answers as not found (newest kept).
 MAX_RETIRED_RUNS = 256
 _RETRYING = object()
+
+
+def _wall_ms():
+    """Wall-clock milliseconds, the clock of a claim's `deadline_at_ms`."""
+    return time.time_ns() // 1_000_000
+
+
 # A fence the account refused (anything but unreachable), or one that could not be
 # built, is asked again after this long, doubling up to the cap, at most this many
 # times. Then the run gives its preparation back and keeps its lease; the account's
@@ -101,16 +142,29 @@ _RETRYING = object()
 FENCE_RETRY_SECONDS = 1.0
 FENCE_RETRY_MAX_SECONDS = 300.0
 MAX_FENCE_ATTEMPTS = 10
+# A failure report is asked again only for these (R6-8); any other refusal can never succeed.
+_REPORT_RETRIED = frozenset({'history_writer_busy', 'history_service_unavailable', 'history_unavailable'})
+# O10 E1: the account (or its service) stopped or could not take the call; asked again while this
+# service runs, never counted as a refusal.
+FENCE_OUTAGES = frozenset({'account_unavailable', 'account_closed_without_reply', 'service_refused_busy',
+                           'service_refused_unavailable', 'service_refused_late'})
 # A given-back preparation whose cleanup did not finish, and a retired run whose
 # monitor slot was refused, are tried again after this long, doubling up to the cap.
 # A refused forget is tried at most MAX_FORGET_ATTEMPTS times: a live attempt is
-# never forgotten, so its slot then stays taken for this host's lifetime.
+# never forgotten, so its slot then stays taken, and the host is replaced once idle (O0c M7).
 CLEANUP_RETRY_SECONDS = 1.0
 CLEANUP_RETRY_MAX_SECONDS = 60.0
 # After this many refused removals a given-back preparation is no longer asked: it
 # stays listed (its workspace may still be there), so its place is never counted free.
 MAX_CLEANUP_ATTEMPTS = 12
 MAX_FORGET_ATTEMPTS = 12
+# O10 D4: a result publication that failed while this service runs is retried from the packet
+# the writer still holds, after this long, doubling up to the cap, until it commits or the
+# run's own deadline (its claim's `deadline_at_ms`) passes. These refusals can never succeed
+# on a retry of the same packet, so they stop the run at once.
+PUBLISH_RETRY_SECONDS = 1.0
+PUBLISH_RETRY_MAX_SECONDS = 60.0
+_PUBLISH_REFUSALS = frozenset({'history_invalid_input', 'history_conflict', 'history_result_not_ready'})
 # How often the journal is checked for runs of stopped earlier services, and how long
 # one settlement request may take.
 SWEEP_SECONDS = 1.0
@@ -130,16 +184,26 @@ REASON_CODES = frozenset({
     # longer counted), or not yet, because something of it may still run.
     'run_lost', 'run_lost_held',
     # The project's result store has no free place (0.3.4 R3): close finished orchestrations.
-    'result_capacity_full',
+    'result_capacity_full', 'result_capacity_busy',
+    # O0c M1: its child's cleanup could not be confirmed; its slot stays held until its service is replaced.
+    'run_cleanup_unconfirmed',
 }) | PREPARATION_STAGE_REASONS
 _REGISTER_FIELDS = {'purpose', 'orchestration_handle', 'run_id', 'host_client', 'assignment', 'task', 'route',
                     'parent_grant'}
 _PREPARE_FIELDS = {'purpose', 'expected_export_commit'}
-_ACTIVE = frozenset({'reading', 'preparing', 'observing', 'leasing', 'arming', 'recording_open', 'claiming', 'binding',
+_ACTIVE = frozenset({'recording_registration', 'reading', 'preparing', 'observing', 'leasing', 'arming', 'recording_open', 'claiming', 'binding',
                      'registering', 'provenance', 'consuming', 'closing', 'settling', 'withdrawing', 'fencing'})
 # A run that can never launch closes itself through these, then ends 'failed' and closed.
 _CLOSING = frozenset({'closing', 'settling', 'withdrawing', 'fencing'})
-_AFTER = frozenset({'ready', 'reporting', 'terminal', 'acknowledging', 'cleanup', 'releasing', 'retiring', 'released'})
+# O10 RC-1: the store's capacity refusals, as the run's failure reasons.
+_CAPACITY_REASONS = {'history_result_capacity': 'result_capacity_full',
+                     'history_result_capacity_busy': 'result_capacity_busy'}
+_AFTER = frozenset({'ready', 'reporting', 'terminal', 'acknowledging', 'cleanup', 'releasing', 'retiring', 'released',
+                    'cleanup_unconfirmed'})
+# O0c M1: a recorded result whose child's cleanup can never be confirmed in this service. It keeps every
+# slot (a child may still be alive) and is no longer under way, so the host can be replaced once idle;
+# the stopping service settles it on the kernel's evidence, or the next one does.
+_HELD = frozenset({'cleanup_unconfirmed'})
 
 
 @dataclass
@@ -151,6 +215,7 @@ class _Run:
     run_id: str
     inputs_digest: str
     state: str = 'registered'
+    reporting: object = None  # S1-R6: its reporting registration on the writer (polled)
     reason: str | None = None
     preparation: object = None
     prepared: object = None
@@ -184,6 +249,15 @@ class _Run:
     closed: bool = False  # Failed and holding nothing: no lease, no preparation, nothing to reconcile.
     fence_attempts: int = 0  # Fences the account refused or that could not be sent.
     fence_at: float | None = None  # When a refused fence is asked again.
+    publish_attempts: int = 0  # Failed publications of the run's result retried (O10 D4).
+    publish_at: float | None = None  # When the failed publication is retried.
+    launch_token: str | None = None  # C2: its container intent's token (containers switched on only).
+    # C3: a failed admitted run's own settlement once its container is gone: the account call under
+    # way, whether it is done, and the refused ones (with when it is asked again).
+    own_settle: object = None
+    own_settled: bool = False
+    own_settle_failures: int = 0
+    own_settle_at: float | None = None
 
 
 class _Call(local):
@@ -260,6 +334,14 @@ class _RateLimitRecorder:
 
 
 class RunDriver:
+    # C2: the container launcher; None while containers are switched off (`container_launch.SETTINGS`).
+    _containers = None
+    # C4: the recovery of earlier instances' container entries, made on its first use (containers only).
+    _recovery = None
+    # O0c M7: retired runs' monitor attempts the monitor still refused after MAX_FORGET_ATTEMPTS
+    # (rebound, never mutated, so the class default stays empty).
+    _stuck_monitor = frozenset()
+
     def __init__(self, state, project_root, bundle_root, scope, runtime, *, clock=time.monotonic, history_endpoint=None):
         self._state, self._root, self._bundle = state, Path(project_root), Path(bundle_root)
         # This host's own project API, read from the helper thread for a verifier's worker result.
@@ -269,8 +351,6 @@ class RunDriver:
         # Preparations of runs that failed or were abandoned before launch, until their slot is free;
         # and, for one whose cleanup did not finish, (attempts, when it is tried again).
         self._giving_back, self._cleanup_retry = [], {}
-        # host outcome digest -> (host class, HostResultContext).
-        self._workers = {}
         # Released and retired runs: key -> (host class, orchestration handle); and the
         # bindings whose monitor slots are still to be freed: binding -> (refusals, next try).
         self._retired, self._forgetting = {}, {}
@@ -290,11 +370,16 @@ class RunDriver:
         except JournalError:
             raise HistoryError('history_service_unavailable') from None
         runtime.pool._registry.launch_journal = self._journal
+        # C2: None while containers are switched off (`container_launch.SETTINGS`, as shipped).
+        self._containers = container_launch.launcher_for(scope.project_id, self._journal)
+        runtime.pool._registry.container_launch = self._containers
         # Runs of earlier service instances, by run handle: (host class, 'released' or 'held').
         self._lost, self._sweep, self._next_sweep = {}, None, 0.0
         self._expiry, self._next_expiry = None, 0.0  # The first cleanup runs at start (0.3.4 R2).
         # Leases an earlier service left armed with no admitted claim, fenced here (0.3.3, C3).
         self._earlier, self._earlier_fences, self._fenced = None, {}, {}
+        # S1-R6: reporting writes for the orchestration report, in order, each retried a few times.
+        self._reports = []
         self._earlier_failures, self._earlier_at, self._earlier_listed = 0, 0.0, False
         self._sweeper = ThreadPoolExecutor(max_workers=1, thread_name_prefix='project-driver-sweep')
         self._owner_name = 'project-driver-%d-%d' % (os.getpid(), id(self))
@@ -423,11 +508,18 @@ class RunDriver:
                 # It already closed by itself; dropping it changes nothing anywhere.
                 del self._runs[held[0].key]
                 self._reply(connection, {'state': 'failed', 'reason_code': 'run_closed'})
-            elif held[0].lease is not None or held[0].state not in {'registered', 'failed'} or held[0].future is not None:
+            elif (held[0].lease is not None or held[0].state not in {'registered', 'recording_registration', 'failed'}
+                  or held[0].future is not None):
                 # A leased or claimed run holds custody and maybe capacity; that needs reconciliation.
                 self._reply(connection, {'state': 'refused', 'reason_code': 'history_conflict'})
             else:
                 run = held[0]
+                if run.state != 'failed' and run.reporting is not None:
+                    # R6-18/R6-20: reported only once its registration has committed.
+                    self._report('failed_before_open', run.key[0], run.key[1], 'run_failed', after=run.reporting)
+                for waiting, _ in run.waiters:  # R6-21: a prepare still waiting is answered
+                    self._reply(waiting, {'state': 'failed', 'reason_code': 'run_abandoned'})
+                run.waiters = []
                 self._give_back(run)
                 del self._runs[run.key]
                 self._reply(connection, {'state': 'failed', 'reason_code': 'run_abandoned'})
@@ -449,13 +541,13 @@ class RunDriver:
             run.waiters.append((connection, self._clock() + WAIT_SECONDS))
 
     def _recorded(self, key, inputs_digest, value, host_client):
-        """The opening primary reports its result admitted; custody may then retire.
+        """The opening primary reports its result admitted: a hint only (D1).
 
-        Only after its own successful admission does the CLI say so. A false
-        report can only shorten custody of that host class's own released run.
-        With the outcome's digest, the run's originals are kept so a verifier of
-        that outcome can be opened later; project history still checks them
-        against the run's consumed grant, so a wrong digest binds nothing.
+        Only after its own successful admission does the CLI say so. It lets a
+        released run retire at once instead of keeping its dispatch view for
+        PUBLISHED_VIEW_SECONDS; a false report can only shorten that, for that
+        host class's own run. The outcome's association with the run is written
+        by the admission itself, in the project store, so nothing depends on it.
         """
         run = self._runs.get(key)
         if run is None:
@@ -464,38 +556,10 @@ class RunDriver:
             raise HistoryError('history_not_authorized')
         if run.inputs_digest != inputs_digest:
             raise HistoryError('history_conflict')
-        if value:
-            if (value.keys() != {'purpose', 'host_outcome_digest'} or value['purpose'] != 'recorded'
-                    or not matches(value['host_outcome_digest'], _DIGEST)):
-                raise HistoryError('history_invalid_input')
-            original = self.result_context(run.binding, host_client) if run.binding is not None else None
-            if original is not None:
-                self._workers.pop(value['host_outcome_digest'], None)
-                self._workers[value['host_outcome_digest']] = (host_client, original)
-                while len(self._workers) > MAX_RETAINED_WORKERS:
-                    self._workers.pop(next(iter(self._workers)))
+        if value and (value.keys() != {'purpose', 'host_outcome_digest'} or value['purpose'] != 'recorded'
+                      or not matches(value['host_outcome_digest'], _DIGEST)):
+            raise HistoryError('history_invalid_input')
         run.result_admitted = True
-
-    def worker_context(self, orchestration_handle, host_outcome_digest, host_client):
-        """A recorded worker's originals for its verifier, only for the host class that ran it.
-
-        Kept in memory: after a host restart a verifier of an earlier worker is
-        refused, never opened without its exact worker.
-        """
-        held = self._workers.get(host_outcome_digest)
-        if held is None or held[0] != host_client or (
-                orchestration_handle is not None and held[1].binding.orchestration_handle != orchestration_handle):
-            return None
-        return held[1]
-
-    def retained_context(self, binding, host_client):
-        """The kept originals of exactly this recorded run, for that host class's QA."""
-        return next((held[1] for held in self._workers.values()
-                     if held[0] == host_client and held[1].binding == binding), None)
-
-    def retains_worker(self, binding, host_client):
-        """Whether this exact binding is a recorded worker kept for that host class's verifier."""
-        return self.retained_context(binding, host_client) is not None
 
     def _register(self, key, inputs_digest, value, host_client):
         # The host class is the enrolled one; the context may only repeat it.
@@ -515,16 +579,13 @@ class RunDriver:
             return
         if len(self._runs) >= MAX_RUNS:
             raise HistoryError('history_service_unavailable')
-        worker = None
-        digest = value['task'].get('verification_for_outcome') if type(value['task']) is dict else None
-        if digest is not None:
-            worker = self.worker_context(value['orchestration_handle'], digest, host_client)
-            if worker is None:
-                raise HistoryError('history_orchestration_unavailable')
+        # D1: a verifier's worker is read from the project store when the run begins (`_begin`), checked there;
+        # its open was already authorized against that same stored worker.
         prospective = OpenScopeContext(self._scope, value['orchestration_handle'], value['assignment'], value['task'],
-                                       value['route'], value['parent_grant'], worker)
+                                       value['route'], value['parent_grant'], None)
         prospective.snapshot()
-        self._runs[key] = _Run(key, self._scope, host_client, prospective, value['run_id'], inputs_digest)
+        run = self._runs[key] = _Run(key, self._scope, host_client, prospective, value['run_id'], inputs_digest)
+        self._submit_registration(run)
 
     def _prepare(self, key, inputs_digest, value, host_client):
         run = self._runs.get(key)
@@ -539,14 +600,42 @@ class RunDriver:
         if value.keys() != _PREPARE_FIELDS or value['purpose'] != 'prepare':
             raise HistoryError('history_invalid_input')
         run.commit = value['expected_export_commit']
-        if run.prospective.worker is None:
+        # S1-R6-6: preparation starts only once its registration has committed.
+        run.state = 'recording_registration'
+        self._after_registration(run)
+
+    def _submit_registration(self, run):
+        """Hand the run's registration to the writer; True unless the writer is closed or faulted."""
+        try:
+            run.reporting = self._runtime.persistence.report_registered_run(
+                run.prospective.orchestration_handle, run.key[0], run.run_id, run.key[1])
+        except HistoryError as error:
+            run.reporting = None
+            return error.reason_code == 'history_writer_busy'  # No room yet: asked again next step (R6-15).
+        return True
+
+    def _after_registration(self, run):
+        if run.reporting is None and not self._submit_registration(run):
+            self._fail(run, 'run_failed')  # The writer is closed or faulted (R6-16).
+            return
+        request = run.reporting
+        if request is None or request.state == 'queued':
+            return
+        if request.state != 'done':
+            self._fail(run, 'run_failed')  # Not written: refused before preparation, nothing else held.
+            return
+        self._begin(run)
+
+    def _begin(self, run):
+        digest = run.prospective.task.get('verification_for_outcome') if type(run.prospective.task) is dict else None
+        if digest is None:
             self._start_preparation(run, None)
             return
-        # A verifier's worker result is read first, off the owner thread.
-        worker, digest, host = run.prospective.worker, run.prospective.task['verification_for_outcome'], run.host_client
+        # A verifier's worker and its result are read first, off the owner thread, from the project store.
+        orchestration, host = run.prospective.orchestration_handle, run.host_client
 
         def read():
-            return self._read_worker_result(worker, digest, host)
+            return self._read_worker_result(orchestration, digest, host)
 
         run.call, run.retry_at, run.retry_until = read, None, self._clock()
         run.future = self._executor.submit(read)
@@ -563,9 +652,14 @@ class RunDriver:
             return
         run.state = 'preparing'
 
-    def _read_worker_result(self, worker, digest, host_client):
-        """Helper thread: the worker's terminal and result from this host's own APIs, checked."""
+    def _read_worker_result(self, orchestration_handle, digest, host_client):
+        """Helper thread: the worker's stored originals, terminal and result from this host's own APIs, checked.
+
+        D1: the originals come from the project store (the worker's stored record context, found by its outcome
+        digest), so a verifier of a worker another service instance recorded is prepared the same way.
+        """
         from .history_api import HistoryClient
+        from .host_result_contracts import HostResultContext
         from .result_contracts import MAX_RESULT_BODY_BYTES, checked_result_body
         from .result_read_api import ResultReadClient
         self._call.role, self._call.host_client, self._call.context = 'host', host_client, None
@@ -573,13 +667,16 @@ class RunDriver:
             endpoint, scope = self._history_endpoint, self._scope
             history = HistoryClient(endpoint, scope.project_id, scope.runtime_digest, timeout=10)
             current = history.worker_input(digest)
-            if current['worker'] != worker.snapshot()[1]:
+            original = current['worker']
+            worker = HostResultContext(**{**original, 'binding': AttemptBinding(**original['binding'])})
+            if (worker.snapshot()[1] != original or not scope.matches_attempt(worker.binding)
+                    or worker.binding.orchestration_handle != orchestration_handle):
                 raise HistoryError('history_conflict')
             reference = current['reference']
             terminal = history.read_record(reference['terminal_record_id'])['record']
             body = ResultReadClient(endpoint, timeout=10).read_result(worker.binding, reference['result_digest'])
             checked_result_body(body, worker.assignment, terminal)
-            return parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)
+            return worker, parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)
         finally:
             self._call.role = self._call.host_client = self._call.context = None
 
@@ -598,6 +695,36 @@ class RunDriver:
             pass
         finally:
             connection.close()
+
+    def _report(self, kind, *arguments, after=None):
+        """Queue one failure report (S1-R6); it never holds up the run, and a failed write is asked again
+        while the service runs (R6-8). `after`: a registration still being written; the report is sent
+        once it commits and dropped if it does not (R6-20)."""
+        self._reports.append([kind, arguments, None, after])
+        self._send_reports()  # at once when there is room, so a report read next comes after it
+
+    def _send_reports(self):
+        """Owner step: hand queued failure reports to the writer while it has reporting room; drop each
+        once written, and ask again for one whose write failed."""
+        lane = self._runtime.persistence
+        for entry in list(self._reports):
+            after = entry[3]
+            if after is not None:
+                if after.state == 'queued':
+                    continue
+                if after.state != 'done':
+                    self._reports.remove(entry)  # Its registration was never written: nothing to report.
+                    continue
+                entry[3] = None
+            request = entry[2]
+            if request is not None and (request.state == 'done' or (
+                    request.state == 'failed' and request.reason not in _REPORT_RETRIED)):
+                self._reports.remove(entry)  # Written, or never can be (no registration, a conflict).
+            elif request is None or request.state == 'failed':
+                try:
+                    entry[2] = lane.report_failed_before_open(*entry[1])
+                except HistoryError:
+                    return  # No room now, or closing: asked again next step.
 
     def _fail(self, run, reason):
         """Stop a run; one that can provably never launch then closes by itself.
@@ -620,6 +747,14 @@ class RunDriver:
                 self._fence_later(run)  # Its claim may still be admitted: only the account can say.
             return
         run.state, run.reason = 'failed', reason
+        if (not run.claim_sent and run.receipt is None and run.binding is None and run.reporting is not None
+                and run.reporting.state in {'done', 'queued'}):
+            # S1-R6: the host open is recorded just before the claim is sent, so this run (most likely)
+            # never had one; the store checks its own open rows (R6-10). Reporting only: the closing
+            # below is unchanged.
+            self._report('failed_before_open', run.key[0], run.key[1],
+                         reason if reason in FAILED_BEFORE_OPEN_REASONS else 'run_failed',
+                         after=run.reporting)  # sent once its registration commits (round-4 verifier)
         if run.persistence is None:
             self._give_back(run)
             run.closed = run.prepared is None and run.lease is None
@@ -665,12 +800,59 @@ class RunDriver:
         delay = min(FENCE_RETRY_MAX_SECONDS, FENCE_RETRY_SECONDS * 2 ** (run.fence_attempts - 1))
         run.fence_at = self._clock() + delay
 
+    def _retry_publication(self, run, reason):
+        """A failed publication of the run's result is published again from the packet the writer kept.
+
+        The child is never launched again: only the writer's own publication step is queued again, and
+        the history returns the stored delivery for a result it already committed, so there is one
+        terminal, outbox and usage record. The run stops when its deadline passes or the refusal can
+        never succeed, keeping what the account holds.
+        """
+        now = self._clock()
+        if reason in _PUBLISH_REFUSALS or _wall_ms() >= run.receipt['deadline_at_ms']:
+            run.publish_at = None
+            self._fail(run, 'run_failed')
+            return
+        if run.publish_at is None:
+            run.publish_attempts += 1
+            run.publish_at = now + min(PUBLISH_RETRY_MAX_SECONDS,
+                                       PUBLISH_RETRY_SECONDS * 2 ** (run.publish_attempts - 1))
+            return
+        if now < run.publish_at:
+            return
+        run.publish_at = None
+        try:
+            self._runtime.persistence.retry(run.persistence)
+        except HistoryError:
+            pass  # Still failed: the next step waits longer and asks again.
+
+    def _writer_stopped(self, run):
+        """O10 D12: the writer faulted while it held this run's step, so the lane says `unknown`.
+
+        A faulted lane refuses every later call for good (its writer, the history key and the
+        history endpoint are gone with it), so no retry can commit, attest or acknowledge anything
+        in this service: whether the result committed can only be settled from the store by a
+        later service. The run ends now, visibly (`run_unavailable` in its status), instead of
+        waiting for ever. It was admitted, so it keeps what the account holds: its lease,
+        preparation and journal entry stay, and the store keeps whatever it committed, so nothing
+        is published twice or lost; the account's own timed rule, or a later service's lost-run
+        settlement, settles its capacity.
+        """
+        run.publish_at = None
+        self._fail(run, 'run_unavailable')
+
     def _close(self, run):
         """The lease is expired in the history: drop its input, then give the preparation back."""
         if run.receipt is not None or run.binding is not None:
             raise HistoryError('history_conflict')  # An admitted claim keeps everything until its release.
         self._runtime.persistence.retire_denied(run.persistence)
         run.persistence, run.state = None, 'failed'
+        if run.launch_token is not None:
+            try:
+                # Nothing of it was admitted, and now nothing can be: its intent is done with.
+                self._journal.remove(run.launch_token)
+            except JournalError:
+                pass  # Left for the container's recovery, which finds it never admitted.
         self._give_back(run)
         run.closed = run.prepared is None
 
@@ -679,13 +861,18 @@ class RunDriver:
 
         The journal entry is written before anything can launch the run; if it
         cannot be written the run stops here, keeping what the account holds.
+        With containers, the admission is recorded on the run's intent, written
+        before its claim was sent.
         """
         run.receipt = receipt
-        self._journal.claimed(receipt['bridge_run_id'], run_handle=run.key[0], attempt=run.key[1],
-                              host_client=run.host_client,
-                              lease={n: getattr(run.lease, n) for n in run.lease.__dataclass_fields__},
-                              identity_digest=run.identity_digest, claim_request_id=run.claim_request_id,
-                              storage_evidence=run.evidence, workspace=run.prepared_inputs.workspace)
+        if run.launch_token is not None:
+            self._journal.admitted(run.launch_token, receipt['bridge_run_id'], receipt['deadline_at_ms'])
+        else:
+            self._journal.claimed(receipt['bridge_run_id'], run_handle=run.key[0], attempt=run.key[1],
+                                  host_client=run.host_client,
+                                  lease={n: getattr(run.lease, n) for n in run.lease.__dataclass_fields__},
+                                  identity_digest=run.identity_digest, claim_request_id=run.claim_request_id,
+                                  storage_evidence=run.evidence, workspace=run.prepared_inputs.workspace)
         run.binding = AttemptBinding(**{n: getattr(run.lease, n) for n in LEASE_SCOPE_FIELDS},
                                      claim_id=receipt['bridge_run_id'], claim_digest=receipt['receipt_digest'])
         self._runtime.persistence.bind_claim(run.persistence, run.binding, hard_deadline_at_ms=receipt['deadline_at_ms'])
@@ -758,23 +945,16 @@ class RunDriver:
     def _control_scope(self):
         return ControlScope(**self._scope.as_data())
 
-    def result_context(self, binding, host_client):
-        """The run's originals for admitting its host result, for the host class that holds it."""
-        from .host_result_contracts import HostResultContext
+    @staticmethod
+    def _record_inputs(run):
+        """D1: what the project writer stores with the run's lease besides its own input: the host class that
+        opened it, and the client capability its result is admitted against (from this runtime, as the CLI reads
+        it), kept as it was even if the installed one changes later."""
         from .learning_adapters import load_client_capabilities
 
-        if not self.owns_binding(binding, host_client):
-            return None
-        run = self._runs[(binding.run_handle, binding.attempt)]
         capability = load_client_capabilities(
             RUNTIME_ROOT / '.codex' / 'orchestration' / 'config' / 'learning-clients.json')['bridge-v1']
-        original = run.prospective
-        return HostResultContext(run.binding, original.assignment, original.task, original.route, capability)
-
-    def owns_binding(self, binding, host_client):
-        """Whether this exact claimed run is one this driver holds for that host class."""
-        run = self._runs.get((binding.run_handle, binding.attempt))
-        return run is not None and run.binding == binding and run.host_client == host_client
+        return {'host_class': run.host_client, 'client_capability': capability}
 
     def owns(self, target, host_client):
         """Whether this run exists here for that host class; status and cancel stay with it.
@@ -796,8 +976,10 @@ class RunDriver:
         self._retire_given_back()
         self._forget_retired()
         self._sweep_lost()
+        self._settle_own_ended()
         self._fence_earlier()
         self._expire_results()
+        self._send_reports()
         for run in list(self._runs.values()):
             try:
                 self._advance(run)
@@ -851,9 +1033,17 @@ class RunDriver:
             if run.fence_at is not None and self._clock() >= run.fence_at:
                 run.fence_at = None
                 self._fence(run)  # A refused fence, asked again (see `_fence_later`).
+        elif run.state == 'registered':
+            if run.reporting is None:
+                self._submit_registration(run)  # R6-15: whether or not a prepare has come
+        elif run.state == 'recording_registration':
+            self._after_registration(run)
         elif run.state == 'reading':
-            worker_result = self._result(run)
-            if worker_result is not None:
+            read = self._result(run)
+            if read is not None:
+                worker, worker_result = read
+                run.prospective = replace(run.prospective, worker=worker)
+                run.prospective.snapshot()
                 self._start_preparation(run, worker_result)
         elif run.state == 'preparing':
             snapshot = prep.snapshot(run.prepared)
@@ -885,18 +1075,20 @@ class RunDriver:
                 run_handle=run.key[0], run_id=run.run_id, attempt=run.key[1],
                 claim_request_id=run.claim_request_id, claim_request_digest=account_request_digest(claim))
             try:
-                run.persistence = lane.prepare_lease(run.lease, run.prepared_inputs.worker)
+                # D1 (RS-D-1): the record context is stored with the lease, before it can be armed.
+                run.persistence = lane.prepare_lease(run.lease, run.prepared_inputs.worker,
+                                                     record_context=self._record_inputs(run))
             except HistoryError as error:
-                if error.reason_code != 'history_result_capacity':
+                if error.reason_code not in _CAPACITY_REASONS:
                     raise
-                self._fail(run, 'result_capacity_full')  # 0.3.4 R3: named, never the generic run_failed.
+                self._fail(run, _CAPACITY_REASONS[error.reason_code])  # 0.3.4 R3, O10 RC-1: named
                 return
             run.state = 'leasing'
         elif run.state == 'leasing':
             snapshot = lane.snapshot(run.persistence)
             state = snapshot['state']
-            if state == 'failed' and snapshot['reason_code'] == 'history_result_capacity':
-                self._fail(run, 'result_capacity_full')  # 0.3.4 R3
+            if state == 'failed' and snapshot['reason_code'] in _CAPACITY_REASONS:
+                self._fail(run, _CAPACITY_REASONS[snapshot['reason_code']])  # 0.3.4 R3, O10 RC-1
                 return
             if state != 'preparing':
                 lane.arm(run.persistence)
@@ -923,6 +1115,17 @@ class RunDriver:
             if state != 'claim_pending':
                 self._fail(run, 'run_failed')
                 return
+            if self._containers is not None and run.launch_token is None:
+                # C2: no intent, no claim. The run's container is on disk before the account is asked.
+                try:
+                    run.launch_token = self._containers.intent(
+                        run_handle=run.key[0], attempt=run.key[1], host_client=run.host_client,
+                        lease={n: getattr(run.lease, n) for n in run.lease.__dataclass_fields__},
+                        identity_digest=run.identity_digest, claim_request_id=run.claim_request_id,
+                        storage_evidence=run.evidence, workspace=run.prepared_inputs.workspace)
+                except Exception:
+                    self._fail(run, 'run_unavailable')
+                    return
             run.claim_sent = True
             self._account_call(run, 'account', 'claim_launch', run.key[0], run.identity_digest,
                                request_id=run.claim_request_id, custody=self._custody(run, storage=run.evidence))
@@ -1026,7 +1229,14 @@ class RunDriver:
                                                   lane.prepared_inputs_digest(run.persistence), inputs.export_info)
             run.state = 'ready'
         elif run.state == 'ready':
-            if lane.snapshot(run.persistence)['state'] not in {'committed'}:
+            snapshot = lane.snapshot(run.persistence)
+            if snapshot['state'] == 'unknown':
+                self._writer_stopped(run)
+                return
+            if snapshot['state'] == 'failed':
+                self._retry_publication(run, snapshot['reason_code'])
+                return
+            if snapshot['state'] != 'committed':
                 return
             run.state = 'reporting'
             self._advance(run)
@@ -1066,10 +1276,14 @@ class RunDriver:
             if lane.snapshot(run.persistence)['state'] != 'acknowledged':
                 if lane.snapshot(run.persistence)['state'] == 'failed':
                     self._fail(run, 'run_failed')
+                elif lane.snapshot(run.persistence)['state'] == 'unknown':
+                    self._writer_stopped(run)
                 return
             try:
                 lane.retain_cleanup(run.persistence)
             except HistoryError:
+                if self._cleanup_unconfirmed(run):
+                    run.state, run.reason = 'cleanup_unconfirmed', 'run_cleanup_unconfirmed'
                 return  # The tracked tree is not yet confirmed clean.
             lane.prepare_cleanup(run.persistence)
             run.state = 'cleanup'
@@ -1101,11 +1315,11 @@ class RunDriver:
                 run.released_at = self._clock()
                 try:
                     # Its capacity is released: nothing is left for a later service to settle.
-                    self._journal.remove(run.receipt['bridge_run_id'])
+                    self._journal.remove(run.launch_token or run.receipt['bridge_run_id'])
                 except JournalError:
                     pass  # A later settlement finds it released and keeps only a tombstone.
-            if not run.result_admitted and self._clock() - run.released_at < RECORD_GRACE_SECONDS:
-                return  # The capacity is released; local custody waits for the primary's record.
+            if not run.result_admitted and self._clock() - run.released_at < PUBLISHED_VIEW_SECONDS:
+                return  # The capacity is released; its dispatch view stays a while for the dispatching command.
             lane.finish_release(run.persistence)
             lane.retire(run.persistence)
             self._runtime.owner.retire(run.binding, self._runtime.pool, run.prepared_inputs.worker)
@@ -1116,6 +1330,10 @@ class RunDriver:
             if state in {'cleaned', 'unknown'}:
                 if state == 'cleaned':
                     self._preparation.retire(run.prepared)
+                else:
+                    # O0c M4: its workspace removal did not finish. It is given back like any other
+                    # preparation: its removal is asked again and its slot retired once clean.
+                    self._giving_back.append(run.prepared)
                 try:
                     # Its tombstone keeps the slot, so the same submit can never launch again.
                     self._dispatch.retire_released(run.context)
@@ -1149,6 +1367,8 @@ class RunDriver:
                     refusals += 1
                     if refusals >= MAX_FORGET_ATTEMPTS:
                         del self._forgetting[binding]
+                        # O0c M7: its slot stays taken; the host is replaced once idle.
+                        self._stuck_monitor = self._stuck_monitor | {binding}
                     else:
                         self._forgetting[binding] = (refusals, now + min(
                             CLEANUP_RETRY_MAX_SECONDS, CLEANUP_RETRY_SECONDS * 2 ** (refusals - 1)))
@@ -1184,11 +1404,16 @@ class RunDriver:
                 self._earlier_later(now)
                 return
             for binding, evidence, host_client in self._earlier.result:
-                if host_client in HOST_CLIENTS:
+                if (host_client in HOST_CLIENTS and binding.claim_request_id not in self._earlier_fences
+                        and binding.run_handle not in self._fenced):
                     self._earlier_fences[binding.claim_request_id] = {
                         'binding': binding, 'evidence': evidence, 'host_client': host_client, 'future': None,
                         'closure': None, 'settling': None, 'refusals': 0, 'outages': 0, 'at': 0.0}
-            self._earlier, self._earlier_listed = None, True
+            skipped, self._earlier = self._earlier.skipped, None
+            if skipped:
+                self._earlier_later(now)  # O10 E2: some could not be read yet; listed again later.
+            else:
+                self._earlier_listed = True
         for key, entry in list(self._earlier_fences.items()):
             if entry['settling'] is not None:
                 state = entry['settling'].state
@@ -1217,7 +1442,7 @@ class RunDriver:
             try:
                 reply = future.result()
             except AccountError as error:
-                if error.reason_code == 'account_unavailable':
+                if error.reason_code in FENCE_OUTAGES:
                     entry['outages'] += 1
                     entry['at'] = now + self._earlier_delay(entry['outages'])
                 else:
@@ -1295,6 +1520,64 @@ class RunDriver:
         if self._clock() >= self._next_sweep:
             self._sweep = self._sweeper.submit(self._settle_lost, False)
 
+    def _settle_own_ended(self):
+        """Owner step (C3, RS-C-7): settle this service's own failed runs whose container is gone.
+
+        Only the owner thread chooses between a run's normal release and this: a run is eligible
+        only once it failed with an admitted claim (so it never enters the normal release) and no
+        account call of it is outstanding. Its container entry must say `gone`, which only the
+        OS's answer writes; from then on nothing can launch it again (a container starts only from
+        an admitted `intent`). The account settles it as lost (`settle_lost_run`, on the sweep's
+        helper thread), the entry becomes `settled` and the run's preparation is given back: the
+        account no longer holds it. A refused or unreachable settlement is asked again later.
+        """
+        now = self._clock()
+        for run in self._runs.values():
+            if (run.own_settled or run.launch_token is None or run.receipt is None or run.state != 'failed'
+                    or run.future is not None):
+                continue
+            if run.own_settle is not None:
+                if not run.own_settle.done():
+                    continue
+                future, run.own_settle = run.own_settle, None
+                try:
+                    reply = future.result()
+                except Exception:
+                    run.own_settle_failures += 1
+                    run.own_settle_at = now + container_launch.stop_retry_delay(run.own_settle_failures)
+                    continue
+                try:
+                    self._journal.settled(run.launch_token, reply['state'])
+                except JournalError:
+                    pass  # The account settled it; a later service asks again and gets the same answer.
+                self._settled_own(run)
+                continue
+            if run.own_settle_at is not None and now < run.own_settle_at:
+                continue
+            try:
+                entry = self._journal.entry(run.launch_token)
+            except JournalError:
+                continue
+            if entry is None or entry['state'] == 'settled':
+                if entry is not None:
+                    self._settled_own(run)
+                continue
+            if entry['state'] != 'gone' or entry['instance'] != self._journal.instance:
+                continue
+            run.own_settle = self._sweeper.submit(self._settle_entry, entry)
+
+    def _settled_own(self, run):
+        """The account no longer holds the run: its preparation goes back, as a run never admitted's does."""
+        run.own_settled, run.own_settle_at = True, None
+        if run.prepared is None:
+            return
+        try:
+            self._preparation.discard(run.prepared)
+        except Exception:
+            return  # Bound to an execution, or the lane is gone: it stays.
+        self._giving_back.append(run.prepared)
+        run.prepared = None
+
     def _settle_lost(self, own):
         """Settle every run of a stopped instance whose whole tree is provably gone; return what is known.
 
@@ -1302,8 +1585,22 @@ class RunDriver:
         launch or own its child; with `own`, this instance's threads have
         stopped too. Nothing is ever signalled; an entry that cannot be read is
         left as it is, and its capacity to the account's timed rule.
+
+        C3: the live sweep first retries the container stops that did not prove the container
+        gone. A container entry of this instance is settled here only when `own` (its service is
+        stopping): one not yet gone is stopped once more (`service_close`) and settled once the OS
+        says it is gone. C4: the live sweep hands every container entry of a stopped instance, and
+        each one this instance took over from one, to the container recovery (`container_recovery`),
+        which also stops orphan containers; at this service's own stop only the ones it took over,
+        and no orphan sweep.
         """
-        journal, lost, stopped = self._journal, {}, {}
+        if self._containers is not None and not own:
+            try:
+                self._containers.retry_stops()
+            except Exception:
+                pass  # Asked again on the next sweep.
+        recovery = self._container_recovery()
+        journal, lost, stopped, recovering = self._journal, {}, {}, []
         for entry in journal.entries():
             if entry['state'] is None:
                 continue
@@ -1312,13 +1609,23 @@ class RunDriver:
                 lost[handle] = (host_client, 'released')
                 continue
             instance = entry['instance']
-            if instance == journal.instance:
+            adopted = entry.get('version') == 2 and recovery is not None and recovery.owns(entry['token'])
+            if adopted:
+                pass
+            elif instance == journal.instance:
                 if not own:
                     continue
             elif stopped.setdefault(instance, journal.instance_stopped(instance)) is not True:
                 continue
             lost[handle] = (host_client, 'held')
-            if tree_state(entry) != 'gone':
+            if entry.get('version') == 2:
+                if adopted or (instance != journal.instance and not own):
+                    if recovery is not None:
+                        recovering.append(entry)
+                    continue
+                if instance != journal.instance or not self._own_container_gone(entry):
+                    continue
+            elif tree_state(entry) != 'gone':
                 continue
             try:
                 reply = self._settle_entry(entry)
@@ -1326,15 +1633,49 @@ class RunDriver:
                 continue  # The account is unreachable or refused: asked again on the next sweep.
             self._remove_workspace(entry['workspace'])
             try:
-                journal.settled(entry['bridge_run_id'], reply['state'])
+                journal.settled(launch_journal_key(entry), reply['state'])
             except JournalError:
                 continue
             lost[handle] = (host_client, 'released')
+        if recovery is not None:
+            try:
+                recovered = recovery.recover(recovering, orphans=not own)
+            except Exception:
+                recovered = {}  # Asked again on the next sweep.
+            for entry in recovering:
+                if entry['token'] in recovered:
+                    lost[entry['run_handle']] = (entry['host_client'], 'released')
         journal.prune()
         for instance in journal.instances():
             if instance != journal.instance:
                 journal.forget_instance(instance)
         return lost
+
+    def _container_recovery(self):
+        """C4: this service's container recovery, or None while containers are switched off."""
+        if self._containers is None:
+            return None
+        if self._recovery is None:
+            self._recovery = ContainerRecovery(
+                self._containers, self._journal, fence=lambda entry: self._fence_entry(entry),
+                settle=lambda entry: self._settle_entry(entry),
+                remove_workspace=lambda workspace: self._remove_workspace(workspace), clock=self._clock)
+        return self._recovery
+
+    def _own_container_gone(self, entry):
+        """C3, at this service's own stop: whether its run's container is gone, stopping it once more
+        (`service_close`, at once) when it was started and not yet proven gone."""
+        if entry['state'] == 'gone':
+            return True
+        if (entry['state'] not in {'started', 'stopping', 'stop_failed'} or self._containers is None
+                or entry['container_id'] is None):
+            return False  # Never started (an intent): its recovery fences the claim (C4).
+        started = container_launch.StartedContainer(entry['token'], entry['container_name'], entry['container_id'],
+                                                    entry['cgroup_path'] or '')
+        try:
+            return self._containers.stop(started, 'service_close', now=True) is True
+        except Exception:
+            return False
 
     def _settle_entry(self, entry):
         """Helper thread: the account's settlement of this run, sent with the run's own custody."""
@@ -1353,6 +1694,27 @@ class RunDriver:
                                    timeout=SETTLE_TIMEOUT_SECONDS)
             return client.settle_lost_run(
                 settle, request_id='lost-' + hashlib.sha256(entry['bridge_run_id'].encode()).hexdigest()[:32])
+        finally:
+            call.role = call.host_client = call.context = None
+
+    def _fence_entry(self, entry):
+        """Helper thread (C4): the account's fence for a recovered intent's own claim request, with the run's
+        custody: it closes the request for good, or returns the receipt of the claim it admitted after all."""
+        lease = ResultLeaseBinding(**entry['lease'])
+        if lease.project_id != self._scope.project_id or entry['host_client'] not in HOST_CLIENTS:
+            raise HistoryError('history_conflict')
+        evidence = bytes.fromhex(entry['storage_evidence'])
+        fence = FenceClaimInput(entry['run_handle'], entry['identity_digest'], entry['claim_request_id'],
+                                parse_bounded_json(evidence)['lease']['lease_digest'])
+        custody = canonical_json({'purpose': 'run', 'lease': entry['lease'], 'storage_evidence': entry['storage_evidence'],
+                                  'terminal_evidence': None, 'cleanup_evidence': None})
+        call = self._call
+        call.role, call.host_client, call.context = 'project', entry['host_client'], custody
+        try:
+            client = AccountClient(self._account, self._scope.project_id, COLLECTOR_RUNTIME_DIGEST,
+                                   timeout=SETTLE_TIMEOUT_SECONDS)
+            return client.fence_claim(
+                fence, request_id='recover-' + hashlib.sha256(entry['token'].encode()).hexdigest()[:32])
         finally:
             call.role = call.host_client = call.context = None
 
@@ -1376,14 +1738,21 @@ class RunDriver:
         except Exception:
             pass
 
-    def settle_on_exit(self):
+    def settle_on_exit(self, *, settle=True):
         """After every thread of this host stopped: settle its own runs, then let later hosts settle the rest.
 
         An in-flight sweep and account call are waited for first, so nothing of
         this host writes its journal or reaches the account after its lock is gone.
+        Without `settle` (O10 D13: its result writer faulted) it settles nothing and
+        only frees its journal lock, so the next host settles its runs.
         """
         self._sweeper.shutdown(wait=True)
         self._executor.shutdown(wait=True)
+        if not settle:
+            if self._containers is not None:
+                self._containers.close()
+            self._journal.release()
+            return
         install_enrollment(self._preamble, owner=self._owner_name)
         try:
             self._settle_lost(True)
@@ -1391,6 +1760,8 @@ class RunDriver:
             pass
         finally:
             install_enrollment(None, owner=self._owner_name)
+            if self._containers is not None:
+                self._containers.close()
         self._journal.release()
 
     @staticmethod
@@ -1398,15 +1769,53 @@ class RunDriver:
         return hashlib.sha256(canonical_json([run.key[0], run.key[1], run.inputs_digest])).hexdigest()[:32]
 
     def busy(self):
-        return any(run.state not in {'registered', 'failed', 'released'} for run in self._runs.values())
+        return any(run.state not in {'registered', 'failed', 'released'} | _HELD for run in self._runs.values())
 
-    def retaining(self):
-        """Whether recorded runs' originals are kept here for their verifiers and QA."""
-        return bool(self._workers)
+    def _cleanup_unconfirmed(self, run):
+        """O0c M1: whether the run's execution can never be confirmed clean here: its worker returned
+        and left the execution unknown, which nothing in this service asks again (process mode; a
+        container's later proof of its end is C3's, so a container run keeps waiting)."""
+        if run.launch_token is not None or run.prepared_inputs is None:
+            return False
+        try:
+            supervisor = self._runtime.pool.supervisor(run.prepared_inputs.worker)
+            view = None if supervisor is None else supervisor.snapshot()
+        except Exception:
+            return False
+        return view is not None and view['state'] == 'unknown' and view['worker_returned'] is True
+
+    def _stranded(self, run):
+        """O0c M1, M3: a run that holds a host slot nothing in this service will free.
+
+        A failed run that keeps its preparation or its result entry and waits for no answer (its claim
+        was admitted, or its fence was given up), or one whose child's cleanup is unconfirmed. A
+        container run is C3's to settle first (`_settle_own_ended`); once settled it counts here too.
+        """
+        if run.state in _HELD:
+            return True
+        if (run.state != 'failed' or run.closed or run.future is not None or run.fence_at is not None
+                or (run.launch_token is not None and not run.own_settled)):
+            return False
+        return run.persistence is not None or run.prepared is not None
+
+    def stuck_slots(self):
+        """O0c M1, M3, M4, M7: host slots held by what nothing in this service will free: stranded runs,
+        given-back preparations whose removal was asked MAX_CLEANUP_ATTEMPTS times, and monitor attempts
+        given up. Each is held until the host is replaced: never freed while a process may live."""
+        preparations = sum(1 for handle in self._giving_back
+                           if self._cleanup_retry.get(handle, (0, 0.0))[0] >= MAX_CLEANUP_ATTEMPTS)
+        return sum(1 for run in self._runs.values() if self._stranded(run)) + preparations + len(self._stuck_monitor)
+
+    def replace_when_idle(self):
+        """O0c M3: something here holds a slot it will never free, so a fresh host replaces this one
+        once no run is under way and no client has called for the idle period."""
+        return not self.busy() and self.stuck_slots() > 0
 
     def exhausted(self):
         """No room for another run in this host's lifetime; a fresh host has it all."""
-        return not self.busy() and (len(self._runs) >= MAX_RUNS or len(self._dispatch._jobs) >= DISPATCH_SLOTS)
+        # O0c M3: with every run slot stuck nothing can run here, so it is replaced at once when idle.
+        return not self.busy() and (len(self._runs) >= MAX_RUNS or len(self._dispatch._jobs) >= DISPATCH_SLOTS
+                                    or self.stuck_slots() >= PREPARATION_SLOTS)
 
     def close(self):
         if self._closed:

@@ -11,6 +11,12 @@ public issue.
 - `feature/<name>` branches come off the current version branch and merge back into it once their checks
   and any required review pass.
 - The owner merges a version branch into `main` after the full regression run and CI pass.
+- `main` is protected by a ruleset: changes only through pull requests, one approving review (admins
+  may bypass), every review conversation resolved, the branch up to date with `main`, and these checks
+  passing: `checks`, `unit (ubuntu-latest)`, `unit (macos-latest)` and `integration (1)` to
+  `integration (6)`. No force push and no deletion. Release tags (`v*`) cannot be moved or deleted.
+  Changing the number of integration shards in `.github/workflows/ci.yml` means changing the
+  ruleset's required checks too.
 - `planning` is a separate branch, with no shared history, for plans, design working documents and
   research. See [Planning material](#planning-material).
 
@@ -25,13 +31,23 @@ ruff check .
 python3 scripts/parallel_tests.py            # all three suites, in parallel
 ```
 
-`parallel_tests.py` runs the three suites (the repository root, `packages/codex-agents` and
-`packages/claude-agents`) split into units across your cores, and prints one summary; a failed unit's
-log tail is shown. Run them one after another only to debug, since that takes over half an hour.
-While working, run only the modules you touched, for example
-`python3 scripts/parallel_tests.py --module codex:tests.test_bridge --module root:test_install`.
+CI runs the identifier guard and Ruff, then the tests by stage: a pull request runs the unit tests on
+Linux and macOS and the integration tests on Linux; `main`, tags and a nightly run add the end-to-end
+tests on both systems and the integration tests on macOS. The integration tests run in six shards,
+balanced by `scripts/test-timings.json`, each at half the runner's cores
+(`parallel_tests.py --shard K/6`). Measured on GitHub's runners (November 2026), a pull request's
+checks take about 4 minutes, its slowest shard about 2 to 5 minutes. A failing shard uploads its failed
+units' logs as an artifact for 7 days.
 
-CI runs the identifier guard, Ruff and all three suites on Linux and macOS.
+`python3 -B scripts/parallel_tests.py` runs all three suites in parallel and prints one summary; a
+failed unit's log tail is shown. Never run them one after another except to debug: that takes over half
+an hour. Every test module has a stage in `scripts/test-stages.json`: `unit` (no process, socket or
+sleep; a unit test that does one fails), `integration` (real services, children, sockets, git,
+sandboxes) or `e2e` (the setup wizard and the installer run as programs). `--stage unit` runs only the
+unit tests, in seconds. While working, run only the modules you touched, for example
+`python3 scripts/parallel_tests.py --module codex:tests.test_bridge --module root:test_install`. A new
+module needs a stage; `python3 scripts/measure_test_behaviour.py` measures what each module does and
+proposes one.
 
 - Every runtime change needs a Codex package version bump and an entry in
   `packages/codex-agents/runtime-releases.json`.

@@ -55,7 +55,8 @@ says `dispatch: native`, stop and report it.
    to this boundary. A missing boundary is a learning failure, not an optional omission.
 3. Classify the task using the installed routing policy. State the operation,
    ambiguity, context breadth, acceptance strength, and safe routing-evidence
-   references. Risk never selects model, effort, or topology or widens authority. High
+   references. Risk never changes topology or widens authority, and selects a model or
+   effort only where the installed policy gives a risk band (see routing.md). High
    and critical tasks must remain meaningful and independently verified. Pass
    the task contract to
    `cli.py learning-route --project-root <exact-root>`; do not choose
@@ -113,11 +114,15 @@ says `dispatch: native`, stop and report it.
    once more while the project's service still runs: it returns the same fenced
    result, which you record. If that is no longer possible, close the orchestration
    once the run is released; the run is counted abandoned.
-   A failure after launch without a usable report leaves no result to record:
-   pause the orchestration, confirm the child is gone, classify that run abandoned
-   (`host_confirmed_gone`), and resume. Never reconstruct a missing result.
+   A failure after launch without a usable report leaves no result to record: run
+   `learning-run-status` until the run has ended, then close the orchestration once
+   the run is released (it is counted abandoned). Only a run that never took a lease
+   is classified abandoned instead (pause, confirm the child is gone,
+   `learning-classify-host-run-abandoned --reason host_confirmed_gone`, resume); for
+   any other run that is refused. Never reconstruct a missing result.
    While `dispatch` waits, a second protected command can run `cli.py
-   learning-run-status --orchestration-handle <orc> --run-handle <handle>` for the
+   learning-run-status --project-root <exact-root> --orchestration-handle <orc>
+   --run-handle <handle>` for the
    child's health (`starting`, `active`, `quiet`, `stale`, then `stopping` or
    `terminal`), or `cli.py learning-cancel-run` with the same arguments to stop it.
    A cancellation reply is a request, not confirmed cleanup; `dispatch` then returns
@@ -170,6 +175,10 @@ says `dispatch: native`, stop and report it.
    closing. The router refuses an outcome that is unknown, from another provider or
    family, or from another orchestration. Open, dispatch, and finish the verifier
    through the same host lifecycle.
+   For a review, `cli.py learning-review worker|verify|finish --project-root <exact-root>
+   --spec <file> --work-dir <folder>` runs the worker, its verifier and operational QA in this order,
+   saving each reply, and stops (with the reason and next step) at a refused step or a result with
+   no verdict.
    Then run `learning-run-operational-checks --project-root <exact-root>
    --host-outcome-digest <worker digest> --verifier-host-outcome-digest <verifier
    digest>`. It may run only the exact commands in the committed, clean project file
@@ -190,8 +199,11 @@ says `dispatch: native`, stop and report it.
    plainly. Record failed output attempts with one typed reason and safe evidence
    references, never raw prompts, output, secrets, or unrestricted tool data. Take the
    provider, model and effort from the route `learning-route` returns; the policy's
-   ordered provider candidates per family decide them, not this text. Risk never raises
-   model or effort. No claimed failure history causes model escalation. Project-bound
+   ordered provider candidates per family decide them, not this text. Risk raises
+   model or effort only through a policy risk band, never below the first choice at
+   high or critical. Failure history escalates a retry only through a policy
+   `escalation` block (once to the next candidate for executable work, never for
+   judgment work, then to the strongest); the shipped policy has none. Project-bound
    escalation from verifier history remains unavailable until the router can resolve
    the references to actual independent verifier records. Eligible alternatives are
    evaluation candidates, not permission to substitute them during live work. Each

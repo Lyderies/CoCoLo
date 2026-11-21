@@ -139,7 +139,10 @@ class LearningCliTests(unittest.TestCase):
         verifier_event["status"] = "completed"
         verifier_event["item_digest"] = verifier["evidence_digests"][0]
         self._admit_fixture_outcome(
-            ledger, event=verifier_event, outcome=verifier, producer="verifier", now_ms=1
+            # Admitted now: the ledger's cycle reads the retention window of outcomes (O0c P8), and
+            # the commands here run on the real clock, so a 1970 outcome would never be mined.
+            ledger, event=verifier_event, outcome=verifier, producer="verifier",
+            now_ms=time.time_ns() // 1_000_000,
         )
         ledger.close()
         self.verifier = verifier

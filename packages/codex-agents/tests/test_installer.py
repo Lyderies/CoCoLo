@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -408,16 +409,21 @@ class InstallerTests(unittest.TestCase):
                 self.assertTrue(report["collector_quiesced"])
                 with self.assertRaises(CollectorError):
                     CollectorClient(LearningState(state_root, create=False).socket).health()
-                payload = json.loads(Path(report["path"]).read_bytes())
-                self.assertEqual(2, payload["body"]["schema_version"])
-                self.assertEqual(
-                    str(target.resolve()),
-                    payload["body"]["project"]["canonical_root"],
-                )
-                self.assertIn(
-                    "handle_digest",
-                    payload["body"]["columns"]["host_run_bindings"],
-                )
+                # PLAN F3: the streamed format-3 file (was format 2's JSON document).
+                self.assertEqual(3, report["format"])
+                self.assertEqual("preupdate_test.sqlite3", Path(report["path"]).name)
+                backup = sqlite3.connect(f"file:{report['path']}?mode=ro", uri=True)
+                try:
+                    self.assertEqual(
+                        str(target.resolve()),
+                        backup.execute("SELECT canonical_root FROM projects").fetchone()[0],
+                    )
+                    manifest = json.loads(backup.execute(
+                        "SELECT manifest FROM cocolo_backup_manifest").fetchone()[0])
+                finally:
+                    backup.close()
+                self.assertIn("handle_digest", manifest["columns"]["host_run_bindings"])
+                self.assertEqual(report["counts"], manifest["counts"])
                 restarted = subprocess.run(
                     [
                         sys.executable,

@@ -16,7 +16,7 @@ from pathlib import Path
 from .contracts import ContractError, TASK_FAMILIES
 from .history_contracts import (
     HISTORY_REASON_CODES, MAX_SEQUENCE, AttemptBinding, HistoryError, TerminalDelivery,
-    _DIGEST, _ID, _PROJECT, matches, valid_integer,
+    _DIGEST, _ID, _PROJECT, _RUN, matches, valid_integer,
 )
 from .host_result_contracts import HostResultReference, decode_host_result_reference
 from .host_open_contracts import OpenProvenanceInput, decode_host_open_submission
@@ -24,7 +24,7 @@ from .learning_contracts import SOURCES, canonical_json, parse_bounded_json, val
 from .operational_qa_contracts import checked_operational_qa, checked_qa_summary
 from .open_scope_contracts import checked_open_scope, decode_open_scope_request
 from .result_contracts import MAX_RESULT_BODY_BYTES
-from .service_transport import MAX_FRAME_BYTES, MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
+from .service_transport import MAX_FRAME_BYTES, MAX_TIMEOUT_SECONDS, SERVICE_REFUSALS, ServiceTransportError, exchange_frame
 
 HISTORY_PROTOCOL_VERSION = 1
 MAX_HISTORY_REPLY_BYTES = 16_384
@@ -41,6 +41,8 @@ HISTORY_OPERATIONS = frozenset({
     "history.learning_cycle", "history.learning_report", "history.routing_evidence",
     "history.learning_feedback", "history.learning_review_case", "history.orchestration_report",
     "history.capacity_report",
+    # D1: a published attempt's terminal reference, found in the store from its run handle, attempt and inputs.
+    "history.result_reference",
 })
 # Replies that may carry more than the ordinary metadata reply.
 LARGE_REPLY_OPERATIONS = frozenset({"history.read_record", "history.qa_details", "history.worker_input",
@@ -195,6 +197,11 @@ def _validate_request(request: HistoryRequest) -> None:
             or not all(matches(payload[key], _DIGEST) for key in ("record_content_digest", "receipt_digest"))
         ):
             raise HistoryError("history_invalid_request")
+    elif operation == "history.result_reference":
+        if (not _closed(payload, {"run_handle", "attempt", "inputs_digest"}) or not matches(payload["run_handle"], _RUN)
+                or not valid_integer(payload["attempt"], minimum=1) or not matches(payload["inputs_digest"], _DIGEST)
+                or request.request_id != payload["run_handle"]):
+            raise HistoryError("history_invalid_request")
     elif operation == "history.pending_terminals":
         if (
             not _closed(payload, {"after_sequence", "limit"})
@@ -322,11 +329,16 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
             raise HistoryError('history_invalid_response')
     elif operation == 'history.capacity_report':
         from .project_capacity_report import CAPACITY_NAMES
-        if (type(result) is not dict or set(result) != set(CAPACITY_NAMES)
+        # O0c M1, M3: a host's service also names the run slots it can no longer free.
+        slots = result.get('run_slots') if type(result) is dict else None
+        if (type(result) is not dict or set(result) - {'run_slots'} != set(CAPACITY_NAMES)
                 or any(type(value) is not dict or set(value) != {'live', 'limit'}
                        or not valid_integer(value['live'], maximum=1 << 32)
                        or (value['limit'] is not None and not valid_integer(value['limit'], minimum=1, maximum=1 << 32))
-                       for value in result.values())):
+                       for name, value in result.items() if name != 'run_slots')
+                or ('run_slots' in result and (type(slots) is not dict or set(slots) != {'stuck', 'limit'}
+                                               or not valid_integer(slots['stuck'], maximum=64)
+                                               or not valid_integer(slots['limit'], minimum=1, maximum=64)))):
             raise HistoryError('history_invalid_response')
     elif operation == 'history.orchestration_report':
         if (type(result) is not dict or result.get('orchestration_id') != request.payload['orchestration_id']
@@ -394,6 +406,17 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
         for name, key in (('worker', 'host_outcome_digest'), ('verifier', 'verifier_host_outcome_digest')):
             _validate_host_reference(result[name], request.payload[name + '_binding'], request.payload[key],
                                      verification=name == 'verifier')
+    elif operation == 'history.result_reference':
+        if (not _closed(result, {'binding', 'delivery'}) or type(result['binding']) is not dict
+                or not _closed(result['delivery'], {'record_id', 'record_content_digest', 'result_digest'})
+                or not matches(result['delivery']['record_id'], _ID)
+                or not all(matches(result['delivery'][n], _DIGEST) for n in ('record_content_digest', 'result_digest'))):
+            raise HistoryError('history_invalid_response')
+        binding = AttemptBinding(**result['binding'])
+        if (binding.project_id != request.project_id or binding.runtime_digest != request.runtime_digest
+                or binding.run_handle != request.payload['run_handle'] or binding.attempt != request.payload['attempt']
+                or binding.as_data() != result['binding']):
+            raise HistoryError('history_invalid_response')
     elif operation == 'history.worker_reference':
         _validate_host_reference(result, request.payload['binding'], request.payload['host_outcome_digest'], verification=False)
         if result['provider'] not in {'codex', 'claude'}:
@@ -535,15 +558,15 @@ class HistoryClient:
         request = HistoryRequest(HISTORY_PROTOCOL_VERSION, operation, identity, self._project, self._runtime, payload)
         encoded = encode_history_request(request)
         request = decode_history_request(encoded)
-        failure = False
+        failure = None
         try:
             raw = exchange_frame(self._endpoint, encoded, timeout=self._timeout,
                                  response_limit=MAX_FRAME_BYTES if operation in LARGE_REPLY_OPERATIONS
                                  else MAX_HISTORY_REPLY_BYTES)
-        except ServiceTransportError:
-            failure = True
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failure = error.reason_code if error.reason_code in SERVICE_REFUSALS else "history_service_unavailable"
         if failure:
-            raise HistoryError("history_service_unavailable")
+            raise HistoryError(failure)
         return decode_history_response(raw, request)
 
     def _record_call(self, operation: str, record: dict) -> dict:
@@ -611,6 +634,12 @@ class HistoryClient:
         """Whether this recorded outcome is accepted reconnaissance for the named task."""
         return self._call('history.routing_evidence', host_outcome_digest, {
             'host_outcome_digest': host_outcome_digest, 'task_id': task_id, 'family': family})['trusted']
+
+    def result_reference(self, run_handle: str, attempt: int, inputs_digest: str) -> dict:
+        """D1: a published attempt this host class ran, from the project store: its binding and terminal reference,
+        whether or not the service that ran it still holds it."""
+        return self._call('history.result_reference', run_handle,
+                          {'run_handle': run_handle, 'attempt': attempt, 'inputs_digest': inputs_digest})
 
     def worker_input(self, host_outcome_digest: str) -> dict:
         """A run this host recorded: its exact originals and where its terminal and result are."""

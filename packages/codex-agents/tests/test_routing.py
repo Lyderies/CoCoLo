@@ -1564,6 +1564,30 @@ class ProviderRoutingTests(unittest.TestCase):
                         ORCHESTRATION_ROOT / "config/discovery-policy.json",
                     )
 
+    def test_mapped_claude_agent_may_carry_a_model_alias_default(self) -> None:
+        for model, refused in (("sonnet", False), ("opus", False), ("gpt-6-astra", True)):
+            with self.subTest(model=model), tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
+                root = Path(directory)
+                agents = root / ".claude/agents"
+                orchestration = root / ".codex/orchestration"
+                agents.mkdir(parents=True)
+                orchestration.mkdir(parents=True)
+                (agents / "project_reader.md").write_text(
+                    "---\nname: project_reader\ndescription: Reads the project\n"
+                    f"tools: Read, Grep\nmodel: {model}\nmaxTurns: 8\n---\n\nRead.\n"
+                )
+                (orchestration / "project-agent-routing.json").write_text(
+                    json.dumps({"version": 1, "roles": {"research": "project_reader"}})
+                )
+                self.git_commit(root, "claude agent")
+                args = (root, ORCHESTRATION_ROOT / "config/routing-policy.json",
+                        ORCHESTRATION_ROOT / "config/discovery-policy.json")
+                if refused:
+                    with self.assertRaisesRegex(PolicyError, "must not override model"):
+                        load_effective_policy(*args)
+                else:
+                    load_effective_policy(*args)
+
     def test_mapped_claude_agent_with_write_tools_is_ineligible(self) -> None:
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
             root = Path(directory)

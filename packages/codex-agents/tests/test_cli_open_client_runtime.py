@@ -130,10 +130,15 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
             if version is not None:
                 self.hint(child, original, version=version)
             changed = dict(self.base.fixture.assignment, objective='Different original objective') if version == 2 else None
+            started = time.monotonic()
             code, refused = self.invoke_open(original, assigned=changed)
+            took = round(time.monotonic() - started, 1)  # On GitHub only, this answered unavailable (0.4.0 O5).
             self.assertEqual(2, code)
             self.assertFalse(refused['ready'])
-            self.assertEqual('history_not_authorized' if version == 2 else 'open_unavailable', refused.get('reason_code'), refused)
+            # S1-U10c: no hint, the project's service is not running; a version-1 hint, an earlier version's.
+            expected = {None: 'open_service_not_running', 1: 'open_service_other_version', 2: 'history_not_authorized'}
+            self.assertEqual(expected[version], refused.get('reason_code'),
+                             {**refused, 'seconds': took, 'version': version})
             self.assertEqual(before, self.fixture.ledger._connection.execute('SELECT COUNT(*) FROM account_open_receipts').fetchone()[0])
             self.assertFalse((child['root']/'launches').exists())
         code, wrong_host = self.invoke_open(original, host='claude' if self.parent_host == 'codex' else 'codex')

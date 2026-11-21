@@ -126,6 +126,48 @@ class ClaimDenialRecoveryTests(unittest.TestCase):
         self.assertEqual(0, self.ledger._connection.execute('PRAGMA query_only').fetchone()[0])
         self.assertFalse(self.call()['known'])
 
+    def earlier_dispatch_results(self, count, content_bytes):
+        """`count` earlier dispatch results of this project, written as 0.2.x wrote them (0.3.3 C2)."""
+        import hashlib
+        stamp = self.fixture.base.stamp
+        sequence = self.ledger._connection.execute("SELECT MAX(source_sequence) FROM records").fetchone()[0] or 0
+        rows = []
+        for index in range(count):
+            content = json.dumps({'record_type': 'dispatch_result',
+                                  'run_id': 'run:' + hashlib.sha256(f'earlier-{index}'.encode()).hexdigest(),
+                                  'summary': 'x' * content_bytes}, separators=(',', ':')).encode()
+            digest = hashlib.sha256(content).hexdigest()
+            observed = stamp - 40 * 86_400_000 + index
+            rows.append((self.fixture.project, 'dispatch_result:' + digest, 'dispatch_result', 'lifecycle',
+                         sequence + 1 + index, observed, observed, observed + 90 * 86_400_000, content, digest))
+        with self.ledger._lock:
+            self.ledger._connection.executemany(
+                "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,"
+                "ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,0)", rows)
+            self.ledger._connection.commit()
+
+    def assert_closed(self):
+        self.assertFalse(self.call()['known'])
+        self.assertEqual(('abandoned', 'claim_denied'), tuple(self.state()))
+
+    def test_C2_a_refused_claim_closes_whatever_the_number_of_earlier_records(self):
+        """0.3.3 C2: 150,000 small earlier records; the old budget refused the closure for good."""
+        self.earlier_dispatch_results(150_000, 64)
+        with mock.patch.object(claim_denial, 'DENIAL_LEGACY_READ_LIMITS', (2000, 50, 2 * 1_048_576)):
+            with self.assertRaisesRegex(AccountError, 'claim_busy'):
+                self.call()
+        self.pending()
+        self.assert_closed()
+
+    def test_C2_a_refused_claim_closes_whatever_the_size_of_an_earlier_record(self):
+        """0.3.3 C2: one earlier record over the old 16 KiB value limit."""
+        self.earlier_dispatch_results(1, 20_000)
+        with mock.patch.object(claim_denial, 'DENIAL_LEGACY_READ_LIMITS', (2000, 50, 16_384)):
+            with self.assertRaisesRegex(AccountError, 'claim_busy'):
+                self.call()
+        self.pending()
+        self.assert_closed()
+
     def test_fence_commits_before_body_charge_retires_and_same_identity_never_rearms(self):
         self.fixture.store._result_capacity = ResultCapacity(8, MAX_RESULT_BODY_BYTES, 1_800_000, 120_000)
         other = replace(self.fixture.scope, run_handle='hrn_' + 'f' * 48, run_id='run:' + 'f' * 64,

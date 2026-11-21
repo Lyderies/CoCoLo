@@ -97,8 +97,21 @@ class ResultDiagnosticTests(unittest.TestCase):
             ),
             "unknown_fields": ({**valid, "CANARY-FIELD": "CANARY-REJECTED"}, assignment()),
             "inconsistent_axes": ({**valid, "execution_state": "failed"}, assignment()),
+            # RV1: each evidence rule's own code, all content-free.
+            "evidence_missing_fields": ({**valid, "evidence": [{k: v for k, v in evidence.items() if k != "details"}]},
+                                        assignment()),
+            "evidence_unknown_fields": ({**valid, "evidence": [{**evidence, "CANARY-FIELD": "x"}]}, assignment()),
+            "evidence_unsupported_type": ({**valid, "evidence": [{**evidence, "type": "CANARY-REJECTED"}]}, assignment()),
+            "evidence_empty_criterion": ({**valid, "evidence": [{**evidence, "criterion_id": ""}]}, assignment()),
+            "evidence_empty_reference": ({**valid, "evidence": [{**evidence, "reference": ""}]}, assignment()),
+            "evidence_unsupported_outcome": ({**valid, "evidence": [{**evidence, "outcome": "CANARY-REJECTED"}]},
+                                             assignment()),
+            "evidence_details_not_text": ({**valid, "evidence": [{**evidence, "details": ["CANARY-REJECTED"]}]},
+                                          assignment()),
         }
-        self.assertEqual(RESULT_VALIDATION_REASON_CODES, set(cases))
+        # Corrected for O10 VF-2 (requirement): structured_output_missing is named by the bridge when the
+        # client gave no result to validate (test_claude_structured_output), never by the validator.
+        self.assertEqual(RESULT_VALIDATION_REASON_CODES - {"structured_output_missing"}, set(cases))
         for reason, (invalid, assigned) in cases.items():
             with self.subTest(reason=reason):
                 self.assertEqual(("invalid_result", reason), bridge._unrecordable(invalid, assigned))
@@ -306,6 +319,12 @@ class ResultPromptContractTests(unittest.TestCase):
         self.assertEqual(set(preflight["semantic_verdicts"]), set(guidance["completed_status_by_verdict"]))
         self.assertEqual("completed", guidance["completed_status_by_verdict"]["not-ready"])
         self.assertEqual("blocked", guidance["completed_status_by_verdict"]["blocked"])
+
+    def test_CR2_the_prompt_says_a_finished_review_is_completed_whatever_its_verdict(self) -> None:
+        prompt = " ".join(bridge.child_prompt(assignment()).split())
+        self.assertIn("A review you finished is status completed and execution_state completed, whatever its "
+                      "verdict, a negative one included; failed means you could not do the work.", prompt)
+        self.assertIn("Set execution_state, semantic_verdict and admission_state; never leave them null.", prompt)
 
     def test_prompt_examples_validate_without_weakening_negative_fences(self) -> None:
         assigned = assignment()

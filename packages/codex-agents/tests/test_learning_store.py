@@ -335,6 +335,14 @@ class LearningStoreTests(unittest.TestCase):
                 self.ledger._connection.execute("DROP TABLE " + name)
             self.ledger._connection.execute("DROP TABLE launch_claims")
             self.ledger._connection.execute("DROP TABLE orchestration_checkpoints")
+            # O0b B0-1 (requirement): 0.4.0's additive index on binding_state is newer than schema five.
+            self.ledger._connection.execute("DROP INDEX IF EXISTS host_run_bindings_live")
+            # O0b RS-A (requirement): so is schema 15's register, whose triggers read those columns.
+            from codex_agents.run_holds_schema import RUN_HOLDS_OBJECTS
+            for kind, name, _ in RUN_HOLDS_OBJECTS:
+                if kind == "trigger":
+                    self.ledger._connection.execute(f"DROP TRIGGER IF EXISTS {name}")
+            self.ledger._connection.execute("DROP TABLE IF EXISTS run_holds")
             for column in (
                 "deadline_observed",
                 "last_progress_at_ms",
@@ -518,6 +526,42 @@ class LearningStoreTests(unittest.TestCase):
         client_health_clear(self.state, self.project_a)
         self.assertEqual({}, client_health_snapshot(self.state, self.project_a))
 
+    def test_P11_client_health_never_fills_and_drops_the_oldest_project(self) -> None:
+        """O0c P11 (ANALYSIS-0.4.0-lifetime-caps.md): about 450 failing roots used to fill the 64 KiB file, after
+        which status, every write and even client_health_clear failed for good. Writes now stay within the
+        bound by dropping the projects whose newest counter is oldest; status and a new increment always work."""
+        roots = Path(tempfile.mkdtemp(dir=self.project_a.parent))
+        self.addCleanup(shutil.rmtree, roots, ignore_errors=True)
+        client_health_increment(self.state, self.project_a, "collector_unavailable", now_ms=1)
+        for index in range(1_000):
+            root = roots / f"p{index}"
+            root.mkdir()
+            client_health_increment(self.state, root, "hook_binding_rejected", now_ms=10 + index)
+        self.assertLessEqual(self.state.client_health.stat().st_size, 65_536)
+        self.assertEqual({}, client_health_snapshot(self.state, self.project_a))  # the oldest went first
+        newest = roots / "p999"
+        self.assertEqual({"hook_binding_rejected": {"count": 1, "updated_at_ms": 1_009}},
+                         client_health_snapshot(self.state, newest))
+        client_health_increment(self.state, self.project_a, "collector_unavailable", now_ms=5_000)
+        self.assertEqual({"collector_unavailable": {"count": 1, "updated_at_ms": 5_000}},
+                         client_health_snapshot(self.state, self.project_a))
+        client_health_clear(self.state, newest)
+        self.assertEqual({}, client_health_snapshot(self.state, newest))
+
+    def test_P11_an_oversized_file_from_an_older_build_is_read_and_repaired_by_the_next_write(self) -> None:
+        """O0c P11: older builds wrote past 64 KiB; such a file is still read, and the next write brings it
+        back within the bound."""
+        projects = {f"{index:064x}": {"collector_unavailable": {"count": 1, "updated_at_ms": index}}
+                    for index in range(1_000)}
+        self.state.client_health.write_bytes(canonical_json({"schema_version": 1, "projects": projects}) + b"\n")
+        self.state.client_health.chmod(0o600)
+        self.assertGreater(self.state.client_health.stat().st_size, 65_536)
+        self.assertEqual({}, client_health_snapshot(self.state, self.project_a))
+        client_health_increment(self.state, self.project_a, "collector_unavailable", now_ms=5_000)
+        self.assertLessEqual(self.state.client_health.stat().st_size, 65_536)
+        self.assertEqual({"collector_unavailable": {"count": 1, "updated_at_ms": 5_000}},
+                         client_health_snapshot(self.state, self.project_a))
+
     def test_ingestion_snapshot_is_exact_project_aggregate_only(self) -> None:
         event_codes = [
             "session_started", "session_ended", "turn_started",
@@ -594,7 +638,7 @@ class LearningStoreTests(unittest.TestCase):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        self.assertEqual(14, version)
+        self.assertEqual(15, version)  # O0b RS-A (requirement): schema 15
         self.assertIn('account_open_receipts', tables)
         self.assertIn('account_open_requests', tables)
         self.assertIn("active_run_capacity", tables)
@@ -637,7 +681,7 @@ class LearningStoreTests(unittest.TestCase):
         connection.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
         snapshot = self.ledger.ingestion_snapshot(self.project_a_id, now_ms=30)
-        self.assertEqual(14, self.ledger._connection.execute(
+        self.assertEqual(15, self.ledger._connection.execute(
             "PRAGMA user_version"
         ).fetchone()[0])
         self.assertEqual(1, snapshot["accepted_hook_event_count"])
@@ -2560,7 +2604,7 @@ class LearningStoreTests(unittest.TestCase):
             expires_at_ms=time.time_ns() // 1_000_000 + 600_000)
         body = backup_body(path, self.project_a_id)
         report = self.ledger.verify_sanitized_backup(self.project_a_id, file_id='sealed_probes')
-        self.assertEqual(14, report['ledger_schema_version'])
+        self.assertEqual(15, report['ledger_schema_version'])  # O0b RS-A (requirement): schema 15
         for table in names:
             self.assertEqual(3, report['counts'][table])
             self.assertEqual(before['tables'][table], body['tables'][table])
@@ -2657,7 +2701,8 @@ class LearningStoreTests(unittest.TestCase):
         )
         body = backup_body(path, self.project_a_id)
 
-        self.assertEqual(set(body["tables"]), {
+        # O0b RS-A (requirement): from schema 15 the hold register is backed up too.
+        self.assertEqual(set(body["tables"]), {"run_holds",
             "sessions", "run_provenance", "records", "record_links",
             "stored_files", "collector_health", "consumed_grants",
             "owner_attestations", "repair_receipts", "host_run_bindings", "launch_claims",
@@ -2886,8 +2931,7 @@ class LearningStoreTests(unittest.TestCase):
 
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
 
-        self.assertEqual(
-            14, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
+        self.assertEqual(15, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
         )
         checkpoint = self.ledger._connection.execute(
             "SELECT sequence,status,observed_at_ms FROM orchestration_checkpoints "
@@ -2954,7 +2998,7 @@ class LearningStoreTests(unittest.TestCase):
         finally:
             connection.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
-        self.assertEqual(14, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(15, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
 
     def test_schema_five_migration_rolls_back_an_injected_schema_failure(self) -> None:
         self._downgrade_fixture_to_schema_five()
@@ -3536,7 +3580,7 @@ class LearningStoreTests(unittest.TestCase):
         self.addCleanup(server.stop)
         client = CollectorClient(self.state.socket, timeout=0.2)
         health = client.health(self.project_a)
-        self.assertEqual(14, health["schema_version"])
+        self.assertEqual(15, health["schema_version"])  # O0b RS-A (requirement): schema 15
         self.assertEqual(PACKAGE_VERSION, health["runtime_version"])
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, health["runtime_digest"])
         self.assertIsInstance(health["started_at_ms"], int)

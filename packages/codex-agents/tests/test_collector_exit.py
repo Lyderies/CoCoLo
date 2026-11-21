@@ -35,6 +35,35 @@ class ExitRecordTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
 
+    def test_H1c_3_a_self_restart_is_recorded_with_its_fixed_cause_only(self):
+        collector_exit.write_exit(self.root, started_at_ms=5, cause='account_restart', error=None,
+                                  detail='ingress_cleanup_failed')
+        record = collector_exit.read_exit(self.root)
+        self.assertEqual(('account_restart', 'ingress_cleanup_failed', []),
+                         (record['cause'], record['error'], record['where']))
+        collector_exit.write_exit(self.root, started_at_ms=5, cause='account_restart', error=None,
+                                  detail='not a fixed cause /x')
+        self.assertIsNone(collector_exit.read_exit(self.root)['error'])
+
+    def test_SD1_each_shutdown_step_is_timed_in_the_record(self):
+        stop = {'account_close': 3, 'account_drain': 10_000, 'server_stop': 5_012}
+        collector_exit.write_exit(self.root, started_at_ms=5, cause='signal', error=None, stop_ms=stop)
+        self.assertEqual(stop, collector_exit.read_exit(self.root)['stop_ms'])
+        collector_exit.write_exit(self.root, started_at_ms=5, cause='signal', error=None)  # a step not reached
+        record = collector_exit.read_exit(self.root)
+        self.assertEqual('signal', record['cause'])
+        self.assertNotIn('stop_ms', record)
+
+    def test_SD1_a_malformed_stop_timing_is_not_written_and_not_read(self):
+        for stop in ({'account_close': -1, 'account_drain': 0, 'server_stop': 0}, {'account_close': 1.5},
+                     {'account_close': 0, 'account_drain': 0, 'server_stop': 0, 'other': 0}, ['x'], 'x'):
+            with self.subTest(stop=stop):
+                collector_exit.write_exit(self.root, started_at_ms=5, cause='signal', error=None, stop_ms=stop)
+                self.assertNotIn('stop_ms', collector_exit.read_exit(self.root))  # left out, record kept
+                record = {'schema_version': 1, 'stopped_at_ms': 1, 'started_at_ms': 1, 'cause': 'signal',
+                          'error': None, 'where': [], 'stop_ms': stop}
+                self.assertIsNone(collector_exit.checked(record))
+
     def test_C10_a_record_round_trips_owner_only(self):
         collector_exit.write_exit(self.root, started_at_ms=5, cause='error', error=RuntimeError('a secret value'))
         record = collector_exit.read_exit(self.root)
@@ -236,6 +265,28 @@ import runpy
 runpy.run_path(sys.argv[0], run_name="__main__")
 '''
 
+RESTART_WRAPPER = '''
+import sys
+sys.path.insert(0, sys.argv[1])
+from codex_agents import account_restart
+account_restart.CHECK_EVERY_SECONDS = 0.05
+account_restart.decide = lambda *args, **kwargs: {'action': 'restart', 'lane': 'ingress',
+                                                  'cause': 'ingress_cleanup_failed', 'held': {}}
+sys.argv = [sys.argv[1] + "/collector_host.py", "--state-root", sys.argv[2]]
+import runpy
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+
+IDLE_WRAPPER = '''
+import sys
+sys.path.insert(0, sys.argv[1])
+from codex_agents import account_restart
+account_restart.CHECK_EVERY_SECONDS = 3600  # the check never runs during this test
+sys.argv = [sys.argv[1] + "/collector_host.py", "--state-root", sys.argv[2]]
+import runpy
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+
 WRAPPER = '''
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -254,13 +305,86 @@ runpy.run_path(sys.argv[0], run_name="__main__")
 '''
 
 
+# O10 SD3 (ANALYSIS-0.4.0-SD3-shutdown.md): a SIGTERM whose SystemExit is swallowed was lost; the
+# collector served on and never wrote an exit record. Each wrapper sends the collector its own
+# SIGTERM at a set point once it is serving, and keeps the interpreter running Python code there
+# so the handler runs exactly at that point.
+_SELF_SIGTERM = '''
+import os, signal, sys, threading, time
+sys.path.insert(0, sys.argv[1])
+STATE = sys.argv[2]
+def sigterm_here():
+    open(os.path.join(STATE, 'sd3-sigterm-sent'), 'w').close()  # the test checks it was sent
+    os.kill(os.getpid(), signal.SIGTERM)
+    end = time.monotonic() + 2
+    while time.monotonic() < end:  # the handler runs (and raises) in here
+        pass
+'''
+
+# SD3-1: the signal lands while a health note is being published (as in all six reproductions).
+PUBLISH_SIGTERM_WRAPPER = _SELF_SIGTERM + '''
+from codex_agents import lane_health
+real, calls = lane_health.replace, []
+def replace(*args, **changes):
+    if threading.current_thread() is threading.main_thread():
+        calls.append(1)
+        if len(calls) == 300:
+            sigterm_here()
+    return real(*args, **changes)
+lane_health.replace = replace
+sys.argv = [sys.argv[1] + "/collector_host.py", "--state-root", sys.argv[2]]
+import runpy
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+
+# SD3-2: any code on the main thread that swallows the handler's exception.
+SWALLOW_WRAPPER = _SELF_SIGTERM + '''
+from codex_agents import account_host
+real, calls = account_host.AccountServiceHost.serve_once, []
+def serve_once(self):
+    calls.append(1)
+    if len(calls) == 300:
+        try:
+            sigterm_here()
+        except BaseException:
+            pass
+    return real(self)
+account_host.AccountServiceHost.serve_once = serve_once
+sys.argv = [sys.argv[1] + "/collector_host.py", "--state-root", sys.argv[2]]
+import runpy
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+
+# SD3-3: the exception is swallowed and the owner step then never returns, so the loop never sees
+# the stop: only the watchdog armed by the signal can end it (bounds shortened to 1 s and 5 s).
+STUCK_WRAPPER = _SELF_SIGTERM + '''
+from codex_agents import account_host, shutdown_watchdog
+shutdown_watchdog.ShutdownWatchdog.__init__.__kwdefaults__.update(bound_seconds=1, hard_stop_seconds=5)
+real, calls = account_host.AccountServiceHost.serve_once, []
+def serve_once(self):
+    calls.append(1)
+    if len(calls) == 300:
+        try:
+            sigterm_here()
+        except BaseException:
+            pass
+        time.sleep(3600)
+    return real(self)
+account_host.AccountServiceHost.serve_once = serve_once
+sys.argv = [sys.argv[1] + "/collector_host.py", "--state-root", sys.argv[2]]
+import runpy
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+
+
 class CollectorExitProcessTests(host_tests.AccountHostTests):
     """The real collector process: each way it stops is recorded, and the next one reports it."""
 
     def wait_gone(self):
         end = time.monotonic() + 20
         while self.processes('collector_host.py'):
-            self.assertLess(time.monotonic(), end, 'collector did not stop')
+            self.assertLess(time.monotonic(), end,
+                            f'collector did not stop: {self.late_stop()}' if time.monotonic() >= end else '')
             time.sleep(.05)
 
     def ready_status(self):
@@ -269,7 +393,9 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
         end = time.monotonic() + 20
         while True:
             code, status = self.cli('learning-status', expected=None)
-            if (code, status.get('ready'), status.get('reason_code')) != (1, False, 'status_account_unavailable'):
+            # O10 ST1: a starting account now says so; both are retried.
+            if (code, status.get('ready')) != (1, False) or status.get('reason_code') not in {
+                    'status_account_unavailable', 'status_account_starting'}:
                 self.assertEqual((0, True), (code, status.get('ready')), json.dumps(status))
                 return status
             self.assertLess(time.monotonic(), end, json.dumps(status))  # Retries stop after 20 s.
@@ -278,6 +404,15 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
     def previous_exit(self):
         status = self.ready_status()  # Starts a new collector.
         return status.get('collector_previous_exit'), json.dumps(status)
+
+    def test_S1_U9a_status_reports_how_long_each_start_up_phase_took(self):
+        status = self.ready_status()
+        phases = status.get('collector_startup_ms')
+        self.assertEqual({'ledger_open', 'collector', 'account'}, set(phases), json.dumps(status))
+        for name, value in phases.items():
+            self.assertIs(int, type(value), name)
+            self.assertGreaterEqual(value, 0, name)
+        self.assertLess(sum(phases.values()), 60_000)  # milliseconds, not some other unit
 
     def test_C10_a_signal_is_recorded(self):
         self.ready_status()
@@ -293,6 +428,9 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
         self.wait_gone()
         record, _ = self.previous_exit()
         self.assertEqual('requested', record['cause'])
+        # SD1: the host times its own shutdown steps, and status shows them with the previous exit.
+        self.assertEqual({'account_close', 'account_drain', 'server_stop'}, set(record['stop_ms']))
+        self.assertTrue(all(type(value) is int and value >= 0 for value in record['stop_ms'].values()))
 
     def test_C10_an_error_in_the_account_loop_is_recorded_without_its_message(self):
         process = subprocess.Popen([sys.executable, '-I', '-B', '-S', '-c', WRAPPER, str(ORCHESTRATION_ROOT),
@@ -311,6 +449,35 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
                                     str(self.state.root)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(lambda: process.poll() is None and process.kill())
         return process
+
+    def test_H1c_3_a_stuck_account_with_nothing_running_stops_itself_and_records_why(self):
+        process = self.run_wrapper(RESTART_WRAPPER)
+        process.wait(timeout=60)
+        self.wait_gone()
+        # C5 (review 040-s1-h1c): the exit record keeps a cause older readers know; the restart's lane
+        # and cause are in account-restart.json.
+        record, _ = self.previous_exit()
+        self.assertEqual('requested', record['cause'])
+        from codex_agents import account_restart
+        last = account_restart.last_restart(self.state.root)
+        self.assertEqual(('ingress', 'ingress_cleanup_failed'), (last['lane'], last['cause']))
+
+    def test_E1_the_last_self_restart_is_shown_from_start_up(self):
+        from codex_agents import account_restart
+        self.state.root.mkdir(parents=True, exist_ok=True)
+        self.assertTrue(account_restart.record_restart(self.state.root, lane='ingress', cause='ingress_cleanup_failed',
+                                                       now_ms=1_700_000_000_000, mono_ns=1))
+        process = self.run_wrapper(IDLE_WRAPPER)
+        end = time.monotonic() + 30
+        while True:
+            code, status = self.cli('learning-status', expected=None)
+            text = ' '.join((status.get('account_health') or {}).get('attention') or [])
+            if 'restarted itself at' in text:
+                break
+            self.assertLess(time.monotonic(), end, json.dumps(status))
+            time.sleep(.2)
+        self.assertIn('ingress_cleanup_failed', text)
+        process.terminate()
 
     def test_C10a_an_error_in_the_collector_thread_is_recorded(self):
         process = self.run_wrapper(THREAD_WRAPPER)
@@ -338,6 +505,30 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
         self.wait_gone()
         record, _ = self.previous_exit()
         self.assertEqual('state_removed', record['cause'])
+
+    def stopped_by_itself(self, process, seconds=20):
+        try:
+            return process.wait(timeout=seconds)
+        except subprocess.TimeoutExpired:
+            sent = (self.state.root / 'sd3-sigterm-sent').exists()
+            self.fail(f'the collector still runs {seconds} s after its own SIGTERM: the stop was lost'
+                      if sent else f'the wrapper never sent its SIGTERM in {seconds} s (test setup)')
+
+    def test_SD3_1_a_signal_while_a_health_note_is_published_still_stops_the_collector(self):
+        process = self.run_wrapper(PUBLISH_SIGTERM_WRAPPER)
+        self.assertEqual(0, self.stopped_by_itself(process))
+        self.assertEqual('signal', collector_exit.read_exit(self.state.root)['cause'])
+
+    def test_SD3_2_a_signal_whose_exception_is_swallowed_still_stops_the_collector(self):
+        process = self.run_wrapper(SWALLOW_WRAPPER)
+        self.assertEqual(0, self.stopped_by_itself(process))
+        self.assertEqual('signal', collector_exit.read_exit(self.state.root)['cause'])
+
+    def test_SD3_3_a_lost_signal_in_a_step_that_never_returns_is_ended_within_the_bound(self):
+        process = self.run_wrapper(STUCK_WRAPPER)
+        self.assertEqual(3, self.stopped_by_itself(process))  # FORCED_EXIT_CODE, by the timer
+        record = collector_exit.read_exit(self.state.root)
+        self.assertEqual(('stop_forced', 'signal_received'), (record['cause'], record.get('stalled_in')))
 
     # The inherited AccountHostTests tests run once in their own module.
     for name in [n for n in dir(host_tests.AccountHostTests) if n.startswith('test_')]:
@@ -406,6 +597,9 @@ class CollectorMainTests(unittest.TestCase):
         self.enterContext(unittest.mock.patch('os.chdir'))
         self.enterContext(unittest.mock.patch('signal.signal', side_effect=lambda n, h: self.handlers.__setitem__(n, h)))
         self.enterContext(unittest.mock.patch('builtins.print'))
+        # The real main arms the shutdown watchdog's kernel alarm (SD2, and SD3 at the signal):
+        # without this the test process itself is ended by SIGALRM 18 s later (seen: exit 142).
+        self.enterContext(unittest.mock.patch('signal.alarm'))
 
     def test_C10d_a_requested_stop_and_a_thread_that_ended_by_itself_are_told_apart(self):
         self.assertEqual(0, self.host.main(['--state-root', str(self.root)]))
@@ -444,6 +638,66 @@ class CollectorMainTests(unittest.TestCase):
         self.assertEqual(['signal'], [r['cause'] for r in self.records])
         self.assertEqual([True], self.closed)
 
+
+    def test_M8_a_self_restart_waits_until_every_child_the_lanes_started_is_proven_gone(self):
+        """O0c M8-M10: the collector restarts the account only once its lanes' children are proven gone;
+        until then the decision is `wait`, naming the lane, and the check runs again."""
+        from codex_agents import account_restart
+        test, asked = self, []
+        (self.root / 'collector.sock').touch()
+
+        class Account:
+            def __init__(self, _ledger, _paths):
+                pass
+
+            def health_notes(self):
+                notes = {name: {'faulted': False, 'kept': 0, 'busy': 0, 'queued': 0, 'last_failure': None,
+                                'held_since_ms': None} for name in account_restart.LANES}
+                notes['signature'].update(faulted=True, kept=2, last_failure={
+                    'cause': 'signature_execution_unconfirmed', 'type': 'SignatureExecutionUnconfirmed', 'at_ms': 1})
+                return notes
+
+            def unended_children(self):
+                asked.append(dict(test.server.account_restart or {}))
+                return ['signature'] if len(asked) == 1 else []
+
+            def serve_once(self):
+                pass
+
+            def close(self):
+                pass
+
+            def drained(self):
+                return True
+
+        real_server = self.Server
+
+        class Server(real_server):
+            def __init__(self, ledger):
+                super().__init__(ledger)
+                test.server = self
+                self.account_restart = None
+
+            def wait(self, _timeout):
+                return False  # serving: only the self-restart ends this loop
+
+        self.enterContext(unittest.mock.patch.object(self.host, 'CollectorServer', Server))
+        self.enterContext(unittest.mock.patch.object(self.host, 'AccountServiceHost', Account))
+        self.enterContext(unittest.mock.patch.object(self.host.LearningLedger, 'machine_idle',
+                                                     lambda _self: {'run_slots': [], 'probes': []}, create=True))
+        self.enterContext(unittest.mock.patch.object(account_restart, 'CHECK_EVERY_SECONDS', 0))
+        self.enterContext(unittest.mock.patch.object(account_restart, 'last_restart', return_value=None))
+        recorded = []
+        self.enterContext(unittest.mock.patch.object(account_restart, 'record_restart',
+                                                     side_effect=lambda *_a, **k: recorded.append(k) or True))
+        self.assertEqual(0, self.host.main(['--state-root', str(self.root)]))
+        self.assertEqual(2, len(asked))
+        first = asked[1]  # the decision the first check made, seen by the second
+        self.assertEqual(('wait', ['signature']), (first.get('action'), first.get('held', {}).get('children')))
+        self.assertEqual([('signature', 'signature_execution_unconfirmed')],
+                         [(k['lane'], k['cause']) for k in recorded])
+        self.assertEqual('restart', self.server.account_restart['action'])
+        self.assertEqual(['requested'], [r['cause'] for r in self.records])
 
 if __name__ == '__main__':
     unittest.main()

@@ -15,17 +15,28 @@ for the learning cycle. Nothing here launches, admits or releases anything.
 from __future__ import annotations
 
 import hashlib
+import json
 
 from .contracts import ContractError
 from .history_contracts import HistoryError, _DIGEST, _ID, matches, valid_integer
 from .learning_contracts import MAX_RECORD_BYTES, canonical_json, parse_bounded_json, validate_learning_record
 from .learning_eligibility import EligibilityError, check_evaluation_case
+from .learning_cycle_core import LEARNING_RETENTION_MS
 from .learning_engine import review_evaluation_case
 from .project_learning_activation import activation
 from .project_learning_corpus import MAX_SIGNATURE_BYTES
 
 MAX_CASES = 20_000
 MAX_FEEDBACK = 20_000
+# The retention of learning (O0c P7): a case or candidate older than this, that is not promoted and that no
+# live record names, is outside the cycle and the case review and is removed by the project service's cleanup.
+# A case is promoted once it is reviewed into a controlled corpus; a candidate once it left `proposed`.
+PROMOTED_SQL = (
+    "(record_type='evaluation_case' AND json_extract(CAST(content AS TEXT),'$.corpus_state')!='development') "
+    "OR (record_type='candidate' AND json_extract(CAST(content AS TEXT),'$.status')!='proposed')")
+# Removed per cleanup pass, and rows examined per record removed (as the other purges).
+LEARNING_PURGE_BATCH = 100
+LEARNING_PURGE_SCAN_FACTOR = 16
 OWNER_REASONS = frozenset({
     "feedback_run_unknown", "case_unknown", "case_review_refused", "owner_record_conflict",
 })
@@ -61,17 +72,26 @@ def corpus_record(history, record_id, kind):
     return None if row is None else _parsed(history, row[0])
 
 
-def corpus_records(history, kind, limit):
-    """Every record of this kind, imported ones first; refuses rather than truncates."""
+def corpus_records(history, kind, limit, *, since_ms=None):
+    """Every record of this kind, imported ones first; refuses rather than truncates.
+
+    With `since_ms`, cases are the window: those stored after it and every promoted one. Case review
+    needs no more (it compares with controlled cases), so a store whose old development cases were
+    removed or never will be is read the same way (O0c P7).
+    """
+    window, extra = "", ()
+    if since_ms is not None and kind == "evaluation_case":
+        window, extra = f" AND (ingested_at_ms>? OR {PROMOTED_SQL})", (since_ms,)
     rows, imported = [], _import_id(history)
     if imported is not None:
         rows = history._connection.execute(
             "SELECT content FROM project_learning_records WHERE project_id=? AND import_id=? "
-            "AND record_type=? ORDER BY source_sequence LIMIT ?",
-            (history.project_id, imported, kind, limit + 1)).fetchall()
+            "AND record_type=?" + window + " ORDER BY source_sequence LIMIT ?",
+            (history.project_id, imported, kind, *extra, limit + 1)).fetchall()
     rows = [*rows, *history._connection.execute(
-        "SELECT content FROM records WHERE project_id=? AND record_type=? ORDER BY source_sequence LIMIT ?",
-        (history.project_id, kind, limit + 1 - len(rows) if len(rows) <= limit else 1))]
+        "SELECT content FROM records WHERE project_id=? AND record_type=?" + window
+        + " ORDER BY source_sequence LIMIT ?",
+        (history.project_id, kind, *extra, limit + 1 - len(rows) if len(rows) <= limit else 1))]
     if len(rows) > limit:
         raise HistoryError("history_learning_capacity")
     seen, records = set(), []
@@ -81,6 +101,67 @@ def corpus_records(history, kind, limit):
             seen.add(record["record_id"])
             records.append(record)
     return records
+
+
+def purge_old_learning(history, now_ms, limit=LEARNING_PURGE_BATCH):
+    """Remove up to `limit` cases and candidates past the retention (O0c P7); returns how many went.
+
+    Run by the project service's cleanup pass, never by a request. A record goes only when it is
+    older than `LEARNING_RETENTION_MS`, is not promoted (a case in a controlled corpus, a candidate
+    past `proposed`), is not named by a live record (a case another case supersedes, a case or
+    candidate an outcome of the window names by digest) and carries no owner attestation. Rows are
+    examined in sequence order from a cursor, at most `LEARNING_PURGE_SCAN_FACTOR` per record that
+    may go, so a pass is bounded and records kept for a reason never stop the ones behind them. A
+    purged case is not mined again: its outcome is as old as it is, and outside every cycle.
+    """
+    cutoff = now_ms - LEARNING_RETENTION_MS
+    connection, project = history._connection, history.project_id
+    scan = limit * LEARNING_PURGE_SCAN_FACTOR
+    rows = connection.execute(
+        "SELECT record_id,record_type,source_sequence,content_digest,content FROM records "
+        "WHERE project_id=? AND record_type IN ('evaluation_case','candidate') AND source_sequence>? "
+        "AND ingested_at_ms<=? AND NOT (" + PROMOTED_SQL + ") ORDER BY source_sequence LIMIT ?",
+        (project, history._learning_purge_cursor, cutoff, scan)).fetchall()
+    history._learning_purge_cursor = 0 if len(rows) < scan else rows[-1][2]
+    if not rows:
+        return 0
+    # (identity, sequence, how an outcome names it: its case digest or its candidate digest)
+    entries, case_digests, candidate_digests = [], {}, {}
+    for identifier, kind, sequence, digest, content in rows:
+        if kind == "evaluation_case":
+            case_digests[digest] = identifier
+        else:
+            digest = parse_bounded_json(history._stored_blob(content, maximum=MAX_RECORD_BYTES))["candidate_digest"]
+            candidate_digests[digest] = identifier
+        entries.append((identifier, sequence))
+    named = {row[0] for row in connection.execute(
+        "SELECT json_extract(CAST(content AS TEXT),'$.supersedes_case_id') FROM records "
+        "WHERE project_id=? AND record_type='evaluation_case' "
+        "AND json_extract(CAST(content AS TEXT),'$.supersedes_case_id') IN (SELECT value FROM json_each(?))",
+        (project, json.dumps([identifier for identifier, _ in entries])))}
+    named.update(row[0] for row in connection.execute(
+        "SELECT subject_record_id FROM project_owner_attestations WHERE project_id=? "
+        "AND subject_record_id IN (SELECT value FROM json_each(?))",
+        (project, json.dumps([identifier for identifier, _ in entries]))))
+    # An outcome of the window that names a case or a candidate (an evaluation run) keeps it.
+    for case, candidate in connection.execute(
+            "SELECT json_extract(CAST(content AS TEXT),'$.evaluation_case_digest'),"
+            "json_extract(CAST(content AS TEXT),'$.evaluation_candidate_digest') "
+            "FROM records INDEXED BY records_learning_outcomes WHERE project_id=? AND record_type='outcome' "
+            "AND ingested_at_ms>? AND (json_extract(CAST(content AS TEXT),'$.evaluation_case_digest') "
+            "IN (SELECT value FROM json_each(?)) OR json_extract(CAST(content AS TEXT),'$.evaluation_candidate_digest') "
+            "IN (SELECT value FROM json_each(?)))",
+            (project, cutoff, json.dumps(list(case_digests)), json.dumps(list(candidate_digests)))):
+        named.update(filter(None, (case_digests.get(case), candidate_digests.get(candidate))))
+    removable = [entry for entry in entries if entry[0] not in named][:limit]
+    if removable and len(removable) == limit:
+        history._learning_purge_cursor = removable[-1][1]  # Rows past it are examined by the next pass.
+    if not removable:
+        return 0
+    with history._transaction():
+        for identifier, _ in removable:
+            connection.execute("DELETE FROM records WHERE project_id=? AND record_id=?", (project, identifier))
+    return len(removable)
 
 
 def rejected_run_ids(history):
@@ -165,7 +246,8 @@ def review_case(history, case_id, *, review_digest, similarity_group_digest, des
             content = canonical_json(reviewed)
         except ContractError as error:
             raise OwnerRecordRefused("case_review_refused", str(error)) from None
-        related = [case for case in corpus_records(history, "evaluation_case", MAX_CASES)
+        related = [case for case in corpus_records(history, "evaluation_case", MAX_CASES,
+                                                   since_ms=now_ms - LEARNING_RETENTION_MS)
                    if case["record_id"] != case_id]
         try:
             check_evaluation_case(

@@ -6,9 +6,10 @@ Each live count follows the same rule its limit enforces, so the report and the 
 from .history_contracts import HistoryError
 from .orchestration_store import OrchestrationOwner
 from .project_cleanup import MAX_CLEANUP_RESERVATIONS
+from .project_history import MAX_RESULT_BODY_BYTES
 from .project_qa_checks import MAX_CHECK_RECEIPTS
 
-CAPACITY_NAMES = ('results', 'orchestrations', 'cleanup_reservations', 'operational_qa', 'qa_check_receipts')
+CAPACITY_NAMES = ('results', 'results_in_flight', 'orchestrations', 'cleanup_reservations', 'operational_qa', 'qa_check_receipts')
 
 
 def capacity_report(history):
@@ -22,8 +23,12 @@ def capacity_report(history):
         except HistoryError:
             results += 1  # Unverifiable counts as live, as in the limit.
     limits = history._orchestration_limits
+    capacity = history._result_capacity
+    _, in_flight, _ = history._result_counts()
     counts = {
-        'results': (results, history._result_capacity.max_entries),
+        'results': (results, capacity.max_entries),
+        # O10 RC-2: results running now, each holding a whole body's space, against how many fit.
+        'results_in_flight': (in_flight, capacity.max_reserved_bytes // MAX_RESULT_BODY_BYTES),
         'orchestrations': (OrchestrationOwner(history)._open_count(), None if limits is None else limits.max_orchestrations),
         # Live: the account's release not yet acknowledged (R6).
         'cleanup_reservations': (db.execute('SELECT COUNT(*) FROM project_cleanup_reservations WHERE project_id=? '

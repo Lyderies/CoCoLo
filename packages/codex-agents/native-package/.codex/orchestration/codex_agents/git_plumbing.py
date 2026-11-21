@@ -32,7 +32,7 @@ import stat
 import subprocess
 import sys
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from .host_paths import executable_location_problem, temp_roots, within
@@ -86,7 +86,8 @@ class GitOutputLimitError(subprocess.SubprocessError):
 
 
 def _bounded_git_output(
-    arguments: list[str], *, text: bool, timeout: float, limit: int, deadline: float | None = None
+    arguments: list[str], *, text: bool, timeout: float, limit: int, deadline: float | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     if (type(limit) is not int or not 1 <= limit <= 32 * 1_048_576
             or type(timeout) not in (int, float) or not 0 < timeout <= 60):
@@ -103,7 +104,7 @@ def _bounded_git_output(
 
     remaining()
     process = subprocess.Popen(
-        arguments, env=GIT_ENVIRONMENT, stdin=subprocess.DEVNULL,
+        arguments, env=GIT_ENVIRONMENT if env is None else dict(env), stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
     )
     output = bytearray()

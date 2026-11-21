@@ -168,6 +168,22 @@ class ResultLeaseTests(unittest.TestCase):
         # takes an entry, so the third fits. 0.8.29 refused it (a lifetime cap).
         self.reserve(3)
 
+    def test_RC_1_space_held_by_running_results_is_busy_not_full(self):
+        """O10 RC-1: results in flight hold the body space, so the refusal is busy (wait), not full."""
+        self.reserve()
+        self.reserve(2)
+        with self.assertRaises(HistoryError) as refused:
+            self.reserve(3)
+        self.assertEqual('history_result_capacity_busy', refused.exception.reason_code)
+
+    def test_RC_1_live_entries_at_their_limit_are_full(self):
+        self.fixture.capacity = replace(self.fixture.capacity, max_entries=1)
+        self.reopen()
+        self.reserve()
+        with self.assertRaises(HistoryError) as refused:
+            self.reserve(2)
+        self.assertEqual('history_result_capacity', refused.exception.reason_code)
+
     def test_mixed_live_body_capacity_cannot_be_bypassed_by_legacy_or_leased_reserve(self):
         self.fixture.reserve()
         self.reserve(2)
@@ -395,7 +411,7 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
                 ProjectHistory(self.fixture.directory, self.fixture.store.project_id, **options)
             self.assertEqual(before, hashlib.sha256(path.read_bytes()).hexdigest())
         self.fixture.store = self.fixture.open(allow_schema_upgrade=True)
-        self.assertEqual(16, self.store._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(18, self.store._connection.execute("PRAGMA user_version").fetchone()[0])  # (requirement) SB: schema 18
         for name, rows in snapshot.items():
             self.assertEqual(rows, [tuple(row) for row in self.store._connection.execute("SELECT * FROM " + name)])
         self.assertEqual(self.fixture.payload()[0], self.store.read_result(binding()))
@@ -438,7 +454,7 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
             self.fixture.open()
         self.assertEqual(before, hashlib.sha256(path.read_bytes()).hexdigest())
         self.fixture.store = self.fixture.open(allow_schema_upgrade=True)
-        self.assertEqual(16, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(18, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) SB: schema 18
         for name, rows in snapshot.items():
             assert_migrated_rows(self, self.store, name, rows)
         self.assertEqual(self.fixture.payload()[0], self.store.read_result(binding()))

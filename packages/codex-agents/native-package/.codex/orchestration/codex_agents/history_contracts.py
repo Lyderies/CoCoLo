@@ -22,12 +22,18 @@ HISTORY_REASON_CODES = frozenset({
     "history_conflict", "history_not_found", "history_sequence_exhausted",
     "history_invalid_request", "history_request_too_large", "history_invalid_response",
     "history_not_authorized", "history_service_unavailable",
-    "history_result_capacity", "history_result_expired", "history_result_unavailable",
+    "history_result_capacity", "history_result_capacity_busy", "history_result_expired", "history_result_unavailable",
     "history_result_not_reserved", "history_result_not_ready",
     "history_execution_consumed", "history_execution_not_ready",
     "history_orchestration_unavailable", "history_orchestration_state",
     "history_orchestration_pending", "history_orchestration_full",
+    # R8a: opened under another session, service or version (an update changes the service's scope).
+    "history_orchestration_other_scope",
+    # R7b: a service that would not take the connection said why (service_transport.SERVICE_REFUSALS).
+    "service_refused_late", "service_refused_enrollment", "service_refused_busy", "service_refused_unavailable",
     "history_learning_capacity", "history_learning_incomplete", "history_learning_reconciliation",
+    # D1 (RS-D M1): a result kept from before format 18, whose record context only an earlier service's memory held.
+    "history_worker_context_unavailable",
 })
 
 

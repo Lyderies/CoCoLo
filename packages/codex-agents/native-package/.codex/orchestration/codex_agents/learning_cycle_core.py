@@ -26,6 +26,11 @@ from .learning_contracts import (
 )
 from .learning_analysis import analyze_outcomes
 
+# How long learning reads and keeps outcomes, unpromoted cases and candidates, and operational QA: the one
+# retention window of the learning cycle (O0c P7/P8). Records older than this are outside every cycle and case
+# review and are removed by the product's own cleanup; promoted policy and anything a live record names stay.
+# The default is 90 days, the ledger's record retention; the owner has not decided it, so it is this constant only.
+LEARNING_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 MAX_OUTCOMES = 10_000
 MAX_CASES = 20_000
 MAX_INVALIDATED_RUNS = 20_000

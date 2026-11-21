@@ -30,6 +30,7 @@ from .claude_activity import ClaudeActivity, ClaudeActivityError
 from .codex_activity import CodexActivity, CodexActivityError
 from . import event_shapes
 from .contracts import (
+    EVIDENCE_FIELDS_RULE,
     ONE_EVIDENCE_ENTRY_RULE,
     effective_dispatch_bounds,
     effective_dispatch_limits,
@@ -92,6 +93,12 @@ MAX_STREAM_BYTES = 8 * 1024 * 1024
 MAX_LINE_BYTES = 1024 * 1024
 MAX_RESULT_BYTES = MAX_RESULT_BODY_BYTES
 CLAUDE_TOOLS = ("Read", "Glob", "Grep")
+# O10 VF: the client's own output tool under --json-schema. It carries the child's result only, reads
+# nothing, and is allowed to a schema-held run alone; the result is taken from the result frame.
+CLAUDE_OUTPUT_TOOL = "StructuredOutput"
+CLAUDE_RUN_TOOLS = (*CLAUDE_TOOLS, CLAUDE_OUTPUT_TOOL)
+# O10 VF-6: the first client version shown to hold a result to --json-schema (a real run, 2026-11-20).
+CLAUDE_SCHEMA_MIN_VERSION = (2, 1, 311)
 # Known built-in plugins are switched off; the init-frame check still fails
 # closed if any plugin loads, so this list is a convenience, not the control.
 CLAUDE_DISABLED_PLUGINS = (
@@ -100,6 +107,18 @@ CLAUDE_DISABLED_PLUGINS = (
     "cc-plugin-plugin-authoring@builtin",
     "cc-plugin-easel@builtin",
 )
+# CI-4: under COCOLO's own child settings (`claude_settings`: hooks off, the plugins above disabled), Claude
+# Code 2.1.323 lists exactly one built-in plugin in the init frame, `cc-plugin-privacy` (captured with those
+# settings). Its only effect, from the binary's plugin manifest, is a `tool.check` hook that can restrict a
+# call; it adds no tool, reads nothing and fetches nothing. It is accepted only with exactly the keys name,
+# path and source, as a built-in (path "builtin", source "<name>@builtin"). The four built-ins COCOLO disables
+# act when loaded (agents-md injects AGENTS.md and CLAUDE.md as context, telemetry fetches, plugin-authoring
+# can register a tool and a hook): one that is listed means the settings did not apply, so the child stops
+# (`init_plugin_not_disabled`). Any other plugin stops it too (`init_plugin_not_allowed`).
+CLAUDE_ALLOWED_BUILTIN_PLUGINS = frozenset({"cc-plugin-privacy"})
+_CLAUDE_PLUGIN_KEYS = frozenset({"name", "path", "source"})
+# The init `permissionMode` COCOLO sets (--permission-mode and settings), checked when the client reports it.
+CLAUDE_PERMISSION_MODE = "dontAsk"
 CODEX_REROUTE_EVENTS = {"model/rerouted", "model_rerouted", "model.rerouted"}
 # Codex features switched off for every child. `code_mode_host` must stay enabled:
 # disabling it breaks Codex's own tool invocation.
@@ -585,21 +604,27 @@ class _WatchdogOwner:
     def __init__(self) -> None:
         self._process: subprocess.Popen | None = None
 
-    def start(self, root: int, birth: str, deadline_monotonic: float, marker: tuple[str, str, str] | None = None) -> None:
+    def start(self, root: int, birth: str, deadline_monotonic: float, marker: tuple[str, str, str] | None = None,
+              container: dict | None = None) -> None:
         # The child remains unreaped through the acknowledgement, so its pid
         # cannot pass to another process. Output processing waits for verification.
+        # C3: with `container` (container mode, no marker) the watchdog also stops the run's
+        # container through the container primitive once this service has died; it is given the
+        # podman client's own environment variables for that, and nothing else.
+        tail = ("--container", container["argument"]) if container is not None else (marker or ())
+        environment = {"PATH": os.defpath, **(container["environment"] if container is not None else {})}
         try:
             self._process = subprocess.Popen(
                 [
                     sys.executable, *PYTHON_ISOLATION_FLAGS, str(WATCHDOG_SCRIPT),
-                    str(root), birth, repr(deadline_monotonic), *(marker or ()),
+                    str(root), birth, repr(deadline_monotonic), *tail,
                 ],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
                 close_fds=True,
-                env={"PATH": os.defpath},
+                env=environment,
             )
         except OSError as exc:
             raise _Abort("watchdog_unavailable") from exc
@@ -786,17 +811,20 @@ def run_child(
                 execution_bound = True
             except ExecutionCustodyError:
                 raise _Abort("process_tracking_unavailable") from None
-        marker = None
+        marker = container = None
         if _execution is not None:
             # Where the watchdog confirms, before it exits, that the tree it tracked is empty.
             try:
                 marker = _execution.watchdog_marker()
+                # C3: in container mode, the container it stops once this service has died.
+                container = _execution.watchdog_container()
             except ExecutionCustodyError:
                 raise _Abort("watchdog_unavailable") from None
         watchdog.start(
             process.pid, tree.root_birth,
             deadline + WATCHDOG_GRACE_SECONDS,
             *(() if marker is None else ((*marker, run_tag),)),
+            **({} if container is None else {"container": container}),
         )
         if _execution is not None:
             # The project service records the acknowledged watchdog durably, so a
@@ -871,7 +899,11 @@ def run_child(
         # the first nonlocal exit, and never infer custody from a failed step.
         if process is not None:
             if _execution is not None:
-                cleanup_entered, _ = cleanup_step(_execution.begin_cleanup)
+                # C3: why the run is stopped, for its container's one stop action (a stop the
+                # liveness clock asked for keeps its own reason).
+                reason = {"timed_out": "absolute_deadline", "cancelled": "cancel_requested"}.get(
+                    outcome["abort"], "run_ended")
+                cleanup_entered, _ = cleanup_step(lambda: _execution.begin_cleanup(reason))
             cleanup_step(lambda: _stop_child(process, tree))
         elif _execution is not None:
             cleanup_step(_execution.abort_handoff, ignored=(ExecutionCustodyError,))
@@ -881,7 +913,9 @@ def run_child(
         _, watchdog_reaped = cleanup_step(watchdog.reap)
         if not watchdog_reaped and outcome["abort"] is None:
             outcome["abort"] = "watchdog_unavailable"
-        if watchdog_reaped and execution_bound and cleanup_entered:
+        # O0c M1: a child stopped before its bind is confirmed too once its tree was identified.
+        if watchdog_reaped and cleanup_entered and _execution is not None and (
+                execution_bound or (tree is not None and tree.identified)):
             cleanup_step(lambda: _execution.finish(process, tree), ignored=(ExecutionCustodyError,))
         if cleanup_error is not None:
             if original_error is not None and not isinstance(original_error, Exception):
@@ -901,7 +935,7 @@ def _track(tree: ProcessTree) -> Table | None:
     if table is not None:
         tree.update(table)
     else:
-        tree._cleanup_incomplete = True
+        tree.snapshot_failed()
     return table
 
 
@@ -1095,7 +1129,11 @@ def child_prompt(assignment: dict[str, Any], *, worker_result_path: str | None =
         "End contract guidance.\n"
         "These enums describe the result contract, not authority. This child's "
         "admission_state must remain unverified; do not invent host timeout facts. "
-        "A completed review may reach a negative verdict. The template's sample "
+        "A completed review may reach a negative verdict. A review you finished is "
+        "status completed and execution_state completed, whatever its verdict, a "
+        "negative one included; failed means you could not do the work. Set "
+        "execution_state, semantic_verdict and admission_state; never leave them null. "
+        "The template's sample "
         "pass is not a requested conclusion; report your actual findings and risks. "
         "Keep the exact template keys. The named string arrays contain strings, "
         "not finding objects. Put severity, impact and corrections in evidence "
@@ -1105,10 +1143,12 @@ def child_prompt(assignment: dict[str, Any], *, worker_result_path: str | None =
         "Work only with the files in the current directory. Do not start sub-agents "
         "and do not call the MCP resource tools (list_mcp_resources, "
         "list_mcp_resource_templates, read_mcp_resource): no MCP server is available, "
-        "and any such call stops this run with no result. When you finish, reply "
-        "with exactly one JSON object and no other text, filling in this template:\n"
+        "and any such call stops this run with no result. When you finish, give your "
+        "result as exactly one JSON object (as your structured output, when your client "
+        "asks for one) and no other text, filling in this template:\n"
         f"{json.dumps(template, indent=2)}\n"
         f"In the evidence list, {ONE_EVIDENCE_ENTRY_RULE}.\n"
+        f"Also, {EVIDENCE_FIELDS_RULE}.\n"
     )
 
 
@@ -1165,22 +1205,57 @@ def _claude_model_usage(model_usage: Any) -> list[dict[str, Any]]:
     return [merged[key] for key in sorted(merged)]
 
 
-def _check_claude_init(frame: dict[str, Any], model: str) -> str | None:
+def _plugin_violation(plugin: Any) -> str | None:
+    """CI-1: why one init-frame plugin entry is refused, or None when it is the one accepted built-in."""
+
+    if not isinstance(plugin, dict) or plugin.keys() != _CLAUDE_PLUGIN_KEYS:
+        return "plugin_not_allowed"
+    name, path, source = plugin["name"], plugin["path"], plugin["source"]
+    if not (isinstance(name, str) and path == "builtin" and source == f"{name}@builtin"):
+        return "plugin_not_allowed"
+    if name in CLAUDE_ALLOWED_BUILTIN_PLUGINS:
+        return None
+    return "plugin_not_disabled" if f"{name}@builtin" in CLAUDE_DISABLED_PLUGINS else "plugin_not_allowed"
+
+
+def _init_client_version(frame: dict[str, Any]) -> str | None:
+    """CI-4: the client version an init frame reports, only when it is a plain dotted number."""
+
+    version = frame.get("claude_code_version")
+    return version if isinstance(version, str) and re.fullmatch(r"\d+\.\d+\.\d+", version) else None
+
+
+def _check_claude_init(frame: dict[str, Any], model: str, allowed: tuple[str, ...] = CLAUDE_TOOLS,
+                       *, schema_held: bool = False) -> str | None:
     """Return the first init-frame violation, or None when the frame is clean."""
 
     if frame.get("apiKeySource") != "none":
         return "api_key_source"
     if frame.get("model") != model:
         return "model_mismatch"
-    if frame.get("plugins") != []:
-        return "plugin_loaded"
+    plugins = frame.get("plugins")
+    if not isinstance(plugins, list):
+        return "plugin_not_allowed"
+    violations = {_plugin_violation(plugin) for plugin in plugins} - {None}
+    if violations:
+        # A plugin nothing allows outranks one COCOLO's settings should have disabled.
+        return "plugin_not_allowed" if "plugin_not_allowed" in violations else "plugin_not_disabled"
     if frame.get("mcp_servers") != []:
         return "mcp_server_loaded"
     tools = frame.get("tools")
     if not isinstance(tools, list) or any(
-        not isinstance(tool, str) or tool not in CLAUDE_TOOLS for tool in tools
+        not isinstance(tool, str) or tool not in allowed for tool in tools
     ):
         return "tool_not_allowed"
+    # CI-2: newer clients report these; one that does must report what COCOLO set (older ones report neither).
+    if "permissionMode" in frame and frame["permissionMode"] != CLAUDE_PERMISSION_MODE:
+        return "permission_mode_mismatch"
+    if "additional_directories" in frame and frame["additional_directories"] != []:
+        return "additional_directories_present"
+    # O10 VF-6: a client that reports a version too old to hold its result to the schema stops here.
+    # No version, or one that cannot be read, is refused like an old one (review 040-vf-dr-code).
+    if schema_held and _client_version(frame.get("claude_code_version")) < CLAUDE_SCHEMA_MIN_VERSION:
+        return "client_unsupported"
     return None
 
 
@@ -1212,10 +1287,13 @@ def run_claude(
     deadline_seconds: float,
     max_turns: int,
     executable: str,
+    schema: bytes,
     worker_result_path: str | None = None,
     _execution: ExecutionTicket | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     model = route["model"]
+    # O10 VF-1: the same strict schema a Codex child gets, so the client holds the result to it.
+    original_schema, strict_schema = codex_schemas(schema)
     settings = _private_file(
         control / "settings.json", json.dumps(claude_settings(model)).encode()
     )
@@ -1235,6 +1313,7 @@ def run_claude(
         # Partial messages give a long message liveness; fences below apply to them too.
         "--include-partial-messages",
         "--max-turns", str(max_turns),
+        "--json-schema", strict_schema.decode(),
         "--append-system-prompt-file", str(system_prompt),
         # The prompt starts with the assignment's objective; after `--` neither
         # client can read it as an option (`-c...`, `--settings=...`).
@@ -1248,7 +1327,7 @@ def run_claude(
         "models": set(),
         "helper_models": set(),
     }
-    activity = (ClaudeActivity(model, CLAUDE_TOOLS) if type(_execution) is ExecutionTicket
+    activity = (ClaudeActivity(model, CLAUDE_RUN_TOOLS) if type(_execution) is ExecutionTicket
                 and _execution.activity_enabled() else None)
 
     def publish(category: str | None) -> None:
@@ -1275,7 +1354,7 @@ def run_claude(
         if state["init"] is None:
             if kind != "system" or frame.get("subtype") != "init":
                 raise _Abort("missing_init_frame")
-            violation = _check_claude_init(frame, model)
+            violation = _check_claude_init(frame, model, CLAUDE_RUN_TOOLS, schema_held=True)
             if violation is not None:
                 raise _Abort(f"init_{violation}")
             state["init"] = frame
@@ -1334,7 +1413,7 @@ def run_claude(
                 state["models"].add(str(started["model"]))
             block = event.get("content_block") if event.get("type") == "content_block_start" else None
             # A prohibited tool stops the child as soon as its call starts streaming.
-            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") not in CLAUDE_TOOLS:
+            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") not in CLAUDE_RUN_TOOLS:
                 raise _Abort("claude_tool_not_allowed")
         if kind == "assistant":
             message = frame.get("message")
@@ -1346,7 +1425,7 @@ def run_claude(
             # them stops the child at once, like a prohibited Codex item.
             if isinstance(content, list) and any(
                 isinstance(block, dict) and block.get("type") == "tool_use"
-                and block.get("name") not in CLAUDE_TOOLS
+                and block.get("name") not in CLAUDE_RUN_TOOLS
                 for block in content
             ):
                 raise _Abort("claude_tool_not_allowed")
@@ -1361,7 +1440,7 @@ def run_claude(
             publish(category)
 
     # Off unless the owner asked for frame shapes; then every frame is noted before any fence.
-    shapes = event_shapes.recorder("claude", requested=model, effort=route["effort"], tools=CLAUDE_TOOLS)
+    shapes = event_shapes.recorder("claude", requested=model, effort=route["effort"], tools=CLAUDE_RUN_TOOLS)
     started = time.monotonic()
     try:
         outcome = run_child(
@@ -1418,12 +1497,23 @@ def run_claude(
             }
     if outcome["abort"] is not None:
         return None, {**report, "outcome": outcome["abort"]}
+    missing = {**report, "outcome": "invalid_result", "result_validation_reason_code": "structured_output_missing"}
+    if isinstance(result_frame, dict) and result_frame.get("subtype") == "error_max_structured_output_retries":
+        # O10 VF-2: the client could not get a schema-valid result; recognised before the exit code,
+        # which may be an error for it (review 040-vf-dr-code).
+        return None, missing
     if outcome["returncode"] != 0 or not isinstance(result_frame, dict):
         return None, {**report, "outcome": "missing_result"}
     if result_frame.get("is_error") is not False or result_frame.get("subtype") != "success":
         return None, {**report, "outcome": "child_reported_error"}
-    result = _result_object(result_frame.get("result"))
-    if result is None:
+    # O10 VF-5: the result is the client's validated object, never the text or a tool call's input,
+    # with the strict schema's optional nulls removed as for Codex; the full validator follows.
+    structured = result_frame.get("structured_output")
+    if type(structured) is not dict:
+        return None, missing
+    try:
+        result = remove_optional_nulls(structured, original_schema)
+    except RecursionError:
         return None, {**report, "outcome": "unparseable_result"}
     return result, {**report, "outcome": "result"}
 
@@ -1714,14 +1804,19 @@ PROBE_DEADLINE_SECONDS = 120
 MAX_PROBE_EVENTS = 64
 
 
-def _run_claude_billing_probe(arguments, *, environment, cwd, deadline_seconds, execution=None):
-    """Fixed probe protocol; retain partial restrictions without claiming success."""
+def _run_claude_billing_probe(arguments, *, environment, cwd, deadline_seconds, execution=None, observed=None):
+    """Fixed probe protocol; retain partial restrictions without claiming success.
+
+    `observed`, when given, receives the client version the init frame reported (CI-4), even when the
+    init check then stops the probe."""
     state: dict[str, Any] = {"init": False, "infos": [], "result": False}
 
     def on_frame(frame: dict[str, Any]) -> None:
         if not state["init"]:
             if frame.get("type") != "system" or frame.get("subtype") != "init":
                 raise _Abort("missing_init_frame")
+            if observed is not None:
+                observed["client_version"] = _init_client_version(frame)
             violation = _check_claude_init(frame, PROBE_MODEL)
             if violation is not None or frame.get("tools") != []:
                 raise _Abort(f"init_{violation or 'tool_not_allowed'}")
@@ -1939,6 +2034,8 @@ def dispatch(
             raise BridgeRefused("provider client version differs from the admitted client")
         if not ledger.client_version_reviewed(provider, identity["client_version"]):
             raise BridgeRefused("provider client version is not reviewed")
+        if provider == "claude" and _client_version(identity["client_version"]) < CLAUDE_SCHEMA_MIN_VERSION:
+            raise BridgeRefused("provider client cannot hold its result to the schema")  # O10 VF-6
         # The child is launched from the client the re-check just read.
         executable, digest = resolve_client(provider, untrusted=[project_root])
         if (executable, digest) != (identity["client_path"], identity["client_sha256"]):
@@ -1970,7 +2067,7 @@ def dispatch(
                 route=route, assignment=assignment, role_prompt=role_prompt,
                 export=export, control=control, environ=environ,
                 deadline_seconds=deadline_seconds, max_turns=max_turns,
-                executable=executable, worker_result_path=worker_result_path,
+                executable=executable, schema=result_schema, worker_result_path=worker_result_path,
                 _execution=execution,
             )
             if report["rate_limit_record_failed"]:
@@ -2039,7 +2136,10 @@ def prepare_dispatch_result(assignment, result, report):
     caller, process-cleanup or account-release authority.
     """
     reviewed = True
-    result_validation_reason_code = None
+    # O10 VF-2: a run that ended with no result may already carry its fixed reason.
+    result_validation_reason_code = (report.get("result_validation_reason_code") if result is None
+                                     and report.get("result_validation_reason_code") in RESULT_VALIDATION_REASON_CODES
+                                     else None)
     if result is not None and report.get("rerouted"):
         # A reroute means the work was not done by the routed model: its verdict
         # is unknown, and the result stays unreviewed. Validate before annotating:
@@ -2233,3 +2333,10 @@ def _codex_role_prompt(bundle_root: Path, route: dict[str, Any]) -> str:
     ):
         raise BridgeRefused("installed Codex agent differs from the routed configuration")
     return prompt
+
+
+def _client_version(text: Any) -> tuple[int, ...]:
+    """A client's version as numbers, (0,) when it cannot be read (so it is refused as too old)."""
+    import re
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", text) if isinstance(text, str) else None
+    return tuple(int(part) for part in match.groups()) if match else (0,)
