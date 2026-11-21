@@ -212,9 +212,11 @@ class CompletenessBoundary(Helpers, CoreCase):
         self.assertTrue(result.get("incomplete"))
 
     def test_a_capped_collection_says_so(self):  # API-8
-        jsonl(self.records / "units.jsonl", [{"id": "U-%04d" % i, "state": "done"} for i in range(1001)])
-        result = self.client("read").call("units.list")
-        self.assertTrue(len(result["units"]) == 1001 or result.get("incomplete") is True, len(result["units"]))
+        jsonl(self.records / "units.jsonl", [{"id": "U-%04d" % i, "state": "done"} for i in range(51)])
+        with mock.patch.object(self.mod, "LIST_MAX", 50):  # the real cap is 10000; plant one row more than the cap
+            result = self.client("read").call("units.list")
+        self.assertEqual(50, len(result["units"]))  # the cut is real ...
+        self.assertIs(True, result.get("incomplete"))  # ... and the reply says so
 
     def test_every_answer_built_on_a_cut_read_says_incomplete(self):  # API-8
         big = [{"id": "H-%d" % i, "summary": "s" * 60} for i in range(100)]
@@ -314,6 +316,7 @@ class IntentsAndIds(Helpers, CoreCase):
         with open(self.records / "commands.jsonl", "a") as handle:
             for _ in range(60):
                 handle.write(json.dumps({"type": "pad", "pad": "p" * 100}) + "\n")
+        (self.records / "ids.json").unlink()  # no counter: the number comes from a scan of the whole (cut) record
         with mock.patch.object(self.mod, "READ_MAX_BYTES", 3000):
             second = self.confirmed(owner, "control.resume", {})["command_id"]
         self.assertNotEqual(first, second)

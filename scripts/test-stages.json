@@ -91,6 +91,7 @@
  "codex:tests.test_core_api_round3": "integration",
  "codex:tests.test_core_api_round4": "integration",
  "codex:tests.test_core_api_round5": "integration",
+ "codex:tests.test_core_api_round6": "integration",
  "codex:tests.test_diagnostic_delivery": "integration",
  "codex:tests.test_dispatch_client_runtime": "integration",
  "codex:tests.test_dispatch_delivery_cli": "unit",

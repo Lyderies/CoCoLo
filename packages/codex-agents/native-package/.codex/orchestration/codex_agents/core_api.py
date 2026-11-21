@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import contextlib
 import errno
 import fcntl
 import hashlib
@@ -117,7 +118,9 @@ MONEY_WORDS = {"price", "prices", "pricing", "priced", "fee", "fees", "amount", 
                "inr", "cent", "cents", "euro", "euros"}
 # Money in text: an amount next to a currency sign (before or after, any spacing, signed), an ISO code or a currency
 # word, or a number right after a money word ("cost 12.50", "the bill was 40"). One exception is kept on purpose:
-# "$" with a single digit and nothing after it is a shell positional parameter ("echo $1"), not an amount.
+# "$" with a single digit and nothing after it is a shell positional parameter ("echo $1"), not an amount, but only
+# where the line before it is shell code (a command word, a test bracket, an assignment) and names no money word;
+# "charged $5 per month" and "a $5 fee" are amounts (_shell_parameter).
 _NUM = r"[-+]?\d[\d,]*(?:\.\d+)?"
 _SIGNS = "\u20ac\u00a3\u00a5\u20b9\u20a9\u20bd"  # euro, pound, yen, rupee, won, rouble ("$" is handled apart)
 _CODES = r"(?:usd|eur|gbp|jpy|aud|nzd|cad|chf|inr|cny|sek|nok|dkk|hkd|sgd)"
@@ -125,14 +128,18 @@ _CURRENCY_WORDS = r"(?:dollars?|euros?|cents?|pounds?|yen|rupees?|francs?|bucks)
 _MONEY_BEFORE = (r"(?:cost|costs|costing|price|prices|priced|fee|fees|charge|charged|charges|bill|billed|paid|pay|"
                  r"spent|spend|spending|budget|balance|credit|credits|amount|invoice|invoiced|refund|refunded)")
 MONEY_VALUE = re.compile(
-    r"(?i)(?:(?:\$(?!\d(?![\d.,]))|[" + _SIGNS + r"])\s*" + _NUM
+    r"(?i)(?:(?:\$|[" + _SIGNS + r"])\s*" + _NUM
     + r"|" + _NUM + r"\s*(?:\$(?![A-Za-z_{(])|[" + _SIGNS + r"])"
     + r"|\b" + _CODES + r"\s*" + _NUM + r"|" + _NUM + r"\s*(?:" + _CODES + r"|" + _CURRENCY_WORDS + r")\b)")
 MONEY_AFTER_WORD = re.compile(
     r"(?i)(\b" + _MONEY_BEFORE + r"\b(?:\s*[:=]\s*|\s+(?:is|was|were|are|of|at|about|around|now|to|by)\s+|\s+))"
     + _NUM)
+_SHELL_CUE = re.compile(r"(?:\b(?:echo|printf|cat|exec|eval|shift|test|read|export|local|set|sh|bash|zsh|if|elif|while|until|"
+                        r"case|for|do|then|return|exit)\b|\[|\w=)")
+_MONEY_PREFIX = re.compile(r"(?i)\b" + _MONEY_BEFORE[3:-1] + r"\b|[" + _SIGNS + r"]")
 AMOUNT_REMOVED = "[amount removed]"
 LIST_MAX = 10000  # a reply list longer than this is cut and the reply says "incomplete"
+REFUSAL_FLOOR_SECONDS = 0.5  # a refusal row always gets at least this long, even after deadline + grace
 AUDIT_GRACE_SECONDS = 1.0  # an audit row may still be written this long after the call's deadline, never longer
 UNKNOWN_STATE_KEYS = ("phase", "session", "now", "ctx", "window", "handoff_replies")
 SECRET_KEY = re.compile(r"(^token$|_token$|^passphrase$|password|secret|transcript|authorization|api_key)", re.I)
@@ -214,7 +221,19 @@ def _no_money_text(text):
     """Text with every money amount replaced (owner 2026-11-21: no money values while subscription-only)."""
     if not isinstance(text, str):
         return text
-    return MONEY_AFTER_WORD.sub(lambda m: m.group(1) + AMOUNT_REMOVED, MONEY_VALUE.sub(AMOUNT_REMOVED, text))
+    def value(m):
+        return m.group(0) if _shell_parameter(m) else AMOUNT_REMOVED
+    return MONEY_AFTER_WORD.sub(lambda m: m.group(1) + AMOUNT_REMOVED, MONEY_VALUE.sub(value, text))
+
+
+def _shell_parameter(match):
+    """True when a MONEY_VALUE match is "$" and one digit used as a shell positional parameter: the line before it
+    holds a shell cue and no money word."""
+    if not re.fullmatch(r"\$\d", match.group(0)):
+        return False
+    text = match.string
+    prefix = text[text.rfind("\n", 0, match.start()) + 1:match.start()]
+    return bool(_SHELL_CUE.search(prefix)) and not _MONEY_PREFIX.search(prefix)
 
 
 def _clean(value, depth=0):
@@ -270,6 +289,7 @@ class _CallState(_thread_local):
 
     deadline = None
     after = False
+    refusal_until = None  # a refusal row may be written until this time even if deadline + grace has passed
     audit_row = False  # the append in progress is an audit row (deadline + grace, never refused as late)
     op = None
     reads = None
@@ -284,7 +304,10 @@ def _limit(audit=False):
     the deadline plus AUDIT_GRACE_SECONDS for an audit row or post-effect work."""
     if _CALL.deadline is None:
         return None
-    return _CALL.deadline + AUDIT_GRACE_SECONDS if (audit or _CALL.after) else _CALL.deadline
+    if audit or _CALL.after:
+        limit = _CALL.deadline + AUDIT_GRACE_SECONDS
+        return max(limit, _CALL.refusal_until) if audit and _CALL.refusal_until else limit
+    return _CALL.deadline
 
 
 def _late(limit):
@@ -482,6 +505,65 @@ def _fsync_dir(path):
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+@contextlib.contextmanager
+def _records_lock(directory, audit=False):
+    """An exclusive flock on the records folder itself (no extra file), held for the whole of an id allocation or
+    a refusal rotate-and-append. A flock on a record file covers only the inode that was opened; this one covers
+    the name, so two services on one folder cannot interleave. No one takes it while holding another path of
+    its own. The wait ends by the call's deadline (plus the grace for an audit row), at most LOCK_SECONDS."""
+    limit = _limit(audit)
+    until = time.monotonic() + LOCK_SECONDS
+    if limit is not None:
+        until = min(until, limit)
+    fd = os.open(str(directory), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= until:
+                    raise ApiError("timeout", "the method took too long")
+                time.sleep(0.005)
+        yield
+    finally:
+        os.close(fd)  # closing the descriptor releases the lock
+
+
+@contextlib.contextmanager
+def _refusal_budget():
+    """The refusal row is written within a short budget of its own, whatever happened to the call's deadline: the
+    call's deadline plus the grace, or REFUSAL_FLOOR_SECONDS from now when that has passed already. Outside a call
+    (transport, in-process and connection refusals) the budget is AUDIT_GRACE_SECONDS from now."""
+    saved = (_CALL.deadline, _CALL.after, _CALL.refusal_until)
+    now = time.monotonic()
+    if _CALL.deadline is None:
+        _CALL.deadline = now
+    _CALL.after, _CALL.refusal_until = False, now + REFUSAL_FLOOR_SECONDS
+    try:
+        yield
+    finally:
+        _CALL.deadline, _CALL.after, _CALL.refusal_until = saved
+
+
+def _unencodable(value):
+    """True when a string anywhere in a request (key or value) cannot be encoded as UTF-8 (a lone surrogate)."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError:
+                return True
+        elif isinstance(item, dict):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return False
 
 
 def _append_jsonl(path, row):
@@ -1069,7 +1151,10 @@ class CoreService:
                     full = False
                     self._refusing += 1
             if conn.over_cap and full:
-                self._audit_connection("too_many_connections")  # no worker, but still a refusal row
+                try:
+                    self._audit_connection("too_many_connections")  # no worker, but still a refusal row
+                except ApiError:
+                    pass  # nobody is answered on this path
                 self._kill(conn)  # a burst beyond the cap gets no worker at all
                 continue
             thread = threading.Thread(target=self._serve, args=(conn,), name="core-conn", daemon=True)
@@ -1083,7 +1168,10 @@ class CoreService:
             if peer_uid(sock) != self.expected_uid:
                 if conn.over_cap:
                     self._done_refusing()
-                self._audit_connection("peer_uid_refused")
+                try:
+                    self._audit_connection("peer_uid_refused")
+                except ApiError:
+                    pass  # the connection is closed without a reply
                 return
             if conn.over_cap:
                 try:
@@ -1110,17 +1198,21 @@ class CoreService:
             self._refusing -= 1
 
     def _audit_connection(self, outcome):
-        """A refused connection is a refusal row too (bounded: refusal rows rotate)."""
-        try:
+        """A refused connection is a refusal row too (bounded: refusal rows rotate). Raises ApiError when the row
+        cannot be written within its own short budget; a caller that replies tells the client, one that has no
+        reply (the burst beyond the cap, a wrong uid) goes on."""
+        with _refusal_budget():
             self._audit_write({"ts": self.clock(), "caller": "anonymous", "method": "connection", "outcome": outcome},
                               change=False)
-        except ApiError:
-            pass
 
     def _refuse_over_cap(self, conn):
-        self._audit_connection("too_many_connections")
         try:
-            conn.send(self._error_reply(None, ApiError("too_many_connections", "too many connections")))
+            self._audit_connection("too_many_connections")
+            error = ApiError("too_many_connections", "too many connections")
+        except ApiError as audit_error:
+            error = audit_error  # no row, no ordinary refusal: the client is told the audit is unavailable
+        try:
+            conn.send(self._error_reply(None, error))
             conn.sock.shutdown(socket.SHUT_WR)
             conn.sock.settimeout(1)
             conn.sock.recv(4096)  # let the client finish its write so it reads the reply, not a reset
@@ -1195,7 +1287,8 @@ class CoreService:
         refusal is returned; when it cannot be written the caller gets `unavailable` instead. Returns the error
         to raise or send, with seq_at and no money in its data."""
         try:
-            self._audit_refusal(session, name, error, params if isinstance(params, dict) else {})
+            with _refusal_budget():
+                self._audit_refusal(session, name, error, params if isinstance(params, dict) else {})
         except ApiError as audit_error:
             error = audit_error
         error.data = _clean(error.data)  # an error carries no money either (a snapshot, for example)
@@ -1251,6 +1344,9 @@ class CoreService:
                     raise ApiError("timeout", "the method took too long")  # a read is refused, not answered late
             except ApiError as error:
                 raise self.refuse(session, name, error, params) from None
+            except Exception:  # an unexpected failure is one audited refusal for both adapters, never a raw exception
+                raise self.refuse(session, name, ApiError("internal_error", "the core could not answer"),
+                                  params) from None
             _CALL.after = True  # the effect is durable: what follows is bounded by the grace, never refused
             op = _CALL.op
             if mutation:
@@ -1283,6 +1379,8 @@ class CoreService:
             raise ApiError("invalid_params", "params must be an object")
         if not known:
             raise ApiError("method_not_found", "unknown method")
+        if _unencodable(params):
+            raise ApiError("invalid_params", "text must be valid Unicode")
         if method == "initialize":
             return self._initialize(session, params)
         return self._dispatch(session, method, params, _CALL.deadline)
@@ -1561,6 +1659,8 @@ class CoreService:
                 raise ApiError("unavailable", "the units record is missing or unreadable")
             records = [self._neutral_unit(r) for r in all_rows if r.get("id") == unit_id]
             if not records:
+                if self._units_cut():
+                    raise ApiError("unavailable", "the units record is too large to read whole; that unit is unknown")
                 raise ApiError("not_found", "no such unit")
             return {"records": records}
 
@@ -1616,6 +1716,8 @@ class CoreService:
             for query in self._queries():
                 if query["id"] == wanted:
                     return {"query": query}
+            if _read_jsonl_cut(self.records / "inbox.jsonl")[2]:
+                raise ApiError("unavailable", "the inbox is too large to read whole; that query is unknown")
             raise ApiError("not_found", "no such query")
 
         @reading("health.get")
@@ -1723,9 +1825,11 @@ class CoreService:
             path = _plain(params.get("path"), 512)
             if path is None:
                 raise ApiError("invalid_params", "path must be a short single-line string")
-            rows, _ = _read_jsonl(self.records / "diffs.jsonl")
+            rows, _, cut = _read_jsonl_cut(self.records / "diffs.jsonl")
             found = [r for r in rows or [] if r.get("path") == path and isinstance(r.get("diff"), str)]
             if not found:
+                if cut:
+                    raise ApiError("unavailable", "the diffs record is too large to read whole; that diff is unknown")
                 raise ApiError("not_found", "no diff is recorded for that path")
             text = found[-1]["diff"]
             data = text.encode("utf-8")
@@ -2170,6 +2274,17 @@ class CoreService:
         """The next id with this prefix (C command, P push, Q query); ids never repeat. A counter in ids.json is
         replaced atomically before the id is used; without one the whole record is scanned once. Under _lock."""
         path = self.records / "ids.json"
+        try:
+            lock = _records_lock(self.records)
+            lock.__enter__()  # shared by every service on this folder: read, scan and replace happen as one step
+        except OSError:
+            raise ApiError("unavailable", "a new id could not be recorded")
+        try:
+            return self._allocate_locked(prefix, path)
+        finally:
+            lock.__exit__(None, None, None)
+
+    def _allocate_locked(self, prefix, path):
         data = _read_json(path)
         data = data if isinstance(data, dict) else {}
         last = data.get(prefix)
@@ -2546,7 +2661,15 @@ class CoreService:
         older refusals, never a change. Both waits end by the call's deadline plus the audit grace."""
         with self._audit_lock:
             path = self.records / ("commands.jsonl" if change else "audit.jsonl")
-            if not change:
+            if change:
+                self._append_audit_row(path, row)
+                return
+            try:  # rotation and append are one step for every service on this folder (a row never lands in a file
+                lock = _records_lock(self.records, audit=True)  # that another service just retired)
+                lock.__enter__()
+            except OSError:
+                raise ApiError("unavailable", "the audit log cannot be written")
+            try:
                 try:
                     if os.lstat(path).st_size >= self.audit_max_bytes:
                         os.replace(path, self.records / "audit.jsonl.1")
@@ -2555,13 +2678,19 @@ class CoreService:
                     pass
                 except OSError:
                     raise ApiError("unavailable", "the audit log cannot be written")
-            _CALL.audit_row = True
-            try:
-                _append_jsonl(path, row)
-            except OSError:
-                raise ApiError("unavailable", "the audit log cannot be written")
+                self._append_audit_row(path, row)
             finally:
-                _CALL.audit_row = False
+                lock.__exit__(None, None, None)
+
+    @staticmethod
+    def _append_audit_row(path, row):
+        _CALL.audit_row = True
+        try:
+            _append_jsonl(path, row)
+        except OSError:
+            raise ApiError("unavailable", "the audit log cannot be written")
+        finally:
+            _CALL.audit_row = False
 
     def _audit(self, caller, method, outcome, params, result=None, change=True, op=None):
         if outcome == "intent":
