@@ -138,6 +138,16 @@ class DispatchWaitTests(unittest.TestCase):
         with self.assertRaises(DispatchError):
             client.dispatch('r', 1, 'x' * 64, wait_seconds=30)
 
+    def test_DR_3_a_dispatch_whose_reply_was_lost_is_answered_with_the_result_by_a_later_dispatch(self):
+        """The first dispatch lost its reply (the submit never answered); a later dispatch for the same run
+        and inputs finds the published result and reads it."""
+        client = self.client([slow()], [])
+        with self.assertRaises(DispatchError):
+            client.dispatch('r', 1, 'x' * 64, wait_seconds=30)
+        later = self.client([PUBLISHED], [json.dumps({'summary': 'done'}).encode()])
+        self.assertEqual({'summary': 'done'}, later.dispatch('r', 1, 'x' * 64, wait_seconds=30)['result'])
+        self.assertEqual(1, self.read_count)
+
 
 if __name__ == '__main__':
     unittest.main()

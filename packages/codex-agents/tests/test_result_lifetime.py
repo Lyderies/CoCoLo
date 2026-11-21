@@ -71,6 +71,38 @@ class ResultLifetimeTests(DriverHarness):
         self.assertNotIn('full', refused['error'])
         self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
 
+    def test_DR_3_a_result_whose_dispatch_reply_was_lost_is_read_and_recorded_by_a_later_command(self):
+        """O10 DR-3: the first dispatch's reply is dropped; dispatching the same run again returns the same
+        result without a second child, and the host records it."""
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)  # reply lost: unused
+        later = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        observation = self.write('observation.json', {'run_handle': run_handle, 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
+                            '--result', self.write('result.json', later['result']), '--observation', observation)
+        self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
+        self.assertEqual(1, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
+
+    @unittest.skip("RC-3 fails: the refused run's binding stays 'pending' (24 h); the account operation that calls "
+                   "withdraw_open and the driver calling it are RS-B (not built)")
+    def test_RC_3_a_run_refused_for_result_space_ends_its_account_binding_at_once(self):
+        """O10 RC-3 (B0-1): the refused run's binding is abandoned and its slot released now, not after 24 h."""
+        from unittest import mock
+        from codex_agents import project_history
+        from codex_agents.history_contracts import HistoryError
+        context, route_path, _, run_handle = self.open_run()
+        with mock.patch.object(project_history.ProjectHistory, '_check_result_capacity',
+                               side_effect=HistoryError('history_result_capacity_busy')):
+            self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        ledger = self.collector_ledger
+        self.wait_for(lambda: ledger._connection.execute(
+            "SELECT COUNT(*) FROM host_run_bindings WHERE binding_state='abandoned'").fetchone()[0] == 1, seconds=30)
+        self.assertEqual(0, ledger._connection.execute(
+            "SELECT COUNT(*) FROM active_run_capacity WHERE released_at_ms IS NULL").fetchone()[0])
+
     def test_RC_2_status_shows_the_results_in_flight_against_the_space_for_them(self):
         context, route_path, orchestration, run_handle = self.open_run()
         capacity = self.cli('learning-status')['project_capacity']
