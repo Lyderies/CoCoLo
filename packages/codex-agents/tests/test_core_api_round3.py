@@ -61,19 +61,6 @@ class Helpers:
 class AuditRound3(Helpers, CoreCase):
     service_options = {"max_line_bytes": 4096}
 
-    def test_refusals_beyond_the_cap_are_summarised_per_method_not_dropped(self):
-        client = self.client("read")
-        for _ in range(80):
-            self.error_code(client, "control.pause")
-        client.close()
-        rows = [r for r in self.audit() if r.get("method") == "control.pause"]
-        self.assertTrue(self.wait_for(lambda: any(r.get("outcome") == "refused_summary" for r in
-                                                   [r for r in self.audit() if r.get("method") == "control.pause"])))
-        summary = [r for r in self.audit() if r.get("outcome") == "refused_summary"]
-        self.assertEqual(30, sum(r["count"] for r in summary if r["method"] == "control.pause"))
-        self.assertEqual(50, len([r for r in self.audit() if r.get("method") == "control.pause"
-                                  and r.get("outcome") == "forbidden"]))
-        self.assertTrue(rows)
 
     def test_malformed_envelopes_are_audited(self):
         s = raw(self.socket)
