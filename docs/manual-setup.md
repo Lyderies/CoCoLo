@@ -57,6 +57,13 @@ used by `tests/test_install.py`. Operational QA runs these commands inside macOS
 `xcrun` lookup cache off) and fails closed on other systems. The sandbox also limits temporary storage
 and file sizes; tests requiring larger fixtures cannot pass that QA gate unchanged.
 
+Identifier scanning: a project that runs `scripts/check_identifiers.py` under QA should have its `qa-security`
+wrapper call `scan_tree(root, (), use_git=False, exclude=frozenset({...private top-level names...}))` from that
+module instead of keeping its own walk. QA cannot start git, so `use_git=False` walks the disk in-process and
+visits the same files as the CLI (tracked plus untracked-but-not-ignored). Placeholder accounts such as
+`/Users/x` and `/home/user` are allowed; a real-looking name still fails. When a security check fails, its
+`path:line: category` lines (never the matched text) are recorded in the check diagnostics.
+
 QA suppresses stdout and stderr because tests and scanners can print project secrets. The agent receives
 only fixed diagnostic codes, the check's status and its exit code, alongside the unchanged receipt.
 For a nonzero exit, inspect the wrapper locally in your own terminal; check that it runs in-process and

@@ -2126,6 +2126,41 @@ def _committed_and_clean(git_executable: str, root: Path, commit: str, relative:
         os.close(descriptor)
 
 
+_QA_FINDING_LINE = re.compile(
+    rb"([^\n\r]{1,512}?)( \(path\))?:(\d{1,9}): "
+    rb"(home-path|hostname|email|denylisted-term|non-noreply-email)"
+)
+MAX_QA_FINDING_RECORDS = 50
+MAX_QA_FINDING_BYTES = 64 * 1024
+
+
+def _security_findings(stderr_file: Path) -> list[dict[str, Any]]:
+    """Bounded ``{path, line, category}`` records from a scanner's stderr; never any matched value.
+
+    Only lines of the exact scanner shape ``path:line: category`` (category from a closed set) are kept;
+    all other text is dropped. A path that was itself flagged is redacted, since it may hold the value.
+    """
+
+    try:
+        with stderr_file.open("rb") as handle:
+            data = handle.read(MAX_QA_FINDING_BYTES)
+    except OSError:
+        return []
+    parsed = [match for line in data.splitlines()
+              if (match := _QA_FINDING_LINE.fullmatch(line)) is not None]
+    flagged = {m.group(1) for m in parsed if m.group(2)}
+    records: list[dict[str, Any]] = []
+    for match in parsed[:MAX_QA_FINDING_RECORDS]:
+        name = match.group(1)
+        records.append({
+            "path": "[redacted]" if match.group(2) or name in flagged
+            else name.decode("utf-8", errors="replace"),
+            "line": int(match.group(3)),
+            "category": match.group(4).decode("ascii"),
+        })
+    return records
+
+
 def run_operational_check_suite(
     project_root: Path, *, scratch_root: Path,
     diagnostics: list[dict[str, Any]] | None = None,
@@ -2166,6 +2201,7 @@ def run_operational_check_suite(
             phase = "snapshot"
             reason_code = None
             process: subprocess.Popen[bytes] | None = None
+            findings: list[dict[str, Any]] = []
             try:
                 temporary = private_directory(scratch_root, "scratch", "qa-")
             except HostPathError as exc:
@@ -2213,18 +2249,25 @@ def run_operational_check_suite(
                         if check["runtime_libraries"] else None,
                     )
                     phase = "launch"
-                    process = subprocess.Popen(
-                        command,
-                        cwd=root,
-                        env=check_environment,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        start_new_session=True,
-                        preexec_fn=_qa_resource_limiter(  # noqa: PLW1509
-                            check["timeout_seconds"]
-                        ),
+                    stderr_file = temporary / "stderr"
+                    stderr_descriptor = os.open(
+                        stderr_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
                     )
+                    try:
+                        process = subprocess.Popen(
+                            command,
+                            cwd=root,
+                            env=check_environment,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=stderr_descriptor,
+                            start_new_session=True,
+                            preexec_fn=_qa_resource_limiter(  # noqa: PLW1509
+                                check["timeout_seconds"]
+                            ),
+                        )
+                    finally:
+                        os.close(stderr_descriptor)
                     phase = "execution"
                     status, return_code = _wait_for_qa_process(
                         process,
@@ -2264,6 +2307,8 @@ def run_operational_check_suite(
                         guard.close()
                     if cleanup_error is not None:
                         raise cleanup_error
+                if group == "security_checks" and status == "failed":
+                    findings = _security_findings(temporary / "stderr")
             finally:
                 remove_private_directory(temporary)
             evidence_digest = content_digest(
@@ -2292,6 +2337,7 @@ def run_operational_check_suite(
                         "passed": "check_passed", "failed": "nonzero_exit",
                         "timeout": "deadline_elapsed",
                     }.get(status, "runner_unavailable"),
+                    **({"findings": findings} if findings else {}),
                 })
             report[group].append(
                 {
