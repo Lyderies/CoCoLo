@@ -6046,10 +6046,17 @@ class LearningLedger:
                 if record["account_fingerprint"] == fingerprint
             ]
             latest = max(billing, key=lambda record: record["observed_at_ms"], default=None)
-            if latest is not None and 0 <= timestamp - latest["observed_at_ms"] < (
+            reuse = latest is not None and 0 <= timestamp - latest["observed_at_ms"] < (
                 PROBE_REUSE_SECONDS * 1000
-            ):
-                # Fresh evidence bounds the spend when children open back to back.
+            )
+            decision = self._evaluate_admission_locked(
+                project_id, provider="claude", environ=environ, timestamp=timestamp,
+                probe=True,
+            )
+            if reuse and decision["decision"] == "pass":
+                # B1: fresh evidence bounds the spend when children open back to back,
+                # but never without a judgment: paid usage, a client version or an
+                # attestation problem is refused below with its own reason.
                 headroom = [
                     record for record, _ in self._account_records_locked(
                         project_id, "provider_headroom", "claude"
@@ -6063,11 +6070,7 @@ class LearningLedger:
             # Owner decision 40 (a): the real problem is reported first; the cooldown
             # names itself only when nothing else refuses. billing_unverified is the
             # gap the cooling probe itself fills, so it does not count as a real problem.
-            decision = self._evaluate_admission_locked(
-                project_id, provider="claude", environ=environ, timestamp=timestamp,
-                probe=True,
-            )
-            if (
+            if not reuse and (
                 decision["decision"] == "pass"
                 or decision["reason_code"] == "billing_unverified"
             ) and self._connection.execute(

@@ -1,4 +1,5 @@
 """Real registered signature returns; model launch/native enrollment remain gated."""
+import json
 from copy import copy
 from pathlib import Path
 import sys
@@ -549,13 +550,55 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         later = claude_rate_limit_records({'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'},
             account_fingerprint=self.identity['account_fingerprint'], observed_at_ms=self.clock)
         self.ledger._store_provider_observations(self.fixture.project_id, later, timestamp=self.clock)
-        self.assertEqual('reused', self.reserve('probe-replay')['probe'])  # still inside its own request window
+        with self.assertRaisesRegex(ProbeAdmissionError, 'probe_conflict'):  # round 2: refused inside the window too
+            self.reserve('probe-replay')
         self.clock += self.owner._timeout+1
         with self.assertRaisesRegex(ProbeAdmissionError, 'probe_conflict'):
             self.reserve('probe-replay')
         with self.assertRaisesRegex(ProbeAdmissionError, 'probe_conflict'):
             self.owner.known_reply(self.fixture.project_id, 'a'*64, 'b'*64, 'probe-replay', self.context,
                                    before_commit=lambda: True)
+
+    def test_H1_r2_paid_usage_after_a_reused_answer_is_never_replayed_as_reused_on_either_entry_point(self):
+        self.store_probe_only(self.FAVOURABLE)
+        original = self.reserve('probe-replay-paid')
+        self.prepared(original)
+        self.assertEqual('reused', self.owner.admit(original)['probe'])
+        later = claude_rate_limit_records({'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'},
+            account_fingerprint=self.identity['account_fingerprint'], observed_at_ms=self.clock)
+        self.ledger._store_provider_observations(self.fixture.project_id, later, timestamp=self.clock)
+        with self.assertRaisesRegex(ProbeAdmissionError, 'probe_conflict'):
+            self.reserve('probe-replay-paid')
+        with self.assertRaisesRegex(ProbeAdmissionError, 'probe_conflict'):
+            self.owner.known_reply(self.fixture.project_id, 'a'*64, 'b'*64, 'probe-replay-paid', self.context,
+                                   before_commit=lambda: True)
+
+    def test_M1a_paid_usage_appearing_during_a_cooldown_is_refused_paid_usage_usable(self):
+        original = self.reserve()
+        self.prepared(original)
+        self.owner.admit(original)  # the bootstrap probe is admitted: the five-minute cooldown now runs
+        for number, run_id in enumerate((None, 'run-paid')):
+            records = claude_rate_limit_records({'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'},
+                account_fingerprint=self.identity['account_fingerprint'], observed_at_ms=self.clock,
+                run_id=run_id, phase=None if run_id is None else 'during')
+            self.ledger._store_provider_observations(self.fixture.project_id, records, timestamp=self.clock)
+            second = self.reserve(f'second-{number}')
+            self.prepared(second)
+            denied = self.owner.admit(second)
+            self.assertEqual(('denied', 'paid_usage_usable'), (denied['probe'], denied['reason_code']), denied)
+
+    def test_LOW_an_api_key_denial_during_a_cooldown_is_persisted_with_its_own_reason(self):
+        original = self.reserve()
+        self.prepared(original)
+        self.owner.admit(original)
+        second = self.reserve('second')
+        self.prepared(second)
+        with mock.patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'sk-test'}):
+            self.assertEqual('provider_api_key_present', self.owner.admit(second)['reason_code'])
+        stored = [json.loads(bytes(r[0])) for r in self.ledger._connection.execute(
+            "SELECT content FROM records WHERE record_type='probe_admission'")]
+        self.assertEqual(['pass', 'deny'], [r['decision'] for r in stored], stored)
+        self.assertEqual('provider_api_key_present', stored[1]['reason_code'], stored)
 
     def test_H1_a_stored_denial_is_still_replayed(self):
         self.store_probe_only({'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'})

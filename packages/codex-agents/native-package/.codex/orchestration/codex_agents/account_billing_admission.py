@@ -305,6 +305,7 @@ class AccountBillingAdmission:
     def admit(self, reservation):
         row = self._original(reservation, False)
         if row['state'] == 'admitted':
+            self._original(reservation)  # a repeat admit() re-checks the API key (launch is still guarded)
             original = self._permits.get(reservation)
             if original is None:
                 raise ProbeAdmissionError()
@@ -672,13 +673,28 @@ class AccountBillingAdmission:
 
     def _replayable(self, row, reply):
         # B1: no 'reused' answer is returned without a judgment at that time. A replay has no verified inputs to
-        # judge again (that needs signature work), so a stored 'reused' is returned only inside its own request
-        # window (deadline_at_ms: the window in which it was judged; this also lets the job verify the answer it
-        # just produced); after it the replay is refused and the caller asks again. Denials and completions are
-        # returned as stored.
-        if type(reply) is dict and reply.get('probe') == 'reused' and not self._now() < row['deadline_at_ms']:
-            raise ProbeAdmissionError('probe_conflict')
+        # judge again (that needs signature work), so a stored 'reused' is returned only (1) inside its own request
+        # window (deadline_at_ms: this also lets the job verify the answer it just produced) and (2) while the
+        # account has no billing or headroom evidence newer than the records the answer cites: any newer evidence
+        # (paid usage above all) refuses the replay with probe_conflict and the caller asks again, which judges
+        # afresh. Denials and completions are returned as stored (a refusal never turns into an admit).
+        if type(reply) is dict and reply.get('probe') == 'reused':
+            if not self._now() < row['deadline_at_ms'] or self._newer_evidence(reply):
+                raise ProbeAdmissionError('probe_conflict')
         return reply
+
+    def _newer_evidence(self, reply):
+        cited = reply['records']
+        identity = cited[0] if cited else None
+        if identity is None:
+            return True
+        ids = [r['record_id'] for r in cited]
+        since = max(r['observed_at_ms'] for r in cited)
+        return self._one(
+            "SELECT 1 FROM records WHERE record_type IN ('provider_billing','provider_headroom') "
+            "AND observed_at_ms>=? AND record_id NOT IN (" + ','.join('?'*len(ids)) + ") "
+            "AND json_extract(CAST(content AS TEXT),'$.account_fingerprint')=? LIMIT 1",
+            (since, *ids, identity['account_fingerprint'])) is not None
 
     def _reply(self, row, *, known):
         from .learning_store import DEFAULT_RETENTION_MS

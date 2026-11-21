@@ -18,6 +18,14 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   Owner decision 40 (a): when a probe is refused while the five-minute cooldown also applies, the refusal now
   names the real problem first (API key, paid usage, client version, attestation); a plain cooldown still says
   probe_cooldown.
+  Review round 2: a stored "reused" answer is replayed only inside its request window and only while no newer
+  billing or headroom evidence exists for the account; newer evidence (paid usage above all) refuses the replay
+  with probe_conflict so the caller asks again and is judged afresh (stored denials still replay). The ledger's
+  own probe path (LearningLedger.observe_claude_billing) now judges before it answers "reused", so a recent
+  paid-usage record is refused with paid_usage_usable, not reused. A repeat admit() on an admitted request
+  re-checks the API key. Accurate scope of the API-key fix: a key present when admit() judges is refused with
+  provider_api_key_present and recorded; a key already present at reserve or prepare is refused as
+  probe_not_authorized and is not recorded.
 
 - Package 0.8.45 (Phase 1.2, core API round 6): the owner-facing core API (TM0) joins the 0.8.44 base after six
   review rounds (owner decision 34, no seventh). Fixed with tests that failed first: a single-digit price ("$5")
