@@ -537,7 +537,10 @@ class LaunchJournal:
             return None
 
     def _entry_or_unknown(self, name):
-        value = self._read(self.directory / name)
+        try:
+            value = self._read(self.directory / name)
+        except JournalError:
+            value = None  # An entry that kept changing is unknown here, as an unreadable one always was.
         return value if value is not None else {'bridge_run_id': name[:-5], 'state': None}
 
     def _window(self, purpose):
@@ -852,8 +855,8 @@ def _read_entry(path):
     """The checked entry in that file, or None (the same checks as `LaunchJournal._read`).
 
     A write replaces the entry file, so a reader that opened the old file sees it unlinked
-    (st_nlink 0): the entry still exists, so the path is opened again, up to _REREADS times,
-    and a file that is replaced every time raises JournalError. A file with two or more links
+    (st_nlink 0): the entry still exists, so the path is opened again (_REREADS opens in all,
+    so two reopens), and a file that is replaced every time raises JournalError. A file with two or more links
     stays refused.
     """
     for _ in range(_REREADS):
@@ -884,7 +887,13 @@ def _read_entry(path):
 
 
 def _read_entry_or_none(path):
-    """`_read_entry` for the status readers, which count an entry that cannot be read as unreadable."""
+    """`_read_entry` for the status readers, which count an entry that cannot be read as unreadable.
+
+    An entry that kept changing on every read is unreadable here too: `unresolved` already lists it
+    with state None (unknown, distinct from a missing file, which is not listed), and `container_holds`
+    leaves it out of its counts. The status shape has no state for it, and status is best-effort: its
+    only caller (client_runtime's status report) displays it and never drives a stop decision.
+    """
     try:
         return _read_entry(path)
     except JournalError:

@@ -168,6 +168,7 @@ class LaunchJournalTests(unittest.TestCase):
         self.assertEqual(9, value['attempt'])  # The new entry, not None and not the old one
         with mock.patch.object(launch_journal.os, 'fstat', self.replacing_fstat(journal, 2)):
             self.assertEqual('claimed', journal.entry(BRIDGE)['state'])
+            self.assertEqual(9, journal.entry(BRIDGE)['attempt'])
 
     def test_an_entry_with_two_links_is_still_refused(self):
         journal = LaunchJournal(self.directory)
@@ -184,6 +185,20 @@ class LaunchJournalTests(unittest.TestCase):
                 journal.entry(BRIDGE)
             self.assertIsNone(launch_journal._read_entry_or_none(journal._path(BRIDGE)))
         self.assertEqual('claimed', journal.entry(BRIDGE)['state'])
+
+    def test_an_entry_that_keeps_changing_is_unknown_in_the_entries_window(self):
+        journal = LaunchJournal(self.directory)
+        claimed(journal)
+        with mock.patch.object(launch_journal.os, 'fstat', self.replacing_fstat(journal, 99)):
+            self.assertEqual([{'bridge_run_id': BRIDGE, 'state': None}], journal.entries())
+
+    def test_status_lists_an_entry_that_keeps_changing_as_unknown_not_missing(self):
+        journal = LaunchJournal(self.directory)
+        claimed(journal)
+        with mock.patch.object(launch_journal.os, 'fstat', self.replacing_fstat(journal, 99)):
+            report = launch_journal.unresolved(self.directory)
+        self.assertEqual(1, report['count'])
+        self.assertIsNone(report['entries'][0]['state'])
 
     def test_a_missing_entry_is_still_none(self):
         journal = LaunchJournal(self.directory)
