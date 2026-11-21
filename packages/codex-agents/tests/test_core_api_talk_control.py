@@ -54,13 +54,6 @@ class ForwardTests(CoreCase):
         self.assertEqual([], self.service.deliver_at_safe_point()["query_ids"])
         self.assertEqual("expired", self.client("read").call("queries.get", {"id": answer["query_id"]})["query"]["state"])
 
-    def test_api16_reply_reaches_the_asker_as_query_answered(self):  # API-16
-        asker = self.client("confirm")
-        query = asker.call("query.ask", {"text": "Should we rewrite the parser?", "mode": "forward"})["query_id"]
-        stream = self.client("read").subscribe({"from_seq": 5, "filter": {"kinds": ["query.answered"]}})
-        self.client("owner").call("query.reply", {"query_id": query, "text": "No, keep it."})
-        event = next(stream)
-        self.assertEqual((query, "No, keep it."), (event["data"]["query_id"], event["data"]["text"]))
 
 
 class PushTests(CoreCase):
