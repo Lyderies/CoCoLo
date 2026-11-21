@@ -292,6 +292,21 @@ class ResultLifetimeTests(DriverHarness):
             self.wait_for(lambda: scopes, seconds=30)
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, scopes[0].runtime_digest)
 
+    def test_O0c_P5_the_service_ends_idle_orchestrations_by_itself(self):
+        """O0c P5: the project service's own cleanup pass asks the store to end idle orchestrations."""
+        from unittest import mock
+        from codex_agents import orchestration_store
+        calls = []
+        original = orchestration_store.OrchestrationOwner.end_idle
+
+        def recorded(owner, now, limit):
+            calls.append((now, limit))
+            return original(owner, now, limit)
+        self.open_run()  # The project service is running.
+        with mock.patch.object(orchestration_store.OrchestrationOwner, 'end_idle', recorded):
+            self.wait_for(lambda: calls, seconds=30)
+        self.assertEqual(10, calls[0][1])
+
 
 class ResultLimitTests(DriverHarness):
     """R8 with small limits, set before the services open their stores."""

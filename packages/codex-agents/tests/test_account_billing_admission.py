@@ -416,6 +416,75 @@ class AccountBillingAdmissionTests(unittest.TestCase):
             learning_store._verify_project_backup_body(broken)
         self.assertEqual(before, self.rows())
 
+    def restart(self):
+        """The collector restarts: the ledger reopens and a new probe owner holds no original."""
+        self.stop()
+        self.pool = None
+        self.ledger.close()
+        reopened = learning_store.LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+        self.ledger = self.fixture.ledger = reopened
+        self.clock_patch = mock.patch.object(reopened, '_clock_ms', side_effect=lambda: self.clock)
+        self.clock_patch.start()
+        self.addCleanup(self.clock_patch.stop)
+        self.views = AccountOwnerViews(reopened)
+        self.intake = SignatureJobIntake(self.views, SignatureIntakeLimits(2, 4, 512, 262_144, 2))
+        self.pool = SignatureWorkerPool(self.intake,
+            SignatureWorkerLimits(2, 4*1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000))
+        self.pool.bootstrap()
+        self.owner = AccountBillingAdmission(self.views, self.pool, SQLReadLimits(100_000, 1000, 2*1_048_576))
+
+    def sweep_now(self):
+        with mock.patch.object(self.ledger, '_capacity_clock_reference', return_value=0):
+            return self.ledger.release_due_account_holds(limit=64)
+
+    def test_O0c_P6_an_admitted_probe_of_an_earlier_collector_holds_its_slot_no_longer_than_deadline_plus_grace(self):
+        """O0c P6: machine limit 1 (and account limit 1); a probe admitted before a restart has no original
+        left in memory and nothing to settle it. Within deadline + grace it is kept (a model may still be
+        ending); after it the sweep closes it as a denial, and a claim and a new probe succeed."""
+        from codex_agents.account_billing_admission import PROBE_ORPHAN_GRACE_MS
+        original = self.reserve()
+        self.prepared(original)
+        self.owner.admit(original)
+        deadline = original.deadline
+        account = self.identity['account_fingerprint']
+        with mock.patch.object(learning_store, 'INSTALLED_ACTIVE_RUN_LIMITS', ActiveRunLimits(1, 1)):
+            self.restart()
+            self.clock = deadline + PROBE_ORPHAN_GRACE_MS
+            self.assertEqual(0, self.sweep_now())  # not yet: the grace is not over
+            with self.ledger._account_transaction(), self.assertRaisesRegex(ClaimError, 'claim_busy'):
+                self.ledger._check_active_capacity_locked('claude', account)
+            self.assertEqual('admitted', self.rows()[0]['state'])
+            self.clock = deadline + PROBE_ORPHAN_GRACE_MS + 1
+            self.assertEqual(1, self.sweep_now())
+            row = self.rows()[0]
+            self.assertEqual('committed', row['state'])
+            self.assertEqual(self.clock, self.ledger._connection.execute(
+                "SELECT released_at_ms FROM run_holds WHERE kind='probe'").fetchone()[0])
+            with self.ledger._account_transaction():
+                self.ledger._check_active_capacity_locked('claude', account)  # a claim now fits
+                self.ledger._check_active_capacity_locked('codex', 'c'*64)
+            replay = self.reserve()  # the same request replays its stored answer: never relaunched
+            self.assertEqual(('denied', 'probe_admitted_expired', True),
+                             (replay['probe'], replay['reason_code'], replay['known']))
+            self.assertEqual(0, self.ledger.account_capacity(self.fixture.project_id)['billing_probes']['live'])
+            again = self.reserve('probe-after')  # and a new probe of the account is admitted, not probe_busy
+            self.assertEqual('reserved', self.rows()[-1]['state'])
+            self.assertIsNotNone(again)
+
+    def test_O0c_P6_an_admitted_probe_this_collector_still_holds_is_never_closed_by_time(self):
+        """M10 stays true: an original in this process's memory (its child may still run) is settled only by
+        its own proof, however late."""
+        from codex_agents.account_billing_admission import PROBE_ORPHAN_GRACE_MS
+        original = self.reserve()
+        self.prepared(original)
+        self.owner.admit(original)
+        self.clock = original.deadline + 10 * PROBE_ORPHAN_GRACE_MS
+        self.assertEqual(0, self.sweep_now())
+        self.assertEqual('admitted', self.rows()[0]['state'])
+        self.assertFalse(self.ledger.account_holds_due())  # nothing the sweep would release: no idle-check spin
+        self.restart()
+        self.assertTrue(self.ledger.account_holds_due())  # an orphan is due
+
     def test_restart_preserves_admitted_unknown_without_recreating_a_launchable_original(self):
         original = self.reserve()
         self.prepared(original)

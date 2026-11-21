@@ -11779,7 +11779,17 @@ class LearningLedger:
                 "AND h.handle_digest=r.identity WHERE r.state<>'released' AND r.state='held' AND r.kind='binding' "
                 "AND h.binding_state='pending' AND h.expires_at_ms<=?)",
                 (*parameters, now, now)).fetchone()
-        return bool(row[0])
+            if row[0]:
+                return True
+            # O0c P6: an admitted probe past deadline + grace that no original of this process holds.
+            from .account_billing_admission import PROBE_ORPHAN_GRACE_MS
+            owner = getattr(self, "_billing_admission_owner", None)
+            held = set(getattr(owner, "_pending", ())) if owner is not None else set()
+            overdue = self._connection.execute(
+                "SELECT project_id,request_key FROM account_billing_probe_requests INDEXED BY "
+                "billing_probe_active_machine WHERE state='admitted' AND deadline_at_ms<? LIMIT ?",
+                (now - PROBE_ORPHAN_GRACE_MS, len(held) + 1)).fetchall()
+        return any((item[0], item[1]) not in held for item in overdue)
 
     def release_due_account_holds(self, *, limit: int = 64) -> int:
         """O0b RS-A: release the account holds whose own predicate now says so, writing each decision once.
@@ -11829,6 +11839,10 @@ class LearningLedger:
             released += closed
             if probes is not None:
                 probes.append(closed)
+        if released < limit:
+            # O0c P6: admitted probes of an earlier collector (no original in memory) past deadline + grace.
+            from .account_billing_admission import close_orphaned_admitted
+            released += close_orphaned_admitted(self, now, limit - released)
         if released < limit:
             # F7: an unclaimed binding is ended in its own row too (the trigger then releases its register
             # row `expired`), so a claim checking the binding refuses it whatever the wall clock later says.
