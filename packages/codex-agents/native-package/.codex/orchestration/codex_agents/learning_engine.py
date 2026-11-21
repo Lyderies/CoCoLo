@@ -2580,11 +2580,29 @@ def build_verified_qa_records(
 
 # Operational QA accepts the routed verifier of either provider: the policy's
 # Codex verification role and its Claude verification role.
-_EXPECTED_REVIEW_CLAIM = re.compile(
-    r"\b(not|never|no)\b[^.]{0,40}\b(run|ran|executed?|tested?|tests)\b"
-    r"|\b(did not|didn't|was not|were not|wasn't|weren't)\b[^.]{0,40}\b(run|execute|test)",
-    re.IGNORECASE,
-)
+# The only statements a read-only review is expected to make about not running tests.
+# Matched as a whole sentence (case, spacing and final punctuation aside), so a sentence
+# that also asserts anything else is never ignored.
+_EXPECTED_REVIEW_STATEMENTS = frozenset({
+    "tests were not run",
+    "tests were not run: this review is read-only",
+    "tests were not run because this review is read-only",
+    "i did not run the tests",
+    "i did not run any tests",
+    "no tests were run",
+    "tests not run",
+})
+
+
+def _is_expected_review_claim(claim: str) -> bool:
+    """True when every sentence of the claim is an expected 'tests not run' statement."""
+
+    sentences = [
+        " ".join(part.lower().split()).rstrip(" .!")
+        for part in re.split(r"(?<=[.!?])\s+|\n+", claim.strip())
+    ]
+    sentences = [sentence for sentence in sentences if sentence]
+    return bool(sentences) and all(s in _EXPECTED_REVIEW_STATEMENTS for s in sentences)
 
 
 def _is_review_slice(task_slice: Any) -> bool:
@@ -2701,7 +2719,7 @@ def build_operational_qa_records(
                 and set(outcomes) == evaluator_criteria
                 and not [
                     claim for claim in result["unverified_claims"]
-                    if not _EXPECTED_REVIEW_CLAIM.search(claim)
+                    if not _is_expected_review_claim(claim)
                 ]
             )
             return passed, complete, axes["semantic_verdict"], outcomes

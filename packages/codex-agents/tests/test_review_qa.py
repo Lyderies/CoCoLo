@@ -77,6 +77,21 @@ class ReviewQaTests(unittest.TestCase):
         )
         self.assertFalse(qa["accepted"])
 
+    def test_review_ignores_only_the_exact_expected_statement(self) -> None:
+        for claim in ("No tests cover the security gate.",
+                      "Tests were not run. The runtime digest is unverified.",
+                      "Tests were not run and the digest is unverified."):
+            qa, _ = build_operational_qa_records(**qa_inputs(review=True, claims=(claim,)))
+            self.assertFalse(qa["accepted"], claim)
+        qa, _ = build_operational_qa_records(**qa_inputs(review=True, claims=("Tests were not run.",)))
+        self.assertTrue(qa["accepted"])
+
+    def test_non_review_same_agreement_is_a_strict_disagreement(self) -> None:
+        qa, record = build_operational_qa_records(**qa_inputs(review=False))
+        self.assertTrue(qa["verifier_disagreement"])
+        self.assertFalse(qa["accepted"])
+        self.assertEqual("rejected", record["status"])
+
     def test_non_review_task_keeps_the_strict_rule(self) -> None:
         qa, _ = build_operational_qa_records(**qa_inputs(review=False))
         self.assertFalse(qa["accepted"])
