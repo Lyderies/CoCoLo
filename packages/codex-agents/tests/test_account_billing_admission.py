@@ -374,27 +374,59 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertEqual([self.identity, *probe], reused['records'])
         self.assertTrue(all(r.get('run_id') is None and r.get('phase') is None for r in reused['records']))
 
-    def test_T3_a_newer_more_restrictive_run_record_is_never_reused_over_and_the_probe_is_launched_fresh(self):
-        """R2 (safety): overage in use / paid usage usable / non-ample headroom in a newer run record stops reuse."""
-        cases = {'overage in use': {'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'},
-                 'headroom rejected': {'status': 'rejected', 'isUsingOverage': False, 'overageStatus': 'rejected',
-                                       'overageDisabledReason': 'org_level_disabled'}}
-        for name, info in cases.items():
+    def test_T3_a_newer_more_restrictive_run_record_stops_reuse_and_admission_is_re_evaluated(self):
+        """R2 (safety): overage in use / paid usage usable / non-ample headroom in a newer run record stops reuse;
+        admission is re-evaluated and the probe launches only if admitted, otherwise a named denial."""
+        cases = {'overage in use': ({'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'},
+                                    'paid_usage_usable'),
+                 'headroom rejected': ({'status': 'rejected', 'isUsingOverage': False, 'overageStatus': 'rejected',
+                                        'overageDisabledReason': 'org_level_disabled'}, 'provider_exhausted')}
+        for name, (info, reason) in cases.items():
             with self.subTest(name):
                 self.tearDown_probe_state()
                 self.store_probe_then_run(info)
                 original = self.reserve(f'probe-{name}'.replace(' ', '-'))
                 self.prepared(original)
                 result = self.owner.admit(original)
-                self.assertNotEqual('reused', result.get('probe') if type(result) is dict else None,
-                                    'a more restrictive newer run record must never be answered as reused')
-                # Admission re-checks every record: a fresh probe is admitted, or a named denial is recorded.
-                if type(result) is dict:
-                    self.assertEqual('denied', result['probe'])
-                    self.assertIsNotNone(result['reason_code'])
-                    self.assertNotEqual('probe_cooldown', result['reason_code'], result)
-                else:
-                    self.assertIs(type(result), ProbeAdmission)
+                self.assertIs(type(result), dict, result)
+                self.assertEqual('denied', result['probe'])
+                self.assertEqual(reason, result['reason_code'], result)
+
+    def test_T3b_paid_usage_usable_alone_in_a_newer_run_record_stops_reuse(self):
+        """R2 isolation: only paid_usage_usable is set (not overage in use, headroom ample)."""
+        _, run = self.store_probe_then_run({'status': 'allowed', 'isUsingOverage': False, 'overageStatus': 'allowed'})
+        billing = [r for r in run if r.get('record_type') == 'provider_billing' or 'paid_usage_usable' in r]
+        self.assertEqual(1, len(billing), run)
+        self.assertIs(True, billing[0]['paid_usage_usable'])
+        self.assertIs(False, billing[0]['is_using_overage'])
+        self.assertEqual('during', billing[0]['phase'])
+        original = self.reserve('probe-paid-usable-only')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), dict, result)
+        self.assertNotEqual('reused', result['probe'])
+        self.assertEqual('denied', result['probe'])
+        self.assertEqual('paid_usage_usable', result['reason_code'], result)
+
+    def test_T3c_constrained_headroom_in_a_newer_run_record_stops_reuse_and_the_probe_launches_fresh(self):
+        """R2: headroom that is not ample (allowed_warning) stops reuse; admission passes, so a fresh probe is launched."""
+        self.store_probe_then_run({'status': 'allowed_warning', 'isUsingOverage': False,
+            'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'})
+        original = self.reserve('probe-constrained')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), ProbeAdmission, result)
+
+    def test_T5_a_run_record_in_the_same_millisecond_as_the_probe_record_stops_reuse(self):
+        """R2 boundary: observed_at equal to the probe's own reading is not older, so it still restricts."""
+        self.store_probe_then_run({'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'},
+                                  probe_age=1000, run_age=1000)
+        original = self.reserve('probe-same-ms')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), dict, result)
+        self.assertNotEqual('reused', result['probe'])
+        self.assertEqual('paid_usage_usable', result['reason_code'], result)
 
     def tearDown_probe_state(self):
         connection = self.ledger._connection

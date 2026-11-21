@@ -290,11 +290,11 @@ class AccountBillingAdmission:
         """R2: a run record newer than the probe's latest billing that is more restrictive (paid usage usable,
         overage in use, or headroom that is not ample) means the probe's favourable reading is not enough."""
         since = latest['observed_at_ms']
-        if any(r.get('run_id') is not None and r['observed_at_ms'] > since
+        if any(r.get('run_id') is not None and r['observed_at_ms'] >= since
                and (r.get('paid_usage_usable') is True or r.get('is_using_overage') is True) for r, _ in billing):
             return True
         newer = [(r, d) for r, d in headroom if r['account_fingerprint'] == fingerprint
-                 and r.get('run_id') is not None and r['observed_at_ms'] > since]
+                 and r.get('run_id') is not None and r['observed_at_ms'] >= since]
         return bool(newer) and headroom_state('claude', fingerprint, newer, [], now)[0] != 'ample'
 
     def admit(self, reservation):
@@ -337,8 +337,8 @@ class AccountBillingAdmission:
             fingerprint = identity['account_fingerprint']
             # A probe's own records carry no run; a finished child's records (run_id, phase 'during') are not
             # probe evidence and the reply contract rejects them. Reuse takes the probe's records only, and a
-            # newer run record that is more restrictive stops reuse: a fresh probe is launched (admission
-            # then re-checks every record).
+            # newer run record that is more restrictive stops reuse: admission is re-evaluated and the probe
+            # launches only if admitted (otherwise a named denial).
             mine = [(r, d) for r, d in prepared['billing'] if r['account_fingerprint'] == fingerprint]
             latest = max((r for r, _ in mine if r.get('run_id') is None and r.get('phase') is None),
                          key=lambda r: r['observed_at_ms'], default=None)
