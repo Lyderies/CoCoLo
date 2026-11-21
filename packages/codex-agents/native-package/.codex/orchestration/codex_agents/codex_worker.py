@@ -46,8 +46,9 @@ _OUTCOMES = frozenset({
 CLAUDE_OUTCOMES = frozenset({
     "claude_activity_invalid", "claude_tool_not_allowed", "missing_init_frame", "paid_usage_observed",
     "provider_rejected", "rate_limit_event_invalid",
-    *("init_" + name for name in ("api_key_source", "model_mismatch", "plugin_loaded", "mcp_server_loaded",
-                                  "tool_not_allowed", "client_unsupported")),
+    *("init_" + name for name in ("api_key_source", "model_mismatch", "plugin_not_allowed", "mcp_server_loaded",
+                                  "tool_not_allowed", "client_unsupported", "permission_mode_mismatch",
+                                  "additional_directories_present")),
 })
 _CLAUDE_USAGE = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 _CODEX_USAGE = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")

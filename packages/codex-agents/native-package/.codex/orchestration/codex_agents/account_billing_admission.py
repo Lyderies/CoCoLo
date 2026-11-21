@@ -16,7 +16,8 @@ from .admission_metadata import API_KEY_VARIABLES, evaluate_admission
 from .account_observation import ObservationContext
 from .account_open_admission import open_admission_inputs
 from .billing_probe_schema import assert_billing_probe_schema
-from .billing_probe_contracts import PROBE_STEP_REASONS, ProbeAdmissionError
+from .billing_probe_contracts import (PROBE_COMPLETION_REASONS, PROBE_STEP_REASONS, ProbeAdmissionError,
+    valid_client_version)
 from .claim_admission import PreparedClaimAdmission, admission_signature_rows, same_admission_inputs
 from .history_contracts import _DIGEST, _ID, _PROJECT, matches, valid_integer
 from .learning_contracts import canonical_json, content_digest, parse_bounded_json_value, validate_learning_record
@@ -631,11 +632,14 @@ class AccountBillingAdmission:
         from .learning_store import DEFAULT_RETENTION_MS
         value = parse_bounded_json_value(row['references_json'].encode(), max_bytes=4096)
         completed = type(value) is dict and value.get('probe') == 'completed'
-        if (type(value) is not dict or value.keys() != ({'probe', 'reason_code', 'records', 'completion_digest'}
+        # CI-4: a completed probe's row also keeps the client version its init frame reported (rows from
+        # before it have none).
+        if (type(value) is not dict or value.keys() - {'client_version'} != ({'probe', 'reason_code', 'records', 'completion_digest'}
                 if completed else {'probe', 'reason_code', 'records'})
+                or ('client_version' in value and not (completed and valid_client_version(value['client_version'])))
                 or value['probe'] not in {'reused', 'denied', 'completed'} or type(value['records']) is not list
                 or (completed and (not matches(value['completion_digest'], _DIGEST)
-                    or value['reason_code'] not in {None, 'probe_incomplete', 'probe_invalid_events', 'probe_no_events'}))
+                    or value['reason_code'] not in {None, *PROBE_COMPLETION_REASONS}))
                 or len(value['records']) > 3):
             raise ProbeAdmissionError('probe_conflict')
         now, records = self._now(), []
@@ -655,6 +659,8 @@ class AccountBillingAdmission:
             records.append(record)
         reply = {'probe': value['probe'], 'reason_code': value['reason_code'], 'records': records,
             'known': known, 'observed_at_ms': row['created_at_ms']}
+        if value.get('client_version') is not None:
+            reply['client_version'] = value['client_version']
         if len(canonical_json(reply)) > MAX_PROBE_REPLY_BYTES:
             raise ProbeAdmissionError()
         return reply

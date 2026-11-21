@@ -21,15 +21,17 @@ def builtin(name):
 
 def frame_2_1_323(**changes):
     """The captured init shape: four built-in plugins and the keys 2.1.323 added."""
-    return init_frame(
-        model="claude-haiku-5-5", tools=[], mcp_servers=[], claude_code_version="2.1.323",
-        plugins=[builtin(name) for name in BUILTIN_NAMES],
-        permissionMode="dontAsk", additional_directories=[], agents=[], skills=[], slash_commands=[],
-        capabilities=[], memory_paths={}, output_style="default", analytics_disabled=True,
-        product_feedback_disabled=True, fast_mode_disabled_reason=None, fast_mode_state="off",
-        per_turn_effort_active=False, ultrathink_available=False, ultrathink_typed_raises=False,
-        view_mode="default", original_cwd="/tmp/empty", messaging_socket_path="/tmp/x.sock",
-        terminal_slash_commands=[], **changes)
+    frame = {
+        "model": "claude-haiku-5-5", "tools": [], "mcp_servers": [], "claude_code_version": "2.1.323",
+        "plugins": [builtin(name) for name in BUILTIN_NAMES],
+        "permissionMode": "dontAsk", "additional_directories": [], "agents": [], "skills": [],
+        "slash_commands": [], "capabilities": [], "memory_paths": {}, "output_style": "default",
+        "analytics_disabled": True, "product_feedback_disabled": True, "fast_mode_disabled_reason": None,
+        "fast_mode_state": "off", "per_turn_effort_active": False, "ultrathink_available": False,
+        "ultrathink_typed_raises": False, "view_mode": "default", "original_cwd": "/tmp/empty",
+        "messaging_socket_path": "/tmp/x.sock", "terminal_slash_commands": [],
+    }
+    return init_frame(**{**frame, **changes})
 
 
 class InitCheckTests(unittest.TestCase):
