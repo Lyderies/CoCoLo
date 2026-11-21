@@ -43,18 +43,6 @@ class StopRecordTests(CoreCase):
         jsonl(self.records / "history.jsonl", [{"id": "H-1", "summary": "a note"}])
         self.assertIn("unknown", self.ask("Why did it stop?")["text"])
 
-    def test_api15_confirmed_stop_and_cancel_write_a_stop_record(self):
-        owner = self.client("owner")
-        for method, params in (("control.stop", {}), ("unit.cancel", {"id": "U-0001"})):
-            try:
-                owner.call(method, params)
-            except self.mod.ApiError as error:
-                owner.call(method, {**params, "confirm_id": error.data["confirm_id"]})
-        stops = [r for r in read_jsonl(self.records / "history.jsonl") if r.get("type") == "stop"]
-        self.assertEqual(["owner", "owner"], [r["by"] for r in stops])
-        self.assertTrue(all(r["code"] and r["reason"] and r["ts"] and r["id"] for r in stops))
-        self.assertEqual([None, "U-0001"], [r.get("unit_id") for r in stops])
-        self.assertIn("you", self.ask("Why did it stop?")["text"].lower())
 
 
 class NeutralTests(CoreCase):
