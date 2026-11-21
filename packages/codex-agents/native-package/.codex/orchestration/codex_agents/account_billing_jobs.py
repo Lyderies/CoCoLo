@@ -226,9 +226,17 @@ class AccountBillingJobs:
 
     def _name_failure(self, job, cause, error=None):
         """A failure that answers a bare probe_unavailable names its cause in this lane's last_failure,
-        once per job (the recurring-issue rule: no unnamed probe_unavailable). Never raises."""
+        once per job (the recurring-issue rule: no unnamed probe_unavailable); a cause already named for this
+        job stays the one shown. Never raises."""
+        if job.noted:
+            return
         job.noted = True
         lane_health.safely(lambda: self.health.note_failure(self._note, cause, error))
+
+    def _stop_cause(self, job):
+        """Why a job is stopped without a failure of its own: its deadline, the close, or a caller's cancel."""
+        return ('probe_deadline_expired' if job.timed_out else 'probe_closing' if self._closing
+                else 'probe_cancelled')
 
     def _discard(self, job, reason='probe_unavailable', *, cause=None, error=None):
         if cause is not None:
@@ -261,8 +269,10 @@ class AccountBillingJobs:
         self._guard()
         ticket = self._signatures[handle]
         job = self._jobs[ticket]
+        cause = 'probe_admit_failed'
         try:
             if job.cancelled or self._closing or not self._subscribed(ticket):
+                cause = self._stop_cause(job)  # a stop is named as one, never as an admission failure
                 raise ProbeAdmissionError()
             result = self._owner.admit(job.reservation)
             if type(result) is ProbeAdmission:
@@ -280,7 +290,7 @@ class AccountBillingJobs:
                 self._settle_failed_step(job, unsure='probe_unavailable')
             else:
                 self._discard(job, getattr(error, 'reason_code', 'probe_unavailable'),
-                              cause='probe_admit_failed', error=error)
+                              cause=cause, error=error)
         finally:
             if handle in self._claims._pool._returned:
                 self._claims._pool.discard(handle)
@@ -348,8 +358,9 @@ class AccountBillingJobs:
                     job.before_publish, _ingress=self._ingress_owner, _billing_parent=(self, ticket))
             elif reply.reason is not None:
                 # Say why: the observation's own fixed reason.
-                self._discard(job, reply.reason if reply.reason in OBSERVATION_REASONS else 'probe_unavailable',
-                              cause='probe_observation_reason_unrecognised')
+                recognised = reply.reason in OBSERVATION_REASONS  # only an unrecognised reason is a bare one
+                self._discard(job, reply.reason if recognised else 'probe_unavailable',
+                              cause=None if recognised else 'probe_observation_reason_unrecognised')
             else:
                 job.identity = next(r for r in reply.result['records'] if r['record_type'] == 'provider_identity')
                 job.state = 'prepare'
@@ -455,6 +466,8 @@ class AccountBillingJobs:
             # Discarding is resumed on the next step; a persistent error keeps the job (0.3.3, C9d).
             self._discard_fault(job)
             if job.state == 'unknown':
+                if job.reason is None and unsure == 'probe_unavailable':
+                    self._name_failure(job, 'probe_settle_unconfirmed')  # the bare reason says why now
                 job.reason = job.reason or unsure
             return
         try:
@@ -550,7 +563,7 @@ class AccountBillingJobs:
                 self._signatures.pop(job.signature)
                 self._owner._signatures.pop(job.reservation)
                 job.signature = None
-        self._discard(job)
+        self._discard(job, cause=self._stop_cause(job))
         return 'cleanup_pending'
 
     def request_close(self):
