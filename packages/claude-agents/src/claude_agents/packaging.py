@@ -297,9 +297,29 @@ def compile_bundle(source_root: Path) -> Bundle:
             os.close(root)
 
 
+# The bundle_sha256 of every earlier release this installer accepts an upgrade from. It lives
+# here, in installer code, so previous-releases.json cannot vouch for itself: a record whose
+# digest is not listed is refused, however consistent the file is. Add a release's digest here
+# (taken from a project installed by that release) when it is cut.
+PINNED_RELEASE_DIGESTS = frozenset({
+    "c3e80b3f92cc5e5728b848e384d820265f70b32031ed931b723f201c1b0309ae",  # 0.8.40
+})
+
+
+def bundle_paths() -> frozenset[str]:
+    """The fixed set of paths compile_bundle produces (the manifest excluded); a recorded
+    release may name only these."""
+    return frozenset({
+        *(".claude/agents/" + role + ".md" for role in ROLES),
+        ".claude/skills/claude-agents/SKILL.md",
+        *(".claude/claude-agents/lib/claude_agents/" + module for module in _MODULES),
+    })
+
+
 def released_bundles(source_root: Path) -> tuple[Bundle, ...]:
-    """The earlier released bundles this source records (previous-releases.json), each rebuilt
-    byte for byte and kept only if its recorded bundle_sha256 is the one its files produce."""
+    """The earlier released bundles this source records (previous-releases.json). A record is
+    kept only if its digest is pinned in this module, it names only bundle_paths(), and its
+    recorded bundle_sha256 is the one its files produce; any other record is refused."""
     root = None
     try:
         root = _root(source_root)
@@ -310,8 +330,10 @@ def released_bundles(source_root: Path) -> tuple[Bundle, ...]:
         bundles = []
         for record in records:
             files = {path: content.encode() for path, content in record["files"].items()}
-            if not all(type(p) is str and p.startswith(".claude/") and p != MANIFEST for p in files):
-                _fail("invalid_previous_release")
+            if record["bundle_sha256"] not in PINNED_RELEASE_DIGESTS:
+                _fail("previous_release_not_pinned")
+            if not files or not set(files) <= bundle_paths():
+                _fail("previous_release_path_refused")
             metadata = {
                 "schema_version": 1, "namespace": "claude-agents",
                 "package_version": record["package_version"], "provider_execution_enabled": False,
@@ -323,7 +345,9 @@ def released_bundles(source_root: Path) -> tuple[Bundle, ...]:
             metadata["bundle_sha256"] = record["bundle_sha256"]
             bundles.append(Bundle(tuple(sorted(files.items())), _canonical(metadata)))
         return tuple(bundles)
-    except (OSError, UnicodeError, KeyError, TypeError, AttributeError, ValueError):
+    except (OSError, UnicodeError, KeyError, TypeError, AttributeError, ValueError) as exc:
+        if isinstance(exc, PackageError):
+            raise
         raise PackageError("invalid_previous_release") from None
     finally:
         if root is not None:
