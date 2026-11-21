@@ -4,6 +4,17 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- A new read-only command, `learning-usage-report --project-root <root> --since <ISO> --until <ISO> [--limit N]`,
+  reports what a window of children used: per provider and model, the runs, the runs with complete usage and
+  the input, output, cache-creation and cache-read tokens, and per run an opaque run id, time, model, effort,
+  role, outcome and tokens. It reads the project's store and the old ledger read-only: it starts no service and
+  writes nothing, and names no task text, path or store identifier. It lists at most 500 runs (`--limit`, at
+  most 2,000) and says when a window had more.
+- A run's usage counted as unknown unless all eight usage fields were known, and a bridged child never reports
+  model calls, tool calls, latency or cost, so `learning-status` counted every run as `host_usage_unknown` and
+  `learning-orchestration-report` never said `child_attribution: complete`. A run is now complete when its
+  input, cached-input and output token counts are known. Runs already recorded keep the flag they had; the new
+  report decides each run from its own usage record.
 - A result can be recorded after its service stopped. What a record, a verifier and QA need of a run (its assignment,
   task, route, client capability and host class) is now kept in the project's records with the run, from before
   its claim, instead of only in the service's memory, so a restarted service records a result left on disk, opens

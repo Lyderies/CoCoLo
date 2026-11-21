@@ -121,6 +121,8 @@ from codex_agents.learning_engine import (  # noqa: E402
 )
 from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient  # noqa: E402
 from codex_agents.collector_paths import UNMOVED_STATE, CollectorPaths  # noqa: E402
+from codex_agents.project_usage_report import DEFAULT_ROWS as USAGE_REPORT_ROWS  # noqa: E402
+from codex_agents.project_usage_report import UsageReportError, usage_report  # noqa: E402
 from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
@@ -290,6 +292,28 @@ def _print(data: object) -> None:
         # (never a supplied value). A not-ready reply without one is a report, not a refusal.
         data = {**data, "next_step": next_step(data["reason_code"])}
     print(json.dumps(data, indent=2, sort_keys=True))
+
+
+def _usage_report(args: argparse.Namespace) -> dict:
+    """The usage report of one window, or a refusal with a fixed reason code; reads only."""
+    import datetime
+
+    def moment(text):
+        try:
+            value = datetime.datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+        except ValueError:
+            raise UsageReportError("usage_window_invalid") from None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=datetime.timezone.utc)
+        return int(value.timestamp() * 1000)
+
+    try:
+        return {"ready": True, **usage_report(CollectorPaths(args.state_root), args.project_root,
+                                              moment(args.since), moment(args.until), args.limit)}
+    except UsageReportError as refusal:
+        return {"ready": False, "reason_code": refusal.reason_code}
+    except StateError:
+        return {"ready": False, "reason_code": "usage_state_unavailable"}
 
 
 def _print_command_report(args: argparse.Namespace, report: dict) -> None:
@@ -1679,6 +1703,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_learning_project(learning_orchestration_report)
     learning_orchestration_report.add_argument("--orchestration-id", required=True)
 
+    learning_usage_report = subparsers.add_parser(
+        "learning-usage-report",
+        help="read-only usage of the children a project ran in a window, per provider and model and per run",
+    )
+    _add_learning_project(learning_usage_report)
+    learning_usage_report.add_argument("--since", required=True, help="window start, ISO 8601 (inclusive)")
+    learning_usage_report.add_argument("--until", required=True, help="window end, ISO 8601 (exclusive)")
+    learning_usage_report.add_argument("--limit", type=int, default=USAGE_REPORT_ROWS,
+                                       help="runs listed at most (default %(default)s)")
+
     learning_bind_agent = subparsers.add_parser(
         "learning-bind-host-agent",
         help="bind a host run to the native subagent identifier",
@@ -2709,6 +2743,11 @@ def main() -> int:
                     }
                 finally:
                     _close_ledger(ledger)
+        elif args.command == "learning-usage-report":
+            # Read-only: no service is started and nothing is written (RT-8).
+            report = _usage_report(args)
+            _print(report)
+            return 0 if report["ready"] else 2
         elif args.command == "learning-bind-host-agent":
             _refuse_bridged_run(args, args.run_handle, "a bridged run binds only its dispatched child")
             ledger, project_id = _learning_ledger(args)

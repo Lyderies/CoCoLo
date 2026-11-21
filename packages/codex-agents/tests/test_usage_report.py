@@ -23,7 +23,7 @@ from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
 from tests.learning_support import verification_outcome
 
 from codex_agents.learning_adapters import empty_usage, token_usage_known
-from codex_agents.learning_contracts import canonical_json, validate_learning_record
+from codex_agents.learning_contracts import canonical_json, content_digest, validate_learning_record
 from codex_agents.learning_store import LearningLedger, LearningState
 from codex_agents.project_history import ProjectHistory
 
@@ -33,6 +33,9 @@ T0 = 1_800_000_000_000  # the window starts here
 HOUR = 3_600_000
 CODEX = "gpt-5.6-sol"
 CLAUDE = "claude-sonnet-5-5"
+CONFIGURATION = ("model", "effort", "role", "topology", "max_parallel", "verification_required", "verifier_digest",
+                 "bounds_digest", "package_digest", "policy_digest", "agent_digest", "skill_digests",
+                 "prompt_digest", "client_digest")
 
 
 def iso(milliseconds: int) -> str:
@@ -96,8 +99,9 @@ class UsageReportCase(unittest.TestCase):
                         "provider", at_ms)
         if outcome:
             value = verification_outcome(f"outcome-{self.counter}")
-            value.update(run_id=run_id, model=model, effort=effort, role=role, status=status,
+            value.update(run_id=run_id, model=model, effort=effort, role=role, status=status, accepted=status == "accepted", admission_state=status,
                          task_slice=SECRET_SLICE, observed_at_ms=at_ms + 5_000)
+            value["configuration_digest"] = content_digest({name: value[name] for name in CONFIGURATION})
             value["usage"] = empty_usage()
             value["usage_sources"] = {field: {"source": "unavailable", "coverage": "unknown"} for field in value["usage"]}
             self.append(value, "host", at_ms + 5_000)
@@ -120,7 +124,7 @@ class UsageReportTests(UsageReportCase):
                                  usage={"input_tokens": 120, "cached": 400, "creation": 80, "output_tokens": 30})
         ids["claude2"] = self.finished(T0 + 3 * HOUR, model=CLAUDE, role="claude_agents_researcher", effort="medium",
                                   usage={"input_tokens": 10, "cached": 20, "creation": 30, "output_tokens": 5})
-        ids["unknown"] = self.finished(T0 + 4 * HOUR, usage=None, status="invalid_result")
+        ids["unknown"] = self.finished(T0 + 4 * HOUR, usage=None, status="rejected")
         ids["early"] = self.finished(T0 - HOUR, usage={"input_tokens": 7, "cached": 1, "output_tokens": 1})
         ids["late"] = self.finished(T0 + 30 * HOUR, usage={"input_tokens": 9, "cached": 1, "output_tokens": 1})
         return ids
@@ -153,7 +157,7 @@ class UsageReportTests(UsageReportCase):
         self.assertEqual((120, 30, 80, 400), tuple(rows[1][key] for key in (
             "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")))
         last = rows[3]
-        self.assertEqual((False, None, "invalid_result"), (last["usage_complete"], last["input_tokens"], last["outcome"]))
+        self.assertEqual((False, None, "rejected"), (last["usage_complete"], last["input_tokens"], last["outcome"]))
 
     def test_the_window_is_since_inclusive_until_exclusive(self) -> None:
         self.finished(T0, usage={"input_tokens": 1, "cached": 0, "output_tokens": 1})
