@@ -50,6 +50,25 @@ The evidence behind these rows comes from two research reports kept in `research
 "Codex and Claude model routing" and "Model routing cost and preferences". Community preference
 enters only as a small prior worth a few paired runs.
 
+## Risk, retries and the verifier
+
+The router reads `risk` and `failed_attempts` through three optional policy entries. The shipped policy
+has none of them, so it routes exactly as the table above says; they carry the mechanism only, and
+cheaper candidates arrive with their evidence (R4).
+
+- **Risk bands:** `risk_candidates.<family>.<route key>.<low|medium|high|critical>` replaces the
+  cell's candidate list for tasks of that risk. A band with no entry uses the cell's list. A high or
+  critical list may never route below the cell's first choice; the loader refuses one that does.
+- **Retries:** an `escalation` block lists the failure reasons that count and gives each family a
+  ladder of candidates, weakest first. After a counted failure, attempt 2 of work with an executable
+  check moves to the next admitted candidate up; judgment work keeps its first choice; attempt 3 and
+  later go to the family's strongest admitted candidate.
+- **Verifier:** `verification.by_risk` and `providers.claude.verifier.by_risk` give the verifier's
+  model and effort per risk. The verifier is still the other provider.
+
+A route that used a band or escalated carries `routing_basis` with the risk, the band used and the
+escalation step.
+
 ## First paired tests
 
 These rows are cheap to test and could change soonest:

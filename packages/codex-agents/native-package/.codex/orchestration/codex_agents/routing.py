@@ -15,7 +15,7 @@ from typing import Any
 import tomllib
 
 from .catalog import discover, load_discovery_policy
-from .contracts import ContractError, validate_task
+from .contracts import FAILURE_REASONS, ContractError, validate_task
 from .git_plumbing import git_executable as find_git
 from .git_plumbing import repository_layout_problem, run_git
 from .learning_contracts import (
@@ -58,8 +58,12 @@ POLICY_KEYS = {
     "version", "status", "validated_client", "evaluation", "quality_first",
     "selection_policy", "max_parallel", "bounds", "observation_deadlines",
     "models", "legacy_fallback", "roles", "routes", "providers",
-    "provider_candidates", "verification", "quality_thresholds",
+    "provider_candidates", "risk_candidates", "escalation", "verification",
+    "quality_thresholds",
 }
+RISK_BANDS = ("low", "medium", "high", "critical")
+HIGH_RISK_BANDS = ("high", "critical")
+MAX_LADDER_RUNGS = 16
 
 
 def _read_project_regular(root: Path, relative: str, *, max_bytes: int) -> bytes:
@@ -666,6 +670,8 @@ def load_policy(path: Path) -> dict[str, Any]:
     if verification.get("mode") != "all_meaningful":
         raise PolicyError("initial policy must verify all meaningful results")
     _validate_model_effort(policy, verification.get("model"), verification.get("effort"))
+    if "by_risk" in verification:
+        _validate_verifier_by_risk(verification["by_risk"], policy["models"], "verification")
     if not isinstance(policy["roles"], dict) or not policy["roles"]:
         raise PolicyError("roles must be a non-empty object")
     if not all(isinstance(role, str) and role for role in policy["roles"].values()):
@@ -750,6 +756,8 @@ def load_policy(path: Path) -> dict[str, Any]:
             )
     _validate_providers(policy)
     _validate_provider_candidates(policy)
+    _validate_escalation(policy)
+    _validate_risk_candidates(policy)
     return policy
 
 
@@ -874,13 +882,33 @@ def _validate_providers(policy: dict[str, Any]) -> None:
             verifier = entry["verifier"]
             if (
                 not isinstance(verifier, dict)
-                or set(verifier) != {"model", "effort"}
+                or not {"model", "effort"} <= set(verifier)
+                or set(verifier) - {"model", "effort", "by_risk"}
                 or verifier["model"] not in models
                 or verifier["effort"] not in models[verifier["model"]]
             ):
                 raise PolicyError(f"providers.{provider}.verifier is invalid")
+            if "by_risk" in verifier:
+                _validate_verifier_by_risk(
+                    verifier["by_risk"], models, f"providers.{provider}.verifier"
+                )
     except ContractError as exc:
         raise PolicyError(f"provider policy is invalid: {exc}") from exc
+
+
+def _validate_verifier_by_risk(by_risk: Any, models: Any, label: str) -> None:
+    """Per-risk verifier settings: a model and effort the provider offers, per band."""
+
+    if not isinstance(by_risk, dict) or not by_risk or not set(by_risk) <= set(RISK_BANDS):
+        raise PolicyError(f"{label}.by_risk must map risk bands to a model and effort")
+    for band, setting in by_risk.items():
+        if (
+            not isinstance(setting, dict)
+            or set(setting) != {"model", "effort"}
+            or setting["model"] not in models
+            or setting["effort"] not in models[setting["model"]]
+        ):
+            raise PolicyError(f"{label}.by_risk.{band} is invalid")
 
 
 def _validate_provider_candidates(policy: dict[str, Any]) -> None:
@@ -908,10 +936,14 @@ def _validate_provider_candidates(policy: dict[str, Any]) -> None:
 
 
 def _validate_candidate_list(
-    policy: dict[str, Any], candidates: Any, role_families: list[str], label: str
+    policy: dict[str, Any],
+    candidates: Any,
+    role_families: list[str],
+    label: str,
+    table: str = "provider_candidates",
 ) -> None:
     if not isinstance(candidates, list) or not candidates or len(candidates) > 8:
-        raise PolicyError(f"provider_candidates.{label} must be a bounded non-empty array")
+        raise PolicyError(f"{table}.{label} must be a bounded non-empty array")
     seen: set[tuple[str, ...]] = set()
     for candidate in candidates:
         if candidate == CODEX_POLICY_CANDIDATE:
@@ -925,28 +957,161 @@ def _validate_candidate_list(
                 provider != "codex" and provider not in policy.get("providers", {})
             ):
                 raise PolicyError(
-                    f"provider_candidates.{label} names an unknown provider"
+                    f"{table}.{label} names an unknown provider"
                 )
             models = _provider_models(policy, provider)
             if candidate["model"] not in models:
                 raise PolicyError(
-                    f"provider_candidates.{label} names a model {provider} does not offer"
+                    f"{table}.{label} names a model {provider} does not offer"
                 )
             if candidate["effort"] not in models[candidate["model"]]:
                 raise PolicyError(
-                    f"provider_candidates.{label} names an effort the model does not allow"
+                    f"{table}.{label} names an effort the model does not allow"
                 )
             key = (provider, candidate["model"], candidate["effort"])
         else:
-            raise PolicyError(f"provider_candidates.{label} contains an invalid candidate")
+            raise PolicyError(f"{table}.{label} contains an invalid candidate")
         roles = _provider_roles(policy, provider)
         if any(family not in roles for family in role_families):
             raise PolicyError(
-                f"provider_candidates.{label} names a provider without a role"
+                f"{table}.{label} names a provider without a role"
             )
         if key in seen:
-            raise PolicyError(f"provider_candidates.{label} must be unique")
+            raise PolicyError(f"{table}.{label} must be unique")
         seen.add(key)
+
+
+def _cell_route(policy: dict[str, Any], name: str, key: str | None) -> dict[str, Any]:
+    """The task-shape policy route a provider-candidate cell belongs to."""
+
+    if key is None:
+        return policy["routes"][name]
+    return policy["routes"]["families"][name][key]
+
+
+def _identity(
+    candidate: dict[str, Any], cell_route: dict[str, Any]
+) -> tuple[str, str, str]:
+    """Provider, model and effort of a candidate; `codex_policy` is the cell's own route."""
+
+    if candidate == CODEX_POLICY_CANDIDATE:
+        return "codex", cell_route["model"], cell_route["effort"]
+    return candidate["provider"], candidate["model"], candidate["effort"]
+
+
+def _ladder_rungs(policy: dict[str, Any], family: str) -> list[tuple[str, str, str]] | None:
+    ladder = policy.get("escalation", {}).get("ladders", {}).get(family)
+    if ladder is None:
+        return None
+    return [(rung["provider"], rung["model"], rung["effort"]) for rung in ladder]
+
+
+def _validate_escalation(policy: dict[str, Any]) -> None:
+    """The escalation block: which failures count, and each family's ladder of strength."""
+
+    if "escalation" not in policy:
+        return
+    block = policy["escalation"]
+    if not isinstance(block, dict) or set(block) != {"failure_reasons", "ladders"}:
+        raise PolicyError("escalation must contain exactly failure_reasons and ladders")
+    reasons = block["failure_reasons"]
+    if (
+        not isinstance(reasons, list)
+        or not reasons
+        or not all(isinstance(reason, str) and reason in FAILURE_REASONS for reason in reasons)
+        or len(reasons) != len(set(reasons))
+    ):
+        raise PolicyError("escalation.failure_reasons must name known failure reasons")
+    ladders = block["ladders"]
+    families = policy["routes"]["families"]
+    if not isinstance(ladders, dict) or not set(ladders) <= set(families):
+        raise PolicyError("escalation.ladders names an unknown family")
+    for family, ladder in ladders.items():
+        label = f"escalation.ladders.{family}"
+        if not isinstance(ladder, list) or not 1 <= len(ladder) <= MAX_LADDER_RUNGS:
+            raise PolicyError(f"{label} must be a bounded non-empty array, weakest first")
+        seen: set[tuple[str, str, str]] = set()
+        for rung in ladder:
+            if not isinstance(rung, dict) or set(rung) != {"provider", "model", "effort"}:
+                raise PolicyError(f"{label} contains an invalid rung")
+            provider = rung["provider"]
+            if provider not in PROVIDERS or (
+                provider != "codex" and provider not in policy.get("providers", {})
+            ):
+                raise PolicyError(f"{label} names an unknown provider")
+            models = _provider_models(policy, provider)
+            if rung["model"] not in models or rung["effort"] not in models[rung["model"]]:
+                raise PolicyError(f"{label} names a model or effort {provider} does not offer")
+            if family not in _provider_roles(policy, provider):
+                raise PolicyError(f"{label} names a provider without a role")
+            key = (provider, rung["model"], rung["effort"])
+            if key in seen:
+                raise PolicyError(f"{label} must be unique")
+            seen.add(key)
+        # A ladder only means something if every candidate of its family sits on it.
+        for key_name, candidates in policy.get("provider_candidates", {}).get(family, {}).items():
+            cell = _cell_route(policy, family, key_name)
+            for candidate in candidates:
+                if _identity(candidate, cell) not in seen:
+                    raise PolicyError(
+                        f"provider_candidates.{family}.{key_name} has a candidate "
+                        f"that is not on the {family} escalation ladder"
+                    )
+
+
+def _validate_risk_candidates(policy: dict[str, Any]) -> None:
+    """Per-risk candidate lists; high and critical may never fall below the first choice."""
+
+    if "risk_candidates" not in policy:
+        return
+    table = policy["risk_candidates"]
+    families = policy["routes"]["families"]
+    if not isinstance(table, dict) or not set(table) <= {*families, "reconnaissance"}:
+        raise PolicyError(
+            "risk_candidates contains an unknown family or route "
+            "(hard_end_to_end keeps its single route)"
+        )
+    for name, entry in table.items():
+        if name == "reconnaissance":
+            cells: dict[str | None, Any] = {None: entry}
+        else:
+            if not isinstance(entry, dict) or not set(entry) <= (
+                set(families[name]) & ROUTE_KEYS
+            ):
+                raise PolicyError(f"risk_candidates.{name} contains an unknown route key")
+            cells = dict(entry)
+        for key, bands in cells.items():
+            label = name if key is None else f"{name}.{key}"
+            if not isinstance(bands, dict) or not bands or not set(bands) <= set(RISK_BANDS):
+                raise PolicyError(f"risk_candidates.{label} must map risk bands to candidates")
+            family = "research" if name == "reconnaissance" else name
+            cell_route = _cell_route(policy, name, key)
+            default = _provider_candidate_list(policy, name, key)
+            for band, candidates in bands.items():
+                _validate_candidate_list(
+                    policy, candidates, [family], f"{label}.{band}", "risk_candidates"
+                )
+                if band not in HIGH_RISK_BANDS:
+                    continue
+                ladder = _ladder_rungs(policy, family)
+                if ladder is None:
+                    raise PolicyError(
+                        f"risk_candidates.{label}.{band} needs an escalation ladder for "
+                        f"{family} to show it never routes below the first choice"
+                    )
+                floor_identity = _identity(default[0], cell_route)
+                if floor_identity not in ladder:
+                    raise PolicyError(
+                        f"the first choice of {label} is not on the {family} escalation ladder"
+                    )
+                floor = ladder.index(floor_identity)
+                for candidate in candidates:
+                    identity = _identity(candidate, cell_route)
+                    if identity not in ladder or ladder.index(identity) < floor:
+                        raise PolicyError(
+                            f"risk_candidates.{label}.{band} routes below the first choice "
+                            f"of {label} or off the {family} escalation ladder"
+                        )
 
 
 def _candidate(
@@ -959,8 +1124,6 @@ def _candidate(
     operation = task["operation"]
     ambiguity = task["ambiguity"]
     context_breadth = task["context_breadth"]
-    acceptance_strength = task["acceptance_strength"]
-    deterministic = task["deterministic_validation"]
     family_routes = policy["routes"]["families"].get(family)
     if family_routes is None:
         raise ContractError(f"unsupported family: {family}")
@@ -988,10 +1151,7 @@ def _candidate(
             else "default"
         )
         return family_routes[name], "execution", family
-    strong_acceptance = (
-        acceptance_strength == "executable"
-        or (acceptance_strength == "deterministic" and deterministic)
-    )
+    strong_acceptance = _strong_acceptance(task)
     if family == "verification":
         bounded_verification = (
             ambiguity in {"known", "partial"}
@@ -1052,6 +1212,26 @@ def _provider_candidate_list(
     table = policy.get("provider_candidates", {})
     entry = table.get(name) if key is None else table.get(name, {}).get(key)
     return entry or [CODEX_POLICY_CANDIDATE]
+
+
+def _banded_candidate_list(
+    policy: dict[str, Any], name: str, key: str | None, risk: str
+) -> tuple[list[dict[str, Any]], str | None]:
+    """The task's risk band list when the policy gives one, else today's list."""
+
+    table = policy.get("risk_candidates", {})
+    bands = table.get(name) if key is None else table.get(name, {}).get(key)
+    banded = bands.get(risk) if bands else None
+    if banded:
+        return banded, risk
+    return _provider_candidate_list(policy, name, key), None
+
+
+def _strong_acceptance(task: dict[str, Any]) -> bool:
+    return task["acceptance_strength"] == "executable" or (
+        task["acceptance_strength"] == "deterministic"
+        and task["deterministic_validation"]
+    )
 
 
 def _provider_settings(policy: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -1170,20 +1350,43 @@ def _codex_project_agent(
     return result
 
 
+def verifier_setting(
+    policy: dict[str, Any], provider: str, risk: str
+) -> tuple[dict[str, str], bool]:
+    """The verifier model and effort for the worker's risk, and whether a per-risk entry applied.
+
+    Absent a per-risk entry the provider's single verifier setting applies, as before.
+    """
+
+    source = (
+        policy["verification"]
+        if provider == "codex"
+        else policy["providers"][provider]["verifier"]
+    )
+    banded = source.get("by_risk", {}).get(risk)
+    chosen = banded if banded is not None else source
+    return {"model": chosen["model"], "effort": chosen["effort"]}, banded is not None
+
+
 def _codex_verifier(
     policy: dict[str, Any],
     routed_family: str,
     *,
     use_legacy_fallback: bool,
+    risk: str,
 ) -> dict[str, Any]:
     verification = policy["verification"]
-    source = policy["legacy_fallback"] if use_legacy_fallback else verification
+    setting, banded = verifier_setting(policy, "codex", risk)
+    source = policy["legacy_fallback"] if use_legacy_fallback else setting
+    banded = banded and not use_legacy_fallback
     verifier: dict[str, Any] = {
         "role": verification["role"],
         "model": source["model"],
         "effort": source["effort"],
         "sandbox_mode": "read-only",
     }
+    if banded:
+        verifier["risk_band"] = risk
     verifier_agent_type = policy.get("project_agent_verifiers", {}).get(
         routed_family
     )
@@ -1232,8 +1435,12 @@ def _select_verifier(
     worker_provider: str,
     primary_provider: str,
     use_legacy_fallback: bool,
+    risk: str,
 ) -> dict[str, Any]:
-    """Prefer the other vendor's reviewer, then the worker's own vendor."""
+    """Prefer the other vendor's reviewer, then the worker's own vendor.
+
+    Its model and effort follow the worker's risk where the policy gives per-risk entries.
+    """
 
     order = ("codex", "claude") if worker_provider == "claude" else ("claude", "codex")
     skipped: str | None = None
@@ -1241,7 +1448,7 @@ def _select_verifier(
         dispatch = _dispatch(primary_provider, provider)
         if provider == "codex":
             verifier = _codex_verifier(
-                policy, routed_family, use_legacy_fallback=use_legacy_fallback
+                policy, routed_family, use_legacy_fallback=use_legacy_fallback, risk=risk
             )
             if dispatch == "bridge" and verifier["sandbox_mode"] != "read-only":
                 skipped = _bridged_writable(verifier)
@@ -1251,14 +1458,17 @@ def _select_verifier(
             agent = _claude_agent(policy, "verification")
             if claude is None or agent is None:
                 continue
+            setting, banded = verifier_setting(policy, "claude", risk)
             verifier = {
                 "role": agent["role"],
-                "model": claude["verifier"]["model"],
-                "effort": claude["verifier"]["effort"],
+                "model": setting["model"],
+                "effort": setting["effort"],
                 "sandbox_mode": "read-only",
                 "agent_type": agent["agent_type"],
                 "agent_path": agent["agent_path"],
             }
+            if banded:
+                verifier["risk_band"] = risk
         if not _provider_admitted(
             policy, primary_provider, provider, verifier["model"]
         ):
@@ -1268,6 +1478,61 @@ def _select_verifier(
         return verifier
     message = "no verifier candidate is eligible for this route"
     raise ContractError(f"{message}: {skipped}" if skipped else message)
+
+
+def _escalate(
+    policy: dict[str, Any],
+    task: dict[str, Any],
+    routed_family: str,
+    picked: tuple[str, dict[str, Any], dict[str, Any] | None],
+    first_eligible: Any,
+) -> tuple[tuple[str, dict[str, Any], dict[str, Any] | None], dict[str, Any] | None]:
+    """Move a retry up its family's ladder after a failed check, once, then to the strongest.
+
+    Attempt 2 after a qualifying failure goes to the next admitted rung above the pick for
+    work with an executable check; judgment work keeps its first choice (it does not
+    cascade). Attempt 3 and later go to the strongest admitted rung and are reported.
+    The policy opts in with an `escalation` block; without one, or without a ladder for
+    the family, the pick stands and nothing is recorded.
+    """
+
+    block = policy.get("escalation")
+    ladder = _ladder_rungs(policy, routed_family) if block is not None else None
+    failed = task["failed_attempts"]
+    if (
+        ladder is None
+        or failed == 0
+        or not any(event["reason"] in block["failure_reasons"] for event in task["failure_events"])
+    ):
+        return picked, None
+    provider, model_effort, _ = picked
+    current = (provider, model_effort["model"], model_effort["effort"])
+    record: dict[str, Any] = {
+        "attempt": failed + 1,
+        "from": {"provider": current[0], "model": current[1], "effort": current[2]},
+    }
+    if failed == 1 and not _strong_acceptance(task):
+        record["step"] = "held_judgment"
+        record["to"] = deepcopy(record["from"])
+        return picked, record
+    if current not in ladder:
+        record["step"] = "off_ladder"
+        record["to"] = deepcopy(record["from"])
+        return picked, record
+    above = [
+        {"provider": p, "model": m, "effort": e}
+        for p, m, e in ladder[ladder.index(current) + 1:]
+    ]
+    # The next rung up is the nearest admitted one; the strongest is the highest.
+    for rung in (above if failed == 1 else list(reversed(above))):
+        found, _ = first_eligible([rung])
+        if found is not None:
+            record["step"] = "next" if failed == 1 else "strongest"
+            record["to"] = deepcopy(rung)
+            return found, record
+    record["step"] = "none_higher"
+    record["to"] = deepcopy(record["from"])
+    return picked, record
 
 
 def _route_task(
@@ -1303,6 +1568,7 @@ def _route_task(
             worker_provider=verification_for_provider,
             primary_provider=primary_provider,
             use_legacy_fallback=use_legacy_fallback,
+            risk=task["risk"],
         )
         rule_agent = None
         if rule["provider"] == "claude":
@@ -1315,39 +1581,52 @@ def _route_task(
             {"model": rule["model"], "effort": rule["effort"]},
             rule_agent,
         )
-    candidate_entries = (
-        []
-        if picked is not None
-        else _provider_candidate_list(
-            policy, *_route_key(policy, routed_family, candidate)
+    risk_band: str | None = None
+    candidate_entries: list[dict[str, Any]] = []
+    if picked is None:
+        candidate_entries, risk_band = _banded_candidate_list(
+            policy, *_route_key(policy, routed_family, candidate), task["risk"]
         )
-    )
-    skipped: str | None = None
-    for entry in candidate_entries:
-        provider = entry["provider"]
-        source = candidate if entry == CODEX_POLICY_CANDIDATE else entry
-        model_effort = {"model": source["model"], "effort": source["effort"]}
-        if not _provider_admitted(
-            policy, primary_provider, provider, model_effort["model"]
-        ):
-            continue
-        agent: dict[str, Any] | None = None
-        if provider == "codex":
-            if (
-                _dispatch(primary_provider, provider) == "bridge"
-                and codex_agent.get("sandbox_mode", "read-only") != "read-only"
+
+    def first_eligible(
+        entries: list[dict[str, Any]],
+    ) -> tuple[tuple[str, dict[str, Any], dict[str, Any] | None] | None, str | None]:
+        skipped: str | None = None
+        for entry in entries:
+            provider = entry["provider"]
+            source = candidate if entry == CODEX_POLICY_CANDIDATE else entry
+            model_effort = {"model": source["model"], "effort": source["effort"]}
+            if not _provider_admitted(
+                policy, primary_provider, provider, model_effort["model"]
             ):
-                skipped = _bridged_writable(codex_agent)
                 continue
-        else:
-            agent = _claude_agent(policy, routed_family)
-            if agent is None:
-                continue
-        picked = (provider, model_effort, agent)
-        break
+            agent: dict[str, Any] | None = None
+            if provider == "codex":
+                if (
+                    _dispatch(primary_provider, provider) == "bridge"
+                    and codex_agent.get("sandbox_mode", "read-only") != "read-only"
+                ):
+                    skipped = _bridged_writable(codex_agent)
+                    continue
+            else:
+                agent = _claude_agent(policy, routed_family)
+                if agent is None:
+                    continue
+            return (provider, model_effort, agent), skipped
+        return None, skipped
+
+    if picked is None:
+        picked, skipped = first_eligible(candidate_entries)
+    else:
+        skipped = None
     if picked is None:
         message = "no provider candidate is eligible for this route"
         raise ContractError(f"{message}: {skipped}" if skipped else message)
+    escalation: dict[str, Any] | None = None
+    if verification_for_provider is None:
+        picked, escalation = _escalate(
+            policy, task, routed_family, picked, first_eligible
+        )
     provider, primary, claude_agent = picked
     selected = primary
     reason = candidate["reason"]
@@ -1399,6 +1678,7 @@ def _route_task(
             worker_provider=provider,
             primary_provider=primary_provider,
             use_legacy_fallback=use_legacy_fallback,
+            risk=task["risk"],
         )
 
     route_bounds = dict(policy["bounds"])
@@ -1437,6 +1717,13 @@ def _route_task(
         "dispatch": _dispatch(primary_provider, provider),
         "provider_config_digest": provider_config_digest,
     }
+    if risk_band is not None or escalation is not None:
+        basis: dict[str, Any] = {"risk": task["risk"]}
+        if risk_band is not None:
+            basis["risk_band"] = risk_band
+        if escalation is not None:
+            basis["escalation"] = escalation
+        result["routing_basis"] = basis
     if fallback is not None:
         fallback["verifier_substituted"] = verification_required
         result["fallback"] = fallback

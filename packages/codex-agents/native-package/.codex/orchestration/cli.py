@@ -208,6 +208,7 @@ from codex_agents.routing import (  # noqa: E402
     load_effective_policy,
     load_policy,
     route_task,
+    verifier_setting,
 )
 from codex_agents.runtime_files import RELEASES_FILE  # noqa: E402
 from codex_agents.session_guard import (  # noqa: E402
@@ -2967,12 +2968,15 @@ def main() -> int:
                     expected_role = policy["roles"].get(task["family"])
                     if selected["role"] != expected_role:
                         raise ContractError("evaluation trial role differs from policy")
+                    verifier_model, verifier_banded = verifier_setting(
+                        policy, "codex", task["risk"]
+                    )
                     verifier = (
                         {
                             "role": policy["verification"]["role"],
-                            "model": policy["verification"]["model"],
-                            "effort": policy["verification"]["effort"],
+                            **verifier_model,
                             "sandbox_mode": "read-only",
+                            **({"risk_band": task["risk"]} if verifier_banded else {}),
                         }
                         if expected_role != "codex_agents_verification_worker" else None
                     )

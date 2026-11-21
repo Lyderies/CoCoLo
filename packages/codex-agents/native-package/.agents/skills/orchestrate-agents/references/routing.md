@@ -24,19 +24,37 @@ safe routing-evidence references. Unknown ambiguity or context breadth routes to
 read-only Luna/high reconnaissance stage. The manager verifies that result, then
 reroutes the clarified task; reconnaissance never implements the original objective.
 
-Risk never selects a model, effort, or topology or widens authority. High and critical tasks must
-be meaningful and retain independent QA plus operational security
-checks. Passing routine QA does not require owner review. Astra evidence must be an
+Risk never widens authority or changes topology. It selects a model and effort only where the
+policy gives a risk band: `risk_candidates.<family>.<route key>.<low|medium|high|critical>` is
+a candidate list used instead of the cell's list for tasks of that risk, and a band without an entry
+uses the cell's list, so a policy without `risk_candidates` routes as before (the shipped policy
+has none). High and critical bands may never route below the cell's first choice: the policy
+loader refuses them unless every candidate sits at or above that first choice on the family's
+`escalation.ladders` ladder. The verifier's model and effort follow the worker's risk the same
+way: `verification.by_risk` (Codex) and `providers.claude.verifier.by_risk` (Claude) give a model
+and effort per band, and the record then carries `risk_band`; without an entry the provider's
+single verifier applies. The verifier is always the other provider where one is admitted.
+High and critical tasks must be meaningful and retain independent QA plus operational security
+checks. A route that used a band or escalated carries `routing_basis` (the risk, the
+`risk_band` used and the `escalation` step); a route that used neither carries none. Passing routine QA does not require owner review. Astra evidence must be an
 `outcome:<sha256>` reference resolved by the ledger to QA-accepted reconnaissance for
 the same project, task identifier, and family. Candidate alternatives are recorded
 only for matched evaluation. They cannot replace the selected live route; the sole
 exception is the policy-pinned GPT-5.6 Sol fallback after the ledger validates and
 consumes its exact host-unavailability receipt.
 
-Result-contract, schema, formatting, transient, corrected-input, authority, semantic,
-and reasoning failure history does not trigger model escalation. Project-bound
-escalation from verifier history is unavailable until the route can resolve each
-reference to an actual independent verifier record. Raw prompts, outputs, secrets, and
+Result-contract, schema, formatting, transient, corrected-input and authority failure
+history never triggers model escalation. Semantic and reasoning failures escalate only where
+the policy has an `escalation` block that lists them in `failure_reasons` and gives the
+family a ladder (candidates, weakest first; every candidate of that family must sit on it).
+Then a retry after one such failure (attempt 2) moves to the next admitted rung above the
+route's pick if its acceptance is an executable check, and keeps the pick if it is judgment
+work (judgment does not cascade); attempt 3 and later go to the strongest admitted rung. The
+step (`next`, `strongest`, `held_judgment`, `none_higher` or `off_ladder`) is recorded in
+`routing_basis.escalation`. The shipped policy has no `escalation` block, so no failure
+history moves a route today. Failure references are only as trustworthy as the recording
+path: a project-bound escalation from verifier history still needs a route that resolves
+each reference to an actual independent verifier record. Raw prompts, outputs, secrets, and
 unrestricted tool data are never failure evidence. Escalation never grants more tools
 or authority.
 

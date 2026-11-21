@@ -87,6 +87,16 @@ def outcome(task: dict, policy: dict, primary: str) -> object:
         return {"refused": str(error)}
 
 
+def load_from_disk(policy: dict) -> dict:
+    """Load a policy through the file validator; runtime-only provider keys stay off disk."""
+
+    on_disk = {k: v for k, v in policy.items() if k not in ("provider_routing", "provider_config_digest")}
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "routing-policy.json"
+        path.write_text(json.dumps(on_disk))
+        return load_policy(path)
+
+
 def digest(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
@@ -310,17 +320,11 @@ class RiskRoutingTests(unittest.TestCase):
                 self.assert_refused(policy, "")
 
     def assert_refused(self, policy: dict, text: str) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "routing-policy.json"
-            path.write_text(json.dumps(policy))
-            with self.assertRaisesRegex(PolicyError, text):
-                load_policy(path)
+        with self.assertRaisesRegex(PolicyError, text):
+            load_from_disk(policy)
 
     def write_and_load(self, policy: dict) -> dict:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "routing-policy.json"
-            path.write_text(json.dumps(policy))
-            return load_policy(path)
+        return load_from_disk(policy)
 
 
 class EscalationTests(unittest.TestCase):
@@ -441,11 +445,8 @@ class EscalationTests(unittest.TestCase):
     def test_every_candidate_of_a_laddered_family_must_be_on_the_ladder(self) -> None:
         policy = deepcopy(self.policy)
         policy["escalation"]["ladders"]["coding"].pop(2)  # sonnet medium
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "routing-policy.json"
-            path.write_text(json.dumps(policy))
-            with self.assertRaisesRegex(PolicyError, "ladder"):
-                load_policy(path)
+        with self.assertRaisesRegex(PolicyError, "ladder"):
+            load_from_disk(policy)
 
     def test_malformed_escalation_is_refused(self) -> None:
         cases = {
@@ -460,11 +461,8 @@ class EscalationTests(unittest.TestCase):
             with self.subTest(name):
                 policy = deepcopy(self.policy)
                 mutate(policy)
-                with tempfile.TemporaryDirectory() as directory:
-                    path = Path(directory) / "routing-policy.json"
-                    path.write_text(json.dumps(policy))
-                    with self.assertRaises(PolicyError):
-                        load_policy(path)
+                with self.assertRaises(PolicyError):
+                    load_from_disk(policy)
 
 
 class VerifierRiskTests(unittest.TestCase):
@@ -575,11 +573,8 @@ class VerifierRiskTests(unittest.TestCase):
             with self.subTest(name):
                 policy = deepcopy(self.policy)
                 mutate(policy)
-                with tempfile.TemporaryDirectory() as directory:
-                    path = Path(directory) / "routing-policy.json"
-                    path.write_text(json.dumps(policy))
-                    with self.assertRaises(PolicyError):
-                        load_policy(path)
+                with self.assertRaises(PolicyError):
+                    load_from_disk(policy)
 
 
 if __name__ == "__main__":
