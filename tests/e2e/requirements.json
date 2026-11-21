@@ -91,14 +91,20 @@
    "flow": "L4",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Routing for a Codex primary and a Claude primary returns the policy's role, model, effort, agent and sandbox, and the child runs with exactly those.",
-   "checks": []
+   "checks": [
+    "l4_1_claude_primary_route_and_child_run_match_policy",
+    "l4_1_codex_primary_route_and_child_run_match_policy"
+   ]
   },
   {
    "id": "L4.2",
    "flow": "L4",
    "source": "PLAN-0.4.0.md T7",
    "statement": "A route edited after learning-route is refused.",
-   "checks": []
+   "checks": [
+    "l4_2_claude_primary_edited_route_refused",
+    "l4_2_codex_primary_edited_route_refused"
+   ]
   },
   {
    "id": "L5.1",

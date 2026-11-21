@@ -231,7 +231,7 @@ class World:
         env = {key: value for key, value in os.environ.items()
                if key not in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NO_COLOR", "PYTHONDONTWRITEBYTECODE",
                               "CODEX_HOME", "CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME",
-                              "XDG_DATA_HOME", "XDG_CACHE_HOME") and not key.startswith(("CODEX_", "CLAUDE_"))}
+                              "XDG_DATA_HOME", "XDG_CACHE_HOME", "CLAUDECODE") and not key.startswith(("CODEX_", "CLAUDE_"))}
         env.update(
             HOME=str(self.home), TERM="xterm", CODEX_HOME=str(self.home / ".codex"),
             PATH=f"{self.home / '.e2e-bin'}:/usr/bin:/bin:/usr/sbin:/sbin",
@@ -396,6 +396,17 @@ class World:
             raise HarnessError("only a Claude primary session is built by this harness so far")
         return self.cli(*args, refuses=refuses, program=self.project / ".codex" / "orchestration" / "cli.py",
                         environment={**self.CLAUDE_HOST, **(environment or {})}, cwd=self.project, timeout=timeout)
+
+    CODEX_HOST = {"CODEX_THREAD_ID": "e2e-codex-thread"}
+
+    def codex_host_cli(self, *args: str, refuses: bool = False, environment: dict | None = None,
+                       timeout: float = 90) -> tuple[int, dict | None, str]:
+        """A command as a Codex primary session runs it (its thread marker set; the project's own CLI).
+
+        The marker is only what the product's host detection reads; the session guard and its recorded
+        Codex session belong to a later group."""
+        return self.cli(*args, refuses=refuses, program=self.project / ".codex" / "orchestration" / "cli.py",
+                        environment={**self.CODEX_HOST, **(environment or {})}, cwd=self.project, timeout=timeout)
 
     @property
     def tools(self) -> Path:
