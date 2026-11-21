@@ -263,3 +263,14 @@ class AccountObservationTests(unittest.TestCase):
                 self.owner.reserve(self.fixture.projects[1], fixtures.RUNTIME, 'b' * 64, 'after-abort',
                     self.request, ObservationContext(str(self.fixture.roots[1])), lambda: True)
         self.assertEqual(2, self.ledger._connection.execute('SELECT COUNT(*) FROM account_observation_origins').fetchone()[0])
+
+
+class FakeProviderToolsRepeatTests(unittest.TestCase):
+    def test_fake_provider_tools_is_repeatable_for_one_folder(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            fake_provider_tools(Path(directory))
+            fake_provider_tools(Path(directory))
+            self.assertTrue((Path(directory) / "codex").exists())
+            self.assertTrue((Path(directory) / "claude").exists())

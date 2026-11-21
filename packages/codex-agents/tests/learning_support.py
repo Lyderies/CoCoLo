@@ -592,6 +592,7 @@ else:
 
 
 _LAUNCHER_FOLDER = None
+_LAUNCHER_CONTENT = None
 
 
 def _launcher() -> str:
@@ -602,7 +603,7 @@ def _launcher() -> str:
     for `codex` and `claude`. This launcher names no folder: it takes the folder and the client's name
     from the path it was started by (`$0`), so it is the same file for every test, and each test's
     `codex` and `claude` are hard links to it (a link is not scanned again)."""
-    global _LAUNCHER_FOLDER
+    global _LAUNCHER_FOLDER, _LAUNCHER_CONTENT
     if _LAUNCHER_FOLDER is None:
         import atexit
         import shutil
@@ -613,8 +614,14 @@ def _launcher() -> str:
         with open(path, "w") as handle:
             handle.write(f"#!/bin/sh\nexec {sys.executable} \"${{0%/*}}/fake_child.py\" "
                          "\"${0%/*}\" \"${0##*/}\" \"$@\"\n")
-        os.chmod(path, 0o755)
-    return os.path.join(_LAUNCHER_FOLDER, "launcher")
+        os.chmod(path, 0o555)  # Read-only: every test's link shares this one file.
+        _LAUNCHER_CONTENT = open(path).read()
+    path = os.path.join(_LAUNCHER_FOLDER, "launcher")
+    # Guard: a write or chmod through any link changes them all, so fail loudly instead of leaking.
+    if (os.stat(path).st_mode & 0o777) != 0o555 or open(path).read() != _LAUNCHER_CONTENT:
+        raise RuntimeError("the shared fake-client launcher was modified by a test; "
+                           "copy it to an independent file before changing it")
+    return path
 
 
 def fake_provider_tools(directory: Path) -> dict[str, str]:
@@ -630,6 +637,7 @@ def fake_provider_tools(directory: Path) -> dict[str, str]:
     (directory / "fake_child.py").write_text(FAKE_CHILD)
     launcher = _launcher()
     for name in ("codex", "claude"):
+        (directory / name).unlink(missing_ok=True)  # Repeatable for one folder.
         try:
             os.link(launcher, directory / name)
         except OSError:  # Another file system: a copy still works, only without the saving.

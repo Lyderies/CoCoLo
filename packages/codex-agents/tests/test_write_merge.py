@@ -158,7 +158,7 @@ class Workspace(unittest.TestCase):
         flush = getattr(fcntl, "F_FULLFSYNC", None)
 
         def fcntl_without_flush(descriptor, command, *arguments):
-            return 0 if flush is not None and command == flush else real_fcntl(descriptor, command, *arguments)
+            return (os.fstat(descriptor) and 0) if flush is not None and command == flush else real_fcntl(descriptor, command, *arguments)
 
         patcher = mock.patch.object(fcntl, "fcntl", fcntl_without_flush)
         patcher.start()
@@ -351,6 +351,38 @@ class CleanMergeTests(Workspace):
         self.assertEqual(listing, git_dir_listing(self.project))
         self.assertEqual(index, (self.project / ".git" / "index").read_bytes())
         self.assertFalse((self.project / ".git" / "index.lock").exists())
+
+
+class FullFlushTests(unittest.TestCase):
+    """The real flush path, without the Workspace stub."""
+
+    def _file(self):
+        directory = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
+        self.addCleanup(directory.cleanup)
+        return os.open(os.path.join(directory.name, "f"), os.O_RDWR | os.O_CREAT, 0o600)
+
+    def test_real_full_flush_is_called_and_a_bad_descriptor_still_fails(self) -> None:
+        descriptor = self._file()
+        os.write(descriptor, b"x")
+        wm._fsync(descriptor)  # Real fcntl, real flush (or os.fsync off macOS).
+        os.close(descriptor)
+        with self.assertRaises(OSError):
+            wm._fsync(descriptor)
+
+    def test_a_refused_full_flush_falls_back_to_fsync(self) -> None:
+        descriptor = self._file()
+        self.addCleanup(os.close, descriptor)
+        calls = []
+        def refuse(*arguments):
+            calls.append(arguments)
+            raise OSError(errno.ENOTSUP, "no full flush")
+        with mock.patch.object(wm.sys, "platform", "darwin"), \
+                mock.patch.object(wm.fcntl, "F_FULLFSYNC", 51, create=True), \
+                mock.patch.object(wm.fcntl, "fcntl", refuse), \
+                mock.patch.object(wm.os, "fsync") as fsync:
+            wm._fsync(descriptor)
+        self.assertEqual(1, len(calls))
+        fsync.assert_called_once_with(descriptor)
 
 
 class MergeGitCallTests(unittest.TestCase):
