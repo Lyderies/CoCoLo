@@ -1,7 +1,7 @@
 """Shared fixture for the core API tests (TM0, PLAN-0.4.0-terminal.md section 9).
 
-The module under test, `codex_agents.core_api`, does not exist yet; it is imported inside the
-fixture so each test fails on its own until the module is built. The contract these tests fix:
+The module under test, `codex_agents.core_api`, is imported inside the fixture, so a module that
+fails to import fails each test on its own. The contract these tests fix:
 
   core_api.CoreService(records_dir, socket_path, *, clock=callable, expected_uid=int, **limits)
       .start() / .stop(); records_dir holds units.jsonl, state.json, events.jsonl, inbox.jsonl,
@@ -10,8 +10,10 @@ fixture so each test fails on its own until the module is built. The contract th
   core_api.CoreClient(socket_path, token=None)
       .call(method, params=None) -> result dict; raises core_api.ApiError with .code (a string)
       .subscribe(params) -> iterator of notifications; .close()
-  core_api.mint_token(records_dir, scope, label="") -> token string (owner's real terminal only).
-  core_api.in_process(service) -> a client-like object with the same .call, no socket.
+  core_api.mint_token(records_dir, scope, label="") -> token string (owner's real terminal only); the
+      fixtures call the storage step core_api._mint_token(records_dir, scope), which skips that check.
+  core_api.in_process(service, token) -> a client-like object with the same .call, no socket; like a
+      socket client it has no scope until initialize is given a valid token.
   core_api.PROTOCOL_VERSION = "1.0".
 """
 import importlib

@@ -1,7 +1,8 @@
 """Core API round 2 (owner decisions 2026-11-21): stop records (API-15), neutral keys (API-25) and the
 terminal's gaps (TERM-0.4.0-api-gaps.md items 1-8 and 10).
 
-Record formats the core reads (the runner writes them; the core writes stop and routing records itself):
+Record formats the core reads (the runner writes them, stop records included, when the stop happens; the
+core writes only routing.json of these):
   history.jsonl  stop record {"type":"stop","id","code","reason","by":"owner|cocolo|limit","ts","next":str|null,
                  "unit_id":optional,"v":1}
   activity.jsonl {"unit_id","ts","kind":"tool|output","name"?,"text"}
