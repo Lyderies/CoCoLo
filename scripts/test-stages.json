@@ -178,6 +178,7 @@
  "codex:tests.test_project_results": "integration",
  "codex:tests.test_project_runtime": "integration",
  "codex:tests.test_project_service": "integration",
+ "codex:tests.test_project_cold_start_r4": "integration",
  "codex:tests.test_project_service_startup": "integration",
  "codex:tests.test_project_worker_result": "integration",
  "codex:tests.test_provider_restrictions": "integration",
