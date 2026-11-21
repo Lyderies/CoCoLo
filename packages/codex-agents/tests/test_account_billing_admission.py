@@ -311,6 +311,21 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertEqual(original.deadline, self.reserve().deadline)
         self.assertEqual(['admitted', 'committed'], [r['state'] for r in self.rows()])
 
+    def test_D40_a_real_problem_during_the_cooldown_is_reported_before_probe_cooldown(self):
+        """Owner decision 40 (a): the refusal names the real problem first; a plain cooldown still says probe_cooldown."""
+        original = self.reserve()
+        self.prepared(original)
+        self.owner.admit(original)
+        second = self.reserve('second')
+        self.prepared(second)
+        with mock.patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'sk-test'}):
+            denied = self.owner.admit(second)
+        self.assertEqual('denied', denied['probe'], denied)
+        self.assertEqual('provider_api_key_present', denied['reason_code'], denied)
+        third = self.reserve('third')
+        self.prepared(third)
+        self.assertEqual('probe_cooldown', self.owner.admit(third)['reason_code'])
+
     def test_changed_raw_evidence_after_signature_return_refuses_without_spending_bootstrap(self):
         original = self.reserve()
         self.prepared(original)

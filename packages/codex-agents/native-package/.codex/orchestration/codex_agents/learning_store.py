@@ -6060,7 +6060,17 @@ class LearningLedger:
                     "probe": "reused",
                     "records": [identity, *headroom[-1:], latest],
                 }
-            if self._connection.execute(
+            # Owner decision 40 (a): the real problem is reported first; the cooldown
+            # names itself only when nothing else refuses. billing_unverified is the
+            # gap the cooling probe itself fills, so it does not count as a real problem.
+            decision = self._evaluate_admission_locked(
+                project_id, provider="claude", environ=environ, timestamp=timestamp,
+                probe=True,
+            )
+            if (
+                decision["decision"] == "pass"
+                or decision["reason_code"] == "billing_unverified"
+            ) and self._connection.execute(
                 "SELECT 1 FROM records WHERE record_type='probe_admission' "
                 "AND source='lifecycle' "
                 "AND json_extract(CAST(content AS TEXT),'$.decision')='pass' "
@@ -6076,11 +6086,6 @@ class LearningLedger:
                     "account_fingerprint": fingerprint, "evidence_digests": [],
                     "observed_at_ms": timestamp,
                 }
-            else:
-                decision = self._evaluate_admission_locked(
-                    project_id, provider="claude", environ=environ, timestamp=timestamp,
-                    probe=True,
-                )
             if decision["decision"] == "pass":
                 # Stored before launch, in the same transaction as the decision,
                 # so a crash or a repeat cannot take the bootstrap twice.

@@ -15,6 +15,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   judged in); after that a retry of the same request is refused with probe_conflict, as a replay cannot judge
   again; stored denials still replay. A clean reuse still answers
   "reused" and starts no new probe.
+  Owner decision 40 (a): when a probe is refused while the five-minute cooldown also applies, the refusal now
+  names the real problem first (API key, paid usage, client version, attestation); a plain cooldown still says
+  probe_cooldown.
 
 - Package 0.8.45 (Phase 1.2, core API round 6): the owner-facing core API (TM0) joins the 0.8.44 base after six
   review rounds (owner decision 34, no seventh). Fixed with tests that failed first: a single-digit price ("$5")

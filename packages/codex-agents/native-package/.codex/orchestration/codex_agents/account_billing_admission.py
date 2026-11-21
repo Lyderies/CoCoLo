@@ -371,15 +371,20 @@ class AccountBillingAdmission:
                     and r.record['provider'] == 'claude' and r.record['decision'] == 'pass'
                     and r.record['account_fingerprint'] == fingerprint and r.record['observed_at_ms'] > now-PROBE_COOLDOWN_MS
                     for r in result.prepared.rows)
-                decision = (judged if judged is not None else
-                    {'provider': 'claude', 'decision': 'deny', 'reason_code': 'probe_cooldown',
-                    'admission_basis': None, 'account_fingerprint': fingerprint, 'evidence_digests': [], 'observed_at_ms': now}
-                    if cooldown else evaluate_admission(provider='claude', identities=prepared['identities'],
-                        attestations=prepared['attestations'], billing=prepared['billing'], headroom=prepared['headroom'],
-                        window_headroom=prepared['headroom'], prior_claude_admissions=prepared['prior_claude_admissions'],
-                        environ=guard, now_ms=now, admission_policy=prepared['admission_policy'],
-                        cited_digests=prepared['cited_digests'], probe=True,
-                        prior_run_admissions=[(f, t) for f, t in prepared['prior_admissions'] if t >= now-18_000_000]))
+                # Owner decision 40 (a): the real problem is reported first; a cooldown names itself only when
+                # nothing else refuses. billing_unverified is the gap the cooling probe itself fills (its bootstrap
+                # is spent), so it is not a real problem and the cooldown names itself.
+                decision = judged if judged is not None else evaluate_admission(provider='claude',
+                    identities=prepared['identities'],
+                    attestations=prepared['attestations'], billing=prepared['billing'], headroom=prepared['headroom'],
+                    window_headroom=prepared['headroom'], prior_claude_admissions=prepared['prior_claude_admissions'],
+                    environ=guard, now_ms=now, admission_policy=prepared['admission_policy'],
+                    cited_digests=prepared['cited_digests'], probe=True,
+                    prior_run_admissions=[(f, t) for f, t in prepared['prior_admissions'] if t >= now-18_000_000])
+                if cooldown and (decision['decision'] == 'pass' or decision['reason_code'] == 'billing_unverified'):
+                    decision = {'provider': 'claude', 'decision': 'deny', 'reason_code': 'probe_cooldown',
+                        'admission_basis': None, 'account_fingerprint': fingerprint, 'evidence_digests': [],
+                        'observed_at_ms': now}
                 if decision['decision'] == 'pass':
                     try:
                         self._read(lambda: self._ledger._check_active_capacity_locked('claude', fingerprint))

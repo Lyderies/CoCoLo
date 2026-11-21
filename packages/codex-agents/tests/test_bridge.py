@@ -3646,6 +3646,16 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
         self.assertEqual("probe_cooldown", self.probe(FAVOURABLE, expected=2)["reason_code"])
         self.assertEqual(1, self.launches())
 
+    def test_D40_a_real_problem_during_the_cooldown_is_reported_before_probe_cooldown(self) -> None:
+        self.admit("claude")
+        self.frames("claude", [PROBE_INIT, result_frame("OK")])
+        self.cli("provider-observe", "--provider", "claude", "--billing-probe", expected=2)
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "key"}):
+            self.assertEqual(
+                "provider_api_key_present", self.probe(FAVOURABLE, expected=2)["reason_code"]
+            )
+        self.assertEqual("probe_cooldown", self.probe(FAVOURABLE, expected=2)["reason_code"])
+
     def test_a_second_project_reuses_or_waits_instead_of_probing(self) -> None:
         self.admit("claude")
         self.assertEqual("launched", self.probe(FAVOURABLE)["probe"])
