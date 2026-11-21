@@ -374,6 +374,23 @@ class StoredContextTests(RecordedContextFixture):
                                               **{'host_class': CODEX,
                                                  'inputs_digest': self.record_context.inputs_digest, **changes})
 
+    def test_A1_an_attempt_that_was_never_opened_is_not_found_while_a_wrong_caller_is_still_not_authorized(self):
+        # O0d R1: a missing dispatch is named plainly; only a caller that is not allowed is "not authorized".
+        self.open_and_consume()
+        self.publish()
+        store = self.reopen()
+        inputs = self.record_context.inputs_digest
+        with self.assertRaisesRegex(HistoryError, 'history_not_found'):
+            store.stored_result_reference('hrn_' + 'e' * 48, self.binding.attempt, host_class=CODEX,
+                                          inputs_digest=inputs)
+        with self.assertRaisesRegex(HistoryError, 'history_not_found'):
+            store.stored_result_reference(self.binding.run_handle, self.binding.attempt + 1, host_class=CODEX,
+                                          inputs_digest=inputs)
+        for changes in ({'host_class': CLAUDE}, {'inputs_digest': 'f' * 64}):
+            with self.subTest(changes=changes), self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
+                store.stored_result_reference(self.binding.run_handle, self.binding.attempt,
+                                              **{'host_class': CODEX, 'inputs_digest': inputs, **changes})
+
     def test_A2_each_wrong_caller_or_changed_input_is_refused_and_changes_nothing(self):
         digest = self.recorded()
         before = rows(self.store, 'SELECT * FROM project_result_contexts'), context_files(self.directory)
