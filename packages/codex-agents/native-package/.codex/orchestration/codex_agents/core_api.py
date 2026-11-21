@@ -4,6 +4,11 @@ The core is a view over the record files plus a command gate; the files stay can
 core keeps no authoritative state (only short-lived confirm ids, rate windows and subscriptions).
 Provider detail appears only under a unit's `extra`. stdlib only.
 
+Stop record (history.jsonl, written by the runner and by this core for owner stops):
+{"type":"stop","id","code","reason" (plain words),"by":"owner|cocolo|limit","ts","next":str|null,"unit_id"?,"v":1}.
+The why-stopped answer reads these, never "the last history line". Other records the core reads: activity.jsonl,
+changes.json, diffs.jsonl, messages.jsonl; it writes routing.json. Record shapes: tests/test_core_api_terminal.py.
+
 Records folder: units.jsonl, state.json, events.jsonl, inbox.jsonl, commands.jsonl, tokens.json,
 history.jsonl, decisions.jsonl, queries.jsonl, deliveries.jsonl (the last two are written here).
 """
@@ -36,12 +41,13 @@ READ_METHODS = {
     "schema.get", "state.get", "units.list", "units.get", "units.history", "runs.list", "usage.get",
     "usage.history", "ci.get", "versions.get", "history.list", "decisions.list", "queries.list",
     "queries.get", "health.get", "events.subscribe", "query.ask",
+    "units.activity", "changes.list", "changes.diff", "messages.list", "routing.get",
 }
 PUSH_METHODS = {"context.push"}
 CONFIRM_ONLY = {"control.pause", "control.resume", "control.handoff", "unit.cancel"}
 REPLY_METHODS = {"query.reply"}
-OWNER_ONLY = {"control.stop", "decision.answer", "unit.verdict"}
-NEEDS_CONFIRM = CONFIRM_ONLY | {"control.stop"}
+OWNER_ONLY = {"control.stop", "decision.answer", "unit.verdict", "unit.message", "routing.set"}
+NEEDS_CONFIRM = CONFIRM_ONLY | {"control.stop", "routing.set"}
 WALLED = {"install.run", "update.run", "setup.run", "install.reviewed", "records.write", "billing.attest",
           "client_range.widen", "token.mint"}
 FORWARD_SCOPES = {"confirm", "owner"}
@@ -68,7 +74,16 @@ RPC_CODES = {"parse_error": -32700, "invalid_request": -32600, "method_not_found
              "invalid_params": -32602, "internal_error": -32603}
 APP_ERROR = -32000
 
-NEUTRAL_EXTRA_KEYS = ("model", "effort", "provider", "reasoning", "account", "lane", "usage", "tokens", "cost")
+# The neutral record schemas: only these keys appear at the top of a record; every other key moves under
+# `extra` (provider detail), and money values are dropped everywhere except state.cost (an existing contract).
+NEUTRAL_UNIT_KEYS = ("id", "kind", "state", "title", "role", "started", "last", "result", "exit", "verdict",
+                     "verdict_by", "verdict_ts")
+NEUTRAL_STATE_KEYS = ("phase", "session", "now", "ctx", "window", "cost", "usage", "ci", "versions",
+                      "handoff_replies")
+NEUTRAL_USAGE_KEYS = ("input", "output", "total", "windows")
+NEUTRAL_DECISION_KEYS = ("id", "text", "why", "reason", "recommended", "options", "answer", "answered_by", "ts")
+MONEY_KEY = re.compile(r"(cost|price|usd|dollar|spend|money|balance|credit|billing|bill)", re.I)
+UNKNOWN_STATE_KEYS = ("phase", "session", "now", "ctx", "window", "cost", "handoff_replies")
 SECRET_KEY = re.compile(r"(^token$|_token$|^passphrase$|password|secret|transcript|authorization|api_key)", re.I)
 
 PUSH_MAX_BYTES = 2048
@@ -80,13 +95,15 @@ REFUSAL_AUDITS_PER_CONNECTION = 50
 MAX_REFUSAL_THREADS = 8
 MAX_COST_TOKENS = 10_000_000
 COMMAND_ACTIONS = {"control.pause": "pause", "control.resume": "resume", "control.handoff": "handoff",
-                   "control.stop": "stop", "unit.cancel": "cancel"}
+                   "control.stop": "stop", "unit.cancel": "cancel", "unit.message": "message"}
 PUSH_PER_WINDOW = 10
 PUSH_WINDOW_SECONDS = 60
 CONFIRM_SECONDS = 60
 QUERY_TTL_SECONDS = 3600
 BLOCK_MAX_TOKENS = 300  # conservative estimate: ascii bytes / 4 plus one token per non-ascii character
 ENTRY_MAX_BYTES = 300
+ACTIVITY_LIMIT = 50
+DIFF_MAX_BYTES = 65536
 COALESCE_SECONDS = 0.03
 
 
@@ -106,6 +123,50 @@ def _strip_secrets(value):
     if isinstance(value, list):
         return [_strip_secrets(v) for v in value]
     return value
+
+
+def _clip(value, limit):
+    return value[:limit] if isinstance(value, str) else value
+
+
+def _plain(value, limit=64):
+    """A short single-line string, or None."""
+    if isinstance(value, str) and 0 < len(value) <= limit and all(ord(c) >= 32 for c in value):
+        return value
+    return None
+
+
+def _split_neutral(row, neutral_keys):
+    """(neutral part, extra part): non-neutral keys go to extra; money keys are dropped."""
+    top = {k: v for k, v in row.items() if k in neutral_keys}
+    extra = dict(row["extra"]) if isinstance(row.get("extra"), dict) else {}
+    extra.update({k: v for k, v in row.items() if k not in neutral_keys and k != "extra"})
+    extra = {k: v for k, v in extra.items() if not MONEY_KEY.search(str(k))}
+    return top, _strip_secrets(extra)
+
+
+def _neutral_usage(value):
+    if not isinstance(value, dict):
+        return value if value is not None else "unknown"
+    top, extra = _split_neutral(value, NEUTRAL_USAGE_KEYS)
+    if "windows" in top:
+        windows = top["windows"] if isinstance(top["windows"], list) else []
+        top["windows"] = [{"label": w["label"], "pct": w["pct"]} for w in windows
+                          if isinstance(w, dict) and isinstance(w.get("label"), str)
+                          and isinstance(w.get("pct"), (int, float)) and not isinstance(w.get("pct"), bool)]
+    if extra:
+        top["extra"] = extra
+    return top
+
+
+def _neutral_replies(value):
+    if not isinstance(value, list):
+        return "unknown"
+    out = []
+    for row in value[:50]:
+        if isinstance(row, dict):
+            out.append({k: _clip(row[k], 1000) for k in ("id", "ts", "text", "by") if k in row})
+    return out
 
 
 def _dump(obj):
@@ -259,6 +320,41 @@ def _tokens_file_ok(path):
     except OSError:
         return False
     return stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and not info.st_mode & 0o077
+
+
+# --- where the terminal finds the socket and its token ------------------------------------------------
+
+def default_socket_path(project):
+    """The default socket location: <project>/.codex/orchestration/core.sock."""
+    return os.path.join(str(project), ".codex", "orchestration", "core.sock")
+
+
+def resolve_socket(explicit=None, env=None, project=None):
+    """The socket path: an explicit value, else COCOLO_CORE_SOCKET, else the project default."""
+    env = os.environ if env is None else env
+    if explicit:
+        return str(explicit)
+    if env.get("COCOLO_CORE_SOCKET"):
+        return env["COCOLO_CORE_SOCKET"]
+    if project:
+        return default_socket_path(project)
+    raise ValueError("no socket given: pass a socket, set COCOLO_CORE_SOCKET or name the project")
+
+
+def resolve_token(explicit=None, token_file=None, env=None):
+    """A token: an explicit value, else the contents of a private token file, else COCOLO_TOKEN, else None.
+
+    A token file must be a regular file we own with no group or other access (like tokens.json)."""
+    env = os.environ if env is None else env
+    if explicit:
+        return explicit
+    if token_file:
+        info = os.lstat(token_file)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            raise PermissionError("the token file must be a regular file private to you (mode 0600)")
+        with open(token_file, encoding="utf-8") as handle:
+            return handle.read().strip() or None
+    return env.get("COCOLO_TOKEN") or None
 
 
 # --- peer identity -----------------------------------------------------------------------------
@@ -796,6 +892,8 @@ class CoreService:
         return self._handlers[method](session, body, deadline)
 
     def _validate_control(self, method, body):
+        if method == "routing.set":
+            self._validate_routing(body)
         if method == "unit.cancel":
             self._need_str(body, "id")
             if self._latest_unit(body["id"]) is None:
@@ -823,13 +921,22 @@ class CoreService:
 
     @staticmethod
     def _neutral_unit(row):
-        unit = {k: v for k, v in row.items() if k not in NEUTRAL_EXTRA_KEYS and k != "extra"}
-        extra = dict(row.get("extra") or {}) if isinstance(row.get("extra"), dict) else {}
-        for key in NEUTRAL_EXTRA_KEYS:
-            if key in row:
-                extra[key] = row[key]
+        unit, extra = _split_neutral(row, NEUTRAL_UNIT_KEYS)
         unit["extra"] = extra
         return unit
+
+    def _neutral_state(self):
+        state = self._state() or {}
+        top, extra = _split_neutral(state, NEUTRAL_STATE_KEYS)
+        if "usage" in top:
+            top["usage"] = _neutral_usage(top["usage"])
+        if "handoff_replies" in top:
+            top["handoff_replies"] = _neutral_replies(top["handoff_replies"])
+        for key in UNKNOWN_STATE_KEYS:
+            top.setdefault(key, "unknown")
+        if extra:
+            top["extra"] = extra
+        return top
 
     def _state(self):
         data = _read_json(self.records / "state.json")
@@ -864,9 +971,7 @@ class CoreService:
 
         @reading("state.get")
         def state_get(session, params, deadline):
-            state = dict(self._state() or {})
-            for key in ("phase", "session", "ctx", "window", "cost"):
-                state.setdefault(key, "unknown")
+            state = self._neutral_state()
             self._check(deadline)
             return {"state": state}
 
@@ -908,6 +1013,8 @@ class CoreService:
         def from_state(key):
             def get(session, params, deadline):
                 value = (self._state() or {}).get(key)
+                if key == "usage":
+                    return {key: _neutral_usage(value)}
                 return {key: value if value is not None else "unknown"}
             return get
 
@@ -992,10 +1099,122 @@ class CoreService:
                 unit_id = params.get("id") if needs_unit else None
                 self._check(deadline)
                 command_id = self._write_command(session, name, unit_id)
+                if name in ("control.stop", "unit.cancel"):
+                    self._write_stop_record(session, name, unit_id)
                 self.emit("command.requested", {"method": name, "command_id": command_id}, unit_id=unit_id)
                 # The runner acts on the command record; `state` says so plainly.
                 return {"outcome": outcome, "command_id": command_id, "state": "requested"}
             h[name] = run
+
+        @reading("units.activity")
+        def units_activity(session, params, deadline):
+            unit_id = self._need_str(params, "id")
+            if self._latest_unit(unit_id) is None:
+                raise ApiError("not_found", "no such unit")
+            rows, _ = _read_jsonl(self.records / "activity.jsonl")
+            if rows is None:
+                return {"id": unit_id, "calls": "unknown", "tail": "unknown", "as_of": self.clock()}
+            mine = [r for r in rows if r.get("unit_id") == unit_id]
+
+            def shape(row):
+                out = {"ts": row.get("ts"), "kind": row.get("kind"), "text": _clip(str(row.get("text", "")), 500)}
+                if isinstance(row.get("name"), str):
+                    out["name"] = _clip(row["name"], 64)
+                return out
+            return {"id": unit_id, "as_of": self.clock(),
+                    "calls": [shape(r) for r in mine if r.get("kind") == "tool"][-ACTIVITY_LIMIT:],
+                    "tail": [shape(r) for r in mine if r.get("kind") == "output"][-ACTIVITY_LIMIT:]}
+
+        @reading("changes.list")
+        def changes_list(session, params, deadline):
+            data = _read_json(self.records / "changes.json")
+            if not isinstance(data, dict) or not isinstance(data.get("worktrees"), list):
+                return {"worktrees": "unknown"}
+            trees = []
+            for tree in data["worktrees"][:64]:
+                if not isinstance(tree, dict):
+                    continue
+                files = [{"path": _clip(f.get("path"), 512), "status": _clip(f.get("status"), 16)}
+                         for f in tree.get("files", [])[:500] if isinstance(f, dict)]
+                commits = [{"id": _clip(c.get("id"), 64), "summary": _clip(c.get("summary"), 300)}
+                           for c in tree.get("commits", [])[:200] if isinstance(c, dict)]
+                trees.append({"name": _clip(tree.get("name"), 200), "branch": _clip(tree.get("branch"), 200),
+                              "files": files, "commits": commits})
+            return {"worktrees": trees}
+
+        @reading("changes.diff")
+        def changes_diff(session, params, deadline):
+            path = _plain(params.get("path"), 512)
+            if path is None:
+                raise ApiError("invalid_params", "path must be a short single-line string")
+            rows, _ = _read_jsonl(self.records / "diffs.jsonl")
+            found = [r for r in rows or [] if r.get("path") == path and isinstance(r.get("diff"), str)]
+            if not found:
+                raise ApiError("not_found", "no diff is recorded for that path")
+            text = found[-1]["diff"]
+            data = text.encode("utf-8")
+            truncated = len(data) > DIFF_MAX_BYTES
+            if truncated:
+                text = data[:DIFF_MAX_BYTES].decode("utf-8", "ignore")
+            return {"path": path, "diff": text, "truncated": truncated}
+
+        @reading("messages.list")
+        def messages_list(session, params, deadline):
+            limit = params.get("limit", 50)
+            if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 200:
+                raise ApiError("invalid_params", "limit must be 1 to 200")
+            since = params.get("since")
+            if since is not None and (not isinstance(since, (int, float)) or isinstance(since, bool)):
+                raise ApiError("invalid_params", "since must be a number")
+            rows, _ = _read_jsonl(self.records / "messages.jsonl")
+            if rows is None:
+                return {"messages": "unknown"}
+            if since is not None:
+                rows = [r for r in rows if isinstance(r.get("ts"), (int, float)) and r["ts"] > since]
+            return {"messages": [{k: _clip(r[k], 2000) for k in ("id", "ts", "role", "text", "unit_id") if k in r}
+                                 for r in rows[-limit:]]}
+
+        @reading("routing.get")
+        def routing_get(session, params, deadline):
+            data = _read_json(self.records / "routing.json")
+            if not isinstance(data, dict) or "rows" not in data:
+                return {"routing": "unknown"}
+            return {"routing": {k: data.get(k) for k in ("profile", "providers", "rows", "set_by", "ts")}}
+
+        @reading("routing.set")
+        def routing_set(session, params, deadline):
+            self._validate_routing(params)
+            record = {"profile": params["profile"], "providers": list(params["providers"]),
+                      "rows": [dict(r) for r in params["rows"]], "set_by": session.caller, "ts": self.clock()}
+            path = self.records / "routing.json"
+            tmp = self.records / ("routing.json.%d.tmp" % os.getpid())
+            try:
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                try:
+                    os.write(fd, json.dumps(record).encode("utf-8"))
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+                os.replace(tmp, path)
+            except OSError:
+                raise ApiError("unavailable", "the routing choice could not be saved")
+            self.emit("state.changed", {"what": "routing"})
+            return {"outcome": "saved"}
+
+        @reading("unit.message")
+        def unit_message(session, params, deadline):
+            unit_id = self._need_str(params, "id")
+            if self._latest_unit(unit_id) is None:
+                raise ApiError("not_found", "no such unit")
+            text = params.get("text")
+            if not isinstance(text, str) or not text.strip():
+                raise ApiError("invalid_params", "text is required")
+            if len(text.encode("utf-8")) > PUSH_MAX_BYTES:
+                raise ApiError("too_large", "the message is too long")
+            self._check(deadline)
+            command_id = self._write_command(session, "unit.message", unit_id, {"text": text})
+            self.emit("command.requested", {"method": "unit.message", "command_id": command_id}, unit_id=unit_id)
+            return {"outcome": "message_requested", "command_id": command_id, "state": "requested"}
 
         control("control.pause", "paused")
         control("control.resume", "resumed")
@@ -1005,28 +1224,56 @@ class CoreService:
         return h
 
     @staticmethod
+    def _validate_routing(body):
+        """Routing shape (the model table): profile, providers[], rows[{task,provider,model,effort,fallback}]."""
+        if _plain(body.get("profile")) is None:
+            raise ApiError("invalid_params", "profile must be a short plain name")
+        providers = body.get("providers")
+        if not isinstance(providers, list) or len(providers) > 16 or any(_plain(p) is None for p in providers):
+            raise ApiError("invalid_params", "providers must be a short list of plain names")
+        rows = body.get("rows")
+        if not isinstance(rows, list) or len(rows) > 64:
+            raise ApiError("invalid_params", "rows must be a list of at most 64")
+        for row in rows:
+            if (not isinstance(row, dict) or set(row) != {"task", "provider", "model", "effort", "fallback"}
+                    or any(_plain(row[k]) is None for k in ("task", "provider", "model", "effort"))
+                    or (row["fallback"] is not None and _plain(row["fallback"]) is None)):
+                raise ApiError("invalid_params", "each row needs task, provider, model, effort and fallback")
+
+    @staticmethod
     def _write_or_unavailable(path, row):
         try:
             _append_jsonl(path, row)
         except OSError:
             raise ApiError("unavailable", "the record could not be written")
 
-    def _write_command(self, session, method, unit_id):
+    def _write_command(self, session, method, unit_id, extra=None):
         """Append the runner's command record (one line, one write); raises `unavailable` if it cannot be written."""
         with self._lock:
             rows, _ = _read_jsonl(self.records / "commands.jsonl")
             command_id = self._next_id("C", [r for r in rows or [] if r.get("type") == "command"], "command_id")
             self._write_or_unavailable(self.records / "commands.jsonl", {
                 "type": "command", "command_id": command_id, "action": COMMAND_ACTIONS[method], "unit_id": unit_id,
-                "caller": session.caller, "ts": self.clock(), "v": 1, "state": "requested"})
+                "caller": session.caller, "ts": self.clock(), "v": 1, "state": "requested", **(extra or {})})
         return command_id
+
+    def _write_stop_record(self, session, method, unit_id):
+        """A stop the owner asked for is recorded in history.jsonl in the stop-record format (see module notes)."""
+        with self._lock:
+            rows, _ = _read_jsonl(self.records / "history.jsonl")
+            record_id = self._next_id("H", rows or [], "id")
+            cancel = method == "unit.cancel"
+            self._write_or_unavailable(self.records / "history.jsonl", {
+                "type": "stop", "id": record_id, "code": "owner_cancel" if cancel else "owner_stop",
+                "reason": "You asked for this unit to be cancelled." if cancel else "You asked CoCoLo to stop.",
+                "by": "owner", "ts": self.clock(), "next": None, "unit_id": unit_id, "v": 1})
 
     def _decisions(self):
         rows, _ = _read_jsonl(self.records / "decisions.jsonl")
         merged = collections.OrderedDict()
         for row in rows or []:
             if "id" in row:
-                merged.setdefault(row["id"], {}).update(row)
+                merged.setdefault(row["id"], {}).update({k: v for k, v in row.items() if k in NEUTRAL_DECISION_KEYS})
         return list(merged.values())
 
     def _findings(self):
@@ -1105,8 +1352,7 @@ class CoreService:
             if from_seq < seq_at and from_seq + 1 < oldest:
                 raise ApiError("cursor_expired", "the cursor is older than the retained events",
                                {"snapshot": {"seq_at": seq_at,
-                                             "state": {**{k: "unknown" for k in ("phase", "session")},
-                                                       **(self._state() or {})},
+                                             "state": self._neutral_state(),
                                              "units": [self._neutral_unit(u) for u in self._latest_units()]}})
             sub = Subscription(session, event_filter, limit, self.event_buffer)
             for event in window:
@@ -1253,25 +1499,23 @@ class CoreService:
         units_known = self._units_rows() is not None
         units = self._latest_units()
         unit_match = re.search(r"\bu-\d+\b", lowered)
-        if unit_match:
+        if unit_match and not (re.search(r"\bwhy\b", lowered) and re.search(r"\bstop", lowered)
+                               and self._stop_records(unit_match.group(0).upper())):
             unit = self._latest_unit(unit_match.group(0).upper())
             body = ("%s is %s: %s." % (unit["id"], unit.get("state", "unknown"), unit.get("title", "untitled"))
                     if unit else ("No unit with that id is recorded." if units_known
                                   else "unknown: the units record is missing or unreadable."))
             return self._records_answer(body, ["units.jsonl"])
         if re.search(r"\bwhy\b", lowered) and re.search(r"\bstop", lowered):
-            rows, _ = _read_jsonl(self.records / "history.jsonl")
-            body = ("The last recorded stop: %s" % (rows[-1].get("summary") or rows[-1].get("id"))
-                    if rows else "unknown: no stop is recorded.")
-            return self._records_answer(body, ["history.jsonl"])
+            return self._why_stopped(unit_match.group(0).upper() if unit_match else None)
         if "history" in lowered:
             rows, _ = _read_jsonl(self.records / "history.jsonl")
             body = ("%d history entries; latest: %s" % (len(rows), rows[-1].get("summary") or rows[-1].get("id"))
                     if rows else "unknown: no history is recorded.")
             return self._records_answer(body, ["history.jsonl"])
         if "usage" in lowered:
-            value = (state or {}).get("usage")
-            return self._records_answer("Usage: %s" % (json.dumps(value) if value is not None else "unknown"),
+            value = _neutral_usage((state or {}).get("usage"))
+            return self._records_answer("Usage: %s" % json.dumps(value),
                                         ["state.json"])
         if re.search(r"\bci\b", lowered):
             value = (state or {}).get("ci")
@@ -1288,6 +1532,28 @@ class CoreService:
                 (state or {}).get("phase", "unknown"), (state or {}).get("session", "unknown"), counts)
             return self._records_answer(body, ["state.json", "units.jsonl"])
         return None
+
+    def _stop_records(self, unit_id=None):
+        """Stop records from history.jsonl (type "stop"), oldest first; for one unit when unit_id is given."""
+        rows, _ = _read_jsonl(self.records / "history.jsonl")
+        stops = [r for r in rows or [] if r.get("type") == "stop"]
+        return [r for r in stops if r.get("unit_id") == unit_id] if unit_id else stops
+
+    def _why_stopped(self, unit_id):
+        stops = self._stop_records(unit_id)
+        if not stops:
+            return self._records_answer("unknown: no stop is recorded.", ["history.jsonl"])
+        stop = stops[-1]
+        who = {"owner": "you", "cocolo": "CoCoLo", "limit": "a limit"}.get(stop.get("by"), "unknown")
+        reason = _clip(stop.get("reason"), 500) if isinstance(stop.get("reason"), str) else "no reason recorded"
+        body = "Stopped by %s: %s" % (who, reason)
+        if isinstance(stop.get("code"), str):
+            body += " (%s)" % _clip(stop["code"], 60)
+        if isinstance(stop.get("ts"), (int, float)):
+            body += " at %s" % stop["ts"]
+        if isinstance(stop.get("next"), str) and stop["next"]:
+            body += ". Next: %s" % _clip(stop["next"], 300)
+        return self._records_answer(body, ["history.jsonl"])
 
     def _records_answer(self, text, sources):
         return {"answered_by": "records", "text": text, "cost_tokens": 0, "sources": sources, "as_of": self.clock()}
@@ -1482,6 +1748,11 @@ class CoreClient:
         self._next_id = 0
         self._children = []
 
+    @classmethod
+    def from_environment(cls, project=None, socket=None, token=None, token_file=None, env=None):
+        """A client for the terminal: socket and token from arguments, COCOLO_CORE_SOCKET / COCOLO_TOKEN or the default."""
+        return cls(resolve_socket(socket, env, project), token=resolve_token(token, token_file, env))
+
     def _connect(self):
         if self._sock is None:
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1539,7 +1810,8 @@ class CoreClient:
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Run the headless core API service.")
     parser.add_argument("--records", required=True)
-    parser.add_argument("--socket")
+    parser.add_argument("--socket", help="default: COCOLO_CORE_SOCKET, else <project>/.codex/orchestration/core.sock")
+    parser.add_argument("--project")
     parser.add_argument("--mint", choices=SCOPES, help="mint a token at your own terminal and print it once")
     parser.add_argument("--label", default="")
     args = parser.parse_args(argv)
@@ -1550,9 +1822,11 @@ def main(argv=None):
             print(error.message, file=sys.stderr)
             return 2
         return 0
-    if not args.socket:
-        parser.error("--socket is required to run the service")
-    service = CoreService(args.records, args.socket)
+    try:
+        socket_path = resolve_socket(args.socket, None, args.project)
+    except ValueError as error:
+        parser.error(str(error))
+    service = CoreService(args.records, socket_path)
     service.start()
     done = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
