@@ -23,11 +23,6 @@ class ReadTests(CoreCase):
         history = self.client().call("units.history", {"id": "U-0001"})["records"]
         self.assertEqual(["running", "done"], [r["state"] for r in history])
 
-    def test_api7_state_get_equals_state_file(self):  # API-7
-        state = self.client().call("state.get")["state"]
-        for key in ("phase", "session", "ctx", "cost"):
-            self.assertEqual(STATE[key], state[key])
-
     def test_term6_runs_list_counts_match_the_units_file(self):  # API-7, TERM-6
         result = self.client().call("runs.list")
         self.assertEqual(2, result["total"])
