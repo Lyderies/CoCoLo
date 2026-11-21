@@ -2708,7 +2708,8 @@ def main() -> int:
             except (OSError, ValueError):
                 spec = None
             try:
-                summary = run_review(args.stage, spec, args.work_dir, args.project_root, status=args.status)
+                summary = run_review(args.stage, spec, args.work_dir, args.project_root, status=args.status,
+                                     state_root=args.state_root)
             except ReviewError as stopped:
                 _print({'ready': False, 'error': 'review stopped', 'reason_code': stopped.reason_code,
                         **({'step': stopped.detail} if stopped.detail else {})})

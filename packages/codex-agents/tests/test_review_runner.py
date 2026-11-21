@@ -50,12 +50,18 @@ class ReviewRunnerTests(unittest.TestCase):
         self.root = Path(temporary.name) / 'project'
         (self.root / 'reviews' / 'x').mkdir(parents=True)
         self.work = Path(temporary.name) / 'work'
+        # The host's private state: its folder (0700) and the digest key in it (0600, 32 bytes).
+        self.state = Path(temporary.name) / 'state'
+        self.state.mkdir(mode=0o700)
+        key = self.state / 'digest.key'
+        key.write_bytes(bytes(range(32)))
+        key.chmod(0o600)
         self.spec = {'id': 'rev1', 'summary': 'a review', 'packet': 'reviews/x', 'context': ['reviews/x/README.md'],
                      'objective': 'review it', 'verify_objective': 'check it', 'expected_output': 'findings',
                      'evidence': [{'id': 'a', 'description': 'point a'}]}
 
     def run_step(self, step, cli):
-        return review_runner.run(step, self.spec, self.work, self.root, cli=cli)
+        return review_runner.run(step, self.spec, self.work, self.root, cli=cli, state_root=self.state)
 
     def test_H1d_1_worker_verify_finish_run_the_sequence_and_save_each_step(self):
         cli = FakeCli()
@@ -123,13 +129,13 @@ class ReviewCorrectionTests(ReviewRunnerTests):
             calls.append((name, args))
             return FakeCli()(name, *args)
         relative_work = os.path.relpath(self.work)
-        review_runner.run('worker', self.spec, relative_work, os.path.relpath(self.root), cli=cli)
+        review_runner.run('worker', self.spec, relative_work, os.path.relpath(self.root), cli=cli, state_root=self.state)
         roots = [args[args.index('--project-root') + 1] for _, args in calls if '--project-root' in args]
         self.assertTrue(roots and all(Path(root).is_absolute() for root in roots))
         files = [arg for _, args in calls for arg in args if arg.endswith('.json')]
         self.assertTrue(files and all(Path(item).is_absolute() for item in files))
-        review_runner.run('verify', self.spec, self.work, self.root, cli=cli)
-        review_runner.run('finish', self.spec, self.work, self.root, cli=cli, status='failed')
+        review_runner.run('verify', self.spec, self.work, self.root, cli=cli, state_root=self.state)
+        review_runner.run('finish', self.spec, self.work, self.root, cli=cli, status='failed', state_root=self.state)
         close = [args for name, args in calls if name == 'learning-close-orchestration'][0]
         self.assertEqual('failed', close[close.index('--status') + 1])
 

@@ -115,6 +115,47 @@ class ReviewRunnerProvenanceTests(unittest.TestCase):
             self.run_step('finish', base.FakeCli())
         self.assertEqual('review_stage_not_ready', stopped.exception.reason_code)
 
+    def test_e_a_writer_who_recomputes_the_unkeyed_digest_is_refused(self):
+        # Mode, shape, both digests and an unkeyed sha256 over the files all agree: only a binding made with the
+        # host's private key tells this was not written by the runner.
+        import hashlib
+        self.staged()
+        for prefix, stage, record in (('', 'worker.json', 'record.json'), ('v', 'verifier.json', 'vrecord.json')):
+            loaded = {name: json.loads((self.work / (prefix + name + '.json')).read_text())
+                      for name in ('route', 'assignment', 'result')}
+            current = json.loads((self.work / stage).read_text())
+            forged = 'e' * 64
+            unkeyed = hashlib.sha256(json.dumps(
+                {'digest': forged, 'provider': current['provider'], 'verdict': current['verdict'],
+                 'summary': current['summary'], 'review': self.spec['id'], 'project': str(self.root.resolve()),
+                 'stage': prefix or 'worker', **loaded}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            self.rewrite(stage, digest=forged, binding=unkeyed)
+            self.rewrite(record, host_outcome_digest=forged)
+        self.assertEqual('review_stage_not_runner_written', self.refused())
+        self.assertEqual('review_stage_not_runner_written', self.refused('verify'))
+
+    def test_e_a_binding_made_under_another_state_is_refused(self):
+        self.staged()
+        other = self.work.parent / 'other-state'
+        other.mkdir(mode=0o700)
+        (other / 'digest.key').write_bytes(bytes(range(1, 33)))
+        (other / 'digest.key').chmod(0o600)
+        with self.assertRaises(review_runner.ReviewError) as stopped:
+            review_runner.run('finish', self.spec, self.work, self.root, cli=base.FakeCli(), state_root=other)
+        self.assertEqual('review_stage_not_runner_written', stopped.exception.reason_code)
+
+    def test_e_the_key_is_not_in_the_work_folder_and_a_missing_or_loose_key_stops_the_review(self):
+        self.staged()
+        key = (self.state / 'digest.key').read_bytes()
+        for path in self.work.iterdir():
+            self.assertNotIn(key, path.read_bytes(), path.name)
+            self.assertNotIn(key.hex().encode(), path.read_bytes(), path.name)
+        os.chmod(self.state / 'digest.key', 0o644)  # not the owner-only secret the host keeps
+        self.assertEqual('review_state_unavailable', self.refused())
+        os.chmod(self.state / 'digest.key', 0o600)
+        (self.state / 'digest.key').unlink()
+        self.assertEqual('review_state_unavailable', self.refused())
+
     def test_e_the_files_the_runner_wrote_are_still_accepted(self):
         cli = self.staged()
         self.run_step('finish', cli)

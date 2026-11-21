@@ -6,6 +6,7 @@ CLI, each reply saved in the work folder. Worker and verifier must give a verdic
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,8 @@ import stat
 import re
 import subprocess
 import sys
+
+from .collector_paths import CollectorPaths, StateError
 
 _DIGEST = re.compile(r'[0-9a-f]{64}')
 _SPEC_KEYS = {'id', 'summary', 'packet', 'context', 'objective', 'verify_objective', 'expected_output', 'evidence'}
@@ -59,10 +62,10 @@ def project_cli(project_root: Path):
     return call
 
 
-def run(step, spec, work_dir, project_root, *, cli=None, status='completed'):
+def run(step, spec, work_dir, project_root, *, cli=None, status='completed', state_root=None):
     """Run one stage (`worker`, `verify` or `finish`); returns its summary, or raises ReviewError."""
     try:
-        return _run(step, spec, work_dir, project_root, cli=cli, status=status)
+        return _run(step, spec, work_dir, project_root, cli=cli, status=status, state_root=state_root)
     except ReviewError:
         raise
     except (KeyError, TypeError, ValueError, AttributeError):
@@ -70,7 +73,7 @@ def run(step, spec, work_dir, project_root, *, cli=None, status='completed'):
         raise ReviewError('review_step_unreadable') from None
 
 
-def _run(step, spec, work_dir, project_root, *, cli, status):
+def _run(step, spec, work_dir, project_root, *, cli, status, state_root):
     project_root = Path(project_root).resolve()  # F3: absolute before any step
     check_spec(spec, project_root)
     cli = cli or project_cli(project_root)
@@ -117,6 +120,16 @@ def _run(step, spec, work_dir, project_root, *, cli, status):
         with os.fdopen(descriptor) as handle:
             return json.loads(handle.read())
 
+    def binding_key():
+        """The key the stage bindings are made with: derived from the host's own digest key (its private state
+        folder, mode 0600, never in a work folder, packet or reply), for this project and purpose only. Nothing
+        is created here; a state with no such key (no host has run) stops the review."""
+        try:
+            secret = CollectorPaths(None if state_root is None else Path(state_root)).digest_key()
+        except (StateError, OSError):
+            raise ReviewError('review_state_unavailable') from None
+        return hmac.new(secret, b'review-stage-binding-v1\0' + str(project_root).encode(), hashlib.sha256).digest()
+
     def facts(prefix):
         """What a stage's marker must say, taken from the stage's own saved route, assignment and result: the
         provider its route names, the verdict and summary its result states, and one digest that binds those to
@@ -126,21 +139,23 @@ def _run(step, spec, work_dir, project_root, *, cli, status):
         verdict, summary = answer.get('semantic_verdict'), answer.get('summary')
 
         def bound(digest):
-            return hashlib.sha256(json.dumps(
+            return hmac.new(binding_key(), json.dumps(
                 {'digest': digest, 'provider': provider, 'verdict': verdict, 'summary': summary,
                  'review': spec['id'], 'project': str(project_root), 'stage': prefix or 'worker',
                  'route': route, 'assignment': assigned, 'result': answer},
-                sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+                sort_keys=True, separators=(',', ':')).encode(), hashlib.sha256).hexdigest()
         return provider, verdict, summary, bound
 
     def load_stage(name, prefix):
         """A finished stage's marker, only as the runner wrote it: its mode, its exact shape, a digest equal to
         the one the stage's own recorded reply holds, and a provider, verdict and summary equal to what the
-        stage's saved route and result say, under a digest that binds them to this review and project (so a
-        changed provider or verdict, or a replaced route, assignment or result, is refused).
+        stage's saved route and result say, under a keyed digest (HMAC) that binds them to this review and
+        project (so a changed provider or verdict, or a replaced route, assignment or result, is refused).
 
-        This is integrity, not secrecy: a writer running as the runner's own user can rewrite every file in the
-        work folder consistently. That writer is outside this check; the project host is not (see `finish`)."""
+        Whoever can write the work folder but cannot read the host's private state cannot make a binding. A
+        process running as the host's own user can read that key: it is outside this check, and the project
+        host is not (see `finish`). The host's records were not used instead because no command reads them
+        without running a step (open and the checks do, right after this); a lookup would be a new host call."""
         stage = load(name)
         recorded = load(prefix + 'record.json')
         provider, verdict, summary, bound = facts(prefix)
@@ -148,7 +163,7 @@ def _run(step, spec, work_dir, project_root, *, cli, status):
               and type(stage['digest']) is str and _DIGEST.fullmatch(stage['digest']) is not None
               and type(verdict) is str and verdict
               and stage['provider'] == provider and stage['verdict'] == verdict and stage['summary'] == summary
-              and stage['binding'] == bound(stage['digest'])
+              and type(stage['binding']) is str and hmac.compare_digest(stage['binding'], bound(stage['digest']))
               and type(recorded) is dict and recorded.get('host_outcome_digest') == stage['digest'])
         if not ok:
             raise ReviewError('review_stage_not_runner_written', name)
