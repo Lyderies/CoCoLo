@@ -200,6 +200,8 @@ def _execute(payload, ticket, project_id, run_handle=None, recorder=None, client
         if client_sha256 is not None and _client_digest(data["executable"]) != client_sha256:
             raise CodexWorkerError()
         provider = data["route"]["provider"]
+        # VF-INV-c: a verifier's child is held to the schema the host would accept.
+        child_schema = bridge.result_schema_for(data["schema"].encode("utf-8"), assignment)
         deadline = max(0, (ticket.deadline_ns() - time.monotonic_ns()) / 1_000_000_000)
         common = dict(project_id=project_id, route=data["route"], assignment=assignment,
                       export=Path(data["export"]), control=Path(data["control"]), environ=data["environ"],
@@ -211,9 +213,9 @@ def _execute(payload, ticket, project_id, run_handle=None, recorder=None, client
                 raise CodexWorkerError()
             _, max_turns = bridge.effective_dispatch_limits(data["route"], assignment)
             result, report = _RUN_CLAUDE(ledger=recorder, run_handle=run_handle, max_turns=max_turns,
-                                         schema=data["schema"].encode("utf-8"), **common)
+                                         schema=child_schema, **common)
         else:
-            result, report = _RUN_CODEX(ledger=object(), schema=data["schema"].encode("utf-8"), **common)
+            result, report = _RUN_CODEX(ledger=object(), schema=child_schema, **common)
         result, report, fenced, reviewed, terminal, reason = _PREPARE_RESULT(assignment, result, report)
         body = canonical_json(result)
         if len(body) > MAX_RESULT_BODY_BYTES:

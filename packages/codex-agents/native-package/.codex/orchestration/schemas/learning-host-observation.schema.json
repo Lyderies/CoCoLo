@@ -85,7 +85,13 @@
                     "missing_required_fields",
                     "unknown_criterion",
                     "unknown_fields",
-                    "inconsistent_axes"
+                    "inconsistent_axes",
+                    "axes_status_verdict_mismatch",
+                    "axes_verdict_without_completion",
+                    "axes_admission_without_completion",
+                    "axes_retry_lineage",
+                    "child_set_admission",
+                    "child_set_timeout"
                   ]
                 },
                 "receipt_id": {
