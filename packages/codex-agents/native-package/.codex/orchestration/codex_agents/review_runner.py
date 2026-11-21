@@ -81,7 +81,19 @@ def _run(step, spec, work_dir, project_root, *, cli, status, state_root):
     work.mkdir(parents=True, exist_ok=True)
     if not work.is_dir():
         raise ReviewError('review_unsafe_work_dir')
-    root = ['--project-root', str(project_root)]
+    # The state is chosen once, here: the same folder holds the key the stage bindings are made with and is
+    # the one every host command below is told to use, so they cannot differ (an installed CLI pins the
+    # state to its default and accepts only that one). The key is read before any child starts.
+    try:
+        state = CollectorPaths(None if state_root is None else Path(state_root))
+        packet = (project_root / spec['packet']).resolve()
+        if any(state.root == place or place in state.root.parents for place in (work, packet)):
+            raise StateError('the state is inside the work folder or the packet')
+        secret = state.digest_key()
+    except (StateError, OSError, ValueError):
+        raise ReviewError('review_state_unavailable') from None
+    binding_key = hmac.new(secret, b'review-stage-binding-v1\0' + str(project_root).encode(), hashlib.sha256).digest()
+    root = ['--project-root', str(project_root), '--state-root', str(state.root)]
     grant = {'tools': ['shell'], 'filesystem': [f"{spec['packet']}:read"], 'network': False, 'mcps': [],
              'external_effects': False}
 
@@ -120,16 +132,6 @@ def _run(step, spec, work_dir, project_root, *, cli, status, state_root):
         with os.fdopen(descriptor) as handle:
             return json.loads(handle.read())
 
-    def binding_key():
-        """The key the stage bindings are made with: derived from the host's own digest key (its private state
-        folder, mode 0600, never in a work folder, packet or reply), for this project and purpose only. Nothing
-        is created here; a state with no such key (no host has run) stops the review."""
-        try:
-            secret = CollectorPaths(None if state_root is None else Path(state_root)).digest_key()
-        except (StateError, OSError):
-            raise ReviewError('review_state_unavailable') from None
-        return hmac.new(secret, b'review-stage-binding-v1\0' + str(project_root).encode(), hashlib.sha256).digest()
-
     def facts(prefix):
         """What a stage's marker must say, taken from the stage's own saved route, assignment and result: the
         provider its route names, the verdict and summary its result states, and one digest that binds those to
@@ -139,7 +141,7 @@ def _run(step, spec, work_dir, project_root, *, cli, status, state_root):
         verdict, summary = answer.get('semantic_verdict'), answer.get('summary')
 
         def bound(digest):
-            return hmac.new(binding_key(), json.dumps(
+            return hmac.new(binding_key, json.dumps(
                 {'digest': digest, 'provider': provider, 'verdict': verdict, 'summary': summary,
                  'review': spec['id'], 'project': str(project_root), 'stage': prefix or 'worker',
                  'route': route, 'assignment': assigned, 'result': answer},

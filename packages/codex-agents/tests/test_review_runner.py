@@ -3,10 +3,12 @@
 Unit stage: the CLI calls are a fake, so the order, the saved files and the stops are checked
 without running a child.
 """
+import inspect
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import tests.support  # noqa: F401
 from codex_agents import review_runner
@@ -25,10 +27,11 @@ def result(verdict='ready'):
 
 class FakeCli:
     def __init__(self, verdicts=('ready', 'pass'), refuse=None):
-        self.calls, self.verdicts, self.refuse = [], list(verdicts), refuse
+        self.calls, self.arguments, self.verdicts, self.refuse = [], [], list(verdicts), refuse
 
     def __call__(self, name, *args):
         self.calls.append(name)
+        self.arguments.append((name, args))
         if name == self.refuse:
             return {'ready': False, 'reason_code': 'claim_busy', 'next_step': 'wait'}
         return {
@@ -43,10 +46,17 @@ class FakeCli:
             'result': result(self.verdicts.pop(0)), 'bridge_report': {'terminal_state': None}}
 
 
+# The runner takes the host's state folder (for the key its stage bindings are made with); a version of the
+# runner from before that has no such argument. The tests pass it only when it exists, so they can run
+# against both and fail on the requirement rather than on the call.
+TAKES_STATE = 'state_root' in inspect.signature(review_runner.run).parameters
+
+
 class ReviewRunnerTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
+        self.guard_real_state()
         self.root = Path(temporary.name) / 'project'
         (self.root / 'reviews' / 'x').mkdir(parents=True)
         self.work = Path(temporary.name) / 'work'
@@ -60,8 +70,25 @@ class ReviewRunnerTests(unittest.TestCase):
                      'objective': 'review it', 'verify_objective': 'check it', 'expected_output': 'findings',
                      'evidence': [{'id': 'a', 'description': 'point a'}]}
 
-    def run_step(self, step, cli):
-        return review_runner.run(step, self.spec, self.work, self.root, cli=cli, state_root=self.state)
+    def guard_real_state(self):
+        """No test may read the developer's real host state (its digest key): a runner that is not given a
+        state folder, or is given the real one, fails the test that did it."""
+        from codex_agents.collector_paths import CollectorPaths, default_state_root
+        real = CollectorPaths
+
+        def guarded(root=None):
+            if root is None or Path(root).resolve() == Path(default_state_root()).resolve():
+                raise AssertionError('a test touched the real state root')
+            return real(root)
+        patch = mock.patch.object(review_runner, 'CollectorPaths', guarded)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def state_kw(self, state=None):
+        return {'state_root': state or self.state} if TAKES_STATE else {}
+
+    def run_step(self, step, cli, **options):
+        return review_runner.run(step, self.spec, self.work, self.root, cli=cli, **self.state_kw(), **options)
 
     def test_H1d_1_worker_verify_finish_run_the_sequence_and_save_each_step(self):
         cli = FakeCli()
@@ -129,13 +156,13 @@ class ReviewCorrectionTests(ReviewRunnerTests):
             calls.append((name, args))
             return FakeCli()(name, *args)
         relative_work = os.path.relpath(self.work)
-        review_runner.run('worker', self.spec, relative_work, os.path.relpath(self.root), cli=cli, state_root=self.state)
+        review_runner.run('worker', self.spec, relative_work, os.path.relpath(self.root), cli=cli, **self.state_kw())
         roots = [args[args.index('--project-root') + 1] for _, args in calls if '--project-root' in args]
         self.assertTrue(roots and all(Path(root).is_absolute() for root in roots))
         files = [arg for _, args in calls for arg in args if arg.endswith('.json')]
         self.assertTrue(files and all(Path(item).is_absolute() for item in files))
-        review_runner.run('verify', self.spec, self.work, self.root, cli=cli, state_root=self.state)
-        review_runner.run('finish', self.spec, self.work, self.root, cli=cli, status='failed', state_root=self.state)
+        review_runner.run('verify', self.spec, self.work, self.root, cli=cli, **self.state_kw())
+        review_runner.run('finish', self.spec, self.work, self.root, cli=cli, status='failed', **self.state_kw())
         close = [args for name, args in calls if name == 'learning-close-orchestration'][0]
         self.assertEqual('failed', close[close.index('--status') + 1])
 
@@ -157,18 +184,18 @@ class ReviewVerifierCorrectionTests(ReviewRunnerTests):
 
     def test_an_empty_verdict_is_no_verdict_and_a_verifier_without_one_is_named(self):
         with self.assertRaises(review_runner.ReviewError) as stopped:
-            review_runner.run('worker', self.spec, self.work, self.root, cli=FakeCli(verdicts=('',)))
+            review_runner.run('worker', self.spec, self.work, self.root, cli=FakeCli(verdicts=('',)), **self.state_kw())
         self.assertEqual(('review_no_verdict', 'worker'), (stopped.exception.reason_code, stopped.exception.detail))
-        review_runner.run('worker', self.spec, self.work, self.root, cli=FakeCli())
+        review_runner.run('worker', self.spec, self.work, self.root, cli=FakeCli(), **self.state_kw())
         with self.assertRaises(review_runner.ReviewError) as stopped:
-            review_runner.run('verify', self.spec, self.work, self.root, cli=FakeCli(verdicts=(None,)))
+            review_runner.run('verify', self.spec, self.work, self.root, cli=FakeCli(verdicts=(None,)), **self.state_kw())
         self.assertEqual(('review_no_verdict', 'verifier'), (stopped.exception.reason_code, stopped.exception.detail))
 
     def test_a_malformed_child_reply_stops_the_review_instead_of_crashing(self):
         def cli(name, *args):
             return {'ready': True} if name == 'learning-route' else FakeCli()(name, *args)
         with self.assertRaises(review_runner.ReviewError) as stopped:
-            review_runner.run('worker', self.spec, self.work, self.root, cli=cli)
+            review_runner.run('worker', self.spec, self.work, self.root, cli=cli, **self.state_kw())
         self.assertEqual('review_step_unreadable', stopped.exception.reason_code)
 
 
@@ -189,6 +216,27 @@ class ReviewCommandTests(ReviewRunnerTests):
         reply = json.loads(out.getvalue())
         self.assertEqual(('review_invalid_spec', False), (reply['reason_code'], reply['ready']))
         self.assertIn('spec', reply['next_step'])
+
+    def test_the_learning_review_command_forwards_its_state_root_to_every_host_command(self):
+        """Requirement: the state folder the key is read from is the one every host command is told to use
+        (an installed CLI pins it to its default and accepts only that). Run through the command itself."""
+        import contextlib
+        import io
+        import sys
+        from tests.test_bridge import cli as command
+        spec = Path(self.work.parent) / 'spec.json'
+        spec.write_text(json.dumps(self.spec))
+        fake = FakeCli()
+        out = io.StringIO()
+        argv = ['cli.py', 'learning-review', 'worker', '--project-root', str(self.root), '--spec', str(spec),
+                '--work-dir', str(self.work), '--state-root', str(self.state)]
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(review_runner, 'project_cli', return_value=fake), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(0, command.main())
+        self.assertTrue(json.loads(out.getvalue())['ready'])
+        self.assertTrue(fake.arguments)
+        for name, args in fake.arguments:
+            self.assertEqual(str(self.state.resolve()), args[args.index('--state-root') + 1], name)
 
 
 if __name__ == '__main__':

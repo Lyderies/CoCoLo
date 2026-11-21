@@ -1,8 +1,18 @@
 """Recurring fix (stale collector, 21 November 2026): the review runner's verdict and stage-file rules.
 
-(d) a result with no verdict is refused before it is recorded; (e) learning-review finish (and verify)
-refuses a stage file the runner did not write: wrong mode, wrong format, or a digest that is not the one its
-own recorded reply holds.
+Requirements:
+(d) a result with no verdict is refused before it is recorded.
+(e) learning-review verify and finish refuse a stage file the runner did not write: wrong mode or shape, a
+    digest its own recorded reply does not hold, a provider, verdict or summary its saved route and result do
+    not state, or a replaced route, assignment or result.
+(f) the stage binding is an HMAC under a key derived from the host's private digest key (the state folder),
+    so a writer who can only reach the work folder cannot make one, even by recomputing the old unkeyed
+    sha256; the key is never in the work folder; a missing or loose key, or a state folder inside the work
+    folder or the packet, stops the review before any child starts.
+(g) the state folder the key comes from is the one every host command is told to use.
+
+These tests pass the state folder only when the runner accepts one (`base.TAKES_STATE`), so they run against a
+runner from before the keyed binding and fail there on the requirement, not on the call.
 """
 import json
 import os
@@ -15,6 +25,8 @@ from tests import test_review_runner as base
 class ReviewRunnerProvenanceTests(unittest.TestCase):
     setUp = base.ReviewRunnerTests.setUp
     run_step = base.ReviewRunnerTests.run_step
+    guard_real_state = base.ReviewRunnerTests.guard_real_state
+    state_kw = base.ReviewRunnerTests.state_kw
 
     def staged(self):
         cli = base.FakeCli()
@@ -141,7 +153,7 @@ class ReviewRunnerProvenanceTests(unittest.TestCase):
         (other / 'digest.key').write_bytes(bytes(range(1, 33)))
         (other / 'digest.key').chmod(0o600)
         with self.assertRaises(review_runner.ReviewError) as stopped:
-            review_runner.run('finish', self.spec, self.work, self.root, cli=base.FakeCli(), state_root=other)
+            review_runner.run('finish', self.spec, self.work, self.root, cli=base.FakeCli(), **self.state_kw(other))
         self.assertEqual('review_stage_not_runner_written', stopped.exception.reason_code)
 
     def test_e_the_key_is_not_in_the_work_folder_and_a_missing_or_loose_key_stops_the_review(self):
@@ -150,11 +162,52 @@ class ReviewRunnerProvenanceTests(unittest.TestCase):
         for path in self.work.iterdir():
             self.assertNotIn(key, path.read_bytes(), path.name)
             self.assertNotIn(key.hex().encode(), path.read_bytes(), path.name)
+            import hashlib
+            import hmac
+            derived = hmac.new(key, b'review-stage-binding-v1\0' + str(self.root.resolve()).encode(),
+                               hashlib.sha256).digest()
+            self.assertNotIn(derived, path.read_bytes(), path.name)
+            self.assertNotIn(derived.hex().encode(), path.read_bytes(), path.name)
         os.chmod(self.state / 'digest.key', 0o644)  # not the owner-only secret the host keeps
         self.assertEqual('review_state_unavailable', self.refused())
         os.chmod(self.state / 'digest.key', 0o600)
         (self.state / 'digest.key').unlink()
         self.assertEqual('review_state_unavailable', self.refused())
+
+    def test_f_a_missing_or_loose_key_stops_the_review_before_any_child_starts(self):
+        for damage in ('missing', 'loose'):
+            with self.subTest(damage=damage):
+                key = self.state / 'digest.key'
+                if damage == 'loose':
+                    os.chmod(key, 0o644)
+                else:
+                    key.unlink()
+                cli = base.FakeCli()
+                with self.assertRaises(review_runner.ReviewError) as stopped:
+                    self.run_step('worker', cli)
+                self.assertEqual(('review_state_unavailable', []), (stopped.exception.reason_code, cli.calls))
+                key.write_bytes(bytes(range(32)))
+                os.chmod(key, 0o600)
+
+    def test_f_a_state_folder_inside_the_work_folder_or_the_packet_is_refused_before_any_child_starts(self):
+        for inside in (self.work / 'state', self.root / 'reviews' / 'x' / 'state'):
+            with self.subTest(inside=str(inside.relative_to(inside.parents[2]))):
+                inside.mkdir(parents=True, mode=0o700)
+                (inside / 'digest.key').write_bytes(bytes(range(32)))
+                os.chmod(inside / 'digest.key', 0o600)
+                cli = base.FakeCli()
+                with self.assertRaises(review_runner.ReviewError) as stopped:
+                    review_runner.run('worker', self.spec, self.work, self.root, cli=cli, **self.state_kw(inside))
+                self.assertEqual(('review_state_unavailable', []), (stopped.exception.reason_code, cli.calls))
+
+    def test_g_every_host_command_is_told_the_state_folder_the_key_comes_from(self):
+        cli = base.FakeCli()
+        self.run_step('worker', cli)
+        self.run_step('verify', cli)
+        self.run_step('finish', cli)
+        self.assertTrue(cli.arguments)
+        for name, args in cli.arguments:
+            self.assertEqual(str(self.state.resolve()), args[args.index('--state-root') + 1], name)
 
     def test_e_the_files_the_runner_wrote_are_still_accepted(self):
         cli = self.staged()
