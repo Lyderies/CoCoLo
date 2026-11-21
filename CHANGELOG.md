@@ -4,6 +4,13 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- The router can now read a task's risk and its failed attempts, and the verifier can follow the worker's risk,
+  but only where the routing policy says so. Three optional policy entries do it: `risk_candidates` (a candidate
+  list per risk band; high and critical may never go below the cell's first choice), `escalation` (a retry after
+  a counted failure moves once to the next candidate up for work with an executable check, stays put for
+  judgment work, and goes to the strongest candidate from the third attempt) and per-risk verifier settings
+  (`by_risk`). A route that used one says so in `routing_basis`. The shipped policy has none of them, so every
+  route is unchanged.
 - A result can be recorded after its service stopped. What a record, a verifier and QA need of a run (its assignment,
   task, route, client capability and host class) is now kept in the project's records with the run, from before
   its claim, instead of only in the service's memory, so a restarted service records a result left on disk, opens
