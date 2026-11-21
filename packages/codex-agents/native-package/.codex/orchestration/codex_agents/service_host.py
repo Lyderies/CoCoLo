@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 
+from .client_runtime import runtime_directory
 from .collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient
 from .collector_paths import CollectorPaths, StateError, _assert_no_symlink_components, _canonical_project_root, _check_owner_mode
 from .history_contracts import AttemptBinding, HistoryError, valid_integer
@@ -125,9 +126,23 @@ def _refuse(pending):
         pass
 
 
-def runtime_directory(state, project_root):
-    """Short private socket directory; the keyed digest keeps project paths out of it."""
-    return state.root / 'rt' / keyed_digest(state.digest_key(), str(project_root))[:16]
+def _exclusive_hint_lock(directory):
+    """The project's hint lock (`project_host_client.HINT_LOCK`), held exclusively: its descriptor,
+    which the caller closes to release it. Its holders keep it briefly, so a few seconds' retries."""
+    descriptor = os.open(directory / 'hint.lock', os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        for attempt in range(500):
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return descriptor
+            except BlockingIOError:
+                if attempt == 499:
+                    raise HistoryError('history_writer_busy') from None
+                time.sleep(0.01)
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 def write_owner_file(path, body):
@@ -355,24 +370,31 @@ class ProjectServiceHost:
             # Sockets, hint and capability are keyed by the project root, the
             # writer lock by its history. This lock makes the root exclusive
             # too, whatever history a second host was handed.
-            descriptor = os.open(directory / 'host.lock', os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
-            os.fchmod(descriptor, 0o600)
-            self._lock_fd = descriptor
-            # A client's liveness probe holds a shared lock for an instant; a
-            # live host holds this one for good. Retry briefly to tell them apart.
-            for attempt in range(20):
-                try:
-                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if attempt == 19:
-                        raise HistoryError('history_writer_busy') from None
-                    time.sleep(0.01)
-            # A dead host's hint would make this one look served before it listens.
+            # CI2: from before it takes the host lock until a dead host's hint is withdrawn, this host
+            # holds the hint lock, which a client reading the hint with its host's liveness shares:
+            # no client sees the dead host's hint with this host's lock and takes them for a service.
+            hint_lock = _exclusive_hint_lock(directory)
             try:
-                self._hint.unlink()
-            except FileNotFoundError:
-                pass
+                descriptor = os.open(directory / 'host.lock', os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+                os.fchmod(descriptor, 0o600)
+                self._lock_fd = descriptor
+                # A client's liveness probe holds a shared lock for an instant; a
+                # live host holds this one for good. Retry briefly to tell them apart.
+                for attempt in range(20):
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if attempt == 19:
+                            raise HistoryError('history_writer_busy') from None
+                        time.sleep(0.01)
+                # A dead host's hint would make this one look served before it listens.
+                try:
+                    self._hint.unlink()
+                except FileNotFoundError:
+                    pass
+            finally:
+                os.close(hint_lock)
             proofs = proof_directory(self._endpoints['project'])
             prepare_proof_directory(proofs)
             key = issue_capability(state, self._project_root, 'host')
@@ -445,18 +467,8 @@ class ProjectServiceHost:
             pass
         # Publication and a client's withdrawal of another version's hint take this
         # lock in turn, so a hint published here is never the one being withdrawn.
-        descriptor = os.open(self._endpoints['control'].parent / 'hint.lock',
-                             os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        descriptor = _exclusive_hint_lock(self._endpoints['control'].parent)
         try:
-            os.fchmod(descriptor, 0o600)
-            for attempt in range(500):
-                try:
-                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if attempt == 499:
-                        raise HistoryError('history_writer_busy') from None
-                    time.sleep(0.01)
             write_owner_file(self._hint, canonical_json(value))
         finally:
             os.close(descriptor)

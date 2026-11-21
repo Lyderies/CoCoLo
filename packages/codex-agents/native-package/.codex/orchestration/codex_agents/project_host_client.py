@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 import time
 
-from .client_runtime import _read_runtime_endpoints, read_runtime_hint, runtime_hint_path
+from .client_runtime import _read_runtime_endpoints, runtime_directory, runtime_hint_path
 from .collector_client import COLLECTOR_RUNTIME_DIGEST
 from .collector_paths import CollectorPaths, StateError, _canonical_project_root
 from .dispatch_api import DispatchError
@@ -19,7 +19,12 @@ START_TIMEOUT_SECONDS = 8.0
 WITHDRAW_TIMEOUT_SECONDS = 5.0
 HOST_ENTRY = 'project_host.py'
 HOST_LOCK = 'host.lock'
-HINT_LOCK = 'hint.lock'  # Taken in turn by a host publishing its hint and a client withdrawing one.
+# Taken in turn by a host publishing its hint, a host starting (from before it takes the host lock
+# until it has withdrawn a dead host's hint), a client withdrawing one, and, shared, by a client
+# reading a hint with its host's liveness (CI2), so none of them sees the other half-way.
+HINT_LOCK = 'hint.lock'
+# How long a client waits for that lock before it counts the project as not served now.
+HINT_READ_WAIT_SECONDS = 1.0
 
 
 def _host_alive(directory):
@@ -48,30 +53,75 @@ def _host_alive(directory):
             os.close(descriptor)
 
 
+def _hinted_host(state, root, *, any_runtime=False, hint_locked=False):
+    """The published hint's (scope, endpoints) and its host's liveness (`_host_alive`), or None.
+
+    CI2: a host takes the project's host lock before it withdraws a dead host's hint, so the
+    dead hint and the new host's lock are on disk together for a moment, and a client that read
+    one and then probed the other took them for a live service: it then used the dead host's
+    sockets and failed. A starting host holds HINT_LOCK through that moment, and the hint is read
+    and its host probed here under the same lock, shared: either before the new host took its
+    lock (the dead hint, nothing alive) or after the dead hint is gone. `hint_locked`: the caller
+    holds HINT_LOCK itself. A lock still busy after HINT_READ_WAIT_SECONDS is None, not served now.
+    """
+    try:
+        scope, endpoints = _read_runtime_endpoints(state, root, any_runtime=any_runtime)
+    except (DispatchError, StateError, OSError, ValueError):
+        return None
+    if hint_locked:
+        return scope, endpoints, _host_alive(endpoints[0].parent)
+    descriptor = None
+    try:
+        try:
+            descriptor = os.open(endpoints[0].parent / HINT_LOCK, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        except FileNotFoundError:
+            # No product host published here: only the hint can be believed (as `_host_alive`).
+            return scope, endpoints, _host_alive(endpoints[0].parent)
+        deadline = time.monotonic() + HINT_READ_WAIT_SECONDS
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    return None
+                time.sleep(0.01)
+        try:  # read again under the lock: the hint read first may be the dead host's, withdrawn since
+            scope, endpoints = _read_runtime_endpoints(state, root, any_runtime=any_runtime)
+        except (DispatchError, StateError, OSError, ValueError):
+            return None
+        return scope, endpoints, _host_alive(endpoints[0].parent)
+    except OSError:
+        return None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def project_host_serving(state_root, project_root):
     """Whether a live host serves this project now; any failure is a plain False."""
     try:
-        state = CollectorPaths(state_root)
-        _, control, _ = read_runtime_hint(state, _canonical_project_root(Path(project_root)))
-    except (DispatchError, StateError, OSError, ValueError):
+        hinted = _hinted_host(CollectorPaths(state_root), _canonical_project_root(Path(project_root)))
+    except (StateError, OSError, ValueError):
         return False
-    return _host_alive(control.parent) is not False
+    return hinted is not None and hinted[2] is not False
 
 
-def other_version_host(state_root, project_root):
+def other_version_host(state_root, project_root, *, hint_locked=False):
     """The lock directory of a live host that another runtime version started, else None.
 
     Such a host cannot serve this version's commands, and while it lives no
     host of this version can start for the project.
     """
     try:
-        state = CollectorPaths(state_root)
-        scope, endpoints = _read_runtime_endpoints(
-            state, _canonical_project_root(Path(project_root)), any_runtime=True)
-    except (DispatchError, StateError, OSError, ValueError):
+        hinted = _hinted_host(CollectorPaths(state_root), _canonical_project_root(Path(project_root)),
+                              any_runtime=True, hint_locked=hint_locked)
+    except (StateError, OSError, ValueError):
         return None
-    directory = endpoints[0].parent
-    return directory if scope.runtime_digest != COLLECTOR_RUNTIME_DIGEST and _host_alive(directory) is True else None
+    if hinted is None:
+        return None
+    scope, endpoints, alive = hinted
+    return endpoints[0].parent if scope.runtime_digest != COLLECTOR_RUNTIME_DIGEST and alive is True else None
 
 
 def withdraw_project_host(state_root, project_root, directory, *, timeout=WITHDRAW_TIMEOUT_SECONDS):
@@ -95,7 +145,7 @@ def withdraw_project_host(state_root, project_root, directory, *, timeout=WITHDR
                 if time.monotonic() >= deadline:
                     return False
                 time.sleep(0.01)
-        current = other_version_host(state_root, project_root)
+        current = other_version_host(state_root, project_root, hint_locked=True)  # this holds HINT_LOCK
         if current is None:
             return True
         if current != directory:
@@ -138,10 +188,10 @@ def ensure_project_host(state_root, orchestration_root, project_root, *, timeout
 
     def serving():
         try:
-            _, control, _ = read_runtime_hint(state, root)
-        except (DispatchError, StateError, OSError):
+            hinted = _hinted_host(state, root)
+        except (StateError, OSError):
             return False
-        return _host_alive(control.parent) is not False
+        return hinted is not None and hinted[2] is not False
 
     if serving():
         return True
@@ -181,6 +231,12 @@ def _spawn_and_wait(state, entry, root, serving, timeout, actions, report_path, 
         if os.waitpid(pid, os.WNOHANG)[0] == pid:
             if serving():
                 return True  # It lost the race to another starter.
+            # CI2: it found the project taken by another host that holds the host lock and has not
+            # served yet (another start's, still starting): wait for that one, within this start's time.
+            while time.monotonic() < deadline and _host_alive(runtime_directory(state, root)) is True:
+                if serving():
+                    return True
+                time.sleep(0.02)
             if report is not None:
                 report.update(_ended_report(report_path))
             return False

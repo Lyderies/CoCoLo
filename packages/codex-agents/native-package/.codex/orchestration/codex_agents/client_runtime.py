@@ -65,6 +65,14 @@ START_REASONS = frozenset({
 LOST_CAPACITY = {'run_lost': 'released', 'run_lost_held': 'held'}
 
 
+def runtime_directory(state, project_root):
+    """Short private socket directory; the keyed digest keeps project paths out of it.
+
+    Its host's sockets, host lock and hint lock live here (`service_host`); a client finds it without
+    a hint too (CI2: a host still starting has none yet)."""
+    return state.root / 'rt' / keyed_digest(state.digest_key(), str(project_root))[:16]
+
+
 def runtime_hint_path(state, project_root):
     if type(state) is not CollectorPaths:
         raise DispatchError('dispatch_unavailable')

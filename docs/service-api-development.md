@@ -87,6 +87,16 @@ and stops waiting as soon as that process serves or exits. A dead host's leftove
 hint, sockets and capability are replaced by the next start. Endpoints published
 without a host lock, as the older process fixtures do, are used as hinted.
 
+A starting host takes the host lock before it withdraws a dead host's hint, so for a
+moment the dead hint and the new lock are on disk together (CI2). The starting host
+holds `hint.lock` exclusively from before it takes the host lock until that hint is
+gone, and a client reads the hint and probes the host lock under the same lock,
+shared (waiting at most `HINT_READ_WAIT_SECONDS`, then counting the project as not
+served now), so it never takes that pair for a service. A start whose own host ended
+while another host holds the host lock (another start's, not serving yet) keeps
+waiting for that host to serve, within the start's time, instead of failing
+(`ProjectServiceStartupTests.test_CI2_*`).
+
 ### Account services in the collector process
 
 `learning-serve` now hands over to the separate entry `collector_host.py`, so the
