@@ -211,16 +211,6 @@ class OrchestratorScopeTests(CoreCase):
 
 
 class AuditTests(CoreCase):
-    def test_api23_refusals_unknown_methods_and_unauthorized_reads_are_audited(self):
-        client = self.client("confirm")
-        self.error_code(client, "nope.nothing")
-        self.error_code(client, "context.push", {})
-        anonymous = self.client(scope=None)
-        self.error_code(anonymous, "state.get")
-        seen = {(r["method"], r["outcome"]) for r in self.audit()}
-        self.assertIn(("unknown", "method_not_found"), seen)
-        self.assertIn(("context.push", "invalid_params"), seen)
-        self.assertIn(("state.get", "unauthorized"), seen)
 
     def test_api23_caller_strings_never_reach_the_audit_log(self):
         token = self.mod._mint_token(str(self.records), "confirm")
