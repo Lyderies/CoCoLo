@@ -168,10 +168,6 @@ class ControlCommandTests(CoreCase):
         self.assertEqual("fail", events[0]["data"]["verdict"])
 
 
-class ReplyTextTests(CoreCase):
-
-
-
 class MintTests(CoreCase):
     def test_api18_minting_needs_the_owner_terminal(self):
         with mock.patch.object(self.mod, "_owner_terminal", return_value=False):
