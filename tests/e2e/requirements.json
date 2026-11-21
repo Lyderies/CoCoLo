@@ -32,7 +32,7 @@
    "id": "L1.2",
    "flow": "L1",
    "source": "PLAN-0.4.0.md T7",
-   "statement": "Setup run again on an installed project changes nothing: same files, same digests, no new records except its own checks.",
+   "statement": "Setup run again on an installed project changes nothing: same files, same digests, no new records except its own checks; an answers-file re-run skips signing a billing statement that is already signed and current unless the answers ask to sign again (owner decision 37).",
    "checks": [
     "l1_setup_again_with_answers_changes_nothing",
     "l1_update_on_installed_project_changes_nothing"
@@ -363,7 +363,7 @@
    "id": "G8",
    "flow": "all",
    "source": "PLAN-0.4.0.md T7",
-   "statement": "No private value appears in any output: keys, fingerprints, paths under the temporary HOME.",
+   "statement": "No private value (keys, fingerprints, paths under the temporary HOME) appears in any output that is saved, logged, reported or read by an AI helper (including the status command); a screen shown to the owner may show one only when the owner needs it to proceed or troubleshoot (owner decision 36).",
    "checks": [
     "g8_no_private_value_in_any_output"
    ]
