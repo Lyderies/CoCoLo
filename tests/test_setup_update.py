@@ -227,6 +227,7 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
         code, screen = self.update(project, {"FAKE_FAIL": "1"})  # the install's apply fails
         self.assertEqual(1, code)
         self.assertIn("The update stopped", screen)
+        self.assertNotIn('Update the install and walk through every step', screen)
         self.assertEqual(0, self.attested())  # no billing, profile or commands after the failure
         self.assertNotRegex(screen, r"OK\s+\d\. Collector:")
         self.assertEqual(commits, self.commit_count(project))
