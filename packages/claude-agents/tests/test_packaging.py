@@ -64,7 +64,30 @@ class PackagingTests(unittest.TestCase):
             if path.startswith(".claude/agents"):
                 self.assertIn(b"maxTurns: 8", content)
                 self.assertNotIn(b"Inert fixture only.", content)
+                self.assertIn(b"\nmodel: ", content)
                 self.assertIn(b"provides no model isolation", content)
+
+    def test_definitions_carry_the_role_model(self) -> None:
+        expected = {
+            "claude_agents_implementation_worker": "sonnet",
+            "claude_agents_planner": "sonnet",
+            "claude_agents_researcher": "sonnet",
+            "claude_agents_verification_worker": "sonnet",
+            "claude_agents_security_reviewer": "opus",
+        }
+        found = {}
+        for path, content in compile_bundle(SOURCE).files:
+            if path.startswith(".claude/agents/"):
+                name = Path(path).stem
+                head = content.decode().split("\n---\n", 1)[0].splitlines()
+                models = [line for line in head if line.startswith("model:")]
+                found[name] = models
+        self.assertEqual({k: [f"model: {v}"] for k, v in expected.items()}, found)
+
+    def test_role_without_a_model_default_fails_loudly(self) -> None:
+        with patch.dict(packaging.ROLE_MODELS, {}, clear=True):
+            with self.assertRaises(PackageError):
+                compile_bundle(SOURCE)
 
     def test_preview_install_verify_update_rollback_and_idempotence(self) -> None:
         before = self.inventory()
