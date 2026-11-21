@@ -1458,7 +1458,8 @@ class HostClaudeVerificationTests(HostVerificationTests):
         opened = self.cli('learning-open-host-run', *context, '--route', route_path,
                           '--orchestration-handle', orchestration)
         self.assertEqual(('admitted', True), (opened['admission'], opened['project_host_registered']))
-        self.frames('claude', [init_frame(), RATE_LIMIT, result_frame(json.dumps(
+        # The client reports the model the route requested.
+        self.frames('claude', [init_frame(model=route['model']), RATE_LIMIT, result_frame(json.dumps(
             {**result(), 'assignment_id': assigned['assignment_id']}))])
         dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
         self.assertEqual('result', dispatched['bridge_report']['outcome'])
@@ -1663,7 +1664,7 @@ class ClaudeOnlyVerificationTests(ClaudeChildHarness):
     def run_claude(self, context, route_path, orchestration, assignment_id):
         opened = self.cli('learning-open-host-run', *context, '--route', route_path,
                           '--orchestration-handle', orchestration)
-        self.frames('claude', [init_frame(), RATE_LIMIT, result_frame(json.dumps(
+        self.frames('claude', [init_frame(model=json.loads(Path(route_path).read_text())['model']), RATE_LIMIT, result_frame(json.dumps(
             {**result(), 'assignment_id': assignment_id}))])
         dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
         self.assertEqual('result', dispatched['bridge_report']['outcome'])
