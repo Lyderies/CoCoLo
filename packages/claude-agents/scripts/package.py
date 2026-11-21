@@ -26,7 +26,9 @@ def main() -> int:
                                   if args.previous_source else None),
         )
     except PackageError as exc:
-        print(json.dumps({"error": str(exc), "provider_execution_enabled": False}))
+        # rollback_state tells the caller whether the package kept unfinished work it must not touch.
+        print(json.dumps({"error": str(exc), "provider_execution_enabled": False,
+                          "rollback_state": "pending" if str(exc) == "rollback_pending" else "none"}))
         return 2
     print(json.dumps(result, sort_keys=True))
     return 0
