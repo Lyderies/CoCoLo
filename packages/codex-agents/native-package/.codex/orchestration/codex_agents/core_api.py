@@ -475,14 +475,11 @@ APPEND_WAIT_SECONDS = 5.0  # an append outside any call waits at most this long 
 
 
 def _fsync_dir(path):
-    try:
-        fd = os.open(os.path.dirname(os.path.abspath(str(path))) or ".", os.O_RDONLY)
-    except OSError:
-        return
+    """Make a new or renamed directory entry durable. A failure raises OSError (it is reported, never swallowed):
+    a caller turns it into `unavailable` before it claims the change."""
+    fd = os.open(os.path.dirname(os.path.abspath(str(path))) or ".", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(fd)
-    except OSError:
-        pass
     finally:
         os.close(fd)
 
@@ -510,6 +507,8 @@ def _append_jsonl(path, row):
             created = True
         fd = _open_nofollow(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
         try:
+            if created:
+                _fsync_dir(path)  # the new entry is durable before a row goes in; a failure writes no row
             while True:
                 try:
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -536,8 +535,6 @@ def _append_jsonl(path, row):
             os.close(fd)  # releases the flock
         if _CALL.reads is not None:
             _CALL.reads.pop(str(path), None)  # a later read in this call sees this row
-        if created:
-            _fsync_dir(path)
     finally:
         _APPEND_LOCK.release()
 
@@ -573,10 +570,16 @@ def _owner_terminal():
 def _locked_tokens(records_dir, mutate):
     """Change tokens.json under its file lock. The new store is written whole to a private temporary file and
     renamed over the old one, so a reader (who takes no lock) sees the old store or the new one, never a
-    truncated one. A damaged store is refused and left as it is, never reset to empty."""
+    truncated one. A damaged store is refused and left as it is, never reset to empty: that includes an existing
+    empty file (only a store this call has just created may start empty)."""
     path = os.path.join(records_dir, "tokens.json")
     end = time.monotonic() + LOCK_SECONDS
     while True:
+        try:
+            os.lstat(path)
+            existed = True
+        except FileNotFoundError:
+            existed = False
         fd = _open_nofollow(path, os.O_RDWR | os.O_CREAT)
         try:
             while True:
@@ -593,12 +596,12 @@ def _locked_tokens(records_dir, mutate):
                 continue
             if os.fstat(fd).st_ino != current.st_ino:
                 continue  # replaced while we waited: lock the file that is there now
-            return _rewrite_tokens(records_dir, path, fd, mutate)
+            return _rewrite_tokens(records_dir, path, fd, mutate, existed)
         finally:
             os.close(fd)
 
 
-def _rewrite_tokens(records_dir, path, fd, mutate):
+def _rewrite_tokens(records_dir, path, fd, mutate, existed=True):
     raw = b""
     while True:
         chunk = os.read(fd, 65536)
@@ -607,6 +610,9 @@ def _rewrite_tokens(records_dir, path, fd, mutate):
         raw += chunk
         if len(raw) > TOKENS_FILE_MAX_BYTES:
             raise ApiError("unavailable", "the token store is too large")
+    if not raw.strip() and existed:
+        raise ApiError("unavailable", "the token store is empty, which is damage, not 'no tokens'; it was left "
+                                      "unchanged (remove it at your terminal to start a new store)")
     try:
         data = json.loads(raw.decode("utf-8")) if raw.strip() else {"tokens": []}
     except (ValueError, UnicodeDecodeError):
@@ -615,18 +621,25 @@ def _rewrite_tokens(records_dir, path, fd, mutate):
         raise ApiError("unavailable", "the token store is damaged; it was left unchanged")
     result = mutate(data["tokens"])
     out = json.dumps(data).encode("utf-8")
+    if len(out) > TOKENS_FILE_MAX_BYTES:  # checked before replacing: a store the reader would refuse is never written
+        raise ApiError("unavailable", "the token store would be too large; it was left unchanged")
     tmp_fd, tmp = tempfile.mkstemp(dir=str(records_dir), prefix=".tokens.", suffix=".tmp")
     try:
         try:
             view = memoryview(out)
             while view:
-                view = view[os.write(tmp_fd, view):]
+                written = os.write(tmp_fd, view)
+                if written <= 0:
+                    raise OSError("the token store could not be written")
+                view = view[written:]
             os.fsync(tmp_fd)
         finally:
             os.close(tmp_fd)
         os.replace(tmp, path)
         tmp = None
         _fsync_dir(path)
+    except OSError:
+        raise ApiError("unavailable", "the token store could not be saved durably")
     finally:
         if tmp is not None:
             try:
