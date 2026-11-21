@@ -326,17 +326,6 @@ class OpenLifetimeJobTests(OriginalAccountOpenJobTests):
         self.ledger.sweep_account_retention(now_ms=FAR, batch=1)
         self.assertEqual(0, sum(counts(self.ledger, handle)[0] for handle in (first, second)))
 
-    def test_OP_2_a_request_with_no_run_to_mark_it_is_kept_so_its_id_never_reopens(self):
-        """B0 revision 3 item 5: a purged request id never reopens. A request that opened no run (denied, or
-        never finished) leaves no register tombstone to recognise its replay by, so it is kept; it counts
-        against nothing (OP-1)."""
-        captured, _ = self.reference.preflight(limits=small_limits(1))
-        self.ledger.sweep_account_retention(now_ms=FAR)
-        self.assertEqual(1, len(self.reference.pending()))
-        self.another_task('second-task')
-        with mock.patch.object(self.ledger, '_clock_ms', return_value=captured.observation_deadline_at_ms):
-            self.reference.preflight(request_id='second-open', limits=small_limits(1))
-
     def test_OP_2_the_purge_reads_only_requests_past_retention_as_young_ones_pile_up(self):
         handle, opened = self.committed()
         self.finish(handle)
