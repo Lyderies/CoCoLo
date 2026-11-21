@@ -5,14 +5,20 @@ CLI, each reply saved in the work folder. Worker and verifier must give a verdic
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
 import secrets
 import stat
+import re
 import subprocess
 import sys
 
+from .collector_paths import CollectorPaths, StateError, default_state_root
+
+_DIGEST = re.compile(r'[0-9a-f]{64}')
 _SPEC_KEYS = {'id', 'summary', 'packet', 'context', 'objective', 'verify_objective', 'expected_output', 'evidence'}
 
 
@@ -56,10 +62,10 @@ def project_cli(project_root: Path):
     return call
 
 
-def run(step, spec, work_dir, project_root, *, cli=None, status='completed'):
+def run(step, spec, work_dir, project_root, *, cli=None, status='completed', state_root=None):
     """Run one stage (`worker`, `verify` or `finish`); returns its summary, or raises ReviewError."""
     try:
-        return _run(step, spec, work_dir, project_root, cli=cli, status=status)
+        return _run(step, spec, work_dir, project_root, cli=cli, status=status, state_root=state_root)
     except ReviewError:
         raise
     except (KeyError, TypeError, ValueError, AttributeError):
@@ -67,7 +73,7 @@ def run(step, spec, work_dir, project_root, *, cli=None, status='completed'):
         raise ReviewError('review_step_unreadable') from None
 
 
-def _run(step, spec, work_dir, project_root, *, cli, status):
+def _run(step, spec, work_dir, project_root, *, cli, status, state_root):
     project_root = Path(project_root).resolve()  # F3: absolute before any step
     check_spec(spec, project_root)
     cli = cli or project_cli(project_root)
@@ -75,7 +81,6 @@ def _run(step, spec, work_dir, project_root, *, cli, status):
     work.mkdir(parents=True, exist_ok=True)
     if not work.is_dir():
         raise ReviewError('review_unsafe_work_dir')
-    root = ['--project-root', str(project_root)]
     grant = {'tools': ['shell'], 'filesystem': [f"{spec['packet']}:read"], 'network': False, 'mcps': [],
              'external_effects': False}
 
@@ -107,9 +112,57 @@ def _run(step, spec, work_dir, project_root, *, cli, status):
         path, present = entry(name)
         if not present:
             raise ReviewError('review_stage_not_ready', name)  # F2: the stage before has not finished
+        info = os.lstat(path)
+        if stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.getuid():
+            raise ReviewError('review_stage_not_runner_written', name)  # not a file save() wrote
         descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
         with os.fdopen(descriptor) as handle:
             return json.loads(handle.read())
+
+    def facts(prefix):
+        """What a stage's marker must say, taken from the stage's own saved route, assignment and result: the
+        provider its route names, the verdict and summary its result states, and one digest that binds those to
+        the recorded outcome, this project and this review."""
+        route, assigned, answer = (load(prefix + name) for name in ('route.json', 'assignment.json', 'result.json'))
+        provider = 'claude' if route['agent_type'].startswith('claude') else 'codex'
+        verdict, summary = answer.get('semantic_verdict'), answer.get('summary')
+
+        def bound(digest):
+            return hmac.new(binding_key, json.dumps(
+                {'digest': digest, 'provider': provider, 'verdict': verdict, 'summary': summary,
+                 'review': spec['id'], 'project': str(project_root), 'stage': prefix or 'worker',
+                 'route': route, 'assignment': assigned, 'result': answer},
+                sort_keys=True, separators=(',', ':')).encode(), hashlib.sha256).hexdigest()
+        return provider, verdict, summary, bound
+
+    def load_stage(name, prefix):
+        """A finished stage's marker, only as the runner wrote it: its mode, its exact shape, a digest equal to
+        the one the stage's own recorded reply holds, and a provider, verdict and summary equal to what the
+        stage's saved route and result say, under a keyed digest (HMAC) that binds them to this review and
+        project (so a changed provider or verdict, or a replaced route, assignment or result, is refused).
+
+        Whoever can write the work folder but cannot read the host's private state cannot make a binding. A
+        process running as the host's own user can read that key: it is outside this check, and the project
+        host is not (see `finish`). The host's records were not used instead because no command reads them
+        without running a step (open and the checks do, right after this); a lookup would be a new host call."""
+        stage = load(name)
+        recorded = load(prefix + 'record.json')
+        provider, verdict, summary, bound = facts(prefix)
+        ok = (type(stage) is dict and set(stage) == {'digest', 'provider', 'verdict', 'summary', 'binding'}
+              and type(stage['digest']) is str and _DIGEST.fullmatch(stage['digest']) is not None
+              and type(verdict) is str and verdict
+              and stage['provider'] == provider and stage['verdict'] == verdict and stage['summary'] == summary
+              and type(stage['binding']) is str and hmac.compare_digest(stage['binding'], bound(stage['digest']))
+              and type(recorded) is dict and recorded.get('host_outcome_digest') == stage['digest'])
+        if not ok:
+            raise ReviewError('review_stage_not_runner_written', name)
+        return stage
+
+    def stage_files(prefix):
+        return tuple(prefix + name + '.json' for name in CHILD_FILES)
+
+    CHILD_FILES = ('task', 'route', 'assignment', 'validate', 'preflight', 'observe', 'open', 'dispatch', 'result',
+                   'observation', 'record')
 
     def forget(*names):
         """F2: a stage starting again first removes its own and later stages' markers."""
@@ -169,25 +222,64 @@ def _run(step, spec, work_dir, project_root, *, cli, status):
         if terminal:
             observation['terminal_state'] = terminal
         observation_file = save(prefix + 'observation.json', observation)
+        verdict = dispatched['result'].get('semantic_verdict')
+        if type(verdict) is not str or not verdict:  # H1d-2: an empty verdict is none; nothing is recorded
+            raise ReviewError('review_no_verdict', 'verifier' if prefix else 'worker')
         recorded = call(prefix + 'record.json', 'learning-record-host-result', '--task', task_file,
                         '--assignment', assignment_file, '--parent-grant', grant_file, '--result', result_file,
                         '--observation', observation_file, *root)
-        verdict = dispatched['result'].get('semantic_verdict')
-        if type(verdict) is not str or not verdict:  # H1d-2: an empty verdict is none
-            raise ReviewError('review_no_verdict', 'verifier' if prefix else 'worker')
-        return {'digest': recorded['host_outcome_digest'], 'provider': provider, 'verdict': verdict,
-                'summary': dispatched['result'].get('summary')}
+        digest = recorded['host_outcome_digest']
+        return {'digest': digest, 'provider': provider, 'verdict': verdict,
+                'summary': dispatched['result'].get('summary'), 'binding': facts(prefix)[3](digest)}
+
+    # A stage starting again first removes the markers and files of its own and later stages, whatever
+    # follows: a rerun that stops at the state check below leaves no earlier marker for `finish` to accept.
+    if step == 'worker':
+        forget('worker.json', 'verifier.json', *stage_files(''), *stage_files('v'))
+    elif step == 'verify':
+        forget('verifier.json', *stage_files('v'))
+    # The state is chosen once, here: the same folder holds the key the stage bindings are made with and is
+    # the one every host command below is told to use, so they cannot differ (an installed CLI pins the
+    # state to its default and accepts only that one). The key is read before any child starts. The state
+    # folder, the work folder, the packet and the project must not lie inside one another (compared by
+    # identity of the folders, so letter case and links cannot hide it).
+    def inside(inner, outer):
+        try:
+            return any(os.path.samestat(os.stat(place), os.stat(outer)) for place in (inner, *inner.parents))
+        except OSError:
+            return True  # a folder that cannot be inspected is not shown to be apart
+
+    try:
+        places = (work, (project_root / spec['packet']).resolve(), project_root)
+        if state_root is None:
+            candidate = default_state_root()
+            if not os.path.lexists(candidate):
+                # Check the nearest existing ancestor by identity before creating state, including
+                # on case-insensitive volumes. A missing folder cannot contain an existing place.
+                ancestor = next(parent for parent in candidate.parents if parent.exists())
+                if any(inside(ancestor, place) for place in places):
+                    raise StateError('the default state overlaps the work folder, packet or project')
+                # Bootstrap only a fresh default with the host's normal private-state checks.
+                # Existing state (including a missing or unsafe key) must still fail closed.
+                from .learning_store import LearningState
+                LearningState()
+        state = CollectorPaths(None if state_root is None else Path(state_root))
+        if any(inside(state.root, place) or inside(place, state.root) for place in places):
+            raise StateError('the state, work folder, packet and project overlap')
+        secret = state.digest_key()
+    except (StateError, OSError, ValueError):
+        raise ReviewError('review_state_unavailable') from None
+    binding_key = hmac.new(secret, b'review-stage-binding-v1\0' + str(project_root).encode(), hashlib.sha256).digest()
+    root = ['--project-root', str(project_root), '--state-root', str(state.root)]
 
     if step == 'worker':
-        forget('worker.json', 'verifier.json')
         orchestration = call('orchestration.json', 'learning-open-orchestration', *root)['orchestration_handle']
         worker = child('', task(spec['id'], 'security', spec['summary']), spec['objective'], spec['context'],
                        orchestration)
         save('worker.json', worker)
         return worker
     if step == 'verify':
-        forget('verifier.json')
-        orchestration, worker = load('orchestration.json')['orchestration_handle'], load('worker.json')
+        orchestration, worker = load('orchestration.json')['orchestration_handle'], load_stage('worker.json', '')
         verifier = child('v', task(spec['id'] + '-verify', 'verification',
                                    'Independently check the recorded review: ' + spec['summary'],
                                    {'verification_for_family': 'security',
@@ -197,8 +289,12 @@ def _run(step, spec, work_dir, project_root, *, cli, status):
         save('verifier.json', verifier)
         return verifier
     if step == 'finish':
-        digests = ['--host-outcome-digest', load('worker.json')['digest'],
-                   '--verifier-host-outcome-digest', load('verifier.json')['digest']]
+        # Both stages are checked against the files they were made from (so the assignment and result paths
+        # QA receives are the ones the markers bind), and the project host checks the same again: it looks
+        # both digests up in its own records and compares each assignment and result body with the original
+        # it holds before it commits anything.
+        digests = ['--host-outcome-digest', load_stage('worker.json', '')['digest'],
+                   '--verifier-host-outcome-digest', load_stage('verifier.json', 'v')['digest']]
         checks = call('checks.json', 'learning-run-operational-checks', *root, *digests)
         qa = call('qa.json', 'learning-record-operational-qa', *root, *digests, '--check-receipt',
                   checks['check_receipt'], '--evaluator-assignment', str(work / 'assignment.json'),

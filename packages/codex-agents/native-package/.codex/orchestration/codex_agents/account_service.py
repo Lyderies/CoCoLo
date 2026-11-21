@@ -815,10 +815,19 @@ class AccountService:
         except ProbeAdmissionError as error:
             return self._reply(labels, reason=error.reason_code)
         except SQLReadError as error:  # M4b E1a-2
+            if error.reason_code != 'sql_read_busy':
+                self._name_probe_failure('probe_sql_read_failed', error)
             return self._reply(labels, reason='account_busy' if error.reason_code == 'sql_read_busy'
                                else 'probe_unavailable')
-        except Exception:
+        except Exception as error:
+            self._name_probe_failure('probe_reply_failed', error)
             return self._reply(labels, reason='probe_unavailable')
+
+    def _name_probe_failure(self, cause, error=None):
+        """Record why a probe was answered probe_unavailable in the billing lane's last_failure."""
+        if self._billing_jobs is not None:
+            lane_health.safely(lambda: self._billing_jobs.health.note_failure(
+                self._billing_jobs._note, cause, error))
 
     def take_claim_reply(self, ticket, *, _ingress=None):
         """Deferred publication has its own request deadline (M4b E1a revision 3)."""
@@ -835,11 +844,13 @@ class AccountService:
             labels = {'request_id': identity, 'project_id': project, 'runtime_digest': runtime,
                       'request_digest': account_request_digest(request)}
             if reply.reason is not None:
-                return self._reply(labels, reason=reply.reason if reply.reason in {
+                allowed = {
                     'probe_invalid_request', 'probe_not_authorized', 'probe_unavailable', 'probe_conflict',
                     'probe_full', 'probe_busy', 'probe_not_ready', 'probe_reply_invalid', 'account_busy', *ADMISSION_CAPTURE_PUBLIC_REASONS,
                     *PROBE_STEP_REASONS, *OBSERVATION_REASONS}
-                    else 'probe_unavailable')
+                if reply.reason not in allowed:
+                    self._name_probe_failure('probe_reason_unrecognised')
+                return self._reply(labels, reason=reply.reason if reply.reason in allowed else 'probe_unavailable')
             return self._billing_reply(reply.key, reply.result, reply.context, reply.before_publish)
         if (self._observation_jobs is not None and type(ticket) is object
                 and ticket in self._observation_jobs._jobs):

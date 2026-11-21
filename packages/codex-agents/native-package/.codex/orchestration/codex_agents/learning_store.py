@@ -53,6 +53,7 @@ from .collector_client import (
     COLLECTOR_RUNTIME_DIGEST as COLLECTOR_RUNTIME_DIGEST,
     PACKAGE_VERSION as PACKAGE_VERSION,
     CollectorClient as CollectorClient,
+    collector_code_stale as collector_code_stale,
     empty_ingestion_snapshot as empty_ingestion_snapshot,
 )
 from .active_run_capacity import CAPACITY_OBJECTS, CAPACITY_SCHEMA, CAPACITY_PARENT_SCHEMA, CAPACITY_COMPLETIONS_SCHEMA, CAPACITY_EXECUTIONS_SCHEMA
@@ -12763,6 +12764,8 @@ class CollectorServer:
                     "schema_version": LEDGER_SCHEMA_VERSION,
                     "runtime_version": PACKAGE_VERSION,
                     "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
+                    # The loaded code against the files now on disk: Python never reloads a module.
+                    "runtime_stale": collector_code_stale(),
                     "started_at_ms": self._started_at_ms,
                     "previous_exit": self.previous_exit,
                     "startup_phases": self.startup_phases,

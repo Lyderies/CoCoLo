@@ -13,7 +13,8 @@ import stat
 import threading
 import time
 
-from .collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient, empty_ingestion_snapshot
+from .collector_client import (COLLECTOR_RUNTIME_DIGEST, CollectorClient, collector_code_diagnosis,
+                               empty_ingestion_snapshot)
 from .account_api import ACCOUNT_REASON_CODES, AccountClient, AccountError, integer as account_integer, _ID as _ACCOUNT_ID
 from .account_claim_contracts import CLAIM_DENIAL_CODES
 from .preparation_reasons import PREPARATION_STAGE_REASONS
@@ -352,6 +353,17 @@ def _hold_words(name, kind):
     return f"{held} {noun} held" + (f" ({'; '.join(notes)})" if notes else '')
 
 
+_CODE_STALE_NOTE = ('collector_code_stale: this collector started before its code changed and still runs the old '
+                    'code; restart it before relying on a live check')
+_CODE_NOTES = {
+    'stale': _CODE_STALE_NOTE,
+    'conflict': ('collector_build_conflict: this collector runs a different build of the same package version, and '
+                 'its own files have not changed; restarting it will not fix that, so use one install for this state'),
+    'invalid': ('collector_identity_invalid: this collector did not state a valid version, schema or digest, so '
+                'whether its code is current cannot be told'),
+}
+
+
 def _status_collector_fields(health):
     """Closed display metadata only; a health view grants no execution authority."""
     template = empty_ingestion_snapshot(registered=False)
@@ -391,6 +403,9 @@ def _status_collector_fields(health):
             or any(type(v) is not dict or v.keys() != {'state'} or v['state'] not in
                    {'present', 'missing', 'identity_missing'} for v in attestations.values())):
         raise ValueError()
+    stale = health.get('runtime_stale')
+    if stale is not None and type(stale) is not bool:
+        raise ValueError()
     counters = health.get('collector_health', {})
     if (type(counters) is not dict or counters.keys() - {'admission_rejected', 'queue_full', 'collector_error', 'conflict'}
             or any(type(v) is not dict or v.keys() != {'count', 'updated_at_ms'}
@@ -416,6 +431,8 @@ def _status_collector_fields(health):
             'collector_startup_ms': phases,  # S1-U9a: milliseconds per start-up phase, or None
             'collector_schema_version': health['schema_version'],
             'collector_runtime_version': health['runtime_version'], 'collector_runtime_digest': health['runtime_digest'],
+            # Whether the collector's runtime files changed after it started; its code is then old.
+            'collector_code_stale': stale, 'collector_code_note': None if stale is not True else _CODE_STALE_NOTE,
             'started_at_ms': health['started_at_ms'], 'collector_health': counters,
             'ingestion': ingestion, 'provider_attestations': attestations}
 
@@ -499,6 +516,14 @@ def status_client(state_root, project_root):
         reason = ('status_collector_transport_unavailable' if isinstance(error, CollectorTransportError)
                   else 'status_collector_unavailable')
         report.update(reason_code=reason, error='Collector status is unavailable.')
+        diagnosis = collector_code_diagnosis(error)
+        if diagnosis is not None:
+            # health() refused this collector before it could say anything about its code (a fresh client
+            # hashes the new files). Each cause is named for what it is; only `stale` says to restart.
+            report.update(collector_code_stale=True if diagnosis == 'stale' else None if diagnosis == 'invalid' else False,
+                          collector_code_note=_CODE_NOTES[diagnosis])
+            if getattr(error, 'loaded_digest', None) is not None:
+                report['collector_runtime_digest'] = error.loaded_digest  # the code it loaded
         if error.code == 'project_unregistered':
             report['ingestion'] = empty_ingestion_snapshot(registered=False)
     except OSError:
@@ -836,7 +861,8 @@ class RuntimeObservationError(RuntimeError):
 
 class RuntimeBillingProbeError(RuntimeError):
     def __init__(self, reason, *, request_id=None):
-        allowed = ACCOUNT_REASON_CODES | BILLING_PROBE_REASONS | PROBE_COMPLETION_REASONS | ADMISSION_REASON_CODES
+        allowed = (ACCOUNT_REASON_CODES | BILLING_PROBE_REASONS | PROBE_COMPLETION_REASONS | ADMISSION_REASON_CODES
+                   | {'collector_code_stale'})
         self.reason_code = reason if type(reason) is str and reason in allowed else 'probe_unavailable'
         self.request_id = request_id if matches(request_id, _ACCOUNT_ID) else None
         super().__init__(self.reason_code)
@@ -851,6 +877,20 @@ def billing_probe_client(state_root, project_root, *, request_id=None):
         raise RuntimeBillingProbeError('provider_api_key_present', request_id=identity)
     try:
         state = CollectorPaths(state_root)
+        try:
+            stale = CollectorClient(state.socket, timeout=1).health(project_root).get('runtime_stale')
+        except CollectorError as error:
+            if collector_code_diagnosis(error) == 'stale':
+                # health() refuses a collector whose loaded digest or version differs from this fresh client's
+                # files before it can say `runtime_stale`: that is the collector running old code, and a restart
+                # fixes it. A malformed identity or another build is not that: the account request reports it.
+                raise RuntimeBillingProbeError('collector_code_stale', request_id=identity) from None
+            stale = None  # an unreadable collector is the account request's to report
+        except (OSError, ValueError, AttributeError):
+            stale = None  # an unreadable collector is the account request's to report
+        if stale is True:
+            # The collector's loaded code is older than its files: a live check would run old code.
+            raise RuntimeBillingProbeError('collector_code_stale', request_id=identity)
         project_id, endpoint = _account_target(state, project_root, await_start=True)
         enroll_clients(state, project_root, None, account=endpoint)
         result = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=60).billing_probe(

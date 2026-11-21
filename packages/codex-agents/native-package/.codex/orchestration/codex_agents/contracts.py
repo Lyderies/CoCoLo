@@ -742,6 +742,12 @@ def validate_assignment(
     return data
 
 
+def _is_review_role(role: Any) -> bool:
+    """A role whose result is a review (a security reviewer or a verification worker)."""
+
+    return isinstance(role, str) and role.endswith(("_security_reviewer", "_verification_worker"))
+
+
 def _legacy_result_axes(status: str) -> tuple[str, str, str]:
     """Project a legacy status without pretending a negative review failed to run."""
 
@@ -906,6 +912,14 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
         )
     if not isinstance(data["status"], str) or data["status"] not in RESULT_STATUSES:
         raise ResultContractError("invalid_status", "result status is unsupported")
+    if (_is_review_role(assignment.get("role"))
+            and data.get("execution_state", _legacy_result_axes(data["status"])[0]) == "completed"
+            and data.get("semantic_verdict") is None):
+        # A review that completed states its verdict; a missing or null one is never filled in, whether the
+        # legacy status is "completed" (read as "pass") or "blocked" (read as "blocked").
+        raise ResultContractError(
+            "missing_required_fields", "result missing required fields: semantic_verdict"
+        )
     axes = result_axes(
         data,
         attempt=assignment.get("attempt", 1),
