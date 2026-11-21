@@ -235,7 +235,7 @@ class BridgeTestCase(unittest.TestCase):
     def task(self) -> dict:
         return {
             "id": "task-1", "objective": "Read one fixture", "family": "research",
-            "complexity": "medium", "risk": "low", "meaningful": True,
+            "complexity": "medium", "risk": "high", "meaningful": True,
             **routing_fields(acceptance_strength="independent_judgment"),
             "deterministic_validation": False, "independent_parts": 1,
             "parallel_safe": False, "failed_attempts": 0, "failure_events": [],

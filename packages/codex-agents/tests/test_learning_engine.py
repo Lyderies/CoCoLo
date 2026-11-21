@@ -2245,7 +2245,7 @@ class InstalledEvidenceTests(unittest.TestCase):
                 "objective": "Research one bounded question",
                 "family": "research",
                 "complexity": "medium",
-                "risk": "low",
+                "risk": "high",
                 **routing_fields(acceptance_strength="independent_judgment"),
                 "meaningful": True,
                 "deterministic_validation": False,

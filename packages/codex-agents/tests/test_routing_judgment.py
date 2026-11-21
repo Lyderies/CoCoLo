@@ -100,9 +100,11 @@ class JudgmentRoutingTests(unittest.TestCase):
                     blocked = deepcopy(self.policy)
                     blocked["provider_routing"]["providers"]["claude"] = admission
                     blocked["provider_config_digest"] = content_digest(blocked["provider_routing"])
-                    for check in (task, verify):
-                        with self.assertRaisesRegex(ContractError, "verifier"):
-                            self.route(check, blocked)
+                    # Same-provider fallback (owner decision 17), recorded as not independent.
+                    fallback = self.route(task, blocked)
+                    self.assertEqual("codex", fallback["verifier"]["provider"])
+                    self.assertIs(False, fallback["verifier"]["independent"])
+                    self.assertEqual("codex", self.route(verify, blocked)["provider"])
 
     def test_high_security_verifier_stays_opus(self):
         for risk in ("high", "critical"):
