@@ -5,6 +5,7 @@ without running a child.
 """
 import inspect
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -290,6 +291,74 @@ class ReviewCommandTests(ReviewRunnerTests):
             self.assertIsNone(default.state_root)  # the default is accepted and then the CLI's own
             with self.assertRaises(command.OwnRootRefused):
                 command._require_own_roots(argparse_namespace('learning-review', other))
+
+
+class ReviewRunnerDefaultStateTests(unittest.TestCase):
+    def test_default_bootstrap_does_not_repair_existing_state_or_create_overlapping_state(self):
+        from codex_agents import host_paths
+        from codex_agents.collector_paths import default_state_root
+
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary).resolve() / 'home'
+            home.mkdir()
+            project = home / 'project'
+            (project / 'reviews' / 'x').mkdir(parents=True)
+            (home / 'reviews' / 'x').mkdir(parents=True)
+            spec = {'id': 'fresh', 'summary': 'fresh install review', 'packet': 'reviews/x',
+                    'context': [], 'objective': 'review it', 'verify_objective': 'check it',
+                    'expected_output': 'findings', 'evidence': [{'id': 'a', 'description': 'point a'}]}
+            environment = {key: value for key, value in os.environ.items() if key != 'XDG_STATE_HOME'}
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(host_paths, 'account_home', return_value=home), \
+                    mock.patch.object(host_paths, 'legacy_state_root', return_value=None):
+                state = default_state_root()
+                cli = FakeCli()
+                with self.assertRaises(review_runner.ReviewError) as stopped:
+                    review_runner.run('worker', spec, home / 'work', home, cli=cli)
+                self.assertEqual('review_state_unavailable', stopped.exception.reason_code)
+                self.assertFalse(state.exists())
+                state.mkdir(parents=True, mode=0o700)
+                for key_mode in (None, 0o644):
+                    with self.subTest(key_mode=key_mode):
+                        key = state / 'digest.key'
+                        if key_mode is not None:
+                            key.write_bytes(b'x' * 32)
+                            key.chmod(key_mode)
+                        with self.assertRaises(review_runner.ReviewError) as stopped:
+                            review_runner.run('worker', spec, home / 'work', project, cli=cli)
+                        self.assertEqual('review_state_unavailable', stopped.exception.reason_code)
+                        self.assertEqual([key] if key_mode else [], list(state.iterdir()))
+                self.assertEqual([], cli.calls)
+
+    def test_fresh_default_state_outside_project_is_created_and_review_completes(self):
+        from codex_agents import host_paths
+        from codex_agents.collector_paths import CollectorPaths, default_state_root
+
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary).resolve() / 'home'
+            home.mkdir()
+            project = home / 'project'
+            (project / 'reviews' / 'x').mkdir(parents=True)
+            spec = {'id': 'fresh', 'summary': 'fresh install review', 'packet': 'reviews/x',
+                    'context': ['reviews/x/README.md'], 'objective': 'review it',
+                    'verify_objective': 'check it', 'expected_output': 'findings',
+                    'evidence': [{'id': 'a', 'description': 'point a'}]}
+            environment = {key: value for key, value in os.environ.items() if key != 'XDG_STATE_HOME'}
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(host_paths, 'account_home', return_value=home), \
+                    mock.patch.object(host_paths, 'legacy_state_root', return_value=None):
+                state = default_state_root()
+                self.assertEqual(home / '.local' / 'state' / 'codex-agents', state)
+                self.assertNotIn(project, state.parents)
+                self.assertFalse(state.exists())
+                cli = FakeCli()
+                for step in ('worker', 'verify', 'finish'):
+                    review_runner.run(step, spec, home / 'work', project, cli=cli)
+                self.assertEqual(0o700, state.stat().st_mode & 0o777)
+                self.assertEqual(32, len(CollectorPaths().digest_key()))
+                self.assertEqual('learning-close-orchestration', cli.calls[-1])
+                for name, arguments in cli.arguments:
+                    self.assertEqual(str(state), arguments[arguments.index('--state-root') + 1], name)
 
 
 def argparse_namespace(command, state_root):

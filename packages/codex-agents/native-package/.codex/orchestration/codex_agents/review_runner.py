@@ -16,7 +16,7 @@ import re
 import subprocess
 import sys
 
-from .collector_paths import CollectorPaths, StateError
+from .collector_paths import CollectorPaths, StateError, default_state_root
 
 _DIGEST = re.compile(r'[0-9a-f]{64}')
 _SPEC_KEYS = {'id', 'summary', 'packet', 'context', 'objective', 'verify_objective', 'expected_output', 'evidence'}
@@ -250,8 +250,20 @@ def _run(step, spec, work_dir, project_root, *, cli, status, state_root):
             return True  # a folder that cannot be inspected is not shown to be apart
 
     try:
-        state = CollectorPaths(None if state_root is None else Path(state_root))
         places = (work, (project_root / spec['packet']).resolve(), project_root)
+        if state_root is None:
+            candidate = default_state_root()
+            if not os.path.lexists(candidate):
+                # Check the nearest existing ancestor by identity before creating state, including
+                # on case-insensitive volumes. A missing folder cannot contain an existing place.
+                ancestor = next(parent for parent in candidate.parents if parent.exists())
+                if any(inside(ancestor, place) for place in places):
+                    raise StateError('the default state overlaps the work folder, packet or project')
+                # Bootstrap only a fresh default with the host's normal private-state checks.
+                # Existing state (including a missing or unsafe key) must still fail closed.
+                from .learning_store import LearningState
+                LearningState()
+        state = CollectorPaths(None if state_root is None else Path(state_root))
         if any(inside(state.root, place) or inside(place, state.root) for place in places):
             raise StateError('the state, work folder, packet and project overlap')
         secret = state.digest_key()

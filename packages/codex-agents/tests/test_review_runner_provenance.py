@@ -231,14 +231,15 @@ class ReviewRunnerProvenanceTests(unittest.TestCase):
         self.assertEqual(('review_state_unavailable', []), (stopped.exception.reason_code, cli.calls))
 
     def test_f_a_state_folder_inside_the_work_folder_the_packet_or_the_project_is_refused(self):
-        """Requirement (f). Regression: ddefa327 accepts a state folder inside the packet's project or beside
-        it, and only compared the work folder and packet by exact path."""
+        """Requirement (f). Regression: ddefa327 accepts these overlaps; 0bfe28b9 compared
+        only the work folder and packet by exact path."""
         for inside in (self.work / 'state', self.root / 'reviews' / 'x' / 'state', self.root / 'state'):
             with self.subTest(inside=str(inside.relative_to(inside.parents[2]))):
                 self.stopped_before_any_child(self.keyed_state(inside))
 
     def test_f_a_work_folder_packet_or_project_inside_the_state_folder_is_refused(self):
-        """Requirement (f), the reverse containment. Regression: ddefa327 checks one direction only."""
+        """Requirement (f), reverse containment. Regression: 0bfe28b9 checks one direction only;
+        the earlier ddefa327 baseline also accepts these overlaps."""
         state = self.keyed_state(self.state.parent / 'wide-state')
         self.stopped_before_any_child(state, work=state / 'work')
         inner = state / 'project'
