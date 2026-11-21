@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 MAX_BYTES = 2 * 1024 * 1024
-DEFAULT_DENYLIST = Path.home() / ".config" / "codex-claude-agent-orchestration" / "identifier-denylist.txt"
+DEFAULT_DENYLIST_PARTS = (".config", "codex-claude-agent-orchestration", "identifier-denylist.txt")
 
 PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("home-path", re.compile(r"(?<![\w/])/Users/(?!Shared\b)[A-Za-z0-9._-]+")),
@@ -82,7 +82,13 @@ def load_denylist(path: Path | None = None) -> tuple[str, ...]:
 
     if path is None:
         configured = os.environ.get("AO_IDENTIFIER_DENYLIST")
-        path = Path(configured) if configured else DEFAULT_DENYLIST
+        if configured:
+            path = Path(configured)
+        else:
+            try:  # QA's sandbox has no home folder; it is handed AO_IDENTIFIER_DENYLIST instead
+                path = Path.home().joinpath(*DEFAULT_DENYLIST_PARTS)
+            except (RuntimeError, KeyError):
+                raise ScanRefused("the home folder is unknown, so the private denylist cannot be found") from None
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
