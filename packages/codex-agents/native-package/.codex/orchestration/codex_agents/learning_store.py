@@ -2179,6 +2179,10 @@ class LearningLedger:
                 "CREATE INDEX IF NOT EXISTS account_open_requests_finished "
                 "ON account_open_requests(opened_at_ms) WHERE state='committed'"
             )
+            self._connection.execute(  # O0c P0: the purge of opens that never finished
+                "CREATE INDEX IF NOT EXISTS account_open_requests_unfinished "
+                "ON account_open_requests(observation_deadline_at_ms) WHERE state='pending'"
+            )
             self._record_first_owner_key()
             self.state.mark_initialized()
             self._reconcile_managed_files()
@@ -2388,6 +2392,37 @@ class LearningLedger:
                 "ORDER BY r.project_id,r.source_sequence LIMIT ?",
                 (now - LEARNING_RETENTION_MS, LEARNING_MOVED_KEY, batch),
             ).fetchall()
+            if not rows:
+                return 0
+            with self._account_transaction():
+                self._connection.executemany(
+                    "DELETE FROM records WHERE project_id=? AND record_id=?",
+                    [(str(row[0]), str(row[1])) for row in rows])
+            return len(rows)
+
+    def sweep_superseded_attestations(self, *, batch: int = LEARNING_SWEEP_BATCH) -> int:
+        """O0c P9 (owner 2026-11-21): remove up to `batch` billing attestations a later signed one of the same
+        owner supersedes for the same provider and account (admission reads only the latest), keeping the
+        latest per provider and account; returns how many. Only an owner-source attestation that no record
+        links from, and whose later one is owner-signed, is removed (its signature row goes with it).
+        Skipped while a reader or a transaction is active."""
+        with self._held():
+            if self._readers() or self._connection.in_transaction:
+                return 0
+            rows = self._connection.execute(
+                "SELECT r.project_id,r.record_id FROM records r WHERE r.record_type='billing_attestation' "
+                "AND r.source='owner' "
+                "AND NOT EXISTS (SELECT 1 FROM record_links l WHERE l.project_id=r.project_id "
+                "AND l.from_record_id=r.record_id) "
+                "AND EXISTS (SELECT 1 FROM records n JOIN owner_attestations a ON a.project_id=n.project_id "
+                "AND a.subject_record_id=n.record_id WHERE n.project_id=r.project_id "
+                "AND n.record_type='billing_attestation' AND n.source='owner' "
+                "AND json_extract(CAST(n.content AS TEXT),'$.provider')=json_extract(CAST(r.content AS TEXT),'$.provider') "
+                "AND json_extract(CAST(n.content AS TEXT),'$.account_fingerprint')="
+                "json_extract(CAST(r.content AS TEXT),'$.account_fingerprint') "
+                "AND (n.observed_at_ms>r.observed_at_ms OR (n.observed_at_ms=r.observed_at_ms "
+                "AND n.source_sequence>r.source_sequence))) "
+                "ORDER BY r.project_id,r.source_sequence LIMIT ?", (batch,)).fetchall()
             if not rows:
                 return 0
             with self._account_transaction():
@@ -12585,9 +12620,10 @@ class CollectorServer:
             sweeps = [(self.ledger.sweep_worker_results, (LedgerError, OSError, sqlite3.Error)),
                       (self.ledger.sweep_event_retention, loose),
                       (self.ledger.sweep_learning_retention, loose),  # O0c P8: cases and candidates past the window
+                      (self.ledger.sweep_superseded_attestations, loose),  # O0c P9: only the latest attestation stays
                       (self.ledger.sweep_account_retention, loose),
                       (release_holds, loose)]
-            for sweep, errors in sweeps[4:] if holds_only else sweeps:
+            for sweep, errors in sweeps[5:] if holds_only else sweeps:
                 if self._sweeps_stop.is_set():
                     return None
                 with contextlib.suppress(*errors):

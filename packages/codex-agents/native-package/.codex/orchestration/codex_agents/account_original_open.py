@@ -44,7 +44,7 @@ IN_FLIGHT_OPENS = ("SELECT COUNT(*) FROM (SELECT 1 FROM account_open_requests WH
 FINISHED_OPENS = (
     "SELECT q.project_id,q.request_key,q.handle_digest FROM account_open_requests q "
     "WHERE q.state='committed' AND q.opened_at_ms<:opened AND q.observation_deadline_at_ms<:deadline "
-    "AND EXISTS(SELECT 1 FROM account_open_receipts c WHERE c.project_id=q.project_id "
+    "AND ((EXISTS(SELECT 1 FROM account_open_receipts c WHERE c.project_id=q.project_id "
     "AND c.handle_digest=q.handle_digest AND c.request_key=q.request_key AND c.run_id IS NOT NULL) "
     "AND EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=q.project_id AND r.kind='binding' "
     "AND r.identity=q.handle_digest AND r.state='released') "
@@ -54,8 +54,23 @@ FINISHED_OPENS = (
     "AND a.handle_digest=q.handle_digest AND a.released_at_ms IS NULL) "
     "AND NOT EXISTS(SELECT 1 FROM host_run_bindings h WHERE h.project_id=q.project_id "
     "AND h.handle_digest=q.handle_digest AND (h.history_owner<>'project' "
-    "OR (h.binding_state='pending' AND h.expires_at_ms>:now))) "
+    "OR (h.binding_state='pending' AND h.expires_at_ms>:now)))) "
+    # O0c P0 (owner 2026-11-21): a denied open (its receipt names no run) has nothing else to keep.
+    "OR (EXISTS(SELECT 1 FROM account_open_receipts c WHERE c.project_id=q.project_id "
+    "AND c.handle_digest=q.handle_digest AND c.request_key=q.request_key AND c.run_id IS NULL) "
+    "AND NOT EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=q.project_id AND r.identity=q.handle_digest "
+    "AND r.kind IN ('binding','run_slot')) "
+    "AND NOT EXISTS(SELECT 1 FROM host_run_bindings h WHERE h.project_id=q.project_id "
+    "AND h.handle_digest=q.handle_digest))) "
     "LIMIT :limit")
+# O0c P0: an open that never finished (still pending past its own deadline) and has no binding or hold.
+UNFINISHED_OPENS = (
+    "SELECT q.project_id,q.request_key,q.handle_digest FROM account_open_requests q INDEXED BY "
+    "account_open_requests_unfinished WHERE q.state='pending' AND q.observation_deadline_at_ms<:deadline "
+    "AND NOT EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=q.project_id AND r.identity=q.handle_digest "
+    "AND r.kind IN ('binding','run_slot')) "
+    "AND NOT EXISTS(SELECT 1 FROM host_run_bindings h WHERE h.project_id=q.project_id "
+    "AND h.handle_digest=q.handle_digest) LIMIT :limit")
 
 
 @dataclass(frozen=True, repr=False)
@@ -323,14 +338,16 @@ def _purged(ledger, request):
 def purge_finished_opens(ledger, now, limit):
     """OP-2: remove up to `limit` finished opens past their retention, each request with its receipt and binding
     in one transaction (B0 revision 3 item 5). The binding's register row stays released, so a replay answers
-    open_expired. An open that opened no run (denied, or never finished) has no such row to tell its replay
-    apart, so it is kept: it counts against nothing (OP-1). Returns how many went. The caller holds the ledger
-    lock outside any transaction."""
+    open_expired. O0c P0 (owner 2026-11-21): an open that opened no run (denied, or never finished) is removed
+    7 days after its own expiry with its receipt; it leaves no tombstone, so a replay then opens fresh. Returns
+    how many went. The caller holds the ledger lock outside any transaction."""
     from .learning_store import HOST_RUN_TTL_MS, OPEN_REQUEST_RETENTION_MS
     rows = ledger._connection.execute(FINISHED_OPENS, {
         'opened': now - HOST_RUN_TTL_MS - OPEN_REQUEST_RETENTION_MS, 'deadline': now - OPEN_REQUEST_RETENTION_MS,
         'now': now, 'limit': limit}).fetchall()
-    if rows:
+    unfinished = ledger._connection.execute(UNFINISHED_OPENS, {
+        'deadline': now - OPEN_REQUEST_RETENTION_MS, 'limit': limit}).fetchall()
+    if rows or unfinished:
         with ledger._account_transaction():
             for project, key, handle in rows:
                 ledger._connection.execute('DELETE FROM account_open_receipts WHERE project_id=? AND handle_digest=? '
@@ -339,7 +356,12 @@ def purge_finished_opens(ledger, now, limit):
                                            "AND state='committed'", (project, key))
                 ledger._connection.execute("DELETE FROM host_run_bindings WHERE project_id=? AND handle_digest=? "
                                            "AND history_owner='project'", (project, handle))
-    return len(rows)
+            for project, key, handle in unfinished:
+                ledger._connection.execute('DELETE FROM account_open_receipts WHERE project_id=? AND handle_digest=? '
+                                           'AND request_key=?', (project, handle, key))
+                ledger._connection.execute("DELETE FROM account_open_requests WHERE project_id=? AND request_key=? "
+                                           "AND state='pending'", (project, key))
+    return len(rows) + len(unfinished)
 
 
 def current_open_request(ledger, request):

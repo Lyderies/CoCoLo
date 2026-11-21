@@ -175,6 +175,28 @@ class SignatureInputOwnerTests(unittest.TestCase):
         self.assertEqual(2, len(captured.rows))
         self.assertEqual(self.ledger._attestation_rows_locked(self.projects[0], "codex"), captured.rows)
 
+    def test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims(self):
+        """O0c P9 (owner 2026-11-21: delete superseded ones, keep the latest per account and provider): with
+        the row limit 2, attesting three times for the same account refuses the capture; one sweep later
+        only the latest remains and the capture succeeds. Another account's, another provider's and an
+        unsuperseded one are never touched."""
+        for issued_at in (2, 3):
+            attest_provider(self.ledger, self.projects[0], self.key, "codex", "a" * 64, issued_at=issued_at)
+        other_account = attest_provider(self.ledger, self.projects[0], self.key, "codex", "d" * 64, issued_at=2)
+        other_provider = attest_provider(self.ledger, self.projects[0], self.key, "claude", "b" * 64, issued_at=2)
+        limits = SignatureCaptureLimits(3, 65_536)
+        self.assert_capture_error("signature_capture_limit", lambda: self.capture(limits=limits))
+        self.assertEqual(2, self.ledger.sweep_superseded_attestations(batch=100))
+        self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=100))  # once only
+        kept = [r[0] for r in self.ledger._connection.execute(
+            "SELECT record_id FROM records WHERE record_type='billing_attestation' ORDER BY source_sequence")]
+        self.assertEqual(3, len(kept))
+        self.assertNotIn(self.record["record_id"], kept)
+        self.assertIn(other_account["record_id"], kept)
+        self.assertIn(other_provider["record_id"], kept)
+        captured = self.capture(limits=limits)
+        self.assertEqual(2, len(captured.rows))  # the latest codex ones of the two accounts (claude's is other)
+
     def test_other_provider_history_is_charged_before_filtering(self):
         attest_provider(self.ledger, self.projects[0], self.key, "claude", "b" * 64, issued_at=2)
         self.assert_capture_error("signature_capture_limit", lambda: self.capture(

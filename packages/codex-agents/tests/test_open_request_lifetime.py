@@ -326,6 +326,33 @@ class OpenLifetimeJobTests(OriginalAccountOpenJobTests):
         self.ledger.sweep_account_retention(now_ms=FAR, batch=1)
         self.assertEqual(0, sum(counts(self.ledger, handle)[0] for handle in (first, second)))
 
+    def test_O0c_P0_denied_and_never_finished_opens_are_purged_7_days_after_their_expiry_and_a_replay_opens_fresh(self):
+        """Owner 2026-11-21: an open that opened no run (denied, or never finished) is purged 7 days after its
+        own expiry; its replay then opens fresh. Past every limit: with one open in flight allowed, a pile of
+        denied and unfinished ones all go, and the one request id that is replayed opens again."""
+        from codex_agents.learning_store import OPEN_REQUEST_RETENTION_MS
+        captured, _ = self.reference.preflight(limits=small_limits(1))  # never finished: stays pending
+        project = self.reference.base.scope.project_id
+        finished_requests(self.ledger, project, 5, opened_at_ms=1)  # committed ...
+        with self.ledger._lock, self.ledger._connection:
+            for key, handle in self.ledger._connection.execute(
+                    "SELECT request_key,handle_digest FROM account_open_requests WHERE state='committed'").fetchall():
+                self.ledger._connection.execute(  # ... with a receipt that opened no run: denied
+                    'INSERT INTO account_open_receipts VALUES(?,?,NULL,?,?,?,x\'7b7d\',?)',
+                    (project, handle, key, 's', 'p', 'c'))
+        due = captured.observation_deadline_at_ms + OPEN_REQUEST_RETENTION_MS
+        total = lambda: self.ledger._connection.execute('SELECT COUNT(*) FROM account_open_requests').fetchone()[0]
+        self.assertEqual(6, total())
+        self.ledger.sweep_account_retention(now_ms=due, batch=100)
+        self.assertEqual(1, total())  # the denied ones were due long before; the unfinished one is not yet
+        self.ledger.sweep_account_retention(now_ms=due + 1, batch=100)
+        self.assertEqual(0, total())
+        self.assertEqual(0, self.ledger._connection.execute('SELECT COUNT(*) FROM account_open_receipts').fetchone()[0])
+        with mock.patch.object(self.ledger, '_clock_ms', return_value=due + 2):
+            again, _ = self.reference.preflight(limits=small_limits(1))  # the same request id opens fresh
+        self.assertEqual(captured.request_key, again.request_key)
+        self.assertEqual(1, total())
+
     def test_OP_2_the_purge_reads_only_requests_past_retention_as_young_ones_pile_up(self):
         handle, opened = self.committed()
         self.finish(handle)
