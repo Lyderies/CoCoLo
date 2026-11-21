@@ -2599,7 +2599,7 @@ def _is_expected_review_claim(claim: str) -> bool:
 
     sentences = [
         " ".join(part.lower().split()).rstrip(" .!")
-        for part in re.split(r"(?<=[.!?])\s+|\n+", claim.strip())
+        for part in re.split(r"(?<=[.!?])\s+", " ".join(claim.split()))
     ]
     sentences = [sentence for sentence in sentences if sentence]
     return bool(sentences) and all(s in _EXPECTED_REVIEW_STATEMENTS for s in sentences)

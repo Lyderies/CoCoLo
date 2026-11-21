@@ -86,6 +86,17 @@ class ReviewQaTests(unittest.TestCase):
         qa, _ = build_operational_qa_records(**qa_inputs(review=True, claims=("Tests were not run.",)))
         self.assertTrue(qa["accepted"])
 
+    def test_wrapped_and_multiline_claims_are_judged_by_sentence(self) -> None:
+        for claim, accepted in (
+            ("Tests were not\nrun.", True),
+            ("Tests were\n  not run: this review\nis read-only.", True),
+            ("Tests were not run.\nNo tests were run.", True),
+            ("Tests were not run\nand the digest is unverified.", False),
+            ("Tests were not run.\nThe digest is unverified.", False),
+        ):
+            qa, _ = build_operational_qa_records(**qa_inputs(review=True, claims=(claim,)))
+            self.assertEqual(qa["accepted"], accepted, claim)
+
     def test_non_review_same_agreement_is_a_strict_disagreement(self) -> None:
         qa, record = build_operational_qa_records(**qa_inputs(review=False))
         self.assertTrue(qa["verifier_disagreement"])
