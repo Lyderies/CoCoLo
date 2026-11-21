@@ -1603,6 +1603,7 @@ def _route_task(
     # The task-shape route stays the Codex baseline; provider candidates only
     # reorder providers, and the first eligible one wins. None eligible denies.
     picked: tuple[str, dict[str, Any], dict[str, Any] | None] | None = None
+    verifier_independent: bool | None = None
     verification_for_provider = task.get("verification_for_provider")
     if verification_for_provider is not None:
         # A verification task for known work follows the same rule as the worker
@@ -1616,11 +1617,11 @@ def _route_task(
             risk=task["risk"],
             independent=(
                 policy.get("escalation", {}).get("scope") == "risk_banded_judgment"
-                and "provider_routing" in policy
                 and task["risk"] in {"low", "medium"}
                 and task.get("verification_for_family") in {"coding", "research", "planning"}
             ),
         )
+        verifier_independent = rule.get("independent")
         rule_agent = None
         if rule["provider"] == "claude":
             rule_agent = {
@@ -1742,7 +1743,6 @@ def _route_task(
             risk=task["risk"],
             independent=(
                 policy.get("escalation", {}).get("scope") == "risk_banded_judgment"
-                and "provider_routing" in policy
                 and task["risk"] in {"low", "medium"}
                 and routed_family in {"coding", "research", "planning"}
             ),
@@ -1819,6 +1819,8 @@ def _route_task(
     if fallback is not None:
         fallback["verifier_substituted"] = verification_required
         result["fallback"] = fallback
+    if verifier_independent is False:
+        result["independent"] = False
     mapping_digest = policy.get("project_agent_mapping_digest")
     if mapping_digest is not None:
         result["project_agent_mapping_digest"] = mapping_digest

@@ -1087,6 +1087,12 @@ class ProviderRoutingTests(unittest.TestCase):
 
     def test_legacy_fallback_stays_on_codex_and_obeys_configuration(self) -> None:
         policy = self.provider_policy()
+        # The guard: a route that is not Codex (high risk research stays on Claude) is refused.
+        with self.assertRaisesRegex(ContractError, "only to Codex routes"):
+            _route_task_legacy_fallback(
+                self.exploratory(family="research", risk="high"), policy,
+                primary_provider="claude",
+            )
         selected = _route_task_legacy_fallback(
             self.exploratory(), policy, primary_provider="claude")
         self.assertEqual(("codex", "gpt-5.6-sol"), (selected["provider"], selected["model"]))

@@ -254,6 +254,33 @@ class JudgmentRoutingTests(unittest.TestCase):
             self.route(judgment(failed_attempts=1, failure_events=[
                 {**SEMANTIC, "evidence_refs": ["host:unconfirmed"]}]), legacy)
 
+    def test_unadjudicated_failure_is_rejected_by_default_validation(self):
+        # M1: only a caller that opts in (policy v6 routing) may carry an unadjudicated claim.
+        task = judgment(failed_attempts=1, failure_events=[
+            {**SEMANTIC, "evidence_refs": ["host:unconfirmed"]}])
+        with self.assertRaisesRegex(ContractError, "verification record digests"):
+            validate_task(task)
+        validate_task(task, allow_unadjudicated_failures=True)
+
+    def test_same_provider_fallback_is_marked_on_a_default_codex_only_install(self):
+        # M2: the shipped policy without provider_routing (default install) still records it.
+        for risk in ("low", "medium"):
+            with self.subTest(risk=risk):
+                worker = route_task(judgment(risk=risk), self.shipped, primary_provider="codex")
+                self.assertEqual("codex", worker["verifier"]["provider"])
+                self.assertIs(False, worker["verifier"]["independent"])
+
+    def test_verification_route_records_the_same_provider_fallback(self):
+        # M3: the route of the verifier that is actually dispatched carries the marker.
+        verify = base_task(family="verification", operation="review", risk="low",
+                           verification_for_family="coding", verification_for_provider="codex",
+                           verification_for_outcome="a" * 64)
+        blocked = deepcopy(self.policy)
+        blocked["provider_routing"]["providers"]["claude"] = {"enabled": False}
+        blocked["provider_config_digest"] = content_digest(blocked["provider_routing"])
+        self.assertIs(False, self.route(verify, blocked)["independent"])
+        self.assertNotIn("independent", self.route(verify))
+
     def test_older_confirmed_failure_does_not_confirm_the_latest_attempt(self):
         task = with_failures(judgment(), 2)
         task["failure_events"][1] = {"attempt": 2, "reason": "transient",

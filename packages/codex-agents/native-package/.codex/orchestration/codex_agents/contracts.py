@@ -198,7 +198,7 @@ def validate_parent_grant(data: Any) -> dict[str, Any]:
     return _validate_permissions(data, "parent_grant")
 
 
-def validate_task(data: Any, *, allow_unadjudicated_failures: bool = True) -> dict[str, Any]:
+def validate_task(data: Any, *, allow_unadjudicated_failures: bool = False) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ContractError("task must be an object", field="task")
     required = {
