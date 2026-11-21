@@ -15,6 +15,7 @@ import fcntl
 import json
 import os
 import socket
+import stat
 import threading
 import time
 from unittest import mock
@@ -524,3 +525,46 @@ class RetirementReplacements(Helpers, CoreCase):
         after = {p.name: p.read_bytes() for p in self.records.iterdir() if p.name not in ("audit.jsonl", "tokens.json")}
         self.assertEqual(before, after)  # commands.jsonl included: a refusal is not a change
         self.assertEqual(walled, [r["method"] for r in self.refusals() if r["outcome"] == "owner_terminal_only"])
+
+
+# --- API-18, API-10: the token store and directory durability --------------------------------------------------
+
+class TokenStoreAndDurability(Helpers, CoreCase):
+    def test_an_existing_empty_token_store_is_refused_not_taken_as_no_tokens(self):  # API-18
+        path = self.records / "tokens.json"
+        for content in ("", "  \n"):
+            with self.subTest(repr(content)):
+                path.write_text(content)
+                os.chmod(path, 0o600)
+                with self.assertRaises(self.mod.ApiError) as raised:
+                    self.mod._mint_token(str(self.records), "read")
+                self.assertEqual("unavailable", raised.exception.code)
+                self.assertEqual(content, path.read_text())  # left as it was
+
+    def test_the_token_store_size_is_checked_before_it_is_replaced(self):  # API-18
+        path = self.records / "tokens.json"
+        with mock.patch.object(self.mod, "TOKENS_FILE_MAX_BYTES", 1200):
+            minted, refused = [], None
+            for _ in range(30):
+                try:
+                    minted.append(self.mod._mint_token(str(self.records), "read", label="x" * 40))
+                except self.mod.ApiError as error:
+                    refused = error.code
+                    break
+            self.assertEqual("unavailable", refused)
+            self.assertLessEqual(path.stat().st_size, 1200)
+            self.assertTrue(self.mod.revoke_token(str(self.records), minted[0]))  # the store still works
+
+    def test_a_failed_directory_fsync_is_reported_not_swallowed(self):  # API-10
+        real = os.fsync
+
+        def fsync(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError(5, "directory fsync failed")
+            return real(fd)
+        with mock.patch.object(self.mod.os, "fsync", fsync):
+            with self.assertRaises(OSError):
+                self.mod._append_jsonl(self.dir / "new.jsonl", {"a": 1})
+            with self.assertRaises(self.mod.ApiError):
+                self.mod._mint_token(str(self.records), "read")
+        self.assertEqual([], read_jsonl(self.dir / "new.jsonl"))  # nothing was written into an entry not durable
