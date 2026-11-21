@@ -25,6 +25,7 @@ from unittest import mock
 import tests.support  # noqa: F401
 from tests import test_account_claim_jobs as claim_tests
 from tests import test_bridge as bridge_fixtures
+from tests.learning_support import trusted_tools
 from tests.test_account_restart import IDLE, NOW, lane, lanes
 
 from codex_agents import account_billing_admission, account_host, account_restart, bridge, billing_probe_worker
@@ -692,7 +693,11 @@ class ObservationLaneRestartTests(unittest.TestCase):
 
     def test_M4_a_normal_observation_leaves_no_child_unproven(self):
         request = self.obs.request()
-        self.obs.take(self.obs.begin(request), request)
+        # The fake provider clients, never whatever client the machine running the test has installed
+        # (a Linux runner has none: the probe then answered observation_unavailable).
+        with trusted_tools(self.obs.backend.tools):
+            reply = self.obs.take(self.obs.begin(request), request)
+        self.assertEqual('codex', reply['provider'], reply)
         self.assertEqual([], self.unended())
 
     def test_M4_an_observation_in_flight_is_not_proven_gone(self):
