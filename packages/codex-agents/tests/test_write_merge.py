@@ -46,6 +46,7 @@ from __future__ import annotations
 # ruff: noqa: I001 -- tests.support bootstraps the native package import path.
 
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -149,6 +150,19 @@ class Workspace(unittest.TestCase):
     """A throwaway folder: the owner's repository, COCOLO's private store and merge state."""
 
     def setUp(self) -> None:
+        # The merge flushes to the disk with F_FULLFSYNC on macOS, which takes tens of milliseconds a call and
+        # is what made the kill-at-every-call tests last minutes. A process killed at a call leaves what it wrote
+        # in the file system cache either way, so no test here depends on the flush: only the flush is skipped,
+        # the call is still made and counted as before.
+        real_fcntl = fcntl.fcntl
+        flush = getattr(fcntl, "F_FULLFSYNC", None)
+
+        def fcntl_without_flush(descriptor, command, *arguments):
+            return 0 if flush is not None and command == flush else real_fcntl(descriptor, command, *arguments)
+
+        patcher = mock.patch.object(fcntl, "fcntl", fcntl_without_flush)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.temporary = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
         self.addCleanup(self.temporary.cleanup)
         self.base_folder = Path(self.temporary.name)
