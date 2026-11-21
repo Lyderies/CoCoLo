@@ -180,7 +180,9 @@ class ProbeFailureCauseTests(unittest.TestCase):
         self.assertEqual('probe_cancelled', self.cause())  # not probe_closing, not probe_admit_failed
 
     def test_a_discarding_job_that_ends_unknown_through_cleanup_faults_is_named_by_them(self):
-        # _settle_failed_step's discarding branch only follows repeated cleanup faults, and each names itself.
+        """GUARD (passes on bf78c373 too): _settle_failed_step's discarding branch is only reached after repeated
+        cleanup faults, each of which names itself, so the job ending unknown is never an unnamed one. Reached
+        through a real cancel and real cleanup failures, with no state set by hand."""
         ticket = self.begin()
         job = self.billing._jobs[ticket]
         self.until(lambda: job.preparation is not None)
