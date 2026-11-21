@@ -206,6 +206,7 @@
  "codex:tests.test_result_read_api": "integration",
  "codex:tests.test_review_runner": "unit",
  "codex:tests.test_routing": "integration",
+ "codex:tests.test_routing_judgment": "unit",
  "codex:tests.test_routing_risk": "unit",
  "codex:tests.test_run_driver_retries": "unit",
  "codex:tests.test_run_holds": "integration",

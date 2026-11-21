@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "status": "accepted",
   "validated_client": "codex-cli 0.164.0",
   "evaluation": {
@@ -325,14 +325,299 @@
     "coding": {
       "bounded": {
         "low": [
-          {"provider": "codex", "model": "gpt-6-sol", "effort": "medium"},
-          {"provider": "claude", "model": "claude-sonnet-5-5", "effort": "medium"}
+          {
+            "provider": "codex",
+            "model": "gpt-6-sol",
+            "effort": "medium"
+          },
+          {
+            "provider": "claude",
+            "model": "claude-sonnet-5-5",
+            "effort": "medium"
+          }
         ],
         "medium": [
-          {"provider": "codex", "model": "gpt-6-sol", "effort": "medium"},
-          {"provider": "claude", "model": "claude-sonnet-5-5", "effort": "medium"}
+          {
+            "provider": "codex",
+            "model": "gpt-6-sol",
+            "effort": "medium"
+          },
+          {
+            "provider": "claude",
+            "model": "claude-sonnet-5-5",
+            "effort": "medium"
+          }
+        ]
+      },
+      "exploratory": {
+        "low": [
+          {
+            "provider": "codex",
+            "model": "gpt-6.1-sol",
+            "effort": "medium"
+          },
+          {
+            "provider": "claude",
+            "model": "claude-sonnet-5-5",
+            "effort": "medium"
+          }
+        ],
+        "medium": [
+          {
+            "provider": "codex",
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          {
+            "provider": "claude",
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          }
+        ]
+      },
+      "judgment": {
+        "low": [
+          {
+            "provider": "codex",
+            "model": "gpt-6.1-sol",
+            "effort": "medium"
+          },
+          {
+            "provider": "claude",
+            "model": "claude-sonnet-5-5",
+            "effort": "medium"
+          }
+        ],
+        "medium": [
+          {
+            "provider": "codex",
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          {
+            "provider": "claude",
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          }
         ]
       }
+    },
+    "research": {
+      "exploratory": {
+        "low": [
+          {
+            "provider": "codex",
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          {
+            "provider": "claude",
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          }
+        ],
+        "medium": [
+          {
+            "provider": "codex",
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          {
+            "provider": "claude",
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          }
+        ]
+      },
+      "judgment": {
+        "low": [
+          {
+            "provider": "codex",
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          {
+            "provider": "claude",
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          }
+        ],
+        "medium": [
+          {
+            "provider": "codex",
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          {
+            "provider": "claude",
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          }
+        ]
+      }
+    },
+    "planning": {
+      "synthesis": {
+        "low": [
+          {
+            "provider": "codex",
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          {
+            "provider": "claude",
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          }
+        ],
+        "medium": [
+          {
+            "provider": "codex",
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          {
+            "provider": "claude",
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          }
+        ]
+      }
+    }
+  },
+  "escalation": {
+    "scope": "risk_banded_judgment",
+    "failure_reasons": [
+      "semantic",
+      "reasoning"
+    ],
+    "ladders": {
+      "coding": [
+        {
+          "provider": "claude",
+          "model": "claude-haiku-5-5",
+          "effort": "high"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6-sol",
+          "effort": "medium"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "effort": "medium"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-sonnet-5-5",
+          "effort": "medium"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "effort": "medium"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "effort": "high"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-sonnet-5-5",
+          "effort": "high"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "effort": "high"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "effort": "high"
+        }
+      ],
+      "research": [
+        {
+          "provider": "claude",
+          "model": "claude-haiku-5-5",
+          "effort": "medium"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "effort": "low"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "effort": "medium"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-sonnet-5-5",
+          "effort": "medium"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "effort": "high"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-sonnet-5-5",
+          "effort": "high"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "effort": "high"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "effort": "high"
+        }
+      ],
+      "planning": [
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "effort": "medium"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-sonnet-5-5",
+          "effort": "medium"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "effort": "medium"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "effort": "high"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-sonnet-5-5",
+          "effort": "high"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "effort": "high"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "effort": "high"
+        }
+      ]
     }
   },
   "verification": {

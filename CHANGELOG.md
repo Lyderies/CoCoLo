@@ -4,6 +4,15 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.43 (RT-21 Phase 0): low/medium coding and research judgment/exploration,
+  and planning synthesis, try GPT-6.1 Sol before Sonnet 5.5. Confirmed quality failures
+  advance one admitted ladder rung, then use the strongest admitted route on the second
+  failure; unadjudicated claims stay held. Explicit provider configurations must admit
+  an independent verifier for low/medium coding, research and planning. Routes record
+  review phase, parent lineage, expanded scope and unknown observations/usage separately.
+  Policy v6 preserves v5 selectors for unopted cells, bounded coding choices and every
+  high/critical route; legacy policies still load. No learning promotion is enabled.
+
 - Package 0.8.42 (O0d): low/medium-risk verifiers use Sonnet 5.5 (medium) for Codex work and
   GPT-6.1 Sol (medium) for Claude work, including confirming reviews. Bounded coding at those
   risks tries GPT-6 Sol (medium), then Sonnet 5.5 (medium). High/critical routes keep their

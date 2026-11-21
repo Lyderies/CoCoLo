@@ -198,7 +198,7 @@ def validate_parent_grant(data: Any) -> dict[str, Any]:
     return _validate_permissions(data, "parent_grant")
 
 
-def validate_task(data: Any) -> dict[str, Any]:
+def validate_task(data: Any, *, allow_unadjudicated_failures: bool = True) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ContractError("task must be an object", field="task")
     required = {
@@ -226,6 +226,9 @@ def validate_task(data: Any) -> dict[str, Any]:
         "verification_for_family",
         "verification_for_provider",
         "verification_for_outcome",
+        "review_phase",
+        "parent_review_id",
+        "expanded_scope",
     }
     _required(data, required, "task")
     unknown = sorted(data.keys() - allowed)
@@ -235,6 +238,15 @@ def validate_task(data: Any) -> dict[str, Any]:
     _nonempty_string(data["objective"], "objective", "task.objective")
     if not isinstance(data["family"], str) or data["family"] not in TASK_FAMILIES:
         raise ContractError(f"unsupported family: {data['family']}", field="task.family")
+    if "review_phase" in data and (
+        not isinstance(data["review_phase"], str)
+        or data["review_phase"] not in {"first", "delta", "confirmation"}
+    ):
+        raise ContractError("unsupported review_phase", field="task.review_phase")
+    if "parent_review_id" in data:
+        _nonempty_string(data["parent_review_id"], "parent_review_id", "task.parent_review_id")
+    if "expanded_scope" in data and not isinstance(data["expanded_scope"], bool):
+        raise ContractError("expanded_scope must be boolean", field="task.expanded_scope")
     verification_for_family = data.get("verification_for_family")
     if verification_for_family is not None:
         if data["family"] != "verification":
@@ -404,9 +416,10 @@ def validate_task(data: Any) -> dict[str, Any]:
             )
         seen_events.add(event_key)
         if reason in {"semantic", "reasoning"}:
-            if not all(
-                VERIFIED_FAILURE_REFERENCE.fullmatch(reference)
-                for reference in evidence_refs
+            # A claim may precede adjudication. Only verification digests qualify it
+            # for escalation; retaining a safe host reference does not confirm it.
+            if not allow_unadjudicated_failures and not all(
+                VERIFIED_FAILURE_REFERENCE.fullmatch(reference) for reference in evidence_refs
             ):
                 raise ContractError(
                     "semantic and reasoning failures require verification record digests",

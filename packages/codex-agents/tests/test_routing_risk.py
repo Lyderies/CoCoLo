@@ -232,14 +232,14 @@ class ShippedVerifierBandTests(unittest.TestCase):
                     risk=risk, operation="review", ambiguity="partial",
                     acceptance_strength="independent_judgment", deterministic_validation=False,
                 ), policy, primary_provider="claude")
-                self.assertEqual("claude", worker["provider"])
-                self.assertEqual(("codex", "gpt-6.1-sol", "medium"), short(worker["verifier"]))
+                self.assertEqual("codex", worker["provider"])
+                self.assertEqual(("claude", "claude-sonnet-5-5", "medium"), short(worker["verifier"]))
                 review = route_task(base_task(
                     family="verification", operation="review", risk=risk,
                     verification_for_family="coding", verification_for_provider="claude",
                     verification_for_outcome="a" * 64,
                 ), policy, primary_provider="claude")
-                self.assertEqual(short(worker["verifier"]), short(review))
+                self.assertEqual(("codex", "gpt-6.1-sol", "medium"), short(review))
 
     def test_shipped_bounded_coding_low_medium_candidates_and_fallback(self) -> None:
         expected = [
@@ -282,14 +282,18 @@ class GoldenTests(unittest.TestCase):
         cls.shipped = load_policy(POLICY_PATH)
 
     def test_shipped_policy_carries_only_approved_risk_entries(self) -> None:
-        self.assertNotIn("escalation", self.shipped)
-        self.assertEqual({"coding"}, set(self.shipped["risk_candidates"]))
-        self.assertEqual({"bounded"}, set(self.shipped["risk_candidates"]["coding"]))
-        for bands in (
-            self.shipped["risk_candidates"]["coding"]["bounded"],
-            self.shipped["verification"]["by_risk"],
-            self.shipped["providers"]["claude"]["verifier"]["by_risk"],
-        ):
+        self.assertEqual({"coding", "research", "planning"}, set(self.shipped["risk_candidates"]))
+        expected_keys = {"coding": {"bounded", "exploratory", "judgment"},
+                         "research": {"exploratory", "judgment"}, "planning": {"synthesis"}}
+        for family, keys in expected_keys.items():
+            self.assertEqual(keys, set(self.shipped["risk_candidates"][family]))
+            for bands in self.shipped["risk_candidates"][family].values():
+                self.assertEqual({"low", "medium"}, set(bands))
+        self.assertEqual("risk_banded_judgment", self.shipped["escalation"]["scope"])
+        self.assertEqual(["semantic", "reasoning"], self.shipped["escalation"]["failure_reasons"])
+        self.assertEqual(set(expected_keys), set(self.shipped["escalation"]["ladders"]))
+        for bands in (self.shipped["verification"]["by_risk"],
+                      self.shipped["providers"]["claude"]["verifier"]["by_risk"]):
             self.assertEqual({"low", "medium"}, set(bands))
 
     def test_shipped_policy_routes_identically_over_the_cross_product(self) -> None:

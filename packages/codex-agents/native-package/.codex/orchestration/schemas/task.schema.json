@@ -23,6 +23,9 @@
     "failure_events"
   ],
   "properties": {
+    "review_phase": {"enum": ["first", "delta", "confirmation"]},
+    "parent_review_id": {"type": "string", "minLength": 1},
+    "expanded_scope": {"type": "boolean"},
     "id": {"type": "string", "minLength": 1},
     "objective": {"type": "string", "minLength": 1},
     "family": {
@@ -101,27 +104,7 @@
               "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
             }
           }
-        },
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "reason": {"enum": ["semantic", "reasoning"]}
-              },
-              "required": ["reason"]
-            },
-            "then": {
-              "properties": {
-                "evidence_refs": {
-                  "items": {
-                    "type": "string",
-                    "pattern": "^verification:[0-9a-f]{64}$"
-                  }
-                }
-              }
-            }
-          }
-        ]
+        }
       }
     },
     "owned_paths": {"type": "array", "items": {"type": "string"}},

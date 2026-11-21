@@ -313,9 +313,7 @@ def _validate_schemas(root: Path, errors: list[str]) -> None:
             )
             conditionals = data.get("allOf")
             try:
-                verifier_reference_pattern = event["allOf"][0]["then"][
-                    "properties"
-                ]["evidence_refs"]["items"]["pattern"]
+                verifier_reference_pattern = event["properties"]["evidence_refs"]["items"]["pattern"]
             except (KeyError, TypeError, IndexError):
                 verifier_reference_pattern = None
             attempts = []
@@ -334,7 +332,7 @@ def _validate_schemas(root: Path, errors: list[str]) -> None:
                 or event.get("properties", {})
                 .get("attempt", {})
                 .get("maximum") != 2
-                or verifier_reference_pattern != "^verification:[0-9a-f]{64}$"
+                or verifier_reference_pattern != "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
             ):
                 errors.append(
                     f"{path.relative_to(root)}: failure history schema lacks runtime semantic parity"
