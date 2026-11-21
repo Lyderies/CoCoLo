@@ -1399,6 +1399,10 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "routing.py::_validate_escalation": {
+   "checks": 1,
+   "ends": "policy validation: the number of rungs one escalation ladder may list (MAX_LADDER_RUNGS), checked when a policy file is loaded; nothing accumulates"
+  },
   "run_provenance.py::checked_run_provenance": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
