@@ -483,7 +483,7 @@ class ClaudeBridgeTests(BridgeTestCase):
         cases = {
             "init_api_key_source": init_frame(apiKeySource="ANTHROPIC_API_KEY"),
             "init_model_mismatch": init_frame(model="claude-sonnet-5-5"),
-            "init_plugin_loaded": init_frame(plugins=[{"name": "cc-plugin-easel"}]),
+            "init_plugin_not_allowed": init_frame(plugins=[{"name": "cc-plugin-easel"}]),
             "init_mcp_server_loaded": init_frame(mcp_servers=[{"name": "x"}]),
             "init_tool_not_allowed": init_frame(tools=["Read", "Bash"]),
             "missing_init_frame": result_frame(),
@@ -3531,6 +3531,22 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
             self.assertEqual(
                 "paid_usage_usable", self.open_claude(expected=2)["reason_code"]
             )
+
+    def test_CI_3_a_probe_stopped_by_the_init_check_reports_that_reason(self) -> None:
+        from tests.test_claude_init_plugins import builtin, frame_2_1_323
+        self.admit("claude")
+        with self.stale_evidence():
+            self.frames("claude", [frame_2_1_323(plugins=[builtin("cc-plugin-easel")]), RATE_LIMIT, result_frame("OK")])
+            failed = self.cli("provider-observe", "--provider", "claude", "--billing-probe", expected=2)
+        self.assertEqual("init_plugin_not_allowed", failed["reason_code"])
+
+    def test_CI_4_a_2_1_323_probe_completes_and_the_reply_carries_the_client_version(self) -> None:
+        from tests.test_claude_init_plugins import frame_2_1_323
+        self.admit("claude")
+        self.frames("claude", [frame_2_1_323(), FAVOURABLE, result_frame("OK")])
+        observed = self.cli("provider-observe", "--provider", "claude", "--billing-probe")
+        self.assertEqual("launched", observed["probe"])
+        self.assertEqual("2.1.323", observed["client_version"])
 
     def test_probe_is_admitted_like_a_run(self) -> None:
         # Without an owner attestation nothing is launched.
