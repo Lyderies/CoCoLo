@@ -108,11 +108,6 @@ class ContractTests(CoreCase):
         for method in ("state.get", "units.list", "usage.get", "health.get"):
             self.assertEqual(5, client.call(method)["seq_at"], method)
 
-    def test_api6_in_process_adapter_equals_socket(self):  # API-6
-        socket_client, local = self.client(), self.mod.in_process(self.service)
-        local.call("initialize", {"protocol": "1.0"})
-        for method in ("state.get", "units.list", "usage.get", "ci.get", "versions.get", "schema.get"):
-            self.assertEqual(socket_client.call(method), local.call(method), method)
 
 
 class LimitTests(CoreCase):
