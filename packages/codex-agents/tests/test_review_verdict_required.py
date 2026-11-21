@@ -34,14 +34,18 @@ class ReviewVerdictRequiredTests(unittest.TestCase):
             self.assertIn('semantic_verdict', str(refused.exception))
 
     def test_a_null_verdict_after_the_strict_schema_is_refused_not_passed(self):
+        """The completed cases are GUARDS: bf78c373 already refused them as missing_required_fields (the
+        earlier version of this test accepted any ContractError, which fits the code before that commit). The
+        blocked cases are the ones bf78c373 does not refuse that way (a blocked review with a null verdict
+        reached invalid_status there). A null verdict is refused as missing, never filled in."""
         original = json.loads(test_bridge.RESULT_SCHEMA)
-        normalized = remove_optional_nulls(test_bridge.null_filled(body()), original)
-        # Strengthened (never loosened): the earlier assertions accepted any ContractError, which the old
-        # code also raised for a null verdict (invalid_status); the requirement is that it is refused as missing.
-        for refused_body in (normalized, {**body(), 'semantic_verdict': None}):
-            with self.assertRaises(ResultContractError) as refused:
-                validate_result(refused_body, assignment=self.assignment('codex_agents_security_reviewer'))
-            self.assertEqual('missing_required_fields', refused.exception.reason_code)
+        for status in ('completed', 'blocked'):
+            normalized = remove_optional_nulls(test_bridge.null_filled(body(status=status)), original)
+            for refused_body in (normalized, {**body(status=status), 'semantic_verdict': None}):
+                with self.subTest(status=status, normalized=refused_body is normalized), \
+                        self.assertRaises(ResultContractError) as refused:
+                    validate_result(refused_body, assignment=self.assignment('codex_agents_security_reviewer'))
+                self.assertEqual('missing_required_fields', refused.exception.reason_code)
 
     def test_a_blocked_review_without_a_verdict_is_refused_not_read_as_blocked(self):
         # status "blocked" is projected to a completed run with the verdict "blocked"; the review still has to

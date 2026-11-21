@@ -77,7 +77,9 @@ class ProbeFailureCauseTests(unittest.TestCase):
         self.assertEqual('probe_reply_read_failed', self.cause())
 
     def test_an_unsettled_failed_step_names_its_cause(self):
-        # account_billing_jobs.py _settle_failed_step (was :272)
+        """GUARD (also passes on bf78c373, where this cause was already named): an admitted probe whose launch
+        fails and whose settlement cannot be confirmed names probe_settle_unconfirmed, and the cause the lane
+        finally reports is one of the two settlement causes (never the bare one, never another stage's)."""
         real, calls = self.billing._executions.launch, []
 
         def failing(*args):
@@ -93,11 +95,10 @@ class ProbeFailureCauseTests(unittest.TestCase):
                                                                                     real_note(slot, cause, error))))
         with self.assertRaisesRegex(AccountError, '^probe_unavailable$'):
             self.take(self.begin())
-        # Strengthened (never loosened): the earlier assertion also accepted probe_settle_failed, which the old
-        # code already named from the retry, so it could not tell the new cause from the old behaviour. The new
-        # cause must itself have been named for this failure, whatever a later retry names over it.
+        # Both checks: the history (the new cause was named for this failure) and the earlier one on the final
+        # cause (a later retry may name its own failure over it, but only a settlement one).
         self.assertIn('probe_settle_unconfirmed', causes)
-        self.assertNotEqual('probe_unavailable', self.cause())
+        self.assertIn(self.cause(), {'probe_settle_unconfirmed', 'probe_settle_failed'})
 
     def test_an_observation_reason_off_its_list_names_its_cause(self):
         # account_billing_jobs.py (was :342)
@@ -158,21 +159,35 @@ class ProbeFailureCauseTests(unittest.TestCase):
                 self.take(self.begin())
         self.assertEqual('probe_cancelled', self.cause())
 
-    def test_a_cancel_after_an_earlier_named_failure_keeps_the_earlier_cause(self):
-        with mock.patch.object(self.claims._pool, 'stuck', return_value=True):
-            with self.assertRaisesRegex(AccountError, '^probe_unavailable$'):
-                self.take(self.begin())
-        self.assertEqual('probe_signature_pool_stuck', self.cause())
+    def test_a_cancel_that_follows_a_named_failure_on_a_live_job_keeps_the_earlier_cause(self):
+        # A caller's cancel names the job's failure while its signature work is out; the close that follows
+        # would name another cause when that work returns. The first named cause stays the one shown.
+        real = type(self.billing).finish_signature
+        seen = []
 
-    def test_a_discarding_job_whose_step_fails_again_names_the_unsettled_cause(self):
-        # _settle_failed_step in its discarding branch: the bare probe_unavailable it leaves is named.
+        def finish(billing, handle):
+            ticket = billing._signatures[handle]
+            # the pool reports its signature work as still running, so the handle stays mapped until it returns
+            with mock.patch.object(billing._claims._pool, 'cancel', return_value='running'):
+                billing.cancel(ticket)
+            seen.append(self.billing.health.view()['last_failure']['cause'])
+            billing.request_close()
+            return real(billing, handle)
+        with mock.patch.object(type(self.billing), 'finish_signature', finish):
+            ticket = self.begin()
+            self.until(lambda: seen)
+        self.assertEqual(['probe_cancelled'], seen)
+        self.assertEqual('probe_cancelled', self.cause())  # not probe_closing, not probe_admit_failed
+
+    def test_a_discarding_job_that_ends_unknown_through_cleanup_faults_is_named_by_them(self):
+        # _settle_failed_step's discarding branch only follows repeated cleanup faults, and each names itself.
         ticket = self.begin()
         job = self.billing._jobs[ticket]
-        job.state, job.reason = 'discarding', None
-        job.discard_faults = 2  # the third fault keeps the job as unknown
-        self.billing._settle_failed_step(job, unsure='probe_unavailable')
-        self.assertEqual('unknown', job.state)
-        self.assertEqual('probe_settle_unconfirmed', self.cause())
+        self.until(lambda: job.preparation is not None)
+        with mock.patch.object(self.billing._executions, 'discard', side_effect=RuntimeError('cleanup fault')):
+            self.billing.cancel(ticket)
+            self.until(lambda: job.state == 'unknown')
+        self.assertEqual('probe_cleanup_failed', self.cause())
 
 
 if __name__ == '__main__':

@@ -466,8 +466,8 @@ class AccountBillingJobs:
             # Discarding is resumed on the next step; a persistent error keeps the job (0.3.3, C9d).
             self._discard_fault(job)
             if job.state == 'unknown':
-                if job.reason is None and unsure == 'probe_unavailable':
-                    self._name_failure(job, 'probe_settle_unconfirmed')  # the bare reason says why now
+                # Only repeated cleanup faults get a discarding job here, and each of those names itself
+                # (`probe_cleanup_failed`, which sets noted), so this bare reason is never an unnamed one.
                 job.reason = job.reason or unsure
             return
         try:
