@@ -28,6 +28,17 @@ def canonical(value: dict) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
+def sha(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def failed_with_writes(report: dict, **fields) -> dict:
+    """A failure reply that still carries the real step's own write report (the package protocol since the
+    write-report fix): the step really wrote what it reports, then failed."""
+    carried = {key: report[key] for key in ("writes", "folders_created", "folders_removed") if key in report}
+    return {**carried, "exit_code": 2, **fields}
+
+
 class ClaudeUpgradeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.base = Path(tempfile.mkdtemp(dir=os.path.realpath(tempfile.gettempdir())))
@@ -109,7 +120,7 @@ class ClaudeUpgradeTests(unittest.TestCase):
         def applies_then_fails(script, operation, target, apply, extra):
             report = real_run(script, operation, target, apply, extra)
             if script == installer.CLAUDE_INSTALLER and apply:
-                return {"error": "operation_failed", "exit_code": 2}
+                return failed_with_writes(report, error="operation_failed")
             return report
 
         self.patch("_run", applies_then_fails)
@@ -124,7 +135,7 @@ class ClaudeUpgradeTests(unittest.TestCase):
             report = real_run(script, operation, target, apply, extra)
             if script == installer.CLAUDE_INSTALLER and apply and not failures:
                 failures.append(1)
-                return {"error": "operation_failed", "exit_code": 2}
+                return failed_with_writes(report, error="operation_failed")
             return report
 
         self.patch("_run", applies_then_fails_once)
@@ -145,7 +156,9 @@ class ClaudeUpgradeTests(unittest.TestCase):
         folder = (self.target / sorted(changed)[-1]).parent
         folder.chmod(0o555)
         self.addCleanup(folder.chmod, 0o755)
+        return folder
 
+    @unittest.skipIf(os.geteuid() == 0, "a read-only folder does not stop root, so the package's write would not fail")
     def test_an_update_that_fails_partway_leaves_the_previous_install_and_no_markers(self) -> None:
         before = inventory(self.target)
         self.make_read_only_for_the_last_change()
@@ -170,7 +183,7 @@ class ClaudeUpgradeTests(unittest.TestCase):
                 other.write_text("mine v2\n")
                 notes.write_text("notes v2\n")
                 (self.target / ".claude" / "agents" / "my_agent.md").write_text("a new user agent\n")
-                return {"error": "operation_failed", "exit_code": 2}
+                return failed_with_writes(report, error="operation_failed")
             return report
 
         self.patch("_run", user_edits_then_fails)
@@ -232,7 +245,7 @@ class ClaudeUpgradeTests(unittest.TestCase):
             if script == installer.CLAUDE_INSTALLER and apply:
                 (self.target / ".claude").rename(self.base / "claude-moved")
                 (self.target / ".claude").symlink_to(outside, target_is_directory=True)
-                return {"error": "operation_failed", "exit_code": 2}
+                return failed_with_writes(report, error="operation_failed")
             return report
 
         self.patch("_run", swaps_the_folder_then_fails)
@@ -287,7 +300,7 @@ class ClaudeUpgradeTests(unittest.TestCase):
         def says_pending_in_words(script, operation, target, apply, extra):
             report = real_run(script, operation, target, apply, extra)
             if script == installer.CLAUDE_INSTALLER and apply:
-                return {"error": "rollback_pending", "exit_code": 2}
+                return failed_with_writes(report, error="rollback_pending")
             return report
 
         self.patch("_run", says_pending_in_words)
@@ -336,10 +349,14 @@ class ClaudeUpgradeTests(unittest.TestCase):
                         "run setup again"):
             self.assertIn(advised, claude["note"])
         self.assertIn(claude["note"], steps.rollback_notes(first))
-        # Run again without following the advice: refused before anything is written, with a known reason.
+        # Run again without following the advice: refused before anything is written, for exactly this reason
+        # (the kept files are uncommitted changes under .claude), never for some other known one.
         with self.assertRaises(installer.InstallRefused) as stuck:
             installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
-        self.assertTrue(steps.installer_refusal(str(stuck.exception).lower(), "manual")[1])
+        self.assertEqual("managed paths (.codex, .agents, .claude) have uncommitted changes", str(stuck.exception))
+        message, known = steps.installer_refusal(str(stuck.exception).lower(), "manual")
+        self.assertTrue(known)
+        self.assertTrue(message.startswith("Managed paths (.codex, .agents, .claude) have uncommitted changes"), message)
         # The advised steps: put the package files back from Git and remove the two control files.
         git(self.target, "checkout", "--", ".claude")
         pending.unlink()
@@ -386,21 +403,37 @@ class ClaudeUpgradeTests(unittest.TestCase):
         for name, relative in (("codex", ".codex/from-outside.txt"),):
             self.assertNotIn(relative, installer._owned_paths(self.target, name, {}))
 
-    def test_a_project_folder_replaced_by_a_symlink_after_the_snapshot_is_refused(self) -> None:
+    def test_a_project_folder_replaced_after_the_snapshot_is_refused(self) -> None:
+        """Guard (r4 test finding: the decoy did not match the journal, so content alone refused the undo). The
+        decoy now holds exactly the journal's after-state, so only the project-folder identity check (and, for
+        a symlink, the no-follow open) stops the undo from deleting it."""
         preview = {"changed_paths": [".claude/agents/claude_agents_planner.md"]}
-        snapshot = installer._snapshot(self.target, "claude", preview)
-        moved = self.base / "target-moved"
-        decoy = self.base / "decoy"
-        (decoy / ".claude/agents").mkdir(parents=True)
-        victim = decoy / ".claude/agents/claude_agents_planner.md"
-        victim.write_text("decoy\n")
-        self.target.rename(moved)
-        self.target.symlink_to(decoy, target_is_directory=True)
-        self.addCleanup(lambda: (self.target.unlink(), moved.rename(self.target)))
-        journal = {"entries": {".claude/agents/claude_agents_planner.md": (None, (b"x", 0o644))}, "created": set()}
-        ok, _ = installer._undo(self.target, "claude", snapshot, journal)
-        self.assertFalse(ok)
-        self.assertEqual("decoy\n", victim.read_text())
+        for swap in ("symlink", "folder"):
+            with self.subTest(swap=swap):
+                snapshot = installer._snapshot(self.target, "claude", preview)
+                moved = self.base / f"target-moved-{swap}"
+                decoy = self.base / f"decoy-{swap}"
+                (decoy / ".claude/agents").mkdir(parents=True)
+                victim = decoy / ".claude/agents/claude_agents_planner.md"
+                victim.write_text("decoy\n")
+                self.target.rename(moved)
+                if swap == "symlink":
+                    self.target.symlink_to(decoy, target_is_directory=True)
+                else:
+                    decoy.rename(self.target)
+                    victim = self.target / ".claude/agents/claude_agents_planner.md"
+                journal = {"entries": {".claude/agents/claude_agents_planner.md": (None, sha(b"decoy\n"))},
+                           "created": [], "left": []}
+                try:
+                    ok, _ = installer._undo(self.target, "claude", snapshot, journal)
+                    self.assertFalse(ok)
+                    self.assertEqual("decoy\n", victim.read_text())
+                finally:
+                    if self.target.is_symlink():
+                        self.target.unlink()
+                    else:
+                        self.target.rename(decoy)
+                    moved.rename(self.target)
 
     def test_a_folder_this_run_did_not_create_is_never_removed(self) -> None:
         keep = self.target / ".claude/preexisting"
@@ -409,8 +442,11 @@ class ClaudeUpgradeTests(unittest.TestCase):
         snapshot = installer._snapshot(self.target, "claude", {"changed_paths": [wanted]})
         (self.target / ".claude/preexisting/made/by").mkdir(parents=True)
         (self.target / wanted).write_text("written by the step\n")
-        post = installer._observe(self.target, "claude", snapshot)
-        journal = installer._journal(snapshot, post)
+        made = [{"path": path, "device": os.stat(self.target / path).st_dev, "inode": os.stat(self.target / path).st_ino}
+                for path in (".claude/preexisting/made", ".claude/preexisting/made/by")]
+        reply = {"writes": [{"path": wanted, "before": None, "after": sha(b"written by the step\n")}],
+                 "folders_created": made}
+        journal = installer._journal(self.target, "claude", snapshot, reply)
         ok, left = installer._undo(self.target, "claude", snapshot, journal)
         self.assertTrue(ok and not left, (ok, left))
         self.assertTrue(keep.is_dir())
@@ -418,13 +454,202 @@ class ClaudeUpgradeTests(unittest.TestCase):
 
     @unittest.skipIf(os.geteuid() == 0, "a read-only folder does not stop root, so the write would not fail")
     def test_an_update_that_fails_partway_leaves_no_marker_or_lock_and_can_be_retried(self) -> None:
-        self.make_read_only_for_the_last_change()
+        """Guard (passes on 1d359e3b too: the package undoes its own partial write). A real failure inside the
+        package; afterwards no control file is left, and once the folder is writable again setup really retries
+        and upgrades."""
+        folder = self.make_read_only_for_the_last_change()
         summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
         self.assertFalse(summary["ok"], summary)
         for control in (".claude/claude-agents/install-pending.json", ".claude/claude-agents/install.lock"):
             self.assertFalse((self.target / control).exists(), control)
         self.assertEqual("operation_failed", summary["claude"]["error"])
-        # this test is a guard: the package undoes its own partial write, so it also passes on 3d86ee76
+        folder.chmod(0o755)
+        again = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertTrue(again["ok"] and again["applied"], again)
+
+
+    # --- the package's own write report is the journal (owner fix 1-4) ----------------------------------
+
+    PLANNER = ".claude/agents/claude_agents_planner.md"
+    SKILL = ".claude/skills/claude-agents/SKILL.md"
+
+    def release_file(self, path: str) -> str:
+        return json.loads((PACKAGE / "previous-releases.json").read_text())["releases"][0]["files"][path]
+
+    def during_the_claude_step(self, action, reply=None) -> None:
+        """Run the real package step, then `action` (another writer, while setup is still running), then hand
+        back the real reply, or `reply(real_reply)`."""
+        real_run = installer._run
+
+        def run(script, operation, target, apply, extra):
+            report = real_run(script, operation, target, apply, extra)
+            if script == installer.CLAUDE_INSTALLER and apply:
+                action()
+                return reply(report) if reply else report
+            return report
+
+        self.patch("_run", run)
+
+    def settings_fail(self) -> list:
+        calls = []
+
+        def failing_settings(target, plan):
+            calls.append(target)
+            raise installer.InstallRefused("simulated settings failure")
+
+        self.patch("apply_settings", failing_settings)
+        return calls
+
+    def claude_entry(self, summary: dict) -> dict:
+        (claude,) = [r for r in summary["rollback"] if r["package"] == "claude"]
+        return claude
+
+    def test_a_users_edit_to_a_package_file_while_the_step_runs_is_left_alone_and_named(self) -> None:
+        """Owner fix 1 (r4 HIGH 'observation is not write authority'): an edit made after the package wrote a file,
+        before setup looked, is the user's: a later failure leaves it and names it. Fails on 1d359e3b: the
+        read-back records the edit as the run's own write, and the undo overwrites it with 0.8.40."""
+        planner = self.target / self.PLANNER
+        self.during_the_claude_step(lambda: planner.write_text("the user's edit while the update ran\n"))
+        self.settings_fail()
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(summary["ok"], summary)
+        self.assertEqual("the user's edit while the update ran\n", planner.read_text())
+        claude = self.claude_entry(summary)
+        self.assertFalse(claude["ok"], claude)
+        self.assertIn(self.PLANNER, claude["left_alone"])
+        self.assertEqual(self.release_file(self.SKILL), (self.target / self.SKILL).read_text())
+
+    def test_an_update_that_wrote_nothing_never_undoes_a_change_made_while_it_ran(self) -> None:
+        """Owner fix 1 (r4: 'an already-current update ... creates a false journal entry'): the package reports no
+        write, so nothing of its is undone. Fails on 1d359e3b: the read-back sees the user's edit and undoes it."""
+        done = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertTrue(done["ok"], done)
+        self.commit("current release")
+        planner = self.target / self.PLANNER
+        self.during_the_claude_step(lambda: planner.write_text("the user's edit\n"))
+        self.settings_fail()
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(summary["ok"], summary)
+        self.assertEqual("the user's edit\n", planner.read_text())
+        claude = self.claude_entry(summary)
+        self.assertTrue(claude["ok"], claude)
+        self.assertNotIn("left_alone", claude)
+
+    def test_a_package_reply_without_its_write_report_stops_setup_and_undoes_nothing_of_that_step(self) -> None:
+        """Owner fix 1 ('no reply, or a malformed reply, means stop and undo conservatively, never ok'). Fails on
+        1d359e3b: the reply is read as success, the later steps run and setup ends ok."""
+        calls = []
+        real_settings = installer.apply_settings
+        self.patch("apply_settings", lambda target, plan: (calls.append(target), real_settings(target, plan))[1])
+        self.during_the_claude_step(lambda: None, reply=lambda report: {"result": "applied", "exit_code": 0})
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(summary["ok"], summary)
+        self.assertFalse(summary["applied"], summary)
+        self.assertEqual([], calls)  # stopped at once: the settings step never ran
+        self.assertIn("no_write_report", summary["claude"]["error"])
+        claude = self.claude_entry(summary)
+        self.assertFalse(claude["ok"], claude)
+        self.assertIn(self.PLANNER, claude["left_alone"])  # what the step may have written is left, and named
+        self.assertNotEqual(self.release_file(self.PLANNER), (self.target / self.PLANNER).read_text())
+
+    def test_an_unknown_rollback_state_is_never_read_as_none(self) -> None:
+        """Owner fix 4 (rollback_state is a structured field): a value that is neither 'none' nor 'pending' makes the
+        reply unusable, so nothing of that package is undone. Fails on 1d359e3b: anything but 'pending' counts as
+        'none' and the package's files are rolled back."""
+        self.during_the_claude_step(lambda: None, reply=lambda report: failed_with_writes(
+            report, error="operation_failed", rollback_state="PENDING"))
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(summary["ok"], summary)
+        self.assertFalse(self.claude_entry(summary)["ok"])
+        self.assertNotEqual(self.release_file(self.PLANNER), (self.target / self.PLANNER).read_text())
+
+    def test_a_project_folder_that_changes_identity_during_a_step_stops_setup_at_once(self) -> None:
+        """Owner fix 2 (r4 MEDIUM: a failed read-back was swallowed and later steps ran to ok=True, install.py:1449,
+        :1466). Fails on 1d359e3b: the settings step runs on the replacement folder and setup ends ok."""
+        moved = self.base / "target-before-the-swap"
+
+        def replace_the_project_folder() -> None:
+            self.target.rename(moved)
+            shutil.copytree(moved, self.target, symlinks=True)
+
+        calls = []
+        real_settings = installer.apply_settings
+        self.patch("apply_settings", lambda target, plan: (calls.append(target), real_settings(target, plan))[1])
+        self.during_the_claude_step(replace_the_project_folder)
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(summary["ok"], summary)
+        self.assertFalse(summary["applied"], summary)
+        self.assertEqual([], calls)
+        self.assertIn("unsafe_or_unavailable_path", summary["claude"]["error"])
+        self.assertFalse(self.claude_entry(summary)["ok"])
+        self.assertTrue(steps.rollback_incomplete(summary))
+
+    def swap_once_when_undoing(self, relative: str, content: str) -> None:
+        """Another writer saves `relative` as a new file (new inode) right after the undo has read it, before the
+        undo acts on it: the window the owner's fix 3 closes with a descriptor identity check."""
+        real_read, real_undo = installer._read_file, installer._undo
+        state = {"armed": False, "done": False}
+
+        def undo(*args, **kwargs):
+            state["armed"] = True
+            return real_undo(*args, **kwargs)
+
+        def read(folder, name, *args, **kwargs):
+            result = real_read(folder, name, *args, **kwargs)
+            if state["armed"] and not state["done"] and name == relative.rsplit("/", 1)[-1]:
+                state["done"] = True
+                path = self.target / relative
+                fresh = path.with_name(".editor-save")
+                fresh.write_text(content)
+                os.replace(fresh, path)
+            return result
+
+        self.patch("_undo", undo)
+        self.patch("_read_file", read)
+
+    def test_an_undo_never_replaces_a_file_swapped_in_after_it_was_checked(self) -> None:
+        """Owner fix 3 (r4 HIGH 'undo comparison and mutation are separate operations', install.py:1278, :1293): the
+        rename happens only if the entry is still the one whose content was checked. Fails on 1d359e3b: the undo
+        renames 0.8.40 over the user's save."""
+        self.swap_once_when_undoing(self.PLANNER, "the user's save\n")
+        self.settings_fail()
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(summary["ok"], summary)
+        self.assertEqual("the user's save\n", (self.target / self.PLANNER).read_text())
+        self.assertIn(self.PLANNER, self.claude_entry(summary)["left_alone"])
+
+    def test_a_refused_undo_never_recreates_a_folder_the_user_deleted(self) -> None:
+        """Owner fix 3 (r4 MEDIUM, install.py:1272). Fails on 1d359e3b: the undo makes the folder again before it
+        finds the file gone, and leaves it behind empty."""
+        skill_folder = (self.target / self.SKILL).parent
+        self.during_the_claude_step(lambda: shutil.rmtree(skill_folder))
+        self.settings_fail()
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(summary["ok"], summary)
+        self.assertFalse(skill_folder.exists())
+        self.assertIn(self.SKILL, self.claude_entry(summary)["left_alone"])
+
+    def test_the_pending_marker_is_never_undone_while_a_lock_is_held(self) -> None:
+        """Pure guard of owner fix 4 (r4 MEDIUM 'control cleanup can erase the pending marker before discovering an
+        unsafe lock', install.py:1249). The package never reports its marker as a write to undo, so no operate
+        flow reaches this. It passes on 1d359e3b only because that journal format never matches a digest."""
+        pending, lock = installer.CLAUDE_CONTROL
+        for case in ("lock changed by another run", "lock held by another run"):
+            with self.subTest(case=case):
+                snapshot = installer._snapshot(self.target, "claude", {"changed_paths": []})
+                marker, token = b'{"marker": 1}\n', b"our token\n"
+                (self.target / pending).write_bytes(marker)
+                (self.target / lock).write_bytes(b"another run's token\n")
+                entries = {pending: (None, sha(marker))}
+                if case == "lock changed by another run":
+                    entries[lock] = (None, sha(token))
+                ok, left = installer._undo(self.target, "claude", snapshot,
+                                           {"entries": entries, "created": [], "left": []})
+                self.assertFalse(ok)
+                self.assertEqual(marker, (self.target / pending).read_bytes())
+                self.assertIn(pending, left)
+                (self.target / pending).unlink()
+                (self.target / lock).unlink()
 
 
 class FreshInstallFailureTests(unittest.TestCase):
@@ -434,7 +659,7 @@ class FreshInstallFailureTests(unittest.TestCase):
         isolate_home(self, self.base / "home")
         self.target, self.codex_options = make_target(self.base)
 
-    def patch_run(self, reply: dict, damage=None) -> None:
+    def patch_run(self, reply: dict, damage=None, carry_writes: bool = False) -> None:
         real_run = installer._run
 
         def run(script, operation, target, apply, extra):
@@ -442,7 +667,7 @@ class FreshInstallFailureTests(unittest.TestCase):
             if script == installer.CLAUDE_INSTALLER and apply:
                 if damage:
                     damage()
-                return reply
+                return failed_with_writes(report, **reply) if carry_writes else reply
             return report
 
         original = installer._run
@@ -451,7 +676,7 @@ class FreshInstallFailureTests(unittest.TestCase):
 
     def test_a_failed_fresh_install_is_undone_and_says_so(self) -> None:
         before = {p: d for p, d in inventory(self.target).items() if p not in PROJECT_CONFIG}
-        self.patch_run({"error": "operation_failed", "exit_code": 2})
+        self.patch_run({"error": "operation_failed", "exit_code": 2}, carry_writes=True)
         summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
         self.assertFalse(summary["ok"], summary)
         (claude,) = [r for r in summary["rollback"] if r["package"] == "claude"]
@@ -468,6 +693,83 @@ class FreshInstallFailureTests(unittest.TestCase):
         message, known = steps.installer_refusal(steps.raw(summary), "manual", steps.rollback_incomplete(summary))
         self.assertNotIn("Nothing was changed", message)
         self.assertTrue(planner.exists())  # kept for the owner to inspect, never silently deleted
+
+
+    def claude_entry(self, summary: dict) -> dict:
+        (claude,) = [r for r in summary["rollback"] if r["package"] == "claude"]
+        return claude
+
+    def test_a_folder_the_run_created_that_now_holds_a_users_file_is_kept_and_named(self) -> None:
+        """Owner fix 3 (r4: folder cleanup failures were swallowed, install.py:1256, :1260). Fails on 1d359e3b: the
+        rmdir failure is ignored and the rollback says ok."""
+        notes = self.target / ".claude/skills/claude-agents/notes.md"
+        self.patch_run({"error": "operation_failed"}, damage=lambda: notes.write_text("mine\n"), carry_writes=True)
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertEqual("mine\n", notes.read_text())
+        claude = self.claude_entry(summary)
+        self.assertFalse(claude["ok"], claude)
+        self.assertIn(".claude/skills/claude-agents", claude["left_alone"])
+
+    def test_a_folder_the_run_created_and_the_user_replaced_is_not_removed(self) -> None:
+        """Owner fix 3 (folder cleanup by identity, r4 MEDIUM install.py:1224, :1259). Fails on 1d359e3b: the empty
+        folder the user put in its place is removed by name."""
+        folder = self.target / ".claude/skills/claude-agents"
+
+        def replace_folder() -> None:
+            folder.rename(self.base / "moved-skill")
+            folder.mkdir()
+
+        self.patch_run({"error": "operation_failed"}, damage=replace_folder, carry_writes=True)
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertTrue(folder.is_dir())
+        self.assertIn(".claude/skills/claude-agents", self.claude_entry(summary)["left_alone"])
+
+    def test_an_undo_never_removes_a_file_swapped_in_after_it_was_checked(self) -> None:
+        """Owner fix 3 (unlink by descriptor identity, install.py:1284). Fails on 1d359e3b: the undo unlinks the
+        user's new file by name."""
+        planner = ".claude/agents/claude_agents_planner.md"
+        real_read, real_undo = installer._read_file, installer._undo
+        state = {"armed": False, "done": False}
+
+        def undo(*args, **kwargs):
+            state["armed"] = True
+            return real_undo(*args, **kwargs)
+
+        def read(folder, name, *args, **kwargs):
+            result = real_read(folder, name, *args, **kwargs)
+            if state["armed"] and not state["done"] and name == "claude_agents_planner.md":
+                state["done"] = True
+                fresh = self.target / ".claude/agents/.editor-save"
+                fresh.write_text("the user's save\n")
+                os.replace(fresh, self.target / planner)
+            return result
+
+        for name, value in (("_undo", undo), ("_read_file", read)):
+            self.addCleanup(setattr, installer, name, getattr(installer, name))
+            setattr(installer, name, value)
+        self.patch_run({"error": "operation_failed"}, carry_writes=True)
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertEqual("the user's save\n", (self.target / planner).read_text())
+        self.assertIn(planner, self.claude_entry(summary)["left_alone"])
+
+    @unittest.skipIf(os.geteuid() == 0, "a read-only folder does not stop root, so the package's write would not fail")
+    def test_a_real_codex_failure_partway_is_undone_from_the_packages_own_report(self) -> None:
+        """Owner fix 1 and 6, a real mid-step failure through the package (no faked reply): the Codex package writes
+        its .agents files, then cannot create .codex/agents; setup undoes exactly what it reports. Fails on
+        1d359e3b only at the write report (the reply has none); the undo itself worked there too, because
+        nothing else writes while the step runs."""
+        before = inventory(self.target)
+        codex = self.target / ".codex"
+        codex.mkdir()
+        codex.chmod(0o555)
+        self.addCleanup(codex.chmod, 0o755)
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(summary["ok"], summary)
+        self.assertIn("error", summary["codex"])
+        self.assertTrue(summary["codex"].get("writes"), summary["codex"])  # it really wrote before failing
+        self.assertEqual([{"package": "codex", "action": "restore", "ok": True}], summary["rollback"])
+        self.assertEqual(before, inventory(self.target))
+        self.assertFalse((self.target / ".agents").exists())
 
 
 if __name__ == "__main__":

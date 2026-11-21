@@ -4,6 +4,7 @@
  "claude:tests.test_journal": "unit",
  "claude:tests.test_native_fixtures": "unit",
  "claude:tests.test_package_cli_state": "unit",
+ "claude:tests.test_package_writes": "integration",
  "claude:tests.test_packaging": "integration",
  "claude:tests.test_previous_release": "integration",
  "claude:tests.test_previous_release_catalogue": "integration",

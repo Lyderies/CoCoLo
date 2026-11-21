@@ -192,6 +192,57 @@ class RefusalWordingTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertTrue(steps.installer_refusal(text.lower(), self.MANUAL)[1])
 
+    def test_a_wrong_call_to_the_package_is_not_blamed_on_a_damaged_copy(self) -> None:
+        """Owner fix 5 (r4 LOW: invalid_operation and invalid_apply got the damaged-copy remedy, steps.py:337-340).
+        These codes mean setup itself called the package wrongly. Fails on 1d359e3b: 'incomplete or damaged'."""
+        for code in ("invalid_operation", "invalid_apply"):
+            with self.subTest(code=code):
+                text = self.message(code)
+                self.assertNotIn("incomplete or damaged", text)
+                self.assertIn("fault in setup itself", text)
+                self.assertIn("Nothing was changed", text)
+                self.assertIn("report it", text)
+
+    def test_an_oversized_file_is_not_called_a_symlink(self) -> None:
+        """Owner fix 5 (r4 LOW: oversized_file got 'Replace it with a real file or folder', steps.py:345-347). Fails
+        on 1d359e3b: it is grouped with the symlink refusals."""
+        text = self.message("oversized_file")
+        self.assertNotIn("Replace it with a real file or folder", text)
+        self.assertIn("larger than", text)
+        self.assertIn("git diff -- .claude", text)
+        self.assertIn("run setup again", text)
+
+    def test_a_write_failure_does_not_say_it_went_back_only_where_it_could(self) -> None:
+        """Owner fix 5 (r4 verifier: write_failed/operation_failed said both 'went back ... where it could' and
+        'Nothing was changed'). operation_failed means the package undid all of its own writes. Fails on
+        1d359e3b: both claims are in the one message."""
+        for code in ("operation_failed", "write_failed"):
+            with self.subTest(code=code):
+                text = self.message(code)
+                self.assertNotIn("where it could", text)
+                self.assertIn("put back", text)
+
+    def test_nothing_was_changed_is_never_said_when_a_rollback_note_exists(self) -> None:
+        """Owner fix 5 ('never say Nothing was changed when a restore note exists'). A rollback entry with a note
+        means something was left or not undone. Fails on 1d359e3b: a noted entry marked ok still gives
+        'Nothing was changed'."""
+        reply = {"ok": False, "claude": {"error": "managed_file_modified"},
+                 "rollback": [{"package": "claude", "action": "restore", "ok": True, "note": "left alone: x"}]}
+        self.assertTrue(steps.rollback_incomplete(reply))
+        wizard = make_wizard()
+        wizard.last_reply = reply
+        wizard.project = "/p"
+        self.assertNotIn("Nothing was changed", wizard.explain_installer("The install failed", self.MANUAL))
+
+    def test_a_step_without_a_write_report_is_explained_without_claiming_nothing_changed(self) -> None:
+        """Owner fix 1 and 5: the installer stops with no_write_report when a package gives no account of its
+        writes; the wizard recognises it and says the files were left as they are. Fails on 1d359e3b: the code
+        is unknown to the wizard."""
+        text = self.message("no_write_report")
+        self.assertNotIn("Nothing was changed", text)
+        self.assertIn("left", text)
+        self.assertIn("git status", text)
+
     def test_update_required_does_not_claim_the_install_is_older(self) -> None:
         text = self.message("update_required")
         self.assertNotIn("is an older release", text)
