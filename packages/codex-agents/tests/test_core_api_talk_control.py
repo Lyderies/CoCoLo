@@ -87,12 +87,12 @@ class PushTests(CoreCase):
 
 class TokenTests(CoreCase):
     def test_api18_tokens_are_256_bit_and_stored_hashed(self):  # API-18
-        token = self.mod.mint_token(str(self.records), "read")
+        token = self.mod._mint_token(str(self.records), "read")
         self.assertGreaterEqual(len(bytes.fromhex(token)) if len(token) % 2 == 0 else len(token), 32)
         self.assertNotIn(token, (self.records / "tokens.json").read_text())
 
     def test_api18_revoked_token_is_refused(self):  # API-18
-        token = self.mod.mint_token(str(self.records), "read")
+        token = self.mod._mint_token(str(self.records), "read")
         self.mod.revoke_token(str(self.records), token)
         client = self.mod.CoreClient(self.socket, token=token)
         self.assertEqual("unauthorized", self.error_code(client, "initialize", {"protocol": "1.0"}))
@@ -215,7 +215,7 @@ class AuditTests(CoreCase):
             self.assertTrue(row["caller"] and row["ts"])
 
     def test_api23_reads_are_not_audited_and_no_secret_is_written(self):  # API-23
-        token = self.mod.mint_token(str(self.records), "confirm")
+        token = self.mod._mint_token(str(self.records), "confirm")
         client = self.mod.CoreClient(self.socket, token=token)
         client.call("initialize", {"protocol": "1.0"})
         client.call("state.get")
