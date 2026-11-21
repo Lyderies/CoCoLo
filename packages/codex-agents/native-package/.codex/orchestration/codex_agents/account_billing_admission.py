@@ -12,7 +12,7 @@ import time
 
 from .account_claim_contracts import ClaimError
 from .admission_inputs import AdmissionCaptureLimits
-from .admission_metadata import API_KEY_VARIABLES, evaluate_admission
+from .admission_metadata import API_KEY_VARIABLES, evaluate_admission, headroom_state
 from .account_observation import ObservationContext
 from .account_open_admission import open_admission_inputs
 from .billing_probe_schema import assert_billing_probe_schema
@@ -285,6 +285,18 @@ class AccountBillingAdmission:
             raise ProbeAdmissionError('probe_conflict')
         return current.captured_at_ms
 
+    @staticmethod
+    def _newer_run_restricts(latest, billing, headroom, fingerprint, now):
+        """R2: a run record newer than the probe's latest billing that is more restrictive (paid usage usable,
+        overage in use, or headroom that is not ample) means the probe's favourable reading is not enough."""
+        since = latest['observed_at_ms']
+        if any(r.get('run_id') is not None and r['observed_at_ms'] > since
+               and (r.get('paid_usage_usable') is True or r.get('is_using_overage') is True) for r, _ in billing):
+            return True
+        newer = [(r, d) for r, d in headroom if r['account_fingerprint'] == fingerprint
+                 and r.get('run_id') is not None and r['observed_at_ms'] > since]
+        return bool(newer) and headroom_state('claude', fingerprint, newer, [], now)[0] != 'ample'
+
     def admit(self, reservation):
         row = self._original(reservation)
         if row['state'] == 'admitted':
@@ -323,10 +335,19 @@ class AccountBillingAdmission:
                     and execution_owner._prepared_identity(reservation) != canonical_json(identity)):
                 raise ProbeAdmissionError('probe_conflict')
             fingerprint = identity['account_fingerprint']
-            latest = max((r for r, _ in prepared['billing'] if r['account_fingerprint'] == fingerprint),
+            # A probe's own records carry no run; a finished child's records (run_id, phase 'during') are not
+            # probe evidence and the reply contract rejects them. Reuse takes the probe's records only, and a
+            # newer run record that is more restrictive stops reuse: a fresh probe is launched (admission
+            # then re-checks every record).
+            mine = [(r, d) for r, d in prepared['billing'] if r['account_fingerprint'] == fingerprint]
+            latest = max((r for r, _ in mine if r.get('run_id') is None and r.get('phase') is None),
                          key=lambda r: r['observed_at_ms'], default=None)
-            if latest is not None and 0 <= now-latest['observed_at_ms'] < PROBE_REUSE_MS:
-                heads = [r for r, _ in prepared['headroom'] if r['account_fingerprint'] == fingerprint]
+            if latest is not None and (not 0 <= now-latest['observed_at_ms'] < PROBE_REUSE_MS
+                    or self._newer_run_restricts(latest, mine, prepared['headroom'], fingerprint, now)):
+                latest = None
+            if latest is not None:
+                heads = [r for r, _ in prepared['headroom']
+                         if r['account_fingerprint'] == fingerprint and r.get('run_id') is None and r.get('phase') is None]
                 selected = [identity, *heads[-1:], latest]
                 final = self._commit_reply(row, 'reused', None, selected, result.prepared.rows)
                 appended = None

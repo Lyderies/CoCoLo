@@ -31,7 +31,7 @@ from .learning_store import (
     _owner_key_identity, _signer_fingerprint,
 )
 from .owner_key_contracts import owner_public_key_from_line
-from . import ledger_waits
+from . import ledger_waits, lane_health
 from .sql_read_budget import SQLReadError, SQLReadLimits
 from .signature_inputs import (
     SignatureCaptureError, SignatureCaptureLimits, SignatureInputSnapshot, signature_input_size,
@@ -794,7 +794,13 @@ class AccountService:
             records = result['records']
             waivers = self._observation_jobs._owner.billing_waivers(project, records) if records else {}
             raw = self._reply(labels, result={**result, 'billing_waivers': waivers})
-            decode_account_response(raw, request)
+            try:
+                decode_account_response(raw, request)
+            except AccountError:
+                # R3: the reply failed its own contract: say so, and record it in the billing lane.
+                lane_health.safely(lambda: self._billing_jobs.health.note_failure(
+                    self._billing_jobs._note, 'probe_reply_invalid', None))
+                raise ProbeAdmissionError('probe_reply_invalid') from None
             if before_publish() is not True:
                 raise ProbeAdmissionError('probe_not_authorized')
             current = self._observation_jobs._owner.billing_waivers(project, records) if records else {}
@@ -831,7 +837,7 @@ class AccountService:
             if reply.reason is not None:
                 return self._reply(labels, reason=reply.reason if reply.reason in {
                     'probe_invalid_request', 'probe_not_authorized', 'probe_unavailable', 'probe_conflict',
-                    'probe_full', 'probe_busy', 'probe_not_ready', 'account_busy', *ADMISSION_CAPTURE_PUBLIC_REASONS,
+                    'probe_full', 'probe_busy', 'probe_not_ready', 'probe_reply_invalid', 'account_busy', *ADMISSION_CAPTURE_PUBLIC_REASONS,
                     *PROBE_STEP_REASONS, *OBSERVATION_REASONS}
                     else 'probe_unavailable')
             return self._billing_reply(reply.key, reply.result, reply.context, reply.before_publish)

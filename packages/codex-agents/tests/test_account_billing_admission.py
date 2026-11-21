@@ -351,6 +351,56 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertEqual(0, self.ledger._connection.execute(
             "SELECT COUNT(*) FROM records WHERE record_type='probe_admission'").fetchone()[0])
 
+    def store_probe_then_run(self, run_info, *, probe_age=2000, run_age=500):
+        """A probe's records, then a finished Claude child's own (run-tagged) records, both inside the reuse window."""
+        fingerprint = self.identity['account_fingerprint']
+        favourable = {'status': 'allowed', 'isUsingOverage': False,
+            'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'}
+        probe = claude_rate_limit_records(favourable, account_fingerprint=fingerprint, observed_at_ms=self.clock-probe_age)
+        run = claude_rate_limit_records(run_info, account_fingerprint=fingerprint, observed_at_ms=self.clock-run_age,
+                                        run_id='run-finished-1')
+        self.ledger._store_provider_observations(self.fixture.project_id, probe, timestamp=self.clock-probe_age)
+        self.ledger._store_provider_observations(self.fixture.project_id, run, timestamp=self.clock-run_age)
+        return probe, run
+
+    def test_T1_a_finished_childs_favourable_records_do_not_break_reuse_of_the_probe_records(self):
+        """R1: the child's run-tagged records are not probe evidence; the reply holds the probe's records only."""
+        probe, run = self.store_probe_then_run({'status': 'allowed', 'isUsingOverage': False,
+            'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'})
+        original = self.reserve()
+        self.prepared(original)
+        reused = self.owner.admit(original)
+        self.assertEqual('reused', reused['probe'])
+        self.assertEqual([self.identity, *probe], reused['records'])
+        self.assertTrue(all(r.get('run_id') is None and r.get('phase') is None for r in reused['records']))
+
+    def test_T3_a_newer_more_restrictive_run_record_is_never_reused_over_and_the_probe_is_launched_fresh(self):
+        """R2 (safety): overage in use / paid usage usable / non-ample headroom in a newer run record stops reuse."""
+        cases = {'overage in use': {'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'},
+                 'headroom rejected': {'status': 'rejected', 'isUsingOverage': False, 'overageStatus': 'rejected',
+                                       'overageDisabledReason': 'org_level_disabled'}}
+        for name, info in cases.items():
+            with self.subTest(name):
+                self.tearDown_probe_state()
+                self.store_probe_then_run(info)
+                original = self.reserve(f'probe-{name}'.replace(' ', '-'))
+                self.prepared(original)
+                result = self.owner.admit(original)
+                self.assertNotEqual('reused', result.get('probe') if type(result) is dict else None,
+                                    'a more restrictive newer run record must never be answered as reused')
+                # Admission re-checks every record: a fresh probe is admitted, or a named denial is recorded.
+                if type(result) is dict:
+                    self.assertEqual('denied', result['probe'])
+                    self.assertIsNotNone(result['reason_code'])
+                    self.assertNotEqual('probe_cooldown', result['reason_code'], result)
+                else:
+                    self.assertIs(type(result), ProbeAdmission)
+
+    def tearDown_probe_state(self):
+        connection = self.ledger._connection
+        with self.ledger._lock, connection:
+            connection.execute("DELETE FROM records WHERE record_type IN ('provider_billing','provider_headroom')")
+
     def test_default_denial_and_tampered_journal_cannot_start_signature_work(self):
         with self.assertRaisesRegex(ProbeAdmissionError, 'probe_not_authorized'):
             self.reserve(before_commit=None)

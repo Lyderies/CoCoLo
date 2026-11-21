@@ -4,6 +4,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- A billing probe asked within five minutes after a Claude child finished was refused as "billing probe
+  unavailable": it reused the child's own rate-limit records (tagged with a run), which the reply contract rejects.
+  Reuse now takes only the probe's own records, and a newer run record that is more restrictive (overage in use,
+  paid usage usable, headroom not ample) stops reuse so a fresh probe is launched. A reply that fails its own
+  contract is now `probe_reply_invalid` and is recorded in the billing lane's last failure.
 - Claude Code 2.1.323 lists one built-in plugin, `cc-plugin-privacy`, in its init frame even when no plugin is
   installed (captured under COCOLO's own child settings), so the check that no plugin loads stopped every Claude
   child and the billing probe. The check now accepts that one plugin, only with exactly the keys `name`,
