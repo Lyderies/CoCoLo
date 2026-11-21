@@ -4,6 +4,12 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.44 (Phase 1 merges): three reviewed changes join the 0.8.43 base.
+  Review QA: operational QA judges a review, not the code (accepted when the verifier confirms the findings;
+  the expected 'tests not run' statement is ignored; a refuted finding still disagrees; other tasks stay strict)
+  (owner decision 32). O0c caps: lifetime caps on open requests and expired bindings, with their
+  tests and limits file. DR-3: extra dispatch-wait and result-lifetime tests (the RC-3 test stays skipped).
+
 - Package 0.8.43 (RT-21 Phase 0): low/medium coding and research judgment/exploration,
   and planning synthesis, try GPT-6.1 Sol before Sonnet 5.5. Confirmed quality failures
   advance one admitted ladder rung, then use the strongest admitted route on the second
