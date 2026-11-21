@@ -11,7 +11,7 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   so the record cannot vouch for itself, and a record may name only the files the package installs: a forged or
   altered record is refused (`previous_release_not_pinned`, `previous_release_path_refused`) and nothing changes.
   The setup update stops with the installer's own reason, in plain words that say what to do next, and a failed
-  update puts the Codex and Claude files back as they were. The Done screen no longer prints a remove command
+  update puts back only the files the packages themselves write (never your own files, and nothing is undone for a package that stopped with its rollback pending). The Done screen no longer prints a remove command
   with an empty `--target`.
 - Two commands that came together on a project whose service was not running could leave one of them reporting
   `orchestration_client_unavailable`: the start that lost to the other's service ended before that service
