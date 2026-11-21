@@ -24,8 +24,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   provider, verdict, summary, route, assignment or result that does not match the keyed digest (HMAC) binding it.
   The key is derived from the host's private digest key (its state folder, owner-only), never held in the work
   folder, so a writer limited to the work folder cannot make a binding. The state folder is chosen once and given
-  to every host command, the key is read before any child starts, and a state folder inside the work folder or the
-  packet is refused (`review_state_unavailable`). A process running as the same user can
+  to every host command, the key is read before any child starts, and a state folder that overlaps the work folder, the
+  packet or the project, either way round, is refused (`review_state_unavailable`); a rerun that stops there has
+  already removed its earlier markers. A process running as the same user can
   read that key and is outside this check; the project host still checks both outcome digests and every
   assignment and result body against its own records before checks or QA are committed.
   Package 0.8.41.
