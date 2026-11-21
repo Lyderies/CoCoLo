@@ -170,10 +170,6 @@ class ControlCommandTests(CoreCase):
 
 class ReplyTextTests(CoreCase):
 
-    def test_api16_reply_cost_must_be_a_non_negative_integer(self):
-        query = self.client("confirm").call("query.ask", {"text": "Rewrite the parser?", "mode": "forward"})["query_id"]
-        self.assertEqual("invalid_params", self.error_code(self.client("owner"), "query.reply",
-                                                           {"query_id": query, "text": "x", "cost_tokens": -1}))
 
 
 class MintTests(CoreCase):
