@@ -749,6 +749,7 @@ def _mint_token(records_dir, scope, label=""):
     token = secrets.token_hex(32)
 
     def add(tokens):
+        tokens[:] = [row for row in tokens if not (isinstance(row, dict) and row.get("revoked"))]  # revoked leave
         tokens.append({"id": _hash_token(token), "scope": scope, "label": str(label), "revoked": False,
                        "created": time.time()})
 
@@ -761,11 +762,11 @@ def revoke_token(records_dir, token):
     wanted = {_hash_token(token), token}
 
     def revoke(tokens):
-        found = False
-        for row in tokens:
-            if isinstance(row, dict) and row.get("id") in wanted:  # a damaged entry is left as it is, not a crash
-                row["revoked"] = True
-                found = True
+        # A revoked token is removed, not marked: the reader refuses an unknown token exactly like a revoked one
+        # (`_lookup_token` finds no row -> "unauthorized"; `_lookup_token_by_id` finds none -> "the token was
+        # revoked"), so the store never fills with revoked rows. Rows already marked revoked are dropped too.
+        found = any(isinstance(row, dict) and row.get("id") in wanted for row in tokens)
+        tokens[:] = [row for row in tokens if not (isinstance(row, dict) and (row.get("id") in wanted or row.get("revoked")))]
         return found
 
     return _locked_tokens(str(records_dir), revoke)
@@ -2524,6 +2525,11 @@ class CoreService:
         """Take one of the token's PUSH_PER_WINDOW notes per window, or refuse (before any intent row)."""
         now = self.clock()
         with self._lock:
+            live = {row["id"] for row in self._token_rows() if not row.get("revoked")}
+            for key in list(self._pushes):  # an entry ends when its window is empty or its token is revoked/unknown
+                if key != session.token_id and (key not in live
+                                                or not any(t > now - PUSH_WINDOW_SECONDS for t in self._pushes[key])):
+                    del self._pushes[key]
             window = [t for t in self._pushes[session.token_id] if t > now - PUSH_WINDOW_SECONDS]
             if len(window) >= PUSH_PER_WINDOW:
                 self._pushes[session.token_id] = window

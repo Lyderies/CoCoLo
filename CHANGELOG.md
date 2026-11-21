@@ -12,7 +12,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   for every change it would feed; routing.json is flushed with its directory; writes that make no progress fail;
   a blank token-store entry no longer crashes a revoke; the history answer says when lines were skipped; the
   empty token store message names tokens.json and the delete step. Five tests that could pass on broken code now
-  prove their requirement.
+  prove their requirement. A revoked token is now removed from the token store (it stays refused as an unknown
+  token) and idle or revoked tokens leave the in-memory push windows, so neither fills up over time.
 
 - Package 0.8.44 (Phase 1 merges): three reviewed changes join the 0.8.43 base.
   Review QA: operational QA judges a review, not the code (accepted when the verifier confirms the findings;

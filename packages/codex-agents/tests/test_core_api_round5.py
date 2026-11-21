@@ -570,6 +570,21 @@ class TokenStoreAndDurability(Helpers, CoreCase):
             self.assertLessEqual(path.stat().st_size, 1200)
             self.assertTrue(self.mod.revoke_token(str(self.records), minted[0]))  # the store still works
 
+    def test_revoked_tokens_leave_the_store_and_stay_refused(self):  # O0c: the store does not fill with revoked tokens
+        path = self.records / "tokens.json"
+        revoked = []
+        with mock.patch.object(self.mod, "TOKENS_FILE_MAX_BYTES", 1200):
+            for _ in range(30):  # far more mints than the store holds at once
+                token = self.mod._mint_token(str(self.records), "read", label="x" * 40)
+                self.assertTrue(self.mod.revoke_token(str(self.records), token))
+                revoked.append(token)
+            self.assertLessEqual(path.stat().st_size, 1200)
+            self.mod._mint_token(str(self.records), "read", label="x" * 40)  # a further mint is not refused
+        for token in revoked:
+            client = self.mod.CoreClient(self.socket, token=token)
+            self.addCleanup(client.close)
+            self.assertEqual("unauthorized", self.error_code(client, "initialize", {"protocol": "1.0"}))
+
     def test_a_failed_directory_fsync_is_reported_not_swallowed(self):  # API-10
         real = os.fsync
 

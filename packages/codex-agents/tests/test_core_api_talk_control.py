@@ -70,6 +70,20 @@ class PushTests(CoreCase):
         self.clock.advance(61)
         self.push(client)
 
+    def test_push_windows_leave_when_empty_revoked_or_unknown(self):  # O0c: one list per token does not stay forever
+        ids = {}
+        for name in ("a", "b", "c"):
+            token = self.mod._mint_token(str(self.records), "agent")
+            ids[name] = (token, self.mod._hash_token(token))
+            self.push(self.client(token=token))
+        self.assertEqual(3, len(self.service._pushes))
+        self.mod.revoke_token(str(self.records), ids["a"][0])
+        self.clock.advance(61)  # b's and c's windows are empty now
+        self.push(self.client("agent"))
+        self.assertEqual(1, len(self.service._pushes))  # only the live token that just pushed
+        for name in ("a", "b", "c"):
+            self.assertNotIn(ids[name][1], self.service._pushes)
+
 
 class TokenTests(CoreCase):
     def test_api18_tokens_are_256_bit_and_stored_hashed(self):  # API-18

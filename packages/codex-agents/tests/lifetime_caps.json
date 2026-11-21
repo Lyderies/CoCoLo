@@ -491,8 +491,8 @@
   },
   "core_api.py::_rewrite_tokens": {
    "checks": 2,
-   "ends": "a byte cap on the token store (tokens.json); a larger store is refused on read and a write that would exceed it is refused before replacing, so the file stops at the cap; revoked tokens are marked revoked, not removed, so a store full of them stops new tokens until the owner deletes the file at their terminal",
-   "test": "test_the_token_store_size_is_checked_before_it_is_replaced"
+   "ends": "a byte cap on the token store (tokens.json); a larger store is refused on read and a write that would exceed it is refused before replacing, so the file stops at the cap; revoking a token removes its row (an unknown token is refused exactly like a revoked one) and the next mint also drops any row still marked revoked, so revoked tokens never use up the store",
+   "test": "test_revoked_tokens_leave_the_store_and_stay_refused"
   },
   "core_api.py::_subscribe": {
    "checks": 2,
@@ -501,8 +501,8 @@
   },
   "core_api.py::_take_push_allowance": {
    "checks": 1,
-   "ends": "a per-token rate limit of PUSH_PER_WINDOW notes per window; times older than the window are dropped on each call; one small list stays per token that has pushed, in memory until the service restarts, so it is bounded by the tokens the capped store holds",
-   "test": "test_api17_rate_cap_resets_with_time"
+   "ends": "a per-token rate limit of PUSH_PER_WINDOW notes per window; times older than the window are dropped on each call; on each call every other token's list is also removed when its window is empty or its token is revoked or unknown, so only tokens with a note in the last window keep a list",
+   "test": "test_push_windows_leave_when_empty_revoked_or_unknown"
   },
   "core_api.py::_tokens_used": {
    "checks": 1,
