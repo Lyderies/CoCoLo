@@ -693,8 +693,10 @@ def _rewrite_tokens(records_dir, path, fd, mutate, existed=True):
         if len(raw) > TOKENS_FILE_MAX_BYTES:
             raise ApiError("unavailable", "the token store is too large")
     if not raw.strip() and existed:
-        raise ApiError("unavailable", "the token store is empty, which is damage, not 'no tokens'; it was left "
-                                      "unchanged (remove it at your terminal to start a new store)")
+        raise ApiError("unavailable", "the token store (tokens.json in the records folder) is empty, which is damage, "
+                                      "not 'no tokens'; it was left unchanged. If it is still empty, delete "
+                                      "tokens.json at your terminal: every token it held is already gone, and the "
+                                      "next mint creates a new store whose tokens must be handed out again")
     try:
         data = json.loads(raw.decode("utf-8")) if raw.strip() else {"tokens": []}
     except (ValueError, UnicodeDecodeError):
@@ -761,7 +763,7 @@ def revoke_token(records_dir, token):
     def revoke(tokens):
         found = False
         for row in tokens:
-            if row.get("id") in wanted:
+            if isinstance(row, dict) and row.get("id") in wanted:  # a damaged entry is left as it is, not a crash
                 row["revoked"] = True
                 found = True
         return found
@@ -1477,7 +1479,7 @@ class CoreService:
             self._need_text(params, "text", QUERY_MAX_BYTES, "reply")
             self._tokens_used(params)
             if not any(q["id"] == params["query_id"] for q in self._queries()):
-                raise ApiError("not_found", "no such query")
+                self._absent("inbox.jsonl", "query")
         elif method == "decision.answer":
             self._decision_choice(params)
         elif method == "unit.message":
@@ -1486,8 +1488,7 @@ class CoreService:
             self._need_str(params, "id")
             if params.get("verdict") not in ("pass", "fail"):
                 raise ApiError("invalid_params", "verdict must be pass or fail")
-            if self._latest_unit(params["id"]) is None:
-                raise ApiError("not_found", "no such unit")
+            self._need_unit(params["id"])
 
     def _audit_intent(self, session, method, params):
         op = secrets.token_hex(6)
@@ -1534,8 +1535,7 @@ class CoreService:
             self._validate_routing(body)
         if method == "unit.cancel":
             self._need_str(body, "id")
-            if self._latest_unit(body["id"]) is None:
-                raise ApiError("not_found", "no such unit")
+            self._need_unit(body["id"])
 
     # -- reads --
 
@@ -1549,6 +1549,18 @@ class CoreService:
 
     def _units_cut(self):
         return self._units_read()[2]
+
+    def _absent(self, filename, what, text="no such %s"):
+        """Refuse a target that was not found: `not_found` when the whole record was read, `unavailable` when the
+        read was cut (the target may sit in the omitted prefix, so an action on it must not be refused as unknown)."""
+        if _read_jsonl_cut(self.records / filename)[2]:
+            raise ApiError("unavailable", "the %s record is too large to read whole; that %s is unknown"
+                           % (filename.split(".")[0], what))
+        raise ApiError("not_found", text % what)
+
+    def _need_unit(self, unit_id):
+        if self._latest_unit(unit_id) is None:
+            self._absent("units.jsonl", "unit")
 
     def _latest_units(self):
         latest = {}
@@ -1753,7 +1765,7 @@ class CoreService:
             with self._lock:
                 current = self._latest_unit(unit_id)
                 if current is None:
-                    raise ApiError("not_found", "no such unit")
+                    self._absent("units.jsonl", "unit")
                 record = {**_clean(current), "verdict": params["verdict"], "verdict_by": session.caller,
                           "verdict_ts": self.clock()}
                 self._write_or_unavailable(self.records / "units.jsonl", record)
@@ -1787,8 +1799,7 @@ class CoreService:
         @reading("units.activity")
         def units_activity(session, params, deadline):
             unit_id = self._need_str(params, "id")
-            if self._latest_unit(unit_id) is None:
-                raise ApiError("not_found", "no such unit")
+            self._need_unit(unit_id)
             rows, _ = _read_jsonl(self.records / "activity.jsonl")
             if rows is None:
                 return {"id": unit_id, "calls": "unknown", "tail": "unknown", "as_of": self.clock()}
@@ -1877,13 +1888,17 @@ class CoreService:
                         self._check(deadline)
                         view = memoryview(data)
                         while view:
-                            view = view[os.write(fd, view):]
+                            written = os.write(fd, view)
+                            if written <= 0:
+                                raise OSError("the routing choice could not be written")
+                            view = view[written:]
                         os.fsync(fd)
                     finally:
                         os.close(fd)
                     self._check(deadline)  # the last point at which the choice can still be refused
                     os.replace(tmp, path)
                     tmp = None
+                    _fsync_dir(path)  # the rename itself is durable before the choice is reported saved
                 except OSError:
                     raise ApiError("unavailable", "the routing choice could not be saved")
                 finally:
@@ -1913,8 +1928,7 @@ class CoreService:
 
     def _message_params(self, params):
         unit_id = self._need_str(params, "id")
-        if self._latest_unit(unit_id) is None:
-            raise ApiError("not_found", "no such unit")
+        self._need_unit(unit_id)
         text = params.get("text")
         if not isinstance(text, str) or not text.strip():
             raise ApiError("invalid_params", "text is required")
@@ -2027,6 +2041,12 @@ class CoreService:
             if path.exists() and _read_json(path) is None:
                 label = name.split(".")[0]
                 add("%s_unreadable" % label, "The %s record could not be read." % label)
+        try:
+            if (self.records / "tokens.json").stat().st_size == 0:
+                add("tokens_empty", "The token store (tokens.json) is empty, so no token is accepted. Delete it at the "
+                                    "owner's terminal; the next mint creates a new store.")
+        except OSError:
+            pass
         if not _tokens_file_ok(self.records / "tokens.json"):
             add("tokens_not_private", "The token store is not private to this user, so no token is accepted.")
         return findings
@@ -2298,7 +2318,10 @@ class CoreService:
             try:
                 view = memoryview(json.dumps(data).encode("utf-8"))
                 while view:
-                    view = view[os.write(fd, view):]
+                    written = os.write(fd, view)
+                    if written <= 0:
+                        raise OSError("the id counter could not be written")
+                    view = view[written:]
                 os.fsync(fd)
             finally:
                 os.close(fd)
@@ -2405,9 +2428,11 @@ class CoreService:
         if asks_why_stopped:
             return self._why_stopped(unit_match.group(0).upper() if unit_match else None)
         if "history" in lowered:
-            rows, _, cut = _read_jsonl_cut(self.records / "history.jsonl")
+            rows, bad, cut = _read_jsonl_cut(self.records / "history.jsonl")
             count = ("at least %d history entries (the record is too large to read whole)" if cut
                      else "%d history entries") % len(rows or [])
+            if bad > 0:
+                count += " (%d damaged lines were skipped)" % bad
             body = ("%s; latest: %s" % (count, _text(rows[-1].get("summary") or rows[-1].get("id")))
                     if rows else "unknown: no history is recorded.")
             return self._records_answer(body, ["history.jsonl"])
@@ -2589,7 +2614,7 @@ class CoreService:
         cost = self._tokens_used(params)
         with self._lock:
             if not any(q["id"] == query_id for q in self._queries()):
-                raise ApiError("not_found", "no such query")
+                self._absent("inbox.jsonl", "query")
             self._write_or_unavailable(self.records / "queries.jsonl",
                                        {"query_id": query_id, "state": "answered", "text": text,
                                         "tokens_used": cost, "by": session.caller, "ts": self.clock()})
@@ -2609,7 +2634,7 @@ class CoreService:
         choice = self._need_str(params, "choice")
         found = next((d for d in self._decisions() if d["id"] == decision_id), None)
         if found is None:
-            raise ApiError("not_found", "no such decision")
+            self._absent("decisions.jsonl", "decision")
         if "answer" in found:
             raise ApiError("conflict", "the decision is already answered")
         options = found.get("options")

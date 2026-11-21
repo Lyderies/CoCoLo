@@ -28,6 +28,25 @@ def _code_path(mod):
     return os.path.dirname(os.path.dirname(os.path.abspath(mod.__file__)))
 
 
+def stalled_writes(test, prefix):
+    """Patch the module's os.write so a write to a temp file made with this prefix returns 0 (no progress);
+    every other write is real. The patches end with the test."""
+    real_write, real_mkstemp, stalled = os.write, tempfile.mkstemp, set()
+
+    def mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        if kwargs.get("prefix") == prefix:
+            stalled.add(fd)
+        return fd, name
+
+    def write(fd, data):
+        return 0 if fd in stalled else real_write(fd, data)
+    for target, name, fake in ((test.mod.os, "write", write), (test.mod.tempfile, "mkstemp", mkstemp)):
+        patch = mock.patch.object(target, name, side_effect=fake)
+        patch.start()
+        test.addCleanup(patch.stop)
+
+
 class MoneyDollarSingleDigit(Helpers, CoreCase):
     def test_a_single_digit_price_is_removed_but_a_shell_parameter_stays(self):  # M1, TERM-36
         amounts = {"A-1": ("charged $5 per month", "5"), "A-2": ("a $5 fee", "5"), "A-3": ("it costs $3", "3"),
@@ -255,3 +274,145 @@ class CutReadsAreUnknown(Helpers, CoreCase):
         with mock.patch.object(self.mod, "READ_MAX_BYTES", 3000):
             self.assertEqual("unavailable", self.error_code(client, "changes.diff", {"path": "a.py"}))
         self.assertEqual("not_found", self.error_code(client, "changes.diff", {"path": "zz.py"}))
+
+
+class CutReadsRefuseMutationsAsUnavailable(Helpers, CoreCase):
+    """R1 (review r6b, verifier): a cut read must not make a valid owner action say `not_found`."""
+
+    def pad(self, name, first):
+        jsonl(self.records / name, [first] + [{"id": "P-%04d" % i, "kind": "note", "text": "p" * 60, "ts": 1,
+                                                "pad": "y" * 60} for i in range(100)])
+
+    def refuse_code(self, client, method, params):
+        with mock.patch.object(self.mod, "READ_MAX_BYTES", 3000):
+            return self.error_code(client, method, params)
+
+    def test_a_unit_before_the_retained_tail_is_unavailable_for_every_unit_action(self):  # R1
+        self.pad("units.jsonl", {"id": "U-0001", "state": "running"})
+        owner = self.client("owner")
+        for method, params in (("unit.verdict", {"id": "U-0001", "verdict": "pass"}),
+                               ("unit.cancel", {"id": "U-0001"}),
+                               ("unit.message", {"id": "U-0001", "text": "hi"}),
+                               ("units.activity", {"id": "U-0001"})):
+            with self.subTest(method):
+                self.assertEqual("unavailable", self.refuse_code(owner, method, params))
+        for method, params in (("unit.verdict", {"id": "U-0777", "verdict": "pass"}),  # a whole record: unknown
+                               ("unit.message", {"id": "U-0777", "text": "hi"})):
+            with self.subTest("whole " + method):
+                self.assertEqual("not_found", self.error_code(owner, method, params))
+
+    def test_a_query_before_the_retained_tail_is_unavailable_to_reply_to(self):  # R1
+        self.pad("inbox.jsonl", {"query_id": "Q-0001", "kind": "query", "text": "q", "ts": 1})
+        owner = self.client("owner")
+        self.assertEqual("unavailable", self.refuse_code(owner, "query.reply", {"query_id": "Q-0001", "text": "ok"}))
+        self.assertEqual("not_found", self.error_code(owner, "query.reply", {"query_id": "Q-0777", "text": "ok"}))
+
+    def test_a_decision_before_the_retained_tail_is_unavailable_to_answer(self):  # R1
+        self.pad("decisions.jsonl", {"id": "D-0001", "question": "go?", "options": ["yes", "no"]})
+        owner = self.client("owner")
+        self.assertEqual("unavailable", self.refuse_code(owner, "decision.answer", {"id": "D-0001", "choice": "yes"}))
+        self.assertEqual("not_found", self.error_code(owner, "decision.answer", {"id": "D-0777", "choice": "yes"}))
+
+
+class RoutingDurability(Helpers, CoreCase):
+    ROUTING = None
+
+    def test_the_routing_file_is_made_durable_by_a_directory_fsync(self):  # R2
+        from tests.test_core_api_round5 import ROUTING
+        owner = self.client("owner")
+        calls = []
+        real = self.mod._fsync_dir
+        with mock.patch.object(self.mod, "_fsync_dir", side_effect=lambda p: (calls.append(str(p)), real(p))[1]):
+            self.confirmed(owner, "routing.set", ROUTING)
+        self.assertTrue(any(p.endswith("routing.json") for p in calls), calls)
+
+    def test_a_failed_directory_fsync_means_the_routing_is_not_reported_saved(self):  # R2
+        from tests.test_core_api_round5 import ROUTING
+        owner = self.client("owner")
+        real = self.mod._fsync_dir
+
+        def fail_for_routing(path):
+            if str(path).endswith("routing.json"):
+                raise OSError("disk")
+            return real(path)
+        with mock.patch.object(self.mod, "_fsync_dir", side_effect=fail_for_routing):
+            with self.assertRaises(self.mod.ApiError) as raised:
+                self.confirmed(owner, "routing.set", ROUTING)
+        self.assertEqual("unavailable", raised.exception.code)
+
+    def test_a_write_that_makes_no_progress_fails_instead_of_looping(self):  # R4
+        from tests.test_core_api_round5 import ROUTING
+        owner = self.client("owner")
+        done = []
+        stalled_writes(self, ".routing.")
+        thread = threading.Thread(target=lambda: done.append(self.try_code(owner)), daemon=True)
+        thread.start()
+        thread.join(10)
+        self.assertEqual(["unavailable"], done, "the write loop did not end")
+
+    def try_code(self, owner):
+        from tests.test_core_api_round5 import ROUTING
+        try:
+            self.confirmed(owner, "routing.set", ROUTING)
+        except self.mod.ApiError as error:
+            return error.code
+
+
+class IdCounterWriteProgress(Helpers, CoreCase):
+    def test_an_id_counter_write_that_makes_no_progress_fails_instead_of_looping(self):  # R4
+        outcome = []
+        stalled_writes(self, ".ids.")
+
+        def attempt():
+            try:
+                with self.service._lock:
+                    self.service._allocate_id("C")
+            except self.mod.ApiError as error:
+                outcome.append(error.code)
+        thread = threading.Thread(target=attempt, daemon=True)
+        thread.start()
+        thread.join(10)
+        self.assertEqual(["unavailable"], outcome, "the write loop did not end")
+
+
+class EmptyTokenStoreMessage(Helpers, CoreCase):
+    def test_the_refusal_names_the_file_the_delete_step_and_what_follows(self):  # R3
+        path = self.records / "tokens.json"
+        path.write_text("")
+        os.chmod(path, 0o600)
+        with self.assertRaises(self.mod.ApiError) as raised:
+            self.mod._mint_token(str(self.records), "read")
+        text = str(raised.exception)
+        for part in ("tokens.json", "delete", "every token", "new store"):
+            self.assertIn(part, text)
+
+
+class EmptyTokenStoreIsReported(Helpers, CoreCase):
+    def test_health_says_the_token_store_is_empty(self):  # R3 (verifier: the owner is told only if they mint)
+        path = self.records / "tokens.json"
+        self.mod._mint_token(str(self.records), "read")
+        codes = lambda: [f["code"] for f in self.service._findings()]  # no token works once the store is empty
+        self.assertNotIn("tokens_empty", codes())
+        with open(path, "r+b") as handle:
+            handle.truncate(0)
+        self.assertIn("tokens_empty", codes())
+
+
+class DamagedStoreEntries(Helpers, CoreCase):
+    def test_a_null_entry_in_the_token_store_does_not_crash_a_revoke(self):  # R5 (verifier, token store)
+        path = self.records / "tokens.json"
+        token = self.mod._mint_token(str(self.records), "read")
+        stored = json.loads(path.read_text())
+        stored["tokens"].insert(0, None)
+        path.write_text(json.dumps(stored))
+        os.chmod(path, 0o600)
+        self.assertTrue(self.mod.revoke_token(str(self.records), token))
+        self.assertIsNone(json.loads(path.read_text())["tokens"][0])  # left as found
+
+
+class CannedHistoryDamage(Helpers, CoreCase):
+    def test_the_canned_history_answer_says_when_lines_were_skipped(self):  # R5 (verifier, canned history)
+        (self.records / "history.jsonl").write_text(
+            '{"id":"H-1","summary":"a"}\nnot json\n{"id":"H-2","summary":"b"}\n{broken\n')
+        answer = self.client("agent").call("query.ask", {"text": "what is the history?"})
+        self.assertIn("2 damaged lines", answer["text"])
