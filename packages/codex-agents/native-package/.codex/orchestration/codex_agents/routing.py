@@ -15,7 +15,12 @@ from typing import Any
 import tomllib
 
 from .catalog import discover, load_discovery_policy
-from .contracts import FAILURE_REASONS, ContractError, validate_task
+from .contracts import (
+    FAILURE_REASONS,
+    VERIFIED_FAILURE_REFERENCE,
+    ContractError,
+    validate_task,
+)
 from .git_plumbing import git_executable as find_git
 from .git_plumbing import repository_layout_problem, run_git
 from .learning_contracts import (
@@ -1013,8 +1018,16 @@ def _validate_escalation(policy: dict[str, Any]) -> None:
     if "escalation" not in policy:
         return
     block = policy["escalation"]
-    if not isinstance(block, dict) or set(block) != {"failure_reasons", "ladders"}:
-        raise PolicyError("escalation must contain exactly failure_reasons and ladders")
+    if (
+        not isinstance(block, dict)
+        or not {"failure_reasons", "ladders"} <= set(block)
+        or set(block) - {"failure_reasons", "ladders", "scope"}
+    ):
+        raise PolicyError("escalation must contain failure_reasons, ladders and optional scope")
+    if "scope" in block and (
+        policy["version"] < 6 or block["scope"] != "risk_banded_judgment"
+    ):
+        raise PolicyError("escalation.scope must be risk_banded_judgment in policy v6 or later")
     reasons = block["failure_reasons"]
     if (
         not isinstance(reasons, list)
@@ -1092,6 +1105,11 @@ def _validate_risk_candidates(policy: dict[str, Any]) -> None:
                 _validate_candidate_list(
                     policy, candidates, [family], f"{label}.{band}", "risk_candidates"
                 )
+                ladder = _ladder_rungs(policy, family)
+                if policy["version"] >= 6 and ladder is not None and any(
+                    _identity(candidate, cell_route) not in ladder for candidate in candidates
+                ):
+                    raise PolicyError(f"risk_candidates.{label}.{band} is off the {family} ladder")
                 if band not in HIGH_RISK_BANDS:
                     continue
                 ladder = _ladder_rungs(policy, family)
@@ -1145,7 +1163,15 @@ def _candidate(
     if family == "planning":
         name = (
             "synthesis"
-            if complexity in {"high", "extreme"}
+            if (
+                policy["version"] >= 6
+                and task["risk"] in {"low", "medium"}
+                and task["acceptance_strength"] == "independent_judgment"
+                and task["risk"] in policy.get("risk_candidates", {}).get(
+                    "planning", {}
+                ).get("synthesis", {})
+            )
+            or complexity in {"high", "extreme"}
             or ambiguity == "high"
             or context_breadth == "cross_system"
             or operation in {"synthesis", "end_to_end"}
@@ -1437,8 +1463,9 @@ def _select_verifier(
     primary_provider: str,
     use_legacy_fallback: bool,
     risk: str,
+    independent: bool = False,
 ) -> dict[str, Any]:
-    """Prefer the other vendor's reviewer, then the worker's own vendor.
+    """Prefer the other vendor, then the worker's own; judgment cells mark that fallback not independent.
 
     Its model and effort follow the worker's risk where the policy gives per-risk entries.
     """
@@ -1476,6 +1503,9 @@ def _select_verifier(
             continue
         verifier["provider"] = provider
         verifier["dispatch"] = dispatch
+        if independent and provider == worker_provider:
+            # Same-provider fallback is kept (owner decision 17); the record says so.
+            verifier["independent"] = False
         return verifier
     message = "no verifier candidate is eligible for this route"
     raise ContractError(f"{message}: {skipped}" if skipped else message)
@@ -1487,12 +1517,14 @@ def _escalate(
     routed_family: str,
     picked: tuple[str, dict[str, Any], dict[str, Any] | None],
     first_eligible: Any,
+    *,
+    judgment_cell: bool = False,
 ) -> tuple[tuple[str, dict[str, Any], dict[str, Any] | None], dict[str, Any] | None]:
     """Move a retry up its family's ladder after a failed check, once, then to the strongest.
 
-    Attempt 2 after a qualifying failure goes to the next admitted rung above the pick for
-    work with an executable check; judgment work keeps its first choice (it does not
-    cascade). Attempt 3 and later go to the strongest admitted rung and are reported.
+    Attempt 2 after a qualifying failure goes to the next admitted rung above the pick.
+    Judgment cells require independent verification evidence; legacy judgment keeps its
+    first choice. Attempt 3 goes to the strongest admitted rung and is reported.
     The policy opts in with an `escalation` block; without one, or without a ladder for
     the family, the pick stands and nothing is recorded.
     """
@@ -1500,10 +1532,14 @@ def _escalate(
     block = policy.get("escalation")
     ladder = _ladder_rungs(policy, routed_family) if block is not None else None
     failed = task["failed_attempts"]
+    scoped = block is not None and block.get("scope") == "risk_banded_judgment"
     if (
         ladder is None
         or failed == 0
-        or not any(event["reason"] in block["failure_reasons"] for event in task["failure_events"])
+        or (scoped and not judgment_cell)
+        or (not scoped and not any(
+            event["reason"] in block["failure_reasons"] for event in task["failure_events"]
+        ))
     ):
         return picked, None
     provider, model_effort, _ = picked
@@ -1512,7 +1548,15 @@ def _escalate(
         "attempt": failed + 1,
         "from": {"provider": current[0], "model": current[1], "effort": current[2]},
     }
-    if failed == 1 and not _strong_acceptance(task):
+    confirmed = any(
+        event["attempt"] == failed
+        and event["reason"] in block["failure_reasons"]
+        and any(VERIFIED_FAILURE_REFERENCE.fullmatch(ref) for ref in event["evidence_refs"])
+        for event in task["failure_events"]
+    )
+    if (scoped and not confirmed) or (
+        failed == 1 and not _strong_acceptance(task) and not judgment_cell
+    ):
         record["step"] = "held_judgment"
         record["to"] = deepcopy(record["from"])
         return picked, record
@@ -1548,7 +1592,7 @@ def _route_task(
         raise ContractError("legacy fallback selection must be boolean")
     if primary_provider not in PROVIDERS:
         raise ContractError("primary provider must be codex or claude")
-    task = validate_task(task_data)
+    task = validate_task(task_data, allow_unadjudicated_failures=policy["version"] >= 6)
     candidate, stage, routed_family = _candidate(
         task, policy, trusted_routing_evidence_refs
     )
@@ -1559,6 +1603,7 @@ def _route_task(
     # The task-shape route stays the Codex baseline; provider candidates only
     # reorder providers, and the first eligible one wins. None eligible denies.
     picked: tuple[str, dict[str, Any], dict[str, Any] | None] | None = None
+    verifier_independent: bool | None = None
     verification_for_provider = task.get("verification_for_provider")
     if verification_for_provider is not None:
         # A verification task for known work follows the same rule as the worker
@@ -1570,7 +1615,13 @@ def _route_task(
             primary_provider=primary_provider,
             use_legacy_fallback=use_legacy_fallback,
             risk=task["risk"],
+            independent=(
+                policy.get("escalation", {}).get("scope") == "risk_banded_judgment"
+                and task["risk"] in {"low", "medium"}
+                and task.get("verification_for_family") in {"coding", "research", "planning"}
+            ),
         )
+        verifier_independent = rule.get("independent")
         rule_agent = None
         if rule["provider"] == "claude":
             rule_agent = {
@@ -1588,6 +1639,15 @@ def _route_task(
         candidate_entries, risk_band = _banded_candidate_list(
             policy, *_route_key(policy, routed_family, candidate), task["risk"]
         )
+    route_name, route_key = _route_key(policy, routed_family, candidate)
+    judgment_scope = (
+        policy.get("escalation", {}).get("scope") == "risk_banded_judgment"
+        and routed_family in {"coding", "research", "planning"}
+        and route_name == routed_family
+        and route_key in {"exploratory", "judgment", "synthesis"}
+        and task["risk"] in {"low", "medium"}
+    )
+    judgment_cell = judgment_scope and risk_band is not None
 
     def first_eligible(
         entries: list[dict[str, Any]],
@@ -1626,7 +1686,8 @@ def _route_task(
     escalation: dict[str, Any] | None = None
     if verification_for_provider is None:
         picked, escalation = _escalate(
-            policy, task, routed_family, picked, first_eligible
+            policy, task, routed_family, picked, first_eligible,
+            judgment_cell=judgment_cell,
         )
     provider, primary, claude_agent = picked
     selected = primary
@@ -1680,11 +1741,23 @@ def _route_task(
             primary_provider=primary_provider,
             use_legacy_fallback=use_legacy_fallback,
             risk=task["risk"],
+            independent=(
+                policy.get("escalation", {}).get("scope") == "risk_banded_judgment"
+                and task["risk"] in {"low", "medium"}
+                and routed_family in {"coding", "research", "planning"}
+            ),
         )
 
     route_bounds = dict(policy["bounds"])
     route_bounds["timeout_seconds"] = policy["observation_deadlines"][routed_family]
     selection = _selection_metadata(candidate, policy)
+    if (
+        policy["version"] == 6
+        and policy.get("escalation", {}).get("scope") == "risk_banded_judgment"
+        and not judgment_scope
+    ):
+        # Unopted cells still execute the v5 selector, including its audit identity.
+        selection["policy_version"] = 5
     if primary != {"model": candidate["model"], "effort": candidate["effort"]}:
         selection["eligible"] = [deepcopy(primary)]
         if provider == "codex":
@@ -1718,16 +1791,36 @@ def _route_task(
         "dispatch": _dispatch(primary_provider, provider),
         "provider_config_digest": provider_config_digest,
     }
-    if risk_band is not None or escalation is not None:
+    review_fields = {key: task[key] for key in (
+        "review_phase", "parent_review_id", "expanded_scope"
+    ) if key in task}
+    if risk_band is not None or escalation is not None or judgment_scope or review_fields:
         basis: dict[str, Any] = {"risk": task["risk"]}
         if risk_band is not None:
             basis["risk_band"] = risk_band
         if escalation is not None:
             basis["escalation"] = escalation
+        if judgment_scope or review_fields:
+            basis.update({key: deepcopy(task[key]) for key in (
+                "family", "operation", "acceptance_strength", "context_breadth",
+                "routing_evidence_refs", "failed_attempts", "failure_events",
+            )})
+            basis.update(review_fields)
+            basis["requested_setting"] = {"provider": provider, "model": model, "effort": effort}
+            # Routing requests execution; it cannot attest an observation or a verdict.
+            basis["observed_setting"] = None
+            basis["verdict_axes"] = dict(
+                admission_state=None, execution_state=None, semantic_verdict=None
+            )
+            basis["usage"] = None
+        if judgment_scope and risk_band is None:
+            basis["risk_cell_fallback"] = "provider_candidates"
         result["routing_basis"] = basis
     if fallback is not None:
         fallback["verifier_substituted"] = verification_required
         result["fallback"] = fallback
+    if verifier_independent is False:
+        result["independent"] = False
     mapping_digest = policy.get("project_agent_mapping_digest")
     if mapping_digest is not None:
         result["project_agent_mapping_digest"] = mapping_digest

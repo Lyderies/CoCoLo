@@ -9,6 +9,7 @@ counts and typed codes; prompts and file contents never reach the ledger.
 from __future__ import annotations
 
 import contextlib
+import copy
 import hashlib
 import json
 import os
@@ -30,7 +31,11 @@ from .claude_activity import ClaudeActivity, ClaudeActivityError
 from .codex_activity import CodexActivity, CodexActivityError
 from . import event_shapes
 from .contracts import (
+    ADMISSION_STATES,
     EVIDENCE_FIELDS_RULE,
+    EXECUTION_STATES,
+    RESULT_STATUSES,
+    SEMANTIC_VERDICTS,
     ONE_EVIDENCE_ENTRY_RULE,
     effective_dispatch_bounds,
     effective_dispatch_limits,
@@ -1093,6 +1098,142 @@ def place_worker_result(export: Path, worker_result: dict[str, Any]) -> str:
     return VERIFIER_WORKER_RESULT_PATH
 
 
+def _is_verification_assignment(assignment: Any) -> bool:
+    """A verifier's assignment: the only role whose host-owned fields the host sets (decision 26)."""
+
+    role = assignment.get("role") if isinstance(assignment, dict) else None
+    return isinstance(role, str) and role.endswith("_verification_worker")
+
+
+def narrow_verifier_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """The result schema a verifier is held to: only what the host would accept (VF-INV-c).
+
+    The admission is the host's (`unverified` only) and a child cannot attest a timeout. Cross-field
+    rules (status against verdict) are not stated here: a strict client accepts no root-level
+    `anyOf`, and the host sets the status itself from the two axes (VF-INV-d). Returns a copy.
+    """
+
+    narrowed = copy.deepcopy(schema)
+    properties = narrowed.get("properties")
+    if isinstance(properties, dict):
+        if isinstance(properties.get("admission_state"), dict):
+            properties["admission_state"]["enum"] = ["unverified"]
+        execution = properties.get("execution_state")
+        if isinstance(execution, dict) and isinstance(execution.get("enum"), list):
+            execution["enum"] = [state for state in execution["enum"] if state != "timed_out"]
+    return narrowed
+
+
+def result_schema_for(schema: bytes, assignment: Any) -> bytes:
+    """The schema bytes a child of this assignment receives: narrowed for a verifier, else unchanged."""
+
+    if not _is_verification_assignment(assignment):
+        return schema
+    try:
+        parsed = json.loads(schema)
+    except ValueError:
+        return schema  # the ordinary schema parse refuses it
+    if not isinstance(parsed, dict):
+        return schema
+    return json.dumps(narrow_verifier_schema(parsed), sort_keys=True).encode()
+
+
+def _host_set_verifier_fields(
+    assignment: Any, result: Any
+) -> tuple[Any, list[dict[str, str]]]:
+    """Owner decision 26: the host sets a verifier's admission and overall status.
+
+    A verifier reports its verdict and findings only. Its admission is always `unverified`; its
+    status follows from its execution state and verdict. Only a recognised value is replaced, and
+    each change is returned as fixed words (the child's original stays in the kept raw answer).
+    A verdict is never filled in and a child's timeout claim is never repaired: the validator
+    still refuses both. Any other role's result is returned untouched.
+    """
+
+    if not _is_verification_assignment(assignment) or type(result) is not dict:
+        return result, []
+    changes: list[dict[str, str]] = []
+    repaired = dict(result)
+    admission = result.get("admission_state")
+    if type(admission) is str and admission in ADMISSION_STATES and admission != "unverified":
+        repaired["admission_state"] = "unverified"
+        changes.append({"field": "admission_state", "was": admission, "now": "unverified"})
+    status, execution, verdict = (result.get(name) for name in ("status", "execution_state", "semantic_verdict"))
+    if (type(status) is str and status in RESULT_STATUSES and type(execution) is str
+            and execution in EXECUTION_STATES and type(verdict) is str and verdict in SEMANTIC_VERDICTS):
+        derived = legacy_result_status(execution, verdict)
+        if status != derived:
+            repaired["status"] = derived
+            changes.append({"field": "status", "was": status, "now": derived})
+    return (repaired, changes) if changes else (result, changes)
+
+
+# VF-INV-a: what a kept raw answer must never hold. The runtime had no scrubber, so this is the
+# host's own: credential-shaped text, private-key blocks and the values of the caller's secret
+# variables are replaced before the answer is written.
+_REMOVED = "[removed]"
+_SECRET_PATTERNS = tuple(re.compile(pattern, re.DOTALL) for pattern in (
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)",
+    r"\bsk-[A-Za-z0-9_-]{16,}",
+    r"\bgh[pousr]_[A-Za-z0-9]{20,}",
+    r"\bgithub_pat_[A-Za-z0-9_]{20,}",
+    r"\bAKIA[0-9A-Z]{16}\b",
+    r"\bAIza[0-9A-Za-z_-]{30,}",
+    r"\bxox[abprs]-[A-Za-z0-9-]{10,}",
+    r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
+    r"\b[Bb]earer\s+[A-Za-z0-9._~+/=-]{16,}",
+))
+_SECRET_ASSIGNMENT = re.compile(
+    r"""((?:api[_-]?key|secret|token|password|passwd|credential)s?(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?)[^\s"',}\]\\]{6,}""",
+    re.IGNORECASE,
+)
+_SCRUB_MARGIN_BYTES = 4096
+_SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
+
+
+def scrub_child_answer(text: str, environ: Mapping[str, str]) -> tuple[str, bool]:
+    """Return the answer without credential-shaped text, and whether anything was removed."""
+
+    scrubbed = text
+    for name, value in environ.items():
+        if isinstance(value, str) and len(value) >= 8 and _SECRET_NAME.search(str(name)):
+            # The value as written, and as JSON writes it (escaped quotes, newlines and, by default,
+            # non-ASCII characters): a re-serialized answer holds the escaped form.
+            for form in {value, json.dumps(value)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1]}:
+                scrubbed = scrubbed.replace(form, _REMOVED)
+    for pattern in _SECRET_PATTERNS:
+        scrubbed = pattern.sub(_REMOVED, scrubbed)
+    scrubbed = _SECRET_ASSIGNMENT.sub(lambda match: match.group(1) + _REMOVED, scrubbed)
+    return scrubbed, scrubbed != text
+
+
+def _keep_raw_answer(
+    ledger: Any, project_id: str, answer: dict[str, Any], environ: Mapping[str, str]
+) -> dict[str, Any] | None:
+    """Keep the child's raw final answer where only the host reads it (VF-INV-a).
+
+    Called before the private directory is removed and before validation can fence the answer.
+    Returns what the report records (digest, size, flags), None when the child gave no answer.
+    Keeping is best effort: a failure is recorded and never changes the run's outcome.
+    """
+
+    content = answer.get("bytes")
+    if not isinstance(content, bytes):
+        return None
+    # Scrub the whole answer first and cut afterwards, so a cut cannot leave part of a secret.
+    text, scrubbed = scrub_child_answer(content.decode("utf-8", "replace"), environ)
+    stored = text.encode("utf-8")
+    truncated = len(stored) > MAX_RESULT_BYTES
+    stored = stored[:MAX_RESULT_BYTES]
+    try:
+        digest = ledger.keep_child_answer(project_id, stored)
+    except Exception:
+        # Best effort, whatever the ledger raises (a database error included): never the run's outcome.
+        return {"kept": False, "reason": "keep_failed"}
+    return {"kept": True, "sha256": digest, "bytes": len(stored),
+            "truncated": truncated, "scrubbed": scrubbed}
+
+
 def child_prompt(assignment: dict[str, Any], *, worker_result_path: str | None = None) -> str:
     preflight = result_preflight(assignment)
     template = preflight["template"]
@@ -1290,6 +1431,7 @@ def run_claude(
     schema: bytes,
     worker_result_path: str | None = None,
     _execution: ExecutionTicket | None = None,
+    raw_answer: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     model = route["model"]
     # O10 VF-1: the same strict schema a Codex child gets, so the client holds the result to it.
@@ -1497,6 +1639,15 @@ def run_claude(
             }
     if outcome["abort"] is not None:
         return None, {**report, "outcome": outcome["abort"]}
+    if raw_answer is not None and isinstance(result_frame, dict):
+        structured_answer = result_frame.get("structured_output")
+        if type(structured_answer) is dict:
+            try:
+                _offer_raw_answer(raw_answer, json.dumps(structured_answer, ensure_ascii=False).encode())
+            except (ValueError, RecursionError):
+                pass
+        elif isinstance(result_frame.get("result"), str):
+            _offer_raw_answer(raw_answer, result_frame["result"].encode("utf-8", "replace"))
     missing = {**report, "outcome": "invalid_result", "result_validation_reason_code": "structured_output_missing"}
     if isinstance(result_frame, dict) and result_frame.get("subtype") == "error_max_structured_output_retries":
         # O10 VF-2: the client could not get a schema-valid result; recognised before the exit code,
@@ -1516,6 +1667,45 @@ def run_claude(
     except RecursionError:
         return None, {**report, "outcome": "unparseable_result"}
     return result, {**report, "outcome": "result"}
+
+
+def _offer_raw_answer(sink: dict[str, Any], content: bytes) -> None:
+    """Hand the child's raw final answer to the dispatch that keeps it (VF-INV-a).
+
+    Not cut here: `_keep_raw_answer` scrubs the whole answer and then caps it, so a cut can never
+    leave part of a secret. What is offered is already in memory (a Codex read is bounded).
+    """
+
+    sink["bytes"] = content
+
+
+def _command_limit(route: dict[str, Any], assignment: dict[str, Any]) -> int | None:
+    """The nominal tool-call limit of a Codex run: the lower of the route's and the assignment's.
+
+    A dispatched route always carries its bounds (validate_assignment checks them); a caller that
+    names only a model and effort is held to the assignment's own bound, never refused here. When
+    neither names a limit there is none: None, which the run reports as such (VF-INV-e).
+    """
+
+    limits = [bounds["max_tool_calls"] for bounds in (route.get("bounds"), assignment.get("bounds"))
+              if isinstance(bounds, dict) and type(bounds.get("max_tool_calls")) is int]
+    return min(limits) if limits else None
+
+
+def _count_command(state: dict[str, Any], kind: str, identifier: Any) -> None:
+    """Count one command item once, whether the stream names it, starts it or only completes it."""
+
+    if type(identifier) is str and identifier:
+        if identifier not in state["command_ids"]:
+            state["command_ids"].add(identifier)
+            state["commands"] += 1
+    elif kind == "item.started":
+        state["commands"] += 1
+        state["open_unnamed"] += 1
+    elif state["open_unnamed"] > 0:
+        state["open_unnamed"] -= 1
+    else:
+        state["commands"] += 1
 
 
 def _event_label(value: Any) -> str:
@@ -1550,6 +1740,7 @@ def run_codex(
     worker_result_path: str | None = None,
     role_prompt: str,
     _execution: ExecutionTicket | None = None,
+    raw_answer: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     model = route["model"]
     original_schema, strict_schema = codex_schemas(schema)
@@ -1584,8 +1775,12 @@ def run_codex(
         "--",
         child_prompt(assignment, worker_result_path=worker_result_path),
     ]
+    # VF-INV-e: the host counts the child's model turns and commands, and stops it above the
+    # nominal tool-call limit (the client has no limit of its own).
+    command_limit = _command_limit(route, assignment)
     state: dict[str, Any] = {
         "usage": None, "rerouted": False, "observed_model": None, "failed": False,
+        "turns": 0, "commands": 0, "peak_input": None, "command_ids": set(), "open_unnamed": 0,
     }
     activity = (CodexActivity() if type(_execution) is ExecutionTicket
                 and _execution.activity_enabled() else None)
@@ -1603,14 +1798,23 @@ def run_codex(
             item_type = item.get("type") if isinstance(item, dict) else None
             if not isinstance(item_type, str) or item_type not in CODEX_ALLOWED_ITEMS:
                 raise _Abort(f"codex_tool_not_allowed:{_event_label(item_type)}")
+            if item_type == "command_execution" and kind != "item.updated":
+                _count_command(state, kind, item.get("id"))
+                if command_limit is not None and state["commands"] > command_limit:
+                    raise _Abort("tool_call_limit_exceeded")
         for key in ("model", "to_model"):
             value = frame.get(key)
             if isinstance(value, str):
                 state["observed_model"] = value
                 if value != model:
                     state["rerouted"] = True
+        if kind == "turn.completed":
+            state["turns"] += 1
         if kind == "turn.completed" and isinstance(frame.get("usage"), dict):
             usage = frame["usage"]
+            peak = usage.get("input_tokens")
+            if type(peak) is int and peak >= 0:
+                state["peak_input"] = max(state["peak_input"] or 0, peak)
             state["usage"] = {
                 name: usage.get(name)
                 for name in (
@@ -1656,6 +1860,10 @@ def run_codex(
         "read_containment": "advisory",
         "rerouted": state["rerouted"],
         "usage": state["usage"],
+        "codex_turns": state["turns"],
+        "codex_commands": state["commands"],
+        "peak_turn_input_tokens": state["peak_input"],
+        "command_limit": command_limit,
     }
     if outcome["abort"] is not None:
         return None, {**report, "outcome": outcome["abort"]}
@@ -1668,7 +1876,11 @@ def run_codex(
     with os.fdopen(descriptor, "rb") as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
             return None, {**report, "outcome": "missing_result"}
-        raw = handle.read(MAX_RESULT_BYTES + 1)
+        # A little past the cap: the kept answer is scrubbed before it is cut, and a secret that
+        # straddles the cap must be seen whole.
+        raw = handle.read(MAX_RESULT_BYTES + 1 + _SCRUB_MARGIN_BYTES)
+    if raw_answer is not None:
+        _offer_raw_answer(raw_answer, raw)
     if len(raw) > MAX_RESULT_BYTES:
         return None, {**report, "outcome": "unparseable_result"}
     result = _result_object(raw.decode("utf-8", "replace"))
@@ -1966,6 +2178,8 @@ def dispatch(
     ):
         raise BridgeRefused("bridged children are read-only")
     validate_assignment(assignment, task=task, route=route, parent_grant=parent_grant)
+    # VF-INV-c: a verifier's child is held to the schema the host would accept.
+    result_schema = result_schema_for(result_schema, assignment)
     admission = ledger.host_run_admission(project_id, run_handle)
     if admission["provider"] != provider:
         raise BridgeRefused("host run admission differs from the route provider")
@@ -2061,6 +2275,7 @@ def dispatch(
             project_id, run_handle=run_handle, agent_id=intent["bridge_run_id"]
         )
         execution = ledger._new_owned_execution(project_id, run_handle, intent["bridge_run_id"])
+        raw_answer: dict[str, Any] = {}
         if provider == "claude":
             result, report = run_claude(
                 ledger=ledger, project_id=project_id, run_handle=run_handle,
@@ -2068,7 +2283,7 @@ def dispatch(
                 export=export, control=control, environ=environ,
                 deadline_seconds=deadline_seconds, max_turns=max_turns,
                 executable=executable, schema=result_schema, worker_result_path=worker_result_path,
-                _execution=execution,
+                _execution=execution, raw_answer=raw_answer,
             )
             if report["rate_limit_record_failed"]:
                 report.setdefault("observations_unavailable", []).append(
@@ -2087,7 +2302,7 @@ def dispatch(
                 schema=result_schema, environ=environ,
                 deadline_seconds=deadline_seconds, executable=executable,
                 worker_result_path=worker_result_path, role_prompt=role_prompt,
-                _execution=execution,
+                _execution=execution, raw_answer=raw_answer,
             )
             try:
                 ledger.observe_provider(
@@ -2101,6 +2316,9 @@ def dispatch(
                     ledger, project_id, run_handle, provider, "after",
                     observation_failure_reason(exc), report,
                 )
+        # VF-INV-a: the child's raw answer outlives this private directory, and is kept
+        # before validation can fence it.
+        report["raw_answer"] = _keep_raw_answer(ledger, project_id, raw_answer, environ)
         _record_usage(ledger, project_id, run_handle, provider, route["model"], report)
     finally:
         remove_private_directory(workspace)
@@ -2136,6 +2354,10 @@ def prepare_dispatch_result(assignment, result, report):
     caller, process-cleanup or account-release authority.
     """
     reviewed = True
+    # Owner decision 26 (VF-INV-d): a verifier's admission and status are the host's to set.
+    result, host_set = _host_set_verifier_fields(assignment, result)
+    if host_set:
+        report["host_set_fields"] = host_set
     # O10 VF-2: a run that ended with no result may already carry its fixed reason.
     result_validation_reason_code = (report.get("result_validation_reason_code") if result is None
                                      and report.get("result_validation_reason_code") in RESULT_VALIDATION_REASON_CODES
@@ -2198,8 +2420,11 @@ def _unrecordable(
     # Raw child results cannot grant their own admission or attest a timeout.
     # Match host commitment before binding an immutable child-result digest;
     # real bridge timeouts get their authoritative fence later in dispatch.
-    if axes["admission_state"] != "unverified" or axes["execution_state"] == "timed_out":
-        return "invalid_result", "inconsistent_axes"
+    # (VF-INV-b: one fixed reason per branch.)
+    if axes["admission_state"] != "unverified":
+        return "invalid_result", "child_set_admission"
+    if axes["execution_state"] == "timed_out":
+        return "invalid_result", "child_set_timeout"
     # Host outcomes keep one digest per criterion plus the assignment/result
     # bindings. Fence before binding if that existing durable limit cannot fit.
     if len(result["evidence"]) + 2 > MAX_OUTCOME_EVIDENCE_DIGESTS:

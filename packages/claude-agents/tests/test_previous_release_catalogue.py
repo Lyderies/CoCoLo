@@ -20,6 +20,7 @@ from claude_agents.packaging import PackageError, compile_bundle, package_operat
 
 SOURCE = Path(__file__).resolve().parents[1]
 RELEASED_0_8_40 = "c3e80b3f92cc5e5728b848e384d820265f70b32031ed931b723f201c1b0309ae"
+RELEASED_0_8_41 = "eb34209dacdac6d3fe00fcd8a3f4c055bb3cdf661683ea270abc527f95ff62d3"
 MANIFEST = ".claude/claude-agents/install-manifest.json"
 SETTINGS = ".claude/settings.json"
 OUTSIDE_PATHS = (SETTINGS, ".claude/claude-agents/lib/claude_agents/contracts/__init__.py",
@@ -81,10 +82,10 @@ class CatalogueTests(unittest.TestCase):
         self.assertEqual(code, str(caught.exception))
 
     def test_the_accepted_digests_are_pinned_in_installer_code(self) -> None:
-        self.assertEqual(frozenset({RELEASED_0_8_40}), packaging.PINNED_RELEASE_DIGESTS)
+        self.assertEqual(frozenset({RELEASED_0_8_40, RELEASED_0_8_41}), packaging.PINNED_RELEASE_DIGESTS)
 
     def test_the_shipped_catalogue_is_accepted(self) -> None:
-        self.assertEqual(1, len(released_bundles(self.source)))
+        self.assertEqual(3, len(released_bundles(self.source)))  # 0.8.40, 0.8.41, 0.8.42 (same bundle as 0.8.41)
 
     def test_an_appended_record_with_a_recomputed_digest_is_refused(self) -> None:
         self.write([*self.records(), self.forged()])

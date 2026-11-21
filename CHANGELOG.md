@@ -4,6 +4,27 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.43 (RT-21 Phase 0): low/medium coding and research judgment/exploration,
+  and planning synthesis, try GPT-6.1 Sol before Sonnet 5.5. Confirmed quality failures
+  advance one admitted ladder rung, then use the strongest admitted route on the second
+  failure; unadjudicated claims stay held. Low/medium coding, research and planning prefer an
+  independent verifier; when the other provider is not admitted the same-provider fallback is
+  kept and the route records `independent: false` (also on the verification route). Routes record
+  review phase, parent lineage, expanded scope and unknown observations/usage separately.
+  Policy v6 preserves v5 selectors for unopted cells, bounded coding choices and every
+  high/critical route; legacy policies still load. No learning promotion is enabled.
+  Verifier `invalid_result` fix (0.4.0 item 0.5): the bridge keeps each child's raw final answer
+  (credential-shaped text removed; owner-only file in the project's artifact folder named by its SHA-256;
+  digest, size and truncation in the report; expires after 7 days) before its private directory is
+  removed. `inconsistent_axes` is split into `axes_status_verdict_mismatch`, `axes_verdict_without_completion`,
+  `axes_admission_without_completion`, `axes_retry_lineage`, `child_set_admission` and `child_set_timeout`
+  (older ledgers still read `inconsistent_axes`). Owner decision 26: the host sets a verifier's admission
+  (`unverified`) and its status from its execution state and verdict, and records what it replaced in
+  `host_set_fields`; a missing verdict or a child's timeout claim still fails, and worker results are
+  unchanged. A verifier's output schema offers only `unverified` admission and no `timed_out` state.
+  A Codex child's turns, commands and peak per-turn input tokens are recorded, and a run above its nominal
+  `max_tool_calls` is stopped as `tool_call_limit_exceeded`.
+
 - Package 0.8.42 (O0d): low/medium-risk verifiers use Sonnet 5.5 (medium) for Codex work and
   GPT-6.1 Sol (medium) for Claude work, including confirming reviews. Bounded coding at those
   risks tries GPT-6 Sol (medium), then Sonnet 5.5 (medium). High/critical routes keep their

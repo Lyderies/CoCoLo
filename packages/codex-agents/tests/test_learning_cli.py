@@ -1321,6 +1321,7 @@ class LearningCliTests(unittest.TestCase):
         failed_result = result()
         failed_result.update(
             status="failed",
+            semantic_verdict="not-applicable",
             summary="failed secret summary",
             evidence=[],
             remaining_risks=["private failure detail"],

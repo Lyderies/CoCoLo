@@ -98,7 +98,15 @@ RESULT_VALIDATION_REASON_CODES = {
     "missing_required_fields",
     "unknown_criterion",
     "unknown_fields",
-    "inconsistent_axes",
+    # 0.4.0 item 0.5 (VF-INV-b): the old `inconsistent_axes` is split by branch, each a fixed,
+    # content-free code. `inconsistent_axes` itself is no longer produced; it stays a readable
+    # diagnostic of older ledgers (RESULT_DIAGNOSTIC_REASON_CODES).
+    "axes_status_verdict_mismatch",
+    "axes_verdict_without_completion",
+    "axes_admission_without_completion",
+    "axes_retry_lineage",
+    "child_set_admission",
+    "child_set_timeout",
     # RV1: which evidence rule a result broke, each a fixed, content-free code.
     "evidence_missing_fields",
     "evidence_unknown_fields",
@@ -113,7 +121,7 @@ RESULT_VALIDATION_REASON_CODES = {
 # Durable bridge diagnostics also cover validators that raise an untyped error.
 # Never add exception text or caller-selected values to this vocabulary.
 RESULT_DIAGNOSTIC_REASON_CODES = frozenset(
-    RESULT_VALIDATION_REASON_CODES | {"contract_validation_failed"}
+    RESULT_VALIDATION_REASON_CODES | {"contract_validation_failed", "inconsistent_axes"}
 )
 BOUND_FIELDS = {
     "max_attempts",
@@ -198,7 +206,7 @@ def validate_parent_grant(data: Any) -> dict[str, Any]:
     return _validate_permissions(data, "parent_grant")
 
 
-def validate_task(data: Any) -> dict[str, Any]:
+def validate_task(data: Any, *, allow_unadjudicated_failures: bool = False) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ContractError("task must be an object", field="task")
     required = {
@@ -226,6 +234,9 @@ def validate_task(data: Any) -> dict[str, Any]:
         "verification_for_family",
         "verification_for_provider",
         "verification_for_outcome",
+        "review_phase",
+        "parent_review_id",
+        "expanded_scope",
     }
     _required(data, required, "task")
     unknown = sorted(data.keys() - allowed)
@@ -235,6 +246,15 @@ def validate_task(data: Any) -> dict[str, Any]:
     _nonempty_string(data["objective"], "objective", "task.objective")
     if not isinstance(data["family"], str) or data["family"] not in TASK_FAMILIES:
         raise ContractError(f"unsupported family: {data['family']}", field="task.family")
+    if "review_phase" in data and (
+        not isinstance(data["review_phase"], str)
+        or data["review_phase"] not in {"first", "delta", "confirmation"}
+    ):
+        raise ContractError("unsupported review_phase", field="task.review_phase")
+    if "parent_review_id" in data:
+        _nonempty_string(data["parent_review_id"], "parent_review_id", "task.parent_review_id")
+    if "expanded_scope" in data and not isinstance(data["expanded_scope"], bool):
+        raise ContractError("expanded_scope must be boolean", field="task.expanded_scope")
     verification_for_family = data.get("verification_for_family")
     if verification_for_family is not None:
         if data["family"] != "verification":
@@ -404,9 +424,10 @@ def validate_task(data: Any) -> dict[str, Any]:
             )
         seen_events.add(event_key)
         if reason in {"semantic", "reasoning"}:
-            if not all(
-                VERIFIED_FAILURE_REFERENCE.fullmatch(reference)
-                for reference in evidence_refs
+            # A claim may precede adjudication. Only verification digests qualify it
+            # for escalation; retaining a safe host reference does not confirm it.
+            if not allow_unadjudicated_failures and not all(
+                VERIFIED_FAILURE_REFERENCE.fullmatch(reference) for reference in evidence_refs
             ):
                 raise ContractError(
                     "semantic and reasoning failures require verification record digests",
@@ -936,16 +957,16 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
         raise ResultContractError("invalid_status", "admission_state is unsupported")
     if data["status"] != legacy_result_status(execution_state, semantic_verdict):
         raise ResultContractError(
-            "inconsistent_axes", "legacy result status disagrees with explicit axes"
+            "axes_status_verdict_mismatch", "legacy result status disagrees with explicit axes"
         )
     substantive = SEMANTIC_VERDICTS - {"not-applicable"}
     if execution_state != "completed" and semantic_verdict in substantive:
         raise ResultContractError(
-            "inconsistent_axes", "non-completed execution cannot claim a semantic verdict"
+            "axes_verdict_without_completion", "non-completed execution cannot claim a semantic verdict"
         )
     if admission_state == "accepted" and execution_state != "completed":
         raise ResultContractError(
-            "inconsistent_axes", "accepted admission requires completed execution"
+            "axes_admission_without_completion", "accepted admission requires completed execution"
         )
     retry = axes["retry"]
     if (
@@ -969,11 +990,11 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
         )
     if retry["attempt"] == 1 and retry["retry_of_assignment_id"] is not None:
         raise ResultContractError(
-            "inconsistent_axes", "first attempt cannot reference a retry predecessor"
+            "axes_retry_lineage", "first attempt cannot reference a retry predecessor"
         )
     if retry["attempt"] > 1 and retry["retry_of_assignment_id"] is None:
         raise ResultContractError(
-            "inconsistent_axes", "retry attempt requires its predecessor assignment"
+            "axes_retry_lineage", "retry attempt requires its predecessor assignment"
         )
     if retry["retry_of_assignment_id"] != assignment.get("retry_of_assignment_id"):
         raise ResultContractError(
@@ -1186,6 +1207,7 @@ def effective_dispatch_bounds(route: dict[str, Any], assignment: dict[str, Any])
 
     deadline, turns = effective_dispatch_limits(route, assignment)
     claude = route.get("provider") == "claude" and route.get("dispatch") == "bridge"
+    codex = route.get("provider") == "codex" and route.get("dispatch") == "bridge"
     explicit = assignment.get("execution_limits", {})
     return {
         "execution_limit_contract": "explicit" if explicit else "legacy",
@@ -1194,6 +1216,12 @@ def effective_dispatch_bounds(route: dict[str, Any], assignment: dict[str, Any])
         "nominal_max_tool_calls": min(route["bounds"]["max_tool_calls"],
                                       assignment["bounds"]["max_tool_calls"]),
         "exact_tool_call_limit": None,
+        # 0.4.0 item 0.5 (VF-INV-e): the host counts a Codex child's command items and stops the run
+        # above the nominal limit; a Claude child is bounded by its client's turn limit instead.
+        "command_limit": min(route["bounds"]["max_tool_calls"], assignment["bounds"]["max_tool_calls"])
+        if codex else None,
+        "command_limit_enforcement": "host counts command items and stops the run above the limit"
+        if codex else "unavailable",
         "model_turn_limit": turns if claude else None,
         "model_turn_enforcement": "client --max-turns" if claude else "unavailable",
         "model_turn_limit_source": (

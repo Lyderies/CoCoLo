@@ -2351,6 +2351,13 @@ class LearningLedger:
                 (now, now, str(row["project_id"]), str(row["relative_path"])),
             )
             due.append((str(row["project_id"]), str(row["relative_path"])))
+        # VF-INV-a: kept child answers carry their own expiry and no orchestration.
+        for row in self._connection.execute(
+            "SELECT project_id,relative_path FROM stored_files WHERE kind='artifact' "
+            "AND substr(file_id,1,13)='child_answer_' AND expires_at_ms IS NOT NULL AND expires_at_ms<=?",
+            (now,),
+        ).fetchall():
+            due.append((str(row["project_id"]), str(row["relative_path"])))
         return due
 
     def sweep_account_retention(self, *, now_ms: int | None = None, batch: int = EVENT_SWEEP_BATCH) -> int:
@@ -2494,6 +2501,40 @@ class LearningLedger:
                 self._connection.execute(f"RELEASE summary_{number}")
                 removed += len(group["ids"])
         return removed
+
+    def keep_child_answer(self, project_id: str, content: bytes) -> str:
+        """Keep a bridged child's raw final answer, owner-only, and return its SHA-256 (VF-INV-a).
+
+        The file is named by its digest (`child_answer_<40 hex>`), lives in the project's artifact
+        partition like a kept worker result, is registered with an expiry of the worker-result
+        retention, and is deleted by `sweep_worker_results` or with the project. The caller has
+        already removed credential-shaped text; the size cap is the caller's. The same answer is
+        kept once.
+        """
+
+        digest = hashlib.sha256(content).hexdigest()
+        file_id = f"child_answer_{digest[:40]}"
+        with self._held():
+            registered = self._connection.execute(
+                "SELECT 1 FROM stored_files WHERE project_id=? AND file_id=?", (project_id, file_id),
+            ).fetchone()
+            if registered is not None:
+                return digest
+            try:
+                path = self._write_owner_file("artifact", project_id, file_id, content)
+            except FileExistsError:
+                # An unregistered leftover of an interrupted keep: removed at the next ledger start.
+                raise LedgerError("a kept child answer is already being written") from None
+            try:
+                self._register_stored_file(
+                    project_id, file_id=file_id, kind="artifact", path=path, digest=digest,
+                    expires_at_ms=self._clock_ms() + WORKER_RESULT_RETENTION_MS,
+                )
+            except Exception:
+                with contextlib.suppress(OSError):
+                    path.unlink()
+                raise
+        return digest
 
     def sweep_worker_results(self) -> int:
         """Delete worker results past their retention or orchestration; return how many.
