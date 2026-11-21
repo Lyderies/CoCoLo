@@ -1,6 +1,10 @@
 """Core API round 4 (Codex review 040-tm0-api-r3, worker and verifier): every r3 finding that was partly or not
-fixed, as a requirement test that was red first. Coverage-only items (scope matrix, handler table, racing
-confirms, replacement-test gaps) are marked "coverage": they pin behaviour the code already has.
+fixed, as a requirement test that was red first. Tests marked GUARD passed on the old code too: they pin a
+requirement the code already met (scope matrix, handler table, racing confirms, replaced-test gaps). Each test
+names its requirement (API-n, TERM-n) on its def line.
+
+API-23 tests follow the owner's decision of 2026-11-21: every change and confirm is a commands.jsonl line, every
+refusal is an audit.jsonl line (rotated separately), each line names caller, method and outcome, no secret appears.
 
 The root cause the review found: earlier rounds patched each call site, so every site not patched kept the
 defect. These tests check the invariant at the boundary (every reply, every event, every write, every lock)
@@ -93,6 +97,10 @@ class Helpers:
         client.call("initialize", {"protocol": self.mod.PROTOCOL_VERSION})
         return client
 
+    def refusals(self):
+        """The refusal rows (API-23): audit.jsonl and its one rotation."""
+        return read_jsonl(self.records / "audit.jsonl.1") + read_jsonl(self.records / "audit.jsonl")
+
     def all_audit(self):
         rows = []
         for name in ("commands.jsonl", "audit.jsonl", "audit.jsonl.1"):
@@ -125,7 +133,7 @@ class NoMoneyRound4(Helpers, CoreCase):
         jsonl(self.records / "messages.jsonl", [{"id": "M-1", "ts": 1, "role": "orchestrator",
                                                   "text": "That was EUR 40 and 3.20 USD"}])
 
-    def test_commands_queries_activity_and_answers_carry_no_money(self):
+    def test_commands_queries_activity_and_answers_carry_no_money(self):  # TERM-36
         owner = self.client("owner")
         command = self.confirmed(owner, "control.pause", {})["command_id"]
         jsonl(self.records / "command_acks.jsonl", [{"type": "ack", "command_id": command, "action": "pause",
@@ -141,14 +149,14 @@ class NoMoneyRound4(Helpers, CoreCase):
         for question in ("What is U-0001 doing?", "What is the status?"):
             self.assertNoMoney(client.call("query.ask", {"text": question}), question)
 
-    def test_money_amounts_in_text_are_removed(self):
+    def test_money_amounts_in_text_are_removed(self):  # TERM-36
         client = self.client("read")
         for method in ("history.list", "messages.list"):
             text = json.dumps(client.call(method))
             for amount in ("12.50", "EUR 40", "3.20 USD"):
                 self.assertNotIn(amount, text, method)
 
-    def test_event_envelopes_carry_no_money(self):
+    def test_event_envelopes_carry_no_money(self):  # TERM-36, API-14
         with open(self.records / "events.jsonl", "a") as handle:
             handle.write(json.dumps({"seq": 6, "ts": {"credits": PLANT}, "kind": "unit.updated", "v": 1,
                                      "data": {"summary": "paid $99 for it"}}) + "\n")
@@ -158,7 +166,7 @@ class NoMoneyRound4(Helpers, CoreCase):
         self.assertNoMoney(events, "event")
         self.assertNotIn("$99", json.dumps(events))
 
-    def test_cursor_expired_snapshot_is_clean(self):  # coverage: r3 noted the old check passed when nothing was raised
+    def test_cursor_expired_snapshot_is_clean(self):  # API-12, TERM-36: r3 noted the old check passed when nothing was raised
         self.service.stop()
         self.start(event_buffer=2)
         with self.assertRaises(self.mod.ApiError) as raised:
@@ -172,7 +180,7 @@ class NoMoneyRound4(Helpers, CoreCase):
 class DeadlineRound4(Helpers, CoreCase):
     service_options = {"method_seconds": 0.3, "lock_seconds": 3.0}
 
-    def test_a_mutation_past_its_deadline_writes_nothing(self):
+    def test_a_mutation_past_its_deadline_writes_nothing(self):  # API-24
         query = self.client("confirm").call("query.ask", {"text": "Rewrite the parser?", "mode": "forward"})["query_id"]
         jsonl(self.records / "decisions.jsonl", [{"id": "D-0001", "text": "Go?", "options": ["yes", "no"]}])
         owner = self.client("owner")
@@ -191,7 +199,7 @@ class DeadlineRound4(Helpers, CoreCase):
                     self.assertEqual("timeout", self.error_code(owner, method, params))
                 self.assertEqual(rows_before, len(read_jsonl(self.records / record)), method)
 
-    def test_a_lock_wait_is_bounded_by_the_remaining_method_time(self):
+    def test_a_lock_wait_is_bounded_by_the_remaining_method_time(self):  # API-24
         held, release = threading.Event(), threading.Event()
 
         def hold():
@@ -208,7 +216,7 @@ class DeadlineRound4(Helpers, CoreCase):
         release.set()
         self.assertEqual([], self.inbox())
 
-    def test_commands_reads_check_the_deadline(self):
+    def test_commands_reads_check_the_deadline(self):  # API-24
         def slow_acks():
             time.sleep(0.5)
             return {}
@@ -220,7 +228,7 @@ class DeadlineRound4(Helpers, CoreCase):
 # --- audit: change rows, refusals, durability ----------------------------------------------------------
 
 class AuditRound4(Helpers, CoreCase):
-    def test_a_failed_audit_after_the_effect_returns_the_effect(self):
+    def test_a_failed_audit_after_the_effect_returns_the_effect(self):  # API-23
         real = self.service._audit_write
 
         def fail_ok(row, *args, **kwargs):
@@ -233,56 +241,41 @@ class AuditRound4(Helpers, CoreCase):
         self.assertTrue(result["push_id"])
         self.assertEqual(1, len(self.inbox()))
 
-    def test_intent_and_ok_rows_share_one_operation_id(self):
+    def test_intent_and_ok_rows_share_one_operation_id(self):  # API-23
         self.client("agent").call("context.push", {"kind": "note", "text": "hello"})
         rows = [r for r in self.audit() if r.get("method") == "context.push"]
         self.assertEqual(["intent", "ok"], [r["outcome"] for r in rows])
         self.assertTrue(rows[0].get("op"))
         self.assertEqual(rows[0]["op"], rows[1].get("op"))
 
-    def test_a_confirm_request_is_audited_on_its_own_even_past_the_refusal_budget(self):
+    def test_a_confirm_request_is_audited_on_its_own_even_past_the_refusal_budget(self):  # API-23
         client = self.client("confirm")
         for _ in range(55):
             self.error_code(client, "control.stop")
         self.assertEqual("confirm_required", self.error_code(client, "control.pause"))
         self.assertIn(("control.pause", "confirm_required"), {(r.get("method"), r.get("outcome")) for r in self.audit()})
 
-    def test_a_refusal_summary_is_kept_until_written(self):
+    def test_every_refusal_is_its_own_audit_row_with_no_hold_past_fifty(self):  # API-23 (rewritten, owner 2026-11-21)
         client = self.client("read")
-        for _ in range(50):
+        for n in range(1, 81):
             self.error_code(client, "control.pause")
-        real = self.service._audit_write
-        failed = []
+            # durable before the reply: the row is there while the connection is still open
+            self.assertEqual(n, len([r for r in self.refusals() if r.get("method") == "control.pause"]), n)
+        rows = [r for r in self.refusals() if r.get("method") == "control.pause"]
+        self.assertEqual({"forbidden"}, {r["outcome"] for r in rows})
+        self.assertTrue(all(r["caller"] and r["ts"] for r in rows))
+        self.assertEqual([], [r for r in self.audit() if r.get("method") == "control.pause"])  # no refusal in commands
 
-        def fail_once(row, *args, **kwargs):
-            if row.get("outcome") == "refused_summary" and not failed:
-                failed.append(row)
-                raise self.mod.ApiError("unavailable", "the audit log cannot be written")
-            return real(row, *args, **kwargs)
-        with mock.patch.object(self.mod, "SUMMARY_FLUSH_AT", 5), \
-                mock.patch.object(self.service, "_audit_write", fail_once):
-            codes = [self.error_code(client, "control.pause") for _ in range(5)]
-        self.assertEqual("unavailable", codes[-1])  # the failed flush is not swallowed
-        client.close()
-
-        def summarised():
-            return sum(r["count"] for r in self.audit() if r.get("outcome") == "refused_summary")
-        self.assertTrue(self.wait_for(lambda: summarised() == 5), summarised())
-
-    def test_a_refusal_summary_keeps_each_outcome(self):
+    def test_each_refusal_row_keeps_its_own_outcome(self):  # API-23 (rewritten, owner 2026-11-21)
         client = self.client("agent")
-        for _ in range(50):
-            self.error_code(client, "context.push", {})
-        for _ in range(3):
+        for _ in range(53):
             self.error_code(client, "context.push", {})
         for _ in range(2):
             self.error_code(client, "context.push", {"kind": "note", "text": "x" * 3000})
-        client.close()
-        self.assertTrue(self.wait_for(lambda: any(r.get("outcome") == "refused_summary" for r in self.audit())))
-        summary = [r for r in self.audit() if r.get("outcome") == "refused_summary" and r["method"] == "context.push"]
-        self.assertEqual({"invalid_params": 3, "too_large": 2}, summary[0].get("outcomes"))
+        outcomes = [r["outcome"] for r in self.refusals() if r.get("method") == "context.push"]
+        self.assertEqual(["invalid_params"] * 53 + ["too_large"] * 2, outcomes)
 
-    def test_over_cap_connections_are_audited(self):
+    def test_over_cap_connections_are_audited(self):  # API-23, API-24 (rewritten, owner 2026-11-21)
         self.service.stop()
         self.start(max_connections=1)
         held = raw(self.socket)
@@ -292,27 +285,26 @@ class AuditRound4(Helpers, CoreCase):
         self.addCleanup(extra.close)
         reply = ask(extra, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": "1.0"}})
         self.assertEqual("too_many_connections", reply["error"]["data"]["code"])
-        self.assertTrue(self.wait_for(lambda: ("connection", "too_many_connections") in
-                                      {(r.get("method"), r.get("outcome")) for r in self.audit()}))
+        self.assertIn(("connection", "too_many_connections"), {(r.get("method"), r.get("outcome")) for r in self.refusals()})
 
-    def test_audit_values_are_validated_per_field(self):
+    def test_audit_values_are_validated_per_field(self):  # API-23 (no secret in either audit file)
         jsonl(self.records / "decisions.jsonl", [{"id": "D-0001", "text": "Go?", "options": ["yes", "no"]}])
         owner = self.client("owner")
         owner.call("context.push", {"kind": "hunter2pass", "text": "x"})
         self.error_code(owner, "unit.cancel", {"id": "pw-hunter2x"})
         self.error_code(owner, "decision.answer", {"id": "D-0001", "choice": "s3cr3tvalue"})
-        text = (self.records / "commands.jsonl").read_text()
+        text = (self.records / "commands.jsonl").read_text() + json.dumps(self.refusals())
         for secret in ("hunter2pass", "pw-hunter2x", "s3cr3tvalue"):
             self.assertNotIn(secret, text)
 
-    def test_record_files_the_core_appends_to_are_private(self):
+    def test_record_files_the_core_appends_to_are_private(self):  # API-23, API-18
         for name in ("commands.jsonl", "inbox.jsonl"):
             os.chmod(self.records / name, 0o644)
         self.client("agent").call("context.push", {"kind": "note", "text": "x"})
         for name in ("commands.jsonl", "inbox.jsonl"):
             self.assertEqual(0, stat.S_IMODE(os.stat(self.records / name).st_mode) & 0o077, name)
 
-    def test_a_short_write_leaves_no_partial_row(self):
+    def test_a_short_write_leaves_no_partial_row(self):  # API-10
         path = self.dir / "short.jsonl"
         real = os.write
         with mock.patch.object(self.mod.os, "write", lambda fd, data: real(fd, data[:10])):
@@ -325,7 +317,7 @@ class AuditRound4(Helpers, CoreCase):
 class AuditEvictionRound4(Helpers, CoreCase):
     service_options = {"audit_max_bytes": 3000}
 
-    def test_reconnecting_refusals_cannot_push_change_rows_out(self):
+    def test_reconnecting_refusals_cannot_push_change_rows_out(self):  # API-23
         jsonl(self.records / "commands.jsonl", [{"type": "pad", "pad": "p" * 100} for _ in range(40)])
         self.client("agent").call("context.push", {"kind": "note", "text": "keep me"})
         for _ in range(6):
@@ -340,7 +332,7 @@ class AuditEvictionRound4(Helpers, CoreCase):
 # --- events: filters, values, sequence, isolation, local subscriptions ---------------------------------
 
 class EventsRound4(Helpers, CoreCase):
-    def test_malformed_filters_are_refused(self):
+    def test_malformed_filters_are_refused(self):  # API-13
         client = self.client("read")
         for event_filter in ({"kinds": 1}, {"kinds": "unit.updated"}, {"kinds": ["no.such.kind"]}, {"unit_id": 5},
                              {"colour": "red"}):
@@ -348,7 +340,7 @@ class EventsRound4(Helpers, CoreCase):
                 self.assertEqual("invalid_params", self.error_code(client, "events.subscribe",
                                                                    {"from_seq": 5, "filter": event_filter}))
 
-    def test_one_failing_subscriber_does_not_break_publishing(self):
+    def test_one_failing_subscriber_does_not_break_publishing(self):  # API-13
         bad = self.inproc().subscribe({"from_seq": 5})
         good = self.inproc().subscribe({"from_seq": 5})
         self.addCleanup(bad.close)
@@ -357,21 +349,29 @@ class EventsRound4(Helpers, CoreCase):
         self.assertEqual(6, event["seq"])
         self.assertEqual(6, next(good)["seq"])
 
-    def test_a_future_cursor_is_refused(self):
+    def test_a_future_cursor_is_refused(self):  # API-12
         self.assertEqual("invalid_params", self.error_code(self.client("read"), "events.subscribe", {"from_seq": 99}))
 
-    def test_the_drop_notice_reuses_no_event_seq(self):
+    def test_the_drop_notice_is_a_transport_notice_and_every_event_keeps_its_envelope(self):  # API-11, API-13
         self.service.stop()
         self.start(event_buffer=3)
-        stream = self.inproc().subscribe({"from_seq": 5})
+        client = self.inproc()
+        client.call("events.subscribe", {"from_seq": 5})
+        sub, client.session.pending_pump = client.session.pending_pump, None
         for i in range(6):
             self.service.emit("unit.updated", {"summary": "e%d" % i}, unit_id="U-0001")
-        got = list(stream)
-        self.assertEqual("subscription.dropped", got[-1]["kind"])
-        seqs = [e["seq"] for e in got[:-1]]
-        self.assertNotIn(got[-1].get("seq"), seqs)
+        wire = list(self.service._stream(sub))  # the messages both adapters send, in order
+        events = [m["params"] for m in wire if m["method"] == "events.event"]
+        self.assertEqual([6, 7, 8], [e["seq"] for e in events])  # gap-free, then the overflow
+        for event in events:  # API-11 envelope on every events.event, no exception
+            self.assertEqual({"seq", "ts", "kind", "data", "v"}, set(event) - {"unit_id", "session"})
+            self.assertIsInstance(event["seq"], int)
+        self.assertEqual([{"reason": "slow_consumer", "last_seq": 8}],
+                         [m["params"] for m in wire if m["method"] == "events.dropped"])
+        self.assertEqual(["events.dropped", "events.end"], [m["method"] for m in wire[-2:]])
+        self.assertNotIn("subscription.dropped", self.client("read").call("schema.get")["event_kinds"])
 
-    def test_event_values_carry_no_secrets_or_transcripts(self):
+    def test_event_values_carry_no_secrets_or_transcripts(self):  # API-14
         token = self.mod._mint_token(str(self.records), "owner")
         self.service.emit("unit.updated", {"summary": "use %s now" % token}, unit_id="U-0001")
         self.service.emit("alert.guard", {"why": "Authorization: Bearer abcdefghijklmnop1234"})
@@ -382,7 +382,7 @@ class EventsRound4(Helpers, CoreCase):
             for secret in (token, "abcdefghijklmnop1234", "secret transcript line"):
                 self.assertNotIn(secret, text)
 
-    def test_a_stored_row_with_an_odd_kind_does_not_end_the_stream(self):
+    def test_a_stored_row_with_an_odd_kind_does_not_end_the_stream(self):  # API-11
         with open(self.records / "events.jsonl", "a") as handle:
             handle.write(json.dumps({"seq": 6, "ts": 1, "kind": ["x"], "data": {}, "v": 1}) + "\n")
             handle.write(json.dumps({"seq": 7, "ts": 2, "kind": "unit.updated", "data": {}, "v": 1}) + "\n")
@@ -391,7 +391,7 @@ class EventsRound4(Helpers, CoreCase):
         events = list(self.inproc().subscribe({"from_seq": 5, "limit": 2}))
         self.assertEqual(7, events[-1]["seq"])
 
-    def test_closing_a_local_subscription_frees_its_slot(self):
+    def test_closing_a_local_subscription_frees_its_slot(self):  # API-6, API-24
         self.service.stop()
         self.start(max_subscriptions_per_token=1)
         client = self.inproc()
@@ -399,7 +399,7 @@ class EventsRound4(Helpers, CoreCase):
         client.subscribe({"from_seq": 5}).close()
         self.assertEqual([], self.service._subs)
 
-    def test_closing_an_in_process_client_ends_its_subscriptions(self):
+    def test_closing_an_in_process_client_ends_its_subscriptions(self):  # API-6, API-24
         client = self.inproc()
         client.subscribe({"from_seq": 5})
         client.close()
@@ -409,18 +409,19 @@ class EventsRound4(Helpers, CoreCase):
 # --- transport and identity ------------------------------------------------------------------------------
 
 class TransportRound4(Helpers, CoreCase):
-    def test_the_handshake_gate_comes_before_params_checks(self):
+    def test_the_handshake_gate_comes_before_params_checks(self):  # API-5
         reply = ask(raw(self.socket), {"jsonrpc": "2.0", "id": 1, "method": "state.get", "params": [1]})
         self.assertEqual("not_initialized", reply["error"]["data"]["code"])
 
-    def test_server_identity_uses_the_effective_uid(self):
+    def test_server_identity_uses_the_effective_uid(self):  # API-3
         with mock.patch.object(self.mod.os, "getuid", return_value=os.geteuid() + 1):
             service = self.mod.CoreService(str(self.records), str(self.dir / "x.sock"))
         self.assertEqual(os.geteuid(), service.expected_uid)
 
-    def test_an_unauthenticated_connection_must_initialize_in_time(self):
+    def test_an_unauthenticated_connection_must_initialize_in_time(self):  # API-24 (connection slots)
         self.service.stop()
-        self.start(handshake_seconds=0.3)
+        with mock.patch.object(self.mod, "HANDSHAKE_SECONDS", 0.3, create=True):  # the default, read at start
+            self.start()
         s = raw(self.socket)
         s.settimeout(0.2)
         started, closed = time.monotonic(), False
@@ -439,7 +440,7 @@ class TransportRound4(Helpers, CoreCase):
         self.assertTrue(closed)
         self.assertLess(time.monotonic() - started, 1.5)
 
-    def test_only_unix_sockets_are_made(self):  # coverage: replaces the lsof check, which hides lsof errors
+    def test_only_unix_sockets_are_made(self):  # API-2 GUARD: replaces the lsof check, which hid lsof errors
         families = []
         real = socket.socket
 
@@ -453,13 +454,13 @@ class TransportRound4(Helpers, CoreCase):
         self.assertTrue(families)
         self.assertEqual({socket.AF_UNIX}, set(families))
 
-    def test_a_socket_path_of_104_bytes_is_refused(self):  # coverage
+    def test_a_socket_path_of_104_bytes_is_refused(self):  # API-2 GUARD
         long_path = str(self.dir / ("s" * (104 - len(str(self.dir)) - 1)))
         self.assertEqual(104, len(long_path.encode()))
         with self.assertRaises(ValueError):
             self.mod.CoreService(str(self.records), long_path).start()
 
-    def test_a_probe_error_never_removes_the_socket(self):  # coverage
+    def test_a_probe_error_never_removes_the_socket(self):  # API-2 GUARD
         path = str(self.dir / "stale.sock")
         listener = socket.socket(socket.AF_UNIX)
         listener.bind(path)
@@ -469,7 +470,7 @@ class TransportRound4(Helpers, CoreCase):
                 self.mod.CoreService._clear_stale(path)
         self.assertTrue(os.path.exists(path))
 
-    def test_a_symlinked_socket_receives_nothing(self):  # coverage: the r3 symlink test only checked the audit
+    def test_a_symlinked_socket_receives_nothing(self):  # API-18 GUARD: the r3 symlink test only checked the audit
         path = str(self.dir / "fake.sock")
         listener = socket.socket(socket.AF_UNIX)
         listener.bind(path)
@@ -500,7 +501,7 @@ class TransportRound4(Helpers, CoreCase):
 # --- tokens ------------------------------------------------------------------------------------------------
 
 class TokensRound4(Helpers, CoreCase):
-    def test_a_reader_never_sees_a_half_written_token_store(self):
+    def test_a_reader_never_sees_a_half_written_token_store(self):  # API-18
         token = self.mod._mint_token(str(self.records), "read")
         real = os.write
         seen = []
@@ -514,7 +515,7 @@ class TokensRound4(Helpers, CoreCase):
         self.assertEqual(1, len(seen))
         self.assertIsNotNone(seen[0])
 
-    def test_a_damaged_token_store_is_left_alone(self):
+    def test_a_damaged_token_store_is_left_alone(self):  # API-18
         path = self.records / "tokens.json"
         path.write_text('{"tokens": [{"id": "abc"')
         os.chmod(path, 0o600)
@@ -523,7 +524,7 @@ class TokensRound4(Helpers, CoreCase):
         self.assertEqual("unavailable", raised.exception.code)
         self.assertEqual('{"tokens": [{"id": "abc"', path.read_text())
 
-    def test_the_token_file_is_checked_on_the_descriptor_it_reads(self):
+    def test_the_token_file_is_checked_on_the_descriptor_it_reads(self):  # API-18, TERM-8
         path = self.dir / "token"
         path.write_text("file-token\n")
         os.chmod(path, 0o644)
@@ -541,7 +542,7 @@ class TokensRound4(Helpers, CoreCase):
 # --- reads: health, truncation, neutrality -----------------------------------------------------------------
 
 class ReadsRound4(Helpers, CoreCase):
-    def test_health_reports_damage_in_every_store(self):
+    def test_health_reports_damage_in_every_store(self):  # API-9
         for name in ("history.jsonl", "inbox.jsonl", "decisions.jsonl", "queries.jsonl", "command_acks.jsonl",
                      "usage.jsonl", "commands.jsonl"):
             (self.records / name).write_text('{"ok": 1}\nnot json\n')
@@ -549,7 +550,7 @@ class ReadsRound4(Helpers, CoreCase):
         for label in ("history", "inbox", "decisions", "queries", "command_acks", "usage", "commands"):
             self.assertIn("%s_damaged" % label, codes)
 
-    def test_a_cut_read_says_incomplete_never_complete(self):
+    def test_a_cut_read_says_incomplete_never_complete(self):  # API-8
         jsonl(self.records / "units.jsonl", [{"id": "U-%04d" % i, "state": "running", "pad": "y" * 50}
                                                for i in range(200)])
         client = self.client("read")
@@ -558,7 +559,7 @@ class ReadsRound4(Helpers, CoreCase):
             self.assertEqual("unknown", client.call("runs.list")["total"])
             self.assertEqual("unavailable", self.error_code(client, "units.get", {"id": "U-0000"}))
 
-    def test_a_command_whose_ack_or_row_was_cut_is_not_reported_as_requested_or_missing(self):
+    def test_a_command_whose_ack_or_row_was_cut_is_not_reported_as_requested_or_missing(self):  # API-8
         owner = self.client("owner")
         command = self.confirmed(owner, "control.pause", {})["command_id"]
         jsonl(self.records / "command_acks.jsonl", [
@@ -574,7 +575,7 @@ class ReadsRound4(Helpers, CoreCase):
         with mock.patch.object(self.mod, "READ_MAX_BYTES", 3000):
             self.assertEqual("unavailable", self.error_code(client, "commands.get", {"id": command}))
 
-    def test_history_and_usage_rows_keep_provider_detail_under_extra(self):
+    def test_history_and_usage_rows_keep_provider_detail_under_extra(self):  # API-25
         jsonl(self.records / "history.jsonl", [{"id": "H-1", "summary": "ran", "codex_session": "abc", "model": "m"}])
         jsonl(self.records / "usage.jsonl", [{"ts": 1, "pct": 3, "claude_window": "5h"}])
         client = self.client("read")
@@ -584,7 +585,7 @@ class ReadsRound4(Helpers, CoreCase):
         self.assertEqual({"codex_session": "abc", "model": "m"}, row["extra"])
         self.assertEqual({"ts", "pct", "extra"}, set(sample))
 
-    def test_canned_answers_on_damaged_records_say_unknown(self):
+    def test_canned_answers_on_damaged_records_say_unknown(self):  # API-15, API-8
         (self.records / "state.json").write_text("{broken")
         (self.records / "units.jsonl").write_text("not json\n")
         text = self.client("read").call("query.ask", {"text": "What is the status?"})["text"]
@@ -595,7 +596,7 @@ class ReadsRound4(Helpers, CoreCase):
 # --- delivery at a safe point: a strict token bound and no lost text ---------------------------------------
 
 class DeliveryRound4(Helpers, CoreCase):
-    def test_the_block_is_bounded_by_bytes_a_strict_token_upper_bound(self):
+    def test_the_block_is_bounded_by_bytes_a_strict_token_upper_bound(self):  # API-16
         client = self.client("agent")
         for i in range(8):
             client.call("context.push", {"kind": "note", "text": "%d %s" % (i, "word " * 40)})
@@ -603,7 +604,7 @@ class DeliveryRound4(Helpers, CoreCase):
         self.assertTrue(block)
         self.assertLessEqual(len(block.encode("utf-8")), 300)  # each token is at least one byte
 
-    def test_a_long_message_is_delivered_in_parts_until_complete(self):
+    def test_a_long_message_is_delivered_in_parts_until_complete(self):  # API-16
         text = "A" * 700 + "B" * 300
         push_id = self.client("agent").call("context.push", {"kind": "note", "text": text})["push_id"]
         parts, done = [], False
@@ -621,33 +622,69 @@ class DeliveryRound4(Helpers, CoreCase):
         self.assertEqual("", self.service.deliver_at_safe_point()["text"])
 
 
-# --- coverage: scope matrix, handler table, racing confirms, replaced-test gaps ----------------------------
+# --- GUARD: scope matrix, handler table, racing confirms, replaced-test gaps -------------------------------
 
 class CoverageRound4(Helpers, CoreCase):
     service_options = {"max_subscriptions": 16}
 
-    def test_every_method_against_every_scope(self):  # coverage, API-19
-        methods = set(EXPECTED_SCOPES["owner"])
+    def seed(self):
+        super().seed()
+        jsonl(self.records / "decisions.jsonl", [{"id": "D-0001", "text": "Go?", "options": ["yes", "no"]}])
+        jsonl(self.records / "inbox.jsonl", [{"query_id": "Q-0001", "kind": "query", "text": "Rewrite?", "source": "x",
+                                              "trust": "untrusted", "ts": 1, "ttl": 3600, "expires": 10 ** 12}])
+        jsonl(self.records / "commands.jsonl", [{"type": "command", "command_id": "C-0001", "action": "pause",
+                                                 "unit_id": None, "caller": "x", "ts": 1, "v": 1, "state": "requested"}])
+        jsonl(self.records / "diffs.jsonl", [{"path": "a.py", "diff": "+x", "ts": 1}])
+
+    # Valid params per method and what an allowed call must give: a result key, or the confirm step (API-21).
+    CALLS = {
+        "schema.get": ({}, "methods"), "state.get": ({}, "state"), "units.list": ({}, "units"),
+        "units.get": ({"id": "U-0001"}, "unit"), "units.history": ({"id": "U-0001"}, "records"),
+        "runs.list": ({}, "total"), "usage.get": ({}, "usage"), "usage.history": ({}, "samples"),
+        "ci.get": ({}, "ci"), "versions.get": ({}, "versions"), "history.list": ({}, "history"),
+        "decisions.list": ({}, "decisions"), "queries.list": ({}, "queries"), "queries.get": ({"id": "Q-0001"}, "query"),
+        "health.get": ({}, "findings"), "events.subscribe": ({"from_seq": 5, "limit": 1}, "subscribed"),
+        "query.ask": ({"text": "What is the status?"}, "answered_by"), "units.activity": ({"id": "U-0001"}, "calls"),
+        "changes.list": ({}, "worktrees"), "changes.diff": ({"path": "a.py"}, "diff"), "messages.list": ({}, "messages"),
+        "routing.get": ({}, "routing"), "commands.get": ({"id": "C-0001"}, "command"), "commands.list": ({}, "commands"),
+        "context.push": ({"kind": "note", "text": "x"}, "push_id"),
+        "query.reply": ({"query_id": "Q-0001", "text": "ok"}, "outcome"),
+        "control.pause": ({}, "confirm_required"), "control.resume": ({}, "confirm_required"),
+        "control.handoff": ({}, "confirm_required"), "control.stop": ({}, "confirm_required"),
+        "unit.cancel": ({"id": "U-0001"}, "confirm_required"), "routing.set": (ROUTING, "confirm_required"),
+        "decision.answer": ({"id": "D-0001", "choice": "yes"}, "outcome"),
+        "unit.verdict": ({"id": "U-0001", "verdict": "pass"}, "outcome"),
+        "unit.message": ({"id": "U-0001", "text": "hi"}, "command_id"),
+    }
+
+    def test_every_method_against_every_scope(self):  # API-19 (valid params; allowed calls must take effect)
+        self.assertEqual(EXPECTED_SCOPES["owner"], set(self.CALLS))
         for scope, allowed in EXPECTED_SCOPES.items():
             client = self.client(scope)
-            for method in sorted(methods):
+            for method, (params, expect) in sorted(self.CALLS.items()):
                 with self.subTest(scope=scope, method=method):
                     try:
-                        client.call(method, {"from_seq": 5, "limit": 1} if method == "events.subscribe" else {})
-                        code = None
+                        result, code = client.call(method, params), None
                     except self.mod.ApiError as error:
-                        code = error.code
-                    self.assertEqual(method not in allowed, code == "forbidden", code)
+                        result, code = None, error.code
+                    if method not in allowed:
+                        self.assertEqual("forbidden", code)
+                    elif expect == "confirm_required":
+                        self.assertEqual("confirm_required", code)
+                    else:
+                        self.assertIsNone(code)
+                        self.assertIn(expect, result)
 
-    def test_the_handler_table_equals_the_declared_methods(self):  # coverage
+    def test_the_handler_table_equals_the_declared_methods(self):  # API-6 GUARD
         declared = set(self.client("read").call("schema.get")["methods"])
         self.assertEqual(declared, set(self.service._handlers))
         self.assertEqual(EXPECTED_SCOPES["owner"], declared)
 
-    def test_two_racing_confirms_execute_once(self):  # coverage, API-21
+    def test_two_racing_confirms_execute_once(self):  # API-21 GUARD
         token = self.mod._mint_token(str(self.records), "confirm")
         a, b = self.client(token=token), self.client(token=token)
         cid = self.confirm_id(a, "control.pause", {})
+        before = len([r for r in self.audit() if r.get("type") == "command"])
         results, barrier = [], threading.Barrier(2)
 
         def go(client):
@@ -660,9 +697,9 @@ class CoverageRound4(Helpers, CoreCase):
         [t.start() for t in threads]
         [t.join(10) for t in threads]
         self.assertEqual(["confirm_invalid", "requested"], sorted(results))
-        self.assertEqual(1, len([r for r in self.audit() if r.get("type") == "command"]))
+        self.assertEqual(before + 1, len([r for r in self.audit() if r.get("type") == "command"]))
 
-    def test_a_cancel_writes_no_stop_record_and_why_stopped_says_requested(self):  # coverage (retired test had cancel)
+    def test_a_cancel_writes_no_stop_record_and_why_stopped_says_requested(self):  # API-15 GUARD (retired test had cancel)
         command = self.confirmed(self.client("owner"), "unit.cancel", {"id": "U-0001"})
         self.assertEqual("requested", command["state"])
         self.assertEqual([], [r for r in read_jsonl(self.records / "history.jsonl") if r.get("type") == "stop"])
@@ -670,7 +707,7 @@ class CoverageRound4(Helpers, CoreCase):
         self.assertIn(command["command_id"], text)
         self.assertIn("requested", text)
 
-    def test_a_stop_acked_done_without_a_stop_record_says_done(self):  # coverage (r3: the old test seeded refused)
+    def test_a_stop_acked_done_without_a_stop_record_says_done(self):  # API-15 GUARD (r3: the old test seeded refused)
         command = self.confirmed(self.client("owner"), "control.stop", {})["command_id"]
         jsonl(self.records / "command_acks.jsonl", [{"type": "ack", "command_id": command, "action": "stop",
                                                       "state": "done", "reason": "stopped", "ts": 9, "v": 1}])
@@ -678,7 +715,7 @@ class CoverageRound4(Helpers, CoreCase):
         self.assertIn("done", text)
         self.assertIn(command, text)
 
-    def test_concurrent_routing_sets_all_succeed(self):  # coverage (r3: the old test dropped thread errors)
+    def test_concurrent_routing_sets_all_succeed(self):  # TERM-35 GUARD (r3: the old test dropped thread errors)
         owners = [self.client("owner") for _ in range(4)]
         results = []
 

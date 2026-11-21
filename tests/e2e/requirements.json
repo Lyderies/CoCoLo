@@ -515,7 +515,7 @@
    "id": "API-23",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
-   "statement": "Audit. Check: every change, refusal and confirm is a commands.jsonl line with caller, method, outcome; no token or secret appears.",
+   "statement": "Audit. Check: every change and confirm is a commands.jsonl line; every refusal is an audit.jsonl line (rotated separately, so refusals cannot push changes out); each line has caller, method, outcome; no token or secret appears.",
    "checks": []
   },
   {
