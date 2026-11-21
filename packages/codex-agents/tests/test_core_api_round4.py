@@ -657,23 +657,36 @@ class CoverageRound4(Helpers, CoreCase):
         "unit.message": ({"id": "U-0001", "text": "hi"}, "command_id"),
     }
 
-    def test_every_method_against_every_scope(self):  # API-19 (valid params; allowed calls must take effect)
+    EFFECT_FILES = {"context.push": "inbox.jsonl", "query.reply": "queries.jsonl", "decision.answer": "decisions.jsonl",
+                    "unit.verdict": "units.jsonl", "unit.message": "commands.jsonl"}  # where the change is recorded
+
+    def test_every_method_against_every_scope(self):  # API-19 (valid params; an allowed call records its change, a refused one none)
         self.assertEqual(EXPECTED_SCOPES["owner"], set(self.CALLS))
+
+        def size(method):
+            name = self.EFFECT_FILES.get(method)
+            path = self.records / name if name else None
+            return path.stat().st_size if path is not None and path.exists() else 0
         for scope, allowed in EXPECTED_SCOPES.items():
             client = self.client(scope)
             for method, (params, expect) in sorted(self.CALLS.items()):
                 with self.subTest(scope=scope, method=method):
+                    before = size(method)
                     try:
                         result, code = client.call(method, params), None
                     except self.mod.ApiError as error:
                         result, code = None, error.code
                     if method not in allowed:
                         self.assertEqual("forbidden", code)
+                        self.assertEqual(before, size(method), "a refused call changed a record")
                     elif expect == "confirm_required":
                         self.assertEqual("confirm_required", code)
+                        self.assertEqual(before, size(method), "an unconfirmed call changed a record")
                     else:
                         self.assertIsNone(code)
                         self.assertIn(expect, result)
+                        if method in self.EFFECT_FILES:
+                            self.assertGreater(size(method), before, "an allowed call recorded nothing")
 
     def test_the_handler_table_equals_the_declared_methods(self):  # API-6 GUARD
         declared = set(self.client("read").call("schema.get")["methods"])

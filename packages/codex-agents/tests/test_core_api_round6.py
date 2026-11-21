@@ -166,7 +166,7 @@ class RefusalBudget(Helpers, CoreCase):
         s.sendall(b"this is not json\n")
         reply = json.loads(s.makefile().readline())
         self.assertLess(time.monotonic() - started, 1.5)
-        self.assertIn(reply["error"]["data"]["code"], ("timeout", "unavailable"))
+        self.assertEqual("timeout", reply["error"]["data"]["code"])
 
     def test_an_in_process_refusal_waits_a_bounded_time_for_the_audit(self):  # M4, API-24
         client = self.inproc("agent")
@@ -175,7 +175,7 @@ class RefusalBudget(Helpers, CoreCase):
         with self.assertRaises(self.mod.ApiError) as raised:
             client.call("context.push", {"kind": "note", "text": "x" * (2 << 20)})
         self.assertLess(time.monotonic() - started, 1.5)
-        self.assertIn(raised.exception.code, ("timeout", "unavailable"))
+        self.assertEqual("timeout", raised.exception.code)
 
     def test_a_connection_audit_waits_a_bounded_time(self):  # M4, API-24
         self.hold(self.service._audit_lock, 3.0)

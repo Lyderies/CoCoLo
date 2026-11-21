@@ -170,7 +170,7 @@ class DeadlineBoundary(Helpers, CoreCase):
         started = time.monotonic()
         code = self.error_code(agent, "context.push", {"kind": "note", "text": "x"})
         self.assertLess(time.monotonic() - started, 2.0)
-        self.assertIn(code, ("timeout", "unavailable"))
+        self.assertEqual("timeout", code)  # the lock wait ends at the call's deadline: a timeout, nothing written
         release.set()
         self.assertEqual([], self.inbox())
 
@@ -178,8 +178,10 @@ class DeadlineBoundary(Helpers, CoreCase):
         reader = self.client("read")
         self.hold(self.service._audit_lock, 3.0)
         started = time.monotonic()
-        self.assertIn(self.error_code(reader, "control.pause"), ("timeout", "unavailable"))
+        self.assertEqual("timeout", self.error_code(reader, "control.pause"))  # the audit lock wait ends by its budget
         self.assertLess(time.monotonic() - started, 2.0)
+        self.assertEqual([], [r for r in self.refusals() if r.get("method") == "control.pause"])  # none was written
+        self.assertEqual([], [r for r in self.audit() if r.get("method") == "control.pause"])
 
     def test_a_read_that_runs_past_its_deadline_is_a_timeout(self):  # API-24
         real = self.service._latest_units
@@ -326,12 +328,22 @@ class IntentsAndIds(Helpers, CoreCase):
     def test_push_and_query_ids_never_repeat_when_the_inbox_is_cut(self):  # API-16, API-17
         agent = self.client("agent")
         first = agent.call("context.push", {"kind": "note", "text": "x"})["push_id"]
+        asker = self.client("confirm")  # only a forwarded question from this scope is queued with an id
+        first_query = asker.call("query.ask", {"text": "Shall we rewrite the parser?", "mode": "forward"})["query_id"]
         with open(self.records / "inbox.jsonl", "a") as handle:
             for _ in range(60):
                 handle.write(json.dumps({"kind": "pad", "pad": "p" * 100}) + "\n")
+        (self.records / "ids.json").unlink()  # no counter: each number comes from a scan of the cut record
         with mock.patch.object(self.mod, "READ_MAX_BYTES", 3000):
             second = agent.call("context.push", {"kind": "note", "text": "y"})["push_id"]
+            second_query = asker.call("query.ask", {"text": "Shall we rewrite the lexer?", "mode": "forward"})["query_id"]
         self.assertNotEqual(first, second)
+        self.assertNotEqual(first_query, second_query)
+        inbox = read_jsonl(self.records / "inbox.jsonl")
+        for key in ("push_id", "query_id"):
+            ids = [r[key] for r in inbox if key in r]
+            self.assertEqual(2, len(ids), key)
+            self.assertEqual(len(ids), len(set(ids)), key)
 
 
 # --- API-10: appends are whole rows even with another writer --------------------------------------------------

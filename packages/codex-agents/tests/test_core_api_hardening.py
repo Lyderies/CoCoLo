@@ -218,7 +218,13 @@ class AuditTests(CoreCase):
         self.error_code(client, "unit.cancel", {"id": token})
         self.error_code(client, "context.push", {"kind": token, "text": "x"})
         self.error_code(client, token, {})
-        self.assertNotIn(token, (self.records / "commands.jsonl").read_text())
+        rows = []
+        for name in ("commands.jsonl", "audit.jsonl", "audit.jsonl.1"):  # refusals are audit.jsonl rows
+            path = self.records / name
+            if path.exists():
+                self.assertNotIn(token, path.read_text(), name)
+                rows += read_jsonl(path)
+        self.assertEqual(3, len([r for r in rows if r.get("outcome") not in ("intent", "ok")]))  # all three were audited
 
     def test_api23_audit_write_failure_is_an_error_and_nothing_changes(self):
         os.chmod(self.records / "commands.jsonl", 0o444)

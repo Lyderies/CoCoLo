@@ -1286,7 +1286,8 @@ class CoreService:
 
     def refuse(self, session, name, error, params=None):
         """The one refusal boundary for both adapters: the refusal row is written (audit.jsonl) before the
-        refusal is returned; when it cannot be written the caller gets `unavailable` instead. Returns the error
+        refusal is returned; when it cannot be written the caller gets the audit's own error instead
+        (`timeout` when its wait ran out, `unavailable` otherwise). Returns the error
         to raise or send, with seq_at and no money in its data."""
         try:
             with _refusal_budget():
