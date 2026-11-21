@@ -292,6 +292,15 @@ _INSTALLER_REFUSALS = (
       "*bisect*progress*", "*unmerged*"),
      "A Git operation (merge, rebase, cherry-pick or similar) is unfinished in the project. Finish or abort it "
      "first."),
+    (("*untrusted_manifest*",),
+     "The Claude files installed in this project are not from a release this setup can upgrade (untrusted manifest): "
+     "they were edited, or come from an older or unknown release. Restore them with git, or remove the Claude "
+     "package files, then run setup again."),
+    (("*update_required*",),
+     "The Claude package installed in this project is an older release and must be updated first (update required)."),
+    (("*managed_file_modified*",),
+     "A Claude file installed in this project was edited by hand (managed file modified), so it was not "
+     "replaced. Restore it with git, then run setup again."),
     (("*managed paths*", "*uncommitted*"),
      "Managed paths (.codex, .agents, .claude) have uncommitted changes. Commit or discard them first."),
     (("*top of its working tree*", "*not a usable git*"),

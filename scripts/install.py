@@ -42,6 +42,7 @@ CLAUDE_INSTALLER = ROOT / "packages" / "claude-agents" / "scripts" / "package.py
 ORCHESTRATION = ROOT / "packages" / "codex-agents" / "native-package" / ".codex" / "orchestration"
 MANAGED_PATHS = (".codex", ".agents", ".claude")
 CODEX_MANIFEST = Path(".codex") / "orchestration" / "install-manifest.json"
+CLAUDE_MANIFEST = Path(".claude") / "claude-agents" / "install-manifest.json"
 CLAUDE_SETTINGS = ".claude/settings.json"
 # Where an earlier version kept its ownership record, inside the project. The record now
 # lives in the owner's learning state (OwnerState); the old file is read once to migrate.
@@ -1092,8 +1093,13 @@ def operate(operation: str, target: Path, *, apply: bool = False, codex_options:
     codex_operation = operation
     if operation == "install" and (target / CODEX_MANIFEST).is_file():
         codex_operation = "update"
+    # The Claude package is adopted the same way: its own update path accepts the installed
+    # bundle when it is this one or a release the package records (previous-releases.json).
+    claude_operation = operation
+    if operation == "install" and (target / CLAUDE_MANIFEST).is_file():
+        claude_operation = "update"
     order = [(CODEX_INSTALLER, "codex", codex_operation, codex_options),
-             (CLAUDE_INSTALLER, "claude", operation, [])]
+             (CLAUDE_INSTALLER, "claude", claude_operation, [])]
     if operation == "remove":
         order.reverse()
     previews = {name: _run(installer, op, target, False, extra) for installer, name, op, extra in order}

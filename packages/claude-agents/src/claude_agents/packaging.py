@@ -297,14 +297,48 @@ def compile_bundle(source_root: Path) -> Bundle:
             os.close(root)
 
 
-def _plan(root: int, bundle: Bundle, previous: Bundle | None, operation: str,
+def released_bundles(source_root: Path) -> tuple[Bundle, ...]:
+    """The earlier released bundles this source records (previous-releases.json), each rebuilt
+    byte for byte and kept only if its recorded bundle_sha256 is the one its files produce."""
+    root = None
+    try:
+        root = _root(source_root)
+        raw = _read(root, "previous-releases.json")
+        if raw is None:
+            return ()
+        records = json.loads(raw.decode())["releases"]
+        bundles = []
+        for record in records:
+            files = {path: content.encode() for path, content in record["files"].items()}
+            if not all(type(p) is str and p.startswith(".claude/") and p != MANIFEST for p in files):
+                _fail("invalid_previous_release")
+            metadata = {
+                "schema_version": 1, "namespace": "claude-agents",
+                "package_version": record["package_version"], "provider_execution_enabled": False,
+                "native_discovery_verified": False, "model_isolation": "not_provided",
+                "files": {p: hashlib.sha256(b).hexdigest() for p, b in sorted(files.items())},
+            }
+            if hashlib.sha256(_canonical(metadata)).hexdigest() != record["bundle_sha256"]:
+                _fail("invalid_previous_release")
+            metadata["bundle_sha256"] = record["bundle_sha256"]
+            bundles.append(Bundle(tuple(sorted(files.items())), _canonical(metadata)))
+        return tuple(bundles)
+    except (OSError, UnicodeError, KeyError, TypeError, AttributeError, ValueError):
+        raise PackageError("invalid_previous_release") from None
+    finally:
+        if root is not None:
+            os.close(root)
+
+
+def _plan(root: int, bundle: Bundle, previous: Bundle | tuple[Bundle, ...] | None, operation: str,
           locked: bool = False) -> list[tuple[str, bytes | None, bytes | None]]:
     if _read(root, PENDING) is not None or (not locked and _read(root, LOCK) is not None):
         _fail("installation_pending")
     manifest = _read(root, MANIFEST)
     old = None
     if manifest is not None:
-        old = next((b for b in (bundle, previous) if b is not None
+        earlier = previous if isinstance(previous, tuple) else (previous,)
+        old = next((b for b in (bundle, *earlier) if b is not None
                     and b.manifest == manifest), None)
         if old is None:
             _fail("untrusted_manifest")
@@ -338,7 +372,8 @@ def package_operation(source_root: Path, target: Path, operation: str, *,
     if type(apply) is not bool:
         _fail("invalid_apply")
     bundle = compile_bundle(source_root)
-    previous = compile_bundle(previous_source_root) if previous_source_root else None
+    previous = ((compile_bundle(previous_source_root),) if previous_source_root else ()) \
+        + released_bundles(source_root)
     root = None
     token = secrets.token_hex(16).encode()
     lock_owned = False

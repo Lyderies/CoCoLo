@@ -4,6 +4,12 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- A project with the 0.8.40 Claude package could not be upgraded: the installer refused it as `untrusted_manifest`,
+  because the Claude agent definitions changed after 0.8.40 (role model defaults). The package now records the
+  previous release's bundle (`previous-releases.json`, checked against its own digest) and accepts an installed
+  copy that matches it exactly; edited or unknown installs are still refused. The setup update now stops with
+  the installer's own reason for a refused preview, and the Done screen no longer prints a remove command
+  with an empty `--target`.
 - Two commands that came together on a project whose service was not running could leave one of them reporting
   `orchestration_client_unavailable`: the start that lost to the other's service ended before that service
   held its lock and did not wait for it. It now waits up to 3 s while no host lock is held, within the start timeout, for the winning service.
