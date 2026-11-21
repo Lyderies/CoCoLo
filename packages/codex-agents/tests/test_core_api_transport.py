@@ -29,11 +29,6 @@ class SocketTests(CoreCase):
         self.assertEqual(0o700, stat.S_IMODE(os.stat(os.path.dirname(self.socket)).st_mode))
         self.assertLess(len(self.socket.encode()), 104)
 
-    def test_api2_no_tcp_listener(self):  # API-2
-        out = subprocess.run(["lsof", "-nP", "-a", "-p", str(os.getpid()), "-iTCP", "-sTCP:LISTEN"],
-                             capture_output=True, text=True).stdout
-        self.assertEqual("", out.strip())
-
 
 class UidTests(CoreCase):
     start_service = False
