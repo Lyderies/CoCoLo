@@ -73,6 +73,8 @@ class ReviewRunnerTests(unittest.TestCase):
     def guard_real_state(self):
         """No test may read the developer's real host state (its digest key): a runner that is not given a
         state folder, or is given the real one, fails the test that did it."""
+        if not hasattr(review_runner, 'CollectorPaths'):
+            return  # a runner from before the keyed binding never reads a state folder
         from codex_agents.collector_paths import CollectorPaths, default_state_root
         real = CollectorPaths
 

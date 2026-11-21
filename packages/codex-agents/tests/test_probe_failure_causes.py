@@ -160,8 +160,9 @@ class ProbeFailureCauseTests(unittest.TestCase):
         self.assertEqual('probe_cancelled', self.cause())
 
     def test_a_cancel_that_follows_a_named_failure_on_a_live_job_keeps_the_earlier_cause(self):
-        # A caller's cancel names the job's failure while its signature work is out; the close that follows
-        # would name another cause when that work returns. The first named cause stays the one shown.
+        """GUARD on 8ec26a08 (the production code is unchanged since), red on bf78c373: a caller's cancel names the
+        job's failure while its signature work is out; the close that follows would name another cause when
+        that work returns. The first named cause stays the one shown."""
         real = type(self.billing).finish_signature
         seen = []
 
@@ -180,12 +181,17 @@ class ProbeFailureCauseTests(unittest.TestCase):
         self.assertEqual('probe_cancelled', self.cause())  # not probe_closing, not probe_admit_failed
 
     def test_a_discarding_job_that_ends_unknown_through_cleanup_faults_is_named_by_them(self):
-        """GUARD (passes on bf78c373 too): _settle_failed_step's discarding branch is only reached after repeated
-        cleanup faults, each of which names itself, so the job ending unknown is never an unnamed one. Reached
-        through a real cancel and real cleanup failures, with no state set by hand."""
+        """GUARD (passes on bf78c373 and 8ec26a08): repeated cleanup faults on a cancelled job take it to
+        unknown, and each fault names itself (`probe_cleanup_failed`), so the job ends named, never bare. This
+        does not enter _settle_failed_step's discarding branch (a fault in a discarding step does, and `drive`
+        names that `probe_step_failed`). The job is held in 'preparing' (its worker never reports prepared) so
+        the cancel cannot meet an offered job."""
+        self.enterContext(mock.patch.object(self.billing._executions, 'snapshot',
+                                            return_value={'worker_state': 'running'}))
         ticket = self.begin()
         job = self.billing._jobs[ticket]
-        self.until(lambda: job.preparation is not None)
+        self.until(lambda: job.preparation is not None and job.state == 'preparing')
+        self.assertEqual('preparing', job.state)
         with mock.patch.object(self.billing._executions, 'discard', side_effect=RuntimeError('cleanup fault')):
             self.billing.cancel(ticket)
             self.until(lambda: job.state == 'unknown')

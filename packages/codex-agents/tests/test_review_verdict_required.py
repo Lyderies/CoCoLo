@@ -34,10 +34,10 @@ class ReviewVerdictRequiredTests(unittest.TestCase):
             self.assertIn('semantic_verdict', str(refused.exception))
 
     def test_a_null_verdict_after_the_strict_schema_is_refused_not_passed(self):
-        """The completed cases are GUARDS: bf78c373 already refused them as missing_required_fields (the
-        earlier version of this test accepted any ContractError, which fits the code before that commit). The
-        blocked cases are the ones bf78c373 does not refuse that way (a blocked review with a null verdict
-        reached invalid_status there). A null verdict is refused as missing, never filled in."""
+        """GUARD on 8ec26a08 (no contract code has changed since): a null verdict on a review, completed or
+        blocked, is refused as missing_required_fields, never filled in. Against bf78c373 the completed cases
+        are already guards and the blocked cases are red there (they reached invalid_status), as is
+        test_a_blocked_review_without_a_verdict_is_refused_not_read_as_blocked."""
         original = json.loads(test_bridge.RESULT_SCHEMA)
         for status in ('completed', 'blocked'):
             normalized = remove_optional_nulls(test_bridge.null_filled(body(status=status)), original)

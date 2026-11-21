@@ -177,24 +177,28 @@ class FreshClientMeetsAnOldCollectorTests(unittest.TestCase):
             return client_runtime.status_client(self.state.root, self.project)
 
     def test_the_probe_refuses_a_collector_that_loaded_other_code_before_any_account_request(self):
+        """GUARD (also passes on 8ec26a08): a collector that loaded other code and finds its files changed is refused by the probe before any account request."""
         self.collector(COLLECTOR_RUNTIME_DIGEST='e' * 64, own_files_changed=True)
         reason, target = self.probe()
         self.assertEqual('collector_code_stale', reason)
         target.assert_not_called()
 
     def test_the_probe_refuses_a_collector_of_an_older_package_version(self):
+        """GUARD (also passes on 8ec26a08): an older package version is refused by the probe as stale."""
         self.collector(PACKAGE_VERSION='0.0.1')
         reason, target = self.probe()
         self.assertEqual('collector_code_stale', reason)
         target.assert_not_called()
 
     def test_the_probe_does_not_call_a_newer_collector_stale(self):
+        """GUARD (also passes on 8ec26a08): a newer collector is never called stale."""
         self.collector(PACKAGE_VERSION='99.0.0')
         reason, target = self.probe()
         self.assertEqual('account_unavailable', reason)  # went on to the account request
         target.assert_called_once()
 
     def test_learning_status_shows_the_stale_note_and_the_digest_the_collector_loaded(self):
+        """GUARD (also passes on 8ec26a08): status names a stale collector and the digest it loaded."""
         self.collector(COLLECTOR_RUNTIME_DIGEST='e' * 64, own_files_changed=True)
         report = self.status()
         self.assertIs(True, report['collector_code_stale'])
@@ -203,18 +207,21 @@ class FreshClientMeetsAnOldCollectorTests(unittest.TestCase):
         self.assertFalse(report['ready'])
 
     def test_learning_status_shows_the_stale_note_for_an_older_package_version(self):
+        """GUARD (also passes on 8ec26a08): status names an older package version as stale."""
         self.collector(PACKAGE_VERSION='0.0.1')
         report = self.status()
         self.assertIs(True, report['collector_code_stale'])
         self.assertIn('collector_code_stale', report['collector_code_note'])
 
     def test_learning_status_of_a_current_collector_is_not_stale(self):
+        """GUARD (also passes on 8ec26a08): a current collector is not stale."""
         self.collector()
         report = self.status()
         self.assertIs(False, report['collector_code_stale'])
         self.assertIsNone(report['collector_code_note'])
 
     def test_a_collector_that_does_not_report_its_own_files_and_differs_is_stale(self):
+        """GUARD (also passes on 8ec26a08, whose blanket check calls it stale): an older collector that never reports runtime_stale is still stale."""
         # Built before `runtime_stale` existed: nothing says its files are unchanged, and restarting loads this
         # install's files.
         self.collector(COLLECTOR_RUNTIME_DIGEST='e' * 64)
@@ -223,6 +230,7 @@ class FreshClientMeetsAnOldCollectorTests(unittest.TestCase):
         self.assertIs(True, self.status()['collector_code_stale'])
 
     def test_another_build_of_the_same_version_is_a_conflict_that_a_restart_does_not_fix(self):
+        """Requirement (r2 4b): another build of the same version, with the collector's own files unchanged, is a conflict and never says 'restart it'. Red on 8ec26a08, which calls it stale."""
         # A different digest, and the collector says its own files are unchanged: it would load the same code.
         self.collector(COLLECTOR_RUNTIME_DIGEST='e' * 64, own_files_changed=False)
         report = self.status()
@@ -236,6 +244,7 @@ class FreshClientMeetsAnOldCollectorTests(unittest.TestCase):
         target.assert_called_once()
 
     def test_a_malformed_identity_is_its_own_cause_never_stale(self):
+        """Requirement (r2 4a): a malformed digest, schema or version is `collector_identity_invalid`, never stale and never refused as stale. Red on 8ec26a08, which calls it stale."""
         for changes in ({'runtime_digest': None}, {'runtime_digest': 'not-a-digest'}, {'schema_version': 'one'},
                         {'runtime_version': 'not-a-version'}, {'runtime_version': None}):
             with self.subTest(changes=changes):
