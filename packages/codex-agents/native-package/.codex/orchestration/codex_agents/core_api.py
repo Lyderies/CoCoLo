@@ -4,13 +4,19 @@ The core is a view over the record files plus a command gate; the files stay can
 core keeps no authoritative state (only short-lived confirm ids, rate windows and subscriptions).
 Provider detail appears only under a unit's `extra`. stdlib only.
 
-Stop record (history.jsonl, written by the runner and by this core for owner stops):
+Stop record (history.jsonl): written by the runner when a stop HAPPENS, never by this core:
 {"type":"stop","id","code","reason" (plain words),"by":"owner|cocolo|limit","ts","next":str|null,"unit_id"?,"v":1}.
-The why-stopped answer reads these, never "the last history line". Other records the core reads: activity.jsonl,
-changes.json, diffs.jsonl, messages.jsonl; it writes routing.json. Record shapes: tests/test_core_api_terminal.py.
+This core only writes the command ("requested", commands.jsonl) and reads the runner's acknowledgement
+(command_acks.jsonl: {"type":"ack","command_id","action","unit_id"?,"state":"done|refused","reason","ts","v":1}) and its
+stop record; the why-stopped answer says "unknown" when there is no stop record. Other records the core reads:
+activity.jsonl, changes.json, diffs.jsonl, messages.jsonl; it writes routing.json. Record shapes:
+tests/test_core_api_terminal.py.
 
 Records folder: units.jsonl, state.json, events.jsonl, inbox.jsonl, commands.jsonl, tokens.json,
-history.jsonl, decisions.jsonl, queries.jsonl, deliveries.jsonl (the last two are written here).
+history.jsonl, decisions.jsonl, queries.jsonl, deliveries.jsonl (the last two are written here). Audit rows go to
+commands.jsonl until it reaches audit_max_bytes, then to audit.jsonl (rotating once to audit.jsonl.1); commands.jsonl
+is never rewritten because the runner keeps a byte offset into it. Every file read is size-capped (READ_MAX_BYTES).
+Money values are removed at every depth from every reply and event; event data passes an allow-list of fields.
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ import socket
 import stat
 import struct
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -42,6 +49,7 @@ READ_METHODS = {
     "usage.history", "ci.get", "versions.get", "history.list", "decisions.list", "queries.list",
     "queries.get", "health.get", "events.subscribe", "query.ask",
     "units.activity", "changes.list", "changes.diff", "messages.list", "routing.get",
+    "commands.get", "commands.list",
 }
 PUSH_METHODS = {"context.push"}
 CONFIRM_ONLY = {"control.pause", "control.resume", "control.handoff", "unit.cancel"}
@@ -60,7 +68,7 @@ SCOPE_METHODS = {
     "owner": READ_METHODS | PUSH_METHODS | CONFIRM_ONLY | REPLY_METHODS | OWNER_ONLY,
 }
 ALL_METHODS = set(SCOPE_METHODS["owner"]) | {"initialize"}
-AUDITED = CONFIRM_ONLY | OWNER_ONLY | PUSH_METHODS | {"query.ask"}
+AUDITED = CONFIRM_ONLY | OWNER_ONLY | PUSH_METHODS | REPLY_METHODS | {"query.ask"}
 
 EVENT_KINDS = ["unit.created", "unit.updated", "state.changed", "alert.guard", "decision.requested",
                "decision.answered", "query.queued", "query.answered", "command.requested", "command.executed", "health.changed",
@@ -86,6 +94,30 @@ MONEY_KEY = re.compile(r"(cost|price|usd|dollar|spend|money|balance|credit|billi
 UNKNOWN_STATE_KEYS = ("phase", "session", "now", "ctx", "window", "handoff_replies")
 SECRET_KEY = re.compile(r"(^token$|_token$|^passphrase$|password|secret|transcript|authorization|api_key)", re.I)
 
+# Event data: only these fields, only scalar values, per kind (an allow-list, not a list of bad key names).
+EVENT_FIELDS = {
+    "unit.created": {"state", "title", "kind", "summary"},
+    "unit.updated": {"summary", "verdict", "state", "title"},
+    "state.changed": {"what", "phase"},
+    "alert.guard": {"why", "summary"},
+    "decision.requested": {"decision_id", "summary"},
+    "decision.answered": {"decision_id"},
+    "query.queued": {"query_id"},
+    "query.answered": {"query_id"},
+    "command.requested": {"method", "command_id"},
+    "command.executed": {"method", "command_id", "state", "reason"},
+    "health.changed": {"summary", "code"},
+    "subscription.dropped": {"reason"},
+}
+EVENT_VALUE_CHARS = 300
+CLEAN_DEPTH = 12
+READ_MAX_BYTES = 16 << 20  # no file read loads more than this (a jsonl file reads its newest tail)
+TOKENS_FILE_MAX_BYTES = 1 << 20
+LOCK_SECONDS = 5.0  # the file lock on tokens.json
+AUDIT_MAX_BYTES = 4 << 20
+MAX_SUBSCRIPTIONS_PER_TOKEN = 8
+SUMMARY_FLUSH_AT = 100
+
 PUSH_MAX_BYTES = 2048
 QUERY_MAX_BYTES = 2048
 STRING_MAX_CHARS = 128  # ids and short strings supplied by a caller
@@ -93,7 +125,7 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,39}$")
 PENDING_CONFIRMS_PER_TOKEN = 8
 REFUSAL_AUDITS_PER_CONNECTION = 50
 MAX_REFUSAL_THREADS = 8
-MAX_COST_TOKENS = 10_000_000
+MAX_TOKENS_USED = 10_000_000
 COMMAND_ACTIONS = {"control.pause": "pause", "control.resume": "resume", "control.handoff": "handoff",
                    "control.stop": "stop", "unit.cancel": "cancel", "unit.message": "message"}
 PUSH_PER_WINDOW = 10
@@ -117,16 +149,42 @@ class ApiError(Exception):
         self.data = dict(data or {})
 
 
-def _strip_secrets(value):
+def _clean(value, depth=0):
+    """Drop secret-looking and money keys at every depth (bounded); the one filter for every reply and event."""
+    if depth > CLEAN_DEPTH:
+        return None
     if isinstance(value, dict):
-        return {k: _strip_secrets(v) for k, v in value.items() if not SECRET_KEY.search(str(k))}
+        return {k: _clean(v, depth + 1) for k, v in value.items()
+                if not SECRET_KEY.search(str(k)) and not MONEY_KEY.search(str(k))}
     if isinstance(value, list):
-        return [_strip_secrets(v) for v in value]
+        return [_clean(v, depth + 1) for v in value[:1000]]
     return value
 
 
+_strip_secrets = _clean
+
+
 def _clip(value, limit):
-    return value[:limit] if isinstance(value, str) else value
+    """A string cut to `limit`; numbers and booleans as they are; anything structured becomes None."""
+    if isinstance(value, str):
+        return value[:limit]
+    return value if value is None or isinstance(value, (bool, int, float)) else None
+
+
+class _TimedLock:
+    """A re-entrant lock whose wait is bounded: a stuck holder makes callers time out, never hang."""
+
+    def __init__(self, seconds):
+        self._lock = threading.RLock()
+        self.seconds = seconds
+
+    def __enter__(self):
+        if not self._lock.acquire(timeout=self.seconds):
+            raise ApiError("timeout", "the core is busy; try again")
+        return self
+
+    def __exit__(self, *exc):
+        self._lock.release()
 
 
 def _plain(value, limit=64):
@@ -138,16 +196,15 @@ def _plain(value, limit=64):
 
 def _split_neutral(row, neutral_keys):
     """(neutral part, extra part): non-neutral keys go to extra; money keys are dropped."""
-    top = {k: v for k, v in row.items() if k in neutral_keys}
+    top = {k: _clean(v) for k, v in row.items() if k in neutral_keys}
     extra = dict(row["extra"]) if isinstance(row.get("extra"), dict) else {}
     extra.update({k: v for k, v in row.items() if k not in neutral_keys and k != "extra"})
-    extra = {k: v for k, v in extra.items() if not MONEY_KEY.search(str(k))}
-    return top, _strip_secrets(extra)
+    return top, _clean(extra)
 
 
 def _neutral_usage(value):
     if not isinstance(value, dict):
-        return value if value is not None else "unknown"
+        return _clean(value) if value is not None else "unknown"
     top, extra = _split_neutral(value, NEUTRAL_USAGE_KEYS)
     if "windows" in top:
         windows = top["windows"] if isinstance(top["windows"], list) else []
@@ -182,7 +239,16 @@ def _hash_token(token):
 def _read_jsonl(path):
     """Return (rows, bad_lines) or (None, 0) when the file is missing, (None, -1) when unreadable."""
     try:
-        text = Path(path).read_text(encoding="utf-8")
+        with open(path, "rb") as handle:
+            size = os.fstat(handle.fileno()).st_size
+            if size > READ_MAX_BYTES:  # read the newest tail only, from the first whole line
+                handle.seek(size - READ_MAX_BYTES)
+                data = handle.read(READ_MAX_BYTES)
+                cut = data.find(b"\n")
+                data = data[cut + 1:] if cut != -1 else b""
+            else:
+                data = handle.read(READ_MAX_BYTES)
+        text = data.decode("utf-8")
     except FileNotFoundError:
         return None, 0
     except (OSError, UnicodeDecodeError):
@@ -206,7 +272,11 @@ def _read_jsonl(path):
 def _read_json(path):
     """Return the parsed object, or None when missing or unreadable."""
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+        with open(path, "rb") as handle:
+            data = handle.read(READ_MAX_BYTES + 1)
+        if len(data) > READ_MAX_BYTES:
+            return None
+        return json.loads(data.decode("utf-8"))
     except (OSError, ValueError, UnicodeDecodeError):
         return None
 
@@ -236,9 +306,20 @@ def _truncate_bytes(text, limit):
 
 
 def _owner_terminal():
-    """True only when stdin and stdout are the owner's own terminal."""
+    """True only when stdin and stdout are one terminal device that we own and that is our controlling terminal.
+
+    Limit (documented): this separates the owner's keyboard from a pipe, a script, a service or another user's
+    terminal. It cannot separate the owner from another process of the same user that holds a pty of its own;
+    that boundary is the token files (0600) and the peer-uid check, not this function."""
     try:
-        return os.isatty(0) and os.isatty(1)
+        if not (os.isatty(0) and os.isatty(1)):
+            return False
+        stdin, stdout = os.fstat(0), os.fstat(1)
+        me = os.geteuid()
+        if stdin.st_uid != me or stdout.st_uid != me or stdin.st_rdev != stdout.st_rdev:
+            return False
+        os.tcgetpgrp(0)  # fails unless fd 0 is this process's controlling terminal
+        return True
     except OSError:
         return False
 
@@ -249,13 +330,23 @@ def _locked_tokens(records_dir, mutate):
     path = os.path.join(records_dir, "tokens.json")
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        end = time.monotonic() + LOCK_SECONDS
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= end:
+                    raise ApiError("timeout", "the token store is busy; try again")
+                time.sleep(0.02)
         raw = b""
         while True:
             chunk = os.read(fd, 65536)
             if not chunk:
                 break
             raw += chunk
+            if len(raw) > TOKENS_FILE_MAX_BYTES:
+                raise ApiError("unavailable", "the token store is too large")
         try:
             data = json.loads(raw.decode("utf-8")) if raw.strip() else {}
         except ValueError:
@@ -353,7 +444,7 @@ def resolve_token(explicit=None, token_file=None, env=None):
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
             raise PermissionError("the token file must be a regular file private to you (mode 0600)")
         with open(token_file, encoding="utf-8") as handle:
-            return handle.read().strip() or None
+            return handle.read(4096).strip() or None
     return env.get("COCOLO_TOKEN") or None
 
 
@@ -382,6 +473,8 @@ class Session:
         self.initialized = False
         self.connection = None  # set by a socket connection; None for the in-process adapter
         self.pending_pump = None  # a subscription to start once its acknowledgement is sent
+        self.refusals = 0  # audited refusals so far on this session
+        self.refusal_counts = collections.Counter()  # refusals past the audit budget, per method name
 
 
 class Subscription:
@@ -425,27 +518,54 @@ class Subscription:
             self.cond.notify_all()
 
 
-class _LineReader:
-    """Reads newline-terminated lines from a socket; a timeout leaves buffered bytes intact (makefile does not)."""
+class LineTimeout(Exception):
+    """A line did not finish within its one absolute deadline."""
 
-    def __init__(self, sock):
+
+class _LineReader:
+    """Reads newline-terminated lines from a socket; a timeout leaves buffered bytes intact (makefile does not).
+
+    A line has one absolute deadline: it starts when the line's first byte arrives, not at every recv."""
+
+    def __init__(self, sock, idle_seconds=None, line_seconds=None):
         self.sock = sock
         self.buffer = b""
+        self.idle_seconds = idle_seconds
+        self.line_seconds = line_seconds
+        self.started = None
 
-    def readline(self, limit):
-        """Up to `limit` bytes, ending at the first newline; b"" at end of stream. May raise socket.timeout."""
+    def _take(self, size):
+        line, self.buffer = self.buffer[:size], self.buffer[size:]
+        self.started = time.monotonic() if self.buffer else None
+        return line
+
+    def readline(self, limit, deadline=None):
+        """Up to `limit` bytes, ending at the first newline; b"" at end of stream.
+
+        Raises socket.timeout when idle with nothing buffered, LineTimeout when a started line (or the given
+        absolute `deadline`) runs out."""
         while True:
             end = self.buffer.find(b"\n", 0, limit)
             if end != -1:
-                line, self.buffer = self.buffer[:end + 1], self.buffer[end + 1:]
-                return line
+                return self._take(end + 1)
             if len(self.buffer) >= limit:
-                line, self.buffer = self.buffer[:limit], self.buffer[limit:]
-                return line
+                return self._take(limit)
+            limit_at = deadline
+            if limit_at is None and self.buffer and self.line_seconds:
+                limit_at = self.started + self.line_seconds
+            if limit_at is not None:
+                remaining = limit_at - time.monotonic()
+                if remaining <= 0:
+                    raise LineTimeout()
+                self.sock.settimeout(remaining)
+            else:
+                self.sock.settimeout(self.idle_seconds)
             chunk = self.sock.recv(65536)
             if not chunk:
                 line, self.buffer = self.buffer, b""
                 return line
+            if not self.buffer:
+                self.started = time.monotonic()
             self.buffer += chunk
 
 
@@ -483,10 +603,14 @@ class Connection:
 class CoreService:
     def __init__(self, records_dir, socket_path, *, clock=time.time, expected_uid=None, max_line_bytes=1 << 20,
                  max_connections=64, max_subscriptions=16, event_buffer=1000, method_seconds=10.0,
-                 idle_seconds=300.0, write_seconds=5.0):
+                 idle_seconds=300.0, write_seconds=5.0, lock_seconds=5.0, audit_max_bytes=AUDIT_MAX_BYTES,
+                 max_subscriptions_per_token=MAX_SUBSCRIPTIONS_PER_TOKEN, monotonic=time.monotonic):
         self.records = Path(records_dir)
         self.socket_path = str(socket_path)
         self.clock = clock
+        self._mono = monotonic  # confirmations expire on this clock as well as the wall clock
+        self.audit_max_bytes = audit_max_bytes
+        self.max_subscriptions_per_token = max_subscriptions_per_token
         self.expected_uid = os.getuid() if expected_uid is None else expected_uid
         self.max_line_bytes = max_line_bytes
         self.max_connections = max_connections
@@ -498,7 +622,8 @@ class CoreService:
         self.slow_for_test = 0.0
         self._bound = None  # (st_dev, st_ino) of the socket inode this instance created
         self._refusing = 0
-        self._lock = threading.RLock()
+        self._refuse_lock = threading.Lock()  # guards the connection set and the refusal count, never held long
+        self._lock = _TimedLock(lock_seconds)
         self._seq = 0
         self._subs = []
         self._connections = set()
@@ -634,15 +759,18 @@ class CoreService:
             except OSError:
                 return
             conn = Connection(sock, self.write_seconds)
-            with self._lock:  # count at accept time so a burst of connects cannot slip past the cap
+            with self._refuse_lock:  # count at accept time so a burst of connects cannot slip past the cap
                 conn.over_cap = len(self._connections) >= self.max_connections
                 if not conn.over_cap:
                     self._connections.add(conn)
                 elif self._refusing >= MAX_REFUSAL_THREADS:
-                    self._kill(conn)  # a burst beyond the cap gets no worker at all
-                    continue
+                    full = True
                 else:
+                    full = False
                     self._refusing += 1
+            if conn.over_cap and full:
+                self._kill(conn)  # a burst beyond the cap gets no worker at all
+                continue
             thread = threading.Thread(target=self._serve, args=(conn,), name="core-conn", daemon=True)
             self._threads = [t for t in self._threads if t.is_alive()] + [thread]
             thread.start()
@@ -653,28 +781,31 @@ class CoreService:
             sock.settimeout(self.idle_seconds)
             if peer_uid(sock) != self.expected_uid:
                 if conn.over_cap:
-                    with self._lock:
-                        self._refusing -= 1
+                    self._done_refusing()
                 return
             if conn.over_cap:
                 try:
                     self._refuse_over_cap(conn)
                 finally:
-                    with self._lock:
-                        self._refusing -= 1
+                    self._done_refusing()
                 return
             try:
                 self._read_loop(conn)
             finally:
-                with self._lock:
-                    self._connections.discard(conn)
-        except OSError:
+                self._connections.discard(conn)
+        except (OSError, ApiError):
             pass
         finally:
-            with self._lock:
-                self._connections.discard(conn)
-            self._drop_connection_subs(conn)
+            self._connections.discard(conn)  # set.discard is atomic: no lock, so a stuck lock cannot leak the slot
+            try:
+                self._drop_connection_subs(conn)
+            except ApiError:
+                pass
             self._kill(conn)
+
+    def _done_refusing(self):
+        with self._refuse_lock:
+            self._refusing -= 1
 
     def _refuse_over_cap(self, conn):
         try:
@@ -688,19 +819,27 @@ class CoreService:
     def _read_loop(self, conn):
         session = Session()
         session.connection = conn
-        reader = _LineReader(conn.sock)
+        try:
+            self._read_lines(conn, session)
+        finally:
+            self.flush_refusals(session)
+
+    def _read_lines(self, conn, session):
+        reader = _LineReader(conn.sock, self.idle_seconds, self.idle_seconds)
         limit = self.max_line_bytes
         while not self._stopping.is_set():
             try:
                 line = reader.readline(limit + 1)
+            except LineTimeout:
+                return  # a line that started but did not finish within its one deadline
             except (socket.timeout, TimeoutError):
                 if conn.subscribed:
                     continue  # a stream waiting for events is not idle
-                return  # idle, or a half-sent line that never finished: close
+                return  # idle: close
             if not line:
                 return
             if len(line) > limit:  # the limit counts the newline; an unterminated oversize line ends the connection
-                conn.send(self._error_reply(None, ApiError("too_large", "request line is too large")))
+                conn.send(self._transport_refusal(session, None, ApiError("too_large", "request line is too large")))
                 if not line.endswith(b"\n") and not self._drain_line(reader, limit):
                     return  # the rest of the line never ended within the bound or the deadline: close
                 continue
@@ -714,33 +853,41 @@ class CoreService:
                 self._threads.append(thread)
                 thread.start()
 
-    @staticmethod
-    def _drain_line(reader, limit):
-        """Discard the rest of an oversize line within a bound (16 x the limit) and the idle deadline."""
+    def _drain_line(self, reader, limit):
+        """Discard the rest of an oversize line within a bound (16 x the limit) and one absolute deadline."""
         budget = 16 * limit
+        deadline = time.monotonic() + (self.idle_seconds or 1.0)
         try:
             while budget > 0:
-                rest = reader.readline(min(65536, budget))
+                rest = reader.readline(min(65536, budget), deadline)
                 if not rest:
                     return False
                 if rest.endswith(b"\n"):
                     return True
                 budget -= len(rest)
-        except (socket.timeout, TimeoutError):
+        except (socket.timeout, TimeoutError, LineTimeout):
             pass
         return False
+
+    def _transport_refusal(self, session, rid, error):
+        """The reply for a refused line (parse, envelope, size): audited under the fixed name `envelope`."""
+        try:
+            self._audit_refusal(session, "envelope", error, {})
+        except ApiError as audit_error:
+            error = audit_error
+        return self._error_reply(rid, error)
 
     def _handle_line(self, session, line):
         try:
             request = json.loads(line.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
-            return self._error_reply(None, ApiError("parse_error", "the line is not valid JSON"))
+            return self._transport_refusal(session, None, ApiError("parse_error", "the line is not valid JSON"))
         valid_id = not isinstance(request, dict) or request.get("id") is None or (
             isinstance(request.get("id"), (str, int)) and not isinstance(request.get("id"), bool))
         if (not isinstance(request, dict) or request.get("jsonrpc") != "2.0"
                 or not isinstance(request.get("method"), str) or not valid_id):
             echo = request.get("id") if isinstance(request, dict) and valid_id else None
-            return self._error_reply(echo, ApiError("invalid_request", "not a JSON-RPC 2.0 request"))
+            return self._transport_refusal(session, echo, ApiError("invalid_request", "not a JSON-RPC 2.0 request"))
         rid = request.get("id")
         notification = "id" not in request
         try:
@@ -770,7 +917,12 @@ class CoreService:
         try:
             result = self._run(session, method, params, known)
         except ApiError as error:
-            self._audit_refusal(session, name, error, params if isinstance(params, dict) else {})
+            try:
+                self._audit_refusal(session, name, error, params if isinstance(params, dict) else {})
+            except ApiError as audit_error:
+                audit_error.data.setdefault("seq_at", self._seq)
+                raise audit_error from None
+            error.data.setdefault("seq_at", self._seq)
             raise
         if method in AUDITED and not (method == "query.ask" and result.get("answered_by") != "queued"):
             self._audit(session.caller, method, "ok", params or {}, result.get("outcome"))
@@ -792,11 +944,25 @@ class CoreService:
         return self._dispatch(session, method, params, deadline)
 
     def _audit_refusal(self, session, name, error, params):
-        session.refusals = getattr(session, "refusals", 0) + 1
+        """Audit a refusal: the first REFUSAL_AUDITS_PER_CONNECTION one by one, the rest as a count per method."""
+        session.refusals += 1
         if session.refusals > REFUSAL_AUDITS_PER_CONNECTION:
+            session.refusal_counts[name] += 1
+            if sum(session.refusal_counts.values()) >= SUMMARY_FLUSH_AT:
+                self.flush_refusals(session)
             return
         outcome = error.code if error.code in ERROR_CODES else "error"
         self._audit(session.caller, name, outcome, params)
+
+    def flush_refusals(self, session):
+        """Write the bounded summary (one row per method) of refusals past the per-connection audit budget."""
+        counts, session.refusal_counts = session.refusal_counts, collections.Counter()
+        for name, count in counts.items():
+            try:
+                self._audit_write({"ts": self.clock(), "caller": session.caller, "method": name,
+                                   "outcome": "refused_summary", "count": count})
+            except ApiError:
+                pass  # nothing more can be done for a closing connection
 
     def _initialize(self, session, params):
         protocol = params.get("protocol")
@@ -853,10 +1019,10 @@ class CoreService:
         if self.slow_for_test:
             time.sleep(self.slow_for_test)
         self._check(deadline)
-        if method in AUDITED:
-            self._audit_ready()
         if method in NEEDS_CONFIRM:
             return self._confirmed(session, method, params, deadline)
+        if method in AUDITED and method != "query.ask":
+            self._audit(session.caller, method, "intent", params)  # durable before the effect
         return self._handlers[method](session, params, deadline)
 
     @staticmethod
@@ -873,22 +1039,25 @@ class CoreService:
         key = (session.token_id, method, json.dumps(body, sort_keys=True))
         with self._lock:
             now = self.clock()  # read inside the lock, immediately before the confirmation is consumed
+            mono = self._mono()
             if confirm_id is None:
-                for stale in [c for c, v in self._confirms.items() if v["expires"] < now]:
+                for stale in [c for c, v in self._confirms.items() if v["expires"] < now or v["mono_expires"] < mono]:
                     del self._confirms[stale]  # expired ones go as soon as a new one is asked for
                 pending = sum(1 for v in self._confirms.values() if v["key"][0] == session.token_id)
                 if pending >= PENDING_CONFIRMS_PER_TOKEN:
                     raise ApiError("rate_limited", "too many confirmations are waiting; use or wait them out")
                 new_id = secrets.token_hex(8)
-                self._confirms[new_id] = {"key": key, "expires": now + CONFIRM_SECONDS}
+                self._confirms[new_id] = {"key": key, "expires": now + CONFIRM_SECONDS,
+                                          "mono_expires": mono + CONFIRM_SECONDS}
                 raise ApiError("confirm_required", "repeat the call with this confirm_id to proceed",
                                {"confirm_id": new_id, "expires_in": CONFIRM_SECONDS})
             entry = self._confirms.get(confirm_id) if isinstance(confirm_id, str) else None
             if entry is None or entry["key"] != key:
                 raise ApiError("confirm_invalid", "the confirm id does not match this call")
             del self._confirms[confirm_id]
-            if now > entry["expires"]:
+            if now > entry["expires"] or mono > entry["mono_expires"]:  # either clock says it is over
                 raise ApiError("confirm_expired", "the confirm id has expired")
+        self._audit(session.caller, method, "intent", body)  # durable before the effect
         return self._handlers[method](session, body, deadline)
 
     def _validate_control(self, method, body):
@@ -949,6 +1118,16 @@ class CoreService:
             raise ApiError("invalid_params", "%s is required" % key)
         if len(value) > STRING_MAX_CHARS or any(ord(c) < 32 for c in value):
             raise ApiError("invalid_params", "%s is too long or has control characters" % key)
+        return value
+
+    @staticmethod
+    def _need_text(params, key, max_bytes, label):
+        """Free text (a note, a question, a reply): non-empty, newlines allowed, bounded in UTF-8 bytes."""
+        value = params.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ApiError("invalid_params", "%s is required" % key)
+        if len(value.encode("utf-8")) > max_bytes:
+            raise ApiError("too_large", "the %s is too long" % label)
         return value
 
     def _build_handlers(self):
@@ -1015,7 +1194,7 @@ class CoreService:
                 value = (self._state() or {}).get(key)
                 if key == "usage":
                     return {key: _neutral_usage(value)}
-                return {key: value if value is not None else "unknown"}
+                return {key: _clean(value) if value is not None else "unknown"}
             return get
 
         h["usage.get"] = from_state("usage")
@@ -1025,7 +1204,7 @@ class CoreService:
         @reading("usage.history")
         def usage_history(session, params, deadline):
             rows, bad = _read_jsonl(self.records / "usage.jsonl")
-            result = {"samples": rows if rows is not None else "unknown"}
+            result = {"samples": [_clean(r) for r in rows] if rows is not None else "unknown"}
             if bad > 0:
                 result["damaged_lines"] = bad  # damaged history must not look complete
             return result
@@ -1033,7 +1212,7 @@ class CoreService:
         @reading("history.list")
         def history_list(session, params, deadline):
             rows, bad = _read_jsonl(self.records / "history.jsonl")
-            result = {"history": rows if rows is not None else "unknown"}
+            result = {"history": [_clean(r) for r in rows] if rows is not None else "unknown"}
             if bad > 0:
                 result["damaged_lines"] = bad
             return result
@@ -1088,10 +1267,10 @@ class CoreService:
                 current = self._latest_unit(unit_id)
                 if current is None:
                     raise ApiError("not_found", "no such unit")
-                record = {**current, "verdict": params["verdict"], "verdict_by": session.caller,
+                record = {**_clean(current), "verdict": params["verdict"], "verdict_by": session.caller,
                           "verdict_ts": self.clock()}
                 self._write_or_unavailable(self.records / "units.jsonl", record)
-            self.emit("unit.updated", {"verdict": params["verdict"]}, unit_id=unit_id)
+            self._emit_after("unit.updated", {"verdict": params["verdict"]}, unit_id=unit_id)
             return {"outcome": "recorded"}
 
         def control(name, outcome, needs_unit=False):
@@ -1099,12 +1278,22 @@ class CoreService:
                 unit_id = params.get("id") if needs_unit else None
                 self._check(deadline)
                 command_id = self._write_command(session, name, unit_id)
-                if name in ("control.stop", "unit.cancel"):
-                    self._write_stop_record(session, name, unit_id)
-                self.emit("command.requested", {"method": name, "command_id": command_id}, unit_id=unit_id)
+                self._emit_after("command.requested", {"method": name, "command_id": command_id}, unit_id=unit_id)
                 # The runner acts on the command record; `state` says so plainly.
                 return {"outcome": outcome, "command_id": command_id, "state": "requested"}
             h[name] = run
+
+        @reading("commands.get")
+        def commands_get(session, params, deadline):
+            wanted = self._need_str(params, "id")
+            for command in self._command_views():
+                if command["command_id"] == wanted:
+                    return {"command": command}
+            raise ApiError("not_found", "no such command")
+
+        @reading("commands.list")
+        def commands_list(session, params, deadline):
+            return {"commands": self._command_views()[-50:]}
 
         @reading("units.activity")
         def units_activity(session, params, deadline):
@@ -1179,7 +1368,7 @@ class CoreService:
             data = _read_json(self.records / "routing.json")
             if not isinstance(data, dict) or "rows" not in data:
                 return {"routing": "unknown"}
-            return {"routing": {k: data.get(k) for k in ("profile", "providers", "rows", "set_by", "ts")}}
+            return {"routing": _clean({k: data.get(k) for k in ("profile", "providers", "rows", "set_by", "ts")})}
 
         @reading("routing.set")
         def routing_set(session, params, deadline):
@@ -1187,18 +1376,32 @@ class CoreService:
             record = {"profile": params["profile"], "providers": list(params["providers"]),
                       "rows": [dict(r) for r in params["rows"]], "set_by": session.caller, "ts": self.clock()}
             path = self.records / "routing.json"
-            tmp = self.records / ("routing.json.%d.tmp" % os.getpid())
-            try:
-                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            data = json.dumps(record).encode("utf-8")
+            self._check(deadline)
+            with self._lock:
+                tmp = None
                 try:
-                    os.write(fd, json.dumps(record).encode("utf-8"))
-                    os.fsync(fd)
+                    fd, tmp = tempfile.mkstemp(dir=str(self.records), prefix=".routing.", suffix=".tmp")
+                    try:
+                        self._check(deadline)
+                        view = memoryview(data)
+                        while view:
+                            view = view[os.write(fd, view):]
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+                    self._check(deadline)  # the last point at which the choice can still be refused
+                    os.replace(tmp, path)
+                    tmp = None
+                except OSError:
+                    raise ApiError("unavailable", "the routing choice could not be saved")
                 finally:
-                    os.close(fd)
-                os.replace(tmp, path)
-            except OSError:
-                raise ApiError("unavailable", "the routing choice could not be saved")
-            self.emit("state.changed", {"what": "routing"})
+                    if tmp is not None:
+                        try:
+                            os.unlink(tmp)
+                        except OSError:
+                            pass
+            self._emit_after("state.changed", {"what": "routing"})
             return {"outcome": "saved"}
 
         @reading("unit.message")
@@ -1213,7 +1416,7 @@ class CoreService:
                 raise ApiError("too_large", "the message is too long")
             self._check(deadline)
             command_id = self._write_command(session, "unit.message", unit_id, {"text": text})
-            self.emit("command.requested", {"method": "unit.message", "command_id": command_id}, unit_id=unit_id)
+            self._emit_after("command.requested", {"method": "unit.message", "command_id": command_id}, unit_id=unit_id)
             return {"outcome": "message_requested", "command_id": command_id, "state": "requested"}
 
         control("control.pause", "paused")
@@ -1257,23 +1460,36 @@ class CoreService:
                 "caller": session.caller, "ts": self.clock(), "v": 1, "state": "requested", **(extra or {})})
         return command_id
 
-    def _write_stop_record(self, session, method, unit_id):
-        """A stop the owner asked for is recorded in history.jsonl in the stop-record format (see module notes)."""
-        with self._lock:
-            rows, _ = _read_jsonl(self.records / "history.jsonl")
-            record_id = self._next_id("H", rows or [], "id")
-            cancel = method == "unit.cancel"
-            self._write_or_unavailable(self.records / "history.jsonl", {
-                "type": "stop", "id": record_id, "code": "owner_cancel" if cancel else "owner_stop",
-                "reason": "You asked for this unit to be cancelled." if cancel else "You asked CoCoLo to stop.",
-                "by": "owner", "ts": self.clock(), "next": None, "unit_id": unit_id, "v": 1})
+    def _commands(self):
+        rows, _ = _read_jsonl(self.records / "commands.jsonl")
+        return [r for r in rows or [] if r.get("type") == "command" and isinstance(r.get("command_id"), str)]
+
+    def _acks(self):
+        """The runner's acknowledgements (command_acks.jsonl), newest per command id."""
+        rows, _ = _read_jsonl(self.records / "command_acks.jsonl")
+        return {r["command_id"]: r for r in rows or []
+                if r.get("type") == "ack" and isinstance(r.get("command_id"), str)}
+
+    def _command_views(self):
+        """Each command with what the runner did: requested until acknowledged, then done or refused."""
+        acks = self._acks()
+        views = []
+        for row in self._commands():
+            ack = acks.get(row["command_id"])
+            done = ack is not None and ack.get("state") in ("done", "refused")
+            views.append({"command_id": row["command_id"], "action": _clip(row.get("action"), 32),
+                          "unit_id": _clip(row.get("unit_id"), 64),
+                          "state": ack["state"] if done else "requested",
+                          "reason": _clip(ack.get("reason"), 300) if done else None,
+                          "requested_at": row.get("ts"), "acked_at": ack.get("ts") if done else None})
+        return views
 
     def _decisions(self):
         rows, _ = _read_jsonl(self.records / "decisions.jsonl")
         merged = collections.OrderedDict()
         for row in rows or []:
             if "id" in row:
-                merged.setdefault(row["id"], {}).update({k: v for k, v in row.items() if k in NEUTRAL_DECISION_KEYS})
+                merged.setdefault(row["id"], {}).update({k: _clean(v) for k, v in row.items() if k in NEUTRAL_DECISION_KEYS})
         return list(merged.values())
 
     def _findings(self):
@@ -1312,11 +1528,36 @@ class CoreService:
         events = self._events_in_file()
         return events[-1]["seq"] if events else 0
 
+    def _emit_after(self, *args, **kwargs):
+        """An event published after its effect is already durable: a failure here must not turn the call into an error."""
+        try:
+            return self.emit(*args, **kwargs)
+        except (OSError, ApiError):
+            return None
+
+    @staticmethod
+    def _event_data(kind, data):
+        """Only the allowed fields for this kind, only scalar values, strings cut short."""
+        allowed = EVENT_FIELDS.get(kind, ())
+        out = {}
+        for key, value in (data if isinstance(data, dict) else {}).items():
+            if key in allowed and (value is None or isinstance(value, (bool, int, float, str))):
+                out[key] = value[:EVENT_VALUE_CHARS] if isinstance(value, str) else value
+        return out
+
+    def _public_event(self, event):
+        out = {k: event[k] for k in ("seq", "ts", "kind", "v") if k in event}
+        out["data"] = self._event_data(event.get("kind"), event.get("data"))
+        for key in ("unit_id", "session"):
+            if isinstance(event.get(key), str):
+                out[key] = event[key][:128]
+        return out
+
     def emit(self, kind, data=None, unit_id=None, session=None):
         """Append one event to events.jsonl and offer it to subscribers; never blocks on a subscriber."""
         with self._lock:
             next_seq = max(self._seq, self._last_seq_in_file()) + 1  # advanced only after the append succeeds
-            event = {"seq": next_seq, "ts": self.clock(), "kind": kind, "data": _strip_secrets(data or {}), "v": 1}
+            event = {"seq": next_seq, "ts": self.clock(), "kind": kind, "data": self._event_data(kind, data), "v": 1}
             if unit_id is not None:
                 event["unit_id"] = unit_id
             if session is not None:
@@ -1328,9 +1569,6 @@ class CoreService:
         return event
 
     def _subscribe(self, session, params):
-        conn = session.connection
-        if conn is None:
-            raise ApiError("unavailable", "subscriptions need a socket connection")
         event_filter = params.get("filter") or {}
         if not isinstance(event_filter, dict):
             raise ApiError("invalid_params", "filter must be an object")
@@ -1340,6 +1578,8 @@ class CoreService:
         with self._lock:
             if len(self._subs) >= self.max_subscriptions:
                 raise ApiError("too_many_subscriptions", "too many subscriptions")
+            if sum(1 for s in self._subs if s.session.token_id == session.token_id) >= self.max_subscriptions_per_token:
+                raise ApiError("too_many_subscriptions", "this token has too many subscriptions")
             events = self._events_in_file()
             seq_at = max(self._seq, events[-1]["seq"] if events else 0)
             from_seq = params.get("from_seq")
@@ -1370,6 +1610,18 @@ class CoreService:
 
     def _pump(self, sub, conn):
         try:
+            for message in self._stream(sub):
+                conn.send(message)
+        except OSError:
+            self._kill(conn)  # a peer that stopped reading loses its connection, freeing the slot
+        finally:
+            conn.subscribed = max(0, conn.subscribed - 1)
+
+    def _stream(self, sub):
+        """The wire messages of one subscription until it ends; shared by the socket pump and in-process readers."""
+        end_revoked = {"jsonrpc": "2.0", "method": "events.end", "params": {"reason": "revoked"}}
+        end = {"jsonrpc": "2.0", "method": "events.end", "params": {}}
+        try:
             while True:
                 with sub.cond:
                     while not (sub.replay or sub.live or sub.dropped or sub.closed):
@@ -1379,12 +1631,12 @@ class CoreService:
                     if sub.closed:
                         return
                 if not self._stream_authorized(sub):
-                    conn.send({"jsonrpc": "2.0", "method": "events.end", "params": {"reason": "revoked"}})
+                    yield end_revoked
                     return
                 time.sleep(COALESCE_SECONDS)  # coalesce a burst so a slow consumer overflows deterministically
                 while True:
                     if not self._stream_authorized(sub):
-                        conn.send({"jsonrpc": "2.0", "method": "events.end", "params": {"reason": "revoked"}})
+                        yield end_revoked
                         return
                     with sub.cond:
                         if sub.closed:
@@ -1398,26 +1650,29 @@ class CoreService:
                         dropped = sub.dropped
                     if event is None:
                         break
-                    conn.send({"jsonrpc": "2.0", "method": "events.event", "params": _strip_secrets(event)})
+                    yield {"jsonrpc": "2.0", "method": "events.event", "params": self._public_event(event)}
                     sub.last_seq = event["seq"]
                     sub.sent += 1
                     if sub.limit and sub.sent >= sub.limit:
-                        conn.send({"jsonrpc": "2.0", "method": "events.end", "params": {}})
+                        yield end
                         return
                 if dropped:
                     notice = {"seq": sub.last_seq, "ts": self.clock(), "kind": "subscription.dropped",
                               "data": {"reason": "slow_consumer"}, "v": 1}
-                    conn.send({"jsonrpc": "2.0", "method": "events.event", "params": notice})
-                    conn.send({"jsonrpc": "2.0", "method": "events.end", "params": {}})
+                    yield {"jsonrpc": "2.0", "method": "events.event", "params": notice}
+                    yield end
                     return
-        except OSError:
-            self._kill(conn)  # a peer that stopped reading loses its connection, freeing the slot
         finally:
             sub.close()
-            conn.subscribed = max(0, conn.subscribed - 1)
-            with self._lock:
-                if sub in self._subs:
+            try:
+                with self._lock:
+                    if sub in self._subs:
+                        self._subs.remove(sub)
+            except ApiError:  # a stuck lock must not leave the slot taken
+                try:
                     self._subs.remove(sub)
+                except ValueError:
+                    pass
 
     def _stream_authorized(self, sub):
         token_id = sub.session.token_id
@@ -1447,7 +1702,7 @@ class CoreService:
                      "source": row.get("source")}
             reply = replies.get(row["query_id"])
             if reply:
-                query.update(state="answered", reply=reply.get("text"), cost_tokens=reply.get("cost_tokens", 0))
+                query.update(state="answered", reply=reply.get("text"), tokens_used=reply.get("tokens_used", 0))
             elif now > row.get("expires", float("inf")):
                 query["state"] = "expired"
             elif row["query_id"] in delivered:
@@ -1479,19 +1734,20 @@ class CoreService:
                 return answer
             if mode == "records_only" or not can_forward:
                 return {"answered_by": "no_records_answer", "text": "The records do not answer this.",
-                        "cost_tokens": 0, "sources": [], "as_of": self.clock()}
+                        "tokens_used": 0, "sources": [], "as_of": self.clock()}
         return self._queue_query(session, text)
 
     def _queue_query(self, session, text):
         now = self.clock()
         with self._lock:
+            self._audit(session.caller, "query.ask", "intent", {"mode": "forward"})  # durable before the effect
             rows = self._inbox()
             query_id = self._next_id("Q", rows, "query_id")
             self._write_or_unavailable(self.records / "inbox.jsonl", {
                 "query_id": query_id, "kind": "query", "text": text, "source": session.label or session.scope,
                 "trust": "untrusted", "ts": now, "ttl": QUERY_TTL_SECONDS, "expires": now + QUERY_TTL_SECONDS})
-        self.emit("query.queued", {"query_id": query_id})
-        return {"answered_by": "queued", "query_id": query_id, "cost_tokens": 0, "as_of": now}
+        self._emit_after("query.queued", {"query_id": query_id})
+        return {"answered_by": "queued", "query_id": query_id, "tokens_used": 0, "as_of": now}
 
     def _answer_from_records(self, text):
         lowered = text.lower()
@@ -1499,18 +1755,18 @@ class CoreService:
         units_known = self._units_rows() is not None
         units = self._latest_units()
         unit_match = re.search(r"\bu-\d+\b", lowered)
-        if unit_match and not (re.search(r"\bwhy\b", lowered) and re.search(r"\bstop", lowered)
-                               and self._stop_records(unit_match.group(0).upper())):
+        asks_why_stopped = bool(re.search(r"\bwhy\b", lowered) and re.search(r"\bstop", lowered))
+        if unit_match and not asks_why_stopped:
             unit = self._latest_unit(unit_match.group(0).upper())
             body = ("%s is %s: %s." % (unit["id"], unit.get("state", "unknown"), unit.get("title", "untitled"))
                     if unit else ("No unit with that id is recorded." if units_known
                                   else "unknown: the units record is missing or unreadable."))
             return self._records_answer(body, ["units.jsonl"])
-        if re.search(r"\bwhy\b", lowered) and re.search(r"\bstop", lowered):
+        if asks_why_stopped:
             return self._why_stopped(unit_match.group(0).upper() if unit_match else None)
         if "history" in lowered:
             rows, _ = _read_jsonl(self.records / "history.jsonl")
-            body = ("%d history entries; latest: %s" % (len(rows), rows[-1].get("summary") or rows[-1].get("id"))
+            body = ("%d history entries; latest: %s" % (len(rows), _clip(rows[-1].get("summary") or rows[-1].get("id"), 200))
                     if rows else "unknown: no history is recorded.")
             return self._records_answer(body, ["history.jsonl"])
         if "usage" in lowered:
@@ -1518,11 +1774,11 @@ class CoreService:
             return self._records_answer("Usage: %s" % json.dumps(value),
                                         ["state.json"])
         if re.search(r"\bci\b", lowered):
-            value = (state or {}).get("ci")
+            value = _clean((state or {}).get("ci"))
             return self._records_answer("CI: %s" % (json.dumps(value) if value is not None else "unknown"),
                                         ["state.json"])
         if "version" in lowered:
-            value = (state or {}).get("versions")
+            value = _clean((state or {}).get("versions"))
             return self._records_answer("Versions: %s" % (json.dumps(value) if value is not None else "unknown"),
                                         ["state.json"])
         if "status" in lowered:
@@ -1542,7 +1798,7 @@ class CoreService:
     def _why_stopped(self, unit_id):
         stops = self._stop_records(unit_id)
         if not stops:
-            return self._records_answer("unknown: no stop is recorded.", ["history.jsonl"])
+            return self._requested_stop_answer(unit_id)
         stop = stops[-1]
         who = {"owner": "you", "cocolo": "CoCoLo", "limit": "a limit"}.get(stop.get("by"), "unknown")
         reason = _clip(stop.get("reason"), 500) if isinstance(stop.get("reason"), str) else "no reason recorded"
@@ -1555,8 +1811,31 @@ class CoreService:
             body += ". Next: %s" % _clip(stop["next"], 300)
         return self._records_answer(body, ["history.jsonl"])
 
+    def _requested_stop_answer(self, unit_id):
+        """No stop record: the runner writes one when a stop happens, so say what is known and nothing more."""
+        sources = ["history.jsonl", "commands.jsonl", "command_acks.jsonl"]
+        acks = self._acks()
+        wanted = [r for r in self._commands() if r.get("action") in ("stop", "cancel")
+                  and (unit_id is None or r.get("unit_id") in (None, unit_id))]
+        if wanted:
+            command = wanted[-1]
+            cid = command["command_id"]
+            ack = acks.get(cid)
+            if ack is not None and ack.get("state") == "refused":
+                reason = _clip(ack.get("reason"), 300) if isinstance(ack.get("reason"), str) else "no reason given"
+                body = "You asked for a stop (%s) but it was refused: %s" % (cid, reason)
+            elif ack is not None and ack.get("state") == "done":
+                body = ("You asked for a stop (%s) and it is done; no stop record with a reason was written." % cid)
+            else:
+                body = "You asked for a stop (%s); it was requested and has not been confirmed yet." % cid
+            return self._records_answer(body, sources)
+        target = " for %s" % unit_id if unit_id else ""
+        return self._records_answer(
+            "unknown: no stop is recorded%s. It may still be running, or no stop has been written yet." % target,
+            sources)
+
     def _records_answer(self, text, sources):
-        return {"answered_by": "records", "text": text, "cost_tokens": 0, "sources": sources, "as_of": self.clock()}
+        return {"answered_by": "records", "text": text, "tokens_used": 0, "sources": sources, "as_of": self.clock()}
 
     def _push(self, session, params):
         text = params.get("text")
@@ -1612,21 +1891,19 @@ class CoreService:
 
     def _reply(self, session, params):
         query_id = self._need_str(params, "query_id")
-        text = self._need_str(params, "text")
-        if len(text.encode("utf-8")) > QUERY_MAX_BYTES:
-            raise ApiError("too_large", "the reply is too long")
-        cost = params.get("cost_tokens", 0)
-        if not isinstance(cost, int) or isinstance(cost, bool) or not 0 <= cost <= MAX_COST_TOKENS:
-            raise ApiError("invalid_params", "cost_tokens must be a non-negative integer")
+        text = self._need_text(params, "text", QUERY_MAX_BYTES, "reply")
+        cost = params.get("tokens_used", 0)
+        if not isinstance(cost, int) or isinstance(cost, bool) or not 0 <= cost <= MAX_TOKENS_USED:
+            raise ApiError("invalid_params", "tokens_used must be a non-negative integer")
         with self._lock:
             if not any(q["id"] == query_id for q in self._queries()):
                 raise ApiError("not_found", "no such query")
             self._write_or_unavailable(self.records / "queries.jsonl",
                                        {"query_id": query_id, "state": "answered", "text": text,
-                                        "cost_tokens": cost, "by": session.caller, "ts": self.clock()})
+                                        "tokens_used": cost, "by": session.caller, "ts": self.clock()})
         # The event names the query only; the answer text is read from queries.get, never broadcast.
-        self.emit("query.answered", {"query_id": query_id})
-        return {"outcome": "answered", "cost_tokens": cost}
+        self._emit_after("query.answered", {"query_id": query_id})
+        return {"outcome": "answered", "tokens_used": cost}
 
     def _decision_answer(self, session, params):
         decision_id = self._need_str(params, "id")
@@ -1642,7 +1919,7 @@ class CoreService:
                 raise ApiError("invalid_params", "choice is not one of the options")
             self._write_or_unavailable(self.records / "decisions.jsonl", {"id": decision_id, "answer": choice,
                                                             "answered_by": session.caller, "ts": self.clock()})
-        self.emit("decision.answered", {"decision_id": decision_id})
+        self._emit_after("decision.answered", {"decision_id": decision_id})
         return {"outcome": "answered"}
 
     # -- audit --
@@ -1658,12 +1935,28 @@ class CoreService:
             return value
         return "invalid"
 
-    def _audit_ready(self):
-        """Refuse a change when the audit log cannot be appended to, before the change is made."""
-        try:
-            os.close(os.open(self.records / "commands.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600))
-        except OSError:
-            raise ApiError("unavailable", "the audit log cannot be written")
+    def _audit_write(self, row):
+        """Append one audit row (fsynced). Rows go to commands.jsonl until it holds audit_max_bytes, then to
+        audit.jsonl, which rotates once to audit.jsonl.1 (so the audit is bounded at about three times the limit).
+        commands.jsonl itself is never rewritten: the runner keeps a byte offset into it."""
+        with self._lock:
+            path = self.records / "commands.jsonl"
+            try:
+                size = path.stat().st_size
+            except FileNotFoundError:
+                size = 0
+            except OSError:
+                raise ApiError("unavailable", "the audit log cannot be written")
+            if size >= self.audit_max_bytes:
+                path = self.records / "audit.jsonl"
+                try:
+                    if path.stat().st_size >= self.audit_max_bytes:
+                        os.replace(path, self.records / "audit.jsonl.1")
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    raise ApiError("unavailable", "the audit log cannot be written")
+            self._write_or_unavailable(path, row)
 
     def _audit(self, caller, method, outcome, params, result=None):
         summary = {k: self._audit_value(v) for k, v in params.items() if k in self.AUDIT_KEYS}
@@ -1672,14 +1965,13 @@ class CoreService:
         row = {"ts": self.clock(), "caller": caller, "method": method, "outcome": outcome, "params": summary}
         if isinstance(result, str) and SAFE_NAME.match(result):
             row["result"] = result
-        with self._lock:
-            self._write_or_unavailable(self.records / "commands.jsonl", row)
+        self._audit_write(row)
 
 
 # --- clients -----------------------------------------------------------------------------------
 
 class _InProcess:
-    """The same contract as the socket: no scope until initialize is given a valid token (subscriptions need a socket)."""
+    """The same contract as the socket: no scope until initialize is given a valid token; subscriptions work too."""
 
     def __init__(self, service, token=None):
         self.service = service
@@ -1690,13 +1982,42 @@ class _InProcess:
         params = dict(params or {})
         if method == "initialize" and self._token and "token" not in params:
             params["token"] = self._token
-        if len(_dump(params).encode("utf-8")) > self.service.max_line_bytes:
-            raise ApiError("too_large", "request is too large")
+        request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        if len(_dump(request).encode("utf-8")) + 1 > self.service.max_line_bytes:  # the whole line, like a socket
+            raise ApiError("too_large", "request is too large", {"seq_at": self.service._seq})
         result = self.service.handle(self.session, method, params)
         return json.loads(json.dumps(result))
 
+    def subscribe(self, params=None):
+        """Subscribe in this process; returns an iterator of event dicts, like the socket client."""
+        self.call("events.subscribe", params or {})
+        sub, self.session.pending_pump = self.session.pending_pump, None
+        return LocalSubscription(self.service, sub)
+
     def close(self):
-        pass
+        self.service.flush_refusals(self.session)
+
+
+class LocalSubscription:
+    """Iterator over the events of one in-process subscription."""
+
+    def __init__(self, service, sub):
+        self._sub = sub
+        self._stream = service._stream(sub)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        for message in self._stream:
+            if message.get("method") == "events.event":
+                return message["params"]
+            raise StopIteration  # events.end
+        raise StopIteration
+
+    def close(self):
+        self._stream.close()
+        self._sub.close()
 
 
 def in_process(service, token=None):
@@ -1755,9 +2076,21 @@ class CoreClient:
 
     def _connect(self):
         if self._sock is None:
+            try:  # before anything is sent: the path must be a socket of ours, not a symlink or a stranger's
+                info = os.lstat(self.socket_path)
+            except OSError:
+                raise ApiError("unavailable", "the core is not reachable")
+            if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.geteuid():
+                raise ApiError("unavailable", "the socket path is not a socket owned by you; nothing was sent")
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.settimeout(self.timeout)
-            sock.connect(self.socket_path)
+            try:
+                sock.connect(self.socket_path)
+                if peer_uid(sock) != os.geteuid():  # the other end must run as us; fail closed when unknown
+                    raise ApiError("unavailable", "the process behind the socket is not yours; nothing was sent")
+            except BaseException:
+                sock.close()
+                raise
             self._sock = sock
             self._reader = sock.makefile("rb")
 

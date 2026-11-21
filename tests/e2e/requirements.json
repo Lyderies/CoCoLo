@@ -459,7 +459,7 @@
    "id": "API-15",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
-   "statement": "Records-first answers. Check: canned questions (status, usage, CI, versions, history, why stopped) are answered from records with sources, as_of and cost_tokens 0, and nothing is written to the inbox.",
+   "statement": "Records-first answers. Check: canned questions (status, usage, CI, versions, history, why stopped) are answered from records with sources, as_of and tokens_used 0, and nothing is written to the inbox.",
    "checks": []
   },
   {

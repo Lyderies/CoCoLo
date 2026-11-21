@@ -59,7 +59,7 @@ class Helpers:
 
 
 class AuditRound3(Helpers, CoreCase):
-    service_options = {"max_line_bytes": 4096, "audit_max_bytes": 3000}
+    service_options = {"max_line_bytes": 4096}
 
     def test_refusals_beyond_the_cap_are_summarised_per_method_not_dropped(self):
         client = self.client("read")
@@ -110,6 +110,10 @@ class AuditRound3(Helpers, CoreCase):
         self.addCleanup(os.chmod, self.records / "commands.jsonl", 0o644)
         self.assertEqual("unavailable", self.error_code(orch, "query.reply", {"query_id": second, "text": "ok"}))
         self.assertEqual(1, len([r for r in read_jsonl(self.records / "queries.jsonl")]))
+
+
+class AuditRotation(Helpers, CoreCase):
+    service_options = {"audit_max_bytes": 3000}
 
     def test_the_audit_log_is_bounded_by_rotation(self):
         for _ in range(4):
@@ -469,7 +473,31 @@ class NoMoneyRound3(Helpers, CoreCase):
         self.assertEqual("pass", latest["verdict"])
 
 
+CANNED = ["What is the status?", "What is U-0001 doing?", "How much usage is left?", "Is CI green?",
+          "Which version is installed?", "Show the history.", "Why did the last unit stop?"]
+
+
 class TokensUsed(Helpers, CoreCase):
+    def test_every_canned_answer_is_from_records_with_tokens_used_zero(self):  # API-15 (replaces the cost_tokens test)
+        client = self.client("read")
+        for question in CANNED:
+            with self.subTest(question):
+                answer = client.call("query.ask", {"text": question, "mode": "auto"})
+                self.assertEqual("records", answer["answered_by"])
+                self.assertEqual(0, answer["tokens_used"])
+                self.assertTrue(answer["sources"] and answer["as_of"])
+        self.assertEqual([], self.inbox())
+
+    def test_the_query_answered_event_has_no_reply_text_but_the_asker_can_read_it(self):  # API-16
+        query = self.client("confirm").call("query.ask", {"text": "Rewrite the parser?", "mode": "forward"})["query_id"]
+        stream = self.client("read").subscribe({"from_seq": 6, "filter": {"kinds": ["query.answered"]}, "limit": 1})
+        self.client("owner").call("query.reply", {"query_id": query, "text": "No, keep it.", "tokens_used": 12})
+        event = next(stream)
+        self.assertEqual(query, event["data"]["query_id"])
+        self.assertNotIn("No, keep it.", json.dumps(event))
+        answer = self.client("confirm").call("queries.get", {"id": query})["query"]
+        self.assertEqual(("answered", "No, keep it.", 12), (answer["state"], answer["reply"], answer["tokens_used"]))
+
     def test_canned_answers_report_tokens_used_zero_and_no_cost_tokens(self):
         answer = self.client("read").call("query.ask", {"text": "What is the status?", "mode": "auto"})
         self.assertEqual(0, answer["tokens_used"])
