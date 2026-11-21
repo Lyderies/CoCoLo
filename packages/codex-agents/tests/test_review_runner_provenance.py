@@ -11,12 +11,15 @@ Requirements:
     folder or the packet, stops the review before any child starts.
 (g) the state folder the key comes from is the one every host command is told to use.
 
-These tests pass the state folder only when the runner accepts one (`base.TAKES_STATE`), so they run against a
+Regression tests (red on the revision before them) are the (f) and (g) ones and the rerun-after-a-state-failure
+case; the (d)/(e) tests and the keyed-binding ones named GUARD pass on the revision before and keep their
+behaviour. These tests pass the state folder only when the runner accepts one (`base.TAKES_STATE`), so they run against a
 runner from before the keyed binding and fail there on the requirement, not on the call.
 """
 import json
 import os
 import unittest
+from pathlib import Path
 
 from codex_agents import review_runner
 from tests import test_review_runner as base
@@ -147,6 +150,8 @@ class ReviewRunnerProvenanceTests(unittest.TestCase):
         self.assertEqual('review_stage_not_runner_written', self.refused('verify'))
 
     def test_e_a_binding_made_under_another_state_is_refused(self):
+        """GUARD on ddefa327 (red on 8ec26a08, which has no key): a binding made under another state's key
+        is refused."""
         self.staged()
         other = self.work.parent / 'other-state'
         other.mkdir(mode=0o700)
@@ -157,6 +162,8 @@ class ReviewRunnerProvenanceTests(unittest.TestCase):
         self.assertEqual('review_stage_not_runner_written', stopped.exception.reason_code)
 
     def test_e_the_key_is_not_in_the_work_folder_and_a_missing_or_loose_key_stops_the_review(self):
+        """GUARD on ddefa327 (red on 8ec26a08): neither the host key nor the key derived from it is in any work
+        file, and a loose or missing key refuses finish."""
         self.staged()
         key = (self.state / 'digest.key').read_bytes()
         for path in self.work.iterdir():
@@ -174,9 +181,17 @@ class ReviewRunnerProvenanceTests(unittest.TestCase):
         (self.state / 'digest.key').unlink()
         self.assertEqual('review_state_unavailable', self.refused())
 
+    def restore_key(self):
+        key = self.state / 'digest.key'
+        key.write_bytes(bytes(range(32)))
+        os.chmod(key, 0o600)
+
     def test_f_a_missing_or_loose_key_stops_the_review_before_any_child_starts(self):
+        """Requirement (f). Regression: ddefa327 reads the key only after the worker has run and been recorded."""
+        self.addCleanup(self.restore_key)
         for damage in ('missing', 'loose'):
             with self.subTest(damage=damage):
+                self.restore_key()
                 key = self.state / 'digest.key'
                 if damage == 'loose':
                     os.chmod(key, 0o644)
@@ -186,28 +201,60 @@ class ReviewRunnerProvenanceTests(unittest.TestCase):
                 with self.assertRaises(review_runner.ReviewError) as stopped:
                     self.run_step('worker', cli)
                 self.assertEqual(('review_state_unavailable', []), (stopped.exception.reason_code, cli.calls))
-                key.write_bytes(bytes(range(32)))
-                os.chmod(key, 0o600)
 
-    def test_f_a_state_folder_inside_the_work_folder_or_the_packet_is_refused_before_any_child_starts(self):
-        for inside in (self.work / 'state', self.root / 'reviews' / 'x' / 'state'):
-            with self.subTest(inside=str(inside.relative_to(inside.parents[2]))):
-                inside.mkdir(parents=True, mode=0o700)
-                (inside / 'digest.key').write_bytes(bytes(range(32)))
-                os.chmod(inside / 'digest.key', 0o600)
-                cli = base.FakeCli()
-                with self.assertRaises(review_runner.ReviewError) as stopped:
-                    review_runner.run('worker', self.spec, self.work, self.root, cli=cli, **self.state_kw(inside))
-                self.assertEqual(('review_state_unavailable', []), (stopped.exception.reason_code, cli.calls))
+    def test_f_a_rerun_stopped_by_the_state_check_leaves_no_earlier_marker_for_finish(self):
+        """Requirement (e)/(f): a stage that starts again removes its earlier markers even when the state
+        check stops it. Regression: ddefa327 checks the state first, so the old markers survive and finish
+        accepts them."""
+        self.addCleanup(self.restore_key)
+        self.staged()
+        os.chmod(self.state / 'digest.key', 0o644)
+        with self.assertRaises(review_runner.ReviewError) as stopped:
+            self.run_step('worker', base.FakeCli())
+        self.assertEqual('review_state_unavailable', stopped.exception.reason_code)
+        self.restore_key()
+        with self.assertRaises(review_runner.ReviewError) as later:
+            self.run_step('finish', base.FakeCli())
+        self.assertEqual('review_stage_not_ready', later.exception.reason_code)
 
-    def test_g_every_host_command_is_told_the_state_folder_the_key_comes_from(self):
+    def keyed_state(self, folder):
+        folder.mkdir(parents=True, mode=0o700)
+        (folder / 'digest.key').write_bytes(bytes(range(32)))
+        os.chmod(folder / 'digest.key', 0o600)
+        return folder
+
+    def stopped_before_any_child(self, state, *, work=None, root=None, spec=None):
         cli = base.FakeCli()
-        self.run_step('worker', cli)
-        self.run_step('verify', cli)
-        self.run_step('finish', cli)
-        self.assertTrue(cli.arguments)
-        for name, args in cli.arguments:
-            self.assertEqual(str(self.state.resolve()), args[args.index('--state-root') + 1], name)
+        with self.assertRaises(review_runner.ReviewError) as stopped:
+            review_runner.run('worker', spec or self.spec, work or self.work, root or self.root, cli=cli,
+                              **self.state_kw(state))
+        self.assertEqual(('review_state_unavailable', []), (stopped.exception.reason_code, cli.calls))
+
+    def test_f_a_state_folder_inside_the_work_folder_the_packet_or_the_project_is_refused(self):
+        """Requirement (f). Regression: ddefa327 accepts a state folder inside the packet's project or beside
+        it, and only compared the work folder and packet by exact path."""
+        for inside in (self.work / 'state', self.root / 'reviews' / 'x' / 'state', self.root / 'state'):
+            with self.subTest(inside=str(inside.relative_to(inside.parents[2]))):
+                self.stopped_before_any_child(self.keyed_state(inside))
+
+    def test_f_a_work_folder_packet_or_project_inside_the_state_folder_is_refused(self):
+        """Requirement (f), the reverse containment. Regression: ddefa327 checks one direction only."""
+        state = self.keyed_state(self.state.parent / 'wide-state')
+        self.stopped_before_any_child(state, work=state / 'work')
+        inner = state / 'project'
+        (inner / 'reviews' / 'x').mkdir(parents=True)
+        self.stopped_before_any_child(state, root=inner)
+
+    def test_f_the_overlap_check_is_not_fooled_by_letter_case(self):
+        """Requirement (f): a state folder inside the work folder, named with other letter case, is refused
+        (the folders are compared by identity; macOS volumes are case-insensitive by default)."""
+        probe = self.work.parent / 'CaseProbe'
+        probe.mkdir()
+        if (self.work.parent / 'caseprobe').exists() is False:
+            self.skipTest('this volume is case-sensitive')
+        self.work.mkdir(parents=True, exist_ok=True)
+        folder = self.keyed_state(self.work / 'state')
+        self.stopped_before_any_child(Path(str(folder).replace(str(self.work), str(self.work).swapcase())))
 
     def test_e_the_files_the_runner_wrote_are_still_accepted(self):
         cli = self.staged()

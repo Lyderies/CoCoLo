@@ -219,26 +219,79 @@ class ReviewCommandTests(ReviewRunnerTests):
         self.assertEqual(('review_invalid_spec', False), (reply['reason_code'], reply['ready']))
         self.assertIn('spec', reply['next_step'])
 
-    def test_the_learning_review_command_forwards_its_state_root_to_every_host_command(self):
-        """Requirement: the state folder the key is read from is the one every host command is told to use
-        (an installed CLI pins it to its default and accepts only that). Run through the command itself."""
+    def command_steps(self, fake):
+        """Run worker, verify and finish through the learning-review command itself (its parser, then the
+        runner), with the host commands replaced by `fake`; returns nothing, the calls are on `fake`."""
         import contextlib
         import io
         import sys
         from tests.test_bridge import cli as command
         spec = Path(self.work.parent) / 'spec.json'
         spec.write_text(json.dumps(self.spec))
+        for stage in ('worker', 'verify', 'finish'):
+            argv = ['cli.py', 'learning-review', stage, '--project-root', str(self.root), '--spec', str(spec),
+                    '--work-dir', str(self.work), '--state-root', str(self.state)]
+            out = io.StringIO()
+            with mock.patch.object(sys, 'argv', argv), \
+                    mock.patch.object(review_runner, 'project_cli', return_value=fake), \
+                    contextlib.redirect_stdout(out):
+                self.assertEqual(0, command.main(), stage)
+            self.assertTrue(json.loads(out.getvalue())['ready'], stage)
+
+    def test_the_learning_review_command_forwards_its_state_root_to_every_host_command(self):
+        """Requirement: the state folder the key is read from is the one every host command is told to use,
+        through the command itself for all three stages. Regression: ddefa327 passes it to the runner but not
+        on to the host commands."""
         fake = FakeCli()
-        out = io.StringIO()
-        argv = ['cli.py', 'learning-review', 'worker', '--project-root', str(self.root), '--spec', str(spec),
-                '--work-dir', str(self.work), '--state-root', str(self.state)]
-        with mock.patch.object(sys, 'argv', argv), mock.patch.object(review_runner, 'project_cli', return_value=fake), \
-                contextlib.redirect_stdout(out):
-            self.assertEqual(0, command.main())
-        self.assertTrue(json.loads(out.getvalue())['ready'])
+        self.command_steps(fake)
         self.assertTrue(fake.arguments)
         for name, args in fake.arguments:
+            self.assertIn('--state-root', args, name)
             self.assertEqual(str(self.state.resolve()), args[args.index('--state-root') + 1], name)
+
+    def test_every_host_command_the_runner_calls_accepts_the_arguments_it_is_given_by_the_real_parser(self):
+        """GUARD (the real parsers accept --state-root on ddefa327 too): the argument list of every host
+        command the runner builds is parsed by the real command-line parser; none exits."""
+        import contextlib
+        import io
+        from tests.test_bridge import cli as command
+        fake = FakeCli()
+        self.command_steps(fake)
+        parser = command.build_parser()
+        names = set()
+        for name, args in fake.arguments:
+            names.add(name)
+            with contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    parsed = parser.parse_args([name, *args])
+                except SystemExit:
+                    self.fail(f'the real parser refused {name} {args}')
+            self.assertEqual(self.state.resolve(), parsed.state_root.resolve(), name)
+        self.assertGreaterEqual(len(names), 10)  # every command of the three stages, not a sample
+
+    def test_an_installed_cli_accepts_only_its_default_state_for_learning_review(self):
+        """Requirement: an installed CLI pins `learning-review` to its default learning state, so the runner,
+        which forwards the folder it resolved, works installed with the default and cannot be pointed at
+        another folder's key. GUARD: unchanged behaviour of the CLI on ddefa327."""
+        from codex_agents.host_commands import PRIMARY_HOST_COMMANDS
+        from tests.test_bridge import cli as command
+        self.assertIn('learning-review', PRIMARY_HOST_COMMANDS)
+        manifest = self.work.parent / 'install-manifest.json'
+        manifest.write_text('{}')
+        other = self.work.parent / 'another-state'
+        other.mkdir(mode=0o700)
+        with mock.patch.object(command, 'INSTALL_MANIFEST', manifest), \
+                mock.patch.object(command, 'default_state_root', return_value=self.state):
+            default = argparse_namespace('learning-review', self.state)
+            command._require_own_roots(default)
+            self.assertIsNone(default.state_root)  # the default is accepted and then the CLI's own
+            with self.assertRaises(command.OwnRootRefused):
+                command._require_own_roots(argparse_namespace('learning-review', other))
+
+
+def argparse_namespace(command, state_root):
+    import argparse
+    return argparse.Namespace(command=command, state_root=state_root, project_root=None, root=None, policy=None)
 
 
 if __name__ == '__main__':

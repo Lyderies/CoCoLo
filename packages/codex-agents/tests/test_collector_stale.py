@@ -230,7 +230,7 @@ class FreshClientMeetsAnOldCollectorTests(unittest.TestCase):
         self.assertIs(True, self.status()['collector_code_stale'])
 
     def test_another_build_of_the_same_version_is_a_conflict_that_a_restart_does_not_fix(self):
-        """Requirement (r2 4b): another build of the same version, with the collector's own files unchanged, is a conflict and never says 'restart it'. Red on 8ec26a08, which calls it stale."""
+        """GUARD on ddefa327. Requirement (r2 4b): another build of the same version, with the collector's own files unchanged, is a conflict and never says 'restart it'. Red on 8ec26a08, which calls it stale."""
         # A different digest, and the collector says its own files are unchanged: it would load the same code.
         self.collector(COLLECTOR_RUNTIME_DIGEST='e' * 64, own_files_changed=False)
         report = self.status()
@@ -244,7 +244,7 @@ class FreshClientMeetsAnOldCollectorTests(unittest.TestCase):
         target.assert_called_once()
 
     def test_a_malformed_identity_is_its_own_cause_never_stale(self):
-        """Requirement (r2 4a): a malformed digest, schema or version is `collector_identity_invalid`, never stale and never refused as stale. Red on 8ec26a08, which calls it stale."""
+        """GUARD on ddefa327. Requirement (r2 4a): a malformed digest, schema or version is `collector_identity_invalid`, never stale and never refused as stale. Red on 8ec26a08, which calls it stale."""
         for changes in ({'runtime_digest': None}, {'runtime_digest': 'not-a-digest'}, {'schema_version': 'one'},
                         {'runtime_version': 'not-a-version'}, {'runtime_version': None}):
             with self.subTest(changes=changes):
