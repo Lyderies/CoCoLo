@@ -6,14 +6,19 @@ import hashlib
 import json
 import os
 import shutil
+import signal
+import stat
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(1, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from test_install import git, installer, inventory, isolate_home, make_target  # noqa: E402
+from test_install import PROJECT_CONFIG, git, installer, inventory, isolate_home, make_target  # noqa: E402
+
+from setup_wizard import steps  # noqa: E402
 
 PACKAGE = Path(__file__).resolve().parents[1] / "packages" / "claude-agents"
 MANIFEST = ".claude/claude-agents/install-manifest.json"
@@ -180,20 +185,23 @@ class ClaudeUpgradeTests(unittest.TestCase):
     def test_a_package_that_keeps_unfinished_changes_is_left_alone(self) -> None:
         real_run = installer._run
         pending = self.target / ".claude/claude-agents/install-pending.json"
+        lock = self.target / ".claude/claude-agents/install.lock"
         edited = self.target / ".claude/agents/claude_agents_planner.md"
 
         def leaves_a_pending_marker(script, operation, target, apply, extra):
             report = real_run(script, operation, target, apply, extra)
             if script == installer.CLAUDE_INSTALLER and apply:
                 pending.write_text("{}\n")
+                lock.write_text("token\n")
                 edited.write_text("an unknown edit the package kept\n")
-                return {"error": "rollback_pending", "exit_code": 2}
+                return {"error": "operation_failed", "rollback_state": "pending", "exit_code": 2}
             return report
 
         self.patch("_run", leaves_a_pending_marker)
         summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
         self.assertFalse(summary["ok"], summary)
         self.assertEqual("{}\n", pending.read_text())
+        self.assertEqual("token\n", lock.read_text())
         self.assertEqual("an unknown edit the package kept\n", edited.read_text())
         (claude,) = [r for r in summary["rollback"] if r["package"] == "claude"]
         self.assertFalse(claude["ok"], claude)
@@ -251,6 +259,213 @@ class ClaudeUpgradeTests(unittest.TestCase):
         self.assertEqual(before, inventory(self.target))
         self.assertEqual(outside_before, {p.relative_to(moved).as_posix(): p.read_bytes()
                                           for p in moved.rglob("*") if p.is_file()})
+
+    # --- one boundary: only what this run wrote is ever undone --------------------------------
+
+    def test_a_package_file_the_user_edits_after_the_update_is_left_alone(self) -> None:
+        planner = self.target / ".claude/agents/claude_agents_planner.md"
+        skill = self.target / ".claude/skills/claude-agents/SKILL.md"
+
+        def user_edits_then_settings_fail(target, plan):
+            planner.write_text("the user's own edit after the update\n")
+            raise installer.InstallRefused("simulated settings failure")
+
+        self.patch("apply_settings", user_edits_then_settings_fail)
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(summary["ok"], summary)
+        self.assertEqual("the user's own edit after the update\n", planner.read_text())
+        (claude,) = [r for r in summary["rollback"] if r["package"] == "claude"]
+        self.assertFalse(claude["ok"], claude)
+        self.assertEqual([".claude/agents/claude_agents_planner.md"], claude["left_alone"])
+        release = json.loads((PACKAGE / "previous-releases.json").read_text())["releases"][0]
+        self.assertEqual(release["files"][".claude/skills/claude-agents/SKILL.md"], skill.read_text())
+
+    def test_a_failure_without_the_structured_field_is_undone_even_when_the_text_says_pending(self) -> None:
+        before = inventory(self.target)
+        real_run = installer._run
+
+        def says_pending_in_words(script, operation, target, apply, extra):
+            report = real_run(script, operation, target, apply, extra)
+            if script == installer.CLAUDE_INSTALLER and apply:
+                return {"error": "rollback_pending", "exit_code": 2}
+            return report
+
+        self.patch("_run", says_pending_in_words)
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assert_stays_on_the_previous_install(summary, before)
+
+    def test_the_structured_field_alone_keeps_a_package_whatever_the_error_text(self) -> None:
+        real_run = installer._run
+        pending = self.target / ".claude/claude-agents/install-pending.json"
+
+        def pending_by_field(script, operation, target, apply, extra):
+            report = real_run(script, operation, target, apply, extra)
+            if script == installer.CLAUDE_INSTALLER and apply:
+                pending.write_text("{}\n")
+                return {"error": "something else entirely", "rollback_state": "pending", "exit_code": 2}
+            return report
+
+        self.patch("_run", pending_by_field)
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertTrue(pending.is_file())
+        (claude,) = [r for r in summary["rollback"] if r["package"] == "claude"]
+        self.assertFalse(claude["ok"], claude)
+
+    def test_after_a_kept_rollback_the_advised_steps_make_setup_work_again(self) -> None:
+        real_run = installer._run
+        pending = self.target / ".claude/claude-agents/install-pending.json"
+        lock = self.target / ".claude/claude-agents/install.lock"
+        state = {"fail": True}
+
+        def kept_once(script, operation, target, apply, extra):
+            report = real_run(script, operation, target, apply, extra)
+            if script == installer.CLAUDE_INSTALLER and apply and state["fail"]:
+                pending.write_text("{}\n")
+                lock.write_text("token\n")
+                (self.target / ".claude/agents/claude_agents_planner.md").write_text("half written\n")
+                return {"error": "operation_failed", "rollback_state": "pending", "exit_code": 2}
+            return report
+
+        self.patch("_run", kept_once)
+        first = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(first["ok"], first)
+        state["fail"] = False
+        # Run again without following any advice: refused, naming the marker, nothing changed.
+        stuck = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(stuck["ok"], stuck)
+        self.assertIn("installation_pending", stuck["claude"]["error"])
+        message, known = steps.installer_refusal(steps.raw(stuck), "manual")
+        self.assertTrue(known)
+        for advised in (".claude/claude-agents/install-pending.json", ".claude/claude-agents/install.lock"):
+            self.assertIn(advised, message)
+        # The advised steps: put the package files back from Git and remove the two control files.
+        git(self.target, "checkout", "--", ".claude")
+        pending.unlink()
+        lock.unlink()
+        again = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertTrue(again["ok"] and again["applied"], again)
+
+    def test_a_special_file_at_an_owned_path_is_refused_without_being_opened(self) -> None:
+        (self.target / ".claude/agents").mkdir(exist_ok=True)
+        fifo = self.target / ".claude/agents/claude_agents_extra.md"
+        os.mkfifo(fifo)
+
+        def alarm(signum, frame):
+            raise AssertionError("the snapshot blocked on a FIFO")
+
+        previous = signal.signal(signal.SIGALRM, alarm)
+        self.addCleanup(signal.signal, signal.SIGALRM, previous)
+        signal.alarm(10)
+        self.addCleanup(signal.alarm, 0)
+        with self.assertRaises(installer.InstallRefused) as caught:
+            installer._snapshot(self.target, "claude", {"changed_paths": [".claude/agents/claude_agents_extra.md"]})
+        self.assertIn("not a regular file", str(caught.exception))
+        message, known = steps.installer_refusal(str(caught.exception).lower(), "manual")
+        self.assertTrue(known, message)
+
+    def test_an_unrelated_special_file_does_not_block_the_upgrade(self) -> None:
+        os.mkfifo(self.target / ".claude/unrelated.fifo")
+        applied = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertTrue(applied["ok"] and applied["applied"], applied)
+
+    def test_the_obsolete_files_of_the_installed_claude_manifest_are_owned_too(self) -> None:
+        manifest = json.loads((self.target / MANIFEST).read_text())
+        manifest["files"][".claude/agents/claude_agents_retired.md"] = "0" * 64
+        (self.target / MANIFEST).write_bytes(canonical(manifest))
+        owned = installer._owned_paths(self.target, "claude", {"changed_paths": []})
+        self.assertIn(".claude/agents/claude_agents_retired.md", owned)
+
+    def test_a_manifest_that_is_a_symlink_is_not_followed(self) -> None:
+        outside = self.base / "outside-manifest.json"
+        outside.write_text(json.dumps({"files": {".codex/from-outside.txt": "0" * 64}}))
+        manifest = self.target / ".codex/orchestration/install-manifest.json"
+        manifest.unlink()
+        manifest.symlink_to(outside)
+        for name, relative in (("codex", ".codex/from-outside.txt"),):
+            self.assertNotIn(relative, installer._owned_paths(self.target, name, {}))
+
+    def test_a_project_folder_replaced_by_a_symlink_after_the_snapshot_is_refused(self) -> None:
+        preview = {"changed_paths": [".claude/agents/claude_agents_planner.md"]}
+        snapshot = installer._snapshot(self.target, "claude", preview)
+        moved = self.base / "target-moved"
+        decoy = self.base / "decoy"
+        (decoy / ".claude/agents").mkdir(parents=True)
+        victim = decoy / ".claude/agents/claude_agents_planner.md"
+        victim.write_text("decoy\n")
+        self.target.rename(moved)
+        self.target.symlink_to(decoy, target_is_directory=True)
+        self.addCleanup(lambda: (self.target.unlink(), moved.rename(self.target)))
+        journal = {"entries": {".claude/agents/claude_agents_planner.md": (None, (b"x", 0o644))}, "created": set()}
+        ok, _ = installer._undo(self.target, "claude", snapshot, journal)
+        self.assertFalse(ok)
+        self.assertEqual("decoy\n", victim.read_text())
+
+    def test_a_folder_this_run_did_not_create_is_never_removed(self) -> None:
+        keep = self.target / ".claude/preexisting"
+        keep.mkdir()
+        wanted = ".claude/preexisting/made/by/step.txt"
+        snapshot = installer._snapshot(self.target, "claude", {"changed_paths": [wanted]})
+        (self.target / ".claude/preexisting/made/by").mkdir(parents=True)
+        (self.target / wanted).write_text("written by the step\n")
+        post = installer._observe(self.target, "claude", snapshot)
+        journal = installer._journal(snapshot, post)
+        ok, left = installer._undo(self.target, "claude", snapshot, journal)
+        self.assertTrue(ok and not left, (ok, left))
+        self.assertTrue(keep.is_dir())
+        self.assertFalse((self.target / ".claude/preexisting/made").exists())
+
+    @unittest.skipIf(os.geteuid() == 0, "a read-only folder does not stop root, so the write would not fail")
+    def test_an_update_that_fails_partway_leaves_no_marker_or_lock_and_can_be_retried(self) -> None:
+        self.make_read_only_for_the_last_change()
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(summary["ok"], summary)
+        for control in (".claude/claude-agents/install-pending.json", ".claude/claude-agents/install.lock"):
+            self.assertFalse((self.target / control).exists(), control)
+        self.assertEqual("operation_failed", summary["claude"]["error"])
+        # this test is a guard: the package undoes its own partial write, so it also passes on 3d86ee76
+
+
+class FreshInstallFailureTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.base = Path(tempfile.mkdtemp(dir=os.path.realpath(tempfile.gettempdir())))
+        self.addCleanup(shutil.rmtree, self.base, ignore_errors=True)
+        isolate_home(self, self.base / "home")
+        self.target, self.codex_options = make_target(self.base)
+
+    def patch_run(self, reply: dict, damage=None) -> None:
+        real_run = installer._run
+
+        def run(script, operation, target, apply, extra):
+            report = real_run(script, operation, target, apply, extra)
+            if script == installer.CLAUDE_INSTALLER and apply:
+                if damage:
+                    damage()
+                return reply
+            return report
+
+        original = installer._run
+        installer._run = run
+        self.addCleanup(setattr, installer, "_run", original)
+
+    def test_a_failed_fresh_install_is_undone_and_says_so(self) -> None:
+        before = {p: d for p, d in inventory(self.target).items() if p not in PROJECT_CONFIG}
+        self.patch_run({"error": "operation_failed", "exit_code": 2})
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(summary["ok"], summary)
+        (claude,) = [r for r in summary["rollback"] if r["package"] == "claude"]
+        self.assertTrue(claude["ok"], claude)
+        self.assertEqual(before, {p: d for p, d in inventory(self.target).items() if p not in PROJECT_CONFIG})
+
+    def test_a_failed_fresh_install_that_cannot_be_undone_is_reported_incomplete(self) -> None:
+        planner = self.target / ".claude/agents/claude_agents_planner.md"
+        self.patch_run({"error": "operation_failed", "rollback_state": "pending", "exit_code": 2},
+                       damage=lambda: (self.target / ".claude/claude-agents/install-pending.json").write_text("{}\n"))
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(summary["ok"], summary)
+        self.assertTrue(steps.rollback_incomplete(summary))
+        message, known = steps.installer_refusal(steps.raw(summary), "manual", steps.rollback_incomplete(summary))
+        self.assertNotIn("Nothing was changed", message)
+        self.assertTrue(planner.exists())  # kept for the owner to inspect, never silently deleted
 
 
 if __name__ == "__main__":
