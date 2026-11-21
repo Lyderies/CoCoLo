@@ -222,6 +222,11 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "bridge.py::_offer_raw_answer": {
+   "checks": 1,
+   "ends": "VF-INV-a: a per-answer byte cap, nothing accumulates; a longer answer is cut to the cap and flagged truncated, and the kept file is deleted with the worker-result retention (sweep_worker_results) or with the project",
+   "test": "test_an_over_cap_answer_is_truncated_with_a_flag_not_skipped"
+  },
   "bridge.py::_result_object": {
    "checks": 2,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
@@ -257,6 +262,10 @@
   "bridge.py::run_codex": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "bridge.py::scrub_child_answer": {
+   "checks": 1,
+   "ends": "VF-INV-a: a minimum length for a secret variable's value (not a count of anything kept); it ends with the call, nothing accumulates"
   },
   "bridge_liveness.py::bind": {
    "checks": 1,

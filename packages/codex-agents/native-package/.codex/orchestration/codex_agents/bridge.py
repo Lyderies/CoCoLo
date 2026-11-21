@@ -1668,6 +1668,18 @@ def _offer_raw_answer(sink: dict[str, Any], content: bytes) -> None:
     sink["truncated"] = len(content) > MAX_RESULT_BYTES
 
 
+def _command_limit(route: dict[str, Any], assignment: dict[str, Any]) -> int:
+    """The nominal tool-call limit of a Codex run: the lower of the route's and the assignment's.
+
+    A dispatched route always carries its bounds (validate_assignment checks them); a caller that
+    names only a model and effort is held to the assignment's own bound, never refused here.
+    """
+
+    limits = [bounds["max_tool_calls"] for bounds in (route.get("bounds"), assignment.get("bounds"))
+              if isinstance(bounds, dict) and type(bounds.get("max_tool_calls")) is int]
+    return min(limits) if limits else 0
+
+
 def _count_command(state: dict[str, Any], kind: str, identifier: Any) -> None:
     """Count one command item once, whether the stream names it, starts it or only completes it."""
 
@@ -1753,7 +1765,7 @@ def run_codex(
     ]
     # VF-INV-e: the host counts the child's model turns and commands, and stops it above the
     # nominal tool-call limit (the client has no limit of its own).
-    command_limit = min(route["bounds"]["max_tool_calls"], assignment["bounds"]["max_tool_calls"])
+    command_limit = _command_limit(route, assignment)
     state: dict[str, Any] = {
         "usage": None, "rerouted": False, "observed_model": None, "failed": False,
         "turns": 0, "commands": 0, "peak_input": None, "command_ids": set(), "open_unnamed": 0,

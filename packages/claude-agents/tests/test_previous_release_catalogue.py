@@ -85,7 +85,7 @@ class CatalogueTests(unittest.TestCase):
         self.assertEqual(frozenset({RELEASED_0_8_40, RELEASED_0_8_41}), packaging.PINNED_RELEASE_DIGESTS)
 
     def test_the_shipped_catalogue_is_accepted(self) -> None:
-        self.assertEqual(2, len(released_bundles(self.source)))
+        self.assertEqual(3, len(released_bundles(self.source)))  # 0.8.40, 0.8.41, 0.8.42 (same bundle as 0.8.41)
 
     def test_an_appended_record_with_a_recomputed_digest_is_refused(self) -> None:
         self.write([*self.records(), self.forged()])

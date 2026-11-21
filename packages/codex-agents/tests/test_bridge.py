@@ -3257,6 +3257,12 @@ class ClaudePrimaryCase(ServiceHarness, CliTestCase):
         finally:
             self.ledger.close()
 
+    def bounded_codex_model(self) -> str:
+        """The model this branch's routing policy names for bounded coding work on Codex."""
+        policy = json.loads((ORCHESTRATION_ROOT / "config" / "routing-policy.json").read_text())
+        return next(candidate["model"] for candidate in policy["provider_candidates"]["coding"]["bounded"]
+                    if candidate["provider"] == "codex")
+
     def coding_task(self, **shape) -> dict:
         return {**self.task(), "family": "coding", **shape}
 
@@ -3313,7 +3319,7 @@ class ClaudePrimaryTests(ClaudePrimaryCase):
         )
         bounded = self.cli("learning-route", "--task", self.write("b.json", self.bounded()))
         self.assertEqual(
-            ("codex", "bridge", "gpt-6-sol", "medium"),
+            ("codex", "bridge", self.bounded_codex_model(), "medium"),
             (bounded["provider"], bounded["dispatch"], bounded["model"], bounded["effort"]),
         )
         refused = self.cli(
@@ -3387,7 +3393,7 @@ class ClaudePrimaryTests(ClaudePrimaryCase):
             context, opened["run_handle"], dispatched["result"],
             dispatched["bridge_report"]["terminal_state"], route_path,
         )
-        self.assertEqual("gpt-6-sol", recorded["outcome"]["model"])
+        self.assertEqual(self.bounded_codex_model(), recorded["outcome"]["model"])
 
 
     def test_provider_observe_shows_an_attested_credits_waiver(self) -> None:
