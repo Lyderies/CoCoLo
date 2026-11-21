@@ -204,8 +204,8 @@ class ReviewRunnerProvenanceTests(unittest.TestCase):
 
     def test_f_a_rerun_stopped_by_the_state_check_leaves_no_earlier_marker_for_finish(self):
         """Requirement (e)/(f): a stage that starts again removes its earlier markers even when the state
-        check stops it. Regression: ddefa327 checks the state first, so the old markers survive and finish
-        accepts them."""
+        check stops it. Regression on 0bfe28b9 (which checks the state before forgetting, so the old markers
+        survive and finish accepts them); it passes on ddefa327, where the key was read late."""
         self.addCleanup(self.restore_key)
         self.staged()
         os.chmod(self.state / 'digest.key', 0o644)

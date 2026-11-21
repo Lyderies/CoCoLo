@@ -250,8 +250,10 @@ class ReviewCommandTests(ReviewRunnerTests):
             self.assertEqual(str(self.state.resolve()), args[args.index('--state-root') + 1], name)
 
     def test_every_host_command_the_runner_calls_accepts_the_arguments_it_is_given_by_the_real_parser(self):
-        """GUARD (the real parsers accept --state-root on ddefa327 too): the argument list of every host
-        command the runner builds is parsed by the real command-line parser; none exits."""
+        """Requirement: every host command the runner calls accepts the arguments the runner builds (so
+        `--state-root` cannot stop every real review). The argument list of each one is parsed by the real
+        command-line parser; none exits. GUARD on 0bfe28b9 (the real parsers all accept it); on ddefa327 it fails
+        by assertion because no --state-root was forwarded yet."""
         import contextlib
         import io
         from tests.test_bridge import cli as command
@@ -266,6 +268,7 @@ class ReviewCommandTests(ReviewRunnerTests):
                     parsed = parser.parse_args([name, *args])
                 except SystemExit:
                     self.fail(f'the real parser refused {name} {args}')
+            self.assertIsNotNone(parsed.state_root, name)  # forwarded, and read by the parser as a path
             self.assertEqual(self.state.resolve(), parsed.state_root.resolve(), name)
         self.assertGreaterEqual(len(names), 10)  # every command of the three stages, not a sample
 
