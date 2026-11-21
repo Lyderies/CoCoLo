@@ -8,7 +8,8 @@ The two agent packages this orchestrator builds on, imported once and developed 
 | `claude-agents/` | The Claude agent package: roles, contracts, validation, the installer, and the stream and usage parsers in `src/claude_agents/`, with tests in `tests/` |
 
 [`PROVENANCE.json`](PROVENANCE.json) records the source commit and a SHA-256 hash for every
-imported file, plus the files changed after import and why. The upstream repositories were the
+imported file at import time, plus the files changed after import and why. These historical hashes
+are not checksums of the current tree; downstream development can change the files. The upstream repositories were the
 authors' private development repositories. They are now frozen, and their research, evaluation
 records and documentation were not imported.
 

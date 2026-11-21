@@ -289,17 +289,25 @@ class Wizard:
                             "restore the project's files with git.")
         self.t.list_sub(f"Reason: {self.runtime_why}")
 
-    def explain_installer(self, label: str, manual: str) -> None:
-        message, known = steps.installer_refusal(steps.raw(self.last_reply), manual)
+    def explain_installer(self, label: str, manual: str) -> str:
+        """Shows the refusal and returns its fixed message (an update stops with it)."""
+        message, known = steps.installer_refusal(steps.raw(self.last_reply), manual,
+                                                 steps.rollback_incomplete(self.last_reply))
+        for note in steps.rollback_notes(self.last_reply):
+            self.t.list_sub(note)
         if not known:
             self.record_failure(label, f"installer refusal not recognised; run: {manual}")
             self.t.list_add("fail", label)
             self.t.list_sub(message)
             self.t.list_cmd(manual)
-            return
+            if steps.rollback_incomplete(self.last_reply):
+                self.t.list_sub(steps.NOT_UNDONE)
+                message = f"{message} {steps.NOT_UNDONE}"
+            return f"{message} {manual}"
         self.record_failure(label, message)
         self.t.list_add("fail", label)
         self.t.list_sub(message)
+        return message
 
     def git_helpers_text(self, found: list[str] | None) -> str:
         shown = " ".join(found)[:120] if found else "(the settings could not be read)"
@@ -576,8 +584,8 @@ class Wizard:
                 if self.t.menu(0, ["Try again", "Quit"]) == 1:
                     raise Stop(1, "Stopped.")
 
-    def choose_another(self) -> None:
-        if self.ask(["Choose another path", "Quit"], getattr(self, "project_problem", "") or "the project cannot be used") == 1:
+    def choose_another(self, reason: str = "") -> None:
+        if self.ask(["Choose another path", "Quit"], reason or getattr(self, "project_problem", "") or "the project cannot be used") == 1:
             raise Stop(1, "Stopped.")
 
     def step_project(self, default: str) -> None:
@@ -684,8 +692,8 @@ class Wizard:
             t.screen_reset()
             self.begin_step(2)
             if status != 0:
-                self.explain_installer("The install preview was refused", self.manual_installer("install", folder))
-                self.choose_another()
+                reason = self.explain_installer("The install preview was refused", self.manual_installer("install", folder))
+                self.choose_another(reason)
                 default = folder
                 continue
             entries = effects.plan_entries(self.preview, folder, NATIVE_PACKAGE)
@@ -698,7 +706,7 @@ class Wizard:
                 else:
                     t.list_sub("The install plan could not be read. Nothing was changed.")
                 self.record_failure("unsafe file name in managed paths", "refused before any change")
-                self.choose_another()
+                self.choose_another("an unsafe file name in the managed paths, or an install plan that could not be read")
                 default = folder
                 continue
             self.project = folder
@@ -1730,9 +1738,12 @@ class Wizard:
             else:
                 t.list_sub("Codex sessions cannot reach the orchestrator until the Codex commands rule exists. Run "
                            "./setup.sh again and allow it in step 8.")
-        t.list_plain(" - To remove everything, including the Codex commands rule, run:")
-        t.list_cmd(f"python3 -I -B -S -X pycache_prefix=/dev/null {steps.shell_quote(str(INSTALLER))} remove --target "
-                   f"{steps.shell_quote(self.project)} --apply")
+        if self.project:
+            t.list_plain(" - To remove everything, including the Codex commands rule, run:")
+            t.list_cmd(f"python3 -I -B -S -X pycache_prefix=/dev/null {steps.shell_quote(str(INSTALLER))} remove --target "
+                       f"{steps.shell_quote(self.project)} --apply")
+        else:
+            t.list_plain(" - No project was chosen, so there is nothing to remove.")
         if self.rule_exists and self.rule_file:
             t.list_plain(" - The Codex commands rule and its protected copy of the orchestrator are outside the project. "
                          "The remove command above deletes both; to undo only the rule, delete:")

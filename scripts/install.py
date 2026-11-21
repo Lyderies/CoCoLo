@@ -42,6 +42,7 @@ CLAUDE_INSTALLER = ROOT / "packages" / "claude-agents" / "scripts" / "package.py
 ORCHESTRATION = ROOT / "packages" / "codex-agents" / "native-package" / ".codex" / "orchestration"
 MANAGED_PATHS = (".codex", ".agents", ".claude")
 CODEX_MANIFEST = Path(".codex") / "orchestration" / "install-manifest.json"
+CLAUDE_MANIFEST = Path(".claude") / "claude-agents" / "install-manifest.json"
 CLAUDE_SETTINGS = ".claude/settings.json"
 # Where an earlier version kept its ownership record, inside the project. The record now
 # lives in the owner's learning state (OwnerState); the old file is read once to migrate.
@@ -79,6 +80,14 @@ IN_PROGRESS = {
 }
 # How to undo a package step that was applied before a later package failed.
 REVERSE = {"install": "remove", "remove": "install"}
+# A failed update is put back from a snapshot of the files the package itself would write (its own
+# preview names them), taken just before the step ran; nothing else in these folders is touched.
+# The settings file belongs to the settings step. The Claude package's control files are its
+# unfinished-work marker and cooperative lock.
+OWNED_ROOTS = {"codex": (".codex", ".agents"), "claude": (".claude",)}
+# The Codex package also writes its Claude orchestration skill, and only that, under .claude.
+CODEX_CLAUDE_SKILL = ".claude/skills/agent-orchestration"
+CLAUDE_CONTROL = (".claude/claude-agents/install-pending.json", ".claude/claude-agents/install.lock")
 # Owner commands a Claude primary may never run, whatever this checkout's parser lists.
 ALWAYS_OWNER_ONLY = ("install-codex-rule", "remove-codex-rule")
 # Paths a Claude primary may never edit with its file tools or recognised shell writes.
@@ -1046,9 +1055,527 @@ def apply_codex_rule(target: Path, plan: dict) -> dict:
 # --- operations --------------------------------------------------------------------------
 
 
-def _roll_back(applied: list[tuple[str, object]], target: Path) -> list[dict]:
-    """Undo earlier steps in reverse order after a later step fails to apply."""
+def _open_root(target: Path) -> tuple[int, tuple[int, int]]:
+    """A descriptor for the project folder and its identity. The folder above is resolved; the project folder
+    itself is opened without following a link, so a project folder replaced by a link is refused."""
 
+    parent = os.open(target.parent.resolve(), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        descriptor = os.open(target.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    finally:
+        os.close(parent)
+    info = os.fstat(descriptor)
+    return descriptor, (info.st_dev, info.st_ino)
+
+
+def _open_folder(root: int, parts: list[str], create: bool = False) -> int:
+    """A descriptor for the folder reached from root through parts, following no symbolic link."""
+
+    descriptor = os.dup(root)
+    try:
+        for part in parts:
+            try:
+                following = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(part, 0o755, dir_fd=descriptor)
+                following = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = following
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _read_file(folder: int, name: str, identity: bool = False):
+    """A regular file's (bytes, mode), None when absent; with identity, (bytes, mode, (st_dev, st_ino)) of the
+    descriptor that was read. The entry is examined with lstat first, so a FIFO or any other special file is
+    refused without being opened, and the descriptor must be that same entry."""
+
+    try:
+        info = os.stat(name, dir_fd=folder, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        raise InstallRefused(f"{name} is not a regular file")
+    try:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder)
+    except OSError:
+        raise InstallRefused(f"{name} cannot be used safely (unsafe_or_unavailable_path)") from None
+    with os.fdopen(descriptor, "rb") as handle:
+        opened = os.fstat(handle.fileno())
+        if not stat.S_ISREG(opened.st_mode):
+            raise InstallRefused(f"{name} is not a regular file")
+        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+            raise InstallRefused(f"{name} changed while it was read (unsafe_or_unavailable_path)")
+        content = handle.read()
+    if identity:
+        return content, stat.S_IMODE(opened.st_mode), (opened.st_dev, opened.st_ino)
+    return content, stat.S_IMODE(opened.st_mode)
+
+
+def _manifest_files(root: int, manifest: str) -> list[str]:
+    """The paths an installed package manifest lists, read without following links; none if unreadable."""
+
+    parts = manifest.split("/")
+    try:
+        folder = _open_folder(root, parts[:-1])
+    except OSError:
+        return []
+    try:
+        content = _read_file(folder, parts[-1])
+        files = json.loads(content[0])["files"] if content else {}
+        return [path for path in files if isinstance(path, str)]
+    except (InstallRefused, OSError, ValueError, KeyError, TypeError):
+        return []
+    finally:
+        os.close(folder)
+
+
+def _check_roots(root: int, name: str) -> None:
+    for owned in OWNED_ROOTS[name]:
+        try:
+            mode = os.stat(owned, dir_fd=root, follow_symlinks=False).st_mode
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISDIR(mode):
+            raise InstallRefused(f"{owned} is a symlink or not a folder")
+
+
+def _owned(relative, name: str, folder: bool = False) -> bool:
+    """A path the package may write: under one of its own roots (for Codex also its Claude skill, and, for a
+    folder, that skill's parents), never a settings file, and with no empty, . or .. part."""
+
+    parts = relative.split("/") if isinstance(relative, str) else []
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        return False
+    if relative.startswith(".claude/settings") and relative.endswith(".json"):
+        return False
+    if parts[0] in OWNED_ROOTS[name]:
+        return True
+    if name == "codex":
+        return relative.startswith(CODEX_CLAUDE_SKILL + "/") or (folder and CODEX_CLAUDE_SKILL.split("/")[:len(parts)] == parts)
+    return False
+
+
+def _owned_paths(target: Path, name: str, preview: dict, root: int | None = None) -> list[str]:
+    """The project paths a package step may write: what its own preview names, its manifest, and the files its
+    installed manifest lists (an update may remove those as obsolete). Never a folder walk. These are only the
+    paths whose prior state is saved; what the step really wrote comes from its own write report."""
+
+    manifest = CLAUDE_MANIFEST if name == "claude" else CODEX_MANIFEST
+    if name == "claude":
+        raw = [*(preview.get("changed_paths") or []), *CLAUDE_CONTROL]
+    else:
+        raw = [*(preview.get("files") or []), *(preview.get("local_files") or []),
+               *(preview.get("project_configuration") or {})]
+    raw.append(manifest.as_posix())
+    opened = root is None
+    if opened:
+        root, _ = _open_root(target)
+    try:
+        raw += _manifest_files(root, manifest.as_posix())
+    finally:
+        if opened:
+            os.close(root)
+    return sorted({relative for relative in raw if _owned(relative, name)})
+
+
+def _scan(root: int, paths) -> dict:
+    """What each path holds now: (bytes, mode), or None when absent."""
+
+    files: dict[str, tuple[bytes, int] | None] = {}
+    for relative in paths:
+        parts = relative.split("/")
+        try:
+            folder = _open_folder(root, parts[:-1])
+        except FileNotFoundError:
+            files[relative] = None
+            continue
+        except OSError:
+            raise InstallRefused(f"{relative} cannot be used safely (unsafe_or_unavailable_path)") from None
+        try:
+            files[relative] = _read_file(folder, parts[-1])
+        finally:
+            os.close(folder)
+    return files
+
+
+def _snapshot(target: Path, name: str, preview: dict) -> dict:
+    """What every path the package step may write holds before the step runs, and the project folder's identity."""
+
+    root, identity = _open_root(target)
+    try:
+        _check_roots(root, name)
+        paths = _owned_paths(target, name, preview, root)
+        folders = {}
+        for path in paths:
+            parts = path.split("/")[:-1]
+            for count in range(1, len(parts) + 1):
+                relative = "/".join(parts[:count])
+                if relative in folders:
+                    continue
+                try:
+                    descriptor = _open_folder(root, parts[:count])
+                except FileNotFoundError:
+                    folders[relative] = None
+                else:
+                    info = os.fstat(descriptor)
+                    os.close(descriptor)
+                    folders[relative] = (info.st_dev, info.st_ino)
+        return {"identity": identity, "files": _scan(root, paths), "folders": folders}
+    finally:
+        os.close(root)
+
+
+class NoWriteReport(InstallRefused):
+    """A package step gave no usable account of what it wrote: no reply, or a malformed one."""
+
+
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+def _digest_of(state) -> str | None:
+    return None if state is None else hashlib.sha256(state[0]).hexdigest()
+
+
+def _report_path(path) -> bool:
+    if not isinstance(path, str) or "\0" in path:
+        return False
+    try:
+        path.encode(sys.getfilesystemencoding(), "strict")
+    except UnicodeError:
+        return False
+    return True
+
+
+def _write_report(name: str, reply) -> tuple[list[tuple], list[tuple[str, tuple]]]:
+    """The step's own write report, validated: [(path, sha256 before, sha256 after, mode)] and [(folder, identity)].
+    Anything missing or malformed is NoWriteReport."""
+
+    problem = NoWriteReport(f"the {name} package gave no usable report of what it wrote (no_write_report)")
+    writes = reply.get("writes") if isinstance(reply, dict) else None
+    folders = reply.get("folders_created") if isinstance(reply, dict) else None
+    if not isinstance(writes, list) or not isinstance(folders, list):
+        raise problem
+    entries, seen = [], set()
+    for item in writes:
+        if not (isinstance(item, dict) and _report_path(item.get("path")) and item["path"] not in seen
+                and "before" in item and "after" in item
+                and "mode" in item
+                and (item["mode"] is None if item["after"] is None else
+                     type(item["mode"]) is int and 0 <= item["mode"] <= 0o7777)
+                and all(value is None or (isinstance(value, str) and _SHA256.fullmatch(value))
+                        for value in (item["before"], item["after"]))):
+            raise problem
+        seen.add(item["path"])
+        entries.append((item["path"], item["before"], item["after"], item["mode"]))
+    made = []
+    for item in folders:
+        if not (isinstance(item, dict) and _report_path(item.get("path"))
+                and type(item.get("device")) is int and type(item.get("inode")) is int):
+            raise problem
+        made.append((item["path"], (item["device"], item["inode"])))
+    return entries, made
+
+
+def _kept(name: str, reply: dict, failed: bool) -> bool:
+    """Whether the Claude package kept unfinished work (its pending marker) that nothing may undo. rollback_state is
+    a structured field, "none" or "pending"; when it is absent, the write report decides (the marker left
+    written). Any other value, or a state the report contradicts, is NoWriteReport."""
+
+    if name != "claude":
+        return False
+    state = reply.get("rollback_state")
+    if failed and state == "pending":
+        return True
+    if "rollback_state" in reply and state not in ("none", "pending"):
+        raise NoWriteReport(f"the {name} package gave a rollback_state it does not define (no_write_report)")
+    marker_left = any(path == CLAUDE_CONTROL[0] and after is not None for path, _, after, _ in _write_report(name, reply)[0])
+    if marker_left and (state is not None or not failed):
+        raise NoWriteReport(f"the {name} package left its pending marker but did not say so (no_write_report)")
+    return marker_left
+
+
+def _journal_from(name: str, snapshot: dict, reply: dict) -> dict:
+    """The undo journal, built from the package's own write report: each path it wrote with the state saved
+    before the step and the digest the package wrote, and each folder it created with its identity. A path the
+    package wrote over something other than the saved state, or outside its own roots, is never undone: it is
+    named in "left"."""
+
+    writes, made = _write_report(name, reply)
+    saved = snapshot["files"]
+    entries: dict = {}
+    modes: dict = {}
+    left: list[str] = []
+    for path, before, after, mode in writes:
+        if not _owned(path, name):
+            left.append(path)
+        elif path in saved and _digest_of(saved[path]) == before:
+            entries[path] = (saved[path], after)
+            modes[path] = mode
+        else:  # what the package replaced is not what setup saved: there is no copy of it to put back
+            left.append(path)
+    created = []
+    for path, identity in made:
+        if (_owned(path, name, folder=True) and path in snapshot["folders"]
+                and snapshot["folders"][path] is None):
+            created.append((path, identity))
+        else:
+            left.append(path)
+    return {"entries": entries, "modes": modes, "created": created, "left": sorted(set(left))}
+
+
+def _check_journal(target: Path, name: str, snapshot: dict, journal: dict) -> None:
+    """Check the journal against what is on disk now: a path that no longer holds what the package says it wrote
+    was changed by someone else; it is moved to "left" and never undone. A changed project folder or an unsafe
+    path refuses (InstallRefused or OSError): setup then stops at once."""
+
+    root, identity = _open_root(target)
+    try:
+        if identity != snapshot["identity"]:
+            raise InstallRefused("the project folder changed while the step ran (project_folder_changed; unsafe_or_unavailable_path)")
+        _check_roots(root, name)
+        now = _scan(root, snapshot["files"])
+        created = dict(journal["created"])
+        for path, before in snapshot["folders"].items():
+            if before is not None:
+                continue
+            try:
+                folder = _open_folder(root, path.split("/"))
+            except FileNotFoundError:
+                if path in created:
+                    journal["left"].append(path)
+                continue
+            try:
+                info = os.fstat(folder)
+                if (info.st_dev, info.st_ino) != created.get(path):
+                    journal["left"].append(path)
+            finally:
+                os.close(folder)
+    finally:
+        os.close(root)
+    for path, (_, after) in list(journal["entries"].items()):
+        if (_digest_of(now[path]) != after
+                or (now[path] is not None and now[path][1] != journal["modes"][path])):
+            del journal["entries"][path]
+            journal["left"] = sorted({*journal["left"], path})
+    omitted = {path for path, state in now.items()
+               if state != snapshot["files"][path] and path not in journal["entries"]}
+    journal["left"] = sorted({*journal["left"], *omitted})
+    if journal["left"]:
+        # Observation can detect omissions, but never grants authority to undo an omitted path.
+        raise InstallRefused("the package write report does not match the saved paths and disk (no_write_report)")
+
+
+def _journal(target: Path, name: str, snapshot: dict, reply: dict) -> dict:
+    """_journal_from, then _check_journal."""
+
+    journal = _journal_from(name, snapshot, reply)
+    _check_journal(target, name, snapshot, journal)
+    return journal
+
+
+def _unaccounted(target: Path, name: str, snapshot: dict) -> list[str] | None:
+    """For a step with no usable write report: the saved paths that differ now (named, never undone); None when
+    that cannot be checked safely."""
+
+    try:
+        root, identity = _open_root(target)
+    except OSError:
+        return None
+    try:
+        if identity != snapshot["identity"]:
+            return None
+        _check_roots(root, name)
+        now = _scan(root, snapshot["files"])
+    except (InstallRefused, OSError):
+        return None
+    finally:
+        os.close(root)
+    return sorted(path for path, state in now.items() if state != snapshot["files"][path])
+
+
+def _undo(target: Path, name: str, snapshot: dict, journal: dict) -> tuple[bool, list[str]]:
+    """Undo exactly the journal's entries and folders. A path whose current state is not the one the package
+    wrote is changed since, so it is left alone and named; so is a folder that is no longer the one the package
+    created, or that cannot be removed. The package's control files go last, the lock before the marker, and
+    the marker only when everything else was undone and no lock is held. Returns (all undone, paths left)."""
+
+    entries, created = journal["entries"], journal.get("created", [])
+    left = list(journal.get("left", []))
+    everything = sorted({*entries, *(path for path, _ in created), *left})
+    try:
+        root, identity = _open_root(target)
+    except OSError:
+        return False, everything
+    try:
+        if identity != snapshot["identity"]:
+            return False, everything
+        try:
+            _check_roots(root, name)
+        except (InstallRefused, OSError):
+            return False, everything
+        pending, lock = CLAUDE_CONTROL if name == "claude" else (None, None)
+        for relative in sorted(set(entries) - {pending, lock}):
+            if not _undo_one(root, relative, *entries[relative], expected_mode=journal.get("modes", {}).get(relative)):
+                left.append(relative)
+        if lock in entries and (left or not _undo_one(root, lock, *entries[lock])):
+            left.append(lock)
+        if pending in entries and (left or _present(root, lock) or not _undo_one(root, pending, *entries[pending])):
+            left.append(pending)
+        for relative, folder in sorted(created, key=lambda item: item[0].count("/"), reverse=True):
+            if not _remove_folder(root, relative, folder):
+                left.append(relative)
+        return not left, sorted(set(left))
+    finally:
+        os.close(root)
+
+
+def _present(root: int, relative: str) -> bool:
+    """Whether anything is at relative (a lock another run holds); True when that cannot be told."""
+
+    parts = relative.split("/")
+    try:
+        folder = _open_folder(root, parts[:-1])
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    try:
+        os.stat(parts[-1], dir_fd=folder, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    finally:
+        os.close(folder)
+
+
+def _same_entry(folder: int, name: str, identity: tuple[int, int]) -> bool:
+    try:
+        info = os.stat(name, dir_fd=folder, follow_symlinks=False)
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and (info.st_dev, info.st_ino) == identity
+
+
+def _undo_one(root: int, relative: str, prior, after: str | None, expected_mode: int | None = None) -> bool:
+    """Put one path back to `prior` when it still holds exactly what the package wrote (`after`, a digest). A file
+    is renamed over or unlinked only while it is the same entry (st_dev, st_ino) whose content was checked;
+    folders are made again only to put back a file the package removed, never for a file someone else
+    removed."""
+
+    parts = relative.split("/")
+    try:
+        folder = _open_folder(root, parts[:-1])
+    except FileNotFoundError:
+        if prior is None:
+            return True  # nothing was there before, and nothing is there now
+        if after is not None:
+            return False  # what the package wrote was removed with its folder by someone else
+        try:
+            folder = _open_folder(root, parts[:-1], create=True)
+        except OSError:
+            return False
+    except OSError:
+        return False
+    try:
+        current = _read_file(folder, parts[-1], identity=True)
+        if current is None:
+            if prior is None:
+                return True
+            if after is not None:
+                return False
+            return _put_back(folder, parts[-1], prior, None)
+        content, mode, identity = current
+        if prior is not None and (content, mode) == prior:
+            return True
+        if (after is None or hashlib.sha256(content).hexdigest() != after
+                or (expected_mode is not None and mode != expected_mode)):
+            return False
+        if prior is None:
+            if not _same_entry(folder, parts[-1], identity):
+                return False
+            os.unlink(parts[-1], dir_fd=folder)
+            return True
+        return _put_back(folder, parts[-1], prior, identity)
+    except (InstallRefused, OSError):
+        return False
+    finally:
+        os.close(folder)
+
+
+def _put_back(folder: int, name: str, prior: tuple[bytes, int], identity: tuple[int, int] | None) -> bool:
+    """Write prior to a new file and move it into place: over the checked entry only while it is still that entry
+    (identity), or, with no identity, only where nothing is (a hard link never replaces anything)."""
+
+    content, mode = prior
+    temporary = f".restore-{secrets.token_hex(8)}"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=folder)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+            os.fchmod(handle.fileno(), mode)
+        if identity is None:
+            try:
+                os.link(temporary, name, src_dir_fd=folder, dst_dir_fd=folder, follow_symlinks=False)
+            except FileExistsError:
+                return False
+            return True
+        if not _same_entry(folder, name, identity):
+            return False
+        os.rename(temporary, name, src_dir_fd=folder, dst_dir_fd=folder)
+        return True
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=folder)
+        except FileNotFoundError:
+            pass
+
+
+def _remove_folder(root: int, relative: str, identity: tuple[int, int]) -> bool:
+    """Remove a folder the package created, only while it is that same folder (st_dev, st_ino) and empty. True
+    when it is gone; False (it is named) when it was replaced or cannot be removed."""
+
+    parts = relative.split("/")
+    try:
+        upper = _open_folder(root, parts[:-1])
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    try:
+        try:
+            info = os.stat(parts[-1], dir_fd=upper, follow_symlinks=False)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        if not stat.S_ISDIR(info.st_mode) or (info.st_dev, info.st_ino) != tuple(identity):
+            return False
+        try:
+            os.rmdir(parts[-1], dir_fd=upper)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return True
+    finally:
+        os.close(upper)
+
+
+def _roll_back(applied: list[tuple[str, object]], target: Path, records: dict | None = None,
+               kept: frozenset = frozenset()) -> list[dict]:
+    """Undo earlier steps in reverse order after a later step fails or setup stops. A step the journal covers
+    (every install/update, and a step that failed or stopped setup) is undone from its journal alone, which is built
+    from the package's own write report; a step with no usable report is not undone at all; a package named in
+    `kept` reported a rollback pending: it keeps changes it did not make, so nothing is undone for it."""
+
+    records = records or {}
     results = []
     for name, step in reversed(applied):
         if name == "codex_rule":
@@ -1065,6 +1592,51 @@ def _roll_back(applied: list[tuple[str, object]], target: Path) -> list[dict]:
             results.append({"package": name, "action": reverse, "ok": ok})
             continue
         installer, op = step
+        record = records.get(name) or {}
+        if name in kept:
+            results.append({"package": name, "action": None, "ok": False,
+                            "note": f"the {name} package stopped with its rollback pending and kept its unfinished "
+                                    "files and marker; nothing more was undone for it. To go on: save any change "
+                                    "you want to keep, put the package files back with git, delete "
+                                    ".claude/claude-agents/install-pending.json and "
+                                    ".claude/claude-agents/install.lock (only when no setup or install is "
+                                    "running), then run setup again"})
+            continue
+        if record.get("use"):
+            journal = record.get("journal")
+            if journal is None:
+                differ = record.get("unaccounted")
+                entry = {"package": name, "action": None, "ok": False,
+                         "note": f"the {name} package did not report what it wrote (no_write_report), so none of "
+                                 "its files were undone"
+                                 + (": these differ from before: " + ", ".join(differ) if differ else "")
+                                 + ("; what differs could not be checked" if differ is None else "")
+                                 + "; check git status in the project"}
+                if differ:
+                    entry["left_alone"] = differ
+                results.append(entry)
+                continue
+            if record.get("completed_install") and name == "codex":
+                # Codex removal deliberately retains project configuration. Keep that policy without
+                # asking its reverse operation to prune parents that predate this run.
+                retained = record.get("retained", [])
+                journal = {**journal,
+                           "entries": {path: state for path, state in journal["entries"].items()
+                                       if path not in retained},
+                           "created": [(path, identity) for path, identity in journal["created"]
+                                       if not any(item.startswith(path + "/") for item in retained)]}
+            ok, left = _undo(target, name, record["snapshot"], journal)
+            entry = {"package": name, "action": "remove" if record.get("completed_install") else "restore", "ok": ok}
+            if left:
+                entry["left_alone"] = left
+                entry["note"] = ("left as they are, because something other than this run changed them since the "
+                                 "package wrote them, or they could not be undone safely: " + ", ".join(left)
+                                 + "; check git status in the project")
+            elif not ok:
+                entry["note"] = (f"the {name} files could not be undone safely (the project folder changed); check "
+                                 "git status in the project")
+            results.append(entry)
+            continue
         reverse = REVERSE.get(op)
         if reverse is None:
             results.append({"package": name, "action": None, "ok": False,
@@ -1092,8 +1664,13 @@ def operate(operation: str, target: Path, *, apply: bool = False, codex_options:
     codex_operation = operation
     if operation == "install" and (target / CODEX_MANIFEST).is_file():
         codex_operation = "update"
+    # The Claude package is adopted the same way: its own update path accepts the installed
+    # bundle when it is this one or a release the package records (previous-releases.json).
+    claude_operation = operation
+    if operation == "install" and (target / CLAUDE_MANIFEST).is_file():
+        claude_operation = "update"
     order = [(CODEX_INSTALLER, "codex", codex_operation, codex_options),
-             (CLAUDE_INSTALLER, "claude", operation, [])]
+             (CLAUDE_INSTALLER, "claude", claude_operation, [])]
     if operation == "remove":
         order.reverse()
     previews = {name: _run(installer, op, target, False, extra) for installer, name, op, extra in order}
@@ -1137,16 +1714,55 @@ def operate(operation: str, target: Path, *, apply: bool = False, codex_options:
             summary["ok"] = False
             summary["rollback"] = _roll_back(applied, target)
             return summary
+    records: dict = {}
     for installer, name, op, extra in order:
-        summary[name] = _run(installer, op, target, True, extra)
-        if _failed(summary[name]):
+        record = records[name] = {"use": False}
+        try:
+            record["snapshot"] = _snapshot(target, name, previews[name])
+        except (InstallRefused, OSError) as exc:
+            reason = str(exc) if isinstance(exc, InstallRefused) else f"{exc} (unsafe_or_unavailable_path)"
+            summary[name] = {"error": f"the {name} files could not be saved before the {op}: {reason}"}
             summary["ok"] = False
-            summary["rollback"] = _roll_back(applied, target)
+            summary["rollback"] = _roll_back(applied, target, records)
             return summary
-        applied.append((name, (installer, op)))
+        reply = summary[name] = _run(installer, op, target, True, extra)
+        failed = _failed(reply)
+        # The package's own write report is the journal: what a later failure may undo, and nothing else. No
+        # usable report, or a check of it that cannot be done safely, stops setup here: no later step runs.
+        stop, kept, problem = failed, False, None
+        try:
+            kept = _kept(name, reply, failed)
+            if not kept:
+                record["journal"] = _journal_from(name, record["snapshot"], reply)
+                _check_journal(target, name, record["snapshot"], record["journal"])
+        except NoWriteReport as exc:
+            record["journal"], record["unaccounted"] = None, _unaccounted(target, name, record["snapshot"])
+            stop, problem = True, str(exc)
+        except (InstallRefused, OSError) as exc:  # the undo re-checks every path, and the folder, itself
+            stop = True
+            problem = (f"what the {name} step wrote could not be checked: "
+                       + (str(exc) if isinstance(exc, InstallRefused) else f"{exc} (unsafe_or_unavailable_path)"))
+        if problem:
+            summary[name] = {**reply, "error": "; ".join(filter(None, (reply.get("error"), problem)))}
+        if op == "update" or stop:
+            record["use"] = True
+            journal = record.get("journal")
+            changed = (kept or record.get("unaccounted") != [] if journal is None
+                       else journal["entries"] or journal["created"] or journal["left"])
+            if op == "update" or changed:
+                applied.append((name, (installer, op)))
+        if stop:
+            summary["ok"] = False
+            summary["rollback"] = _roll_back(applied, target, records, frozenset({name}) if kept else frozenset())
+            return summary
+        if op != "update":
+            if op == "install":
+                record["use"] = record["completed_install"] = True
+                record["retained"] = list(reply.get("project_configuration", {}))
+            applied.append((name, (installer, op)))
     if operation == "install" and not settings_step():
         summary["ok"] = False
-        summary["rollback"] = _roll_back(applied, target)
+        summary["rollback"] = _roll_back(applied, target, records)
         return summary
     summary["applied"] = True
     summary["ok"] = True
