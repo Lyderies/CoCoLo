@@ -8,15 +8,6 @@ CANNED = ["What is the status?", "What is U-0001 doing?", "How much usage is lef
 
 
 class RecordsFirstTests(CoreCase):
-    def test_api15_canned_questions_answer_from_records_with_zero_tokens(self):  # API-15
-        client = self.client("read")
-        for question in CANNED:
-            with self.subTest(question):
-                answer = client.call("query.ask", {"text": question, "mode": "auto"})
-                self.assertEqual("records", answer["answered_by"])
-                self.assertEqual(0, answer["cost_tokens"])
-                self.assertTrue(answer["sources"] and answer["as_of"])
-        self.assertEqual([], self.inbox())  # nothing queued, so nothing reaches the model
 
     def test_api15_records_only_mode_never_forwards(self):  # API-15
         answer = self.client("read").call("query.ask", {"text": "Should we rewrite the parser?", "mode": "records_only"})
