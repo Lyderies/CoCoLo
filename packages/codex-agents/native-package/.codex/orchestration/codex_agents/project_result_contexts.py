@@ -481,14 +481,19 @@ def stored_attempt_context(history, run_handle: str, attempt: int, *, host_class
     """A published attempt named by its run handle, attempt and open inputs digest, for its own host class: what
     the record command needs to find its result once the service that ran it has gone."""
     row = _row(history, run_handle, attempt)
-    if row is None or row["state"] in ("leased", "opened", "bound"):
+    if row is None:
+        # O0d R1: no such dispatch. Named plainly, as the dispatch view named it; the run handle is a random
+        # 48-hex name only an enrolled host of this project can ask about, so this adds no leak.
+        raise HistoryError("history_not_found")
+    if row["state"] in ("leased", "opened", "bound"):
         raise HistoryError("history_result_not_ready")  # not (yet) published: the record command says so
     _readable(row, recorded=False)
     if row["host_class"] != host_class:
-        raise HistoryError("history_not_authorized")
-    if not matches(inputs_digest, _DIGEST) or not secrets.compare_digest(_read(history, row)["inputs_digest"],
-                                                                         inputs_digest):
-        raise HistoryError("history_not_authorized")
+        raise HistoryError("history_not_authorized")  # another host class's run: not this caller's to ask about
+    if not matches(inputs_digest, _DIGEST):
+        raise HistoryError("history_invalid_input")
+    if not secrets.compare_digest(_read(history, row)["inputs_digest"], inputs_digest):
+        raise HistoryError("history_conflict")  # O0d R1: this caller's run, but not with those original inputs
     binding = _lease_binding(history, row)
     return _checked(history, row, binding, host_class)
 

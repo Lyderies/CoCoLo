@@ -58,6 +58,9 @@ DRIVER_ENDPOINT = 'run.sock'  # Beside the control socket; client_runtime uses t
 # D1: refusals of the stored record context a caller is told as they are; any other failure is "not authorized".
 _PLAIN_CONTEXT_REFUSALS = frozenset({'history_worker_context_unavailable', 'history_result_expired',
                                      'history_result_not_ready'})
+# O0d R1: what the record command's lookup of a published attempt also names plainly: no such dispatch, and
+# original inputs that differ from the stored ones (a conflict of input, not a refusal of the caller).
+_PLAIN_REFERENCE_REFUSALS = _PLAIN_CONTEXT_REFUSALS | {'history_not_found', 'history_conflict'}
 
 
 @dataclass(frozen=True)
@@ -485,7 +488,7 @@ class ProjectServiceHost:
         try:
             return read(self._runtime.persistence)
         except HistoryError as error:
-            if plain and error.reason_code in _PLAIN_CONTEXT_REFUSALS:
+            if plain and error.reason_code in (_PLAIN_CONTEXT_REFUSALS if plain is True else plain):
                 raise
             return None
         except Exception:
@@ -551,7 +554,7 @@ class ProjectServiceHost:
             payload = request.payload
             original = self._stored(lambda lane: lane.stored_attempt_context(
                 payload['run_handle'], payload['attempt'], entry.enrolled.host_client, payload['inputs_digest']),
-                plain=True)
+                plain=_PLAIN_REFERENCE_REFUSALS)
             if original is None:
                 return None
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',

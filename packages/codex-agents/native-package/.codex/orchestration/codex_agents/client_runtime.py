@@ -1096,7 +1096,15 @@ def record_codex_result_client(state_root, project_root, task, route, assignment
         history = HistoryClient(result_endpoint, scope.project_id, scope.runtime_digest, timeout=10)
         # D1: the published attempt is found in the project store from its run handle, attempt and inputs, so it
         # is recorded whether or not the service that ran it still holds it (a successor records it the same way).
-        found = history.result_reference(observation.get('run_handle'), assignment.get('attempt'), inputs)
+        try:
+            found = history.result_reference(observation.get('run_handle'), assignment.get('attempt'), inputs)
+        except HistoryError as missing:
+            # O0d R1: said as before D1: no such dispatch, or one opened with other original inputs.
+            if missing.reason_code == 'history_not_found':
+                raise DispatchError('dispatch_not_found') from None
+            if missing.reason_code == 'history_conflict':
+                raise DispatchError('dispatch_conflict') from None
+            raise
         binding = AttemptBinding(**found['binding'])
         current = OrchestrationClient(result_endpoint, OrchestrationScope(**vars(scope)), timeout=10).call(
             'orchestration.status', {'orchestration_handle': binding.orchestration_handle})
