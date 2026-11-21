@@ -4,6 +4,15 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- The identifier guard scanned a different file set in QA than in CI, and QA could miss a real identifier. QA
+  and CI now scan one list that git produces (tracked files, even when an ignore rule names them, plus untracked
+  files no `.gitignore` ignores); the QA runner writes it before the sandbox starts, with a copy of the owner's
+  private denylist, and the shipped `scripts/qa-security.template` scans exactly that list. It refuses, rather
+  than scan fewer files, when git, the list or the denylist is unavailable. Tracked symbolic links are scanned
+  by name and target text, and a file name that is not valid UTF-8 is a finding. The placeholder exemption
+  (`/Users/x`, `/home/user`) is exact, lower-case and whole-component only: `User`, `User Smith` and a name that
+  merely starts with a placeholder now fail. A file name that holds a value prints as `[redacted]`. QA
+  diagnostics keep a path only if git lists it and it holds no value, and a line only if the file has it.
 - Two commands that came together on a project whose service was not running could leave one of them reporting
   `orchestration_client_unavailable`: the start that lost to the other's service ended before that service
   held its lock and did not wait for it. It now waits up to 3 s while no host lock is held, within the start timeout, for the winning service.

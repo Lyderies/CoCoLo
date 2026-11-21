@@ -64,8 +64,11 @@ This repository is public. Never commit personal names, email addresses, hostnam
 machine pins, and keep run records and ledgers out of it (they live in `~/.local/state/codex-agents`).
 Commit with a GitHub `noreply` address.
 
-`scripts/check_identifiers.py` scans tracked files, and the pre-commit hook scans staged content and your
-commit identity. Findings report only a category, path and line, never the matched text. Terms specific
+`scripts/check_identifiers.py` scans the files git lists (tracked files, plus untracked files no `.gitignore`
+ignores), and the pre-commit hook scans staged content and your commit identity. Operational QA scans the same
+list through `scripts/qa-security.template`. Findings report only a category, path and line, never the matched
+text; a file name that holds a value prints as `[redacted]`. Only exact placeholder accounts such as `/Users/x`
+are allowed. Terms specific
 to you can go in a private denylist outside the repository, one per line:
 `~/.config/codex-claude-agent-orchestration/identifier-denylist.txt`, or the file `$AO_IDENTIFIER_DENYLIST`
 names.
