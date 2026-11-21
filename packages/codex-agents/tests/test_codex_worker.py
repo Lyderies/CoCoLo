@@ -319,6 +319,47 @@ for row in json.loads((root / "frames.json").read_text()):
         self.assertNotIn("PRIVATE", result.packet.body.decode())
         self.assertNotIn("PRIVATE", result.packet.report.decode())
 
+    def test_an_invalid_answer_on_the_worker_path_is_kept_owner_only_with_its_digest(self):
+        """Review r2 MED-1 (VF-INV-a, decision 26 "original kept"): the pool's runners did not offer the
+        raw answer, so a worker-process dispatch kept nothing."""
+        import hashlib
+        import stat
+
+        ledger, project = self.fixture.ledger, self.fixture.project_id
+
+        class Keeper:  # The worker's project id names the run; the fixture ledger holds its one project.
+            def keep_child_answer(self, _project_id, content):
+                return ledger.keep_child_answer(project, content)
+
+        invalid = {**fixtures.result(), "admission_state": "accepted", "summary": "PRIVATE-KEPT-CLAIM"}
+        prepared = self.prepare(value=invalid, submit=False)
+        self.pool.attach_answer_keeper(prepared[3], Keeper())
+        self.pool.submit(prepared[3])
+        self.returned(prepared)
+        result = self.owner.result(prepared[1], self.pool, prepared[3])
+        report = json.loads(result.packet.report)
+        self.assertEqual("invalid_result", report["outcome"])
+        self.assertNotIn("PRIVATE", result.packet.body.decode() + result.packet.report.decode())
+        (path,) = sorted((self.fixture.state.artifacts / project).glob("child_answer_*.json"))
+        raw = path.read_bytes()
+        kept = report["raw_answer"]
+        self.assertEqual({"kept", "sha256", "bytes", "truncated", "scrubbed"}, set(kept))
+        self.assertEqual((hashlib.sha256(raw).hexdigest(), len(raw), True, False),
+                         (kept["sha256"], kept["bytes"], kept["kept"], kept["scrubbed"]))
+        self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode))
+        self.assertEqual("accepted", json.loads(raw)["admission_state"])
+        with ledger._held():
+            row = ledger._connection.execute("SELECT content_digest FROM stored_files WHERE project_id=? AND file_id=?",
+                                             (project, path.stem)).fetchone()
+        self.assertEqual(kept["sha256"], row["content_digest"])
+
+    def test_a_worker_without_a_keeper_reports_no_kept_answer_and_still_returns(self):
+        prepared = self.prepare()
+        self.returned(prepared)
+        report = json.loads(self.owner.result(prepared[1], self.pool, prepared[3]).packet.report)
+        self.assertEqual("result", report["outcome"])
+        self.assertNotIn("raw_answer", report)
+
     def test_unknown_native_model_text_is_not_retained_as_report_metadata(self):
         rows = [{"frame": {"type": "turn.started", "model": "PRIVATE-UNKNOWN-MODEL"}},
                 {"result": fixtures.null_filled(fixtures.result())},

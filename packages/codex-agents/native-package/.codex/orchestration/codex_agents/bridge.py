@@ -1187,6 +1187,7 @@ _SECRET_ASSIGNMENT = re.compile(
     r"""((?:api[_-]?key|secret|token|password|passwd|credential)s?(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?)[^\s"',}\]\\]{6,}""",
     re.IGNORECASE,
 )
+_SCRUB_MARGIN_BYTES = 4096
 _SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", re.IGNORECASE)
 
 
@@ -1196,7 +1197,10 @@ def scrub_child_answer(text: str, environ: Mapping[str, str]) -> tuple[str, bool
     scrubbed = text
     for name, value in environ.items():
         if isinstance(value, str) and len(value) >= 8 and _SECRET_NAME.search(str(name)):
-            scrubbed = scrubbed.replace(value, _REMOVED)
+            # The value as written, and as JSON writes it (escaped quotes, newlines and, by default,
+            # non-ASCII characters): a re-serialized answer holds the escaped form.
+            for form in {value, json.dumps(value)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1]}:
+                scrubbed = scrubbed.replace(form, _REMOVED)
     for pattern in _SECRET_PATTERNS:
         scrubbed = pattern.sub(_REMOVED, scrubbed)
     scrubbed = _SECRET_ASSIGNMENT.sub(lambda match: match.group(1) + _REMOVED, scrubbed)
@@ -1216,14 +1220,18 @@ def _keep_raw_answer(
     content = answer.get("bytes")
     if not isinstance(content, bytes):
         return None
+    # Scrub the whole answer first and cut afterwards, so a cut cannot leave part of a secret.
     text, scrubbed = scrub_child_answer(content.decode("utf-8", "replace"), environ)
     stored = text.encode("utf-8")
+    truncated = len(stored) > MAX_RESULT_BYTES
+    stored = stored[:MAX_RESULT_BYTES]
     try:
         digest = ledger.keep_child_answer(project_id, stored)
-    except (ContractError, LedgerError, OSError):
+    except Exception:
+        # Best effort, whatever the ledger raises (a database error included): never the run's outcome.
         return {"kept": False, "reason": "keep_failed"}
     return {"kept": True, "sha256": digest, "bytes": len(stored),
-            "truncated": bool(answer.get("truncated")), "scrubbed": scrubbed}
+            "truncated": truncated, "scrubbed": scrubbed}
 
 
 def child_prompt(assignment: dict[str, Any], *, worker_result_path: str | None = None) -> str:
@@ -1635,7 +1643,7 @@ def run_claude(
         structured_answer = result_frame.get("structured_output")
         if type(structured_answer) is dict:
             try:
-                _offer_raw_answer(raw_answer, json.dumps(structured_answer).encode())
+                _offer_raw_answer(raw_answer, json.dumps(structured_answer, ensure_ascii=False).encode())
             except (ValueError, RecursionError):
                 pass
         elif isinstance(result_frame.get("result"), str):
@@ -1662,22 +1670,26 @@ def run_claude(
 
 
 def _offer_raw_answer(sink: dict[str, Any], content: bytes) -> None:
-    """Hand the child's raw final answer, capped, to the dispatch that keeps it (VF-INV-a)."""
+    """Hand the child's raw final answer to the dispatch that keeps it (VF-INV-a).
 
-    sink["bytes"] = content[:MAX_RESULT_BYTES]
-    sink["truncated"] = len(content) > MAX_RESULT_BYTES
+    Not cut here: `_keep_raw_answer` scrubs the whole answer and then caps it, so a cut can never
+    leave part of a secret. What is offered is already in memory (a Codex read is bounded).
+    """
+
+    sink["bytes"] = content
 
 
-def _command_limit(route: dict[str, Any], assignment: dict[str, Any]) -> int:
+def _command_limit(route: dict[str, Any], assignment: dict[str, Any]) -> int | None:
     """The nominal tool-call limit of a Codex run: the lower of the route's and the assignment's.
 
     A dispatched route always carries its bounds (validate_assignment checks them); a caller that
-    names only a model and effort is held to the assignment's own bound, never refused here.
+    names only a model and effort is held to the assignment's own bound, never refused here. When
+    neither names a limit there is none: None, which the run reports as such (VF-INV-e).
     """
 
     limits = [bounds["max_tool_calls"] for bounds in (route.get("bounds"), assignment.get("bounds"))
               if isinstance(bounds, dict) and type(bounds.get("max_tool_calls")) is int]
-    return min(limits) if limits else 0
+    return min(limits) if limits else None
 
 
 def _count_command(state: dict[str, Any], kind: str, identifier: Any) -> None:
@@ -1788,7 +1800,7 @@ def run_codex(
                 raise _Abort(f"codex_tool_not_allowed:{_event_label(item_type)}")
             if item_type == "command_execution" and kind != "item.updated":
                 _count_command(state, kind, item.get("id"))
-                if state["commands"] > command_limit:
+                if command_limit is not None and state["commands"] > command_limit:
                     raise _Abort("tool_call_limit_exceeded")
         for key in ("model", "to_model"):
             value = frame.get(key)
@@ -1851,6 +1863,7 @@ def run_codex(
         "codex_turns": state["turns"],
         "codex_commands": state["commands"],
         "peak_turn_input_tokens": state["peak_input"],
+        "command_limit": command_limit,
     }
     if outcome["abort"] is not None:
         return None, {**report, "outcome": outcome["abort"]}
@@ -1863,7 +1876,9 @@ def run_codex(
     with os.fdopen(descriptor, "rb") as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
             return None, {**report, "outcome": "missing_result"}
-        raw = handle.read(MAX_RESULT_BYTES + 1)
+        # A little past the cap: the kept answer is scrubbed before it is cut, and a secret that
+        # straddles the cap must be seen whole.
+        raw = handle.read(MAX_RESULT_BYTES + 1 + _SCRUB_MARGIN_BYTES)
     if raw_answer is not None:
         _offer_raw_answer(raw_answer, raw)
     if len(raw) > MAX_RESULT_BYTES:

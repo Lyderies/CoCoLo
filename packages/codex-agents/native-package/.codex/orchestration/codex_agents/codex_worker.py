@@ -100,6 +100,7 @@ class _Job:
     state: str = "prepared"
     packet: CodexWorkerPacket | None = None
     recorder: object = None
+    keeper: object = None
     client_sha256: str | None = None
 
 
@@ -179,10 +180,27 @@ def _safe_report(report, provider):
         # The client's own exit code, result subtype and error label: fixed safe values only.
         if report.get("client_diagnostics") is not None:
             result["client_diagnostics"] = validate_client_diagnostics(report["client_diagnostics"])
+    if "raw_answer" in report:
+        result["raw_answer"] = _safe_raw_answer(report["raw_answer"])
     body = canonical_json(result)
     if len(body) > MAX_REPORT_BYTES:
         raise CodexWorkerError()
     return body
+
+
+def _safe_raw_answer(kept):
+    """What the host recorded of the child's kept answer (VF-INV-a): fixed fields only, or nothing kept."""
+    if kept is None:
+        return None
+    if type(kept) is dict and kept == {"kept": False, "reason": "keep_failed"}:
+        return dict(kept)
+    if (type(kept) is dict and set(kept) == {"kept", "sha256", "bytes", "truncated", "scrubbed"}
+            and kept["kept"] is True and type(kept["sha256"]) is str and len(kept["sha256"]) == 64
+            and all(c in "0123456789abcdef" for c in kept["sha256"])
+            and type(kept["bytes"]) is int and 0 <= kept["bytes"] <= MAX_RESULT_BODY_BYTES
+            and type(kept["truncated"]) is bool and type(kept["scrubbed"]) is bool):
+        return {name: kept[name] for name in ("kept", "sha256", "bytes", "truncated", "scrubbed")}
+    raise CodexWorkerError()
 
 
 def _client_digest(path):
@@ -193,7 +211,7 @@ def _client_digest(path):
     return digest.hexdigest()
 
 
-def _execute(payload, ticket, project_id, run_handle=None, recorder=None, client_sha256=None):
+def _execute(payload, ticket, project_id, run_handle=None, recorder=None, client_sha256=None, keeper=None):
     try:
         data, assignment = _decode_input(payload)
         # The prepared client, re-read just before launch, is still the one the account observed.
@@ -202,11 +220,14 @@ def _execute(payload, ticket, project_id, run_handle=None, recorder=None, client
         provider = data["route"]["provider"]
         # VF-INV-c: a verifier's child is held to the schema the host would accept.
         child_schema = bridge.result_schema_for(data["schema"].encode("utf-8"), assignment)
+        # VF-INV-a (decision 26, "original kept"): the runners offer the child's raw final answer here.
+        raw_answer = {}
         deadline = max(0, (ticket.deadline_ns() - time.monotonic_ns()) / 1_000_000_000)
         common = dict(project_id=project_id, route=data["route"], assignment=assignment,
                       export=Path(data["export"]), control=Path(data["control"]), environ=data["environ"],
                       role_prompt=data["role_prompt"], executable=data["executable"],
-                      worker_result_path=data["worker_result_path"], deadline_seconds=deadline, _execution=ticket)
+                      worker_result_path=data["worker_result_path"], deadline_seconds=deadline, _execution=ticket,
+                      raw_answer=raw_answer)
         if provider == "claude":
             # Without its recorder a Claude child could not report a restriction: never launch it.
             if recorder is None or type(run_handle) is not str or client_sha256 is None:
@@ -216,6 +237,9 @@ def _execute(payload, ticket, project_id, run_handle=None, recorder=None, client
                                          schema=child_schema, **common)
         else:
             result, report = _RUN_CODEX(ledger=object(), schema=child_schema, **common)
+        if keeper is not None:
+            # Kept before validation can fence the answer, as on the bridge path; best effort.
+            report["raw_answer"] = bridge._keep_raw_answer(keeper, project_id, raw_answer, data["environ"])
         result, report, fenced, reviewed, terminal, reason = _PREPARE_RESULT(assignment, result, report)
         body = canonical_json(result)
         if len(body) > MAX_RESULT_BODY_BYTES:
@@ -344,6 +368,20 @@ class CodexWorkerPool:
                 raise CodexWorkerError()
             job.recorder = recorder
 
+    def attach_answer_keeper(self, handle, keeper):
+        """Before submission: where the child's raw final answer is kept (VF-INV-a).
+
+        `keeper.keep_child_answer(project_id, content)` is the ledger's call of the same name; the
+        project process holds no ledger of its own, so a host that has one attaches it here. Without
+        a keeper nothing is kept and the report says nothing about it.
+        """
+        with self._registry._lock:
+            job = self._job(handle)
+            if (job.state not in {"prepared", "reserved"} or job.keeper is not None or keeper is None
+                    or not callable(getattr(keeper, "keep_child_answer", None))):
+                raise CodexWorkerError()
+            job.keeper = keeper
+
     def submit(self, handle):
         self._owner()
         with self._registry._lock:
@@ -431,8 +469,9 @@ class CodexWorkerPool:
                     payload, job.payload = job.payload, None
                     ticket, project_id = job.ticket, entry.key.project_id
                     run_handle, recorder, client = entry.run_handle, job.recorder, job.client_sha256
-                packet = _execute(payload, ticket, project_id, run_handle, recorder, client)
-                payload = ticket = recorder = None
+                    keeper = job.keeper
+                packet = _execute(payload, ticket, project_id, run_handle, recorder, client, keeper)
+                payload = ticket = recorder = keeper = None
                 with self._registry._lock:
                     job.packet, job.state = packet, "finishing"
                     self._registry._complete_worker(self, handle)

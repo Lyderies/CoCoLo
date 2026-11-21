@@ -4485,6 +4485,47 @@ class RawAnswerKeptTests(BridgeTestCase):
         # The stored text is still the child's JSON, with its claim intact.
         self.assertEqual("accepted", json.loads(text)["admission_state"])
 
+    def test_a_non_ascii_secret_in_a_claude_answer_is_not_kept(self) -> None:
+        # Review r2 LOW: the structured answer is re-serialized for keeping; an escaped (\\u00e4) form
+        # of a non-ASCII secret value must not slip past the scrub.
+        route, assigned, handle = self.claude_run()
+        canary = "p\u00e4ssw\u00f6rd-\u20ac-geheim-wert"
+        invalid = {**result(), "admission_state": "rejected", "summary": f"the value is {canary}"}
+        self.frames("claude", [init_frame(), RATE_LIMIT, result_frame(json.dumps(invalid))])
+        output = self.dispatch(route, assigned, handle, environ={"DEPLOY_TOKEN": canary})
+        (path,) = self.kept_files()
+        text = path.read_text()
+        self.assertNotIn(canary, text)
+        self.assertNotIn(json.dumps(canary)[1:-1], text)
+        self.assertNotIn("geheim", text)
+        self.assertTrue(output["bridge_report"]["raw_answer"]["scrubbed"])
+
+    def test_a_secret_straddling_the_cut_is_scrubbed_before_the_answer_is_cut(self) -> None:
+        # Review r2 LOW: cutting first would leave the first ten characters of this token.
+        route, assigned, handle = self.codex_run()
+        self.answer("y" * 189 + " ghp_abcdefghijklmnopqrstuvwxyz0123456789 " + "z" * 300)
+        with mock.patch.object(bridge, "MAX_RESULT_BYTES", 200):
+            output = self.dispatch(route, assigned, handle)
+        (path,) = self.kept_files()
+        text = path.read_text()
+        self.assertNotIn("ghp_", text)
+        self.assertLessEqual(len(text.encode()), 200)
+        self.assertTrue(output["bridge_report"]["raw_answer"]["truncated"])
+
+    def test_a_failed_keep_is_recorded_and_never_changes_the_outcome(self) -> None:
+        # Review r2 LOW: a database error from the keep is the same best-effort failure.
+        import sqlite3
+
+        for error in (sqlite3.OperationalError("database is locked"), LedgerError("no room")):
+            with self.subTest(error=type(error).__name__):
+                route, assigned, handle = self.codex_run()
+                self.answer({**result(), "admission_state": "accepted"})
+                with mock.patch.object(self.ledger, "keep_child_answer", side_effect=error):
+                    output = self.dispatch(route, assigned, handle)
+                self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
+                self.assertEqual({"kept": False, "reason": "keep_failed"}, output["bridge_report"]["raw_answer"])
+                self.assertEqual([], self.kept_files())
+
     def test_a_kept_answer_expires_with_the_worker_result_retention(self) -> None:
         route, assigned, handle = self.codex_run()
         self.answer(result())
@@ -4553,6 +4594,35 @@ class CodexCommandCountTests(BridgeTestCase):
         output = self.dispatch(route, assigned, handle)
         self.assertEqual("result", output["bridge_report"]["outcome"])
         self.assertEqual(result(), output["result"])
+
+    def test_a_run_with_no_bounds_anywhere_completes_and_reports_that_no_limit_applied(self) -> None:
+        # Review r2 MED: the limit was 0 when neither route nor assignment named one, so the first
+        # command stopped the run as tool_call_limit_exceeded.
+        route = {"model": "gpt-6-astra", "effort": "high"}
+        assigned = assignment()
+        assigned["bounds"].pop("max_tool_calls")
+        self.assertIsNone(bridge._command_limit(route, assigned))
+        frames = [*self.commands(4), {"type": "turn.completed", "usage": {"input_tokens": 9}}]
+
+        def child(arguments, *, on_frame, **_):
+            try:
+                for frame in frames:
+                    on_frame(frame)
+            except bridge._Abort as stop:
+                return {"returncode": None, "abort": stop.reason}
+            Path(arguments[arguments.index("-o") + 1]).write_text(json.dumps(null_filled(result())))
+            return {"returncode": 0, "abort": None}
+
+        # A validated assignment always carries its bound, so the prompt (which needs one) is stubbed.
+        with mock.patch.object(bridge, "run_child", side_effect=child), \
+                mock.patch.object(bridge, "child_prompt", return_value="Read only."):
+            _, report = bridge.run_codex(
+                ledger=object(), project_id=self.project_id, route=route, assignment=assigned,
+                role_prompt="Read only.", schema=RESULT_SCHEMA, export=self.tools, control=self.tools,
+                environ={"PATH": os.defpath}, deadline_seconds=5, executable="/usr/bin/false")
+        self.assertEqual("result", report["outcome"])
+        self.assertEqual(4, report["codex_commands"])
+        self.assertIsNone(report["command_limit"])
 
     def test_claude_runs_report_no_codex_counts_and_no_command_limit(self) -> None:
         route, assigned, handle = self.claude_run()
