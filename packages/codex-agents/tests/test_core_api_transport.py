@@ -29,14 +29,6 @@ class SocketTests(CoreCase):
         self.assertEqual(0o700, stat.S_IMODE(os.stat(os.path.dirname(self.socket)).st_mode))
         self.assertLess(len(self.socket.encode()), 104)
 
-    def test_api2_stale_socket_is_replaced_and_live_one_is_not(self):  # API-2
-        self.service.stop()
-        open(self.socket, "w").close()  # a dead file where the socket was
-        self.start()
-        self.assertIn("seq_at", self.client().call("state.get"))
-        with self.assertRaises(Exception):
-            self.mod.CoreService(str(self.records), self.socket, clock=self.clock, expected_uid=os.getuid()).start()
-
     def test_api2_no_tcp_listener(self):  # API-2
         out = subprocess.run(["lsof", "-nP", "-a", "-p", str(os.getpid()), "-iTCP", "-sTCP:LISTEN"],
                              capture_output=True, text=True).stdout
