@@ -202,8 +202,8 @@ def main():
                 retained_bytes=2*MAX_PERSISTENCE_ENTRY_BYTES if api_options else MAX_PERSISTENCE_ENTRY_BYTES,
                 allow_local_execution_reference=not data.get('with_provenance', False), **api_options)
 
-        def until(predicate):
-            end = time.monotonic() + 12
+        def until(predicate, seconds=12):
+            end = time.monotonic() + seconds
             while not predicate():
                 if time.monotonic() >= end:
                     raise RuntimeError("fixture_progress_timeout")
@@ -236,7 +236,11 @@ def main():
 
         def next_message():
             if data.get('client_dispatch', False):
-                until(lambda: bool(select.select([sys.stdin], [], [], 0)[0]))
+                # Serve the product meanwhile, but the 12 s progress limit is for the product's progress, not for the
+                # parent test: while it runs the client commands that precede this message (about 6 s idle, over
+                # 12 s on a loaded CI runner) this child must not exit. A parent that is gone closes stdin, which
+                # also ends the wait.
+                until(lambda: bool(select.select([sys.stdin], [], [], 0)[0]), seconds=120)
             return receive()
 
         def start_ingress():
