@@ -52,7 +52,9 @@
    "flow": "L2",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Replacing the owner key refuses signatures made with the old key and accepts the new one's.",
-   "checks": []
+   "checks": [
+    "l2_2_replacing_owner_key_refuses_old_signatures_accepts_new"
+   ]
   },
   {
    "id": "L3.1",
