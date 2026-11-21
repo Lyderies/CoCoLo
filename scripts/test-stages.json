@@ -228,6 +228,7 @@
  "codex:tests.test_synchronized_races": "integration",
  "codex:tests.test_trial_run_driver_bugs": "integration",
  "codex:tests.test_type_lookups": "integration",
+ "codex:tests.test_usage_report": "integration",
  "codex:tests.test_validation": "integration",
  "codex:tests.test_validation_cli_client_boundary": "integration",
  "codex:tests.test_watchdog_lifetime": "integration",
