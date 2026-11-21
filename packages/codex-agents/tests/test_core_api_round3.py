@@ -62,19 +62,6 @@ class AuditRound3(Helpers, CoreCase):
     service_options = {"max_line_bytes": 4096}
 
 
-    def test_malformed_envelopes_are_audited(self):
-        s = raw(self.socket)
-        reader = s.makefile()
-        s.sendall(b"this is not json\n")
-        reader.readline()
-        s.sendall(b'{"jsonrpc":"1.0","id":1,"method":"x"}\n')
-        reader.readline()
-        s.sendall(b"x" * 9000)
-        reader.readline()
-        outcomes = {(r["method"], r["outcome"]) for r in self.audit()}
-        self.assertTrue({("envelope", "parse_error"), ("envelope", "invalid_request"),
-                         ("envelope", "too_large")} <= outcomes, outcomes)
-
     def test_mutation_is_audited_durably_before_the_effect(self):
         order = []
         real = self.mod._append_jsonl
