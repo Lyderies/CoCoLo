@@ -175,6 +175,56 @@ class SignatureInputOwnerTests(unittest.TestCase):
         self.assertEqual(2, len(captured.rows))
         self.assertEqual(self.ledger._attestation_rows_locked(self.projects[0], "codex"), captured.rows)
 
+    def test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims(self):
+        """O0c P9 (owner 2026-11-21: delete superseded ones, keep the latest per account and provider): with
+        the row limit 2, attesting three times for the same account refuses the capture; one sweep later
+        only the latest remains and the capture succeeds. Another account's, another provider's and an
+        unsuperseded one are never touched."""
+        for issued_at in (2, 3):
+            attest_provider(self.ledger, self.projects[0], self.key, "codex", "a" * 64, issued_at=issued_at)
+        other_account = attest_provider(self.ledger, self.projects[0], self.key, "codex", "d" * 64, issued_at=2)
+        other_provider = attest_provider(self.ledger, self.projects[0], self.key, "claude", "b" * 64, issued_at=2)
+        limits = SignatureCaptureLimits(3, 65_536)
+        self.assert_capture_error("signature_capture_limit", lambda: self.capture(limits=limits))
+        self.assertEqual(2, self.ledger.sweep_superseded_attestations(batch=100))
+        self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=100))  # once only
+        kept = [r[0] for r in self.ledger._connection.execute(
+            "SELECT record_id FROM records WHERE record_type='billing_attestation' ORDER BY source_sequence")]
+        self.assertEqual(3, len(kept))
+        self.assertNotIn(self.record["record_id"], kept)
+        self.assertIn(other_account["record_id"], kept)
+        self.assertIn(other_provider["record_id"], kept)
+        captured = self.capture(limits=limits)
+        self.assertEqual(2, len(captured.rows))  # the latest codex ones of the two accounts (claude's is other)
+
+    def test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted(self):
+        """Review rev040o0ccapsr1 M2: a record that links to the older attestation, a link from it, a consumed
+        grant or a stored file that names it each keep it, though a later one supersedes it. The latest stays too."""
+        project, connection = self.projects[0], self.ledger._connection
+        older = [self.record]
+        for number in range(2, 6):
+            older.append(attest_provider(self.ledger, project, self.key, "codex", "a" * 64, issued_at=number))
+        latest = attest_provider(self.ledger, project, self.key, "codex", "a" * 64, issued_at=9)
+        witness = attest_provider(self.ledger, project, self.key, "claude", "b" * 64, issued_at=1)
+        with self.ledger._lock, connection:
+            # 1: a record cites older[0] (a link TO it); 2: older[1] links to a record (a link FROM it)
+            connection.execute("INSERT INTO record_links VALUES(?,?,?,?)",
+                               (project, witness["record_id"], older[0]["record_id"], "cites"))
+            connection.execute("INSERT INTO record_links VALUES(?,?,?,?)",
+                               (project, older[1]["record_id"], witness["record_id"], "cites"))
+            # 3: a stored file names older[2] as its source
+            connection.execute("INSERT INTO stored_files VALUES(?,?,?,?,?,?,?)",
+                               (project, "f1", "artifact", "f1.bin", "d", older[2]["record_id"], None))
+            # 4: a consumed grant names older[3] as its promotion record
+            connection.execute("INSERT INTO consumed_grants VALUES(?,?,?,?,?,?)",
+                               (project, witness["record_id"], older[3]["record_id"], "c", "promote", 1))
+        self.assertEqual(1, self.ledger.sweep_superseded_attestations(batch=100))  # only older[4], uncited
+        kept = {r[0] for r in connection.execute("SELECT record_id FROM records WHERE record_type='billing_attestation'")}
+        for cited in older[:4]:
+            self.assertIn(cited["record_id"], kept)
+        self.assertNotIn(older[4]["record_id"], kept)
+        self.assertIn(latest["record_id"], kept)
+
     def test_other_provider_history_is_charged_before_filtering(self):
         attest_provider(self.ledger, self.projects[0], self.key, "claude", "b" * 64, issued_at=2)
         self.assert_capture_error("signature_capture_limit", lambda: self.capture(

@@ -306,3 +306,41 @@ class UnclaimedRunFenceTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DispatchSlotRegisterTests(unittest.TestCase):
+    """O0c M11: a host with no dispatch slot left refuses a new run at registration, before any claim, so the
+    run is never admitted only to meet dispatch_full; the host is replaced (exhausted) and the next run
+    registers on a fresh one."""
+
+    KEY = ('hrn_' + 'a' * 48, 1)
+
+    def host(self, jobs):
+        value = driver()
+        value._runs = {}
+        value._dispatch = SimpleNamespace(_jobs={number: object() for number in range(jobs)})
+        value._scope = None
+        value._submit_registration = mock.Mock()
+        return value
+
+    def register(self, value):
+        fields = {name: None for name in project_driver._REGISTER_FIELDS}
+        fields.update(purpose='register', host_client='codex-host-v1', run_id='run-1',
+                      assignment={'attempt': 1}, orchestration_handle='orc_' + 'a' * 48)
+        with mock.patch.object(project_driver, 'open_inputs_digest', return_value='d' * 64), \
+                mock.patch.object(project_driver, 'OpenScopeContext', return_value=mock.Mock()):
+            value._register(self.KEY, 'd' * 64, fields, 'codex-host-v1')
+
+    def test_M11_past_every_dispatch_slot_the_run_is_refused_before_its_claim_and_the_host_is_replaced(self):
+        with mock.patch.object(project_driver, 'DISPATCH_SLOTS', 2):
+            full = self.host(2)
+            with self.assertRaises(project_driver.HistoryError) as refused:
+                self.register(full)
+            self.assertEqual('history_service_unavailable', refused.exception.reason_code)
+            self.assertEqual({}, full._runs)  # nothing registered, so nothing to claim
+            full._submit_registration.assert_not_called()
+            full.busy = lambda: False
+            self.assertTrue(full.exhausted())  # the host is replaced; a fresh one takes the next run
+            fresh = self.host(0)
+            self.register(fresh)
+            self.assertIn(self.KEY, fresh._runs)

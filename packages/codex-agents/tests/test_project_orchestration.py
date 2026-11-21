@@ -345,6 +345,48 @@ class ProjectOrchestrationTests(unittest.TestCase):
             self.assertIsNotNone(ended['ended_at_ms'])
         self.assertEqual(0, owner.end_earlier(updated, 10))  # Already ended: once only.
 
+    def test_O0c_P5_abandoned_orchestrations_end_after_24_hours_idle_so_a_new_one_opens(self):
+        """O0c P5 (owner 2026-11-21: 24 hours idle): with the limit 2, three abandoned orchestrations in a row
+        (one paused, one with a late checkpoint) never leave the project unable to open another."""
+        from codex_agents.orchestration_store import ORCHESTRATION_IDLE_MS
+        self.assertEqual(24 * 60 * 60 * 1000, ORCHESTRATION_IDLE_MS)
+        self.store._orchestration_limits = OrchestrationLimits(2, 12)
+        owner = self.store._orchestration_owner()
+        first = self.call('open', identity='open-first')['current']['snapshot']
+        paused = self.call('open', identity='open-second')['current']['snapshot']
+        self.call('pause', self.target(paused), 'pause-second')
+        with self.assertRaisesRegex(HistoryError, 'history_orchestration_full'):
+            self.call('open', identity='open-third')
+        self.now += ORCHESTRATION_IDLE_MS - 1
+        self.assertEqual(0, owner.end_idle(self.now, 10))  # Not idle long enough yet.
+        self.assertEqual(2, owner._open_count())
+        self.now += 1
+        self.assertEqual(2, owner.end_idle(self.now, 10))
+        self.assertEqual(0, owner._open_count())
+        for snapshot in (first, paused):
+            ended = owner._current(self.scope, snapshot['orchestration_handle'])['snapshot']
+            self.assertEqual(('interrupted', self.now), (ended['status'], ended['ended_at_ms']))
+        self.assertEqual(0, owner.end_idle(self.now, 10))  # Once only.
+        self.assertEqual('active', self.call('open', identity='open-third')['current']['snapshot']['status'])
+
+    def test_O0c_P5_an_orchestration_with_recent_activity_or_a_run_not_over_is_never_ended_idle(self):
+        from codex_agents.orchestration_store import ORCHESTRATION_IDLE_MS
+        owner = self.store._orchestration_owner()
+        busy = self.opened()
+        self.call('open', identity='open-quiet')
+        self.now += ORCHESTRATION_IDLE_MS
+        self.call('checkpoint', self.target(busy, goal_tokens_used=0, goal_time_used_seconds=0), 'checkpoint-busy')
+        self.assertEqual(1, owner.end_idle(self.now, 10))  # Only the quiet one.
+        self.assertEqual(1, owner._open_count())
+        # A run registered against it and not over keeps even an idle one open.
+        self.store._connection.execute(
+            "INSERT INTO result_reservations(project_id,claim_id,run_handle,attempt,claim_digest,orchestration_handle,"
+            "binding,assignment_digest,created_at_ms,hard_deadline_at_ms,reserved_until_ms,expires_at_ms,state) "
+            "VALUES(?,'clm_y','hrn_y',1,?,?,x'00','a',0,0,0,0,'reserved')", (PROJECT_A, 'c' * 64, busy['orchestration_handle']))
+        self.now += ORCHESTRATION_IDLE_MS
+        self.assertEqual(0, owner.end_idle(self.now, 10))
+        self.assertEqual(1, owner._open_count())
+
     def test_034_R10_a_used_request_id_never_stops_the_end(self):
         """Review 034-r10: the end used the predictable request id 'end-earlier-<handle>'; one already
         used by an old client made every attempt conflict, so the orchestration stayed open for good."""

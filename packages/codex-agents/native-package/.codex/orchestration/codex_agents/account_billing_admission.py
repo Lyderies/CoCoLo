@@ -34,6 +34,9 @@ _FIELDS = ('project_id', 'request_key', 'parameters_digest', 'runtime_digest', '
 
 # Billing this recent is reused instead of probing; an admitted probe reserves its account this long.
 PROBE_REUSE_MS = 300_000
+# O0c P6: an admitted probe no live original of this process holds (its collector restarted) is closed as a denial
+# once its deadline plus this grace has passed; no model it launched can still be running by then.
+PROBE_ORPHAN_GRACE_MS = 300_000
 PROBE_COOLDOWN_MS = 300_000
 
 
@@ -716,3 +719,39 @@ def close_expired_reserved(ledger, now_ms, limit):
             + " WHERE project_id=? AND request_key=? AND state='reserved'",
             (*(final[n] for n in (*names, 'state_seal')), row['project_id'], row['request_key']))
     return len(rows)
+
+
+def close_orphaned_admitted(ledger, now_ms, limit):
+    """O0c P6: close every `admitted` probe request whose deadline plus PROBE_ORPHAN_GRACE_MS has passed and
+    that no original in this process holds (a collector restart lost it: nothing could ever settle it), as a
+    committed denial (`probe_admitted_expired`) inside the caller's account transaction. Its admission record
+    stays, so the cooldown still applies, and a replay reads this reply and never relaunches. An original this
+    process holds is never closed by time: only its own proof of an ended child settles it (M10). Returns how
+    many were closed."""
+    if not ledger._connection.in_transaction:
+        raise ProbeAdmissionError('probe_conflict')
+    owner = getattr(ledger, '_billing_admission_owner', None)
+    held = set(getattr(owner, '_pending', ())) if owner is not None else set()
+    key = ledger.state.digest_key()
+    rows = [dict(row) for row in ledger._connection.execute(
+        "SELECT * FROM account_billing_probe_requests WHERE state='admitted' AND deadline_at_ms<? LIMIT ?",
+        (now_ms - PROBE_ORPHAN_GRACE_MS, limit + len(held))).fetchall()]
+    names = [n for n in _FIELDS if n not in {'project_id', 'request_key'}]
+    closed = 0
+    for row in rows:
+        if closed >= limit:
+            break
+        if (row['project_id'], row['request_key']) in held:
+            continue
+        final = {**{n: row[n] for n in _FIELDS}, 'state': 'committed', 'references_json': canonical_json(
+            {'probe': 'denied', 'reason_code': 'probe_admitted_expired', 'records': []}).decode()}
+        final['state_seal'] = keyed(key, b'billing-probe-state-v1\0', {n: final[n] for n in _FIELDS})
+        ledger._connection.execute(
+            "UPDATE run_holds SET release_kind='expired' WHERE kind='probe' AND project_id=? AND identity=? "
+            "AND state='held'", (row['project_id'], row['request_key']))
+        ledger._connection.execute(
+            'UPDATE account_billing_probe_requests SET ' + ','.join(n + '=?' for n in (*names, 'state_seal'))
+            + " WHERE project_id=? AND request_key=? AND state='admitted'",
+            (*(final[n] for n in (*names, 'state_seal')), row['project_id'], row['request_key']))
+        closed += 1
+    return closed

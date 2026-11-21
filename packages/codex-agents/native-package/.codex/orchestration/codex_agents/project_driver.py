@@ -577,7 +577,9 @@ class RunDriver:
             if known.inputs_digest != inputs_digest or known.run_id != value['run_id']:
                 raise HistoryError('history_conflict')
             return
-        if len(self._runs) >= MAX_RUNS:
+        # O0c M11: no dispatch slot left in this host's lifetime: refuse before any claim (exhausted() has the
+        # host replaced), never admit a run that would meet dispatch_full.
+        if len(self._runs) >= MAX_RUNS or len(self._dispatch._jobs) >= DISPATCH_SLOTS:
             raise HistoryError('history_service_unavailable')
         # D1: a verifier's worker is read from the project store when the run begins (`_begin`), checked there;
         # its open was already authorized against that same stored worker.

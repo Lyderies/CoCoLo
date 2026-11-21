@@ -282,6 +282,18 @@ def _kept_learning_sql(alias: str) -> str:
                   f"json_extract(CAST({alias}.content AS TEXT),'$.corpus_state')!='development')")
     return f"({controlled} OR {link} OR {grant} OR {attested})"
 
+def _cited_sql(alias: str) -> str:
+    """A record something else still names, in any table that references records (review rev040o0ccapsr1 M2):
+    a record link in either direction, a consumed grant (as the grant or as its promotion record), a stored
+    file's source. Such a record is never deleted by a sweep whose only reason is that a later one supersedes it."""
+    project, record = f"{alias}.project_id", f"{alias}.record_id"
+    return ("(EXISTS (SELECT 1 FROM record_links l WHERE l.project_id=" + project + " AND "
+            "(l.from_record_id=" + record + " OR l.to_record_id=" + record + ")) "
+            "OR EXISTS (SELECT 1 FROM consumed_grants g WHERE g.project_id=" + project + " AND "
+            "(g.grant_id=" + record + " OR g.promotion_record_id=" + record + ")) "
+            "OR EXISTS (SELECT 1 FROM stored_files f WHERE f.project_id=" + project + " AND "
+            "f.source_record_id=" + record + "))")
+
 _DAY_MS = 24 * 60 * 60 * 1000
 
 
@@ -2180,6 +2192,14 @@ class LearningLedger:
                 "CREATE INDEX IF NOT EXISTS account_open_requests_finished "
                 "ON account_open_requests(opened_at_ms) WHERE state='committed'"
             )
+            self._connection.execute(  # O0c P0: the purge of opens that never finished
+                "CREATE INDEX IF NOT EXISTS account_open_requests_unfinished "
+                "ON account_open_requests(observation_deadline_at_ms) WHERE state='pending'"
+            )
+            self._connection.execute(  # O0c P0 (review rev040o0ccapsr1 M1): the purge of denied opens, by expiry
+                "CREATE INDEX IF NOT EXISTS account_open_requests_committed_expiry "
+                "ON account_open_requests(observation_deadline_at_ms) WHERE state='committed'"
+            )
             self._record_first_owner_key()
             self.state.mark_initialized()
             self._reconcile_managed_files()
@@ -2396,6 +2416,37 @@ class LearningLedger:
                 "ORDER BY r.project_id,r.source_sequence LIMIT ?",
                 (now - LEARNING_RETENTION_MS, LEARNING_MOVED_KEY, batch),
             ).fetchall()
+            if not rows:
+                return 0
+            with self._account_transaction():
+                self._connection.executemany(
+                    "DELETE FROM records WHERE project_id=? AND record_id=?",
+                    [(str(row[0]), str(row[1])) for row in rows])
+            return len(rows)
+
+    def sweep_superseded_attestations(self, *, batch: int = LEARNING_SWEEP_BATCH) -> int:
+        """O0c P9 (owner 2026-11-21): remove up to `batch` billing attestations a later signed one of the same
+        owner supersedes for the same provider and account (admission reads only the latest), keeping the
+        latest per provider and account; returns how many. Only an owner-source attestation that nothing cites
+        (`_cited_sql`: a record link either way, a consumed grant, a stored file), and whose later one is
+        owner-signed, is removed (its signature row goes with it).
+        Skipped while a reader or a transaction is active."""
+        with self._held():
+            if self._readers() or self._connection.in_transaction:
+                return 0
+            rows = self._connection.execute(
+                "SELECT r.project_id,r.record_id FROM records r WHERE r.record_type='billing_attestation' "
+                "AND r.source='owner' "
+                f"AND NOT {_cited_sql('r')} "
+                "AND EXISTS (SELECT 1 FROM records n JOIN owner_attestations a ON a.project_id=n.project_id "
+                "AND a.subject_record_id=n.record_id WHERE n.project_id=r.project_id "
+                "AND n.record_type='billing_attestation' AND n.source='owner' "
+                "AND json_extract(CAST(n.content AS TEXT),'$.provider')=json_extract(CAST(r.content AS TEXT),'$.provider') "
+                "AND json_extract(CAST(n.content AS TEXT),'$.account_fingerprint')="
+                "json_extract(CAST(r.content AS TEXT),'$.account_fingerprint') "
+                "AND (n.observed_at_ms>r.observed_at_ms OR (n.observed_at_ms=r.observed_at_ms "
+                "AND n.source_sequence>r.source_sequence))) "
+                "ORDER BY r.project_id,r.source_sequence LIMIT ?", (batch,)).fetchall()
             if not rows:
                 return 0
             with self._account_transaction():
@@ -11821,7 +11872,17 @@ class LearningLedger:
                 "AND h.handle_digest=r.identity WHERE r.state<>'released' AND r.state='held' AND r.kind='binding' "
                 "AND h.binding_state='pending' AND h.expires_at_ms<=?)",
                 (*parameters, now, now)).fetchone()
-        return bool(row[0])
+            if row[0]:
+                return True
+            # O0c P6: an admitted probe past deadline + grace that no original of this process holds.
+            from .account_billing_admission import PROBE_ORPHAN_GRACE_MS
+            owner = getattr(self, "_billing_admission_owner", None)
+            held = set(getattr(owner, "_pending", ())) if owner is not None else set()
+            overdue = self._connection.execute(
+                "SELECT project_id,request_key FROM account_billing_probe_requests INDEXED BY "
+                "billing_probe_active_machine WHERE state='admitted' AND deadline_at_ms<? LIMIT ?",
+                (now - PROBE_ORPHAN_GRACE_MS, len(held) + 1)).fetchall()
+        return any((item[0], item[1]) not in held for item in overdue)
 
     def release_due_account_holds(self, *, limit: int = 64) -> int:
         """O0b RS-A: release the account holds whose own predicate now says so, writing each decision once.
@@ -11871,6 +11932,10 @@ class LearningLedger:
             released += closed
             if probes is not None:
                 probes.append(closed)
+        if released < limit:
+            # O0c P6: admitted probes of an earlier collector (no original in memory) past deadline + grace.
+            from .account_billing_admission import close_orphaned_admitted
+            released += close_orphaned_admitted(self, now, limit - released)
         if released < limit:
             # F7: an unclaimed binding is ended in its own row too (the trigger then releases its register
             # row `expired`), so a claim checking the binding refuses it whatever the wall clock later says.
@@ -12613,9 +12678,10 @@ class CollectorServer:
             sweeps = [(self.ledger.sweep_worker_results, (LedgerError, OSError, sqlite3.Error)),
                       (self.ledger.sweep_event_retention, loose),
                       (self.ledger.sweep_learning_retention, loose),  # O0c P8: cases and candidates past the window
+                      (self.ledger.sweep_superseded_attestations, loose),  # O0c P9: only the latest attestation stays
                       (self.ledger.sweep_account_retention, loose),
                       (release_holds, loose)]
-            for sweep, errors in sweeps[4:] if holds_only else sweeps:
+            for sweep, errors in sweeps[5:] if holds_only else sweeps:
                 if self._sweeps_stop.is_set():
                     return None
                 with contextlib.suppress(*errors):

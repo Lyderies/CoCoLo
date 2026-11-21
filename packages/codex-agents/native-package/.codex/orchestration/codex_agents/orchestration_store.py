@@ -20,6 +20,9 @@ MAX_JOURNAL_EVENTS = 65_536
 # A closed orchestration is kept this long for reports, then removed with its checkpoints (0.3.4 R6):
 # the ledger's own retention (client_runtime.LEARNING_MAX_AGE_MS).
 ORCHESTRATION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
+# An open or paused orchestration with no checkpoint and no run registered for this long is abandoned and
+# is ended interrupted by the service's cleanup (O0c P5, owner 2026-11-21: 24 hours idle).
+ORCHESTRATION_IDLE_MS = 24 * 60 * 60 * 1000
 
 class OrchestrationOwner:
     def __init__(self, history):
@@ -164,6 +167,46 @@ class OrchestrationOwner:
             tried += 1
             # A fresh request id each time: no client can have used it before (review 034-r10).
             request = OrchestrationRequest(1, 'orchestration.close', 'end-earlier-' + secrets.token_hex(16), earlier, {
+                'orchestration_handle': row['orchestration_handle'], 'expected_sequence': snapshot['sequence'],
+                'status': 'interrupted', 'goal_tokens_used': None, 'goal_time_used_seconds': None})
+            try:
+                self.apply(request, client_version=snapshot['client_version'], before_commit=lambda: None)
+            except HistoryError:
+                continue  # A run not yet over, or anything else: it stays open for a later pass.
+            ended += 1
+        return ended
+
+    def end_idle(self, now, limit):
+        """End, as interrupted, the open or paused orchestrations idle for ORCHESTRATION_IDLE_MS (O0c P5):
+        no checkpoint and no run reserved against them since. The ordinary close does it, under each
+        one's own sealed scope, so an orchestration with a run not yet over stays open. Each pass tries at
+        most `limit`, from where the last one stopped. Returns how many ended."""
+        project = self._history.project_id
+        after = self._history._purge_cursors.get('idle')
+        rows = self._db.execute('SELECT rowid,orchestration_handle,sequence,checkpoint_digest,scope_digest '
+                                'FROM project_orchestrations WHERE project_id=?' + ('' if after is None else ' AND rowid>?') + ' ORDER BY rowid LIMIT ?',
+                                (project, *(() if after is None else (after,)), limit * 16)).fetchall()
+        if not rows and after is not None:
+            self._history._purge_cursors['idle'] = None
+            return self.end_idle(now, limit)
+        ended = tried = 0
+        for row in rows:
+            if tried >= limit:
+                break
+            self._history._purge_cursors['idle'] = row['rowid']
+            snapshot = self._latest_snapshot(row)
+            if snapshot is None or snapshot['status'] in ORCHESTRATION_TERMINAL_STATES:
+                continue
+            latest = self._db.execute('SELECT MAX(created_at_ms) FROM result_reservations WHERE project_id=? '
+                                      'AND orchestration_handle=?', (project, row['orchestration_handle'])).fetchone()[0]
+            since = max(snapshot['observed_at_ms'], latest if valid_integer(latest, minimum=0) else 0)
+            if now - since < ORCHESTRATION_IDLE_MS:
+                continue
+            scope = OrchestrationScope(**snapshot['scope'])
+            if self._scope_digest(scope) != row['scope_digest']:
+                continue  # The row does not belong to the scope its checkpoint names: left as it is.
+            tried += 1
+            request = OrchestrationRequest(1, 'orchestration.close', 'end-idle-' + secrets.token_hex(16), scope, {
                 'orchestration_handle': row['orchestration_handle'], 'expected_sequence': snapshot['sequence'],
                 'status': 'interrupted', 'goal_tokens_used': None, 'goal_time_used_seconds': None})
             try:

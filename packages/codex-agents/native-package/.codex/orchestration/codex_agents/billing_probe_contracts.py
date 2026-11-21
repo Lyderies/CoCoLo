@@ -17,7 +17,8 @@ BILLING_PROBE_REASONS = frozenset({'probe_invalid_request', 'probe_invalid_respo
     'probe_reply_invalid'})
 PROBE_STEP_REASONS = frozenset({'probe_preparation_failed', 'probe_preparation_unknown', 'probe_worker_failed',
     'probe_step_failed', 'probe_worker_unavailable',
-    'probe_unlaunched_expired'})  # O0b RS-A-2: a reserved probe past its deadline, closed by the supervisor
+    'probe_unlaunched_expired',
+    'probe_admitted_expired'})  # O0c P6: an admitted probe of an earlier collector, closed past deadline + grace  # O0b RS-A-2: a reserved probe past its deadline, closed by the supervisor
 # CI-3: why the init-frame check stopped a probe (the bridge's `init_*` outcomes); kept as the reply's reason
 # instead of probe_incomplete.
 PROBE_INIT_REASONS = frozenset({'init_api_key_source', 'init_model_mismatch', 'init_plugin_not_allowed',
