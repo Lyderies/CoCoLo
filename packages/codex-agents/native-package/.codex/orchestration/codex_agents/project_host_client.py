@@ -17,6 +17,9 @@ from .host_paths import PYTHON_ISOLATION_FLAGS
 
 START_TIMEOUT_SECONDS = 8.0
 WITHDRAW_TIMEOUT_SECONDS = 5.0
+# R4: how long a start that lost to another start's host (see _spawn_and_wait) waits for that host.
+START_COLLISION_GRACE_SECONDS = 3.0
+START_COLLISION_REASONS = frozenset({'history_writer_busy', 'history_service_unavailable'})
 HOST_ENTRY = 'project_host.py'
 HOST_LOCK = 'host.lock'
 # Taken in turn by a host publishing its hint, a host starting (from before it takes the host lock
@@ -233,9 +236,17 @@ def _spawn_and_wait(state, entry, root, serving, timeout, actions, report_path, 
                 return True  # It lost the race to another starter.
             # CI2: it found the project taken by another host that holds the host lock and has not
             # served yet (another start's, still starting): wait for that one, within this start's time.
-            while time.monotonic() < deadline and _host_alive(runtime_directory(state, root)) is True:
+            # R4: another start's host may not hold the host lock yet (it takes the history writer lock
+            # first), and the start that lost to it ends with one of these two reasons. For a short
+            # grace it waits for that host as well; a host that does hold the lock is waited for to
+            # the deadline, as above.
+            contended = _ended_report(report_path).get('reason_code') in START_COLLISION_REASONS
+            grace = time.monotonic() + START_COLLISION_GRACE_SECONDS
+            while time.monotonic() < deadline:
                 if serving():
                     return True
+                if _host_alive(runtime_directory(state, root)) is not True and not (contended and time.monotonic() < grace):
+                    break
                 time.sleep(0.02)
             if report is not None:
                 report.update(_ended_report(report_path))
