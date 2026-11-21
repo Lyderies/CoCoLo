@@ -124,6 +124,7 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
         code, screen = self.update(project, {"FAKE_REGISTER": "", "FAKE_UPGRADE": '{"ready": true}'})
         self.assertEqual(1, code)
         self.assertIn("records_need_owner_choice", screen)
+        self.assertIn("Update the install and walk through every step", screen)
         self.assertEqual(0, self.attested())
 
     def test_U2_the_menu_entry_update_this_project_does_the_same(self):
