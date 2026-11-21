@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_install import git, installer, isolate_home, make_target  # noqa: E402
+from test_install import git, installer, inventory, isolate_home, make_target  # noqa: E402
 
 PACKAGE = Path(__file__).resolve().parents[1] / "packages" / "claude-agents"
 MANIFEST = ".claude/claude-agents/install-manifest.json"
@@ -74,6 +74,61 @@ class ClaudeUpgradeTests(unittest.TestCase):
         preview = installer.operate("install", self.target, codex_options=self.codex_options)
         self.assertFalse(preview["ok"], preview)
         self.assertEqual("untrusted_manifest", preview["claude"]["error"])
+
+    def patch(self, name: str, value) -> None:
+        original = getattr(installer, name)
+        setattr(installer, name, value)
+        self.addCleanup(setattr, installer, name, original)
+
+    def assert_stays_on_the_previous_install(self, summary: dict, before: dict) -> None:
+        self.assertFalse(summary["ok"], summary)
+        self.assertFalse(summary["applied"], summary)
+        self.assertEqual(before, inventory(self.target))
+
+    def test_a_failed_settings_step_after_the_claude_update_restores_the_previous_install(self) -> None:
+        before = inventory(self.target)
+
+        def failing_settings(target, plan):
+            raise installer.InstallRefused("simulated settings failure")
+
+        self.patch("apply_settings", failing_settings)
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertEqual(["claude", "codex"], [r["package"] for r in summary["rollback"]])
+        self.assertTrue(all(r["ok"] for r in summary["rollback"]), summary["rollback"])
+        self.assert_stays_on_the_previous_install(summary, before)
+
+    def test_a_claude_update_that_applied_and_then_reported_failure_is_restored(self) -> None:
+        before = inventory(self.target)
+        real_run = installer._run
+
+        def applies_then_fails(script, operation, target, apply, extra):
+            report = real_run(script, operation, target, apply, extra)
+            if script == installer.CLAUDE_INSTALLER and apply:
+                return {"error": "rollback_pending", "exit_code": 2}
+            return report
+
+        self.patch("_run", applies_then_fails)
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assert_stays_on_the_previous_install(summary, before)
+        self.assertNotIn(".claude/claude-agents/install-pending.json", inventory(self.target))
+        self.assertNotIn(".claude/claude-agents/install.lock", inventory(self.target))
+
+    def test_a_failed_update_leaves_the_project_able_to_upgrade_again(self) -> None:
+        real_run = installer._run
+        failures = []
+
+        def applies_then_fails_once(script, operation, target, apply, extra):
+            report = real_run(script, operation, target, apply, extra)
+            if script == installer.CLAUDE_INSTALLER and apply and not failures:
+                failures.append(1)
+                return {"error": "rollback_pending", "exit_code": 2}
+            return report
+
+        self.patch("_run", applies_then_fails_once)
+        self.assertFalse(installer.operate("install", self.target, apply=True,
+                                           codex_options=self.codex_options)["ok"])
+        again = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertTrue(again["ok"] and again["applied"], again)
 
 
 if __name__ == "__main__":

@@ -80,6 +80,9 @@ IN_PROGRESS = {
 }
 # How to undo a package step that was applied before a later package failed.
 REVERSE = {"install": "remove", "remove": "install"}
+# What each package step owns in the project. A failed update is put back from a snapshot of these
+# paths taken just before the step ran (the settings file belongs to the settings step).
+OWNED_PATHS = {"codex": (".codex", ".agents"), "claude": (".claude",)}
 # Owner commands a Claude primary may never run, whatever this checkout's parser lists.
 ALWAYS_OWNER_ONLY = ("install-codex-rule", "remove-codex-rule")
 # Paths a Claude primary may never edit with its file tools or recognised shell writes.
@@ -1047,8 +1050,82 @@ def apply_codex_rule(target: Path, plan: dict) -> dict:
 # --- operations --------------------------------------------------------------------------
 
 
-def _roll_back(applied: list[tuple[str, object]], target: Path) -> list[dict]:
-    """Undo earlier steps in reverse order after a later step fails to apply."""
+def _owned_files(target: Path, name: str) -> tuple[dict[str, Path], set[str]]:
+    """Every regular file (relative name -> path) and folder under the paths a package step owns, never
+    following a symbolic link; a link or other special entry is refused."""
+
+    files: dict[str, Path] = {}
+    folders: set[str] = set()
+    for owned in OWNED_PATHS[name]:
+        top = target / owned
+        if not os.path.lexists(top):
+            continue
+        for directory, names, filenames in os.walk(top, followlinks=False):
+            base = Path(directory)
+            folders.add(base.relative_to(target).as_posix())
+            for entry in [*names, *filenames]:
+                path = base / entry
+                mode = os.lstat(path).st_mode
+                relative = path.relative_to(target).as_posix()
+                if stat.S_ISDIR(mode):
+                    continue
+                if not stat.S_ISREG(mode):
+                    raise InstallRefused(f"{relative} is not a regular file")
+                if not (relative.startswith(".claude/settings") and relative.endswith(".json")):
+                    files[relative] = path
+    return files, folders
+
+
+def _snapshot(target: Path, name: str) -> dict:
+    files, folders = _owned_files(target, name)
+    return {"files": {relative: (path.read_bytes(), stat.S_IMODE(os.lstat(path).st_mode))
+                      for relative, path in files.items()}, "folders": folders}
+
+
+def _restore(target: Path, name: str, snapshot: dict) -> bool:
+    """Put a package's owned paths back exactly as the snapshot holds them."""
+
+    try:
+        files, folders = _owned_files(target, name)
+        for relative in sorted(set(files) - set(snapshot["files"])):
+            files[relative].unlink()
+        for relative, (content, mode) in sorted(snapshot["files"].items()):
+            path = target / relative
+            if relative in files and files[relative].read_bytes() == content \
+                    and stat.S_IMODE(os.lstat(path).st_mode) == mode:
+                continue
+            parent = path.parent
+            walked = target
+            for part in parent.relative_to(target).parts:
+                walked = walked / part
+                if os.path.islink(walked):
+                    return False
+            parent.mkdir(parents=True, exist_ok=True)
+            temporary = parent / f".restore-{secrets.token_hex(8)}"
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            try:
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(content)
+                os.chmod(temporary, mode)
+                os.replace(temporary, path)
+            finally:
+                if os.path.lexists(temporary):
+                    os.unlink(temporary)
+        for relative in sorted(folders - snapshot["folders"], reverse=True):
+            try:
+                (target / relative).rmdir()
+            except OSError:
+                pass
+        return True
+    except (InstallRefused, OSError):
+        return False
+
+
+def _roll_back(applied: list[tuple[str, object]], target: Path, snapshots: dict | None = None) -> list[dict]:
+    """Undo earlier steps in reverse order after a later step fails to apply. An update is undone by
+    restoring the files it owned from the snapshot taken before it ran."""
+
+    snapshots = snapshots or {}
 
     results = []
     for name, step in reversed(applied):
@@ -1066,6 +1143,9 @@ def _roll_back(applied: list[tuple[str, object]], target: Path) -> list[dict]:
             results.append({"package": name, "action": reverse, "ok": ok})
             continue
         installer, op = step
+        if op == "update" and name in snapshots:
+            results.append({"package": name, "action": "restore", "ok": _restore(target, name, snapshots[name])})
+            continue
         reverse = REVERSE.get(op)
         if reverse is None:
             results.append({"package": name, "action": None, "ok": False,
@@ -1143,16 +1223,29 @@ def operate(operation: str, target: Path, *, apply: bool = False, codex_options:
             summary["ok"] = False
             summary["rollback"] = _roll_back(applied, target)
             return summary
+    snapshots: dict = {}
     for installer, name, op, extra in order:
+        if op == "update":
+            try:
+                snapshots[name] = _snapshot(target, name)
+            except (InstallRefused, OSError) as exc:
+                summary[name] = {"error": f"the {name} files could not be saved before the update: {exc}"}
+                summary["ok"] = False
+                summary["rollback"] = _roll_back(applied, target, snapshots)
+                return summary
         summary[name] = _run(installer, op, target, True, extra)
+        if op == "update":
+            # Even a failed update may have written some files: it is undone with the others.
+            applied.append((name, (installer, op)))
         if _failed(summary[name]):
             summary["ok"] = False
-            summary["rollback"] = _roll_back(applied, target)
+            summary["rollback"] = _roll_back(applied, target, snapshots)
             return summary
-        applied.append((name, (installer, op)))
+        if op != "update":
+            applied.append((name, (installer, op)))
     if operation == "install" and not settings_step():
         summary["ok"] = False
-        summary["rollback"] = _roll_back(applied, target)
+        summary["rollback"] = _roll_back(applied, target, snapshots)
         return summary
     summary["applied"] = True
     summary["ok"] = True
