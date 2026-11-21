@@ -81,19 +81,6 @@ def _run(step, spec, work_dir, project_root, *, cli, status, state_root):
     work.mkdir(parents=True, exist_ok=True)
     if not work.is_dir():
         raise ReviewError('review_unsafe_work_dir')
-    # The state is chosen once, here: the same folder holds the key the stage bindings are made with and is
-    # the one every host command below is told to use, so they cannot differ (an installed CLI pins the
-    # state to its default and accepts only that one). The key is read before any child starts.
-    try:
-        state = CollectorPaths(None if state_root is None else Path(state_root))
-        packet = (project_root / spec['packet']).resolve()
-        if any(state.root == place or place in state.root.parents for place in (work, packet)):
-            raise StateError('the state is inside the work folder or the packet')
-        secret = state.digest_key()
-    except (StateError, OSError, ValueError):
-        raise ReviewError('review_state_unavailable') from None
-    binding_key = hmac.new(secret, b'review-stage-binding-v1\0' + str(project_root).encode(), hashlib.sha256).digest()
-    root = ['--project-root', str(project_root), '--state-root', str(state.root)]
     grant = {'tools': ['shell'], 'filesystem': [f"{spec['packet']}:read"], 'network': False, 'mcps': [],
              'external_effects': False}
 
@@ -245,15 +232,41 @@ def _run(step, spec, work_dir, project_root, *, cli, status, state_root):
         return {'digest': digest, 'provider': provider, 'verdict': verdict,
                 'summary': dispatched['result'].get('summary'), 'binding': facts(prefix)[3](digest)}
 
+    # A stage starting again first removes the markers and files of its own and later stages, whatever
+    # follows: a rerun that stops at the state check below leaves no earlier marker for `finish` to accept.
     if step == 'worker':
-        forget('worker.json', 'verifier.json', *stage_files(''), *stage_files('v'))  # none of an earlier run stays
+        forget('worker.json', 'verifier.json', *stage_files(''), *stage_files('v'))
+    elif step == 'verify':
+        forget('verifier.json', *stage_files('v'))
+    # The state is chosen once, here: the same folder holds the key the stage bindings are made with and is
+    # the one every host command below is told to use, so they cannot differ (an installed CLI pins the
+    # state to its default and accepts only that one). The key is read before any child starts. The state
+    # folder, the work folder, the packet and the project must not lie inside one another (compared by
+    # identity of the folders, so letter case and links cannot hide it).
+    def inside(inner, outer):
+        try:
+            return any(os.path.samestat(os.stat(place), os.stat(outer)) for place in (inner, *inner.parents))
+        except OSError:
+            return True  # a folder that cannot be inspected is not shown to be apart
+
+    try:
+        state = CollectorPaths(None if state_root is None else Path(state_root))
+        places = (work, (project_root / spec['packet']).resolve(), project_root)
+        if any(inside(state.root, place) or inside(place, state.root) for place in places):
+            raise StateError('the state, work folder, packet and project overlap')
+        secret = state.digest_key()
+    except (StateError, OSError, ValueError):
+        raise ReviewError('review_state_unavailable') from None
+    binding_key = hmac.new(secret, b'review-stage-binding-v1\0' + str(project_root).encode(), hashlib.sha256).digest()
+    root = ['--project-root', str(project_root), '--state-root', str(state.root)]
+
+    if step == 'worker':
         orchestration = call('orchestration.json', 'learning-open-orchestration', *root)['orchestration_handle']
         worker = child('', task(spec['id'], 'security', spec['summary']), spec['objective'], spec['context'],
                        orchestration)
         save('worker.json', worker)
         return worker
     if step == 'verify':
-        forget('verifier.json', *stage_files('v'))
         orchestration, worker = load('orchestration.json')['orchestration_handle'], load_stage('worker.json', '')
         verifier = child('v', task(spec['id'] + '-verify', 'verification',
                                    'Independently check the recorded review: ' + spec['summary'],
