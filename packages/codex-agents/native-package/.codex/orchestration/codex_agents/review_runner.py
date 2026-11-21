@@ -10,9 +10,11 @@ import os
 from pathlib import Path
 import secrets
 import stat
+import re
 import subprocess
 import sys
 
+_DIGEST = re.compile(r'[0-9a-f]{64}')
 _SPEC_KEYS = {'id', 'summary', 'packet', 'context', 'objective', 'verify_objective', 'expected_output', 'evidence'}
 
 
@@ -107,9 +109,26 @@ def _run(step, spec, work_dir, project_root, *, cli, status):
         path, present = entry(name)
         if not present:
             raise ReviewError('review_stage_not_ready', name)  # F2: the stage before has not finished
+        info = os.lstat(path)
+        if stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.getuid():
+            raise ReviewError('review_stage_not_runner_written', name)  # not a file save() wrote
         descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
         with os.fdopen(descriptor) as handle:
             return json.loads(handle.read())
+
+    def load_stage(name, record):
+        """A finished stage's marker, only as the runner wrote it: its mode, its exact shape, and a digest
+        equal to the one the stage's own recorded reply holds."""
+        stage = load(name)
+        recorded = load(record)
+        ok = (type(stage) is dict and set(stage) == {'digest', 'provider', 'verdict', 'summary'}
+              and type(stage['digest']) is str and _DIGEST.fullmatch(stage['digest']) is not None
+              and stage['provider'] in {'claude', 'codex'}
+              and type(stage['verdict']) is str and stage['verdict']
+              and type(recorded) is dict and recorded.get('host_outcome_digest') == stage['digest'])
+        if not ok:
+            raise ReviewError('review_stage_not_runner_written', name)
+        return stage
 
     def forget(*names):
         """F2: a stage starting again first removes its own and later stages' markers."""
@@ -169,12 +188,12 @@ def _run(step, spec, work_dir, project_root, *, cli, status):
         if terminal:
             observation['terminal_state'] = terminal
         observation_file = save(prefix + 'observation.json', observation)
+        verdict = dispatched['result'].get('semantic_verdict')
+        if type(verdict) is not str or not verdict:  # H1d-2: an empty verdict is none; nothing is recorded
+            raise ReviewError('review_no_verdict', 'verifier' if prefix else 'worker')
         recorded = call(prefix + 'record.json', 'learning-record-host-result', '--task', task_file,
                         '--assignment', assignment_file, '--parent-grant', grant_file, '--result', result_file,
                         '--observation', observation_file, *root)
-        verdict = dispatched['result'].get('semantic_verdict')
-        if type(verdict) is not str or not verdict:  # H1d-2: an empty verdict is none
-            raise ReviewError('review_no_verdict', 'verifier' if prefix else 'worker')
         return {'digest': recorded['host_outcome_digest'], 'provider': provider, 'verdict': verdict,
                 'summary': dispatched['result'].get('summary')}
 
@@ -187,7 +206,7 @@ def _run(step, spec, work_dir, project_root, *, cli, status):
         return worker
     if step == 'verify':
         forget('verifier.json')
-        orchestration, worker = load('orchestration.json')['orchestration_handle'], load('worker.json')
+        orchestration, worker = load('orchestration.json')['orchestration_handle'], load_stage('worker.json', 'record.json')
         verifier = child('v', task(spec['id'] + '-verify', 'verification',
                                    'Independently check the recorded review: ' + spec['summary'],
                                    {'verification_for_family': 'security',
@@ -197,8 +216,8 @@ def _run(step, spec, work_dir, project_root, *, cli, status):
         save('verifier.json', verifier)
         return verifier
     if step == 'finish':
-        digests = ['--host-outcome-digest', load('worker.json')['digest'],
-                   '--verifier-host-outcome-digest', load('verifier.json')['digest']]
+        digests = ['--host-outcome-digest', load_stage('worker.json', 'record.json')['digest'],
+                   '--verifier-host-outcome-digest', load_stage('verifier.json', 'vrecord.json')['digest']]
         checks = call('checks.json', 'learning-run-operational-checks', *root, *digests)
         qa = call('qa.json', 'learning-record-operational-qa', *root, *digests, '--check-receipt',
                   checks['check_receipt'], '--evaluator-assignment', str(work / 'assignment.json'),

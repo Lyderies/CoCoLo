@@ -224,7 +224,15 @@ class AccountBillingJobs:
         if self._closing:
             self._drop(ticket)
 
-    def _discard(self, job, reason='probe_unavailable'):
+    def _name_failure(self, job, cause, error=None):
+        """A failure that answers a bare probe_unavailable names its cause in this lane's last_failure,
+        once per job (the recurring-issue rule: no unnamed probe_unavailable). Never raises."""
+        job.noted = True
+        lane_health.safely(lambda: self.health.note_failure(self._note, cause, error))
+
+    def _discard(self, job, reason='probe_unavailable', *, cause=None, error=None):
+        if cause is not None:
+            self._name_failure(job, cause, error)
         job.reason, job.state = reason, 'discarding'
         self._request_cleanup(job)
 
@@ -271,7 +279,8 @@ class AccountBillingJobs:
                 # keep both until a restart (0.3.3, C9). Once a ticket exists the run is kept.
                 self._settle_failed_step(job, unsure='probe_unavailable')
             else:
-                self._discard(job, getattr(error, 'reason_code', 'probe_unavailable'))
+                self._discard(job, getattr(error, 'reason_code', 'probe_unavailable'),
+                              cause='probe_admit_failed', error=error)
         finally:
             if handle in self._claims._pool._returned:
                 self._claims._pool.discard(handle)
@@ -339,7 +348,8 @@ class AccountBillingJobs:
                     job.before_publish, _ingress=self._ingress_owner, _billing_parent=(self, ticket))
             elif reply.reason is not None:
                 # Say why: the observation's own fixed reason.
-                self._discard(job, reply.reason if reply.reason in OBSERVATION_REASONS else 'probe_unavailable')
+                self._discard(job, reply.reason if reply.reason in OBSERVATION_REASONS else 'probe_unavailable',
+                              cause='probe_observation_reason_unrecognised')
             else:
                 job.identity = next(r for r in reply.result['records'] if r['record_type'] == 'provider_identity')
                 job.state = 'prepare'
@@ -361,7 +371,7 @@ class AccountBillingJobs:
             if state == 'prepared' and self._claims._pool.stuck():
                 # O0c M8: no signature worker can free before the account restarts itself: say so now,
                 # rather than wait as work that would hold that restart.
-                self._discard(job, 'probe_unavailable')
+                self._discard(job, 'probe_unavailable', cause='probe_signature_pool_stuck')
                 return
             if state == 'prepared':
                 try:
@@ -458,8 +468,10 @@ class AccountBillingJobs:
                     self._owner.settle_unlaunched(job.reservation, 'probe_step_failed')
                     job.settled = True
             self._discard(job, 'probe_step_failed')
-        except Exception:
+        except Exception as error:
             job.state, job.reason = 'unknown', unsure
+            if unsure == 'probe_unavailable':
+                self._name_failure(job, 'probe_settle_unconfirmed', error)
 
     def drive(self):
         self._guard()
@@ -513,8 +525,9 @@ class AccountBillingJobs:
                     raise ProbeAdmissionError('probe_conflict')
             except ProbeAdmissionError as error:
                 result, reason = None, error.reason_code
-            except Exception:
+            except Exception as error:
                 result, reason = None, 'probe_unavailable'
+                lane_health.safely(lambda: self.health.note_failure(self._note, 'probe_reply_read_failed', error))
         reply = BillingJobReply(job.key, result, reason, job.before_publish, job.context)
         if job.state == 'ready':
             self._drop(ticket)

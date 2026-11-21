@@ -391,6 +391,9 @@ def _status_collector_fields(health):
             or any(type(v) is not dict or v.keys() != {'state'} or v['state'] not in
                    {'present', 'missing', 'identity_missing'} for v in attestations.values())):
         raise ValueError()
+    stale = health.get('runtime_stale')
+    if stale is not None and type(stale) is not bool:
+        raise ValueError()
     counters = health.get('collector_health', {})
     if (type(counters) is not dict or counters.keys() - {'admission_rejected', 'queue_full', 'collector_error', 'conflict'}
             or any(type(v) is not dict or v.keys() != {'count', 'updated_at_ms'}
@@ -416,6 +419,10 @@ def _status_collector_fields(health):
             'collector_startup_ms': phases,  # S1-U9a: milliseconds per start-up phase, or None
             'collector_schema_version': health['schema_version'],
             'collector_runtime_version': health['runtime_version'], 'collector_runtime_digest': health['runtime_digest'],
+            # Whether the collector's runtime files changed after it started; its code is then old.
+            'collector_code_stale': stale, 'collector_code_note': None if stale is not True else (
+                'collector_code_stale: this collector started before its code changed and still runs the old '
+                'code; restart it before relying on a live check'),
             'started_at_ms': health['started_at_ms'], 'collector_health': counters,
             'ingestion': ingestion, 'provider_attestations': attestations}
 
@@ -836,7 +843,8 @@ class RuntimeObservationError(RuntimeError):
 
 class RuntimeBillingProbeError(RuntimeError):
     def __init__(self, reason, *, request_id=None):
-        allowed = ACCOUNT_REASON_CODES | BILLING_PROBE_REASONS | PROBE_COMPLETION_REASONS | ADMISSION_REASON_CODES
+        allowed = (ACCOUNT_REASON_CODES | BILLING_PROBE_REASONS | PROBE_COMPLETION_REASONS | ADMISSION_REASON_CODES
+                   | {'collector_code_stale'})
         self.reason_code = reason if type(reason) is str and reason in allowed else 'probe_unavailable'
         self.request_id = request_id if matches(request_id, _ACCOUNT_ID) else None
         super().__init__(self.reason_code)
@@ -851,6 +859,13 @@ def billing_probe_client(state_root, project_root, *, request_id=None):
         raise RuntimeBillingProbeError('provider_api_key_present', request_id=identity)
     try:
         state = CollectorPaths(state_root)
+        try:
+            stale = CollectorClient(state.socket, timeout=1).health(project_root).get('runtime_stale')
+        except (CollectorError, OSError, ValueError, AttributeError):
+            stale = None  # an unreadable collector is the account request's to report
+        if stale is True:
+            # The collector's loaded code is older than its files: a live check would run old code.
+            raise RuntimeBillingProbeError('collector_code_stale', request_id=identity)
         project_id, endpoint = _account_target(state, project_root, await_start=True)
         enroll_clients(state, project_root, None, account=endpoint)
         result = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=60).billing_probe(

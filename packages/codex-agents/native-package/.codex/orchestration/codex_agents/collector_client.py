@@ -30,10 +30,10 @@ from .runtime_files import RUNTIME_FILES, runtime_digest
 from .service_transport import ServiceTransportError, exchange_frame
 
 
-def _collector_runtime_digest() -> str:
-    """The digest of every runtime file this process runs from (`RUNTIME_FILES`)."""
+def _collector_runtime_digest(root: Path | None = None) -> str:
+    """The digest of every runtime file this process runs from (`RUNTIME_FILES`), or of those under `root`."""
 
-    orchestration_root = Path(__file__).resolve().parent.parent
+    orchestration_root = Path(root) if root is not None else Path(__file__).resolve().parent.parent
     return runtime_digest(
         {relative: (orchestration_root / relative).read_bytes() for relative in RUNTIME_FILES}
     )
@@ -60,6 +60,18 @@ def _package_version() -> str:
 
 
 COLLECTOR_RUNTIME_DIGEST = _collector_runtime_digest()
+
+
+def collector_code_stale(*, root: Path | None = None, loaded: str | None = None) -> bool:
+    """True when the runtime files now on disk differ from the digest this process loaded.
+
+    Python never reloads a module, so a collector started before its files changed keeps running the old
+    code; this says so. A file that cannot be read counts as changed. Never raises.
+    """
+    try:
+        return _collector_runtime_digest(root) != (COLLECTOR_RUNTIME_DIGEST if loaded is None else loaded)
+    except Exception:  # noqa: BLE001 - unreadable or missing files mean the loaded code cannot be confirmed
+        return True
 PACKAGE_VERSION = _package_version()
 
 

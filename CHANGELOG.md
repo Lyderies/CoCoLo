@@ -4,6 +4,16 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- A collector started before its code changed kept running the old code (Python never reloads its modules), so a
+  fix merged afterwards did not take effect and a live check ran the old behaviour. The collector's health now
+  says whether its runtime files differ from the digest it loaded; `learning-status` shows
+  `collector_code_stale` with a plain note, and `provider-observe --billing-probe` refuses with
+  `collector_code_stale` until the collector is restarted. Every remaining bare `probe_unavailable` now names its
+  cause in the billing lane's last failure. A result for a security reviewer or verification worker with no
+  `semantic_verdict` (missing or null) is refused (`missing_required_fields`), never filled in as `pass`.
+  `learning-review` refuses an empty verdict before recording the result, and `verify`/`finish` refuse a stage
+  file the runner did not write (wrong mode, wrong shape, or a digest its own recorded reply does not hold).
+  Package 0.8.41.
 - Two commands that came together on a project whose service was not running could leave one of them reporting
   `orchestration_client_unavailable`: the start that lost to the other's service ended before that service
   held its lock and did not wait for it. It now waits up to 3 s while no host lock is held, within the start timeout, for the winning service.
