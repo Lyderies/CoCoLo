@@ -6,7 +6,7 @@ from unittest import mock
 
 import tests.support  # noqa: F401
 from tests import test_account_api as fixtures
-from tests.learning_support import fake_provider_tools, trusted_tools
+from tests.learning_support import fake_provider_tools, replace_fake_client, trusted_tools
 
 from codex_agents import account_observation, providers
 from codex_agents.account_observation import (
@@ -266,6 +266,20 @@ class AccountObservationTests(unittest.TestCase):
 
 
 class FakeProviderToolsRepeatTests(unittest.TestCase):
+    def test_replacing_a_fake_client_leaves_the_shared_launcher_unchanged(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            fake_provider_tools(Path(first))
+            fake_provider_tools(Path(second))
+            shared = Path(first, "codex").read_bytes()
+            replace_fake_client(Path(first) / "codex", b"#!/bin/sh\necho own\n")
+            self.assertEqual(b"#!/bin/sh\necho own\n", Path(first, "codex").read_bytes())
+            self.assertEqual(shared, Path(second, "codex").read_bytes())
+            self.assertEqual(0o555, os.stat(Path(second) / "codex").st_mode & 0o777)
+            self.assertEqual(shared, Path(first, "claude").read_bytes())
+
     def test_fake_provider_tools_is_repeatable_for_one_folder(self):
         import tempfile
         from pathlib import Path
