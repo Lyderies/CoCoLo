@@ -297,17 +297,21 @@ _INSTALLER_REFUSALS = (
      "use it to upgrade your project. Nothing was changed. Get a fresh copy of CoCoLo from its official "
      "source, then run setup again from that copy."),
     (("*untrusted_manifest*",),
-     "The Claude files installed in this project do not match any release this setup knows how to upgrade "
-     "(untrusted manifest). Nothing was changed. If you changed them, put them back with git restore .claude "
-     "(and git status to check), then run setup again."),
+     "The Claude files installed in this project do not match any release this setup knows how to "
+     "upgrade (untrusted manifest). Nothing was changed. Run git status and git diff -- .claude in the project to "
+     "see what differs. Save any change you want to keep, then either put the package files back from Git, or "
+     "remove the package files (.claude/agents/claude_agents_*.md, .claude/skills/claude-agents and "
+     ".claude/claude-agents), commit that, and run setup again. Your other .claude files are not part of it."),
     (("*update_required*",),
      "The Claude files installed in this project are from a different release than this setup (update "
      "required). Nothing was changed. Update the install (choose Configure, then 'Update the install and "
      "walk through every step')."),
     (("*managed_file_modified*",),
-     "A Claude file installed in this project is changed or missing (managed file modified), so setup did "
-     "not replace it. Nothing was changed. Put the Claude files back with git restore .claude, then run "
-     "setup again."),
+     "A Claude package file in this project is changed or missing (managed file modified), so setup did "
+     "not replace it. Nothing was changed. Run git status and git diff -- .claude in the project to see which "
+     "file. Save any change you want to keep, put that file back with git restore -- followed by its path, or "
+     "remove the package files (.claude/agents/claude_agents_*.md, .claude/skills/claude-agents and "
+     ".claude/claude-agents), commit that, and run setup again."),
     (("*managed paths*", "*uncommitted*"),
      "Managed paths (.codex, .agents, .claude) have uncommitted changes. Commit or discard them first."),
     (("*top of its working tree*", "*not a usable git*"),
@@ -337,14 +341,30 @@ _INSTALLER_REFUSALS = (
 )
 
 
-def installer_refusal(raw: str, manual: str) -> tuple[str, bool]:
+_NOT_UNDONE = ("Setup could not undo everything it had already changed, so some files may differ from before: "
+               "check git status in the project before anything else.")
+
+
+def rollback_incomplete(reply) -> bool:
+    """True when an installer reply reports a rollback step that did not complete."""
+    steps_ = reply.get("rollback") if isinstance(reply, dict) else None
+    return isinstance(steps_, list) and any(not (isinstance(item, dict) and item.get("ok") is True)
+                                            for item in steps_)
+
+
+def installer_refusal(raw: str, manual: str, rollback_incomplete: bool = False) -> tuple[str, bool]:
     """W5.5, W10.4: the fixed message for an installer refusal, and whether it was recognised. The raw
     text is matched (case-sensitive, as bash's case is), never shown; an unknown refusal points to
     the command to run by hand."""
     from fnmatch import fnmatchcase
     for patterns, message in _INSTALLER_REFUSALS:
         if any(fnmatchcase(raw, pattern) for pattern in patterns):
-            return message.format(manual=manual), True
+            message = message.format(manual=manual)
+            if rollback_incomplete:
+                message = message.replace("Nothing was changed.", _NOT_UNDONE)
+                if _NOT_UNDONE not in message:
+                    message = f"{message} {_NOT_UNDONE}"
+            return message, True
     return "The installer refused: run it manually to see why:", False
 
 

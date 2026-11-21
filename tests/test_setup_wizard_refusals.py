@@ -99,15 +99,46 @@ class RefusalWordingTests(unittest.TestCase):
         self.assertNotIn("by hand", text)
         self.assertIn("changed or missing", text)
         self.assertIn("Nothing was changed", text)
-        self.assertIn("git restore .claude", text)
+        self.assertIn("git diff -- .claude", text)
         self.assertIn("run setup again", text)
 
     def test_an_untrusted_manifest_names_what_to_do_without_asserting_a_cause(self) -> None:
         text = self.message("untrusted_manifest")
         self.assertNotIn("older", text)
         self.assertIn("Nothing was changed", text)
-        self.assertIn("git restore .claude", text)
+        self.assertIn("git diff -- .claude", text)
         self.assertIn("run setup again", text)
+
+    def test_the_advice_never_restores_all_of_claude_and_keeps_a_way_out(self) -> None:
+        for code in ("untrusted_manifest", "managed_file_modified"):
+            with self.subTest(code=code):
+                text = self.message(code)
+                self.assertNotIn("git restore .claude", text)
+                self.assertNotIn("git restore -- .claude ", text)
+                self.assertIn("Save any change you want to keep", text)
+                self.assertIn("remove the package files", text)
+                self.assertIn(".claude/claude-agents", text)
+
+    def test_nothing_was_changed_is_not_said_after_a_rollback_that_failed(self) -> None:
+        for code in ("untrusted_manifest", "managed_file_modified", "previous_release_not_pinned"):
+            with self.subTest(code=code):
+                text, known = steps.installer_refusal(f'{{"claude": {{"error": "{code}"}}}}', self.MANUAL,
+                                                      rollback_incomplete=True)
+                self.assertTrue(known)
+                self.assertNotIn("Nothing was changed", text)
+                self.assertIn("could not undo everything", text)
+                self.assertIn("git status", text)
+
+    def test_the_wizard_notices_an_incomplete_rollback_in_the_installer_reply(self) -> None:
+        wizard = make_wizard()
+        wizard.last_reply = {"ok": False, "claude": {"error": "managed_file_modified"},
+                             "rollback": [{"package": "claude", "action": None, "ok": False, "note": "x"}]}
+        wizard.project = "/p"
+        message = wizard.explain_installer("The install failed", self.MANUAL)
+        self.assertNotIn("Nothing was changed", message)
+        wizard.last_reply = {"ok": False, "claude": {"error": "managed_file_modified"},
+                             "rollback": [{"package": "claude", "action": "restore", "ok": True}]}
+        self.assertIn("Nothing was changed", wizard.explain_installer("The install failed", self.MANUAL))
 
     def test_update_required_does_not_claim_the_install_is_older(self) -> None:
         text = self.message("update_required")
