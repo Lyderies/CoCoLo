@@ -15,9 +15,10 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   each file only while it still holds what the package wrote (checked on the open file, then moved or removed
   only if it is still that same file), and each folder a package created only while it is that same, empty
   folder. Anything else (a file you changed while setup ran, a folder you replaced or filled) is left as it is
-  and named. A package step that gives no usable account of its writes, or whose writes cannot be checked
-  safely (the project folder changed, an unsafe path), stops setup at once: no later step runs, nothing of that
-  step is undone, and setup says so. Nothing is undone for a package that reports a pending rollback, and its
+  and named. A package step that gives no usable account of its writes stops setup at once, and nothing of that
+  step is undone; one whose writes cannot be checked safely (the project folder changed, an unsafe path) also
+  stops setup at once, and its undo then acts only on the files it can still check one by one (none, when the
+  project folder changed). No later step runs, and setup says so. Nothing is undone for a package that reports a pending rollback, and its
   markers stay. A step that had finished an install or remove is undone by the opposite operation. The setup
   wizard says "Nothing was changed" only when every undo completed with nothing left over. The Done screen no
   longer prints a remove command with an empty `--target`.
