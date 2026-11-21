@@ -39,6 +39,7 @@ class FakeClock:
 class DispatchWaitTests(unittest.TestCase):
     def client(self, replies, reads):
         test, self.read_count, self.status_count, self.clock = self, 0, 0, FakeClock()
+        self.operations = []
         client = object.__new__(DispatchClient)
         client._endpoint = client._result_endpoint = '/nonexistent'
         client._scope, client._timeout, client.last_binding = None, 2, None
@@ -46,6 +47,7 @@ class DispatchWaitTests(unittest.TestCase):
 
         def call(operation, *args, **kwargs):
             self.status_count += operation == 'dispatch.status'
+            self.operations.append(operation)
             self.clock.now += 0.01  # each call takes a little time
             reply = next(replies)
             if isinstance(reply, Exception):
@@ -137,6 +139,19 @@ class DispatchWaitTests(unittest.TestCase):
         client = self.client([RUNNING, PUBLISHED, DispatchError('dispatch_unavailable')], [OSError('gone')])
         with self.assertRaises(DispatchError):
             client.dispatch('r', 1, 'x' * 64, wait_seconds=30)
+
+    def test_DR_3_a_dispatch_whose_reply_was_lost_is_answered_with_the_result_by_a_later_dispatch(self):
+        """The first dispatch lost its reply (the submit never answered); a later dispatch for the same run
+        and inputs finds the published result and reads it."""
+        client = self.client([slow()], [])
+        with self.assertRaises(DispatchError):
+            client.dispatch('r', 1, 'x' * 64, wait_seconds=30)
+        self.assertEqual(['dispatch.submit'], self.operations)
+        later = self.client([PUBLISHED, PUBLISHED], [json.dumps({'summary': 'done'}).encode()])
+        self.assertEqual({'summary': 'done'}, later.dispatch('r', 1, 'x' * 64, wait_seconds=30)['result'])
+        # DR-3 review MED-1: the later dispatch asks once and reads; it never submits a second time
+        self.assertEqual(['dispatch.submit'], self.operations)
+        self.assertEqual(1, self.read_count)
 
 
 if __name__ == '__main__':
