@@ -75,22 +75,40 @@ def collector_code_stale(*, root: Path | None = None, loaded: str | None = None)
 PACKAGE_VERSION = _package_version()
 
 
-def _with_loaded_digest(error: CollectorError, response: dict[str, Any]) -> CollectorError:
-    """Keep what the collector reported as the digest of the code it loaded, when well formed, on the error.
+def _with_loaded_digest(error: CollectorError, response: dict[str, Any], *, identity_valid: bool) -> CollectorError:
+    """Keep what the collector reported about the code it loaded on the refusal health() raises.
 
     A client that starts after the runtime files changed hashes the new files, so an old collector's
     digest differs from its own: health() then raises instead of returning `runtime_stale`. The error says
-    which code the collector loaded, so the callers can still show and act on a collector that runs old code.
+    which code the collector loaded (when well formed), whether the identity fields it judged by were well
+    formed at all, and what the collector said about its own files, so callers can tell a collector that
+    runs old code from one that sent a malformed identity or runs another build.
     """
     digest = response.get("runtime_digest")
     error.loaded_digest = digest if type(digest) is str and re.fullmatch(r"[0-9a-f]{64}", digest) else None
+    error.identity_valid = identity_valid
+    reported = response.get("runtime_stale")
+    error.reported_stale = reported if type(reported) is bool else None
     return error
 
 
-def collector_runs_other_code(error: BaseException) -> bool:
-    """True when this health() refusal means the collector runs code other than the files on disk:
-    an older package version or a different build of the same version (never a newer collector)."""
-    return isinstance(error, (CollectorUpgradeRequired, CollectorBuildConflictError))
+def collector_code_diagnosis(error: BaseException) -> str | None:
+    """What a health() refusal says about the collector's code, one of:
+
+    `stale`: it runs code other than this install's files and restarting it would load them (an older package
+    version or schema, or the same version with a digest this install does not have and a collector that
+    does not say its own files are unchanged); `conflict`: the same version, a well-formed other digest, and
+    the collector says its own files are unchanged: another build, which a restart would not change;
+    `invalid`: the identity fields it judged by (schema, version, digest) were malformed; None: any other
+    error (a newer collector included).
+    """
+    if not isinstance(error, (CollectorUpgradeRequired, CollectorBuildConflictError)):
+        return None
+    if getattr(error, "identity_valid", False) is not True:
+        return "invalid"
+    if isinstance(error, CollectorBuildConflictError) and getattr(error, "reported_stale", None) is False:
+        return "conflict"
+    return "stale"
 
 
 HOOK_EVENT_CODES = tuple(value[0] for value in HOOK_EVENTS.values())
@@ -236,12 +254,15 @@ class CollectorClient:
             raise _with_loaded_digest(CollectorUpgradeRequired(
                 "collector runtime is older than the installed package",
                 code="runtime_upgrade_required",
-            ), response)
+            ), response, identity_valid=(
+                isinstance(server_schema, int) and not isinstance(server_schema, bool)
+                and server_version is not None))
         if response.get("runtime_digest") != COLLECTOR_RUNTIME_DIGEST:
             raise _with_loaded_digest(CollectorBuildConflictError(
                 "collector build conflicts with this package version",
                 code="runtime_conflict",
-            ), response)
+            ), response, identity_valid=(type(response.get("runtime_digest")) is str and re.fullmatch(
+                r"[0-9a-f]{64}", response["runtime_digest"]) is not None))
         return response
 
     def project(self, project_root: Path) -> str:

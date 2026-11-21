@@ -13,7 +13,7 @@ import stat
 import threading
 import time
 
-from .collector_client import (COLLECTOR_RUNTIME_DIGEST, CollectorClient, collector_runs_other_code,
+from .collector_client import (COLLECTOR_RUNTIME_DIGEST, CollectorClient, collector_code_diagnosis,
                                empty_ingestion_snapshot)
 from .account_api import ACCOUNT_REASON_CODES, AccountClient, AccountError, integer as account_integer, _ID as _ACCOUNT_ID
 from .account_claim_contracts import CLAIM_DENIAL_CODES
@@ -355,6 +355,13 @@ def _hold_words(name, kind):
 
 _CODE_STALE_NOTE = ('collector_code_stale: this collector started before its code changed and still runs the old '
                     'code; restart it before relying on a live check')
+_CODE_NOTES = {
+    'stale': _CODE_STALE_NOTE,
+    'conflict': ('collector_build_conflict: this collector runs a different build of the same package version, and '
+                 'its own files have not changed; restarting it will not fix that, so use one install for this state'),
+    'invalid': ('collector_identity_invalid: this collector did not state a valid version, schema or digest, so '
+                'whether its code is current cannot be told'),
+}
 
 
 def _status_collector_fields(health):
@@ -509,10 +516,12 @@ def status_client(state_root, project_root):
         reason = ('status_collector_transport_unavailable' if isinstance(error, CollectorTransportError)
                   else 'status_collector_unavailable')
         report.update(reason_code=reason, error='Collector status is unavailable.')
-        if collector_runs_other_code(error):
-            # A collector that loaded other code than the files on disk is the stale collector this status
-            # exists to name; health() refused it before it could say so (a fresh client hashes the new files).
-            report.update(collector_code_stale=True, collector_code_note=_CODE_STALE_NOTE)
+        diagnosis = collector_code_diagnosis(error)
+        if diagnosis is not None:
+            # health() refused this collector before it could say anything about its code (a fresh client
+            # hashes the new files). Each cause is named for what it is; only `stale` says to restart.
+            report.update(collector_code_stale=True if diagnosis == 'stale' else None if diagnosis == 'invalid' else False,
+                          collector_code_note=_CODE_NOTES[diagnosis])
             if getattr(error, 'loaded_digest', None) is not None:
                 report['collector_runtime_digest'] = error.loaded_digest  # the code it loaded
         if error.code == 'project_unregistered':
@@ -871,9 +880,10 @@ def billing_probe_client(state_root, project_root, *, request_id=None):
         try:
             stale = CollectorClient(state.socket, timeout=1).health(project_root).get('runtime_stale')
         except CollectorError as error:
-            if collector_runs_other_code(error):
+            if collector_code_diagnosis(error) == 'stale':
                 # health() refuses a collector whose loaded digest or version differs from this fresh client's
-                # files before it can say `runtime_stale`: that is the collector running old code.
+                # files before it can say `runtime_stale`: that is the collector running old code, and a restart
+                # fixes it. A malformed identity or another build is not that: the account request reports it.
                 raise RuntimeBillingProbeError('collector_code_stale', request_id=identity) from None
             stale = None  # an unreadable collector is the account request's to report
         except (OSError, ValueError, AttributeError):

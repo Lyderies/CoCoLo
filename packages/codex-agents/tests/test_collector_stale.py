@@ -128,15 +128,36 @@ class FreshClientMeetsAnOldCollectorTests(unittest.TestCase):
         self.addCleanup(self.ledger.close)
         self.ledger.register_project(self.project)
 
-    def collector(self, **loaded):
-        """A running collector whose loaded digest or version (not this client's) are the ones given."""
+    def collector(self, *, own_files_changed=None, **loaded):
+        """A running collector whose loaded digest or version (not this client's) are the ones given. A
+        collector that started before its files changed also finds its own files changed (`runtime_stale`)."""
         for name, value in loaded.items():
             patch = mock.patch.object(learning_store, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        if own_files_changed is not None:
+            patch = mock.patch.object(learning_store, 'collector_code_stale', return_value=own_files_changed)
             patch.start()
             self.addCleanup(patch.stop)
         server = CollectorServer(self.ledger)
         server.start()
         self.addCleanup(server.stop)
+
+    def health_reply(self, **changes):
+        """The collector's health reply as it reaches the client, with these fields changed (None removes one)."""
+        real = collector_client.CollectorClient._request
+
+        def request(client, message):
+            reply = real(client, message)
+            if message.get('op') == 'health':
+                reply = {key: value for key, value in {**reply, **changes}.items()
+                         if not (key in changes and changes[key] is None and key != 'runtime_digest')}
+                if 'runtime_digest' in changes and changes['runtime_digest'] is None:
+                    reply['runtime_digest'] = None
+            return reply
+        patch = mock.patch.object(collector_client.CollectorClient, '_request', request)
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def probe(self):
         with mock.patch.object(client_runtime, '_account_target', side_effect=client_runtime.DispatchError('x')) as target:
@@ -156,7 +177,7 @@ class FreshClientMeetsAnOldCollectorTests(unittest.TestCase):
             return client_runtime.status_client(self.state.root, self.project)
 
     def test_the_probe_refuses_a_collector_that_loaded_other_code_before_any_account_request(self):
-        self.collector(COLLECTOR_RUNTIME_DIGEST='e' * 64)
+        self.collector(COLLECTOR_RUNTIME_DIGEST='e' * 64, own_files_changed=True)
         reason, target = self.probe()
         self.assertEqual('collector_code_stale', reason)
         target.assert_not_called()
@@ -174,7 +195,7 @@ class FreshClientMeetsAnOldCollectorTests(unittest.TestCase):
         target.assert_called_once()
 
     def test_learning_status_shows_the_stale_note_and_the_digest_the_collector_loaded(self):
-        self.collector(COLLECTOR_RUNTIME_DIGEST='e' * 64)
+        self.collector(COLLECTOR_RUNTIME_DIGEST='e' * 64, own_files_changed=True)
         report = self.status()
         self.assertIs(True, report['collector_code_stale'])
         self.assertIn('restart', report['collector_code_note'])
@@ -192,6 +213,43 @@ class FreshClientMeetsAnOldCollectorTests(unittest.TestCase):
         report = self.status()
         self.assertIs(False, report['collector_code_stale'])
         self.assertIsNone(report['collector_code_note'])
+
+    def test_a_collector_that_does_not_report_its_own_files_and_differs_is_stale(self):
+        # Built before `runtime_stale` existed: nothing says its files are unchanged, and restarting loads this
+        # install's files.
+        self.collector(COLLECTOR_RUNTIME_DIGEST='e' * 64)
+        self.health_reply(runtime_stale=None)
+        self.assertEqual('collector_code_stale', self.probe()[0])
+        self.assertIs(True, self.status()['collector_code_stale'])
+
+    def test_another_build_of_the_same_version_is_a_conflict_that_a_restart_does_not_fix(self):
+        # A different digest, and the collector says its own files are unchanged: it would load the same code.
+        self.collector(COLLECTOR_RUNTIME_DIGEST='e' * 64, own_files_changed=False)
+        report = self.status()
+        self.assertIs(False, report['collector_code_stale'])
+        self.assertIn('collector_build_conflict', report['collector_code_note'])
+        self.assertNotIn('restart it', report['collector_code_note'])
+        self.assertIn('will not fix', report['collector_code_note'])
+        self.assertEqual('e' * 64, report['collector_runtime_digest'])
+        reason, target = self.probe()
+        self.assertEqual('account_unavailable', reason)  # not called stale; the account request reports it
+        target.assert_called_once()
+
+    def test_a_malformed_identity_is_its_own_cause_never_stale(self):
+        for changes in ({'runtime_digest': None}, {'runtime_digest': 'not-a-digest'}, {'schema_version': 'one'},
+                        {'runtime_version': 'not-a-version'}, {'runtime_version': None}):
+            with self.subTest(changes=changes):
+                self.collector()
+                self.health_reply(**changes)
+                report = self.status()
+                self.assertIsNone(report['collector_code_stale'])
+                self.assertIn('collector_identity_invalid', report['collector_code_note'])
+                self.assertNotIn('restart it', report['collector_code_note'])
+                reason, target = self.probe()
+                self.assertEqual('account_unavailable', reason)
+                target.assert_called_once()
+                self.doCleanups()
+                self.setUp()
 
 
 if __name__ == '__main__':
