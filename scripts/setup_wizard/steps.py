@@ -307,8 +307,8 @@ _INSTALLER_REFUSALS = (
      "A Git operation (merge, rebase, cherry-pick or similar) is unfinished in the project. Finish or abort it "
      "first."),
     (("*no_write_report*",),
-     "A package step ended without a usable report of what it wrote (no write report), so setup stopped there "
-     "and left that package's files as they are rather than risk undoing changes of your own. Run git status "
+     "A package step ended without a complete, usable report of what it wrote (no write report), so setup stopped "
+     "there. Files whose changes could not be accounted for were left as they are; the summary lists any undo. Run git status "
      "and git diff in the project to see what differs, put back with git what you do not want, and run setup "
      "again."),
     (("*previous_release_not_pinned*", "*previous_release_path_refused*", "*invalid_previous_release*"),
@@ -358,6 +358,9 @@ _INSTALLER_REFUSALS = (
      "A file at a Claude package path in this project is larger than any package file can be (oversized file), "
      "so setup did not read it. Nothing was changed. " + _LOOK_AND_SAVE + " then put that file back with git "
      "restore -- followed by its path, or remove it, and run setup again."),
+    (("*project_folder_changed*",),
+     "The project folder changed while setup was running, so setup stopped. Check which folder is now at the "
+     "project path and run git status in both the original and replacement folders before running setup again."),
     (("*symlink*", "*unsafe_or_unavailable_path*", "*not a regular file*", "*invalid_root*", "*unsafe_file*",
       "*unsafe_path*", "*cannot be used safely*"),
      "A managed path is a symlink or cannot be used safely. Replace it with a real file or folder."),
@@ -411,6 +414,9 @@ def installer_refusal(raw: str, manual: str, rollback_incomplete: bool = False) 
         if any(fnmatchcase(raw, pattern) for pattern in patterns):
             message = message.format(manual=manual)
             if rollback_incomplete:
+                if patterns in (("*operation_failed*",), ("*write_failed*",)):
+                    return ("The Claude package could not finish writing its files. " + NOT_UNDONE
+                            + " Check that the project folder is writable and has free space, then run setup again."), True
                 message = message.replace("Nothing was changed.", NOT_UNDONE)
                 if NOT_UNDONE not in message:
                     message = f"{message} {NOT_UNDONE}"

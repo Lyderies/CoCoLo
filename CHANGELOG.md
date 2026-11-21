@@ -12,16 +12,26 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   altered record is refused (`previous_release_not_pinned`, `previous_release_path_refused`) and nothing changes.
   The setup update stops with the installer's own reason, in plain words that say what to do next. When an
   install, update or remove fails, setup undoes only what the packages themselves report they wrote in that run,
-  each file only while it still holds what the package wrote (checked on the open file, then moved or removed
+  after checking the report against the saved paths and disk, each file only while it still holds the bytes
+  and mode the package wrote (checked on the open file, then moved or removed
   only if it is still that same file), and each folder a package created only while it is that same, empty
   folder. Anything else (a file you changed while setup ran, a folder you replaced or filled) is left as it is
   and named. A package step that gives no usable account of its writes stops setup at once, and nothing of that
   step is undone; one whose writes cannot be checked safely (the project folder changed, an unsafe path) also
   stops setup at once, and its undo then acts only on the files it can still check one by one (none, when the
   project folder changed). No later step runs, and setup says so. Nothing is undone for a package that reports a pending rollback, and its
-  markers stay. A step that had finished an install or remove is undone by the opposite operation. The setup
+  markers stay. Completed installs also use their checked journal, keeping preexisting folders and retaining
+  Codex project configuration; a completed remove still uses the opposite operation. The setup
   wizard says "Nothing was changed" only when every undo completed with nothing left over. The Done screen no
   longer prints a remove command with an empty `--target`.
+  Remaining LOW limits: filesystem checks and rename/unlink/rmdir are separate operations, so a concurrent
+  writer can still change an entry between check and mutation (including folder creation and identity capture).
+  The project root is reopened and its identity compared rather than held open throughout the operation.
+  Parents recreated to restore a deleted file can remain unnamed if restoration fails. A partial Claude
+  control-file write can report the intended digest; it is preserved on mismatch. Reports do not authenticate
+  authorship against a deliberately dishonest package, which already has filesystem write authority; the
+  snapshot check detects omissions only among preview and installed-manifest paths. Codex update/remove report
+  completeness has no dedicated producer test. These limits are outside the install-first fixes above.
 - Two commands that came together on a project whose service was not running could leave one of them reporting
   `orchestration_client_unavailable`: the start that lost to the other's service ended before that service
   held its lock and did not wait for it. It now waits up to 3 s while no host lock is held, within the start timeout, for the winning service.

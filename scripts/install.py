@@ -1209,7 +1209,23 @@ def _snapshot(target: Path, name: str, preview: dict) -> dict:
     root, identity = _open_root(target)
     try:
         _check_roots(root, name)
-        return {"identity": identity, "files": _scan(root, _owned_paths(target, name, preview, root))}
+        paths = _owned_paths(target, name, preview, root)
+        folders = {}
+        for path in paths:
+            parts = path.split("/")[:-1]
+            for count in range(1, len(parts) + 1):
+                relative = "/".join(parts[:count])
+                if relative in folders:
+                    continue
+                try:
+                    descriptor = _open_folder(root, parts[:count])
+                except FileNotFoundError:
+                    folders[relative] = None
+                else:
+                    info = os.fstat(descriptor)
+                    os.close(descriptor)
+                    folders[relative] = (info.st_dev, info.st_ino)
+        return {"identity": identity, "files": _scan(root, paths), "folders": folders}
     finally:
         os.close(root)
 
@@ -1225,27 +1241,40 @@ def _digest_of(state) -> str | None:
     return None if state is None else hashlib.sha256(state[0]).hexdigest()
 
 
-def _write_report(name: str, reply) -> tuple[list[tuple[str, str | None, str | None]], list[tuple[str, tuple]]]:
-    """The step's own write report, validated: [(path, sha256 before, sha256 after)] and [(folder, identity)].
+def _report_path(path) -> bool:
+    if not isinstance(path, str) or "\0" in path:
+        return False
+    try:
+        path.encode(sys.getfilesystemencoding(), "strict")
+    except UnicodeError:
+        return False
+    return True
+
+
+def _write_report(name: str, reply) -> tuple[list[tuple], list[tuple[str, tuple]]]:
+    """The step's own write report, validated: [(path, sha256 before, sha256 after, mode)] and [(folder, identity)].
     Anything missing or malformed is NoWriteReport."""
 
     problem = NoWriteReport(f"the {name} package gave no usable report of what it wrote (no_write_report)")
     writes = reply.get("writes") if isinstance(reply, dict) else None
-    folders = reply.get("folders_created", []) if isinstance(reply, dict) else None
+    folders = reply.get("folders_created") if isinstance(reply, dict) else None
     if not isinstance(writes, list) or not isinstance(folders, list):
         raise problem
     entries, seen = [], set()
     for item in writes:
-        if not (isinstance(item, dict) and isinstance(item.get("path"), str) and item["path"] not in seen
+        if not (isinstance(item, dict) and _report_path(item.get("path")) and item["path"] not in seen
                 and "before" in item and "after" in item
+                and "mode" in item
+                and (item["mode"] is None if item["after"] is None else
+                     type(item["mode"]) is int and 0 <= item["mode"] <= 0o7777)
                 and all(value is None or (isinstance(value, str) and _SHA256.fullmatch(value))
                         for value in (item["before"], item["after"]))):
             raise problem
         seen.add(item["path"])
-        entries.append((item["path"], item["before"], item["after"]))
+        entries.append((item["path"], item["before"], item["after"], item["mode"]))
     made = []
     for item in folders:
-        if not (isinstance(item, dict) and isinstance(item.get("path"), str)
+        if not (isinstance(item, dict) and _report_path(item.get("path"))
                 and type(item.get("device")) is int and type(item.get("inode")) is int):
             raise problem
         made.append((item["path"], (item["device"], item["inode"])))
@@ -1264,7 +1293,7 @@ def _kept(name: str, reply: dict, failed: bool) -> bool:
         return True
     if "rollback_state" in reply and state not in ("none", "pending"):
         raise NoWriteReport(f"the {name} package gave a rollback_state it does not define (no_write_report)")
-    marker_left = any(path == CLAUDE_CONTROL[0] and after is not None for path, _, after in _write_report(name, reply)[0])
+    marker_left = any(path == CLAUDE_CONTROL[0] and after is not None for path, _, after, _ in _write_report(name, reply)[0])
     if marker_left and (state is not None or not failed):
         raise NoWriteReport(f"the {name} package left its pending marker but did not say so (no_write_report)")
     return marker_left
@@ -1279,20 +1308,24 @@ def _journal_from(name: str, snapshot: dict, reply: dict) -> dict:
     writes, made = _write_report(name, reply)
     saved = snapshot["files"]
     entries: dict = {}
+    modes: dict = {}
     left: list[str] = []
-    for path, before, after in writes:
+    for path, before, after, mode in writes:
         if not _owned(path, name):
             left.append(path)
         elif path in saved and _digest_of(saved[path]) == before:
             entries[path] = (saved[path], after)
-        elif path not in saved and before is None:
-            entries[path] = (None, after)
+            modes[path] = mode
         else:  # what the package replaced is not what setup saved: there is no copy of it to put back
             left.append(path)
     created = []
     for path, identity in made:
-        (created.append((path, identity)) if _owned(path, name, folder=True) else left.append(path))
-    return {"entries": entries, "created": created, "left": sorted(set(left))}
+        if (_owned(path, name, folder=True) and path in snapshot["folders"]
+                and snapshot["folders"][path] is None):
+            created.append((path, identity))
+        else:
+            left.append(path)
+    return {"entries": entries, "modes": modes, "created": created, "left": sorted(set(left))}
 
 
 def _check_journal(target: Path, name: str, snapshot: dict, journal: dict) -> None:
@@ -1303,15 +1336,38 @@ def _check_journal(target: Path, name: str, snapshot: dict, journal: dict) -> No
     root, identity = _open_root(target)
     try:
         if identity != snapshot["identity"]:
-            raise InstallRefused("the project folder changed while the step ran (unsafe_or_unavailable_path)")
+            raise InstallRefused("the project folder changed while the step ran (project_folder_changed; unsafe_or_unavailable_path)")
         _check_roots(root, name)
-        now = _scan(root, journal["entries"])
+        now = _scan(root, snapshot["files"])
+        created = dict(journal["created"])
+        for path, before in snapshot["folders"].items():
+            if before is not None:
+                continue
+            try:
+                folder = _open_folder(root, path.split("/"))
+            except FileNotFoundError:
+                if path in created:
+                    journal["left"].append(path)
+                continue
+            try:
+                info = os.fstat(folder)
+                if (info.st_dev, info.st_ino) != created.get(path):
+                    journal["left"].append(path)
+            finally:
+                os.close(folder)
     finally:
         os.close(root)
     for path, (_, after) in list(journal["entries"].items()):
-        if _digest_of(now[path]) != after:
+        if (_digest_of(now[path]) != after
+                or (now[path] is not None and now[path][1] != journal["modes"][path])):
             del journal["entries"][path]
             journal["left"] = sorted({*journal["left"], path})
+    omitted = {path for path, state in now.items()
+               if state != snapshot["files"][path] and path not in journal["entries"]}
+    journal["left"] = sorted({*journal["left"], *omitted})
+    if journal["left"]:
+        # Observation can detect omissions, but never grants authority to undo an omitted path.
+        raise InstallRefused("the package write report does not match the saved paths and disk (no_write_report)")
 
 
 def _journal(target: Path, name: str, snapshot: dict, reply: dict) -> dict:
@@ -1360,11 +1416,11 @@ def _undo(target: Path, name: str, snapshot: dict, journal: dict) -> tuple[bool,
             return False, everything
         try:
             _check_roots(root, name)
-        except InstallRefused:
+        except (InstallRefused, OSError):
             return False, everything
         pending, lock = CLAUDE_CONTROL if name == "claude" else (None, None)
         for relative in sorted(set(entries) - {pending, lock}):
-            if not _undo_one(root, relative, *entries[relative]):
+            if not _undo_one(root, relative, *entries[relative], expected_mode=journal.get("modes", {}).get(relative)):
                 left.append(relative)
         if lock in entries and (left or not _undo_one(root, lock, *entries[lock])):
             left.append(lock)
@@ -1407,7 +1463,7 @@ def _same_entry(folder: int, name: str, identity: tuple[int, int]) -> bool:
     return stat.S_ISREG(info.st_mode) and (info.st_dev, info.st_ino) == identity
 
 
-def _undo_one(root: int, relative: str, prior, after: str | None) -> bool:
+def _undo_one(root: int, relative: str, prior, after: str | None, expected_mode: int | None = None) -> bool:
     """Put one path back to `prior` when it still holds exactly what the package wrote (`after`, a digest). A file
     is renamed over or unlinked only while it is the same entry (st_dev, st_ino) whose content was checked;
     folders are made again only to put back a file the package removed, never for a file someone else
@@ -1438,7 +1494,8 @@ def _undo_one(root: int, relative: str, prior, after: str | None) -> bool:
         content, mode, identity = current
         if prior is not None and (content, mode) == prior:
             return True
-        if after is None or hashlib.sha256(content).hexdigest() != after:
+        if (after is None or hashlib.sha256(content).hexdigest() != after
+                or (expected_mode is not None and mode != expected_mode)):
             return False
         if prior is None:
             if not _same_entry(folder, parts[-1], identity):
@@ -1496,6 +1553,8 @@ def _remove_folder(root: int, relative: str, identity: tuple[int, int]) -> bool:
             info = os.stat(parts[-1], dir_fd=upper, follow_symlinks=False)
         except FileNotFoundError:
             return True
+        except OSError:
+            return False
         if not stat.S_ISDIR(info.st_mode) or (info.st_dev, info.st_ino) != tuple(identity):
             return False
         try:
@@ -1512,7 +1571,7 @@ def _remove_folder(root: int, relative: str, identity: tuple[int, int]) -> bool:
 def _roll_back(applied: list[tuple[str, object]], target: Path, records: dict | None = None,
                kept: frozenset = frozenset()) -> list[dict]:
     """Undo earlier steps in reverse order after a later step fails or setup stops. A step the journal covers
-    (every update, and a step that failed or stopped setup) is undone from its journal alone, which is built
+    (every install/update, and a step that failed or stopped setup) is undone from its journal alone, which is built
     from the package's own write report; a step with no usable report is not undone at all; a package named in
     `kept` reported a rollback pending: it keeps changes it did not make, so nothing is undone for it."""
 
@@ -1557,8 +1616,17 @@ def _roll_back(applied: list[tuple[str, object]], target: Path, records: dict | 
                     entry["left_alone"] = differ
                 results.append(entry)
                 continue
+            if record.get("completed_install") and name == "codex":
+                # Codex removal deliberately retains project configuration. Keep that policy without
+                # asking its reverse operation to prune parents that predate this run.
+                retained = record.get("retained", [])
+                journal = {**journal,
+                           "entries": {path: state for path, state in journal["entries"].items()
+                                       if path not in retained},
+                           "created": [(path, identity) for path, identity in journal["created"]
+                                       if not any(item.startswith(path + "/") for item in retained)]}
             ok, left = _undo(target, name, record["snapshot"], journal)
-            entry = {"package": name, "action": "restore", "ok": ok}
+            entry = {"package": name, "action": "remove" if record.get("completed_install") else "restore", "ok": ok}
             if left:
                 entry["left_alone"] = left
                 entry["note"] = ("left as they are, because something other than this run changed them since the "
@@ -1688,6 +1756,9 @@ def operate(operation: str, target: Path, *, apply: bool = False, codex_options:
             summary["rollback"] = _roll_back(applied, target, records, frozenset({name}) if kept else frozenset())
             return summary
         if op != "update":
+            if op == "install":
+                record["use"] = record["completed_install"] = True
+                record["retained"] = list(reply.get("project_configuration", {}))
             applied.append((name, (installer, op)))
     if operation == "install" and not settings_step():
         summary["ok"] = False

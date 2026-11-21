@@ -59,14 +59,19 @@ class _Ledger:
 
     def __init__(self) -> None:
         self.files: dict[str, list[str | None]] = {}
+        self.modes: dict[str, int | None] = {}
+        self.before_modes: dict[str, int | None] = {}
         self.folders: list[dict] = []
 
-    def wrote(self, relative: str, before: bytes | None, after: bytes | None) -> None:
+    def wrote(self, relative: str, before: bytes | None, after: bytes | None, mode: int | None,
+              before_mode: int | None) -> None:
         digests = [None if content is None else hashlib.sha256(content).hexdigest() for content in (before, after)]
         if relative in self.files:
             self.files[relative][1] = digests[1]
         else:
             self.files[relative] = digests
+            self.before_modes[relative] = before_mode
+        self.modes[relative] = mode
 
     def made_folder(self, relative: str, info: os.stat_result) -> None:
         self.folders.append({"path": relative, "device": info.st_dev, "inode": info.st_ino})
@@ -76,17 +81,19 @@ class _Ledger:
         return relative in self.files and self.files[relative][1] is not None
 
     def report(self) -> dict:
-        return {"writes": [{"path": path, "before": before, "after": after}
-                           for path, (before, after) in sorted(self.files.items()) if before != after],
+        return {"writes": [{"path": path, "before": before, "after": after, "mode": self.modes[path]}
+                           for path, (before, after) in sorted(self.files.items())
+                           if before != after or self.before_modes[path] != self.modes[path]],
                 "folders_created": list(self.folders)}
 
 
 _LEDGER: _Ledger | None = None
 
 
-def _record(relative: str, before: bytes | None, after: bytes | None) -> None:
+def _record(relative: str, before: bytes | None, after: bytes | None, mode: int | None = None,
+            before_mode: int | None = None) -> None:
     if _LEDGER is not None:
-        _LEDGER.wrote(relative, before, after)
+        _LEDGER.wrote(relative, before, after, mode, before_mode)
 
 
 def _root(path: Path) -> int:
@@ -130,7 +137,7 @@ def _parent(root: int, relative: str, create: bool = False) -> tuple[int, str]:
         raise
 
 
-def _read(root: int, relative: str) -> bytes | None:
+def _read(root: int, relative: str, *, with_mode: bool = False):
     try:
         parent, name = _parent(root, relative)
     except FileNotFoundError:
@@ -149,7 +156,7 @@ def _read(root: int, relative: str) -> bytes | None:
             while len(result) <= _LIMIT:
                 chunk = os.read(descriptor, min(65536, _LIMIT + 1 - len(result)))
                 if not chunk:
-                    return result
+                    return (result, stat.S_IMODE(info.st_mode)) if with_mode else result
                 result += chunk
             _fail("oversized_file")
         finally:
@@ -205,7 +212,7 @@ def _exclusive(root: int, relative: str, content: bytes) -> None:
     try:
         descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL
                              | os.O_NOFOLLOW, 0o644, dir_fd=parent)
-        _record(relative, None, content)  # created: even a partial write is this run's, and is reported
+        _record(relative, None, content, stat.S_IMODE(os.fstat(descriptor).st_mode))
         try:
             _write_all(descriptor, content)
         finally:
@@ -217,7 +224,8 @@ def _exclusive(root: int, relative: str, content: bytes) -> None:
 
 def _set_file(root: int, relative: str, before: bytes | None,
               after: bytes | None) -> None:
-    if _read(root, relative) != before:
+    current, before_mode = _read(root, relative, with_mode=True) or (None, None)
+    if current != before:
         _fail("owned_file_changed")
     parent, name = _parent(root, relative, after is not None)
     temporary = ".claude-agents-" + secrets.token_hex(16)
@@ -225,7 +233,7 @@ def _set_file(root: int, relative: str, before: bytes | None,
     try:
         if after is None:
             os.unlink(name, dir_fd=parent)
-            _record(relative, before, None)
+            _record(relative, before, None, before_mode=before_mode)
         else:
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL
                                  | os.O_NOFOLLOW, 0o644, dir_fd=parent)
@@ -241,7 +249,7 @@ def _set_file(root: int, relative: str, before: bytes | None,
                         follow_symlinks=False)
             else:
                 os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
-            _record(relative, before, after)
+            _record(relative, before, after, stat.S_IMODE(created.st_mode), before_mode)
         os.fsync(parent)
     finally:
         if created is not None:

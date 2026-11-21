@@ -248,6 +248,7 @@
  "root:test_e2e_strictness": "unit",
  "root:test_install": "e2e",
  "root:test_install_claude_upgrade": "e2e",
+ "root:test_install_report_validation": "integration",
  "root:test_measure_test_behaviour": "unit",
  "root:test_measure_test_behaviour_probe": "integration",
  "root:test_owner_tool_bounds": "integration",

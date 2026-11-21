@@ -248,6 +248,34 @@ class RefusalWordingTests(unittest.TestCase):
         self.assertNotIn("is an older release", text)
         self.assertIn("Update the install", text)
 
+    def test_an_incomplete_undo_makes_no_claim_that_all_files_were_put_back(self) -> None:
+        """r5: a pending or incomplete undo must not promise restoration."""
+        for code in ("operation_failed", "write_failed"):
+            with self.subTest(code=code):
+                text, known = steps.installer_refusal(code, self.MANUAL, True)
+                self.assertTrue(known)
+                self.assertNotIn("put back", text)
+                self.assertNotIn("before changing any", text)
+                self.assertNotIn("Nothing was changed", text)
+                self.assertIn("could not undo everything", text)
+
+    def test_a_changed_project_folder_has_its_own_remedy(self) -> None:
+        """r5: a replaced project root needs inspection, not a symlink remedy."""
+        text, known = steps.installer_refusal(
+            "project_folder_changed unsafe_or_unavailable_path", self.MANUAL, True)
+        self.assertTrue(known)
+        self.assertIn("project folder changed", text.lower())
+        self.assertIn("git status", text)
+        self.assertNotIn("Replace it with a real file or folder", text)
+
+    def test_an_incomplete_report_does_not_claim_the_whole_package_was_left_untouched(self) -> None:
+        """A partial report can authorize undo of its checked entries, but never the omitted ones."""
+        text, known = steps.installer_refusal("no_write_report", self.MANUAL, True)
+        self.assertTrue(known)
+        self.assertNotIn("left that package's files as they are", text)
+        self.assertIn("left", text)
+        self.assertIn("git status", text)
+
 
 class DoneScreenTests(unittest.TestCase):
     def summary(self, project: str) -> Screen:

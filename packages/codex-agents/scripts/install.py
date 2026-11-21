@@ -64,19 +64,25 @@ class _Ledger:
 
     def __init__(self) -> None:
         self.files: dict[str, list[str | None]] = {}
+        self.modes: dict[str, int | None] = {}
+        self.before_modes: dict[str, int | None] = {}
         self.created: list[dict] = []
         self.removed: list[str] = []
 
-    def wrote(self, relative: str, before: bytes | None, after: bytes | None) -> None:
+    def wrote(self, relative: str, before: bytes | None, after: bytes | None, mode: int | None = None,
+              before_mode: int | None = None) -> None:
         digests = [None if content is None else hashlib.sha256(content).hexdigest() for content in (before, after)]
         if relative in self.files:
             self.files[relative][1] = digests[1]
         else:
             self.files[relative] = digests
+            self.before_modes[relative] = before_mode
+        self.modes[relative] = mode
 
     def report(self) -> dict:
-        return {"writes": [{"path": path, "before": before, "after": after}
-                           for path, (before, after) in sorted(self.files.items()) if before != after],
+        return {"writes": [{"path": path, "before": before, "after": after, "mode": self.modes[path]}
+                           for path, (before, after) in sorted(self.files.items())
+                           if before != after or self.before_modes[path] != self.modes[path]],
                 "folders_created": list(self.created), "folders_removed": list(self.removed)}
 
 
@@ -166,7 +172,7 @@ def _open_parent_fd(
         raise
 
 
-def _read_from_parent(parent_fd: int, name: str, relative: str) -> bytes | None:
+def _read_from_parent(parent_fd: int, name: str, relative: str, *, with_mode: bool = False):
     try:
         descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
     except FileNotFoundError:
@@ -174,10 +180,12 @@ def _read_from_parent(parent_fd: int, name: str, relative: str) -> bytes | None:
     except OSError as exc:
         raise InstallError(f"refusing symlinked install path: {relative}") from exc
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
             raise InstallError(f"managed path is not a regular file: {relative}")
         with os.fdopen(descriptor, "rb") as handle:
-            return handle.read()
+            content = handle.read()
+            return (content, stat.S_IMODE(info.st_mode)) if with_mode else content
     except BaseException:
         try:
             os.close(descriptor)
@@ -224,7 +232,7 @@ def _atomic_write_managed(
     )
     temporary_name = f".{name}.{secrets.token_hex(8)}.tmp"
     try:
-        before = _read_from_parent(parent_fd, name, relative)
+        before, before_mode = _read_from_parent(parent_fd, name, relative, with_mode=True) or (None, None)
         descriptor = os.open(
             temporary_name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -236,6 +244,7 @@ def _atomic_write_managed(
                 handle.write(content)
                 handle.flush()
                 os.fsync(handle.fileno())
+                written_mode = stat.S_IMODE(os.fstat(handle.fileno()).st_mode)
         except BaseException:
             try:
                 os.unlink(temporary_name, dir_fd=parent_fd)
@@ -248,7 +257,7 @@ def _atomic_write_managed(
             src_dir_fd=parent_fd,
             dst_dir_fd=parent_fd,
         )
-        _LEDGER.wrote(relative, before, content)
+        _LEDGER.wrote(relative, before, content, written_mode, before_mode)
         os.fsync(parent_fd)
     finally:
         try:

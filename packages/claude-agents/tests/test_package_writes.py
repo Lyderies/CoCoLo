@@ -86,6 +86,50 @@ class PackageWritesTests(unittest.TestCase):
         self.assertEqual([], again["writes"])
         self.assertEqual([], again["folders_created"])
 
+    def test_existing_agent_folders_are_never_reported_as_created(self) -> None:
+        """r5 verifier guard: exercise the producer rather than supplying folder identities."""
+        keep = self.target / ".claude/agents"
+        keep.mkdir(parents=True)
+        report = package_operation(SOURCE, self.target, "install", apply=True)
+        created = {entry["path"] for entry in report["folders_created"]}
+        self.assertNotIn(".claude", created)
+        self.assertNotIn(".claude/agents", created)
+        self.assertIn(".claude/skills", created)
+
+    def test_reported_modes_are_the_modes_written_under_the_callers_umask(self) -> None:
+        """The mode comes from the created descriptor, including the caller's umask."""
+        previous = os.umask(0o077)
+        try:
+            report = package_operation(SOURCE, self.target, "install", apply=True)
+        finally:
+            os.umask(previous)
+        for entry in report["writes"]:
+            self.assertEqual(0o600, entry["mode"], entry["path"])
+            self.assertEqual((self.target / entry["path"]).stat().st_mode & 0o7777, entry["mode"])
+
+    def test_a_partial_remove_reports_a_mode_only_change_left_by_its_own_undo(self) -> None:
+        """Restoring bytes internally can still change a saved mode; the umbrella must see that write."""
+        package_operation(SOURCE, self.target, "install", apply=True)
+        first = ".claude/agents/claude_agents_implementation_worker.md"
+        (self.target / first).chmod(0o600)
+        real_unlink = os.unlink
+        failed = False
+
+        def fail_once(name, *args, **kwargs):
+            nonlocal failed
+            if name == "claude_agents_planner.md" and not failed:
+                failed = True
+                raise OSError(errno.EIO, "injected removal failure")
+            return real_unlink(name, *args, **kwargs)
+
+        with patch.object(packaging.os, "unlink", side_effect=fail_once), self.assertRaises(PackageError) as caught:
+            package_operation(SOURCE, self.target, "remove", apply=True)
+        self.assertEqual("none", caught.exception.rollback_state)
+        writes = {entry["path"]: entry for entry in caught.exception.writes}
+        self.assertIn(first, writes)
+        self.assertEqual(writes[first]["before"], writes[first]["after"])
+        self.assertEqual((self.target / first).stat().st_mode & 0o7777, writes[first]["mode"])
+
     def test_a_real_failure_partway_reports_that_nothing_it_wrote_is_left(self) -> None:
         """R1 with a real mid-step failure (owner fix 6): the third new file fails inside the package after two were
         written; the package undoes its own two, so its failure says no write is left, rollback_state 'none', and
