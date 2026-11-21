@@ -102,7 +102,7 @@ class Wizard:
             return self.t.menu(0, items)
         self.t.render()  # No menu draws the screen, so the owner still sees each step as it goes.
         if isinstance(update, str):
-            raise Stop(1, f'The update stopped: {update}. Nothing further was changed. To choose, run ./setup.sh, pick this project, then "Update the install and walk through every step".')
+            raise Stop(1, f"The update stopped: {update}. Nothing further was changed; run ./setup.sh to choose.")
         return update
 
     def answer(self, key: str, default):
@@ -115,6 +115,9 @@ class Wizard:
             return self.ask(items, 0 if self.answers[key] else 1)
         if self.answers is not None:
             return self.ask(items, f"answers file: {key}: needed here and not given")
+        if self.update:
+            self.t.render()
+            raise Stop(1, f'The update stopped: {update_reason}. Nothing further was changed. To choose, run ./setup.sh, pick this project, then "Update the install and walk through every step".')
         return self.ask(items, update_reason)
 
     # Bookkeeping ----------------------------------------------------------------------------
