@@ -37,11 +37,56 @@ _CONTRACTS = {
 
 
 class PackageError(ValueError):
-    """Content-free package failure code."""
+    """Content-free package failure code. `rollback_state` says, as a field, whether this run kept unfinished
+    work (its pending marker) that the caller must leave alone; `writes` and `folders_created` are what this
+    run left written (see _Ledger)."""
+
+    def __init__(self, code: str, rollback_state: str | None = None) -> None:
+        super().__init__(code)
+        self.rollback_state = rollback_state or ("pending" if code == "rollback_pending" else "none")
+        self.writes: list[dict] = []
+        self.folders_created: list[dict] = []
 
 
 def _fail(code: str) -> None:
     raise PackageError(code)
+
+
+class _Ledger:
+    """Every write this run made, as the package itself made it: per path, the sha256 before its first write and
+    after its last one, and every folder it created with its identity. A path whose net state is unchanged is no
+    write. The caller builds its undo journal from this report, never from reading files back."""
+
+    def __init__(self) -> None:
+        self.files: dict[str, list[str | None]] = {}
+        self.folders: list[dict] = []
+
+    def wrote(self, relative: str, before: bytes | None, after: bytes | None) -> None:
+        digests = [None if content is None else hashlib.sha256(content).hexdigest() for content in (before, after)]
+        if relative in self.files:
+            self.files[relative][1] = digests[1]
+        else:
+            self.files[relative] = digests
+
+    def made_folder(self, relative: str, info: os.stat_result) -> None:
+        self.folders.append({"path": relative, "device": info.st_dev, "inode": info.st_ino})
+
+    def left(self, relative: str) -> bool:
+        """True when this run wrote `relative` and did not take it away again."""
+        return relative in self.files and self.files[relative][1] is not None
+
+    def report(self) -> dict:
+        return {"writes": [{"path": path, "before": before, "after": after}
+                           for path, (before, after) in sorted(self.files.items()) if before != after],
+                "folders_created": list(self.folders)}
+
+
+_LEDGER: _Ledger | None = None
+
+
+def _record(relative: str, before: bytes | None, after: bytes | None) -> None:
+    if _LEDGER is not None:
+        _LEDGER.wrote(relative, before, after)
 
 
 def _root(path: Path) -> int:
@@ -66,15 +111,19 @@ def _parent(root: int, relative: str, create: bool = False) -> tuple[int, str]:
         _fail("unsafe_path")
     descriptor = os.dup(root)
     try:
-        for part in parts[:-1]:
+        for index, part in enumerate(parts[:-1]):
+            made = False
             if create:
                 try:
                     os.mkdir(part, 0o755, dir_fd=descriptor)
+                    made = True
                 except FileExistsError:
                     pass
             next_descriptor = os.open(part, _FLAGS, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = next_descriptor
+            if made and _LEDGER is not None:
+                _LEDGER.made_folder("/".join(parts[:index + 1]), os.fstat(descriptor))
         return descriptor, parts[-1]
     except BaseException:
         os.close(descriptor)
@@ -156,6 +205,7 @@ def _exclusive(root: int, relative: str, content: bytes) -> None:
     try:
         descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL
                              | os.O_NOFOLLOW, 0o644, dir_fd=parent)
+        _record(relative, None, content)  # created: even a partial write is this run's, and is reported
         try:
             _write_all(descriptor, content)
         finally:
@@ -175,6 +225,7 @@ def _set_file(root: int, relative: str, before: bytes | None,
     try:
         if after is None:
             os.unlink(name, dir_fd=parent)
+            _record(relative, before, None)
         else:
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL
                                  | os.O_NOFOLLOW, 0o644, dir_fd=parent)
@@ -190,6 +241,7 @@ def _set_file(root: int, relative: str, before: bytes | None,
                         follow_symlinks=False)
             else:
                 os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+            _record(relative, before, after)
         os.fsync(parent)
     finally:
         if created is not None:
@@ -391,11 +443,34 @@ def _plan(root: int, bundle: Bundle, previous: Bundle | tuple[Bundle, ...] | Non
 
 def package_operation(source_root: Path, target: Path, operation: str, *,
                       apply: bool = False, previous_source_root: Path | None = None) -> dict:
-    """Preview by default. Update/rollback requires exact trusted old bundle bytes."""
+    """Preview by default. Update/rollback requires exact trusted old bundle bytes.
+
+    An applied operation's report, and every failure (PackageError), carries this run's own write report
+    (`writes`, `folders_created`, see _Ledger); a failure that leaves this run's pending marker in place says
+    rollback_state "pending"."""
+    global _LEDGER
     if type(operation) is not str or operation not in {"install", "update", "verify", "remove"}:
         _fail("invalid_operation")
     if type(apply) is not bool:
         _fail("invalid_apply")
+    ledger, outer = _Ledger(), _LEDGER
+    _LEDGER = ledger
+    try:
+        report = _operate(source_root, target, operation, apply, previous_source_root)
+    except PackageError as exc:
+        exc.writes, exc.folders_created = ledger.report()["writes"], ledger.report()["folders_created"]
+        if ledger.left(PENDING):  # its marker is still there: unfinished work the caller must leave alone
+            exc.rollback_state = "pending"
+        raise
+    finally:
+        _LEDGER = outer
+    if apply and operation != "verify":
+        report.update(ledger.report())
+    return report
+
+
+def _operate(source_root: Path, target: Path, operation: str, apply: bool,
+             previous_source_root: Path | None) -> dict:
     bundle = compile_bundle(source_root)
     previous = ((compile_bundle(previous_source_root),) if previous_source_root else ()) \
         + released_bundles(source_root)
@@ -454,7 +529,8 @@ def package_operation(source_root: Path, target: Path, operation: str, *,
                 _exclusive(root, PENDING, marker)
             if not incomplete and _read(root, PENDING) == marker:
                 _set_file(root, PENDING, marker, None)
-            raise PackageError("rollback_pending" if incomplete else "operation_failed") from None
+            raise PackageError("rollback_pending" if incomplete else "operation_failed",
+                               "pending" if incomplete else "none") from None
         report["result"] = "applied"
         return report
     except OSError:

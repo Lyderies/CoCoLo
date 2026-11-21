@@ -26,9 +26,12 @@ def main() -> int:
                                   if args.previous_source else None),
         )
     except PackageError as exc:
-        # rollback_state tells the caller whether the package kept unfinished work it must not touch.
+        # rollback_state (a field of the failure, never read from its text) tells the caller whether the package
+        # kept unfinished work it must not touch; writes and folders_created are what this run left written.
         print(json.dumps({"error": str(exc), "provider_execution_enabled": False,
-                          "rollback_state": "pending" if str(exc) == "rollback_pending" else "none"}))
+                          "rollback_state": getattr(exc, "rollback_state", "none"),
+                          "writes": getattr(exc, "writes", []),
+                          "folders_created": getattr(exc, "folders_created", [])}))
         return 2
     print(json.dumps(result, sort_keys=True))
     return 0
