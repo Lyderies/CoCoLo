@@ -148,6 +148,47 @@ class LaunchJournalTests(unittest.TestCase):
         os.killpg(process.pid, signal.SIGKILL)
         process.wait(5)
 
+    def replacing_fstat(self, journal, times):
+        """An fstat that first replaces the entry file `times` times: a write landing while a reader has it open."""
+        real, left, base = os.fstat, [times], journal.entry(BRIDGE)
+
+        def fstat(descriptor):
+            if left[0]:
+                left[0] -= 1
+                journal._write(BRIDGE, {**base, 'attempt': 9 - left[0]})
+            return real(descriptor)
+        return fstat
+
+    def test_an_entry_replaced_while_it_is_read_is_read_again_not_missing(self):
+        journal = LaunchJournal(self.directory)
+        claimed(journal)
+        with mock.patch.object(launch_journal.os, 'fstat', self.replacing_fstat(journal, 1)):
+            value = launch_journal._read_entry(journal._path(BRIDGE))
+        self.assertIsNotNone(value)
+        self.assertEqual(9, value['attempt'])  # The new entry, not None and not the old one
+        with mock.patch.object(launch_journal.os, 'fstat', self.replacing_fstat(journal, 2)):
+            self.assertEqual('claimed', journal.entry(BRIDGE)['state'])
+
+    def test_an_entry_with_two_links_is_still_refused(self):
+        journal = LaunchJournal(self.directory)
+        claimed(journal)
+        os.link(journal._path(BRIDGE), self.directory / 'other-name')
+        self.assertIsNone(journal.entry(BRIDGE))
+        self.assertIsNone(launch_journal._read_entry(journal._path(BRIDGE)))
+
+    def test_an_entry_replaced_every_time_it_is_opened_ends_in_a_fixed_failure(self):
+        journal = LaunchJournal(self.directory)
+        claimed(journal)
+        with mock.patch.object(launch_journal.os, 'fstat', self.replacing_fstat(journal, 99)):
+            with self.assertRaisesRegex(JournalError, 'kept changing while it was read'):
+                journal.entry(BRIDGE)
+            self.assertIsNone(launch_journal._read_entry_or_none(journal._path(BRIDGE)))
+        self.assertEqual('claimed', journal.entry(BRIDGE)['state'])
+
+    def test_a_missing_entry_is_still_none(self):
+        journal = LaunchJournal(self.directory)
+        self.assertIsNone(journal.entry(BRIDGE))
+
     def test_a_run_claimed_but_never_spawned_is_gone(self):
         journal = LaunchJournal(self.directory)
         claimed(journal)

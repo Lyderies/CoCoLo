@@ -687,7 +687,7 @@ def unresolved(directory, *, now_ms=None):
     live, found = {}, []
     for name in names:
         path = directory / name
-        value = _read_entry(path)
+        value = _read_entry_or_none(path)
         if value is not None:
             if value['state'] == 'settled':
                 continue
@@ -763,7 +763,7 @@ def container_holds(directory, *, now_ms=None):
     failed = []
     for name in names:
         path = directory / name
-        value = _read_entry(path)
+        value = _read_entry_or_none(path)
         if value is None or value['version'] != 2 or value['state'] not in counts:
             continue
         counts[value['state']] += 1
@@ -845,29 +845,50 @@ def _read_recovery(path):
     return value
 
 
+_REREADS = 3  # Times an entry replaced while it was open is opened again by its path.
+
+
 def _read_entry(path):
-    """The checked entry in that file, or None (the same checks as `LaunchJournal._read`)."""
-    try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
-    except OSError:
-        return None
-    try:
-        info = os.fstat(descriptor)
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077
-                or info.st_nlink != 1 or info.st_size > MAX_ENTRY_BYTES):
+    """The checked entry in that file, or None (the same checks as `LaunchJournal._read`).
+
+    A write replaces the entry file, so a reader that opened the old file sees it unlinked
+    (st_nlink 0): the entry still exists, so the path is opened again, up to _REREADS times,
+    and a file that is replaced every time raises JournalError. A file with two or more links
+    stays refused.
+    """
+    for _ in range(_REREADS):
+        try:
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+        except OSError:
             return None
-        raw = os.read(descriptor, MAX_ENTRY_BYTES + 1)
-    except OSError:
-        return None
-    finally:
-        os.close(descriptor)
+        try:
+            info = os.fstat(descriptor)
+            if info.st_nlink == 0 and stat.S_ISREG(info.st_mode):
+                continue  # Replaced while open: read the new entry.
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077
+                    or info.st_nlink != 1 or info.st_size > MAX_ENTRY_BYTES):
+                return None
+            raw = os.read(descriptor, MAX_ENTRY_BYTES + 1)
+        except OSError:
+            return None
+        finally:
+            os.close(descriptor)
+        try:
+            value = checked_entry(json.loads(raw))
+        except (ValueError, RecursionError):
+            return None
+        if value is None or path.name != entry_key(value) + '.json':
+            return None
+        return value
+    raise JournalError('launch entry kept changing while it was read')
+
+
+def _read_entry_or_none(path):
+    """`_read_entry` for the status readers, which count an entry that cannot be read as unreadable."""
     try:
-        value = checked_entry(json.loads(raw))
-    except (ValueError, RecursionError):
+        return _read_entry(path)
+    except JournalError:
         return None
-    if value is None or path.name != entry_key(value) + '.json':
-        return None
-    return value
 
 
 def _entry_name(name):
