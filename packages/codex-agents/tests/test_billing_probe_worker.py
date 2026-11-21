@@ -8,6 +8,8 @@ import unittest
 from unittest import mock
 
 from tests import test_bridge as fixtures
+from tests.test_claude_init_plugins import PRIVACY, builtin, frame_2_1_323
+from codex_agents.billing_probe_contracts import PROBE_INIT_REASONS
 from codex_agents import billing_probe_worker as workers, bridge
 from codex_agents.learning_contracts import parse_bounded_json_value
 from codex_agents.owned_execution import ExecutionCustodyError, OwnedExecutionRegistry
@@ -63,6 +65,41 @@ class BillingProbeProtocolTests(unittest.TestCase):
                 self.assertEqual(1, len(infos))
                 self.assertEqual(expected, reason)
 
+    def test_CI_1_a_2_1_323_probe_completes(self):
+        infos, reason = self.probe([frame_2_1_323(), fixtures.FAVOURABLE, fixtures.result_frame('OK')])
+        self.assertEqual((1, None), (len(infos), reason))
+
+    def init_cases(self):
+        return {
+            'init_plugin_not_allowed': frame_2_1_323(plugins=[builtin('cc-plugin-sec-default')]),
+            'init_plugin_not_disabled': frame_2_1_323(plugins=[PRIVACY, builtin('cc-plugin-telemetry')]),
+            'init_api_key_source': frame_2_1_323(apiKeySource='ANTHROPIC_API_KEY'),
+            'init_model_mismatch': frame_2_1_323(model='claude-sonnet-5-5'),
+            'init_mcp_server_loaded': frame_2_1_323(mcp_servers=[{'name': 'x'}]),
+            'init_tool_not_allowed': frame_2_1_323(tools=['Read']),
+            'init_permission_mode_mismatch': frame_2_1_323(permissionMode='bypassPermissions'),
+            'init_additional_directories_present': frame_2_1_323(additional_directories=['/x']),
+        }
+
+    def test_CI_3_each_init_violation_is_the_probe_reason(self):
+        cases = self.init_cases()
+        self.assertEqual(PROBE_INIT_REASONS, set(cases))  # every reason the contract names is driven here
+        for reason, init in cases.items():
+            with self.subTest(reason=reason):
+                infos, failure = self.probe([init, fixtures.FAVOURABLE, fixtures.result_frame('OK')])
+                self.assertEqual((0, reason), (len(infos), failure))
+
+    def test_CI_3_normalization_keeps_each_init_reason_and_the_version_and_nothing_else(self):
+        for reason in PROBE_INIT_REASONS:
+            with self.subTest(reason=reason):
+                body, got = workers._normalized([], reason, {}, 5, '2.1.323')
+                self.assertEqual(reason, got)
+                self.assertEqual({'records': [], 'observed_at_ms': 5, 'reason_code': reason,
+                                  'client_version': '2.1.323'}, json.loads(body))
+        for failure in ('probe_tool_not_allowed', 'missing_init_frame', 'probe_clock_changed', 'init_client_unsupported',
+                        'init_other', 'PRIVATE text'):
+            with self.subTest(failure=failure):
+                self.assertEqual('probe_incomplete', workers._normalized([], failure, {}, 5, None)[1])
 
 class BillingProbeWorkerTests(unittest.TestCase):
     """Actual inert Popen/tree/watchdog custody; no native or account release claim."""
@@ -115,6 +152,29 @@ class BillingProbeWorkerTests(unittest.TestCase):
         self.until(lambda: self.pool.snapshot(handle)['state'] in {'returned', 'unknown'})
         self.assertEqual('returned', self.pool.snapshot(handle)['state'])
         return self.pool.packet(handle)
+
+    def test_CI_3_the_packet_keeps_the_init_reason_instead_of_probe_incomplete(self):
+        handle, _, _, _ = self.launch([frame_2_1_323(plugins=[builtin('cc-plugin-sec-default')]),
+                                       fixtures.FAVOURABLE, fixtures.result_frame('OK')])
+        packet = self.returned(handle)
+        self.assertEqual('init_plugin_not_allowed', packet.reason_code)
+        self.assertEqual([], json.loads(packet.body)['records'])
+
+    def test_CI_3_a_failure_that_is_not_an_init_reason_is_still_probe_incomplete(self):
+        handle, _, _, _ = self.launch([fixtures.PROBE_INIT, fixtures.FAVOURABLE,
+                                       {'type': 'tool_use', 'name': 'Bash'}])
+        self.assertEqual('probe_incomplete', self.returned(handle).reason_code)
+
+    def test_CI_4_the_client_version_from_init_is_recorded_with_the_probe_evidence(self):
+        handle, _, _, _ = self.launch([frame_2_1_323(), fixtures.FAVOURABLE, fixtures.result_frame('OK')])
+        packet = self.returned(handle)
+        self.assertIsNone(packet.reason_code)
+        self.assertEqual('2.1.323', json.loads(packet.body)['client_version'])
+
+    def test_CI_4_the_version_is_kept_when_the_init_check_stops_the_probe(self):
+        handle, _, _, _ = self.launch([frame_2_1_323(plugins=[builtin('cc-plugin-sec-default')]),
+                                       fixtures.FAVOURABLE, fixtures.result_frame('OK')])
+        self.assertEqual('2.1.323', json.loads(self.returned(handle).body)['client_version'])
 
     def test_real_process_return_requires_original_cleanup_before_local_retirement(self):
         with mock.patch.object(sqlite3, 'connect', side_effect=AssertionError('worker SQL')):

@@ -34,8 +34,9 @@ _OUTCOMES = frozenset({'result', 'launch_failed', 'process_tracking_unavailable'
     'codex_tool_not_allowed:collab_tool_call', 'codex_tool_not_allowed:unknown'})
 _CLAUDE_OUTCOMES = frozenset({'claude_activity_invalid', 'claude_tool_not_allowed', 'missing_init_frame',
     'paid_usage_observed', 'provider_rejected', 'rate_limit_event_invalid', 'init_api_key_source',
-    'init_model_mismatch', 'init_plugin_loaded', 'init_mcp_server_loaded', 'init_tool_not_allowed',
-    'init_client_unsupported'})  # O10 VF-6
+    'init_model_mismatch', 'init_plugin_not_allowed', 'init_mcp_server_loaded', 'init_tool_not_allowed',
+    'init_client_unsupported', 'init_permission_mode_mismatch', 'init_additional_directories_present',
+    'init_plugin_not_disabled'})  # O10 VF-6
 _USAGE = {'codex': {'input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens'},
           'claude': {'input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'}}
 _RATE_LIMIT_FIELDS = {'rate_limit_events', 'rate_limit_records_kept', 'rate_limit_record_failed'}

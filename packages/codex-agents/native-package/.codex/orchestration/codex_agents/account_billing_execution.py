@@ -14,6 +14,7 @@ from .account_billing_admission import AccountBillingAdmission, ProbeAdmissionEr
 from .billing_probe_worker import (
     BillingProbeWorkers, MAX_PROBE_INPUT_BYTES, MAX_PROBE_PACKET_BYTES, probe_payload,
 )
+from .billing_probe_contracts import PROBE_COMPLETION_REASONS, valid_client_version
 from .learning_contracts import canonical_json, content_digest, parse_bounded_json_value, validate_learning_record
 from .owned_execution import OwnedExecutionKey, OwnedExecutionRegistry
 
@@ -189,9 +190,10 @@ class AccountBillingExecutions:
                 or prepared_key[0] != inputs.reservation.project):
             raise ProbeAdmissionError('probe_conflict')
         value = parse_bounded_json_value(packet.body, max_bytes=MAX_PROBE_PACKET_BYTES)
-        if (type(value) is not dict or value.keys() != {'records', 'observed_at_ms', 'reason_code'}
+        if (type(value) is not dict or value.keys() != {'records', 'observed_at_ms', 'reason_code', 'client_version'}
+                or not valid_client_version(value['client_version'])
                 or type(value['records']) is not list or len(value['records']) > 2
-                or value['reason_code'] not in {None, 'probe_incomplete', 'probe_invalid_events', 'probe_no_events'}
+                or value['reason_code'] not in {None, *PROBE_COMPLETION_REASONS}
                 or value['reason_code'] != packet.reason_code):
             raise ProbeAdmissionError()
         observed, now = value['observed_at_ms'], self._owner._now()
@@ -250,8 +252,10 @@ class AccountBillingExecutions:
                                    'content_digest': content_digest(record)})
             if self._completion(job, kept_workspace) != (row, packet, identity, records, digest):
                 raise ProbeAdmissionError('probe_conflict')
+            packet_version = parse_bounded_json_value(packet.body, max_bytes=MAX_PROBE_PACKET_BYTES)['client_version']
             value = canonical_json({'probe': 'completed', 'reason_code': packet.reason_code,
-                                    'records': references, 'completion_digest': digest})
+                                    'records': references, 'completion_digest': digest,
+                                    'client_version': packet_version})
             if len(value) > 4096:
                 raise ProbeAdmissionError()
             final = owner._update(row, state='committed', references_json=value.decode())

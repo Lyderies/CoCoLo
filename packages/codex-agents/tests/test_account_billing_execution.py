@@ -235,7 +235,7 @@ class AccountBillingExecutionTests(unittest.TestCase):
         self.executions.complete(handle)
         raw = self.row()['references_json']
         self.assertNotIn('PRIVATE-MODEL-ANSWER', raw)
-        self.assertEqual({'probe', 'reason_code', 'records', 'completion_digest'}, json.loads(raw).keys())
+        self.assertEqual({'probe', 'reason_code', 'records', 'completion_digest', 'client_version'}, json.loads(raw).keys())
 
     def test_known_reply_cannot_read_expired_records_or_relaunch_to_replace_them(self):
         handle, _, _ = self.launch()

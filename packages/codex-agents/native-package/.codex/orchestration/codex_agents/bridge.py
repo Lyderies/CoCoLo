@@ -107,6 +107,18 @@ CLAUDE_DISABLED_PLUGINS = (
     "cc-plugin-plugin-authoring@builtin",
     "cc-plugin-easel@builtin",
 )
+# CI-4: under COCOLO's own child settings (`claude_settings`: hooks off, the plugins above disabled), Claude
+# Code 2.1.323 lists exactly one built-in plugin in the init frame, `cc-plugin-privacy` (captured with those
+# settings). Its only effect, from the binary's plugin manifest, is a `tool.check` hook that can restrict a
+# call; it adds no tool, reads nothing and fetches nothing. It is accepted only with exactly the keys name,
+# path and source, as a built-in (path "builtin", source "<name>@builtin"). The four built-ins COCOLO disables
+# act when loaded (agents-md injects AGENTS.md and CLAUDE.md as context, telemetry fetches, plugin-authoring
+# can register a tool and a hook): one that is listed means the settings did not apply, so the child stops
+# (`init_plugin_not_disabled`). Any other plugin stops it too (`init_plugin_not_allowed`).
+CLAUDE_ALLOWED_BUILTIN_PLUGINS = frozenset({"cc-plugin-privacy"})
+_CLAUDE_PLUGIN_KEYS = frozenset({"name", "path", "source"})
+# The init `permissionMode` COCOLO sets (--permission-mode and settings), checked when the client reports it.
+CLAUDE_PERMISSION_MODE = "dontAsk"
 CODEX_REROUTE_EVENTS = {"model/rerouted", "model_rerouted", "model.rerouted"}
 # Codex features switched off for every child. `code_mode_host` must stay enabled:
 # disabling it breaks Codex's own tool invocation.
@@ -1193,6 +1205,26 @@ def _claude_model_usage(model_usage: Any) -> list[dict[str, Any]]:
     return [merged[key] for key in sorted(merged)]
 
 
+def _plugin_violation(plugin: Any) -> str | None:
+    """CI-1: why one init-frame plugin entry is refused, or None when it is the one accepted built-in."""
+
+    if not isinstance(plugin, dict) or plugin.keys() != _CLAUDE_PLUGIN_KEYS:
+        return "plugin_not_allowed"
+    name, path, source = plugin["name"], plugin["path"], plugin["source"]
+    if not (isinstance(name, str) and path == "builtin" and source == f"{name}@builtin"):
+        return "plugin_not_allowed"
+    if name in CLAUDE_ALLOWED_BUILTIN_PLUGINS:
+        return None
+    return "plugin_not_disabled" if f"{name}@builtin" in CLAUDE_DISABLED_PLUGINS else "plugin_not_allowed"
+
+
+def _init_client_version(frame: dict[str, Any]) -> str | None:
+    """CI-4: the client version an init frame reports, only when it is a plain dotted number."""
+
+    version = frame.get("claude_code_version")
+    return version if isinstance(version, str) and re.fullmatch(r"\d+\.\d+\.\d+", version) else None
+
+
 def _check_claude_init(frame: dict[str, Any], model: str, allowed: tuple[str, ...] = CLAUDE_TOOLS,
                        *, schema_held: bool = False) -> str | None:
     """Return the first init-frame violation, or None when the frame is clean."""
@@ -1201,8 +1233,13 @@ def _check_claude_init(frame: dict[str, Any], model: str, allowed: tuple[str, ..
         return "api_key_source"
     if frame.get("model") != model:
         return "model_mismatch"
-    if frame.get("plugins") != []:
-        return "plugin_loaded"
+    plugins = frame.get("plugins")
+    if not isinstance(plugins, list):
+        return "plugin_not_allowed"
+    violations = {_plugin_violation(plugin) for plugin in plugins} - {None}
+    if violations:
+        # A plugin nothing allows outranks one COCOLO's settings should have disabled.
+        return "plugin_not_allowed" if "plugin_not_allowed" in violations else "plugin_not_disabled"
     if frame.get("mcp_servers") != []:
         return "mcp_server_loaded"
     tools = frame.get("tools")
@@ -1210,6 +1247,11 @@ def _check_claude_init(frame: dict[str, Any], model: str, allowed: tuple[str, ..
         not isinstance(tool, str) or tool not in allowed for tool in tools
     ):
         return "tool_not_allowed"
+    # CI-2: newer clients report these; one that does must report what COCOLO set (older ones report neither).
+    if "permissionMode" in frame and frame["permissionMode"] != CLAUDE_PERMISSION_MODE:
+        return "permission_mode_mismatch"
+    if "additional_directories" in frame and frame["additional_directories"] != []:
+        return "additional_directories_present"
     # O10 VF-6: a client that reports a version too old to hold its result to the schema stops here.
     # No version, or one that cannot be read, is refused like an old one (review 040-vf-dr-code).
     if schema_held and _client_version(frame.get("claude_code_version")) < CLAUDE_SCHEMA_MIN_VERSION:
@@ -1762,14 +1804,19 @@ PROBE_DEADLINE_SECONDS = 120
 MAX_PROBE_EVENTS = 64
 
 
-def _run_claude_billing_probe(arguments, *, environment, cwd, deadline_seconds, execution=None):
-    """Fixed probe protocol; retain partial restrictions without claiming success."""
+def _run_claude_billing_probe(arguments, *, environment, cwd, deadline_seconds, execution=None, observed=None):
+    """Fixed probe protocol; retain partial restrictions without claiming success.
+
+    `observed`, when given, receives the client version the init frame reported (CI-4), even when the
+    init check then stops the probe."""
     state: dict[str, Any] = {"init": False, "infos": [], "result": False}
 
     def on_frame(frame: dict[str, Any]) -> None:
         if not state["init"]:
             if frame.get("type") != "system" or frame.get("subtype") != "init":
                 raise _Abort("missing_init_frame")
+            if observed is not None:
+                observed["client_version"] = _init_client_version(frame)
             violation = _check_claude_init(frame, PROBE_MODEL)
             if violation is not None or frame.get("tools") != []:
                 raise _Abort(f"init_{violation or 'tool_not_allowed'}")

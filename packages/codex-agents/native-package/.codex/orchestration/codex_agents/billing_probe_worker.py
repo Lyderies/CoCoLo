@@ -16,6 +16,7 @@ import time
 from . import lane_health
 from . import bridge
 from .admission_metadata import _headroom_state
+from .billing_probe_contracts import PROBE_INIT_REASONS
 from .history_contracts import _DIGEST, _PROJECT, matches, valid_integer
 from .learning_contracts import canonical_json, parse_bounded_json_value, validate_learning_record
 from .owned_execution import ExecutionTicket, OwnedExecutionKey, OwnedExecutionRegistry
@@ -228,7 +229,7 @@ def _prepare(payload):
         return None, None, started
 
 
-def _normalized(infos, failure, identity, observed):
+def _normalized(infos, failure, identity, observed, client_version=None):
     heads, bills, invalid = [], [], 0
     for info in infos:
         try:
@@ -247,9 +248,11 @@ def _normalized(infos, failure, identity, observed):
             records = [*([head] if head['status'] != 'allowed'
                 or _headroom_state('claude', head, observed) not in {'ample', None} else []),
                 *([bill] if bill['paid_usage_usable'] is not False else [])]
-    reason = 'probe_incomplete' if failure is not None else ('probe_invalid_events' if invalid
+    # CI-3: a probe the init check stopped keeps its fixed reason; any other failure stays probe_incomplete.
+    reason = (failure if failure in PROBE_INIT_REASONS else 'probe_incomplete') if failure is not None else ('probe_invalid_events' if invalid
         else 'probe_no_events' if not heads else None)
-    body = canonical_json({'records': records, 'observed_at_ms': observed, 'reason_code': reason})
+    body = canonical_json({'records': records, 'observed_at_ms': observed, 'reason_code': reason,
+        'client_version': client_version})
     if len(body) > MAX_PROBE_PACKET_BYTES:
         raise ProbeWorkerError()
     return body, reason
@@ -267,18 +270,21 @@ def _execute(job):
         check_backend(os.environ, Path(value['root']))
         if resolve_client('claude', untrusted=[Path(value['root'])]) != prepared.client_identity:
             raise ProbeWorkerError()
+        seen = {}
         infos, failure = bridge._run_claude_billing_probe(list(prepared.arguments),
             environment=dict(prepared.environment), cwd=prepared.workspace/'export',
-            deadline_seconds=bridge.PROBE_DEADLINE_SECONDS, execution=job.ticket)
+            deadline_seconds=bridge.PROBE_DEADLINE_SECONDS, execution=job.ticket, observed=seen)
         observed = time.time_ns()//1_000_000
         if observed < value['created_at_ms']:
             failure = 'probe_clock_changed'
             observed = value['created_at_ms']  # Incomplete; retain restrictions without shortening their horizon.
         body, reason = _normalized(infos, failure,
-            parse_bounded_json_value(prepared.identity, max_bytes=MAX_PROBE_INPUT_BYTES), observed)
+            parse_bounded_json_value(prepared.identity, max_bytes=MAX_PROBE_INPUT_BYTES), observed,
+            seen.get('client_version'))
     except BaseException as error:
         _caught(error, 'execute')  # S1-H1a C7: its type, for the worker that notes this failure
-        body = canonical_json({'records': [], 'observed_at_ms': None, 'reason_code': 'probe_incomplete'})
+        body = canonical_json({'records': [], 'observed_at_ms': None, 'reason_code': 'probe_incomplete',
+            'client_version': None})
     removed = _remove(prepared.workspace)
     return BillingProbePacket(body, prepared.inputs_digest, removed, reason)
 
