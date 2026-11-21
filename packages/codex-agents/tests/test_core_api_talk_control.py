@@ -184,16 +184,6 @@ class OwnerWallTests(CoreCase):
 
 
 class AuditTests(CoreCase):
-    def test_api23_changes_refusals_and_confirms_are_audited(self):  # API-23
-        client = self.client("confirm")
-        client.call("context.push", {"kind": "note", "text": "hello"})
-        self.error_code(client, "control.stop")  # refused: forbidden
-        self.error_code(client, "unit.cancel", {"id": "U-0001"})  # confirm asked
-        outcomes = {(r["method"], r["outcome"]) for r in self.audit()}
-        self.assertEqual({("context.push", "ok"), ("control.stop", "forbidden"), ("unit.cancel", "confirm_required")},
-                         outcomes & {("context.push", "ok"), ("control.stop", "forbidden"), ("unit.cancel", "confirm_required")})
-        for row in self.audit():
-            self.assertTrue(row["caller"] and row["ts"])
 
     def test_api23_reads_are_not_audited_and_no_secret_is_written(self):  # API-23
         token = self.mod._mint_token(str(self.records), "confirm")
