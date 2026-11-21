@@ -17,7 +17,9 @@ class ColdStartConcurrentOpenTests(unittest.TestCase):
     env = startup.ProjectServiceStartupTests.__dict__['env']
     cli_command = startup.ProjectServiceStartupTests.cli_command
 
-    def test_T5_two_concurrent_opens_on_a_cold_project_both_open(self):
+    # A smoke test: the interleaving is left to the OS, so it can pass on old code. The gate for the
+    # interleaving is LostStartWaitsForTheWinnerTests below, which is deterministic.
+    def test_T5_smoke_two_concurrent_opens_on_a_cold_project_both_open(self):
         for round_ in range(6):
             project = self.base / f'cold{round_}'
             (project / '.git').mkdir(parents=True)
@@ -51,6 +53,16 @@ class LostStartWaitsForTheWinnerTests(unittest.TestCase):
         from codex_agents import project_host_client as client
         calls = []
 
+        class Clock:  # injected time: sleeping advances it, nothing really waits
+            now = 1000.0
+
+            def monotonic(self):
+                return self.now
+
+            def sleep(self, seconds):
+                self.now += seconds
+        clock = Clock()
+
         def serving():
             calls.append(1)
             return len(calls) > serves_after
@@ -58,7 +70,8 @@ class LostStartWaitsForTheWinnerTests(unittest.TestCase):
             report_path = Path(base) / 'report.json'
             report_path.write_text(json.dumps({'ready': False, 'reason_code': reason}))
             state = mock.Mock(root=Path(base))
-            with mock.patch.object(client.os, 'posix_spawn', return_value=4242), \
+            with mock.patch.object(client, 'time', clock), \
+                    mock.patch.object(client.os, 'posix_spawn', return_value=4242), \
                     mock.patch.object(client.os, 'waitpid', return_value=(4242, 0)), \
                     mock.patch.object(client, '_host_alive', return_value=None), \
                     mock.patch.object(client, 'runtime_directory', return_value=Path(base)):

@@ -6,7 +6,7 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 - Two commands that came together on a project whose service was not running could leave one of them reporting
   `orchestration_client_unavailable`: the start that lost to the other's service ended before that service
-  held its lock and did not wait for it. It now waits (bounded) for the winning service.
+  held its lock and did not wait for it. It now waits up to 3 s while no host lock is held, within the start timeout, for the winning service.
 - A billing probe asked within five minutes after a Claude child finished was refused as "billing probe
   unavailable": it reused the child's own rate-limit records (tagged with a run), which the reply contract rejects.
   Reuse now takes only the probe's own records, and a newer run record that is more restrictive (overage in use,
