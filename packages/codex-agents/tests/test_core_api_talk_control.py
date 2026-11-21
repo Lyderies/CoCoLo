@@ -3,10 +3,6 @@ import json
 
 from tests.core_api_support import CoreCase, read_jsonl
 
-CANNED = ["What is the status?", "What is U-0001 doing?", "How much usage is left?", "Is CI green?",
-          "Which version is installed?", "Show the history.", "Why did the last unit stop?"]
-
-
 class RecordsFirstTests(CoreCase):
 
     def test_api15_records_only_mode_never_forwards(self):  # API-15
