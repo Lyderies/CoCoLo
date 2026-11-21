@@ -465,7 +465,7 @@ class RetirementReplacements(Helpers, CoreCase):
         self.assertEqual(list(range(6, 306)), got)  # every event, in order, no gap, no drop
         self.assertTrue(self.wait_for(lambda: len(self.service._subs) == 0, 10))  # the stalled one is gone
 
-    def test_no_read_method_writes_any_record_file(self):  # API-10, TERM-17 (replaces transport :37)
+    def test_no_read_method_writes_any_record_file(self):  # API-10, TERM-17 GUARD (replaces transport :37)
         jsonl(self.records / "diffs.jsonl", [{"path": "a.py", "diff": "+x", "ts": 1}])
         client = self.client("read")
         before = {p.name: p.read_bytes() for p in self.records.iterdir() if p.name != "audit.jsonl"}
@@ -494,7 +494,7 @@ class RetirementReplacements(Helpers, CoreCase):
             self.client("read").call("state.get")
         self.assertEqual([socket.AF_UNIX], listened)
 
-    def test_each_canned_answer_states_the_record_values(self):  # API-15 (replaces the dead CANNED list)
+    def test_each_canned_answer_states_the_record_values(self):  # API-15 GUARD (replaces the dead CANNED list)
         jsonl(self.records / "history.jsonl", [{"id": "H-1", "summary": "built B1"},
                                                 {"type": "stop", "id": "H-2", "code": "guard", "by": "cocolo",
                                                  "reason": "The window was nearly full.", "ts": 5, "next": None, "v": 1}])
