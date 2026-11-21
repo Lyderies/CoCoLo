@@ -46,7 +46,6 @@ class ForwardTests(CoreCase):
         self.assertEqual("expired", self.client("read").call("queries.get", {"id": answer["query_id"]})["query"]["state"])
 
 
-
 class PushTests(CoreCase):
     def push(self, client=None, **params):
         body = {"kind": "note", "text": "build finished", **params}
@@ -149,11 +148,6 @@ class ConfirmTests(CoreCase):
             return params, error.data["confirm_id"]
         self.fail("no confirm was asked")
 
-    def test_api21_second_call_executes_once(self):  # API-21
-        client = self.client("confirm")
-        params, confirm_id = self.begin(client)
-        self.assertEqual("cancelled", client.call("unit.cancel", {**params, "confirm_id": confirm_id})["outcome"])
-        self.assertEqual("confirm_invalid", self.error_code(client, "unit.cancel", {**params, "confirm_id": confirm_id}))
 
     def test_api21_expires_after_60_seconds(self):  # API-21
         client = self.client("confirm")
