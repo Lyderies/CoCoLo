@@ -1,0 +1,446 @@
+"""The shared harness of the lifecycle end-to-end test (PLAN-0.4.0.md T7; scripts/e2e_lifecycle.py).
+
+One `World` is a complete, isolated machine for one run:
+
+- a scratch folder with its own HOME, XDG state, Codex home and ~/.ssh, a fake project (a Git
+  repository holding a committed fixture and its operational checks), fake Codex and Claude
+  clients, and an owner key with a passphrase made for the run;
+- the product's own programs run unchanged (`./setup.sh`, the orchestrator CLI) through a Python
+  stand-in in the scratch folder that answers "the account's home" with the scratch HOME and finds
+  the fake clients only, so the real home, the real clients, the real collector and the real
+  accounts are never read, written or started.
+
+Why the scratch folder is under ~/.cache and not in a temporary folder: the runtime refuses any
+program, client or Python that lies in a temporary folder or outside a hidden folder of the
+account's home (scripts/attest.py and codex_agents/host_paths.py; tests/test_setup_sh.py keeps its
+fakes in ~/.cache/agent-orch-tests for the same reason). Nothing in it is read from the real
+home, and the whole folder is removed at the end, after every process started inside it is stopped.
+"""
+
+from __future__ import annotations
+
+import ast
+import contextlib
+import hashlib
+import json
+import os
+import pty
+import re
+import secrets
+import select
+import shutil
+import signal
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SETUP = ROOT / "setup.sh"
+ORCHESTRATION = ROOT / "packages" / "codex-agents" / "native-package" / ".codex" / "orchestration"
+CLI = ORCHESTRATION / "cli.py"
+PROVIDER_FIXTURES = ROOT / "packages" / "codex-agents" / "tests" / "fixtures" / "providers"
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B|\x1b[=>]")
+SETUP_TIMEOUT_SECONDS = 150
+
+# The reasons a step may never answer with by themselves (G1): each names a missing thing, not a cause.
+BARE_UNAVAILABLE = ("run_unavailable", "account_unavailable", "probe_unavailable")
+
+# What the stand-in Python does before it runs the product's own script, `-c` code or `-m` module.
+BOOT = '''\
+import os, sys, pwd, runpy, shutil
+HOME = %HOME%
+_account = pwd.getpwuid
+def getpwuid(uid):
+    r = _account(uid)
+    return pwd.struct_passwd((r.pw_name, r.pw_passwd, r.pw_uid, r.pw_gid, r.pw_gecos, HOME, r.pw_shell))
+pwd.getpwuid = getpwuid
+_which = shutil.which
+def which(cmd, mode=os.F_OK | os.X_OK, path=None):
+    if cmd in ("codex", "claude"):  # the fake clients only, never one the machine has
+        path = HOME + "/.local/bin"
+    return _which(cmd, mode, path)
+shutil.which = which
+sys.executable = %SHIM%
+args = sys.argv[1:]
+if args[0] == "-c":
+    code = args[1]
+    sys.argv = ["-c"] + args[2:]
+    exec(compile(code, "<string>", "exec"), {"__name__": "__main__"})
+elif args[0] == "-m":
+    sys.argv = [args[1]] + args[2:]
+    runpy.run_module(args[1], run_name="__main__", alter_sys=True)
+else:
+    sys.argv = args
+    runpy.run_path(args[0], run_name="__main__")
+'''
+
+SHIM = '''\
+#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -I|-B|-S|-E|-s) shift;;
+    -X) shift 2;;
+    *) break;;
+  esac
+done
+exec "%PYTHON%" -I -B -S -X pycache_prefix=/dev/null "%BOOT%" "$@"
+'''
+
+# A fake client: `fake_child.py` of the repository's own provider fakes (packages/codex-agents/tests/
+# learning_support.py), launched from the client name it was started by.
+CLIENT = '#!/bin/sh\nexec "%PYTHON%" "${0%/*}/fake_child.py" "${0%/*}" "${0##*/}" "$@"\n'
+
+
+# Every private value any World of this process has held, so the report can be scanned for them (G8).
+PRIVATE_VALUES: set[str] = set()
+
+
+class HarnessError(Exception):
+    """The harness itself could not be built (a missing tool, a refused location): the check fails."""
+
+
+def strip_ansi(data: bytes | str) -> str:
+    text = data.decode("utf-8", "replace") if isinstance(data, bytes) else data
+    return ANSI.sub("", text).replace("\r", "")
+
+
+def bare_unavailable(text: str) -> list[str]:
+    """G1: the bare reason codes in a step's output (one that is the whole reason, not part of another word)."""
+    return sorted({code for code in BARE_UNAVAILABLE if re.search(rf"(?<![a-z0-9_]){code}(?![a-z0-9_])", text)})
+
+
+def fake_child_source() -> str:
+    """The repository's fake provider client, read from its own test support (no second copy)."""
+    tree = ast.parse((ROOT / "packages" / "codex-agents" / "tests" / "learning_support.py").read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "FAKE_CHILD" for t in node.targets):
+            return ast.literal_eval(node.value)
+    raise HarnessError("the repository's fake provider client was not found")
+
+
+@dataclass
+class Run:
+    """One program run on a terminal: its exit status, whole screen text and seconds."""
+    code: int
+    text: str
+    seconds: float
+    timed_out: bool = False
+
+
+@dataclass
+class World:
+    """An isolated machine for one run (see the module note); a context manager that removes it."""
+    base: Path = field(init=False)
+    home: Path = field(init=False)
+    project: Path = field(init=False)
+    passphrase: str = field(init=False)
+    python: str = field(init=False)
+    env: dict = field(init=False)
+    outputs: list = field(default_factory=list)  # every output a step produced, for G8
+    steps: list = field(default_factory=list)  # every step run: {"step": label, "code": exit status, "refuses": bool}
+
+    def __enter__(self) -> "World":
+        try:
+            self._build()
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.stop_processes()
+        if getattr(self, "base", None) is not None:
+            shutil.rmtree(self.base, ignore_errors=True)
+
+    # Building ------------------------------------------------------------------------------------
+
+    def _build(self) -> None:
+        account = Path(os.path.realpath(os.path.expanduser("~")))
+        cache = account / ".cache"
+        cache.mkdir(mode=0o700, exist_ok=True)
+        self.base = Path(os.path.realpath(tempfile.mkdtemp(prefix="e2e-", dir=cache)))
+        self.base.chmod(0o700)
+        self.home = self.base / "h"  # short: a socket path may not pass 100 bytes (service_host.MAX_SOCKET_PATH_BYTES)
+        self.home.mkdir()
+        for folder in (".ssh", ".codex", ".local", ".local/bin", ".local/state", ".e2e-bin"):
+            (self.home / folder).mkdir(mode=0o700)
+        (self.base / "tmp").mkdir()
+        printed = subprocess.run(["/bin/bash", str(SETUP), "--print-python"], capture_output=True, text=True,
+                                 check=False, stdin=subprocess.DEVNULL).stdout.strip()
+        if not printed.startswith("/"):
+            raise HarnessError("no trusted python3 (setup.sh --print-python refused)")
+        self.python = printed
+        self._stand_in_python()
+        self._fake_clients()
+        self.passphrase = secrets.token_urlsafe(18)
+        self.env = self._environment()
+        self._fake_project()
+
+    def _stand_in_python(self) -> None:
+        folder = self.home / ".e2e-bin"
+        shim = folder / "python3"
+        (folder / "boot.py").write_text(BOOT.replace("%HOME%", repr(str(self.home))).replace("%SHIM%", repr(str(shim))))
+        shim.write_text(SHIM.replace("%PYTHON%", self.python).replace("%BOOT%", str(folder / "boot.py")))
+        shim.chmod(0o755)
+        self.shim = shim
+
+    def _fake_clients(self) -> None:
+        tools = self.home / ".local" / "bin"
+        (tools / "fake_child.py").write_text(fake_child_source())
+        (tools / "codex-result.json").write_bytes((PROVIDER_FIXTURES / "codex-rate-limits.json").read_bytes())
+        (tools / "claude-status.json").write_bytes((PROVIDER_FIXTURES / "claude-auth-status.json").read_bytes())
+        for name in ("codex", "claude"):
+            (tools / name).write_text(CLIENT.replace("%PYTHON%", self.python))
+            (tools / name).chmod(0o755)
+
+    def key_values(self) -> tuple[str, str]:
+        """The test owner key's fingerprint and public blob, once the product has made the key."""
+        pub = self.home / ".ssh" / "codex-agents-owner.pub"
+        if not pub.is_file():
+            return "", ""
+        done = subprocess.run(["/usr/bin/ssh-keygen", "-lf", str(pub)], capture_output=True, text=True)
+        return (done.stdout.split() or ["", ""])[1], pub.read_text().split()[1]
+
+    def _environment(self) -> dict:
+        env = {key: value for key, value in os.environ.items()
+               if key not in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NO_COLOR", "PYTHONDONTWRITEBYTECODE",
+                              "CODEX_HOME", "CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME",
+                              "XDG_DATA_HOME", "XDG_CACHE_HOME") and not key.startswith(("CODEX_", "CLAUDE_"))}
+        env.update(
+            HOME=str(self.home), TERM="xterm", CODEX_HOME=str(self.home / ".codex"),
+            PATH=f"{self.home / '.e2e-bin'}:/usr/bin:/bin:/usr/sbin:/sbin",
+            XDG_STATE_HOME=str(self.home / ".local" / "state"), TMPDIR=str(self.base / "tmp"),
+            GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null",
+            GIT_AUTHOR_NAME="e2e", GIT_AUTHOR_EMAIL="e2e@example.invalid",
+            GIT_COMMITTER_NAME="e2e", GIT_COMMITTER_EMAIL="e2e@example.invalid")
+        env.pop("XDG_RUNTIME_DIR", None)
+        return env
+
+    def git(self, *args: str, project: Path | None = None) -> subprocess.CompletedProcess:
+        git = subprocess.run(["/bin/bash", str(SETUP), "--print-git"], capture_output=True, text=True,
+                             stdin=subprocess.DEVNULL).stdout.strip()
+        if not git.startswith("/"):
+            raise HarnessError("no trusted git")
+        return subprocess.run([git, "-C", str(project or self.project), *args], capture_output=True, text=True,
+                              env=self.env, stdin=subprocess.DEVNULL)
+
+    def _fake_project(self) -> None:
+        """A Git repository holding a committed fixture, its answer oracle and two QA wrappers (PLAN T7)."""
+        self.project = self.base / "project"
+        self.project.mkdir()
+        self.project.chmod(0o755)
+        self.git("init", "-q")
+        (self.project / "fixture").mkdir()
+        (self.project / "fixture" / "facts.txt").write_text("alpha 3\nbeta 5\n")
+        (self.project / "fixture" / "oracle.json").write_text(json.dumps({"alpha": 3, "beta": 5}, sort_keys=True))
+        wrapper = "#!/usr/bin/python3\nprint(1)\n"
+        interpreter = hashlib.sha256(Path("/usr/bin/python3").read_bytes()).hexdigest()
+        entries = {}
+        for kind, name in (("deterministic_checks", "tests"), ("security_checks", "security")):
+            path = self.project / "qa-check"
+            path.write_text(wrapper)
+            path.chmod(0o700)
+            entries[kind] = [{
+                "check_id": name, "driver": "python-wrapper", "argv": ["./qa-check"],
+                "executable_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "interpreter_sha256": interpreter, "runtime_tree": None, "timeout_seconds": 5}]
+        self.checks = self.base / "operational-checks.json"
+        self.checks.write_text(json.dumps({"version": 1, **entries}))
+        self.git("add", ".")
+        self.git("commit", "-qm", "fixture")
+
+    def answers(self, **changes) -> Path:
+        """The S1 answers file (docs/setup-wizard.md); `changes` replace or, with None, drop an answer."""
+        data = {"project": str(self.project), "operational_checks": str(self.checks),
+                "providers": {"codex": "on", "claude": "on", "claude_models": "claude-sonnet-5-5", "bridge": "off"},
+                "commit": True, "commands_rule": True, "move_records": False, "upgrade_records": False}
+        for key, value in changes.items():
+            if value is None:
+                data.pop(key, None)
+            else:
+                data[key] = value
+        path = self.base / "answers.json"
+        path.write_text(json.dumps(data))
+        return path
+
+    # Running -------------------------------------------------------------------------------------
+
+    def terminal(self, argv: list[str], *, label: str = "setup", refuses: bool = False,
+                 cwd: Path | None = None, timeout: float = SETUP_TIMEOUT_SECONDS) -> Run:
+        """Run `argv` on a pseudo-terminal, as an owner at a terminal does, answering what it asks.
+
+        The owner's three kinds of question are answered the way the test owner would: a yes or no
+        statement about billing is answered yes, and a passphrase is typed. Anything else that waits is
+        a failure (the run times out and is stopped). Output is collected for the G8 scan."""
+        started = time.monotonic()
+        pid, descriptor = pty.fork()
+        if pid == 0:  # the child: its own session, the terminal its controlling one
+            with contextlib.suppress(Exception):
+                os.chdir(cwd or ROOT)
+                os.execve(argv[0], argv, self.env)
+            os._exit(127)
+        raw, mark, timed_out, status = b"", 0, False, None
+        rules = ((re.compile(r"\[y/N\]\s*$"), "y"), (re.compile(r"[Pp]assphrase[^\n]*:\s*$"), self.passphrase))
+        try:
+            while True:
+                ready, _, _ = select.select([descriptor], [], [], 0.25)
+                if ready:
+                    try:
+                        chunk = os.read(descriptor, 65536)
+                    except OSError:
+                        chunk = b""
+                    if not chunk:
+                        break
+                    raw += chunk
+                tail = strip_ansi(raw[mark:])[-400:]
+                for pattern, reply in rules:
+                    if pattern.search(tail):
+                        time.sleep(0.2)
+                        os.write(descriptor, reply.encode() + b"\r")
+                        mark = len(raw)
+                        break
+                if time.monotonic() - started > timeout:
+                    timed_out = True
+                    break
+        finally:
+            if timed_out:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(pid, signal.SIGKILL)
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+            try:
+                _, status = os.waitpid(pid, 0)
+            except ChildProcessError:
+                status = 0
+        text = strip_ansi(raw)
+        self.outputs.append(text)
+        code = os.waitstatus_to_exitcode(status) if status is not None else -1
+        self.steps.append({"step": label, "code": code, "refuses": refuses, "timed_out": timed_out})
+        self.register_private_values()
+        return Run(code, text, round(time.monotonic() - started, 3), timed_out)
+
+    def setup(self, answers: Path, *, refuses: bool = False) -> Run:
+        """`./setup.sh --answers FILE`, from the clone, through the stand-in Python on the PATH."""
+        return self.terminal(["/bin/bash", str(SETUP), "--answers", str(answers)], label="setup_answers",
+                             refuses=refuses)
+
+    def update(self) -> Run:
+        """`./setup.sh --update PROJECT`: setup again on the installed project, no menu."""
+        return self.terminal(["/bin/bash", str(SETUP), "--update", str(self.project)], label="setup_update")
+
+    def cli(self, *args: str, timeout: float = 60) -> tuple[int, dict | None, str]:
+        """An owner command of this clone's orchestrator CLI for the fake project; (exit, JSON reply, text)."""
+        done = subprocess.run([str(self.shim), "-I", "-B", "-S", str(CLI), *args, "--project-root", str(self.project)],
+                              capture_output=True, text=True, env=self.env, stdin=subprocess.DEVNULL,
+                              timeout=timeout, cwd=str(self.base))
+        text = done.stdout + done.stderr
+        self.outputs.append(text)
+        self.steps.append({"step": args[0], "code": done.returncode, "refuses": False, "timed_out": False})
+        try:
+            reply = json.loads(done.stdout)
+        except ValueError:
+            reply = None
+        return done.returncode, reply if isinstance(reply, dict) else None, text
+
+    # Snapshots -----------------------------------------------------------------------------------
+
+    def snapshot(self) -> dict:
+        """What a second setup must leave alone: every file and digest, and the records by kind.
+
+        Files: the project (except Git's own objects), the scratch HOME (Codex rule and protected copy,
+        ~/.ssh, the state folder's files), each as a relative name and a SHA-256. Volatile files that only
+        a running service rewrites (sockets, locks, write-ahead logs, the database files themselves) are
+        named but not hashed; their content is judged through the records counted below. Git: HEAD and
+        the number of commits. Records: the collector's counts by kind (learning-status), never content."""
+        files = {}
+        for top, label in ((self.project, "project"), (self.home, "home")):
+            for folder, names, leaves in os.walk(top):
+                names[:] = sorted(name for name in names if not (label == "project" and name == ".git"
+                                                                  and folder == str(top)) and name != ".e2e-bin"
+                                  and not (label == "home" and folder == str(self.home / ".local") and name == "bin"))
+                for leaf in sorted(leaves):
+                    path = Path(folder) / leaf
+                    relative = f"{label}/{path.relative_to(top)}"
+                    if path.is_symlink() or not path.is_file():
+                        files[relative] = "-"
+                    elif re.search(r"\.(sqlite3(-wal|-shm)?|lock|sock|pid)$|/rt/", relative):
+                        files[relative] = "volatile"
+                    else:
+                        files[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        count = self.git("rev-list", "--count", "HEAD").stdout.strip()
+        dirty = self.git("status", "--porcelain").stdout
+        return {"files": files, "head": head, "commits": count, "dirty": dirty, "records": self.records(),
+                "ledger": self.ledger_counts()}
+
+    def records(self) -> dict:
+        """The collector's counts by kind: capacity `live` counts, ingestion counts, attestations."""
+        code, status, _ = self.cli("learning-status")
+        if code != 0 or status is None:
+            return {"status": "unreadable"}
+        counts = {}
+        for group in ("account_capacity", "project_capacity"):
+            for kind, value in (status.get(group) or {}).items():
+                counts[f"{group}.{kind}"] = (value or {}).get("live")
+        for kind, value in ((status.get("ingestion") or {}).get("hook_event_counts") or {}).items():
+            counts[f"hook_events.{kind}"] = value
+        for provider, value in (status.get("provider_attestations") or {}).items():
+            counts[f"attestation.{provider}"] = (value or {}).get("state")
+        counts["owner_key.replacements"] = (status.get("owner_key") or {}).get("replacements")
+        return counts
+
+    def ledger_counts(self) -> dict:
+        """Row counts by table in the account ledger, read-only (names and numbers, never content)."""
+        path = self.home / ".local" / "state" / "codex-agents" / "learning.sqlite3"
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            tables = [row[0] for row in connection.execute(
+                "select name from sqlite_master where type = 'table' and name not like 'sqlite_%' order by name")]
+            return {name: connection.execute(f'select count(*) from "{name}"').fetchone()[0] for name in tables}
+        finally:
+            connection.close()
+
+    # Cleanup -------------------------------------------------------------------------------------
+
+    def stop_processes(self) -> None:
+        """Stop every process started inside this scratch folder (the collector, project services)."""
+        base = getattr(self, "base", None)
+        if base is None:
+            return
+        for _ in range(3):
+            listing = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
+            pids = [int(line.split(None, 1)[0]) for line in listing.splitlines()
+                    if str(base) in line and int(line.split(None, 1)[0]) != os.getpid()]
+            if not pids:
+                return
+            for pid in pids:
+                with contextlib.suppress(OSError):
+                    os.kill(pid, signal.SIGTERM)
+            time.sleep(0.6)
+        for pid in pids:
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGKILL)
+
+    # Private values (G8) -------------------------------------------------------------------------
+
+    def private_values(self) -> dict:
+        """The values no output may carry: name -> the text to look for (the names are what is reported)."""
+        fingerprint, blob = self.key_values()
+        return {"owner_key_fingerprint": fingerprint, "owner_key_material": blob,
+                "passphrase": self.passphrase, "temporary_home_path": str(self.home),
+                "temporary_home_realpath": os.path.realpath(self.home)}
+
+    def register_private_values(self) -> None:
+        """Remember the values for the report's own scan (kept in memory only, never written)."""
+        PRIVATE_VALUES.update(value for value in self.private_values().values() if value)
+
+    def leaks(self, text: str) -> list[str]:
+        return sorted({name for name, value in self.private_values().items() if value and value in text})
+
+
+def python_version() -> str:
+    return "%d.%d.%d" % sys.version_info[:3]

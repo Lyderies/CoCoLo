@@ -24,14 +24,14 @@
    "flow": "L1",
    "source": "PLAN-0.4.0.md T7",
    "statement": "A fresh install through the scripted setup (S1 answers file and passphrase) finishes with every step ok, the protected command rule installed and the collector ready.",
-   "checks": []
+   "checks": ["l1_fresh_install_scripted_setup"]
   },
   {
    "id": "L1.2",
    "flow": "L1",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Setup run again on an installed project changes nothing: same files, same digests, no new records except its own checks.",
-   "checks": []
+   "checks": ["l1_setup_again_with_answers_changes_nothing", "l1_update_on_installed_project_changes_nothing"]
   },
   {
    "id": "L2.1",
@@ -297,7 +297,7 @@
    "flow": "all",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Every step exits 0, or refuses with a reason the step expects; a bare run_unavailable, account_unavailable or probe_unavailable is a failure.",
-   "checks": []
+   "checks": ["g1_every_step_exits_zero_or_refuses_as_expected"]
   },
   {
    "id": "G2",
@@ -346,14 +346,14 @@
    "flow": "all",
    "source": "PLAN-0.4.0.md T7",
    "statement": "No private value appears in any output: keys, fingerprints, paths under the temporary HOME.",
-   "checks": []
+   "checks": ["g8_no_private_value_in_any_output"]
   },
   {
    "id": "G9",
    "flow": "all",
    "source": "PLAN-0.4.0.md T7",
    "statement": "A content-free JSON report with phases, seconds, reason codes and pass or fail per requirement is written, kept as the CI artifact.",
-   "checks": []
+   "checks": ["g9_report_is_content_free_json_with_phases_seconds_reasons"]
   }
  ]
 }
