@@ -203,7 +203,13 @@
         "security": "claude_agents_security_reviewer",
         "verification": "claude_agents_verification_worker"
       },
-      "verifier": {"model": "claude-opus-5-5", "effort": "high"},
+      "verifier": {
+        "model": "claude-opus-5-5", "effort": "high",
+        "by_risk": {
+          "low": {"model": "claude-sonnet-5-5", "effort": "medium"},
+          "medium": {"model": "claude-sonnet-5-5", "effort": "medium"}
+        }
+      },
       "client_versions": {"minimum": "2.1.0", "maximum_exclusive": "2.2.0"},
       "max_admissions_per_window": 40
     },
@@ -315,11 +321,29 @@
       {"provider": "codex", "model": "gpt-6-astra", "effort": "high"}
     ]
   },
+  "risk_candidates": {
+    "coding": {
+      "bounded": {
+        "low": [
+          {"provider": "codex", "model": "gpt-6-sol", "effort": "medium"},
+          {"provider": "claude", "model": "claude-sonnet-5-5", "effort": "medium"}
+        ],
+        "medium": [
+          {"provider": "codex", "model": "gpt-6-sol", "effort": "medium"},
+          {"provider": "claude", "model": "claude-sonnet-5-5", "effort": "medium"}
+        ]
+      }
+    }
+  },
   "verification": {
     "mode": "all_meaningful",
     "role": "codex_agents_verification_worker",
     "model": "gpt-6.1-sol",
-    "effort": "high"
+    "effort": "high",
+    "by_risk": {
+      "low": {"model": "gpt-6.1-sol", "effort": "medium"},
+      "medium": {"model": "gpt-6.1-sol", "effort": "medium"}
+    }
   },
   "quality_thresholds": {
     "minimum_score": 0.9,

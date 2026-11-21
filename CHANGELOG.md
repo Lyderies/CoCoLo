@@ -4,6 +4,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.42 (O0d): low/medium-risk verifiers use Sonnet 5.5 (medium) for Codex work and
+  GPT-6.1 Sol (medium) for Claude work, including confirming reviews. Bounded coding at those
+  risks tries GPT-6 Sol (medium), then Sonnet 5.5 (medium). High/critical routes keep their
+  existing choices, including Opus for the first review of high-risk security code.
+
 - A collector started before its code changed kept running the old code (Python never reloads its modules), so a
   fix merged afterwards did not take effect and a live check ran the old behaviour. The collector's health now
   says whether its runtime files differ from the digest it loaded; `learning-status` shows

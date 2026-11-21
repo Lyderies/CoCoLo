@@ -1,9 +1,7 @@
 """R3 (RT-2, RT-3 escalation, RT-5): risk, failed attempts and the verifier follow the policy.
 
-Every behaviour here is a policy opt-in. The shipped policy has no `risk_candidates`,
-`escalation` or per-risk verifier entries, so it must route exactly as before: the golden test
-holds a digest of every route over a cross product of task shapes, risks, attempts and provider
-configurations. The mechanism itself is tested with test policies built in this module.
+The shipped policy opts low/medium bounded coding and verifiers into O0d bands. The golden
+fixture pins the route cross product; synthetic policies independently exercise all R3 mechanisms.
 """
 
 from __future__ import annotations
@@ -154,7 +152,7 @@ def golden_buckets(policy: dict) -> dict[str, str]:
 
 
 def build_policy(shipped: dict) -> dict:
-    """The shipped policy plus the three R3 mechanisms; cheaper candidates are test-only."""
+    """The shipped policy plus synthetic R3 candidates, escalation and verifier settings."""
 
     policy = enable_providers(deepcopy(shipped))
     codex = lambda model, effort: {"provider": "codex", "model": model, "effort": effort}  # noqa: E731
@@ -198,25 +196,108 @@ def short(route: dict) -> tuple[str, str, str]:
     return (route["provider"], route["model"], route["effort"])
 
 
+class ShippedVerifierBandTests(unittest.TestCase):
+    """O0d: ship cheaper low/medium bands without changing high/critical routes."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.policy = load_policy(POLICY_PATH)
+
+    def test_shipped_claude_verifier_low_medium_is_sonnet_medium(self) -> None:
+        policy = enable_providers(deepcopy(self.policy))
+        for risk in ("low", "medium"):
+            with self.subTest(risk=risk):
+                self.assertEqual(
+                    {"model": "claude-sonnet-5-5", "effort": "medium"},
+                    policy["providers"]["claude"]["verifier"].get("by_risk", {}).get(risk),
+                )
+                worker = route_task(base_task(risk=risk), policy, primary_provider="claude")
+                self.assertEqual(("claude", "claude-sonnet-5-5", "medium"), short(worker["verifier"]))
+                review = route_task(base_task(
+                    family="verification", operation="review", risk=risk,
+                    verification_for_family="coding", verification_for_provider="codex",
+                    verification_for_outcome="a" * 64,
+                ), policy, primary_provider="claude")
+                self.assertEqual(short(worker["verifier"]), short(review))
+
+    def test_shipped_codex_verifier_low_medium_is_sol_medium(self) -> None:
+        policy = enable_providers(deepcopy(self.policy))
+        for risk in ("low", "medium"):
+            with self.subTest(risk=risk):
+                self.assertEqual(
+                    {"model": "gpt-6.1-sol", "effort": "medium"},
+                    policy["verification"].get("by_risk", {}).get(risk),
+                )
+                worker = route_task(base_task(
+                    risk=risk, operation="review", ambiguity="partial",
+                    acceptance_strength="independent_judgment", deterministic_validation=False,
+                ), policy, primary_provider="claude")
+                self.assertEqual("claude", worker["provider"])
+                self.assertEqual(("codex", "gpt-6.1-sol", "medium"), short(worker["verifier"]))
+                review = route_task(base_task(
+                    family="verification", operation="review", risk=risk,
+                    verification_for_family="coding", verification_for_provider="claude",
+                    verification_for_outcome="a" * 64,
+                ), policy, primary_provider="claude")
+                self.assertEqual(short(worker["verifier"]), short(review))
+
+    def test_shipped_bounded_coding_low_medium_candidates_and_fallback(self) -> None:
+        expected = [
+            {"provider": "codex", "model": "gpt-6-sol", "effort": "medium"},
+            {"provider": "claude", "model": "claude-sonnet-5-5", "effort": "medium"},
+        ]
+        for risk in ("low", "medium"):
+            with self.subTest(risk=risk):
+                self.assertEqual(expected, self.policy.get("risk_candidates", {}).get(
+                    "coding", {}).get("bounded", {}).get(risk))
+                policy = enable_providers(deepcopy(self.policy))
+                self.assertEqual(tuple(expected[0].values()), short(route_task(
+                    base_task(risk=risk), policy, primary_provider="claude")))
+                policy["provider_routing"]["providers"]["codex"]["enabled"] = False
+                policy["provider_config_digest"] = content_digest(policy["provider_routing"])
+                self.assertEqual(tuple(expected[1].values()), short(route_task(
+                    base_task(risk=risk), policy, primary_provider="claude")))
+
+    def test_shipped_high_critical_security_reviews_keep_opus(self) -> None:
+        policy = enable_providers(deepcopy(self.policy))
+        for risk in ("high", "critical"):
+            with self.subTest(risk=risk):
+                worker = route_task(base_task(family="security", risk=risk, operation="review"),
+                                    policy, primary_provider="claude")
+                self.assertEqual(("codex", "gpt-6-astra", "high"), short(worker))
+                self.assertEqual(("claude", "claude-opus-5-5", "high"), short(worker["verifier"]))
+                review = route_task(base_task(
+                    family="verification", operation="review", risk=risk,
+                    verification_for_family="security", verification_for_provider="codex",
+                    verification_for_outcome="a" * 64,
+                ), policy, primary_provider="claude")
+                self.assertEqual(short(worker["verifier"]), short(review))
+
+
 class GoldenTests(unittest.TestCase):
-    """The shipped policy, with no policy edit, routes identically to today."""
+    """The shipped policy routes exactly as its approved golden fixture records."""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.shipped = load_policy(POLICY_PATH)
 
-    def test_shipped_policy_carries_none_of_the_new_entries(self) -> None:
-        for key in ("risk_candidates", "escalation"):
-            self.assertNotIn(key, self.shipped)
-        self.assertNotIn("by_risk", self.shipped["verification"])
-        self.assertNotIn("by_risk", self.shipped["providers"]["claude"]["verifier"])
+    def test_shipped_policy_carries_only_approved_risk_entries(self) -> None:
+        self.assertNotIn("escalation", self.shipped)
+        self.assertEqual({"coding"}, set(self.shipped["risk_candidates"]))
+        self.assertEqual({"bounded"}, set(self.shipped["risk_candidates"]["coding"]))
+        for bands in (
+            self.shipped["risk_candidates"]["coding"]["bounded"],
+            self.shipped["verification"]["by_risk"],
+            self.shipped["providers"]["claude"]["verifier"]["by_risk"],
+        ):
+            self.assertEqual({"low", "medium"}, set(bands))
 
     def test_shipped_policy_routes_identically_over_the_cross_product(self) -> None:
         expected = json.loads(GOLDEN_PATH.read_text())
         actual = golden_buckets(self.shipped)
         self.assertEqual(sorted(expected), sorted(actual))
         changed = sorted(name for name in expected if expected[name] != actual[name])
-        self.assertEqual([], changed, "routes changed without a policy edit")
+        self.assertEqual([], changed, "routes differ from the approved shipped policy")
 
 
 class RiskRoutingTests(unittest.TestCase):
@@ -244,8 +325,10 @@ class RiskRoutingTests(unittest.TestCase):
 
     def test_a_band_without_an_entry_uses_todays_list(self) -> None:
         medium = self.route(risk="medium")
+        plain = enable_providers(deepcopy(self.shipped))
+        plain.pop("risk_candidates", None)  # Exercise absence, independent of shipped opt-ins.
         today = route_task(
-            base_task(risk="medium"), enable_providers(deepcopy(self.shipped)),
+            base_task(risk="medium"), plain,
             primary_provider="claude",
         )
         self.assertEqual(short(today), short(medium))
@@ -544,6 +627,8 @@ class VerifierRiskTests(unittest.TestCase):
 
     def test_absent_per_risk_entries_keep_todays_verifier(self) -> None:
         plain = enable_providers(deepcopy(self.shipped))
+        plain["providers"]["claude"]["verifier"].pop("by_risk", None)
+        plain["verification"].pop("by_risk", None)
         for risk in RISKS:
             with self.subTest(risk=risk):
                 route = route_task(base_task(risk=risk), plain, primary_provider="claude")
