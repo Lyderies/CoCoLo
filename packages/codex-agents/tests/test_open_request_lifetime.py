@@ -237,6 +237,26 @@ class OpenIndexTests(AppendLookupTests):
         self.assertEqual(version, self.ledger._connection.execute('PRAGMA user_version').fetchone()[0])
 
 
+    def test_O0c_P0_an_upgraded_ledger_without_the_unfinished_index_still_purges(self):
+        """Review rev040o0ccapsr1 M3: the purge of never finished opens names its index; a ledger from before it has
+        none until it opens, and opening creates it before any purge can run, so neither purge fails."""
+        from codex_agents.learning_store import OPEN_REQUEST_RETENTION_MS
+        self.reopen()
+        self.ledger._connection.execute('DROP INDEX IF EXISTS account_open_requests_unfinished')
+        self.reopen()
+        present = {row[0] for row in self.ledger._connection.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        self.assertIn('account_open_requests_unfinished', present)
+        project = self.ledger._connection.execute('SELECT project_id FROM projects LIMIT 1').fetchone()[0]
+        deadline = 5_000_000_000_000
+        with self.ledger._lock, self.ledger._connection:
+            self.ledger._connection.execute(
+                "INSERT INTO account_open_requests(project_id,request_key,original_key,parameters_digest,handle_digest,"
+                "run_id,state,opened_at_ms,observation_deadline_at_ms,receipt_digest,request_seal) "
+                "VALUES(?,'k','o','p','h','r','pending',1,?,NULL,'s')", (project, deadline))
+        self.assertEqual(1, self.ledger.sweep_account_retention(now_ms=deadline + OPEN_REQUEST_RETENTION_MS + 1))
+        self.assertEqual(0, self.ledger._connection.execute('SELECT COUNT(*) FROM account_open_requests').fetchone()[0])
+
+
 class OpenLifetimeJobTests(OriginalAccountOpenJobTests):
     """OP-1 and OP-2 with real signature work: opens that commit, then finish."""
 
@@ -352,6 +372,93 @@ class OpenLifetimeJobTests(OriginalAccountOpenJobTests):
             again, _ = self.reference.preflight(limits=small_limits(1))  # the same request id opens fresh
         self.assertEqual(captured.request_key, again.request_key)
         self.assertEqual(1, total())
+
+    def _open_row(self, tag, *, state, deadline, opened=None, denied=False):
+        """One open request (and, if `denied`, a receipt that names no run); returns its handle digest."""
+        project = self.reference.base.scope.project_id
+        key, handle = f'k-{tag:0>60}', f'h-{tag:0>60}'
+        with self.ledger._lock, self.ledger._connection:
+            self.ledger._connection.execute(
+                "INSERT INTO account_open_requests(project_id,request_key,original_key,parameters_digest,handle_digest,"
+                "run_id,state,opened_at_ms,observation_deadline_at_ms,receipt_digest,request_seal) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (project, key, 'o-' + tag, 'p', handle, 'run-' + tag, state,
+                 deadline - 1000 if opened is None else opened, deadline, '0' * 64 if state == 'committed' else None, 's'))
+            if denied:
+                self.ledger._connection.execute(
+                    'INSERT INTO account_open_receipts VALUES(?,?,NULL,?,?,?,x\'7b7d\',?)',
+                    (project, handle, key, 's', 'p', 'c'))
+        return handle
+
+    def _gone(self, handle):
+        return self.ledger._connection.execute(
+            'SELECT COUNT(*) FROM account_open_requests WHERE handle_digest=?', (handle,)).fetchone()[0] == 0
+
+    def test_O0c_P0_the_7_day_rule_counts_from_the_opens_own_expiry_not_from_when_it_was_opened(self):
+        """Review rev040o0ccapsr1 M1: the rule is 7 days after expiry, for a denied open as for a never finished one,
+        whatever its opened-at time (the host-run TTL, 24 h, must not be added)."""
+        from codex_agents.learning_store import OPEN_REQUEST_RETENTION_MS
+        self.assertEqual(7 * 24 * 60 * 60 * 1000, OPEN_REQUEST_RETENTION_MS)
+        deadline = 5_000_000_000_000
+        denied = self._open_row('denied', state='committed', deadline=deadline, denied=True)
+        unfinished = self._open_row('unfinished', state='pending', deadline=deadline)
+        hour = 60 * 60 * 1000
+        self.ledger.sweep_account_retention(now_ms=deadline + OPEN_REQUEST_RETENTION_MS - hour, batch=100)  # 6 d 23 h
+        self.assertFalse(self._gone(denied))
+        self.assertFalse(self._gone(unfinished))
+        self.ledger.sweep_account_retention(now_ms=deadline + OPEN_REQUEST_RETENTION_MS, batch=100)  # exactly 7 d
+        self.assertFalse(self._gone(denied))
+        self.ledger.sweep_account_retention(now_ms=deadline + OPEN_REQUEST_RETENTION_MS + 1, batch=100)  # past 7 d
+        self.assertTrue(self._gone(denied))
+        self.assertTrue(self._gone(unfinished))
+
+    def test_O0c_P0_a_denied_or_unfinished_open_with_a_hold_or_a_binding_survives_the_purge(self):
+        """Review rev040o0ccapsr1 M4: past 7 days a clean denied or unfinished open goes, while one a hold (any
+        state) or a binding still names stays, so the purge never drops a row something relies on."""
+        from codex_agents.learning_store import OPEN_REQUEST_RETENTION_MS
+        project = self.reference.base.scope.project_id
+        deadline = 5_000_000_000_000
+        now = deadline + OPEN_REQUEST_RETENTION_MS + 1
+        connection = self.ledger._connection
+        kept, clean = [], []
+        for state, denied in (('committed', True), ('pending', False)):
+            tag = 'd' if denied else 'u'
+            clean.append(self._open_row(tag + 'clean', state=state, deadline=deadline, denied=denied))
+            for kind in ('binding', 'run_slot'):
+                for hold_state in ('held', 'released'):
+                    handle = self._open_row(f'{tag}{kind}{hold_state}', state=state, deadline=deadline, denied=denied)
+                    with self.ledger._lock, connection:
+                        connection.execute(
+                            'INSERT INTO run_holds(kind,project_id,identity,state,taken_at_ms,released_at_ms,release_kind) '
+                            'VALUES(?,?,?,?,1,?,?)',
+                            (kind, project, handle, hold_state, 2 if hold_state == 'released' else None,
+                             'completed' if hold_state == 'released' else None))
+                    kept.append(handle)
+            handle = self._open_row(tag + 'binding_row', state=state, deadline=deadline, denied=denied)
+            with self.ledger._lock, connection:
+                connection.execute(
+                    "INSERT INTO host_run_bindings(project_id,handle_digest,run_id,assignment_digest,task_digest,"
+                    "route_digest,configuration_digest,client_version,created_at_ms,expires_at_ms,binding_state,"
+                    "history_owner) VALUES(?,?,?,?,?,?,?,?,1,2,'terminal','project')",
+                    (project, handle, 'bound-' + tag, 'a', 't', 'r', 'c', 'v'))
+                connection.execute("DELETE FROM run_holds WHERE project_id=? AND identity=?", (project, handle))
+            kept.append(handle)
+        self.ledger.sweep_account_retention(now_ms=now, batch=100)
+        for handle in clean:
+            self.assertTrue(self._gone(handle), handle)
+        for handle in kept:
+            self.assertFalse(self._gone(handle), handle)
+
+    def test_O0c_P0_the_purge_never_removes_more_than_its_batch(self):
+        """Review rev040o0ccapsr1 LOW: the finished, denied and unfinished purges share one batch limit."""
+        from codex_agents.learning_store import OPEN_REQUEST_RETENTION_MS
+        deadline = 5_000_000_000_000
+        handles = [self._open_row(f'{kind}{n}', state=state, deadline=deadline, denied=denied)
+                   for n in range(3) for kind, state, denied in (('d', 'committed', True), ('u', 'pending', False))]
+        now = deadline + OPEN_REQUEST_RETENTION_MS + 1
+        self.assertEqual(4, self.ledger.sweep_account_retention(now_ms=now, batch=4))
+        self.assertEqual(2, self.ledger.sweep_account_retention(now_ms=now, batch=4))
+        self.assertTrue(all(self._gone(handle) for handle in handles))
 
     def test_OP_2_the_purge_reads_only_requests_past_retention_as_young_ones_pile_up(self):
         handle, opened = self.committed()

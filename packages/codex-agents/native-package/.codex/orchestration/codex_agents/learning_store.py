@@ -281,6 +281,18 @@ def _kept_learning_sql(alias: str) -> str:
                   f"json_extract(CAST({alias}.content AS TEXT),'$.corpus_state')!='development')")
     return f"({controlled} OR {link} OR {grant} OR {attested})"
 
+def _cited_sql(alias: str) -> str:
+    """A record something else still names, in any table that references records (review rev040o0ccapsr1 M2):
+    a record link in either direction, a consumed grant (as the grant or as its promotion record), a stored
+    file's source. Such a record is never deleted by a sweep whose only reason is that a later one supersedes it."""
+    project, record = f"{alias}.project_id", f"{alias}.record_id"
+    return ("(EXISTS (SELECT 1 FROM record_links l WHERE l.project_id=" + project + " AND "
+            "(l.from_record_id=" + record + " OR l.to_record_id=" + record + ")) "
+            "OR EXISTS (SELECT 1 FROM consumed_grants g WHERE g.project_id=" + project + " AND "
+            "(g.grant_id=" + record + " OR g.promotion_record_id=" + record + ")) "
+            "OR EXISTS (SELECT 1 FROM stored_files f WHERE f.project_id=" + project + " AND "
+            "f.source_record_id=" + record + "))")
+
 _DAY_MS = 24 * 60 * 60 * 1000
 
 
@@ -2183,6 +2195,10 @@ class LearningLedger:
                 "CREATE INDEX IF NOT EXISTS account_open_requests_unfinished "
                 "ON account_open_requests(observation_deadline_at_ms) WHERE state='pending'"
             )
+            self._connection.execute(  # O0c P0 (review rev040o0ccapsr1 M1): the purge of denied opens, by expiry
+                "CREATE INDEX IF NOT EXISTS account_open_requests_committed_expiry "
+                "ON account_open_requests(observation_deadline_at_ms) WHERE state='committed'"
+            )
             self._record_first_owner_key()
             self.state.mark_initialized()
             self._reconcile_managed_files()
@@ -2403,8 +2419,9 @@ class LearningLedger:
     def sweep_superseded_attestations(self, *, batch: int = LEARNING_SWEEP_BATCH) -> int:
         """O0c P9 (owner 2026-11-21): remove up to `batch` billing attestations a later signed one of the same
         owner supersedes for the same provider and account (admission reads only the latest), keeping the
-        latest per provider and account; returns how many. Only an owner-source attestation that no record
-        links from, and whose later one is owner-signed, is removed (its signature row goes with it).
+        latest per provider and account; returns how many. Only an owner-source attestation that nothing cites
+        (`_cited_sql`: a record link either way, a consumed grant, a stored file), and whose later one is
+        owner-signed, is removed (its signature row goes with it).
         Skipped while a reader or a transaction is active."""
         with self._held():
             if self._readers() or self._connection.in_transaction:
@@ -2412,8 +2429,7 @@ class LearningLedger:
             rows = self._connection.execute(
                 "SELECT r.project_id,r.record_id FROM records r WHERE r.record_type='billing_attestation' "
                 "AND r.source='owner' "
-                "AND NOT EXISTS (SELECT 1 FROM record_links l WHERE l.project_id=r.project_id "
-                "AND l.from_record_id=r.record_id) "
+                f"AND NOT {_cited_sql('r')} "
                 "AND EXISTS (SELECT 1 FROM records n JOIN owner_attestations a ON a.project_id=n.project_id "
                 "AND a.subject_record_id=n.record_id WHERE n.project_id=r.project_id "
                 "AND n.record_type='billing_attestation' AND n.source='owner' "
