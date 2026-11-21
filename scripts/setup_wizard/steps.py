@@ -267,6 +267,20 @@ def summary_destination_refusal(path: str) -> str | None:
     return None
 
 
+# The Claude package's own files, exactly (the manifest and the helper modules included): the only
+# files setup's advice ever tells anyone to delete.
+CLAUDE_PACKAGE_FILES = (
+    ".claude/agents/claude_agents_implementation_worker.md", ".claude/agents/claude_agents_planner.md",
+    ".claude/agents/claude_agents_researcher.md", ".claude/agents/claude_agents_security_reviewer.md",
+    ".claude/agents/claude_agents_verification_worker.md", ".claude/skills/claude-agents/SKILL.md",
+    ".claude/claude-agents/install-manifest.json", ".claude/claude-agents/lib/claude_agents/__init__.py",
+    ".claude/claude-agents/lib/claude_agents/contracts.py", ".claude/claude-agents/lib/claude_agents/validation.py",
+)
+CLAUDE_CONTROL_FILES = ".claude/claude-agents/install-pending.json and .claude/claude-agents/install.lock"
+_LOOK_AND_SAVE = "Run git status and git diff -- .claude in the project to see what differs. Save any change you want to keep,"
+_REMOVE_EXACT = ("remove the package files themselves, exactly these: " + ", ".join(CLAUDE_PACKAGE_FILES)
+                 + " (remove a directory above them only if it is then empty), and commit that")
+
 # setup.sh's explain_installer, in its order: the first pattern that matches gives the fixed message.
 # The installer's own text is only matched, never shown.
 _INSTALLER_REFUSALS = (
@@ -298,25 +312,38 @@ _INSTALLER_REFUSALS = (
      "source, then run setup again from that copy."),
     (("*untrusted_manifest*",),
      "The Claude files installed in this project do not match any release this setup knows how to "
-     "upgrade (untrusted manifest). Nothing was changed. Run git status and git diff -- .claude in the project to "
-     "see what differs. Save any change you want to keep, then either put the package files back from Git, or "
-     "remove the package files (.claude/agents/claude_agents_*.md, .claude/skills/claude-agents and "
-     ".claude/claude-agents), commit that, and run setup again. Your other .claude files are not part of it."),
+     "upgrade (untrusted manifest). Nothing was changed. " + _LOOK_AND_SAVE + " then either put the package "
+     "files back from Git, or " + _REMOVE_EXACT + ", and run setup again."),
     (("*update_required*",),
      "The Claude files installed in this project are from a different release than this setup (update "
      "required). Nothing was changed. Update the install (choose Configure, then 'Update the install and "
      "walk through every step')."),
-    (("*managed_file_modified*",),
+    (("*managed_file_modified*", "*owned_file_changed*"),
      "A Claude package file in this project is changed or missing (managed file modified), so setup did "
-     "not replace it. Nothing was changed. Run git status and git diff -- .claude in the project to see which "
-     "file. Save any change you want to keep, put that file back with git restore -- followed by its path, or "
-     "remove the package files (.claude/agents/claude_agents_*.md, .claude/skills/claude-agents and "
-     ".claude/claude-agents), commit that, and run setup again."),
+     "not replace it. Nothing was changed. " + _LOOK_AND_SAVE + " then put that file back with git restore -- "
+     "followed by its path, or " + _REMOVE_EXACT + ", and run setup again."),
+    (("*installation_pending*", "*rollback_pending*"),
+     "A Claude package change in this project was started and did not finish (installation pending), so some "
+     "package files may be half written. " + _LOOK_AND_SAVE + " then put the package files back from Git, "
+     "delete the two control files " + CLAUDE_CONTROL_FILES + ", and run setup again. Delete them only "
+     "when no setup or install is running."),
+    (("*not_installed*",),
+     "The Claude package is not installed in this project yet (not installed), so there is nothing to update "
+     "or verify. Nothing was changed. Run setup to install it."),
+    (("*write_failed*", "*operation_failed*"),
+     "The Claude package files could not be written (write failed), so setup went back to the previous state "
+     "where it could. Nothing was changed. Check that the project folder is writable and has free space, then "
+     "run setup again."),
+    (("*invalid_source*", "*source_missing*", "*non_offline_helper*", "*role_model_missing*",
+      "*invalid_operation*", "*invalid_apply*"),
+     "This copy of CoCoLo's Claude package is incomplete or damaged, so setup will not use it. Nothing was "
+     "changed. Get a fresh copy of CoCoLo from its official source, then run setup again from that copy."),
     (("*managed paths*", "*uncommitted*"),
      "Managed paths (.codex, .agents, .claude) have uncommitted changes. Commit or discard them first."),
-    (("*top of its working tree*", "*not a usable git*"),
+    (("*top of its working tree*", "*not a usable git*", "*git_target_required*"),
      "The path is not the top folder of a Git working tree. Choose the project root."),
-    (("*symlink*", "*unsafe_or_unavailable_path*", "*not a regular file*"),
+    (("*symlink*", "*unsafe_or_unavailable_path*", "*not a regular file*", "*invalid_root*", "*unsafe_file*",
+      "*unsafe_path*", "*oversized_file*", "*cannot be used safely*"),
      "A managed path is a symlink or cannot be used safely. Replace it with a real file or folder."),
     (("*differs*", "*conflict*", "*collision*", "*modified obsolete*", "*already exists*"),
      "A file in the project collides with a managed file (it differs from what would be installed). Move or "
@@ -341,7 +368,7 @@ _INSTALLER_REFUSALS = (
 )
 
 
-_NOT_UNDONE = ("Setup could not undo everything it had already changed, so some files may differ from before: "
+NOT_UNDONE = ("Setup could not undo everything it had already changed, so some files may differ from before: "
                "check git status in the project before anything else.")
 
 
@@ -350,6 +377,12 @@ def rollback_incomplete(reply) -> bool:
     steps_ = reply.get("rollback") if isinstance(reply, dict) else None
     return isinstance(steps_, list) and any(not (isinstance(item, dict) and item.get("ok") is True)
                                             for item in steps_)
+
+
+def rollback_notes(reply) -> list[str]:
+    """What the installer says about the steps it could not or would not undo, one note each."""
+    steps_ = reply.get("rollback") if isinstance(reply, dict) else None
+    return [item["note"] for item in steps_ or [] if isinstance(item, dict) and isinstance(item.get("note"), str)]
 
 
 def installer_refusal(raw: str, manual: str, rollback_incomplete: bool = False) -> tuple[str, bool]:
@@ -361,9 +394,9 @@ def installer_refusal(raw: str, manual: str, rollback_incomplete: bool = False) 
         if any(fnmatchcase(raw, pattern) for pattern in patterns):
             message = message.format(manual=manual)
             if rollback_incomplete:
-                message = message.replace("Nothing was changed.", _NOT_UNDONE)
-                if _NOT_UNDONE not in message:
-                    message = f"{message} {_NOT_UNDONE}"
+                message = message.replace("Nothing was changed.", NOT_UNDONE)
+                if NOT_UNDONE not in message:
+                    message = f"{message} {NOT_UNDONE}"
             return message, True
     return "The installer refused: run it manually to see why:", False
 

@@ -3,6 +3,7 @@
 No process, socket or sleep: the wizard's steps run against a stand-in terminal.
 """
 
+import ast
 import os
 import sys
 import tempfile
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATION = ROOT / "packages" / "codex-agents" / "native-package" / ".codex" / "orchestration"
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(1, str(ORCHESTRATION))
+sys.path.insert(2, str(ROOT / "packages" / "claude-agents" / "src"))
 
 from setup_wizard import flow, steps  # noqa: E402
 from setup_wizard.terminal import Stop  # noqa: E402
@@ -139,6 +141,56 @@ class RefusalWordingTests(unittest.TestCase):
         wizard.last_reply = {"ok": False, "claude": {"error": "managed_file_modified"},
                              "rollback": [{"package": "claude", "action": "restore", "ok": True}]}
         self.assertIn("Nothing was changed", wizard.explain_installer("The install failed", self.MANUAL))
+
+    def test_the_removal_advice_names_exact_package_files_never_a_glob_or_a_whole_folder(self) -> None:
+        for code in ("untrusted_manifest", "managed_file_modified"):
+            with self.subTest(code=code):
+                text = self.message(code)
+                self.assertNotIn("claude_agents_*", text)
+                self.assertNotIn(" and .claude/claude-agents,", text)
+                for exact in steps.CLAUDE_PACKAGE_FILES:
+                    self.assertIn(exact, text)
+                self.assertIn("only if it is then empty", text)
+
+    def test_every_refusal_code_of_the_claude_package_has_a_wizard_message(self) -> None:
+        source = (ROOT / "packages" / "claude-agents" / "src" / "claude_agents" / "packaging.py").read_text()
+        codes = set()
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", None) in ("_fail", "PackageError"):
+                codes.update(const.value for arg in node.args for const in ast.walk(arg)
+                             if isinstance(const, ast.Constant) and isinstance(const.value, str))
+        self.assertGreaterEqual(len(codes), 20, codes)
+        for code in sorted(codes):
+            with self.subTest(code=code):
+                text, known = steps.installer_refusal(f'{{"claude": {{"error": "{code}"}}}}', self.MANUAL)
+                self.assertTrue(known, code)
+                self.assertNotIn("{manual}", text)
+
+    def test_the_advice_lists_exactly_the_files_the_package_installs(self) -> None:
+        from claude_agents import packaging
+        self.assertEqual(set(packaging.bundle_paths()) | {packaging.MANIFEST}, set(steps.CLAUDE_PACKAGE_FILES))
+
+    def test_an_installation_pending_refusal_names_the_marker_and_the_lock(self) -> None:
+        for code in ("installation_pending", "rollback_pending"):
+            with self.subTest(code=code):
+                text = self.message(code)
+                self.assertIn(".claude/claude-agents/install-pending.json", text)
+                self.assertIn(".claude/claude-agents/install.lock", text)
+                self.assertIn("run setup again", text)
+
+    def test_an_unrecognised_refusal_still_warns_after_an_incomplete_rollback(self) -> None:
+        wizard = make_wizard()
+        wizard.last_reply = {"ok": False, "claude": {"error": "something nobody mapped"},
+                             "rollback": [{"package": "claude", "action": None, "ok": False}]}
+        message = wizard.explain_installer("The install failed", self.MANUAL)
+        self.assertIn("could not undo everything", message)
+
+    def test_the_installers_own_safety_refusals_are_recognised(self) -> None:
+        for text in ("claude_agents_x.md is not a regular file", ".claude is a symlink or not a folder",
+                     ".claude/agents/x.md cannot be used safely (unsafe_or_unavailable_path)",
+                     "the claude files could not be saved before the update: .claude is a symlink or not a folder"):
+            with self.subTest(text=text):
+                self.assertTrue(steps.installer_refusal(text.lower(), self.MANUAL)[1])
 
     def test_update_required_does_not_claim_the_install_is_older(self) -> None:
         text = self.message("update_required")

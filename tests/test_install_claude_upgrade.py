@@ -330,14 +330,16 @@ class ClaudeUpgradeTests(unittest.TestCase):
         first = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
         self.assertFalse(first["ok"], first)
         state["fail"] = False
-        # Run again without following any advice: refused, naming the marker, nothing changed.
-        stuck = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
-        self.assertFalse(stuck["ok"], stuck)
-        self.assertIn("installation_pending", stuck["claude"]["error"])
-        message, known = steps.installer_refusal(steps.raw(stuck), "manual")
-        self.assertTrue(known)
-        for advised in (".claude/claude-agents/install-pending.json", ".claude/claude-agents/install.lock"):
-            self.assertIn(advised, message)
+        # The kept note says what to do; the wizard shows it.
+        (claude,) = [r for r in first["rollback"] if r["package"] == "claude"]
+        for advised in (".claude/claude-agents/install-pending.json", ".claude/claude-agents/install.lock",
+                        "run setup again"):
+            self.assertIn(advised, claude["note"])
+        self.assertIn(claude["note"], steps.rollback_notes(first))
+        # Run again without following the advice: refused before anything is written, with a known reason.
+        with self.assertRaises(installer.InstallRefused) as stuck:
+            installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertTrue(steps.installer_refusal(str(stuck.exception).lower(), "manual")[1])
         # The advised steps: put the package files back from Git and remove the two control files.
         git(self.target, "checkout", "--", ".claude")
         pending.unlink()

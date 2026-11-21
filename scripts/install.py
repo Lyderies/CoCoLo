@@ -1331,8 +1331,11 @@ def _roll_back(applied: list[tuple[str, object]], target: Path, records: dict | 
         if name in kept:
             results.append({"package": name, "action": None, "ok": False,
                             "note": f"the {name} package stopped with its rollback pending and kept its unfinished "
-                                    "files and marker; nothing more was undone for it. Check git status in the "
-                                    "project, then follow the advice setup gives for an installation pending"})
+                                    "files and marker; nothing more was undone for it. To go on: save any change "
+                                    "you want to keep, put the package files back with git, delete "
+                                    ".claude/claude-agents/install-pending.json and "
+                                    ".claude/claude-agents/install.lock (only when no setup or install is "
+                                    "running), then run setup again"})
             continue
         if record.get("use"):
             journal = record.get("journal")

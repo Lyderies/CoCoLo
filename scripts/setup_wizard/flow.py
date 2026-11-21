@@ -293,11 +293,16 @@ class Wizard:
         """Shows the refusal and returns its fixed message (an update stops with it)."""
         message, known = steps.installer_refusal(steps.raw(self.last_reply), manual,
                                                  steps.rollback_incomplete(self.last_reply))
+        for note in steps.rollback_notes(self.last_reply):
+            self.t.list_sub(note)
         if not known:
             self.record_failure(label, f"installer refusal not recognised; run: {manual}")
             self.t.list_add("fail", label)
             self.t.list_sub(message)
             self.t.list_cmd(manual)
+            if steps.rollback_incomplete(self.last_reply):
+                self.t.list_sub(steps.NOT_UNDONE)
+                message = f"{message} {steps.NOT_UNDONE}"
             return f"{message} {manual}"
         self.record_failure(label, message)
         self.t.list_add("fail", label)
