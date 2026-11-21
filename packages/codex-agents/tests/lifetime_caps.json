@@ -698,6 +698,15 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "learning_engine.py::_is_review_slice": {
+   "checks": 1,
+   "ends": "VF-INV-a: a minimum number of dash-separated parts in a task slice name (a shape check, not a count of anything kept); it ends with the call, nothing accumulates"
+  },
+  "learning_engine.py::_qa_denylist_bytes": {
+   "checks": 1,
+   "ends": "a per-read byte cap on the owner's denylist file; a larger file is refused (None) and the scan refuses with it, nothing is kept, so nothing accumulates",
+   "test": "test_an_unreadable_or_oversize_denylist_is_not_provisioned_as_empty"
+  },
   "learning_engine.py::_read_managed_bytes": {
    "checks": 3,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
@@ -705,6 +714,11 @@
   "learning_engine.py::_runtime_library_identities": {
    "checks": 2,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_engine.py::_security_findings": {
+   "checks": 2,
+   "ends": "a per-scan cap on stderr bytes read and on records kept (a cut final line is dropped); the records live in one check report that goes with its QA result retention, nothing accumulates across scans",
+   "test": "test_findings_past_the_record_limit_are_cut_at_the_limit"
   },
   "learning_engine.py::_snapshot_runtime_libraries": {
    "checks": 1,

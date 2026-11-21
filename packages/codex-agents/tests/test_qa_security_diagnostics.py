@@ -125,6 +125,11 @@ class SecurityFindingParserTests(unittest.TestCase):
         self.assertEqual(bound, len(data) - len(b"-more text\nb.txt:1: email\n"))
         self.assertEqual([], self.parse(data))
 
+    def test_findings_past_the_record_limit_are_cut_at_the_limit(self) -> None:
+        limit = learning_engine.MAX_QA_FINDING_RECORDS
+        records = self.parse("a.txt:1: email\n" * (limit + 1))
+        self.assertEqual(limit, len(records))
+
     def test_a_non_utf8_path_is_redacted(self) -> None:
         self.assertEqual([{"path": "[redacted]", "line": 0, "category": "email"}],
                          self.parse(b"bad\xff.txt:1: email\n"))
