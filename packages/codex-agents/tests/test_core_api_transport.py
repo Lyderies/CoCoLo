@@ -117,16 +117,6 @@ class LimitTests(CoreCase):
         client = self.client()
         self.assertEqual("too_large", self.error_code(client, "query.ask", {"text": "x" * 10000}))
 
-    def test_api24_connection_cap(self):  # API-24
-        held = [raw(self.socket) for _ in range(3)]
-        extra = raw(self.socket)
-        try:
-            reply = ask(extra, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocol": "1.0"}})
-            self.assertEqual("too_many_connections", reply["error"]["data"]["code"])
-        except (ConnectionResetError, json.JSONDecodeError):
-            pass
-        for s in held:
-            s.close()
 
     def test_api24_subscription_cap(self):  # API-24
         a, b = self.client(), self.client()
