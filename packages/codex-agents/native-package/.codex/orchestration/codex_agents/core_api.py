@@ -75,15 +75,15 @@ RPC_CODES = {"parse_error": -32700, "invalid_request": -32600, "method_not_found
 APP_ERROR = -32000
 
 # The neutral record schemas: only these keys appear at the top of a record; every other key moves under
-# `extra` (provider detail), and money values are dropped everywhere except state.cost (an existing contract).
+# `extra` (provider detail), and money values are dropped everywhere (owner 2026-11-21: subscription-only).
 NEUTRAL_UNIT_KEYS = ("id", "kind", "state", "title", "role", "started", "last", "result", "exit", "verdict",
                      "verdict_by", "verdict_ts")
-NEUTRAL_STATE_KEYS = ("phase", "session", "now", "ctx", "window", "cost", "usage", "ci", "versions",
+NEUTRAL_STATE_KEYS = ("phase", "session", "now", "ctx", "window", "usage", "ci", "versions",
                       "handoff_replies")
 NEUTRAL_USAGE_KEYS = ("input", "output", "total", "windows")
 NEUTRAL_DECISION_KEYS = ("id", "text", "why", "reason", "recommended", "options", "answer", "answered_by", "ts")
 MONEY_KEY = re.compile(r"(cost|price|usd|dollar|spend|money|balance|credit|billing|bill)", re.I)
-UNKNOWN_STATE_KEYS = ("phase", "session", "now", "ctx", "window", "cost", "handoff_replies")
+UNKNOWN_STATE_KEYS = ("phase", "session", "now", "ctx", "window", "handoff_replies")
 SECRET_KEY = re.compile(r"(^token$|_token$|^passphrase$|password|secret|transcript|authorization|api_key)", re.I)
 
 PUSH_MAX_BYTES = 2048

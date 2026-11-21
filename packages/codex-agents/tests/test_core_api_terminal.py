@@ -68,6 +68,13 @@ class NeutralTests(CoreCase):
         self.assertNotIn("codex_thread", got)
         self.assertEqual({"claude_session_id": "abc", "codex_thread": "t1"}, got["extra"])
 
+    def test_api25_state_get_has_no_money_keys(self):  # owner 2026-11-21: subscription-only, no money values
+        state = self.client("read").call("state.get")["state"]
+        for key in ("phase", "session", "ctx"):
+            self.assertEqual({"phase": "build", "session": "S-7", "ctx": 120000}[key], state[key])
+        self.assertNotIn("cost", json.dumps(state).lower())
+        self.assertNotIn("1.25", json.dumps(state))
+
     def test_api25_usage_get_has_windows_and_no_money(self):
         usage = {"input": 10, "output": 5, "cost_usd": 3.2, "price": 1,
                  "windows": [{"label": "5h", "pct": 40, "resets": "x", "spend": 9}], "claude_plan": "pro"}
