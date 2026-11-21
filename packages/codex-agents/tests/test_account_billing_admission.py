@@ -410,8 +410,15 @@ class AccountBillingAdmissionTests(unittest.TestCase):
 
     def test_T3c_constrained_headroom_in_a_newer_run_record_stops_reuse_and_the_probe_launches_fresh(self):
         """R2: headroom that is not ample (allowed_warning) stops reuse; admission passes, so a fresh probe is launched."""
-        self.store_probe_then_run({'status': 'allowed_warning', 'isUsingOverage': False,
+        _, run = self.store_probe_then_run({'status': 'allowed_warning', 'isUsingOverage': False,
             'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'})
+        billing = [r for r in run if 'paid_usage_usable' in r]
+        headroom = [r for r in run if 'paid_usage_usable' not in r and r.get('status') is not None]
+        self.assertEqual(1, len(billing), run)
+        self.assertIs(False, billing[0]['paid_usage_usable'])
+        self.assertIs(False, billing[0]['is_using_overage'])
+        self.assertEqual('during', billing[0]['phase'])
+        self.assertEqual(['allowed_warning'], [r['status'] for r in headroom], run)
         original = self.reserve('probe-constrained')
         self.prepared(original)
         result = self.owner.admit(original)
@@ -427,6 +434,23 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertIs(type(result), dict, result)
         self.assertNotEqual('reused', result['probe'])
         self.assertEqual('paid_usage_usable', result['reason_code'], result)
+
+    def test_T5b_a_same_millisecond_constrained_headroom_run_record_stops_reuse_and_the_probe_launches_fresh(self):
+        """R2 boundary on headroom alone: equal ages, allowed_warning, both billing flags false."""
+        _, run = self.store_probe_then_run({'status': 'allowed_warning', 'isUsingOverage': False,
+            'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'},
+            probe_age=1000, run_age=1000)
+        billing = [r for r in run if 'paid_usage_usable' in r]
+        headroom = [r for r in run if 'paid_usage_usable' not in r and r.get('status') is not None]
+        self.assertEqual(1, len(billing), run)
+        self.assertIs(False, billing[0]['paid_usage_usable'])
+        self.assertIs(False, billing[0]['is_using_overage'])
+        self.assertEqual('during', billing[0]['phase'])
+        self.assertEqual(['allowed_warning'], [r['status'] for r in headroom], run)
+        original = self.reserve('probe-same-ms-constrained')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), ProbeAdmission, result)
 
     def tearDown_probe_state(self):
         connection = self.ledger._connection
