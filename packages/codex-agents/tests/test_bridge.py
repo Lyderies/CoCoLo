@@ -3532,21 +3532,47 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
                 "paid_usage_usable", self.open_claude(expected=2)["reason_code"]
             )
 
-    def test_CI_3_a_probe_stopped_by_the_init_check_reports_that_reason(self) -> None:
-        from tests.test_claude_init_plugins import builtin, frame_2_1_323
-        self.admit("claude")
-        with self.stale_evidence():
-            self.frames("claude", [frame_2_1_323(plugins=[builtin("cc-plugin-easel")]), RATE_LIMIT, result_frame("OK")])
-            failed = self.cli("provider-observe", "--provider", "claude", "--billing-probe", expected=2)
-        self.assertEqual("init_plugin_not_allowed", failed["reason_code"])
+    def test_CI_3_each_init_reason_reaches_the_reply_and_survives_a_replay(self) -> None:
+        # Through the services: the worker's packet, the committed row, the CLI reply and a replay of it.
+        from codex_agents.billing_probe_contracts import PROBE_INIT_REASONS
+        from tests.test_claude_init_plugins import PRIVACY, builtin, frame_2_1_323
+        cases = {
+            "init_plugin_not_allowed": frame_2_1_323(plugins=[builtin("cc-plugin-sec-default")]),
+            "init_plugin_not_disabled": frame_2_1_323(plugins=[PRIVACY, builtin("cc-plugin-telemetry")]),
+            "init_api_key_source": frame_2_1_323(apiKeySource="ANTHROPIC_API_KEY"),
+            "init_model_mismatch": frame_2_1_323(model="claude-sonnet-5-5"),
+            "init_mcp_server_loaded": frame_2_1_323(mcp_servers=[{"name": "x"}]),
+            "init_tool_not_allowed": frame_2_1_323(tools=["Read"]),
+            "init_permission_mode_mismatch": frame_2_1_323(permissionMode="bypassPermissions"),
+            "init_additional_directories_present": frame_2_1_323(additional_directories=["/x"]),
+        }
+        self.assertEqual(PROBE_INIT_REASONS, set(cases))
+        for reason, init in cases.items():
+            with self.subTest(reason=reason):
+                self.setUp_fresh_project()
+                before = self.launches()
+                with self.stale_evidence():
+                    self.frames("claude", [init, RATE_LIMIT, result_frame("OK")])
+                    failed = self.cli("provider-observe", "--provider", "claude", "--billing-probe", expected=2)
+                    self.assertEqual(reason, failed["reason_code"])
+                    self.assertEqual(before + 1, self.launches())
+                    # The same request again reads the committed row: the same reason, no second launch.
+                    again = self.cli("provider-observe", "--provider", "claude", "--billing-probe",
+                                     "--request-id", failed["request_id"], expected=2)
+                self.assertEqual(reason, again["reason_code"])
+                self.assertEqual(before + 1, self.launches())
 
-    def test_CI_4_a_2_1_323_probe_completes_and_the_reply_carries_the_client_version(self) -> None:
+    def test_CI_4_a_real_settings_probe_completes_and_a_replay_keeps_the_client_version(self) -> None:
         from tests.test_claude_init_plugins import frame_2_1_323
         self.admit("claude")
         self.frames("claude", [frame_2_1_323(), FAVOURABLE, result_frame("OK")])
         observed = self.cli("provider-observe", "--provider", "claude", "--billing-probe")
-        self.assertEqual("launched", observed["probe"])
-        self.assertEqual("2.1.323", observed["client_version"])
+        self.assertEqual(("launched", "2.1.323"), (observed["probe"], observed["client_version"]))
+        before = self.launches()
+        again = self.cli("provider-observe", "--provider", "claude", "--billing-probe",
+                         "--request-id", observed["request_id"])
+        self.assertEqual((True, "2.1.323"), (again["known"], again["client_version"]))
+        self.assertEqual(before, self.launches())
 
     def test_probe_is_admitted_like_a_run(self) -> None:
         # Without an owner attestation nothing is launched.
