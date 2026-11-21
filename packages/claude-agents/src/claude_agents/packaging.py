@@ -530,7 +530,7 @@ def _operate(source_root: Path, target: Path, operation: str, apply: bool,
             if not incomplete and _read(root, PENDING) == marker:
                 _set_file(root, PENDING, marker, None)
             raise PackageError("rollback_pending" if incomplete else "operation_failed",
-                               "pending" if incomplete else "none") from None
+                               rollback_state="pending" if incomplete else "none") from None
         report["result"] = "applied"
         return report
     except OSError:
