@@ -80,9 +80,12 @@ IN_PROGRESS = {
 }
 # How to undo a package step that was applied before a later package failed.
 REVERSE = {"install": "remove", "remove": "install"}
-# What each package step owns in the project. A failed update is put back from a snapshot of these
-# paths taken just before the step ran (the settings file belongs to the settings step).
-OWNED_PATHS = {"codex": (".codex", ".agents"), "claude": (".claude",)}
+# A failed update is put back from a snapshot of the files the package itself would write (its own
+# preview names them), taken just before the step ran; nothing else in these folders is touched.
+# The settings file belongs to the settings step. The Claude package's control files are its
+# unfinished-work marker and cooperative lock.
+OWNED_ROOTS = {"codex": (".codex", ".agents"), "claude": (".claude",)}
+CLAUDE_CONTROL = (".claude/claude-agents/install-pending.json", ".claude/claude-agents/install.lock")
 # Owner commands a Claude primary may never run, whatever this checkout's parser lists.
 ALWAYS_OWNER_ONLY = ("install-codex-rule", "remove-codex-rule")
 # Paths a Claude primary may never edit with its file tools or recognised shell writes.
@@ -1050,80 +1053,168 @@ def apply_codex_rule(target: Path, plan: dict) -> dict:
 # --- operations --------------------------------------------------------------------------
 
 
-def _owned_files(target: Path, name: str) -> tuple[dict[str, Path], set[str]]:
-    """Every regular file (relative name -> path) and folder under the paths a package step owns, never
-    following a symbolic link; a link or other special entry is refused."""
+def _owned_paths(target: Path, name: str, preview: dict) -> list[str]:
+    """The project paths a package step writes, from its own preview (never a folder walk)."""
 
-    files: dict[str, Path] = {}
-    folders: set[str] = set()
-    for owned in OWNED_PATHS[name]:
-        top = target / owned
-        if not os.path.lexists(top):
+    if name == "claude":
+        raw = [*(preview.get("changed_paths") or []), CLAUDE_MANIFEST.as_posix(), *CLAUDE_CONTROL]
+    else:
+        raw = [*(preview.get("files") or []), *(preview.get("local_files") or []),
+               *(preview.get("project_configuration") or {}), CODEX_MANIFEST.as_posix()]
+        try:  # files an update would remove as obsolete are named by the installed manifest
+            raw += list(json.loads((target / CODEX_MANIFEST).read_bytes())["files"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    paths = []
+    for relative in raw:
+        parts = relative.split("/") if isinstance(relative, str) else []
+        if (not parts or any(part in ("", ".", "..") for part in parts) or parts[0] not in OWNED_ROOTS[name]
+                or (relative.startswith(".claude/settings") and relative.endswith(".json"))):
             continue
-        for directory, names, filenames in os.walk(top, followlinks=False):
-            base = Path(directory)
-            folders.add(base.relative_to(target).as_posix())
-            for entry in [*names, *filenames]:
-                path = base / entry
-                mode = os.lstat(path).st_mode
-                relative = path.relative_to(target).as_posix()
-                if stat.S_ISDIR(mode):
-                    continue
-                if not stat.S_ISREG(mode):
-                    raise InstallRefused(f"{relative} is not a regular file")
-                if not (relative.startswith(".claude/settings") and relative.endswith(".json")):
-                    files[relative] = path
-    return files, folders
+        if relative not in paths:
+            paths.append(relative)
+    return sorted(paths)
 
 
-def _snapshot(target: Path, name: str) -> dict:
-    files, folders = _owned_files(target, name)
-    return {"files": {relative: (path.read_bytes(), stat.S_IMODE(os.lstat(path).st_mode))
-                      for relative, path in files.items()}, "folders": folders}
+def _open_folder(root: int, parts: list[str], create: bool = False) -> int:
+    """A descriptor for the folder reached from root through parts, following no symbolic link."""
+
+    descriptor = os.dup(root)
+    try:
+        for part in parts:
+            try:
+                following = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(part, 0o755, dir_fd=descriptor)
+                following = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = following
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _read_file(folder: int, name: str) -> tuple[bytes, int] | None:
+    """A regular file's bytes and mode, None when absent; anything else (such as a link) is refused."""
+
+    try:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=folder)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(descriptor, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise InstallRefused("a path the package writes is not a regular file")
+        return handle.read(), stat.S_IMODE(info.st_mode)
+
+
+def _check_roots(target: Path, name: str) -> None:
+    for root in OWNED_ROOTS[name]:
+        try:
+            mode = os.lstat(target / root).st_mode
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISDIR(mode):
+            raise InstallRefused(f"{root} is a symbolic link or not a folder")
+
+
+def _snapshot(target: Path, name: str, preview: dict) -> dict:
+    """What each package-owned path holds now: (bytes, mode), or None when absent."""
+
+    _check_roots(target, name)
+    files: dict[str, tuple[bytes, int] | None] = {}
+    folders: set[str] = set()
+    root = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for relative in _owned_paths(target, name, preview):
+            parts = relative.split("/")
+            try:
+                folder = _open_folder(root, parts[:-1])
+            except FileNotFoundError:
+                files[relative] = None
+                continue
+            except OSError as exc:
+                raise InstallRefused(f"{relative} cannot be reached safely: {exc.strerror}") from None
+            try:
+                files[relative] = _read_file(folder, parts[-1])
+            finally:
+                os.close(folder)
+            folders.update("/".join(parts[:count]) for count in range(1, len(parts)))
+    finally:
+        os.close(root)
+    return {"files": files, "folders": folders}
 
 
 def _restore(target: Path, name: str, snapshot: dict) -> bool:
-    """Put a package's owned paths back exactly as the snapshot holds them."""
+    """Put the package-owned paths back exactly as the snapshot holds them. An owned folder that is
+    now a symbolic link stops it before anything is touched; nothing outside those paths is read."""
 
     try:
-        files, folders = _owned_files(target, name)
-        for relative in sorted(set(files) - set(snapshot["files"])):
-            files[relative].unlink()
-        for relative, (content, mode) in sorted(snapshot["files"].items()):
-            path = target / relative
-            if relative in files and files[relative].read_bytes() == content \
-                    and stat.S_IMODE(os.lstat(path).st_mode) == mode:
-                continue
-            parent = path.parent
-            walked = target
-            for part in parent.relative_to(target).parts:
-                walked = walked / part
-                if os.path.islink(walked):
-                    return False
-            parent.mkdir(parents=True, exist_ok=True)
-            temporary = parent / f".restore-{secrets.token_hex(8)}"
-            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-            try:
-                with os.fdopen(descriptor, "wb") as handle:
-                    handle.write(content)
-                os.chmod(temporary, mode)
-                os.replace(temporary, path)
-            finally:
-                if os.path.lexists(temporary):
-                    os.unlink(temporary)
-        for relative in sorted(folders - snapshot["folders"], reverse=True):
-            try:
-                (target / relative).rmdir()
-            except OSError:
-                pass
-        return True
+        _check_roots(target, name)
     except (InstallRefused, OSError):
         return False
+    ok = True
+    root = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for relative, wanted in sorted(snapshot["files"].items()):
+            parts = relative.split("/")
+            try:
+                folder = _open_folder(root, parts[:-1], create=wanted is not None)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                ok = False
+                continue
+            try:
+                current = _read_file(folder, parts[-1])
+                if current == wanted:
+                    continue
+                if wanted is None:
+                    os.unlink(parts[-1], dir_fd=folder)
+                    for depth in range(len(parts) - 1, 1, -1):  # folders the update created, if now empty
+                        if "/".join(parts[:depth]) in snapshot["folders"]:
+                            break
+                        try:
+                            upper = _open_folder(root, parts[:depth - 1])
+                            try:
+                                os.rmdir(parts[depth - 1], dir_fd=upper)
+                            finally:
+                                os.close(upper)
+                        except OSError:
+                            break
+                    continue
+                content, mode = wanted
+                temporary = f".restore-{secrets.token_hex(8)}"
+                descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                                     dir_fd=folder)
+                try:
+                    with os.fdopen(descriptor, "wb") as handle:
+                        handle.write(content)
+                        os.fchmod(handle.fileno(), mode)
+                    os.rename(temporary, parts[-1], src_dir_fd=folder, dst_dir_fd=folder)
+                except BaseException:
+                    try:
+                        os.unlink(temporary, dir_fd=folder)
+                    except OSError:
+                        pass
+                    raise
+            except (InstallRefused, OSError):
+                ok = False
+            finally:
+                os.close(folder)
+    finally:
+        os.close(root)
+    return ok
 
 
-def _roll_back(applied: list[tuple[str, object]], target: Path, snapshots: dict | None = None) -> list[dict]:
+def _roll_back(applied: list[tuple[str, object]], target: Path, snapshots: dict | None = None,
+               kept: frozenset = frozenset()) -> list[dict]:
     """Undo earlier steps in reverse order after a later step fails to apply. An update is undone by
-    restoring the files it owned from the snapshot taken before it ran."""
+    restoring the files it owned from the snapshot taken before it ran. A package named in `kept`
+    stopped with its own rollback pending: it keeps changes it did not make, so nothing is undone for it."""
 
     snapshots = snapshots or {}
 
@@ -1143,6 +1234,12 @@ def _roll_back(applied: list[tuple[str, object]], target: Path, snapshots: dict 
             results.append({"package": name, "action": reverse, "ok": ok})
             continue
         installer, op = step
+        if name in kept:
+            results.append({"package": name, "action": None, "ok": False,
+                            "note": f"the {name} package stopped with its rollback pending and kept its unfinished "
+                                    "files and marker; nothing more was undone for it. Check git status in the "
+                                    "project, then run setup again"})
+            continue
         if op == "update" and name in snapshots:
             results.append({"package": name, "action": "restore", "ok": _restore(target, name, snapshots[name])})
             continue
@@ -1227,7 +1324,7 @@ def operate(operation: str, target: Path, *, apply: bool = False, codex_options:
     for installer, name, op, extra in order:
         if op == "update":
             try:
-                snapshots[name] = _snapshot(target, name)
+                snapshots[name] = _snapshot(target, name, previews[name])
             except (InstallRefused, OSError) as exc:
                 summary[name] = {"error": f"the {name} files could not be saved before the update: {exc}"}
                 summary["ok"] = False
@@ -1239,7 +1336,8 @@ def operate(operation: str, target: Path, *, apply: bool = False, codex_options:
             applied.append((name, (installer, op)))
         if _failed(summary[name]):
             summary["ok"] = False
-            summary["rollback"] = _roll_back(applied, target, snapshots)
+            kept = frozenset({name}) if "rollback_pending" in str(summary[name].get("error", "")) else frozenset()
+            summary["rollback"] = _roll_back(applied, target, snapshots, kept)
             return summary
         if op != "update":
             applied.append((name, (installer, op)))
