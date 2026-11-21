@@ -591,6 +591,32 @@ else:
 """
 
 
+_LAUNCHER_FOLDER = None
+
+
+def _launcher() -> str:
+    """The one launcher script every fake client is a link to, made once per test process.
+
+    On macOS the first run of an executable file whose content is new costs 70-280 ms (the system's
+    security scan), and each test used to write launchers naming its own folder, so every test paid it
+    for `codex` and `claude`. This launcher names no folder: it takes the folder and the client's name
+    from the path it was started by (`$0`), so it is the same file for every test, and each test's
+    `codex` and `claude` are hard links to it (a link is not scanned again)."""
+    global _LAUNCHER_FOLDER
+    if _LAUNCHER_FOLDER is None:
+        import atexit
+        import shutil
+        import tempfile
+        _LAUNCHER_FOLDER = tempfile.mkdtemp(prefix="fake-client-launcher-")
+        atexit.register(shutil.rmtree, _LAUNCHER_FOLDER, ignore_errors=True)
+        path = os.path.join(_LAUNCHER_FOLDER, "launcher")
+        with open(path, "w") as handle:
+            handle.write(f"#!/bin/sh\nexec {sys.executable} \"${{0%/*}}/fake_child.py\" "
+                         "\"${0%/*}\" \"${0##*/}\" \"$@\"\n")
+        os.chmod(path, 0o755)
+    return os.path.join(_LAUNCHER_FOLDER, "launcher")
+
+
 def fake_provider_tools(directory: Path) -> dict[str, str]:
     """Install fake `codex` and `claude` clients; return an environment using them.
 
@@ -602,13 +628,13 @@ def fake_provider_tools(directory: Path) -> dict[str, str]:
     (directory / "codex-result.json").write_bytes(provider_fixture("codex-rate-limits.json"))
     (directory / "claude-status.json").write_bytes(provider_fixture("claude-auth-status.json"))
     (directory / "fake_child.py").write_text(FAKE_CHILD)
+    launcher = _launcher()
     for name in ("codex", "claude"):
-        script = directory / name
-        script.write_text(
-            f"#!/bin/sh\nexec {sys.executable} {directory / 'fake_child.py'} "
-            f"{directory} {name} \"$@\"\n"
-        )
-        script.chmod(0o755)
+        try:
+            os.link(launcher, directory / name)
+        except OSError:  # Another file system: a copy still works, only without the saving.
+            import shutil
+            shutil.copy2(launcher, directory / name)
     return {"PATH": str(directory)}
 
 
