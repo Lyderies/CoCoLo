@@ -4,13 +4,15 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
-- Claude Code 2.1.323 lists four built-in plugins in its init frame (`cc-plugin-agents-md`,
-  `cc-plugin-telemetry`, `cc-plugin-privacy`, `cc-plugin-plugin-authoring`) even when no plugin is installed, so
-  the check that no plugin loads stopped every Claude child and the billing probe. The check now accepts a
-  plugin only when its name is one of those four, its path is `builtin` and its source is `<name>@builtin`;
-  any other plugin, or another built-in, still stops the child (`init_plugin_not_allowed`, renamed from
-  `init_plugin_loaded`). Tools, MCP servers, the key source and the model are held as before, and a client
-  that reports a `permissionMode` other than the one COCOLO sets, or any `additional_directories`, is stopped
+- Claude Code 2.1.323 lists one built-in plugin, `cc-plugin-privacy`, in its init frame even when no plugin is
+  installed (captured under COCOLO's own child settings), so the check that no plugin loads stopped every Claude
+  child and the billing probe. The check now accepts that one plugin, only with exactly the keys `name`,
+  `path` (`builtin`) and `source` (`cc-plugin-privacy@builtin`); its only effect is a hook that can restrict a
+  tool call. A built-in COCOLO's settings disable (`cc-plugin-agents-md`, `cc-plugin-telemetry`,
+  `cc-plugin-plugin-authoring`, `cc-plugin-easel`) that is listed means the settings did not apply and stops the
+  child (`init_plugin_not_disabled`); any other plugin stops it too (`init_plugin_not_allowed`, renamed from
+  `init_plugin_loaded`). Tools, MCP servers, the key source and the model are held as before, and a client that
+  reports a `permissionMode` other than the one COCOLO sets, or any `additional_directories`, is stopped
   (`init_permission_mode_mismatch`, `init_additional_directories_present`). A billing probe stopped by the init
   check now reports that reason (in `provider-observe --billing-probe`) instead of `probe_incomplete`, and a
   probe records the client version its init frame reported (`client_version` in its reply). Package 0.8.40.

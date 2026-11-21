@@ -107,16 +107,16 @@ CLAUDE_DISABLED_PLUGINS = (
     "cc-plugin-plugin-authoring@builtin",
     "cc-plugin-easel@builtin",
 )
-# CI-4: Claude Code 2.1.323 lists four built-in plugins in the init frame even with no plugin installed. They
-# are accepted by name, and only as built-ins (path "builtin", source "<name>@builtin"); any other plugin, or
-# another built-in, still stops the child. Binary strings of 2.1.323 (their manifests): agents-md reads
-# AGENTS.md/CLAUDE.md as prompt context and adds no tool; telemetry sends Anthropic usage telemetry and adds
-# no tool; privacy declares only a `tool.check` hook; plugin-authoring declares a skill and a hook module that
-# can register a `scan_secrets` tool (and `SendUserFile` in a chat session). A tool added by any of them
-# appears in the init `tools` list, which is still held to the allow-list, so it stops the child there.
-CLAUDE_ALLOWED_BUILTIN_PLUGINS = frozenset({
-    "cc-plugin-agents-md", "cc-plugin-telemetry", "cc-plugin-privacy", "cc-plugin-plugin-authoring",
-})
+# CI-4: under COCOLO's own child settings (`claude_settings`: hooks off, the plugins above disabled), Claude
+# Code 2.1.323 lists exactly one built-in plugin in the init frame, `cc-plugin-privacy` (captured with those
+# settings). Its only effect, from the binary's plugin manifest, is a `tool.check` hook that can restrict a
+# call; it adds no tool, reads nothing and fetches nothing. It is accepted only with exactly the keys name,
+# path and source, as a built-in (path "builtin", source "<name>@builtin"). The four built-ins COCOLO disables
+# act when loaded (agents-md injects AGENTS.md and CLAUDE.md as context, telemetry fetches, plugin-authoring
+# can register a tool and a hook): one that is listed means the settings did not apply, so the child stops
+# (`init_plugin_not_disabled`). Any other plugin stops it too (`init_plugin_not_allowed`).
+CLAUDE_ALLOWED_BUILTIN_PLUGINS = frozenset({"cc-plugin-privacy"})
+_CLAUDE_PLUGIN_KEYS = frozenset({"name", "path", "source"})
 # The init `permissionMode` COCOLO sets (--permission-mode and settings), checked when the client reports it.
 CLAUDE_PERMISSION_MODE = "dontAsk"
 CODEX_REROUTE_EVENTS = {"model/rerouted", "model_rerouted", "model.rerouted"}
@@ -1205,16 +1205,17 @@ def _claude_model_usage(model_usage: Any) -> list[dict[str, Any]]:
     return [merged[key] for key in sorted(merged)]
 
 
-def _builtin_plugin_allowed(plugin: Any) -> bool:
-    """CI-1: one init-frame plugin entry is a fixed built-in: allow-listed name, path "builtin", its own source."""
+def _plugin_violation(plugin: Any) -> str | None:
+    """CI-1: why one init-frame plugin entry is refused, or None when it is the one accepted built-in."""
 
-    if not isinstance(plugin, dict):
-        return False
-    name = plugin.get("name")
-    return (
-        isinstance(name, str) and name in CLAUDE_ALLOWED_BUILTIN_PLUGINS
-        and plugin.get("path") == "builtin" and plugin.get("source") == f"{name}@builtin"
-    )
+    if not isinstance(plugin, dict) or plugin.keys() != _CLAUDE_PLUGIN_KEYS:
+        return "plugin_not_allowed"
+    name, path, source = plugin["name"], plugin["path"], plugin["source"]
+    if not (isinstance(name, str) and path == "builtin" and source == f"{name}@builtin"):
+        return "plugin_not_allowed"
+    if name in CLAUDE_ALLOWED_BUILTIN_PLUGINS:
+        return None
+    return "plugin_not_disabled" if f"{name}@builtin" in CLAUDE_DISABLED_PLUGINS else "plugin_not_allowed"
 
 
 def _init_client_version(frame: dict[str, Any]) -> str | None:
@@ -1233,8 +1234,12 @@ def _check_claude_init(frame: dict[str, Any], model: str, allowed: tuple[str, ..
     if frame.get("model") != model:
         return "model_mismatch"
     plugins = frame.get("plugins")
-    if not isinstance(plugins, list) or not all(_builtin_plugin_allowed(plugin) for plugin in plugins):
+    if not isinstance(plugins, list):
         return "plugin_not_allowed"
+    violations = {_plugin_violation(plugin) for plugin in plugins} - {None}
+    if violations:
+        # A plugin nothing allows outranks one COCOLO's settings should have disabled.
+        return "plugin_not_allowed" if "plugin_not_allowed" in violations else "plugin_not_disabled"
     if frame.get("mcp_servers") != []:
         return "mcp_server_loaded"
     tools = frame.get("tools")

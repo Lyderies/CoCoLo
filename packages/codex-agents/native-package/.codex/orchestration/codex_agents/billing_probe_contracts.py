@@ -19,7 +19,7 @@ PROBE_STEP_REASONS = frozenset({'probe_preparation_failed', 'probe_preparation_u
 # CI-3: why the init-frame check stopped a probe (the bridge's `init_*` outcomes); kept as the reply's reason
 # instead of probe_incomplete.
 PROBE_INIT_REASONS = frozenset({'init_api_key_source', 'init_model_mismatch', 'init_plugin_not_allowed',
-    'init_mcp_server_loaded', 'init_tool_not_allowed', 'init_permission_mode_mismatch',
+    'init_plugin_not_disabled', 'init_mcp_server_loaded', 'init_tool_not_allowed', 'init_permission_mode_mismatch',
     'init_additional_directories_present'})
 PROBE_COMPLETION_REASONS = frozenset({'probe_incomplete', 'probe_invalid_events', 'probe_no_events'}) | PROBE_INIT_REASONS
 _CLIENT_VERSION = re.compile(r'\d+\.\d+\.\d+')
