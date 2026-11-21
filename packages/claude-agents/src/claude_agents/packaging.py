@@ -299,8 +299,9 @@ def compile_bundle(source_root: Path) -> Bundle:
 
 # The bundle_sha256 of every earlier release this installer accepts an upgrade from. It lives
 # here, in installer code, so previous-releases.json cannot vouch for itself: a record whose
-# digest is not listed is refused, however consistent the file is. Add a release's digest here
-# (taken from a project installed by that release) when it is cut.
+# digest is not listed is refused, however consistent the file is. When a release is cut, add
+# its digest here from that release's own build output (or its signed tag), reviewed in the
+# same change as its record; never copy it from an installed project, which may be tampered.
 PINNED_RELEASE_DIGESTS = frozenset({
     "c3e80b3f92cc5e5728b848e384d820265f70b32031ed931b723f201c1b0309ae",  # 0.8.40
 })

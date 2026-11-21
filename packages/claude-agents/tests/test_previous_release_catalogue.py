@@ -135,6 +135,27 @@ class CatalogueTests(unittest.TestCase):
             self.assertEqual(before, self.snapshot())
             self.assertTrue((self.target / SETTINGS).is_file())
 
+    def test_a_forged_record_with_only_its_digest_pinned_is_stopped_by_the_path_check_end_to_end(self) -> None:
+        forged = self.forged(SETTINGS)
+        self.write([*self.records(), forged])
+        for path, content in forged["files"].items():
+            (self.target / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.target / path).write_text(content)
+        files = {p: hashlib.sha256(c.encode()).hexdigest() for p, c in sorted(forged["files"].items())}
+        manifest = {"schema_version": 1, "namespace": "claude-agents", "package_version": forged["package_version"],
+                    "provider_execution_enabled": False, "native_discovery_verified": False,
+                    "model_isolation": "not_provided", "files": files, "bundle_sha256": forged["bundle_sha256"]}
+        (self.target / MANIFEST).write_bytes(packaging._canonical(manifest))
+        before = self.snapshot()
+        pinned = packaging.PINNED_RELEASE_DIGESTS | {forged["bundle_sha256"]}
+        for operation in ("update", "remove"):
+            with self.subTest(operation=operation), mock.patch.object(packaging, "PINNED_RELEASE_DIGESTS", pinned):
+                with self.assertRaises(PackageError) as caught:
+                    package_operation(self.source, self.target, operation, apply=True)
+                self.assertEqual("previous_release_path_refused", str(caught.exception))
+            self.assertEqual(before, self.snapshot(), operation)
+            self.assertTrue((self.target / SETTINGS).is_file(), operation)
+
     def test_a_fresh_install_is_refused_while_the_catalogue_holds_a_forged_record(self) -> None:
         self.write([*self.records(), self.forged()])
         with self.assertRaises(PackageError) as caught:
