@@ -11,7 +11,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   `collector_code_stale` until the collector is restarted. A command started after the files changed sees the
   new digest, so a collector that loaded older code (or an older package version) is refused by the version
   check before it can report staleness: status and the probe now treat that refusal itself as the stale
-  collector (a newer collector is not called stale). Every remaining bare `probe_unavailable` now names its
+  collector. A newer collector is not called stale; a collector that sent a malformed version, schema or digest is
+  named `collector_identity_invalid`, and another build of the same version whose own files are unchanged is named
+  `collector_build_conflict` (a restart would not fix it), and neither is refused as stale. Every remaining bare `probe_unavailable` now names its
   cause in the billing lane's last failure, including a deadline (`probe_deadline_expired`), a caller's cancel
   (`probe_cancelled`) and a close (`probe_closing`); a recognised observation reason is no longer labelled
   unrecognised, and an earlier named cause is kept. A result for a security reviewer or verification worker
@@ -19,10 +21,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   (`missing_required_fields`), never filled in. `learning-review` refuses an empty verdict before recording the
   result, running `worker` again removes every file of the earlier run, and `verify`/`finish` refuse a stage
   file the runner did not write: wrong mode or shape, a digest its own recorded reply does not hold, or a
-  provider, verdict, summary, route, assignment or result that does not match the digest binding it. That is an
-  integrity check, not authentication: a process running as the same user can rewrite the whole work folder
-  consistently; the project host still checks both outcome digests and every assignment and result body
-  against its own records before checks or QA are committed.
+  provider, verdict, summary, route, assignment or result that does not match the keyed digest (HMAC) binding it.
+  The key is derived from the host's private digest key (its state folder, owner-only), never held in the work
+  folder, so a writer limited to the work folder cannot make a binding. A process running as the same user can
+  read that key and is outside this check; the project host still checks both outcome digests and every
+  assignment and result body against its own records before checks or QA are committed.
   Package 0.8.41.
 - Two commands that came together on a project whose service was not running could leave one of them reporting
   `orchestration_client_unavailable`: the start that lost to the other's service ended before that service
