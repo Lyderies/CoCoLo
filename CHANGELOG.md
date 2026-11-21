@@ -10,9 +10,17 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   edited or unknown installs are still refused. The accepted release digests are pinned in the installer's code,
   so the record cannot vouch for itself, and a record may name only the files the package installs: a forged or
   altered record is refused (`previous_release_not_pinned`, `previous_release_path_refused`) and nothing changes.
-  The setup update stops with the installer's own reason, in plain words that say what to do next, and a failed
-  update undoes only the writes that run made (a file changed since is left alone and named; nothing is undone for a package that reports a pending rollback, and its markers stay). The Done screen no longer prints a remove command
-  with an empty `--target`.
+  The setup update stops with the installer's own reason, in plain words that say what to do next. When an
+  install, update or remove fails, setup undoes only what the packages themselves report they wrote in that run,
+  each file only while it still holds what the package wrote (checked on the open file, then moved or removed
+  only if it is still that same file), and each folder a package created only while it is that same, empty
+  folder. Anything else (a file you changed while setup ran, a folder you replaced or filled) is left as it is
+  and named. A package step that gives no usable account of its writes, or whose writes cannot be checked
+  safely (the project folder changed, an unsafe path), stops setup at once: no later step runs, nothing of that
+  step is undone, and setup says so. Nothing is undone for a package that reports a pending rollback, and its
+  markers stay. A step that had finished an install or remove is undone by the opposite operation. The setup
+  wizard says "Nothing was changed" only when every undo completed with nothing left over. The Done screen no
+  longer prints a remove command with an empty `--target`.
 - Two commands that came together on a project whose service was not running could leave one of them reporting
   `orchestration_client_unavailable`: the start that lost to the other's service ended before that service
   held its lock and did not wait for it. It now waits up to 3 s while no host lock is held, within the start timeout, for the winning service.

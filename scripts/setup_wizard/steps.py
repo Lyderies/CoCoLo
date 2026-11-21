@@ -306,6 +306,11 @@ _INSTALLER_REFUSALS = (
       "*bisect*progress*", "*unmerged*"),
      "A Git operation (merge, rebase, cherry-pick or similar) is unfinished in the project. Finish or abort it "
      "first."),
+    (("*no_write_report*",),
+     "A package step ended without a usable report of what it wrote (no write report), so setup stopped there "
+     "and left that package's files as they are rather than risk undoing changes of your own. Run git status "
+     "and git diff in the project to see what differs, put back with git what you do not want, and run setup "
+     "again."),
     (("*previous_release_not_pinned*", "*previous_release_path_refused*", "*invalid_previous_release*"),
      "This copy of CoCoLo carries a list of earlier releases that failed its safety check, so setup will not "
      "use it to upgrade your project. Nothing was changed. Get a fresh copy of CoCoLo from its official "
@@ -330,20 +335,31 @@ _INSTALLER_REFUSALS = (
     (("*not_installed*",),
      "The Claude package is not installed in this project yet (not installed), so there is nothing to update "
      "or verify. Nothing was changed. Run setup to install it."),
-    (("*write_failed*", "*operation_failed*"),
-     "The Claude package files could not be written (write failed), so setup went back to the previous state "
-     "where it could. Nothing was changed. Check that the project folder is writable and has free space, then "
+    (("*operation_failed*",),
+     "The Claude package could not write all of its files (operation failed) and put back the ones it had "
+     "already written. Nothing was changed. Check that the project folder is writable and has free space, then "
      "run setup again."),
-    (("*invalid_source*", "*source_missing*", "*non_offline_helper*", "*role_model_missing*",
-      "*invalid_operation*", "*invalid_apply*"),
+    (("*write_failed*",),
+     "The Claude package could not write its control file (write failed) before changing any of its files, so "
+     "it had nothing to put back. Nothing was changed. Check that the project folder is writable and has free "
+     "space, then run setup again."),
+    (("*invalid_operation*", "*invalid_apply*"),
+     "Setup called the Claude package with an operation or option it does not accept (invalid operation), "
+     "which is a fault in setup itself, not in your project. Nothing was changed. Get a fresh copy of CoCoLo "
+     "from its official source and run setup again from it; if it happens again, report it."),
+    (("*invalid_source*", "*source_missing*", "*non_offline_helper*", "*role_model_missing*"),
      "This copy of CoCoLo's Claude package is incomplete or damaged, so setup will not use it. Nothing was "
      "changed. Get a fresh copy of CoCoLo from its official source, then run setup again from that copy."),
     (("*managed paths*", "*uncommitted*"),
      "Managed paths (.codex, .agents, .claude) have uncommitted changes. Commit or discard them first."),
     (("*top of its working tree*", "*not a usable git*", "*git_target_required*"),
      "The path is not the top folder of a Git working tree. Choose the project root."),
+    (("*oversized_file*",),
+     "A file at a Claude package path in this project is larger than any package file can be (oversized file), "
+     "so setup did not read it. Nothing was changed. " + _LOOK_AND_SAVE + " then put that file back with git "
+     "restore -- followed by its path, or remove it, and run setup again."),
     (("*symlink*", "*unsafe_or_unavailable_path*", "*not a regular file*", "*invalid_root*", "*unsafe_file*",
-      "*unsafe_path*", "*oversized_file*", "*cannot be used safely*"),
+      "*unsafe_path*", "*cannot be used safely*"),
      "A managed path is a symlink or cannot be used safely. Replace it with a real file or folder."),
     (("*differs*", "*conflict*", "*collision*", "*modified obsolete*", "*already exists*"),
      "A file in the project collides with a managed file (it differs from what would be installed). Move or "
@@ -373,10 +389,11 @@ NOT_UNDONE = ("Setup could not undo everything it had already changed, so some f
 
 
 def rollback_incomplete(reply) -> bool:
-    """True when an installer reply reports a rollback step that did not complete."""
+    """True when an installer reply reports a rollback step that did not complete, or one that carries a note
+    (something was left as it is or not undone): then setup never says "Nothing was changed"."""
     steps_ = reply.get("rollback") if isinstance(reply, dict) else None
     return isinstance(steps_, list) and any(not (isinstance(item, dict) and item.get("ok") is True)
-                                            for item in steps_)
+                                            or isinstance(item.get("note"), str) for item in steps_)
 
 
 def rollback_notes(reply) -> list[str]:
