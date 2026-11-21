@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 
 from .history_contracts import HistoryError, matches
-from .learning_adapters import empty_usage
+from .learning_adapters import TOKEN_USAGE_FIELDS, empty_usage
 from .learning_contracts import MAX_RECORD_BYTES, external_id, parse_bounded_json
 
 MAX_REPORTED_CHECKPOINTS = 64
@@ -203,6 +203,6 @@ def orchestration_report(history, orchestration_id):
                   "goal_total_tokens": current["goal_tokens_used"],
                   "goal_time_used_seconds": current["goal_time_used_seconds"],
                   "goal_usage_source": "host_reported" if goal_known else "unavailable",
-                  "child_attribution": "complete" if runs and all(count == 0 for count in unknown.values())
+                  "child_attribution": "complete" if runs and all(unknown[field] == 0 for field in TOKEN_USAGE_FIELDS)
                   else "unknown"},
     }

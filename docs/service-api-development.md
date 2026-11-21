@@ -1197,6 +1197,14 @@ identity check; feedback alone carries its own authority, the owner's signature.
   One checkpoint per orchestration is read to find it; rows are selected by SQLite and
   only that orchestration's (at most 512 runs, else refused) are parsed in the service.
   The SQLite scans themselves still grow with the project's history.
+- `learning-usage-report` (RT-8): read-only, never through a service. It maps the project root to its id in
+  the ledger's `projects` table and opens the project's `history.sqlite3` and the ledger read-only
+  (`project_usage_report.py`; with write-ahead files present it shares the database with its writer, without
+  them it opens it immutable so nothing is created). A run is the `provider_usage` or `observation_unavailable`
+  record its terminal wrote, counted once at that record's time, joined to its first host `outcome` for model,
+  effort, role and status; a run with no usage record (an earlier version's native child) is counted by its
+  outcome. Run ids are `external_id(digest key, "run", run id)`. At most `--limit` runs (default 500, at most
+  2,000) and a window of at most 366 days; a larger window is cut and says `truncated`.
 - `learning-expire` still applies the ledger's retention to the ledger. Separately, the
   collector's `sweep_event_retention` runs every `WORKER_RESULT_SWEEP_SECONDS`: up to
   `EVENT_SWEEP_BATCH` (500) expired hook and app-server events that no record link

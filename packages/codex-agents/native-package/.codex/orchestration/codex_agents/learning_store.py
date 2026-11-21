@@ -118,7 +118,9 @@ from .learning_contracts import (
     validate_event,
     validate_execution_configuration,
 )
-from .learning_adapters import HOOK_EVENTS, empty_usage, load_client_capabilities, reconcile_run
+from .learning_adapters import (
+    HOOK_EVENTS, TOKEN_USAGE_FIELDS, empty_usage, load_client_capabilities, reconcile_run, token_usage_known,
+)
 from .learning_eligibility import (
     EligibilityError, check_candidate_eligibility, check_evaluation_case,
 )
@@ -5176,7 +5178,7 @@ class LearningLedger:
                 ),
                 "child_attribution": (
                     "complete"
-                    if bindings and all(count == 0 for count in usage_unknown_runs.values())
+                    if bindings and all(usage_unknown_runs[field] == 0 for field in TOKEN_USAGE_FIELDS)
                     else "unknown"
                 ),
             },
@@ -8386,9 +8388,7 @@ class LearningLedger:
                         raise LedgerError("host run handle is expired or already consumed")
                     if binding["native_assignment_id"] is None:
                         raise LedgerError("host run is not bound to a native agent")
-                    usage_complete = int(
-                        all(value is not None for value in outcome["usage"].values())
-                    )
+                    usage_complete = int(token_usage_known(outcome["usage"]))
                     consumed = self._connection.execute(
                         "UPDATE host_run_bindings SET consumed_at_ms=?,expires_at_ms=?,"
                         "usage_complete=?,binding_state='terminal' "

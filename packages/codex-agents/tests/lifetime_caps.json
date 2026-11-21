@@ -1295,6 +1295,26 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "project_usage_report.py::_by_run": {
+   "checks": 1,
+   "ends": "a read-only report over a caller-chosen window: its rows are never kept and never written; each statement reads at most the row limit (default 500, at most 2,000) plus one, and a window with more says truncated",
+   "test": "test_a_window_past_the_row_limit_is_truncated_not_refused"
+  },
+  "project_usage_report.py::_record": {
+   "checks": 1,
+   "ends": "a read-only report over a caller-chosen window: its rows are never kept and never written; each statement reads at most the row limit (default 500, at most 2,000) plus one, and a window with more says truncated",
+   "test": "test_a_window_past_the_row_limit_is_truncated_not_refused"
+  },
+  "project_usage_report.py::_rows": {
+   "checks": 2,
+   "ends": "a read-only report over a caller-chosen window: its rows are never kept and never written; each statement reads at most the row limit (default 500, at most 2,000) plus one, and a window with more says truncated",
+   "test": "test_a_window_past_the_row_limit_is_truncated_not_refused"
+  },
+  "project_usage_report.py::usage_report": {
+   "checks": 1,
+   "ends": "a read-only report over a caller-chosen window: its rows are never kept and never written; each statement reads at most the row limit (default 500, at most 2,000) plus one, and a window with more says truncated",
+   "test": "test_a_window_past_the_row_limit_is_truncated_not_refused"
+  },
   "provider_observation_contracts.py::checked_observation_reply": {
    "checks": 2,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"

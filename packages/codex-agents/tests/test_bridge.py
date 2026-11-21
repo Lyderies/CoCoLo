@@ -4281,6 +4281,28 @@ class BridgedUsageTests(BridgeTestCase):
             "unavailable", committed["outcome"]["usage_sources"]["model_calls"]["source"]
         )
 
+    def test_a_bridged_run_with_its_token_counts_recorded_is_usage_complete(self) -> None:
+        # RT-8: `usage_complete` required all eight outcome usage fields, and a bridged child never reports
+        # model calls, tool calls, latency or cost, so no run was ever complete (242 of 242 unknown in the
+        # control project). A run whose provider reported its token counts is complete.
+        route, assigned, handle = self.claude_run()
+        frame = result_frame()
+        frame["usage"] = {"input_tokens": 120, "output_tokens": 30,
+                          "cache_read_input_tokens": 400, "cache_creation_input_tokens": 80}
+        self.frames("claude", [init_frame(), RATE_LIMIT, frame])
+        output = self.dispatch(route, assigned, handle)
+        self.ledger.commit_host_result(
+            self.project_id, assignment=assigned, task=self.task(), route=route,
+            result=output["result"],
+            observation={"run_handle": handle, "result_attempts": ACCEPTED},
+            execution_configuration=route["execution_configuration"],
+        )
+        complete = self.ledger._connection.execute(
+            "SELECT usage_complete FROM host_run_bindings WHERE project_id=? AND consumed_at_ms IS NOT NULL",
+            (self.project_id,)
+        ).fetchall()
+        self.assertEqual([(1,)], [tuple(row) for row in complete])
+
     def test_a_bridged_run_without_recorded_usage_stays_unknown(self) -> None:
         route, assigned, handle = self.claude_run(timeout_seconds=1)
         self.frames("claude", [init_frame(), {"sleep": 60}])
