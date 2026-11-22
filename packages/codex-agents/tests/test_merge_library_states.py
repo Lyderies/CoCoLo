@@ -28,17 +28,17 @@ class EndStates(unittest.TestCase):
                                kind='forward', read_history=lambda: rows, **kw)
 
     def test_E2_cleanup_fault_preserves_durable_reverted_and_restored_tree(self):
-        self.check(call=ml.IOCall('unlink', 'after', 'cleanup'), fault=errno.EIO)
+        self.check(call=ml.IOCall('unlink', 'after', 'cleanup'), fault=errno.EIO, terminal_before='reverted')
         put(self.f.project / 'a.txt', b'child')
         with self.assertRaises(AssertionError):
-            self.check(call=ml.IOCall('unlink', 'after', 'cleanup'), fault=errno.EIO)
+            self.check(call=ml.IOCall('unlink', 'after', 'cleanup'), fault=errno.EIO, terminal_before='reverted')
 
     def test_F1_retirement_fault_preserves_terminal_direction(self):
-        self.check(call=ml.IOCall('sqlite_commit', 'before', 'retirement'), fault=errno.EIO)
+        self.check(call=ml.IOCall('sqlite_commit', 'before', 'retirement'), fault=errno.EIO, terminal_before='reverted')
         put(self.f.project / 'a.txt', b'child')
         self.check(row=replace(self.row, state='landed'),
                    report=replace(self.report, state='landed', paths=(ml.PathReport('a.txt', 'new'),)),
-                   call=ml.IOCall('sqlite_commit', 'before', 'retirement'), fault=errno.EIO)
+                   call=ml.IOCall('sqlite_commit', 'before', 'retirement'), fault=errno.EIO, terminal_before='landed')
 
     def test_B3_pins_only_this_operation_and_rejects_partial_bytes(self):
         from tests.merge_library_support import check_end_state
@@ -99,7 +99,7 @@ class EndStates(unittest.TestCase):
     def test_E1_unlisted_empty_folder_is_never_removed(self):
         (self.f.project / 'owner-empty').mkdir()
         self.f.operation_before = self.f.before = tree(self.f.project)
-        self.check(call=ml.IOCall('unlink', 'before', 'cleanup'), fault=errno.EIO)
+        self.check(call=ml.IOCall('unlink', 'before', 'cleanup'), fault=errno.EIO, terminal_before='reverted')
         (self.f.project / 'owner-empty').rmdir()
         with self.assertRaises(AssertionError):
             self.check(call=ml.IOCall('unlink', 'before', 'cleanup'), fault=errno.EIO)
@@ -213,6 +213,23 @@ class EndStates(unittest.TestCase):
         (self.f.project / 'removed').chmod(0o700)
         with self.assertRaisesRegex(AssertionError, 'mode'):
             self.check(row=row, report=report)
+
+    def test_decision_91_only_recorded_empty_descendants_qualify(self):
+        from tests.merge_library_support import check_empty_recorded_tree
+        root = self.f.project / 'removed'
+        (root / 'old.txt').unlink()
+        child = root / 'child'
+        child.mkdir()
+        identities = {'removed/child': (child.stat().st_dev, child.stat().st_ino)}
+        check_empty_recorded_tree(self, self.f, 'removed', identities)
+        put(child / 'foreign', b'owner')
+        with self.assertRaises(AssertionError):
+            check_empty_recorded_tree(self, self.f, 'removed', identities)
+        (child / 'foreign').unlink()
+        with self.assertRaises(AssertionError):
+            check_empty_recorded_tree(self, self.f, 'removed', {})
+        with self.assertRaises(AssertionError):
+            check_empty_recorded_tree(self, self.f, 'removed', {'removed/child': (0, 0)})
 
 
 if __name__ == '__main__':

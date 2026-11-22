@@ -39,7 +39,7 @@ class DurableDiskTests(unittest.TestCase):
         d.write('/model/only-parent', b'content', 0o644)
         d.flush('/model')
         d.crash()
-        self.assertNotEqual((stat.S_IFREG, 0o644, b'content'), d.snapshot('/model').get('only-parent'))
+        self.assertNotIn('only-parent', d.snapshot('/model'))
         d.write('/model/complete', b'content', 0o644)
         d.flush('/model/complete')
         d.flush('/model')
@@ -110,6 +110,7 @@ class DurableDiskTests(unittest.TestCase):
 
     def test_skipping_flush_before_A_is_caught_after_model_power_loss(self):
         from tests.merge_library_disk import ModelCrash
+        suppressed = []
         def committed_staging_survives():
             f = Fixture()
             self.addCleanup(f.close)
@@ -123,16 +124,20 @@ class DurableDiskTests(unittest.TestCase):
                 return answer
             with self.assertRaises(ModelCrash):
                 f.land(batch, hook=crash_after_A)
-            staged = '.cocolo/staging/child-1/e00000'
-            self.assertEqual((stat.S_IFREG, 0o644, b'durable child'), disk.snapshot(f.project).get(staged))
+            event = batch.events[0]
+            staged = f'.cocolo/staging/{batch.child_id}/e{batch.events.index(event):05d}'
+            self.assertEqual((stat.S_IFREG, event.new.mode_bits, event.new.data), disk.snapshot(f.project).get(staged),
+                             'commit A lost staged contents: ' + staged)
         committed_staging_survives()
         original = ml._Store.flush_all
         def missing_A_flush(store):
             if store.phase != 'history':
                 return original(store)
+            suppressed.append(store.phase)
         with mock.patch.object(ml._Store, 'flush_all', missing_A_flush):
-            with self.assertRaises(AssertionError):
+            with self.assertRaisesRegex(AssertionError, 'commit A lost staged contents: .*e00000'):
                 committed_staging_survives()
+        self.assertEqual(['history'], suppressed, 'missing-flush mutation never activated')
 
     def call(self, operation, path, **detail):
         return self.disk(ml.IOCall(operation, 'before', 'test', str(path), detail=detail)).value
@@ -201,6 +206,29 @@ class DurableDiskTests(unittest.TestCase):
         self.assertEqual(b'a', d.read('/model/right/b'))
         d.unlink('/model/left/a'); d.crash()
         self.assertEqual(b'b', d.read('/model/left/a'))
+
+    def test_review_B6_power_loss_latches_finally_IO_until_recovery(self):
+        from tests.merge_library_disk import ModelCrash
+        f = Fixture()
+        self.addCleanup(f.close)
+        disk = self.disk_type(f.root)
+        unwinding = []
+        def hook(call):
+            if getattr(disk, 'powered_off', False):
+                unwinding.append(call.operation)
+            answer = disk(call)
+            if call.operation == 'sqlite_commit' and call.when == 'after' and call.detail.get('commit') == 'A':
+                disk.crash(power_loss=True)
+                raise ModelCrash()
+            return answer
+        with self.assertRaises(ModelCrash):
+            f.land(f.batch({'a.txt': b'child'}), hook=hook)
+        self.assertIn('sqlite_close', unwinding, 'production finally I/O evidence')
+        with self.assertRaises(ModelCrash):
+            disk(ml.IOCall('mkdir', 'before', 'test', str(f.project / 'after-power-loss')))
+        self.assertFalse(disk.exists(f.project / 'after-power-loss'))
+        disk.resume()
+        ml.recover(f.project, f.private, hook=disk)
 
 
 if __name__ == '__main__':
