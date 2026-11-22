@@ -23,7 +23,7 @@ import time
 import weakref
 
 from . import bridge
-from .contracts import RESULT_VALIDATION_REASON_CODES, ContractError, validate_assignment
+from .contracts import RESULT_DIAGNOSTIC_REASON_CODES, ContractError, validate_assignment
 from .learning_contracts import (
     SUPPORTED_EFFORTS, SUPPORTED_MODELS, canonical_json, parse_bounded_json, validate_client_diagnostics,
 )
@@ -167,7 +167,7 @@ def _safe_report(report, provider):
         for name in names) else None)
     code = report.get("result_validation_reason_code")
     if code is not None:
-        if type(code) is not str or code not in RESULT_VALIDATION_REASON_CODES:
+        if type(code) is not str or code not in RESULT_DIAGNOSTIC_REASON_CODES:
             raise CodexWorkerError()
         result["result_validation_reason_code"] = code
     if claude:

@@ -806,7 +806,8 @@ def validate_outcome(data: Any) -> dict[str, Any]:
         not isinstance(reason_codes, list)
         or len(reason_codes) != data["repairs"]
         or any(
-            not isinstance(code, str) or code not in RESULT_VALIDATION_REASON_CODES
+            # Older releases wrote `inconsistent_axes` here; stored outcomes stay readable.
+            not isinstance(code, str) or code not in RESULT_DIAGNOSTIC_REASON_CODES
             for code in reason_codes
         )
     ):
