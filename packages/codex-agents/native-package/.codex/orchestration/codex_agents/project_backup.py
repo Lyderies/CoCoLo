@@ -303,7 +303,7 @@ def verify(path: Path, *, project_id: str, schema_version: int | None = None,
                 while batch := cursor.fetchmany(BATCH_ROWS):
                     for content, digest in batch:
                         try:
-                            record = validate_learning_record(json.loads(bytes(content)))
+                            record = validate_learning_record(json.loads(bytes(content)), stored=True)
                         except (ContractError, json.JSONDecodeError, TypeError, ValueError):
                             raise _error("project backup contains a corrupt learning record") from None
                         if content_digest(record) != digest:

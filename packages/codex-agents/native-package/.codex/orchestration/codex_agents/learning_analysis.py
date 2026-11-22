@@ -23,7 +23,7 @@ def analyze_outcomes(
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     excluded = 0
     for raw in outcomes:
-        outcome = validate_outcome(raw)
+        outcome = validate_outcome(raw, stored=True)
         if outcome["run_id"] in invalidated:
             excluded += 1
             continue

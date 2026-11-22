@@ -104,6 +104,7 @@ from .contracts import (
     validate_task,
 )
 from .learning_contracts import (
+    validate_outcome,
     PRODUCER_AUTHORITY as PRODUCER_AUTHORITY,
     PROVIDER_OBSERVATION_TYPES as PROVIDER_OBSERVATION_TYPES,
     DISPATCH_RESULT_SCHEMA_VERSION,
@@ -941,7 +942,7 @@ def _verify_project_backup_body(
                 decoded_rows.append(decoded)
                 if table == "records":
                     try:
-                        content = validate_learning_record(json.loads(bytes(decoded["content"])))
+                        content = validate_learning_record(json.loads(bytes(decoded["content"])), stored=True)
                     except (ContractError, json.JSONDecodeError, TypeError, ValueError) as exc:
                         raise LedgerError("project backup contains a corrupt learning record") from exc
                     if content_digest(content) != decoded["content_digest"]:
@@ -4230,7 +4231,7 @@ class LearningLedger:
         now_ms: int | None = None,
     ) -> dict[str, Any]:
         try:
-            checked = validate_learning_record(record, fresh=True)
+            checked = validate_learning_record(record)
         except ContractError as exc:
             raise LedgerError("record admission rejected") from exc
         allowed = PRODUCER_AUTHORITY.get(producer, set())
@@ -5690,7 +5691,7 @@ class LearningLedger:
         timestamp: int,
     ) -> list[dict[str, Any]]:
         try:
-            checked = [validate_learning_record(record, fresh=True) for record in records]
+            checked = [validate_learning_record(record) for record in records]
         except ContractError as exc:
             raise LedgerError("record admission rejected") from exc
         if any(record["record_type"] not in PROVIDER_OBSERVATION_TYPES for record in checked):
@@ -6328,7 +6329,7 @@ class LearningLedger:
                 phase="during",
             )
             try:
-                checked = [validate_learning_record(record, fresh=True) for record in records]
+                checked = [validate_learning_record(record) for record in records]
             except ContractError as exc:
                 raise LedgerError("record admission rejected") from exc
             kept = [
@@ -10369,6 +10370,8 @@ class LearningLedger:
             raise LedgerError(LEARNING_MOVED_ERROR)
         if checked["record_type"] == "candidate":
             self._validate_candidate_eligibility_locked(project_id, checked)
+        if checked.get("record_type") == "outcome":
+            validate_outcome(checked)  # a new row never takes the stored-read leniency, whoever built it
         source = SOURCE_BY_PRODUCER[producer]
         content = canonical_json(checked)
         digest = content_digest(checked)
