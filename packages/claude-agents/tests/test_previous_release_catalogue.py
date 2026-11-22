@@ -87,6 +87,47 @@ class CatalogueTests(unittest.TestCase):
     def test_the_shipped_catalogue_is_accepted(self) -> None:
         self.assertEqual(8, len(released_bundles(self.source)))  # 0.8.40, 0.8.41, 0.8.42, 0.8.43, 0.8.44, 0.8.45, 0.8.46, 0.8.47 (last seven: same bundle)
 
+    def padded(self, size: int) -> None:
+        body = json.dumps({"releases": self.records()}).encode()
+        self.catalogue.write_bytes(body + b" " * (size - len(body)))
+
+    def test_cl1_a_catalogue_up_to_2_mib_is_accepted(self) -> None:
+        self.padded(2_097_152)
+        self.assertEqual(9, len(released_bundles(self.source)))
+
+    def test_cl1_a_catalogue_over_2_mib_is_refused(self) -> None:
+        self.padded(2_097_152 + 1)
+        self.refused("unsafe_file")
+
+    def test_cl2_every_other_file_keeps_the_256_kib_limit(self) -> None:
+        for size, ok in ((262_144, True), (262_145, False)):
+            (self.source / "other.bin").write_bytes(b"x" * size)
+            root = packaging._root(self.source)
+            try:
+                if ok:
+                    self.assertEqual(size, len(packaging._read(root, "other.bin")))
+                else:
+                    with self.assertRaises(PackageError) as caught:
+                        packaging._read(root, "other.bin")
+                    self.assertEqual("unsafe_file", str(caught.exception))
+            finally:
+                import os
+                os.close(root)
+
+    def test_cl3_the_read_stays_bounded_when_the_file_grows_after_the_size_check(self) -> None:
+        (self.source / "other.bin").write_bytes(b"x" * 10)
+        root = packaging._root(self.source)
+        try:
+            with mock.patch.object(packaging.os, "fstat") as fstat:
+                fstat.return_value = mock.Mock(st_mode=0o100644, st_size=10)
+                (self.source / "other.bin").write_bytes(b"x" * 300_000)
+                with self.assertRaises(PackageError) as caught:
+                    packaging._read(root, "other.bin")
+            self.assertEqual("oversized_file", str(caught.exception))
+        finally:
+            import os
+            os.close(root)
+
     def test_an_appended_record_with_a_recomputed_digest_is_refused(self) -> None:
         self.write([*self.records(), self.forged()])
         self.refused("previous_release_not_pinned")
