@@ -43,6 +43,7 @@ import signal
 import struct
 import subprocess
 import sys
+import threading
 from threading import local as thread_local
 import time
 
@@ -58,10 +59,15 @@ WATCHDOG_INTERVAL_SECONDS = 0.5
 WATCHDOG_IDENTIFY_SECONDS = 5
 WATCHDOG_READY_SECONDS = 10
 WATCHDOG_READY = b"ready\n"
-# C3: an orphaned watchdog asks the container primitive to stop the container at most this many
-# times (one try, then a retry after each pause below), then ends the tree anyway. Each try is itself
-# bounded by the primitive (grace + its kill and gone waits), so the whole stop ends: attempts x that
-# bound + the pauses (1 + 2 + 4 s).
+# C3: an orphaned watchdog asks the container primitive to stop the container for at most one
+# monotonic budget: WATCHDOG_STOP_BUDGET_SECONDS plus the container's own grace (a stop needs the
+# grace to finish its SIGTERM wait). Inside it, at most WATCHDOG_STOP_ATTEMPTS tries with the pauses
+# below; a try still running when the budget ends is abandoned (it runs in a helper thread), so
+# neither a hanging podman nor the pauses can hold the tree alive past the budget. The tree is then
+# ended (its own bound: MAX_KILL_ROUNDS rounds) and one last stop is tried for at most
+# WATCHDOG_LAST_STOP_SECONDS. 15 s + grace fits the real test's 20 s allowance (grace 1 s there).
+WATCHDOG_STOP_BUDGET_SECONDS = 15.0
+WATCHDOG_LAST_STOP_SECONDS = 5.0
 WATCHDOG_STOP_ATTEMPTS = 4
 WATCHDOG_STOP_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
 # Kill rounds: each takes a fresh snapshot, adopts what the tree started since and
@@ -1017,23 +1023,44 @@ def container_watcher(argument: str) -> _ContainerWatch:
     return _ContainerWatch(runtime, config["name"], config["grace"], config["cgroup"], config["parent"])
 
 
-def _stop_container(container) -> bool:
-    """Stop the container until it is gone: a refused or stop_failed answer, or an exception, is
-    retried after a back-off, at most WATCHDOG_STOP_ATTEMPTS times in all. True once gone; False
-    when the bound ends it (recovery asks the OS again, as before)."""
+def _stop_once(container, seconds: float) -> bool:
+    """One stop try, abandoned (False) when it has not answered within `seconds`; True only when gone."""
+    answer: list[bool] = []
+
+    def attempt() -> None:
+        try:
+            answer.append(bool(container.stop().gone))
+        except Exception:
+            answer.append(False)
+
+    worker = threading.Thread(target=attempt, daemon=True)
+    worker.start()
+    worker.join(max(seconds, 0.0))
+    return bool(answer and answer[0])
+
+
+def _stop_container(container, budget: float | None = None) -> bool:
+    """Stop the container until it is gone: a refused or stop_failed answer, an exception or a try that
+    hangs is retried after a back-off, at most WATCHDOG_STOP_ATTEMPTS times and never past the budget
+    (default WATCHDOG_STOP_BUDGET_SECONDS plus the container's grace). True once gone; False when the
+    bound ends it."""
+    if budget is None:
+        budget = WATCHDOG_STOP_BUDGET_SECONDS + float(getattr(container, "grace", 0) or 0)
+    end = time.monotonic() + budget
     for attempt in range(WATCHDOG_STOP_ATTEMPTS):
         if attempt:
-            time.sleep(WATCHDOG_STOP_BACKOFF_SECONDS[min(attempt, len(WATCHDOG_STOP_BACKOFF_SECONDS)) - 1])
-        try:
-            if container.stop().gone:
-                return True
-        except Exception:
-            pass
+            pause = WATCHDOG_STOP_BACKOFF_SECONDS[min(attempt, len(WATCHDOG_STOP_BACKOFF_SECONDS)) - 1]
+            time.sleep(max(min(pause, end - time.monotonic()), 0.0))
+        left = end - time.monotonic()
+        if left <= 0:
+            break
+        if _stop_once(container, left):
+            return True
     return False
 
 
 def watch(root: int, birth: str, deadline: float, announce, marker: str | None = None,
-          bridge_run_id: str | None = None, run_tag: str | None = None, *, container=None) -> None:
+          bridge_run_id: str | None = None, run_tag: str | None = None, *, container=None) -> bool:
     """The detached deadline watchdog for one bridged child.
 
     It verifies the child's identity from the bridge, which keeps the child
@@ -1049,14 +1076,15 @@ def watch(root: int, birth: str, deadline: float, announce, marker: str | None =
     C3, with `container` (container mode: the child streams a container's output): once the
     service that started it has died, the container is stopped through the container primitive
     (SIGTERM, the grace, the kill, removal, gone asked of the OS) before the tree is killed. While
-    the service lives it stops its own runs' containers, so the watchdog leaves them to it.
+    the service lives it stops its own runs' containers, so the watchdog leaves them to it. Returns
+    False only when the container was not proven gone (see WATCHDOG_STOP_BUDGET_SECONDS).
     """
 
     tree = ProcessTree(root, run_tag)
     give_up = time.monotonic() + WATCHDOG_IDENTIFY_SECONDS
     while not tree.identify(process_table(), birth):
         if time.monotonic() >= give_up:
-            return
+            return True
         time.sleep(0.1)
     announce()
     while True:
@@ -1065,12 +1093,17 @@ def watch(root: int, birth: str, deadline: float, announce, marker: str | None =
             tree.update(table)
         orphaned = container is not None and not container.parent_alive()
         if orphaned or tree.root_exited() or time.monotonic() >= deadline:
+            stopped = True
             if orphaned:
-                _stop_container(container)  # Nothing records it here: recovery asks the OS again.
+                stopped = _stop_container(container)  # Nothing records it here: recovery asks the OS again.
             tree.terminate()
+            if not stopped:
+                # Hand-off: one last bounded try after the tree is gone, and a nonzero exit (the bridge's
+                # reap() reads it as a backstop that did not finish) for whatever next asks the OS.
+                stopped = _stop_once(container, WATCHDOG_LAST_STOP_SECONDS)
             if marker is not None and bridge_run_id is not None and tree.cleanup_confirmed():
                 write_cleanup_marker(marker, bridge_run_id, root, tree.root_birth)
-            return
+            return stopped
         time.sleep(WATCHDOG_INTERVAL_SECONDS)
 
 
@@ -1089,8 +1122,8 @@ if __name__ == "__main__":
     if len(sys.argv) == 6 and sys.argv[4] == "--container":
         # A container it cannot take on is never left unguarded quietly: it exits without
         # acknowledging, so the bridge refuses the run.
-        watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce,
-              container=container_watcher(sys.argv[5]))
+        sys.exit(0 if watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce,
+                            container=container_watcher(sys.argv[5])) else 1)
     else:
         watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce,
               *(sys.argv[4:7] if len(sys.argv) in (6, 7) else ()))

@@ -8,7 +8,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   A refused or failed stop, or an exception, is retried (at most 4 tries, pauses of 1, 2 and 4 s) and the tree
   is ended only once the container is gone or the tries are used up; before, one failed try abandoned the
   container. The real-watchdog test now waits until the watchdog process exists instead of sleeping 1 s (the
-  watchdog starts after the container runs; the sleep raced it under load).
+  watchdog starts after the container runs; the sleep raced it under load). The whole stop phase has one time budget
+  (15 s plus the container's grace; a hanging try is abandoned), and a stop not proven gone gets one last try
+  after the tree is ended and a nonzero exit.
 
 - Package 0.8.45 (Phase 1.2, core API round 6): the owner-facing core API (TM0) joins the 0.8.44 base after six
   review rounds (owner decision 34, no seventh). Fixed with tests that failed first: a single-digit price ("$5")
