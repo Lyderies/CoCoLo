@@ -8,7 +8,7 @@ from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, 
 
 from codex_agents import merge_library as ml
 from tests.merge_library_disk import MemoryDisk, ModelCrash
-from tests.merge_library_support import Fixture, ReplayPoint, check_end_state, replay_points
+from tests.merge_library_support import Fixture, ReplayPoint, check_end_state, replay_points, snapshot_fault
 
 
 class MergeMachine(RuleBasedStateMachine):
@@ -19,6 +19,9 @@ class MergeMachine(RuleBasedStateMachine):
         self.disk = self.f.disk = MemoryDisk(self.f.root)
         self.test = unittest.TestCase()
         self.last = None
+        self.fired_call = self.fault = None
+        self.action_kind = 'forward'
+        self.operation_name = 'land'
         # Independent expected operation maps, never obtained from the row/report.
         self.f.operation_before = dict(self.f.before)
         self.undo_start = None
@@ -26,8 +29,10 @@ class MergeMachine(RuleBasedStateMachine):
     def rows(self):
         return ml.history(self.f.project, self.f.private, hook=self.disk)
 
-    def invoke(self, action, data, mode):
+    def invoke(self, action, data, mode, *, operation='land'):
+        self.operation_name = operation
         import copy
+        self.fired_call = self.fault = None
         probe = copy.deepcopy(self.disk)
         probe.calls = []
         action(probe)
@@ -39,8 +44,11 @@ class MergeMachine(RuleBasedStateMachine):
             return
         key, _ = data.draw(st.sampled_from(points), label='persistence_boundary')
         def inject(call):
+            snapshot_fault(self.f, call)
+            self.fired_call = call
+            self.fault = errno.EIO if mode == 'EIO' else 'power_loss'
             if mode == 'power_loss':
-                self.disk.crash()
+                self.disk.crash(power_loss=True)
                 raise ModelCrash()
             raise OSError(errno.EIO, 'generated EIO at persistence boundary')
         point = ReplayPoint(key, self.f, inject)
@@ -50,14 +58,44 @@ class MergeMachine(RuleBasedStateMachine):
         try:
             self.last = action(hook)
         except ModelCrash:
+            self.disk.resume()
+            self.fired_call = self.fault = None
             self.last = ml.recover(self.f.project, self.f.private, hook=self.disk)
         point.assert_fired(self.test)
+        self.check_operation_report()
+
+    def check_operation_report(self):
+        reports = self.last if isinstance(self.last, tuple) else (self.last,) if self.last is not None else ()
+        rows = self.rows()
+        for report in reports:
+            row = next((r for r in rows if r.batch_no == report.batch_no), None)
+            # Recovery can report several historical terminal rows. A later
+            # durable operation owns today's tree; its endpoint still comes
+            # from the independent start/target maps, never from observed bytes.
+            previous = getattr(self.f, 'terminal_tree', None)
+            if row and rows and row.batch_no < rows[-1].batch_no:
+                latest = rows[-1]
+                self.test.assertIn(latest.state, ('landed', 'reverted', 'undone', 'resolved'))
+                direction = 'undoing' if latest.kind == 'undo' else 'forward'
+                self.f.terminal_tree = (self.f.operation_target(self.batch, direction) if latest.state == 'landed'
+                                        else self.f.operation_start(self.batch, direction))
+            try:
+                check_end_state(self.test, self.f, self.batch, report,
+                                kind='undoing' if row and row.kind == 'undo' else 'forward' if row else self.action_kind,
+                                call=self.fired_call, fault=self.fault, action=self.operation_name)
+            finally:
+                if previous is None:
+                    self.f.__dict__.pop('terminal_tree', None)
+                else:
+                    self.f.terminal_tree = previous
+
 
     @precondition(lambda self: not self.rows() or self.rows()[-1].state == 'reverted')
     @rule(data=st.data(), mode=st.sampled_from(('normal', 'EIO', 'power_loss')), checks=st.booleans())
     def land(self, data, mode, checks):
         self.f.operation_before = self.disk.snapshot(self.f.project, control=False)
         self.undo_start = None
+        self.action_kind = 'forward'
         policy = replace(self.f.policy, checks=lambda project: checks)
         self.invoke(lambda hook: self.f.land(self.batch, hook=hook, policy=policy), data, mode)
 
@@ -65,10 +103,13 @@ class MergeMachine(RuleBasedStateMachine):
     @rule(data=st.data(), mode=st.sampled_from(('normal', 'EIO', 'power_loss')))
     def retry(self, data, mode):
         number = self.rows()[-1].batch_no
-        self.invoke(lambda hook: ml.retry(self.f.project, self.f.private, number, policy=self.f.policy, hook=hook), data, mode)
+        self.invoke(lambda hook: ml.retry(self.f.project, self.f.private, number, policy=self.f.policy, hook=hook), data, mode, operation='retry')
 
     @rule()
     def cancel(self):
+        self.fired_call = self.fault = None
+        self.operation_name = 'cancel'
+        snapshot_fault(self.f, None)
         queued = ml.queue(self.f.project, self.f.private, hook=self.disk)
         if not queued:
             queued = (ml.enqueue(self.f.project, self.f.private, self.batch, policy=self.f.policy, hook=self.disk),)
@@ -80,19 +121,25 @@ class MergeMachine(RuleBasedStateMachine):
         number = self.rows()[-1].batch_no
         self.undo_start = self.disk.snapshot(self.f.project, control=False)
         self.f.operation_before = self.undo_start
-        self.invoke(lambda hook: ml.undo(self.f.project, self.f.private, number, hook=hook), data, mode)
+        self.action_kind = 'undoing'
+        self.invoke(lambda hook: ml.undo(self.f.project, self.f.private, number, hook=hook), data, mode, operation='undo')
 
     @rule()
     def crash(self):
+        self.operation_name = 'recover'
+        self.fired_call = self.fault = None
         self.disk.crash()
         self.last = ml.recover(self.f.project, self.f.private, hook=self.disk)
 
     @rule()
     def recover(self):
+        self.operation_name = 'recover'
+        self.fired_call = self.fault = None
         self.last = ml.recover(self.f.project, self.f.private, hook=self.disk)
 
     @invariant()
     def durable_history_and_tree_obey_the_single_checker(self):
+        self.check_operation_report()
         rows = self.rows()
         reports = ml.status(self.f.project, self.f.private, hook=self.disk)
         if rows:

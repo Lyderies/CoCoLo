@@ -63,6 +63,9 @@ class TableOutcomes(unittest.TestCase):
             put(f.project / 'a.txt', b'child')
             rows = [replace(row, state='landed', contents_kept=variant != 'retired')]
             report = replace(report, state='landed')
+            if variant == 'retired':
+                rows[0] = replace(rows[0], cleanup_complete=True)
+                rows.extend(replace(row, batch_no=i, state='landed') for i in range(2, 12))
             if variant in ('merged', 'owner_only'):
                 data = b'merged owner and child' if variant == 'merged' else b'owner only'
                 put(f.project / 'a.txt', data)

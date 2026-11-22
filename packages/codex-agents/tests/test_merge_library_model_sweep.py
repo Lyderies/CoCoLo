@@ -6,7 +6,7 @@ import unittest
 from codex_agents import merge_library as ml
 from tests.merge_library_disk import MemoryDisk, ModelCrash
 from tests.merge_library_support import (Fixture, FAULTABLE, ReplayPoint, check_end_state,
-                                         replay_points, sample_boundaries, seed_applied, tree)
+                                         replay_points, sample_boundaries, seed_applied, tree, snapshot_fault)
 
 
 def prepare(kind):
@@ -59,10 +59,9 @@ class PersistenceSamples(unittest.TestCase):
                     current = f.disk = copy.deepcopy(baseline)
                     f.terminal_states = {}
                     def inject(at):
-                        if at.detail.get('reporting'):
-                            f.terminal_states = {r.batch_no: r.state for r in ml.history(f.project, f.private, hook=current)}
+                        snapshot_fault(f, at)
                         if failure == 'power_loss':
-                            current.crash()
+                            current.crash(power_loss=True)
                             raise ModelCrash()
                         raise OSError(failure, 'modeled persistence fault')
                     point = ReplayPoint(key, f, inject)
@@ -76,6 +75,7 @@ class PersistenceSamples(unittest.TestCase):
                     point.assert_fired(self)
                     if report is not None:
                         check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+                    current.resume()
                     ml.recover(f.project, f.private, hook=current)
                     rows = ml.history(f.project, f.private, hook=current)
                     if rows:
@@ -86,6 +86,7 @@ class PersistenceSamples(unittest.TestCase):
                         queued = ml.queue(f.project, f.private, hook=current)
                         check_end_state(self, f, batch, ml.Report(queued[-1].state if queued else 'refused', recorded=False), kind=kind)
                     before, history = current.snapshot(f.project), rows
+                    current.resume()
                     ml.recover(f.project, f.private, hook=current)
                     self.assertEqual(before, current.snapshot(f.project))
                     self.assertEqual(history, ml.history(f.project, f.private, hook=current))

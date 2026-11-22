@@ -225,6 +225,8 @@ class Fixture:
         if cleanup:
             emptied = {p.as_posix() for e in batch.events if e.kind == "file" and e.new is None
                        for p in Path(e.path).parents if p != Path('.')}
+            if policy_outcomes()['Q5'] == 'parents':
+                emptied &= {str(Path(e.path).parent) for e in batch.events if e.kind == 'file' and e.new is None}
             for directory in sorted(emptied, key=len, reverse=True):
                 if directory != "." and not any(k.startswith(directory + "/") for k in expected):
                     expected.pop(directory, None)
@@ -572,13 +574,69 @@ POLICY = {
 }
 
 
-def check_end_state(test, f, batch, report, *, kind='forward', read_history=None,
-                    kept_candidates=(), call=None, fault=None, terminal_before=None):
+def check_empty_recorded_tree(test, f, name, identities):
+    """Decision 91=A: every descendant is an empty, recorded CoCoLo inode."""
+    for child, version in observed_tree(f, f.project / name, control=True).items():
+        relative = name + '/' + child
+        test.assertEqual(stat.S_IFDIR, version[0], 'foreign content in empty tree: ' + relative)
+        test.assertIn(relative, identities, 'unrecorded folder in empty tree: ' + relative)
+        info = observed_info(f, f.project / relative)
+        test.assertEqual(tuple(identities[relative]), (info.st_dev, info.st_ino),
+                         'replaced folder in empty tree: ' + relative)
+
+
+def policy_outcomes():
+    """Executable alternatives from the six open questions; no hidden defaults."""
+    return {
+        'Q1': ('needs_owner', 'io') if POLICY['Q1'] == 'needs_owner(io)' else ('reverted', None),
+        'Q2': ('reverted', 'needs_owner') if POLICY['Q2'] == 'put_back_and_cleanup' else ('landed', 'needs_owner'),
+        'Q3': 'terminal' if POLICY['Q3'] == 'durable_terminal_retirement_pending' else 'pending',
+        'Q4': ('needs_owner', 'owner') if POLICY['Q4'] == 'needs_owner(owner)' else ('reverted', 'owner'),
+        'Q5': 'ancestors' if POLICY['Q5'] == 'all_emptied_ancestors' else 'parents',
+        'Q6': ('reverted', 'needs_owner') if POLICY['Q6'] == 'put_back' else ('applying',),
+    }
+
+
+def snapshot_fault(f, call):
+    """Read committed rows without the library, its hook, or any write/DDL."""
+    import sqlite3
+    path = f.private / 'history.sqlite'
+    disk = getattr(f, 'disk', None)
+    if disk is not None:
+        values = disk.databases.get(disk._inode(path), {}).get('rows', {}).values() if disk.exists(path) else ()
+    elif path.exists():
+        with sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) as db:
+            tables = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='rows'").fetchall()
+            values = [v for (v,) in db.execute('SELECT value FROM rows')] if tables else ()
+    else:
+        values = ()
+    f.terminal_states = {row['id']: row['state'] for row in map(json.loads, values)}
+    f.fault_call = call
+    return dict(f.terminal_states)
+
+
+def check_end_state(test, f, batch, report, **kwargs):
+    """The immutable independent starting evidence is checked on every exit."""
+    import copy
+    before = copy.deepcopy(f.before)
+    try:
+        return _check_end_state(test, f, batch, report, **kwargs)
+    finally:
+        test.assertEqual(before, f.before, 'oracle must not mutate its start evidence')
+
+
+def _check_end_state(test, f, batch, report, *, kind='forward', read_history=None,
+                    kept_candidates=(), call=None, fault=None, terminal_before=None, action=None):
     """One invariant, states table §§1–3/5. Direction ALWAYS comes from reread history.
 
     read_history is an independent durable-view seam for checker self-tests only.
     Operation tests leave it unset; the report can never supply durable direction.
     """
+    policies = policy_outcomes()
+    if action == 'retry':
+        test.assertIn(report.state, policies['Q2'], 'H1 retry outcome')
+    if action == 'cancel' and 'applying' in getattr(f, 'terminal_states', {}).values():
+        test.assertIn(report.state, policies['Q6'], 'A6 cancel outcome')
     actual = observed_tree(f)
     try:
         rows = (read_history or (lambda: observed_history(f)))()
@@ -588,15 +646,27 @@ def check_end_state(test, f, batch, report, *, kind='forward', read_history=None
         test.assertFalse(report.recorded)
         test.assertEqual(f.operation_before, actual)
         return
+    operation_rows = [r for r in rows if r.batch == batch and r.kind == ('undo' if kind == 'undoing' else 'forward')]
+    if report.batch_no is None and report.state != 'unknown':
+        test.assertFalse(any(r.state == 'applying' for r in operation_rows), 'admission hides applying authority')
     matches = [r for r in rows if r.batch_no == report.batch_no]
     test.assertLessEqual(len(matches), 1, 'duplicate durable operation')
+    if report.recorded:
+        test.assertEqual(1, len(matches), 'recorded operation requires exactly one durable row')
     row = matches[0] if matches else None
     start = f.operation_start(batch, kind)
     target = f.operation_target(batch, kind)
     before = dict(f.before)
     if report.state == 'unknown':
+        test.assertTrue(call and fault and call.operation in ('sqlite_read', 'sqlite_open') and not call.detail.get('mutating'),
+                        'unknown requires independent history failure provenance')
         test.assertEqual(f.operation_before, actual)
         test.assertFalse(report.recorded)
+        if hasattr(f, 'terminal_states'):
+            test.assertEqual(f.terminal_states, {r.batch_no: r.state for r in rows}, 'D7 unknown must not alter durable direction')
+        for item in rows:
+            if item.state in ('applying', 'needs_owner'):
+                test.assertTrue(item.contents_kept, 'D7 unresolved contents remain pinned')
         return
     # A5 representation is deliberately open; G1 may name the original row,
     # but neither report grants applying authority for the refused operation.
@@ -616,15 +686,25 @@ def check_end_state(test, f, batch, report, *, kind='forward', read_history=None
         if report.paths:
             report_oracle(test, f, report, batch)
         return
-    if report.recorded:
+    retirement_pending = call and fault and call.phase == 'retirement' and policies['Q3'] == 'pending'
+    if retirement_pending:
+        test.assertFalse(report.recorded)
+        test.assertEqual('record_pending', report.state)
+    elif report.recorded:
         test.assertEqual(row.state, report.state, 'report must agree with durable row')
     else:  # C3: terminal write failed; never infer commit from a complete target tree.
+        test.assertNotIn(report.state, ('landed', 'reverted', 'resolved', 'undone'), 'terminal report requires a durable recorded outcome')
         test.assertEqual('applying', row.state)
     test.assertEqual(batch, row.batch)
+    if policies['Q5'] == 'parents':
+        direct = {str(Path(e.path).parent) for e in batch.events if e.kind == 'file'}
+        test.assertTrue(set(row.emptied_folders).issubset(direct), 'Q5 direct-parent policy forbids ancestor records')
     test.assertEqual('undo' if kind == 'undoing' else 'forward', row.kind)
     if terminal_before is None:
         terminal_before = getattr(f, 'terminal_states', {}).get(report.batch_no)
-    if terminal_before is not None:  # D6/E/F: cleanup has no tree direction.
+    if call and fault and call.phase in ('cleanup', 'retirement'):
+        test.assertIsNotNone(terminal_before, 'pre-fault durable terminal snapshot required')
+    if terminal_before in ('landed', 'reverted', 'resolved', 'undone'):  # D6/E/F: cleanup has no tree direction.
         test.assertEqual(terminal_before, row.state)
     state = row.state
     test.assertIn(state, ('applying', 'landed', 'reverted', 'needs_owner', 'resolved', 'undone'))
@@ -645,10 +725,14 @@ def check_end_state(test, f, batch, report, *, kind='forward', read_history=None
             test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
             test.assertTrue(name in named or str(f.project / name) in named, name)
             kept.add(name)
-    if kept and state in ('reverted', 'needs_owner') and POLICY['Q1'] == 'needs_owner(io)':
-        test.assertEqual('needs_owner', state)
-        test.assertEqual('io', report.reason)
-    if state in ('applying', 'needs_owner') or not report.recorded:
+    if kept and state in ('reverted', 'needs_owner'):
+        test.assertEqual(policies['Q1'][0], state, 'B2 Q1 kept folder outcome')
+        if policies['Q1'][1]:
+            test.assertEqual(policies['Q1'][1], report.reason)
+    if f.owner_versions and report.reason == 'owner' and state not in ('applying', 'landed'):
+        test.assertEqual(policies['Q4'], (state, report.reason), 'B4/G3 Q4 owner outcome')
+    released = state == 'undone' or (sum(r.batch_no > row.batch_no and r.kind == 'forward' and r.state == 'landed' for r in rows) >= 10 and row.cleanup_complete)
+    if not released and state != 'resolved':
         test.assertTrue(row.contents_kept, 'this operation must pin its contents')
         if row.undoes is not None:
             dependency = next(r for r in rows if r.batch_no == row.undoes)
@@ -659,7 +743,7 @@ def check_end_state(test, f, batch, report, *, kind='forward', read_history=None
                     and call.detail.get('commit') == 'retire'):
                 test.assertFalse(row.cleanup_complete, 'failed cleanup must remain retryable')
         elif state == 'landed':
-            test.assertTrue(fault == 'short' or call.operation == 'sqlite_commit' or (call.detail.get('reporting') and terminal_before == 'landed'),
+            test.assertTrue(fault == 'short' or call.operation == 'sqlite_commit' or (call.operation in ('open', 'read', 'fstat', 'lstat') and call.detail.get('reporting') and terminal_before == 'landed'),
                             'ordinary I/O failure cannot end landed')
         else:
             test.assertIn(state, ('applying', 'reverted', 'needs_owner'))
@@ -671,17 +755,37 @@ def check_end_state(test, f, batch, report, *, kind='forward', read_history=None
         test.assertTrue(set(versions) & surviving, f'owner version lost: {name}')
     if state in ('landed', 'reverted'):
         expected = dict(getattr(f, 'terminal_tree', target if state == 'landed' else start))
+        if state == 'reverted' and policies['Q4'][0] == 'reverted' and report.reason == 'owner':
+            for name, versions in f.owner_versions.items():
+                if actual.get(name) in versions:
+                    if name in actual:
+                        expected[name] = actual[name]
+                    else:
+                        expected.pop(name, None)
         if state == 'landed':
             expected.update(getattr(f, 'late_owner_versions', {}))
         if state == 'landed' and row.kind == 'undo':
             test.assertTrue(any(r.batch_no == row.undoes and r.state == 'undone' for r in rows))
+        # EL allowances must not make a parent appear required by the original endpoint.
+        required_tree = dict(expected)
         # EL deletion is permitted only after landing and only with the commit-A identity.
-        for name, identity in row.emptied_folders.items():
-            if state != 'landed' or any(p.startswith(name + '/') for p in expected):
+        for name, identity in sorted(row.emptied_folders.items(), key=lambda item: (-item[0].count('/'), item[0])):
+            if state != 'landed' or any(p.startswith(name + '/') and p not in row.emptied_folders for p in required_tree):
                 continue
             if name in actual:
-                test.assertEqual(stat.S_IFDIR, actual[name][0], name)
-                test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+                permitted_folder = expected.get(name, start.get(name))
+                test.assertIsNotNone(permitted_folder, 'EL must belong to the independent start/target tree')
+                test.assertEqual(permitted_folder, actual[name], 'EL full directory mode changed: ' + name)
+                identities = dict(row.created_folders)
+                if row.undoes is not None:
+                    original = next(r for r in rows if r.batch_no == row.undoes)
+                    identities.update(original.created_folders)
+                check_empty_recorded_tree(test, f, name, identities)
+                for descendant in actual:
+                    if descendant.startswith(name + '/'):
+                        version = expected.get(descendant, start.get(descendant))
+                        test.assertEqual(version, actual[descendant], 'recorded descendant mode changed: ' + descendant)
+                        expected[descendant] = version
                 info = observed_info(f, f.project / name)
                 test.assertEqual(tuple(identity), (info.st_dev, info.st_ino), name)
                 expected[name] = actual[name]
@@ -701,10 +805,14 @@ def check_end_state(test, f, batch, report, *, kind='forward', read_history=None
                 continue
             if actual.get(name) in (start.get(name), target.get(name)):
                 continue
-            if classes.get(name) in ('owner', 'moved', 'unknown'):
+            if name in {e.path for e in batch.events} and classes.get(name) in ('owner', 'moved', 'unknown'):
                 test.assertIn(name, named)
                 if classes[name] == 'owner':
                     test.assertIn(actual.get(name), f.owner_versions.get(name, ()), name)
+                elif classes[name] == 'moved':
+                    test.assertIn(name, getattr(f, 'moved_paths', {}), 'moved needs independent provenance')
+                else:
+                    test.assertIn(name, unreadable, 'unknown needs independent unreadable provenance')
                 continue
             test.assertIn(actual.get(name), (start.get(name), target.get(name)), name)
     else:  # D6/F2/H2: resolved/undone carry no automatic direction.
@@ -736,6 +844,7 @@ class CleanupFaultOracleSelfTests(unittest.TestCase):
         self.report = ml.Report("landed", batch_no=1, recorded=True,
                                 paths=(ml.PathReport("removed/old.txt", "absent"),))
         self.call = ml.IOCall("rmdir", "after", "cleanup")
+        self.f.terminal_states = {1: "landed"}
 
     def check(self, report=None, row=None, call=None):
         fault_outcome_oracle(self, self.f, self.batch, report or self.report,
@@ -845,16 +954,17 @@ def sample_boundaries(points, *, lane='real', reproducer='forward'):
     """TF-18: exact checked-in normal samples; explicit soak retains every boundary."""
     if os.environ.get('COCOLO_TEST_PROFILE', 'ci') == 'soak':
         return points
+    points = [(key, call) for key, call in points if call.operation in FAULTABLE | {'sqlite_read'}]
     inventory = json.loads((Path(__file__).resolve().parents[3] / 'tests/merge-persistence-samples.json').read_text())
     expected = inventory['samples'][lane][reproducer]
     by_key = {canonical(key): (key, call) for key, call in points}
     selected = [by_key[canonical(row['key'])] for row in expected if canonical(row['key']) in by_key]
-    if lane == 'model':
+    if lane in ('real', 'model'):
         missing = [row for row in expected if canonical(row['key']) not in by_key]
         if missing:
             raise AssertionError('stale persistence sample: ' + repr(missing))
-        observed_kinds = {(c.operation, c.phase, c.when, c.detail.get('commit')) for _, c in points}
-        sampled_kinds = {(c.operation, c.phase, c.when, c.detail.get('commit')) for _, c in selected}
+        observed_kinds = {(('full_flush' if c.operation in ('fsync', 'fullfsync') else c.operation), c.phase, c.when, c.detail.get('commit')) for _, c in points}
+        sampled_kinds = {(('full_flush' if c.operation in ('fsync', 'fullfsync') else c.operation), c.phase, c.when, c.detail.get('commit')) for _, c in selected}
         if observed_kinds != sampled_kinds:
             raise AssertionError('new persistence boundary needs a sample: ' + repr(observed_kinds - sampled_kinds))
     if points and not selected:
@@ -871,26 +981,31 @@ def kill_oracle(test, operation, *, select=lambda c: c.operation != "checkpoint"
         operation(discovery, batch, trace)
         assert_discovery(test, trace.calls, operation)
         assert_commit_flushes(test, trace.calls)
-        boundaries = replay_points(trace.calls, discovery, select)
+        all_boundaries = replay_points(trace.calls, discovery, lambda c: c.operation in FAULTABLE | {'sqlite_read'})
+        sampled = sample_boundaries(all_boundaries, reproducer=operation.__name__)
+        boundaries = [(key, call) for key, call in sampled if select(call)]
         test.assertTrue(boundaries, "a syscall hook must expose at least one boundary")
         if operation.__name__ == "forward" and any(c.operation == "sqlite_commit" for _, c in boundaries):
             test.assertTrue({(label, side) for label in ("A", "B") for side in ("before", "after")}
                             .issubset({(c.detail.get("commit"), c.when) for _, c in boundaries}))
     finally:
         discovery.close()
-    for key, selected in sample_boundaries(boundaries, reproducer=operation.__name__):
+    for key, selected in boundaries:
         f = Fixture()
         try:
             batch = f.batch()
             # A durable marker proves identity matching even though SIGKILL loses Python memory.
             marker = f.root / "injection-fired"
             def kill(call):
+                before = snapshot_fault(f, call)
+                marker.with_suffix('.states').write_text(json.dumps(before))
                 marker.write_bytes(canonical(key))
                 os.kill(os.getpid(), signal.SIGKILL)
             point = ReplayPoint(key, f, kill)
             status = child_run(lambda: operation(f, batch, Trace(point)))
             test.assertTrue(os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL)
             test.assertEqual(canonical(key), marker.read_bytes())
+            f.terminal_states = {int(k): v for k, v in json.loads(marker.with_suffix('.states').read_text()).items()}
             rows = ml.history(f.project, f.private)
             reports = recover_checked(test, f, batch, operation.__name__)
             if not reports:
@@ -914,7 +1029,7 @@ def fault_sweep(test, operation):
         operation(discovery, discovery.batch(), trace)
         assert_discovery(test, trace.calls, operation)
         assert_commit_flushes(test, trace.calls)
-        points = replay_points(trace.calls, discovery, lambda c: c.operation in FAULTABLE)
+        points = replay_points(trace.calls, discovery, lambda c: c.operation in FAULTABLE | {'sqlite_read'})
         test.assertTrue(points)
         # Both failed calls and successful calls with lost acknowledgement, including
         # undo/retire commits and fsync, get injected; short writes apply only before.
@@ -929,8 +1044,7 @@ def fault_sweep(test, operation):
             try:
                 batch = f.batch()
                 def inject(current):
-                    if current.detail.get('reporting'):
-                        f.terminal_states = {r.batch_no: r.state for r in observed_history(f)}
+                    snapshot_fault(f, current)
                     if fault == "short":
                         data = current.detail["data"]
                         count = os.write(current.detail["fd"], data[:max(1, len(data) // 2)])
@@ -950,6 +1064,7 @@ def fault_sweep(test, operation):
                                  for r in records)
                 if unresolved:
                     retry = ml.retry(f.project, f.private, report.batch_no, policy=f.policy)
+                    test.assertIn(retry.state, policy_outcomes()['Q2'], 'H1 retry must put back and clean up')
                     outcome_oracle(test, f, batch, retry, ml.history(f.project, f.private), operation.__name__)
                 recover_checked(test, f, batch, operation.__name__)
 
@@ -973,6 +1088,11 @@ def declare_ml_tests(namespace):
             numbers = re.findall(r'ML-?(\d+)', method.__doc__ or name.upper())
             ids = tuple(dict.fromkeys('ML-' + n for n in numbers))
             if not ids:
-                ids = (next((value for key, value in mapping.items() if name.startswith('test_' + key + '_')), 'TF-19'),)
+                requirement = next((value for key, value in mapping.items() if name.startswith('test_' + key + '_')), None)
+                explicit = getattr(method, '__requirements__', ()) or getattr(cls, '__requirements__', ())
+                ids = explicit or ((requirement,) if requirement else ())
+                if not ids:
+                    raise ValueError('unmapped merge test: ' + cls.__name__ + '.' + name)
             method.__requirements__ = ids
-            method.__why_not_scenario__ = 'Persistence, crash, authority and oracle negative controls require exact syscall boundaries independent of lifecycle flows.'
+            method.__why_not_scenario__ = (getattr(method, '__why_not_scenario__', '') or getattr(cls, '__why_not_scenario__', '') or
+                                             f'{name} checks {ids} at exact filesystem or authority boundaries.')

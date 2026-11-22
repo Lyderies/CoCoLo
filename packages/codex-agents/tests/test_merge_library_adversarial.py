@@ -827,3 +827,22 @@ declare_ml_tests(globals())
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# The original methods remain the source of truth, including soak users.
+# Discovery partitions them by fault area; no assertion or boundary is removed.
+def campaign_area(name):
+    if name.startswith('test_ml_10_edit_'):
+        return 'owners'
+    if name in {'test_ml_11_kill_' + kind for kind in ('forward', 'reverse', 'undo', 'recovery', 'cleanup')}:
+        return 'kills'
+    if name == 'test_ml_12_fault_sweep_forward':
+        return 'forward_faults'
+    if name in {'test_ml_12_fault_sweep_' + kind for kind in ('reverse', 'recovery', 'cleanup')}:
+        return 'recovery_faults'
+    return 'adversarial'
+
+
+def load_tests(loader, tests, pattern):
+    return unittest.TestSuite(Adversarial(name) for name in loader.getTestCaseNames(Adversarial)
+                              if campaign_area(name) == 'adversarial')

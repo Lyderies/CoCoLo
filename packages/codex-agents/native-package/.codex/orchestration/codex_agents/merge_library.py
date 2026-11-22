@@ -433,14 +433,35 @@ class _Store:
         self.check_dir(dst.parent)
         # Anchor both parents with descriptors. /dev/fd paths bind the kernel
         # operation to those open directories, including a concurrently moved one.
-        a = self.io('open', lambda: os.open(src.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW), src.parent, flags=os.O_RDONLY | os.O_DIRECTORY)
-        b = self.io('open', lambda: os.open(dst.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW), dst.parent, flags=os.O_RDONLY | os.O_DIRECTORY)
+        a = self.io('open', lambda: os.open(src.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW), src.parent, flags=os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            self.io('exchange' if exchange else 'rename_noreplace', lambda: _atomic(src.name, dst.name, exchange, a, b),
-                    src, dst, mutating=True, scope=scope)
+            b = self.io('open', lambda: os.open(dst.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW), dst.parent, flags=os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                self.io('exchange' if exchange else 'rename_noreplace', lambda: _atomic(src.name, dst.name, exchange, a, b),
+                        src, dst, mutating=True, scope=scope)
+            finally:
+                self.close_fd(b, dst.parent)
         finally:
-            self.io('close', lambda: os.close(a), src.parent, fd=a)
-            self.io('close', lambda: os.close(b), dst.parent, fd=b)
+            self.close_fd(a, src.parent)
+
+    def close_fd(self, fd, path):
+        closed = False
+        def close():
+            nonlocal closed
+            os.close(fd)
+            closed = True
+        try:
+            self.io('close', close, path, fd=fd)
+        except BaseException:
+            # A hook may fail before the close. Release the real resource even
+            # while another parent's close is unwinding; never double-close.
+            if not closed:
+                try:
+                    os.close(fd)
+                except OSError as error:
+                    if error.errno != errno.EBADF:
+                        raise
+            raise
 
     def connect(self):
         if self.db is None:
@@ -709,6 +730,9 @@ def _anchor(s, r, e):
 
 
 def _snapshot(s, r):
+    deleted = {e.path for e in map(_de, r['effective']) if e.kind == 'file' and e.new is None}
+    added = {e.path for e in map(_de, r['effective']) if e.new is not None or e.kind == 'folder'}
+    candidates = {}
     for e in map(_de, r['effective']):
         parent = (s.project / e.path).parent
         while parent != s.project.parent:
@@ -724,8 +748,17 @@ def _snapshot(s, r):
             parent = (s.project / e.path).parent
             while parent != s.project and s.exists(parent):
                 info = s.info(parent)
-                r['emptied'][parent.relative_to(s.project).as_posix()] = [info.st_dev, info.st_ino]
+                name = parent.relative_to(s.project).as_posix()
+                candidates[name] = [info.st_dev, info.st_ino]
                 parent = parent.parent
+    # Only ancestors whose surviving children are themselves eligible removals
+    # become empty. An owner's pre-existing empty subfolder is not ours to prune.
+    eligible = {}
+    for name in sorted(candidates, key=lambda name: (-name.count('/'), name)):
+        children = {p.relative_to(s.project).as_posix() for p in s.children(s.project / name)}
+        if children.issubset(deleted | set(eligible)) and not any(p.startswith(name + '/') for p in added):
+            eligible[name] = candidates[name]
+    r['emptied'].update(eligible)
 
 
 def _report(s, r, state=None, reason='', merged=(), conflicts=(), recorded=True, pending=False):
@@ -733,41 +766,44 @@ def _report(s, r, state=None, reason='', merged=(), conflicts=(), recorded=True,
     was_reporting = getattr(s, 'reporting', False)
     s.reporting = True
     s.phase = 'validation'
-    s.moved.update(r.get('moved', ()))
-    b = _unpack(r['batch'])
-    staging = s.project / '.cocolo/staging' / b.child_id
-    leftovers = []
     try:
-        s.check_dir(staging)
-        leftovers = [str(p) for p, info in s.walk(staging) if stat.S_ISREG(info.st_mode) and p.name != '.gitignore']
-    except (_Refusal, OSError):
-        pass
-    rows = []
-    for e in b.events:
-        retained = tuple(p for p in leftovers if p == r['staged'].get(e.path))
+        s.moved.update(r.get('moved', ()))
+        b = _unpack(r['batch'])
+        staging = s.project / '.cocolo/staging' / b.child_id
+        leftovers = []
         try:
-            s.check_dir((s.project / e.path).parent)
-            observed = s.read(s.project / e.path) if e.kind == 'file' else None
-            classification = ('absent' if observed is None else 'base' if _equal(observed, e.base)
-                              else 'new' if _equal(observed, e.new) else 'owner')
-        except _Refusal as error:
-            classification = 'absent' if str(error) == 'moved' else 'owner'
-        except OSError:
-            classification = 'unknown'
-        if e.path in s.moved:
-            classification = 'moved'
-        rows.append(PathReport(e.path, classification, retained))
-    listed = {path.path for path in rows}
-    for name in r.get('unrecorded_folders', ()):
-        if name not in listed:
-            rows.append(PathReport(name, 'owner'))
-    notes = _NOTES + (('Moved parent locations are unverified.',) if s.moved else ())
-    if pending:
-        notes += ('Unresolved record pending; backups remain pinned.',)
-    s.phase = oldphase
-    s.reporting = was_reporting
-    return Report(state or r['state'], reason or r.get('reason', ''), r['id'], tuple(rows), tuple(merged), tuple(conflicts),
-                  tuple(leftovers), notes, recorded)
+            s.check_dir(staging)
+            leftovers = [str(p) for p, info in s.walk(staging) if stat.S_ISREG(info.st_mode) and p.name != '.gitignore']
+        except (_Refusal, OSError):
+            pass
+        rows = []
+        for e in b.events:
+            retained = tuple(p for p in leftovers if p == r['staged'].get(e.path))
+            try:
+                s.check_dir((s.project / e.path).parent)
+                observed = s.read(s.project / e.path) if e.kind == 'file' else None
+                classification = ('absent' if observed is None else 'base' if _equal(observed, e.base)
+                                  else 'new' if _equal(observed, e.new) else 'owner')
+            except _Refusal as error:
+                classification = 'absent' if str(error) == 'moved' else 'owner'
+            except OSError:
+                classification = 'unknown'
+            if e.path in s.moved:
+                classification = 'moved'
+            rows.append(PathReport(e.path, classification, retained))
+        listed = {path.path for path in rows}
+        for name in r.get('unrecorded_folders', ()):
+            if name not in listed:
+                rows.append(PathReport(name, 'owner'))
+        notes = _NOTES + (('Moved parent locations are unverified.',) if s.moved else ())
+        if pending:
+            notes += ('Unresolved record pending; backups remain pinned.',)
+        return Report(state or r['state'], reason or r.get('reason', ''), r['id'], tuple(rows), tuple(merged), tuple(conflicts),
+                      tuple(leftovers), notes, recorded)
+
+    finally:
+        s.phase = oldphase
+        s.reporting = was_reporting
 
 
 def _apply(s, r):
@@ -1023,7 +1059,7 @@ def queue(project, private_root, *, hook=None):
 
 def _enqueue(s, b):
     qs = s.qrows()
-    existing = next((q for q in qs if q['child'] == b.child_id), None)
+    existing = next((q for q in qs if q['child'] == b.child_id and (q.get('batch') == _pack(b) or q['state'] not in ('landed', 'resolved', 'cancelled'))), None)
     if existing:
         return existing
     q = dict(id=max([q['id'] for q in qs], default=0)+1, child=b.child_id, state='queued', base=b.base_commit, kind='child', batch=_pack(b))
@@ -1179,7 +1215,10 @@ def land(project, private_root, batch, *, policy, hook=None):
             s.phase = 'validation'
             s.checkpoint('final_validation')
             if next(x for x in s.qrows() if x['id'] == q['id'])['state'] == 'cancelled':
-                durable = next(x for x in s.rows() if x['id'] == r['id'])
+                try:
+                    durable = next(x for x in s.rows() if x['id'] == r['id'])
+                except (OSError, sqlite3.Error, StopIteration):
+                    return Report('unknown', 'io', r['id'], recorded=False)
                 if durable['state'] != 'applying':
                     return _report(s, durable, merged=merged)
                 s.phase = 'reverse'
@@ -1227,7 +1266,10 @@ def land(project, private_root, batch, *, policy, hook=None):
             if s is None:
                 return Report('refused', 'io')
             s.close()
-            durable = next((x for x in s.rows() if r and x['id'] == r['id']), None)
+            try:
+                durable = next((x for x in s.rows() if r and x['id'] == r['id']), None)
+            except (OSError, sqlite3.Error):
+                return Report('unknown', 'io', r['id'] if r else None, recorded=False)
             if durable and durable['state'] == 'landed':
                 # A terminal record fixes direction. Cleanup remains retryable;
                 # its failure cannot turn a completed landing into a put-back.
@@ -1250,7 +1292,10 @@ def land(project, private_root, batch, *, policy, hook=None):
 def rollback(project, private_root, batch_no, *, hook=None):
     s = _Store(project, private_root, hook)
     try:
-        r = next(x for x in s.rows() if x['id'] == batch_no)
+        try:
+            r = next(x for x in s.rows() if x['id'] == batch_no)
+        except (OSError, sqlite3.Error, StopIteration):
+            return Report('unknown', 'io', batch_no, recorded=False)
         if r['state'] not in ('applying', 'needs_owner'):
             return _report(s, r, 'refused', 'terminal', recorded=False)
         s.phase = 'reverse'
@@ -1308,7 +1353,10 @@ def undo(project, private_root, batch_no, *, hook=None):
     s = _Store(project, private_root, hook)
     r = None
     try:
-        rows = s.rows()
+        try:
+            rows = s.rows()
+        except (OSError, sqlite3.Error):
+            return Report('unknown', 'io', recorded=False)
         original = next((x for x in rows if x['id'] == batch_no), None)
         if not original:
             return Report('refused', 'unknown_batch')
@@ -1399,7 +1447,7 @@ def cancel(project, private_root, ticket, *, hook=None):
     s = _Store(project, private_root, hook)
     try:
         q = next(q for q in s.qrows() if q['id'] == ticket)
-        rows = [r for r in s.rows() if r['batch'][0] == q['child']]
+        rows = [r for r in s.rows() if r['batch'] == q.get('batch')]
         latest = max(rows, key=lambda r: r['id']) if rows else None
         if latest and latest['state'] in ('landed', 'reverted', 'resolved', 'undone'):
             _clean_row(s, latest)
@@ -1447,7 +1495,10 @@ def cleanup(project, private_root, *, hook=None):
     s = _Store(project, private_root, hook)
     try:
         reports = []
-        rows = s.rows()
+        try:
+            rows = s.rows()
+        except (OSError, sqlite3.Error):
+            return (Report('unknown', 'io', recorded=False),)
         for r in rows:
             if any(x['state'] in ('applying', 'needs_owner') and x['batch'][0] == r['batch'][0]
                    for x in rows):
@@ -1465,7 +1516,11 @@ def cleanup(project, private_root, *, hook=None):
                 # E1/E2/F1: cleanup and retirement cannot change durable direction.
                 # The local row may already have clean/kept edits from a failed commit.
                 s.close()
-                durable = next(x for x in s.rows() if x['id'] == r['id'])
+                try:
+                    durable = next(x for x in s.rows() if x['id'] == r['id'])
+                except (OSError, sqlite3.Error, StopIteration):
+                    reports.append(Report('unknown', 'io', r['id'], recorded=False))
+                    continue
                 pending = _report(s, durable, reason='io', recorded=durable['state'] != 'applying')
                 reports.append(replace(pending, notes=pending.notes + ('Cleanup or retirement pending.',)))
         return tuple(reports)

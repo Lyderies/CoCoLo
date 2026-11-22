@@ -4,6 +4,13 @@ File flush persists bytes and mode. Directory flush persists only its name→ino
 edges. A crash discards everything else; a cross-directory rename is therefore
 not durable until both parents are flushed. SQLite FULL commits are atomic and
 independently durable. This models persistence, not arbitrary filesystem bugs.
+
+Scope: SELECT supports only the library's complete rows/queue ORDER BY id scans;
+WHERE and other ordering raise an explicit unmodeled-statement assertion. The
+merge_file model covers unchanged-side and identical-side merges; other triples
+are conservatively conflicts, so clean nontrivial three-way merges are certified
+by the real-git ML-27 contract tests, never by this model. Git reads are cached by
+repository identity and argv; the modeled fixture does not change git history.
 """
 from __future__ import annotations
 
@@ -28,7 +35,8 @@ class _Connection:
         self.disk, self.path, self.generation = disk, str(path), disk.generation
         if not disk.exists(path):
             disk.write(path, b'', 0o600)
-        self.pending = copy.deepcopy(disk.databases.get(self.path, {'rows': {}, 'queue': {}}))
+        self.inode = disk._inode(path)
+        self.pending = copy.deepcopy(disk.databases.get(self.inode, {'rows': {}, 'queue': {}}))
         self.answer = []
 
     def execute(self, sql, parameters=()):
@@ -36,12 +44,14 @@ class _Connection:
             return self
         if sql.startswith('SELECT value FROM '):
             table = sql.split()[3]
+            if sql not in ('SELECT value FROM rows ORDER BY id', 'SELECT value FROM queue ORDER BY id'):
+                raise AssertionError('unmodeled SQLite SELECT (WHERE/order require an explicit model): ' + sql)
             self.answer = [(value,) for _, value in sorted(self.pending[table].items())]
         elif sql.startswith('INSERT OR REPLACE INTO '):
             table = sql.split()[4]
             key, value = parameters
             self.pending[table][key] = value
-            self.disk.write(self.path, repr(self.pending).encode(), 0o600)
+            self.disk.nodes[self.inode]['data'] = repr(self.pending).encode()
         else:
             raise AssertionError('unmodeled SQLite statement: ' + sql)
         return self
@@ -51,12 +61,12 @@ class _Connection:
 
     def commit(self):
         if self.generation == self.disk.generation:
-            self.disk.databases[self.path] = copy.deepcopy(self.pending)
-            self.disk.flush(self.path)
+            self.disk.databases[self.inode] = copy.deepcopy(self.pending)
+            self.disk.flush_inode(self.inode)
 
     def rollback(self):
         if self.generation == self.disk.generation:
-            self.pending = copy.deepcopy(self.disk.databases.get(self.path, {'rows': {}, 'queue': {}}))
+            self.pending = copy.deepcopy(self.disk.databases.get(self.inode, {'rows': {}, 'queue': {}}))
 
     def close(self):
         pass
@@ -73,11 +83,18 @@ class MemoryDisk:
         self.databases = {}
         self.git_reads = {}
         self.generation = 0
+        self.powered_off = False
         self.next_inode = 100
         self.next_fd = 100000
         self.device = self.root.stat().st_dev if seed else 1
         self.ancestors = {str(p): p.lstat() for p in self.root.parents} if seed else {}
         self.root_inode = self._new(stat.S_IFDIR, 0o755, None)
+        if seed:
+            real_root = self.root.stat().st_ino
+            self.nodes[real_root] = self.nodes.pop(self.root_inode)
+            self.links[real_root] = self.links.pop(self.root_inode)
+            self.root_inode = real_root
+            self.next_inode = max(self.next_inode, real_root)
         if seed:
             self.nodes[self.root_inode]['mode'] = stat.S_IMODE(self.root.stat().st_mode)
             def visit(directory):
@@ -105,7 +122,7 @@ class MemoryDisk:
                         visit(path)
                     elif path.name == 'history.sqlite':
                         with sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) as connection:
-                            self.databases[str(path)] = {table: dict(connection.execute('SELECT id,value FROM ' + table))
+                            self.databases[info.st_ino] = {table: dict(connection.execute('SELECT id,value FROM ' + table))
                                                         for table in ('rows', 'queue')}
 
             visit(self.root)
@@ -180,12 +197,18 @@ class MemoryDisk:
         parent, name = self._parent(path)
         if name not in self.links[parent]:
             raise FileNotFoundError(errno.ENOENT, 'absent', str(path))
+        if self.nodes[self.links[parent][name]]['kind'] == stat.S_IFDIR:
+            raise IsADirectoryError(errno.EISDIR, 'is directory', str(path))
         del self.links[parent][name]
 
     def rmdir(self, path):
-        if self.links[self._inode(path)]:
+        inode = self._inode(path)
+        if self.nodes[inode]['kind'] != stat.S_IFDIR:
+            raise NotADirectoryError(errno.ENOTDIR, 'not directory', str(path))
+        if self.links[inode]:
             raise OSError(errno.ENOTEMPTY, 'not empty', str(path))
-        self.unlink(path)
+        parent, name = self._parent(path)
+        del self.links[parent][name]
 
     def rename(self, source, target, exchange=False):
         a, an = self._parent(source)
@@ -201,12 +224,18 @@ class MemoryDisk:
             del self.links[a][an]
 
     def flush(self, path):
-        inode = self._inode(path)
+        self.flush_inode(self._inode(path))
+
+    def flush_inode(self, inode):
         self.durable_nodes[inode] = copy.deepcopy(self.nodes[inode])
         if inode in self.links:
             self.durable_links[inode] = dict(self.links[inode])
 
-    def crash(self):
+    def resume(self):
+        self.powered_off = False
+
+    def crash(self, *, power_loss=False):
+        self.powered_off = power_loss
         self.nodes = copy.deepcopy(self.durable_nodes)
         self.links = copy.deepcopy(self.durable_links)
         # A persisted name cannot confer persisted contents on an unflushed inode.
@@ -236,6 +265,8 @@ class MemoryDisk:
 
     def __call__(self, call):
         self.calls.append(call)
+        if self.powered_off:
+            raise ModelCrash('I/O while power is off')
         if call.when != 'before':
             return None
         op, path, detail = call.operation, call.path, call.detail
@@ -254,6 +285,15 @@ class MemoryDisk:
             if not exists and flags & os.O_CREAT:
                 self.write(path, b'', detail.get('mode', 0o644))
             inode = self._inode(path)
+            kind = self.nodes[inode]['kind']
+            if flags & os.O_NOFOLLOW and kind == stat.S_IFLNK:
+                raise OSError(errno.ELOOP, 'symlink', path)
+            if flags & os.O_DIRECTORY and kind != stat.S_IFDIR:
+                raise NotADirectoryError(errno.ENOTDIR, 'not directory', path)
+            if flags & os.O_TRUNC:
+                if kind != stat.S_IFREG:
+                    raise IsADirectoryError(errno.EISDIR, 'not regular file', path)
+                self.nodes[inode]['data'] = b''
             self.next_fd += 1
             answer = self.next_fd
             self.handles[answer] = [inode, len(self.nodes[inode]['data'] or b'') if flags & os.O_APPEND else 0]
@@ -268,7 +308,7 @@ class MemoryDisk:
                 answer = data[handle[1]:handle[1] + detail['size']]
                 handle[1] += len(answer)
             else:
-                answer = self.read(path) if self.exists(path) else b''
+                answer = self.read(path)
         elif op == 'write':
             inode, offset = self.handles[detail['fd']]
             data = detail['data']
@@ -279,7 +319,7 @@ class MemoryDisk:
         elif op == 'chmod':
             self.nodes[self.handles[detail['fd']][0]]['mode'] = detail['mode']
         elif op in ('fsync', 'fullfsync'):
-            self.flush(path)
+            self.flush_inode(self.handles[detail['fd']][0])
         elif op == 'mkdir':
             self.mkdir(path)
         elif op == 'unlink':
@@ -299,9 +339,10 @@ class MemoryDisk:
             answer = subprocess.CompletedProcess(argv, 0 if merged is not None else 1, merged or b'', b'')
         elif op == 'git_read':
             argv = tuple(detail['argv'])
-            if argv not in self.git_reads:
-                self.git_reads[argv] = subprocess.run(['git', '-C', str(Path(path).parent), *argv], capture_output=True, check=True, timeout=8).stdout
-            answer = self.git_reads[argv]
+            key = (str(Path(path).parent), argv)
+            if key not in self.git_reads:
+                self.git_reads[key] = subprocess.run(['git', '-C', str(Path(path).parent), *argv], capture_output=True, check=True, timeout=8).stdout
+            answer = self.git_reads[key]
         elif op in ('sqlite_read', 'sqlite_write', 'sqlite_commit', 'sqlite_close', 'checkpoint', 'project_checks'):
             # Read-only git and trusted policy callbacks are deliberately real;
             # SQLite callbacks operate the model connection returned above.
