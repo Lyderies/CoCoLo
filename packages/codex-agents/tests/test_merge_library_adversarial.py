@@ -109,6 +109,32 @@ class Adversarial(unittest.TestCase):
         self.assertEqual(expected, tree(self.f.project))
         self.assertTrue(any(p.path == "made" for r in reports for p in r.paths))
 
+    def test_ml_6_emptied_identities_are_durable_immediately_after_A(self):
+        """ML-6/23: read real A after SIGKILL at its after hook, before any mkdir."""
+        batch = self.f.batch({"made/add": b"child", "removed/old.txt": None})
+        folder = self.f.project / "removed"
+        emptied = (folder.stat().st_dev, folder.stat().st_ino)
+        marker = self.f.root / "killed-after-A"
+        def run():
+            def hook(call):
+                if (call.operation == "sqlite_commit" and call.when == "after"
+                        and call.detail.get("commit") == "A"):
+                    marker.write_text("A committed")
+                    os.kill(os.getpid(), signal.SIGKILL)
+            self.f.land(batch, hook=hook)
+        status = child_run(run)
+        self.assertTrue(os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL)
+        self.assertEqual("A committed", marker.read_text())
+        self.assertFalse((self.f.project / "made").exists())
+        self.assertEqual(self.f.before, tree(self.f.project))
+        rows = ml.history(self.f.project, self.f.private)
+        self.assertEqual(1, len(rows))
+        row = rows[0]
+        self.assertEqual(batch, row.batch)
+        self.assertEqual("applying", row.state)
+        self.assertEqual({"removed": emptied}, row.emptied_folders)
+        self.assertEqual({}, row.created_folders)
+
     def test_ml_7_safe_save_captured_then_kill(self):
         """ML-7: safe-save B captured by exchange survives kill before displaced inspection."""
         batch = self.f.batch({"a.txt": b"child\n"})

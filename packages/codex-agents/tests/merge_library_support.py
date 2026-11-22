@@ -336,14 +336,18 @@ def report_oracle(test, fixture, report, batch, *, retained=None, moved=None):
         test.assertTrue(actual.issubset(named), actual - named)
 
 
+def write_open(call):
+    return call.operation == "open" and (
+        bool(call.detail.get("mutating")) or bool(call.detail.get("flags", 0) & (
+            os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)))
+
+
 def assert_no_git_writes(test, fixture, calls):
     anchor = fixture.project / ".git"
     for call in calls:
         mutating = call.operation in MUTATIONS | {"write", "sqlite_write", "ftruncate", "link", "chmod"}
         mutating |= bool(call.detail.get("mutating"))
-        if call.operation == "open":
-            flags = call.detail.get("flags", 0)
-            mutating |= bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
+        mutating |= write_open(call)
         if mutating:
             for value in (call.path, call.other):
                 if value:
@@ -365,7 +369,8 @@ def assert_trace(test, calls):
             test.assertGreater(i, b, "retirement is post-terminal cleanup")
     a_done = next(i for i, c in enumerate(calls) if c.operation == "sqlite_commit"
                   and c.when == "after" and c.detail.get("commit") == "A")
-    mutations = [i for i, c in before if c.detail.get("scope") == "tree" and c.operation in MUTATIONS
+    mutations = [i for i, c in before if c.detail.get("scope") == "tree"
+                 and (c.operation in MUTATIONS or write_open(c))
                  and c.phase != "cleanup"]
     test.assertTrue(mutations)
     test.assertLess(a_done, min(mutations))
@@ -374,6 +379,13 @@ def assert_trace(test, calls):
                and c.result is True]
     test.assertTrue(checked)
     test.assertLess(max(checked), b)
+    assert_commit_flushes(test, calls)
+
+
+def assert_commit_flushes(test, calls):
+    """ML-19: every transaction, including queue/retire/undo/reverse, has fresh durability."""
+    commits = [(i, c) for i, c in enumerate(calls)
+               if c.when == "before" and c.operation == "sqlite_commit"]
     previous_commit = -1
     for index, _ in commits:
         dirty = {}
@@ -392,6 +404,10 @@ def assert_trace(test, calls):
                         dirty[str(Path(path).parent)] = n
                 if call.operation == "mkdir":
                     dirty[call.path] = n
+            if write_open(call):
+                test.assertTrue(call.path, call)
+                dirty[call.path] = n
+                dirty[str(Path(call.path).parent)] = n
         test.assertTrue(history_writes, "each commit must expose its own history writes")
         for path, last_change in dirty.items():
             flushes = [n for n, c in enumerate(calls[:index]) if n > last_change and c.path == path
@@ -500,6 +516,24 @@ def outcome_oracle(test, f, batch, report, rows, kind):
             test.assertIn(actual.get(path), (pre.get(path), post.get(path)), path)
 
 
+def fault_outcome_oracle(test, f, batch, report, rows, kind, call, fault):
+    # ML-12: "I/O failure ends reverted or needs_owner(io), with history contents pinned".
+    # A handled short write returns a count, not an I/O error. Only SQLite commit
+    # uncertainty may resolve to success by reopening the durable terminal row
+    # (protocol §9.1); ordinary swallowed EIO/ENOSPC must never count as landed.
+    if report.state == "landed":
+        test.assertTrue(fault == "short" or call.operation == "sqlite_commit")
+    else:
+        test.assertIn(report.state, ("reverted", "needs_owner"))
+    outcome_oracle(test, f, batch, report, rows, kind)
+
+
+def location_refusal_oracle(test, report, before, after):
+    """ML-30: the otherwise-valid child authority must fail the location guard."""
+    test.assertEqual("refused", report.state)
+    test.assertEqual(before, after)
+
+
 def owner_preservation_oracle(test, f, batch, reports, owner_tree):
     """Exact unrelated tree plus both explicitly named versions for unresolved work."""
     actual = tree(f.project)
@@ -571,6 +605,7 @@ def kill_oracle(test, operation, *, select=lambda c: c.operation != "checkpoint"
         trace = Trace()
         operation(discovery, batch, trace)
         assert_discovery(test, trace.calls, operation)
+        assert_commit_flushes(test, trace.calls)
         boundaries = [(replay_key(trace.calls, i, discovery), c) for i, c in enumerate(trace.calls) if select(c)]
         test.assertTrue(boundaries, "a syscall hook must expose at least one boundary")
         if operation.__name__ == "forward" and any(c.operation == "sqlite_commit" for _, c in boundaries):
@@ -625,6 +660,7 @@ def fault_sweep(test, operation):
         trace = Trace()
         operation(discovery, discovery.batch(), trace)
         assert_discovery(test, trace.calls, operation)
+        assert_commit_flushes(test, trace.calls)
         points = [(replay_key(trace.calls, i, discovery), c) for i, c in enumerate(trace.calls)
                   if c.operation in FAULTABLE]
         test.assertTrue(points)
@@ -650,7 +686,7 @@ def fault_sweep(test, operation):
                 report = operation(f, batch, Trace(point))
                 point.assert_fired(test)
                 rows = ml.history(f.project, f.private)
-                outcome_oracle(test, f, batch, report, rows, operation.__name__)
+                fault_outcome_oracle(test, f, batch, report, rows, operation.__name__, call, fault)
                 recover_checked(test, f, batch, operation.__name__)
                 first, records = tree(f.project, control=True), ml.history(f.project, f.private)
                 recover_checked(test, f, batch, operation.__name__)

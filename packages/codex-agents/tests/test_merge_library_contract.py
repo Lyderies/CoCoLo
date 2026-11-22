@@ -23,7 +23,7 @@ from tests.support import TEMP_ROOT  # noqa: F401 -- native package bootstrap
 from codex_agents import merge_library as ml
 from tests.merge_library_support import (
     Fixture, Trace, assert_trace, checkpoint, child_run, content, fresh_queue, git, put,
-    report_oracle, tree, assert_no_git_writes,
+    report_oracle, tree, assert_no_git_writes, location_refusal_oracle,
 )
 
 
@@ -53,6 +53,8 @@ class Contract(unittest.TestCase):
     def test_ml_2_path_count_boundary(self):
         """ML-2: 2000 accepted; 2001 refused as one batch, with a reason, never split."""
         batch = self.f.batch({f"p{i:04d}": b"x" for i in range(2000)})
+        self.assertEqual(2000, len(batch.events))
+        self.assertEqual({f"p{i:04d}" for i in range(2000)}, {e.path for e in batch.events})
         report = self.f.land(batch)
         self.assertEqual("landed", report.state)
         self.assertEqual(2000, len([r for r in report.paths if r.path.startswith("p")]))
@@ -74,10 +76,16 @@ class Contract(unittest.TestCase):
     def test_ml_6_normal_two_commit_order(self):
         """ML-6: exactly A/B; A precedes mutation, checks and parent flushes precede B."""
         trace = Trace()
-        report = self.f.land(hook=trace)
+        batch = self.f.batch()
+        expected_folders = {e.path for e in batch.events if e.kind == "folder"}
+        self.assertEqual({"new", "new/deep"}, expected_folders)
+        self.assertTrue(expected_folders, "created-identity checks must be non-vacuous")
+        report = self.f.land(batch, hook=trace)
         self.assertEqual("landed", report.state)
         assert_trace(self, trace.calls)
         row = next(r for r in ml.history(self.f.project, self.f.private) if r.batch_no == report.batch_no)
+        self.assertEqual(batch, row.batch)
+        self.assertEqual(expected_folders, set(row.created_folders))
         for event in row.batch.events:
             if event.kind == "folder":
                 info = (self.f.project / event.path).stat()
@@ -227,7 +235,7 @@ class Contract(unittest.TestCase):
         # Calling the second ticket first must not bypass the durable head.
         before = tree(self.f.project)
         blocked = self.f.land(next(b for b in batches if b.child_id == order[1]))
-        self.assertNotEqual("landed", blocked.state)
+        self.assertEqual("refused", blocked.state)
         self.assertEqual(before, tree(self.f.project))
         self.assertFalse(any(r.state == "landed" for r in ml.history(self.f.project, self.f.private)))
         self.assertEqual(order, [q.child_id for q in ml.queue(self.f.project, self.f.private)])
@@ -776,12 +784,29 @@ def forgery(test, kind):
         forged = replace(batch, approval="child invented approval")
         # Model an otherwise-working authority adapter using this misplaced root.
         # Removing only the root-location guard would trust the child's receipt.
-        child_authority = replace(test.f.policy, verify_seal=lambda b: b.approval == forged.approval)
+        test.f.write_records(editable, forged)
+        put(editable / "seals.json", ('{"child-1":"' + forged.approval + '"}').encode())
+        def verify_child_authority(b):
+            import json
+            return (json.loads((editable / "seals.json").read_text()).get(b.child_id) == b.approval
+                    and test.f.verify_records(editable, b))
+        child_authority = replace(test.f.policy, verify_seal=verify_child_authority)
         put(editable / "approvals.json", b'{"child-1":"child invented approval"}')
+        test.assertTrue(child_authority.verify_seal(forged), "valid except for authority location")
         before = tree(test.f.project)
         report = ml.land(test.f.project, editable, forged, policy=child_authority)
         test.assertEqual("refused", report.state)
         test.assertEqual(before, tree(test.f.project))
+        location_refusal_oracle(test, report, before, tree(test.f.project))
+        # Explicit negative control: identical forged data and verifier, but an
+        # outside root, must land. Location is the sole failing precondition above.
+        relocated = test.f.root / "relocated-child-authority"
+        shutil.copytree(editable, relocated)
+        accepted = ml.land(test.f.project, relocated, forged, policy=child_authority)
+        test.assertEqual("landed", accepted.state)
+        test.assertEqual(test.f.expected(forged), tree(test.f.project))
+        test.assertEqual([forged], [r.batch for r in ml.history(test.f.project, relocated)
+                                  if r.state == "landed"])
         return
     forged = replace(batch, approval="child invented approval")
     source = test.f.root / "forged-private"

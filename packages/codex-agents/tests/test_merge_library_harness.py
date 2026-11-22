@@ -1,6 +1,8 @@
 """Passing negative controls for the ML harness, without library implementation."""
 from __future__ import annotations
 
+import errno
+import os
 import stat
 import unittest
 from dataclasses import replace
@@ -8,8 +10,9 @@ from dataclasses import replace
 from tests.support import TEMP_ROOT  # noqa: F401 -- native package bootstrap
 from codex_agents import merge_library as ml
 from tests.merge_library_support import (
-    Fixture, ReplayPoint, assert_no_git_writes, assert_trace, durable_endpoint,
+    Fixture, ReplayPoint, assert_no_git_writes, assert_trace, assert_commit_flushes, durable_endpoint,
     outcome_oracle, owner_preservation_oracle, put, replay_key, report_oracle, tree,
+    FAULTABLE, fault_outcome_oracle, location_refusal_oracle,
 )
 
 
@@ -57,6 +60,67 @@ class HarnessOracles(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_trace(self, stale)
 
+    def test_H1_write_opens_require_staged_file_and_parent_flushes(self):
+        staged = str(self.f.project / ".cocolo/staging/c/e")
+        for flags in (os.O_CREAT | os.O_TRUNC | os.O_WRONLY, os.O_CREAT,
+                      os.O_TRUNC, os.O_WRONLY, os.O_RDWR, os.O_APPEND, 0):
+            with self.subTest(flags=flags):
+                valid = [replace(c, operation="open", detail={"scope": "staging", "flags": flags,
+                                                               "mutating": flags == 0})
+                         if c.operation == "write" and c.path == staged else c for c in self.trace()]
+                assert_trace(self, valid)
+                with self.assertRaisesRegex(AssertionError, "missing fresh full flush"):
+                    assert_trace(self, [c for c in valid
+                                        if not (c.operation == "fullfsync" and c.path == staged)])
+                # Isolate the open: no exchange can independently create its parent obligation.
+                isolated = [c for c in valid if c.operation != "exchange"]
+                assert_commit_flushes(self, isolated)
+                with self.assertRaisesRegex(AssertionError, "missing fresh full flush"):
+                    assert_commit_flushes(self, [c for c in isolated if not (
+                        c.operation == "fullfsync" and c.path == str(self.f.project / ".cocolo/staging/c"))])
+
+    def test_ML19_all_commit_labels_require_fresh_flush_and_own_history_write(self):
+        history = str(self.f.private / "history.sqlite")
+        for label in ("queue", "retire", "undo", "reverse"):
+            with self.subTest(commit=label):
+                suffix = [ml.IOCall(op, side, "retirement" if label == "retire" else label,
+                                   history if op != "sqlite_commit" else None,
+                                   detail={"scope": "history", "commit": label})
+                          for op in ("sqlite_write", "fullfsync", "sqlite_commit")
+                          for side in ("before", "after")]
+                # assert_trace retains exactly A/B counting, while the sibling also
+                # handles standalone undo/reverse traces with their own commit labels.
+                check = assert_trace if label in ("queue", "retire") else assert_commit_flushes
+                prefix = self.trace()
+                valid = prefix + suffix
+                check(self, valid)
+                with self.assertRaisesRegex(AssertionError, "missing fresh full flush"):
+                    check(self, prefix + [c for c in suffix if c.operation != "fullfsync"])
+                with self.assertRaisesRegex(AssertionError, "each commit must expose its own history writes"):
+                    check(self, prefix + [c for c in suffix if c.operation != "sqlite_write"])
+                if label in ("undo", "reverse"):
+                    assert_commit_flushes(self, suffix)
+                    with self.assertRaisesRegex(AssertionError, "missing fresh full flush"):
+                        assert_commit_flushes(self, [c for c in suffix if c.operation != "fullfsync"])
+
+    def test_ML12_rejects_swallowed_IO_failures_even_with_landed_tree_and_row(self):
+        put(self.f.project / "a.txt", b"CHILD")
+        report = self.report("landed")
+        rows = (ml.HistoryRow(1, self.batch, "landed"),)
+        outcome_oracle(self, self.f, self.batch, report, rows, "forward")
+        for operation in FAULTABLE - {"sqlite_commit"}:
+            for side in ("before", "after"):
+                for fault in (errno.ENOSPC, errno.EIO):
+                    call = ml.IOCall(operation, side, "forward")
+                    with self.subTest(operation=operation, side=side, fault=fault), self.assertRaises(AssertionError):
+                        fault_outcome_oracle(self, self.f, self.batch, report, rows, "forward", call, fault)
+        for call, fault in ((ml.IOCall("write", "before", "staging"), "short"),
+                            (ml.IOCall("sqlite_commit", "after", "forward"), errno.EIO)):
+            fault_outcome_oracle(self, self.f, self.batch, report, rows, "forward", call, fault)
+        with self.assertRaises(AssertionError):
+            fault_outcome_oracle(self, self.f, self.batch, report, (), "forward",
+                                 ml.IOCall("sqlite_commit", "after", "forward"), errno.EIO)
+
     def test_H2_rejects_reverted_new_tree_and_landed_base_tree(self):
         put(self.f.project / "a.txt", b"CHILD")
         with self.assertRaises(AssertionError):
@@ -76,9 +140,14 @@ class HarnessOracles(unittest.TestCase):
                          durable_endpoint(self.f, self.batch, (forward, applying_undo), "undoing"))
         committed = (replace(forward, state="undone"), replace(applying_undo, state="landed"))
         expected = durable_endpoint(self.f, self.batch, committed, "undoing")
+        self.assertEqual(self.f.before, expected)
         put(self.f.project / "a.txt", b"CHILD")
+        undone_report = replace(self.report("landed"), batch_no=2)
         with self.assertRaises(AssertionError):
-            self.assertEqual(expected, tree(self.f.project))
+            outcome_oracle(self, self.f, self.batch, undone_report, committed, "undoing")
+        put(self.f.project / "a.txt", self.batch.events[0].base.data)
+        outcome_oracle(self, self.f, self.batch, replace(undone_report, paths=(ml.PathReport("a.txt", "base"),)),
+                       committed, "undoing")
         self.assertEqual(self.f.before, durable_endpoint(self.f, self.batch, (forward,), "reverse"))
 
     def test_H3_rejects_owner_somewhere_with_unrelated_damage_or_missing_child(self):
@@ -137,11 +206,35 @@ class HarnessOracles(unittest.TestCase):
                       moved={"a.txt": (destination, (info.st_dev, info.st_ino))})
 
     def test_M6_rejects_git_directory_destination_and_relative_write(self):
+        assert_no_git_writes(self, self.f, [
+            ml.IOCall("write", "before", "staging", ".cocolo/staging/c/e"),
+            ml.IOCall("rename_noreplace", "before", "forward", ".cocolo/staging/c/e", "a.txt"),
+            ml.IOCall("open", "before", "forward", "a.txt", detail={"flags": os.O_WRONLY}),
+            ml.IOCall("open", "before", "intake", ".git/config", detail={"flags": os.O_RDONLY}),
+        ])
         for call in (ml.IOCall("rename_noreplace", "before", "forward", "a.txt", ".git"),
                      ml.IOCall("write", "before", "forward", ".git/../.git/config"),
                      ml.IOCall("open", "before", "forward", ".git/config", detail={"mutating": True})):
             with self.subTest(call=call), self.assertRaises(AssertionError):
                 assert_no_git_writes(self, self.f, [call])
+
+    def test_ML30_location_oracle_rejects_otherwise_valid_forgery_landing(self):
+        forged = replace(self.batch, approval="child invented approval")
+        editable = self.f.project / ".cocolo"
+        editable.mkdir()
+        self.f.write_records(editable, forged)
+        self.assertTrue(self.f.verify_records(editable, forged))
+        before = tree(self.f.project)
+        location_refusal_oracle(self, ml.Report("refused"), before, before)
+        # Negative control for removing just location refusal: a verifier trusting
+        # these child-controlled authority records admits this exact forged batch.
+        def without_location_check(batch):
+            self.assertTrue(self.f.verify_records(editable, batch))
+            return ml.Report("landed", recorded=True, batch_no=1)
+        landed = without_location_check(forged)
+        self.assertEqual("landed", landed.state)
+        with self.assertRaises(AssertionError):
+            location_refusal_oracle(self, landed, before, before)
 
 
 if __name__ == "__main__":
