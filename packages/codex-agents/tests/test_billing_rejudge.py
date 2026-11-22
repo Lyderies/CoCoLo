@@ -39,6 +39,7 @@ from tests import test_account_billing_admission as _owner_tests
 from tests import test_account_billing_jobs as _service_tests
 
 from codex_agents import account_billing_admission
+from codex_agents.account_api import AccountError
 from codex_agents.account_billing_admission import PROBE_REUSE_MS, ProbeAdmission, ProbeAdmissionError
 from codex_agents.admission_inputs import AdmissionInputPolicy
 from codex_agents.billing_probe_contracts import BillingProbeError, checked_billing_probe_reply
@@ -141,10 +142,11 @@ class RejudgeOwnerBase(unittest.TestCase):
         self.commit_completed(identity, None, [self.identity, *records])
 
     # ---- the repeat: the smallest interface the design implies (I1, I2) ----------------------------
-    def repeat(self, identity='saved', *, identity_changes=None):
+    def repeat(self, identity='saved', *, identity_changes=None, observe=True):
         """reserve (again) -> the job's identity observation -> prepare -> admit. A refusal that
         raises is reported as {'probe': 'error', 'reason_code': ...}; a pass that would launch a new
-        provider call as {'probe': 'would_launch'}."""
+        provider call as {'probe': 'would_launch'}. `observe=False` is a repeat that took no identity
+        observation of its own (decision 47, M-identity)."""
         try:
             out = self.reserve(identity)
         except ProbeAdmissionError as error:
@@ -152,7 +154,8 @@ class RejudgeOwnerBase(unittest.TestCase):
         if type(out) is dict:
             return out
         try:
-            self.observe_identity(**(identity_changes or {}))
+            if observe:
+                self.observe_identity(**(identity_changes or {}))
             self.prepared(out)
             result = self.owner.admit(out)
         except ProbeAdmissionError as error:
@@ -161,6 +164,19 @@ class RejudgeOwnerBase(unittest.TestCase):
 
     def assertDenied(self, reason, answer):
         self.assertEqual(('denied', reason), (answer['probe'], answer.get('reason_code')), answer)
+
+    YES = frozenset({'reused', 'completed', 'would_launch'})
+
+    def append_any(self, info, **options):
+        """Provider records stored from anywhere: inside the owner's open transaction (a callback) or outside it."""
+        records = claude_rate_limit_records(info, account_fingerprint=self.identity['account_fingerprint'],
+                                            observed_at_ms=self.clock, **options)
+        if self.ledger._connection.in_transaction:
+            for record in records:
+                self.ledger._append_checked_locked(self.fixture.project_id, record, producer='provider',
+                                                   timestamp=self.clock)
+        else:
+            self.ledger._store_provider_observations(self.fixture.project_id, records, timestamp=self.clock)
 
 
 class BR1FreshJudgmentOfEveryInput(RejudgeOwnerBase):
@@ -863,6 +879,312 @@ class RejudgeServiceTests(unittest.TestCase):
         self.assertTrue(added, 'the hook never ran between commit and publish')
         self.assertEqual(('reused', False), (answer['probe'], answer['known']), answer)
         self.assertEqual([], self.launches())
+
+
+# ------------------------------------------------------------------------------------------------------
+# Owner decision 47: ONE more round, tests first (review billing-reuse-r4: H1, H3, identity, M1-M3, M4).
+
+class H3NoUncheckedCallbackAfterTheFinalComparison(RejudgeOwnerBase):
+    """BR-7/BR-8 (H3): whatever the LAST authorization callback of a judgment changes is checked after it,
+    never answered over. The change is made by the last callback the owner makes, found by a dry run."""
+
+    def admit_repeat(self, change, fire_at):
+        """A repeat's admit; the `fire_at`-th authorization callback made inside it runs `change`."""
+        state = {'inside': False, 'n': 0, 'fired': False}
+
+        def callback():
+            if state['inside']:
+                state['n'] += 1
+                if state['n'] == fire_at:
+                    state['fired'] = True
+                    change()
+            return True
+
+        out = self.reserve('saved', before_commit=callback)
+        self.observe_identity()
+        self.prepared(out)
+        state['inside'] = True
+        try:
+            result = self.owner.admit(out)
+        except ProbeAdmissionError as error:
+            result = {'probe': 'error', 'reason_code': error.reason_code}
+        finally:
+            state['inside'] = False
+        return result, state
+
+    def last_callback_changes(self, change):
+        self.saved_reused()
+        self.clock += 1000
+        dry, counted = self.admit_repeat(lambda: None, None)
+        self.assertEqual('reused', dry['probe'], dry)
+        self.assertGreaterEqual(counted['n'], 1, 'admit made no authorization callback')
+        result, state = self.admit_repeat(change, counted['n'])
+        self.assertTrue(state['fired'], 'the last callback never ran')
+        return result
+
+    def test_H3_paid_usage_added_by_the_last_callback_of_admit_is_never_a_yes(self):
+        answer = self.last_callback_changes(lambda: self.append_any(PAID))
+        self.assertNotIn(answer['probe'], self.YES, answer)
+
+    def test_H3_a_policy_changed_by_the_last_callback_of_admit_is_never_a_yes(self):
+        patch = mock.patch.object(self.views, '_claim_policy', return_value=AdmissionInputPolicy('999.0.0', '1000.0.0', None))
+        self.addCleanup(patch.stop)
+        answer = self.last_callback_changes(patch.start)
+        self.assertNotIn(answer['probe'], self.YES, answer)
+
+    def test_H3_an_attestation_removed_by_the_last_callback_of_admit_is_never_a_yes(self):
+        answer = self.last_callback_changes(lambda: self.ledger._connection.execute('DELETE FROM owner_attestations'))
+        self.assertNotIn(answer['probe'], self.YES, answer)
+
+    def verify_with_last_callback(self, change):
+        """verify_committed (the publication check) of a repeat's yes; the last callback it makes runs `change`."""
+        self.saved_reused()
+        self.clock += 1000
+        out = self.reserve('saved')
+        self.observe_identity()
+        self.prepared(out)
+        reply = self.owner.admit(out)
+        self.assertEqual('reused', reply['probe'], reply)
+        state = {'n': 0, 'fire_at': None, 'fired': False}
+
+        def callback():
+            state['n'] += 1
+            if state['n'] == state['fire_at']:
+                state['fired'] = True
+                change()
+            return True
+
+        def verify():
+            state['n'] = 0
+            return self.owner.verify_committed(self.fixture.project_id, 'a'*64, 'b'*64, 'saved', self.context,
+                                               before_commit=callback, reply=reply, history=out.history)
+
+        self.assertIs(True, verify())
+        state['fire_at'] = state['n']
+        try:
+            verify()
+        except ProbeAdmissionError as error:
+            self.assertTrue(state['fired'])
+            return error.reason_code
+        self.assertTrue(state['fired'], 'the last callback never ran')
+        return True
+
+    def test_H3_paid_usage_added_by_the_last_callback_of_the_publication_check_is_refused(self):
+        self.assertEqual('probe_conflict', self.verify_with_last_callback(lambda: self.append_any(PAID)))
+
+    def test_H3_an_attestation_removed_by_the_last_callback_of_the_publication_check_is_refused(self):
+        self.assertEqual('probe_conflict', self.verify_with_last_callback(
+            lambda: self.ledger._connection.execute('DELETE FROM owner_attestations')))
+
+
+class IdentityObservationOnARepeat(RejudgeOwnerBase):
+    """M-identity (BR-1): an identity observation is a local, non-spending reading (`claude auth status --json`
+    and `--version`, no model call); a repeat takes a new one. With none of its own, it is refused as stale: an
+    older reading inside the reuse age cannot show that the login or subscription changed since."""
+
+    def test_identity_a_repeat_with_no_observation_of_its_own_is_refused_as_stale_with_zero_effects(self):
+        self.saved_reused()
+        self.clock += 1000
+        before = self.effects()
+        self.assertDenied('probe_replay_stale', self.repeat(observe=False))
+        self.assertEqual(before, self.effects())
+
+    def test_identity_a_reading_taken_before_the_repeat_began_is_not_used_though_inside_the_reuse_age(self):
+        self.saved_reused()
+        self.clock += 1000
+        self.observe_identity()  # a favourable reading, taken before the repeat began (the account may change after it)
+        self.clock += 1000
+        answer = self.repeat(observe=False)
+        self.assertNotIn(answer['probe'], self.YES, answer)
+        self.assertDenied('probe_replay_stale', answer)
+
+
+class BR2LateRunRecords(RejudgeOwnerBase):
+    """M4: BR-2's late restrictions as run records (the insertion-order branch only handles records with a
+    run_id); added next to the originals, which stay as they are."""
+
+    def test_BR2_a_run_record_with_paid_usage_stored_late_with_an_earlier_stamp_refuses_every_repeat(self):
+        self.saved_reused()
+        self.clock += 1000
+        self.store(PAID, age=3500, run_id='run-late-1')
+        for _ in range(2):
+            self.assertNotIn(self.repeat()['probe'], self.YES)
+
+    def test_BR2_a_run_record_with_exhausted_headroom_stored_late_with_an_earlier_stamp_refuses_every_repeat(self):
+        self.saved_reused()
+        self.clock += 1000
+        self.store(EXHAUSTED, age=3500, run_id='run-late-2')
+        for _ in range(2):
+            self.assertNotIn(self.repeat()['probe'], self.YES)
+
+
+# ------------------------------------------------------------------------------------------------------
+class _Hook:
+    """Stands in for the caller's `allowed` flag: every authorization callback reads it, so it sees them."""
+
+    def __init__(self):
+        self.armed, self.calls, self.fire_at, self.action, self.fired = False, 0, None, None, False
+
+    def __bool__(self):
+        if self.armed:
+            self.calls += 1
+            if self.calls == self.fire_at:
+                self.fired = True
+                self.action()
+        return True
+
+
+@PLATFORM
+class RejudgeDeliveryTests(unittest.TestCase):
+    """Decision 47: delivery through the real service, jobs, workers and fake client."""
+    setUp = _service_tests.AccountBillingJobTests.setUp
+    stop = _service_tests.AccountBillingJobTests.stop
+    request = _service_tests.AccountBillingJobTests.request
+    begin = _service_tests.AccountBillingJobTests.begin
+    until = _service_tests.AccountBillingJobTests.until
+    take = _service_tests.AccountBillingJobTests.take
+    launches = _service_tests.AccountBillingJobTests.launches
+    fingerprint = RejudgeServiceTests.fingerprint
+    store = RejudgeServiceTests.store
+    YES = frozenset({'reused', 'completed'})
+
+    def outcome(self, ticket, request=None):
+        try:
+            return self.take(ticket, request)
+        except AccountError as error:
+            return {'probe': 'error', 'reason_code': str(error)}
+
+    def ready(self, ticket):
+        self.until(lambda: self.billing._jobs[ticket].state == 'ready')
+
+    def ready_reused(self, identity='probe-first'):
+        self.store(FAVOURABLE, age=2000)
+        request = self.request(identity)
+        ticket = self.begin(request)
+        self.ready(ticket)
+        self.assertEqual('reused', self.billing._jobs[ticket].result['probe'])
+        return ticket, request
+
+    def assertRefusedNotYes(self, answer, reason=None):
+        self.assertNotIn(answer['probe'], self.YES, answer)
+        if reason is not None:
+            self.assertEqual(('denied', reason), (answer['probe'], answer.get('reason_code')), answer)
+
+    # ---- H1: a ready job is judged again before its yes is delivered ----------------------------------
+    def test_H1_a_ready_yes_is_judged_again_when_paid_usage_arrives_before_the_first_take(self):
+        ticket, request = self.ready_reused()
+        self.store(PAID)
+        self.assertIs(ticket, self.begin(request))  # a duplicate submit returns the same ticket
+        self.assertRefusedNotYes(self.outcome(ticket, request), 'paid_usage_usable')
+
+    def test_H1_a_ready_completed_run_is_judged_again_when_paid_usage_arrives_before_the_first_take(self):
+        request = self.request()
+        ticket = self.begin(request)
+        self.ready(ticket)
+        self.assertEqual('completed', self.billing._jobs[ticket].result['probe'])
+        self.assertEqual(1, len(self.launches()))
+        self.store(PAID)
+        self.assertRefusedNotYes(self.outcome(ticket, request), 'paid_usage_usable')
+        self.assertEqual(1, len(self.launches()), 'judging again launched the provider again')
+
+    def test_H1_a_ready_yes_is_judged_again_when_the_attestation_is_removed_before_the_first_take(self):
+        ticket, request = self.ready_reused()
+        with self.ledger._lock, self.ledger._connection:
+            self.ledger._connection.execute('DELETE FROM owner_attestations')
+        self.assertRefusedNotYes(self.outcome(ticket, request), 'billing_attestation_missing')
+
+    def test_H1_guard_a_ready_yes_whose_inputs_did_not_change_is_delivered_without_a_second_judgment(self):
+        ticket, request = self.ready_reused()
+        capture = self.enterContext(mock.patch.object(self.claims._intake, 'capture_admission',
+                                                      wraps=self.claims._intake.capture_admission))
+        answer = self.take(ticket, request)
+        self.assertEqual(('reused', False), (answer['probe'], answer['known']), answer)
+        self.assertEqual(0, capture.call_count)
+
+    # ---- M-identity through the service --------------------------------------------------------------
+    def test_identity_a_repeat_observes_the_identity_again_and_sees_a_subscription_that_is_gone(self):
+        self.store(FAVOURABLE, age=2000)
+        self.assertEqual('reused', self.take(self.begin())['probe'])
+        status = self.fixture.tools / 'claude-status.json'
+        status.write_text(json.dumps({**json.loads(status.read_text()), 'subscriptionType': 'free'}))
+        observed = self.enterContext(mock.patch.object(self.observations, 'submit', wraps=self.observations.submit))
+        answer = self.outcome(self.begin())
+        self.assertEqual(1, observed.call_count, 'a repeat took no identity observation of its own')
+        self.assertRefusedNotYes(answer, 'claude_subscription_missing')
+
+    # ---- M1: publication is bound to the committed row and the reply of its judgment generation ------
+    def after_take(self, action):
+        real, done = self.billing.take, []
+
+        def take(ticket, **options):
+            reply = real(ticket, **options)
+            if reply is not None and not done:
+                done.append(True)
+                action(reply)
+            return reply
+
+        self.enterContext(mock.patch.object(self.billing, 'take', side_effect=take))
+        return done
+
+    def test_M1_publication_refuses_a_different_validly_sealed_row_that_yields_the_same_reply(self):
+        self.store(FAVOURABLE, age=2000)
+        owner = self.billing._owner
+
+        def reseal(reply):
+            row = dict(self.ledger._connection.execute('SELECT * FROM account_billing_probe_requests').fetchone())
+            with self.ledger._account_transaction():
+                owner._update(row, deadline_at_ms=row['deadline_at_ms']+1)  # not part of the reply
+
+        done = self.after_take(reseal)
+        answer = self.outcome(self.begin())
+        self.assertTrue(done)
+        self.assertNotIn(answer['probe'], self.YES, answer)
+
+    def test_M1_publication_refuses_a_repeat_reply_that_differs_from_the_one_its_judgment_built(self):
+        self.store(FAVOURABLE, age=2000)
+        self.assertEqual('reused', self.take(self.begin())['probe'])
+
+        def alter(reply):
+            reply.result['observed_at_ms'] += 1  # the history row is unchanged; the reply is not what was judged
+
+        done = self.after_take(alter)
+        answer = self.outcome(self.begin())
+        self.assertTrue(done)
+        self.assertNotIn(answer['probe'], self.YES, answer)
+
+    # ---- H3 / M2 at publication: nothing unchecked after the last callback ----------------------------
+    def publish_with_last_callback(self, identity, action=None, fire_at=None):
+        hook = self.allowed
+        hook.calls, hook.fired, hook.fire_at, hook.action = 0, False, fire_at, action
+        ticket, request = self.ready_reused(identity)
+        real = self.billing.take
+
+        def take(t, **options):
+            reply = real(t, **options)
+            if reply is not None:
+                hook.armed = True  # publication starts here
+            return reply
+
+        with mock.patch.object(self.billing, 'take', side_effect=take):
+            answer = self.outcome(ticket, request)
+        hook.armed = False
+        return answer, hook
+
+    def last_callback_changes(self, action):
+        self.allowed = _Hook()
+        dry, hook = self.publish_with_last_callback('probe-dry')
+        self.assertEqual('reused', dry['probe'], dry)
+        self.assertGreaterEqual(hook.calls, 1)
+        answer, hook = self.publish_with_last_callback('probe-real', action, hook.calls)
+        self.assertTrue(hook.fired, 'the last callback never ran')
+        return answer
+
+    def test_H3_paid_usage_added_by_the_last_publication_callback_is_never_published_as_a_yes(self):
+        self.assertNotIn(self.last_callback_changes(lambda: self.store(PAID))['probe'], self.YES)
+
+    def test_M2_a_waiver_revoked_by_the_last_publication_callback_is_never_published(self):
+        answer = self.last_callback_changes(lambda: self.ledger._connection.execute('DELETE FROM owner_attestations'))
+        self.assertNotIn(answer['probe'], self.YES, answer)
 
 
 if __name__ == '__main__':

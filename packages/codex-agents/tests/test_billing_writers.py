@@ -4,6 +4,7 @@ The owner signer and the policy can change outside the ledger lock, and some mul
 are not one unit. Requirement: every judgment re-checks signer and policy immediately before it commits,
 signer writes take the ledger lock, and records that must stay together are written in one transaction.
 """
+import contextlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +14,9 @@ import tests.support  # noqa: F401
 from tests.learning_support import generate_test_owner_key
 from tests.test_billing_rejudge import FAVOURABLE, PLATFORM, RejudgeOwnerBase
 
+from codex_agents import learning_store
 from codex_agents.account_billing_admission import ProbeAdmissionError
+from codex_agents.collector_paths import StateError
 from codex_agents.admission_inputs import AdmissionInputPolicy
 from codex_agents.providers import claude_rate_limit_records
 
@@ -90,6 +93,66 @@ class BR15SignerPolicyAndAtomicWrites(RejudgeOwnerBase):
             with self.assertRaises(RuntimeError):
                 self.ledger._store_provider_observations(self.fixture.project_id, records, timestamp=self.clock)
         self.assertEqual(before, count(), 'one record of a two-record billing write stayed visible')
+
+    # ---- decision 47, M3: the signer turn is held until the transaction has committed -----------------
+    def admit_fresh(self):
+        self.store_probe_only(FAVOURABLE)
+        original = self.reserve('br15-turn')
+        self.prepared(original)
+        return original
+
+    def test_BR15_M3_the_signer_turn_is_held_until_the_transaction_has_committed_and_taken_after_the_ledger_lock(self):
+        original = self.admit_fresh()
+        events, state = [], self.ledger.state
+        real_turn, real_transaction = state._owner_key_turn, self.ledger._account_transaction
+
+        @contextlib.contextmanager
+        def turn():
+            with real_turn():
+                events.append('turn_taken')
+                yield
+                events.append('turn_released')  # appended while it is still held; released right after
+
+        @contextlib.contextmanager
+        def transaction():
+            events.append('ledger_lock_and_begin')
+            with real_transaction():
+                yield
+            events.append('committed')
+
+        with mock.patch.object(state, '_owner_key_turn', side_effect=turn), \
+                mock.patch.object(self.ledger, '_account_transaction', side_effect=transaction):
+            self.assertEqual('reused', self.owner.admit(original)['probe'])
+        self.assertIn('turn_taken', events)
+        self.assertLess(events.index('ledger_lock_and_begin'), events.index('turn_taken'), 'lock order: ledger first')
+        self.assertLess(events.index('committed'), events.index('turn_released'),
+                        'the signer turn ended before the transaction committed')
+
+    def test_BR15_M3_a_signer_writer_cannot_get_in_between_the_last_check_and_the_commit(self):
+        """A writer that holds only the owner-key turn (first setup, another process) tries to take it right
+        after the last signer/policy comparison, the moment before the commit."""
+        original = self.admit_fresh()
+        after_guard, outcome = [], []
+        real_check, real_harden = self.owner._inputs_unchanged, self.ledger.state.harden_database_files
+
+        def check(snapshot):
+            real_check(snapshot)
+            after_guard.append(True)
+
+        def harden():
+            if after_guard and not outcome:
+                try:
+                    with self.ledger.state._owner_key_turn():
+                        outcome.append('writer got in')
+                except StateError:
+                    outcome.append('writer blocked')
+            return real_harden()
+
+        with mock.patch.object(learning_store, 'OWNER_KEY_TURN_SECONDS', 0.05), \
+                mock.patch.object(self.owner, '_inputs_unchanged', side_effect=check), \
+                mock.patch.object(self.ledger.state, 'harden_database_files', side_effect=harden):
+            self.owner.admit(original)
+        self.assertEqual(['writer blocked'], outcome, 'a signer writer got in after the last check, before the commit')
 
 
 if __name__ == '__main__':
