@@ -75,3 +75,6 @@ variants, each paired with a rejected corrupt outcome. No fictitious 41st label 
 
 ## R1-B6 fixture correction (inspection before conditional repair)
 `DurableDiskTests.test_review_B6_power_loss_latches_finally_IO_until_recovery` initially assumed the commit-A unwind emits hooked `sqlite_close`. Review B6 requires first collecting actual production finally I/O; `_Store.close` directly closes its connection, so that assumption contradicts the inspected seam. The witness is stopped at that assumption. Its requirement-based replacement injects power loss after a write, where `_Store.write` unconditionally invokes hooked `close` in finally, and retains the latch/no-write/recovery assertions. No claim that SQLite close is hooked is made.
+
+## C-3 resolved by owner decision 91=A
+The owner selected recorded empty folder trees: each descendant must be a directory CoCoLo recorded with matching device/inode; no files, unrecorded folders or replaced identities qualify. REQUIREMENTS-merge-review.md records ML-R91. Both original C-3 test methods are retained and now pass with this shared-checker rule. The earlier red status above is historical, not an outstanding owner question. The parent check uses the immutable original endpoint so adding an allowed child cannot accidentally suppress the parent's identity/mode check.
