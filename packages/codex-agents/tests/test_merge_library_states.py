@@ -295,9 +295,13 @@ class EndStates(unittest.TestCase):
         put(self.f.project / 'a.txt', b'child')
         row = replace(self.row, state='landed')
         report = replace(self.report, state='landed', paths=(ml.PathReport('a.txt', 'new'),))
-        call = ml.IOCall('exchange', 'after', 'forward', detail={'reporting': True})
-        with self.assertRaisesRegex(AssertionError, 'ordinary I/O failure'):
-            self.check(row=row, report=report, call=call, fault=errno.EIO, terminal_before='landed')
+        import os
+        calls = [ml.IOCall('exchange', 'after', 'forward', detail={'reporting': True}),
+                 ml.IOCall('open', 'after', 'forward', detail={'reporting': True, 'mutating': True, 'flags': os.O_WRONLY}),
+                 ml.IOCall('open', 'after', 'forward', detail={'reporting': True, 'flags': os.O_TRUNC})]
+        for call in calls:
+            with self.subTest(call=call), self.assertRaisesRegex(AssertionError, 'ordinary I/O failure'):
+                self.check(row=row, report=report, call=call, fault=errno.EIO, terminal_before='landed')
 
 
 if __name__ == '__main__':
