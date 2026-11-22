@@ -371,7 +371,10 @@ class SetupStraightTests(SetupUpdateTests):
         self.send("\x1b[B\r")  # No
         self.finish(timeout=90)
         self.assertIn("old records not moved", self.plain(self.transcript))  # the summary keeps it
-        self.assertFalse((self.base / "register.log").exists())
+        # Nothing was registered (so nothing moved). The billing step now also asks the project CLI whether a
+        # signature is current on the straight path (decision 37), so the log may hold its provider-observe calls.
+        log = self.base / "register.log"
+        self.assertNotIn("learning-register", log.read_text() if log.exists() else "")
 
 
 def load_tests(loader, tests, pattern):

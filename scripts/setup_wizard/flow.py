@@ -1314,7 +1314,7 @@ class Wizard:
         # the answers file's billing_sign_again asks for a new one, and the step-by-step menu offers it.
         again = self.answers is not None and self.answers.get("billing_sign_again") is True
         signed = False
-        if (self.update and not again) or (self.mode == "full" and not self.update and not self.straight):
+        if (self.update and not again) or (self.mode == "full" and not self.update):
             signed = self.already_attested()
         if self.update and not again and signed:
             t.list_add("ok", "Every enabled provider's current account is already attested; no passphrase needed")

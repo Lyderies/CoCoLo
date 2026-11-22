@@ -3804,7 +3804,10 @@ def main() -> int:
             ledger, _project_id = _learning_ledger(args)
             try:
                 owner_key = ledger.replace_owner_key(args.public_key.read_text())
-                owner_key = {name: owner_key[name] for name in ("state", "replacements", "last_replaced_at_ms")}  # D36: a whitelist
+                try:
+                    owner_key = {name: owner_key[name] for name in ("state", "replacements", "last_replaced_at_ms")}  # D36: a whitelist
+                except KeyError:
+                    raise LedgerError("the owner key report is incomplete") from None
                 report = {"ready": owner_key["state"] == "ok", "owner_key": owner_key}
             finally:
                 _close_ledger(ledger)
