@@ -188,3 +188,19 @@ weaken kill/fault assertions for speed. The new merge-library branch was not reb
   remain explicit gaps. Use appropriate real-OS evidence later; this capture does not prove power-loss safety.
 - There is no before/after optimization comparison yet. Append an entry after EACH step-5 module with
   timing-file job-seconds, named replacement checks, assertion file:line replacements and retained real runs.
+
+## Step-1 r1 baseline budget census (before reconciliation)
+
+Source: `baseline-timings.json`, one complete module total per declared baseline module.
+
+| Layer | Budget job-s | Baseline modules | Over budget |
+|---|---:|---:|---:|
+| unit | 5 | 76 | 0 |
+| component | 30 | 0 | 0 |
+| crash | 60 | 0 | 0 |
+| scenario | 60 | 212 | 16 |
+| soak | 900 | 0 | 0 |
+
+Option A records these modules and their original ceilings in `scripts/test-budget-debt.json`.
+Every remaining entry is named even in filtered runs; only a complete under-budget result permits retirement.
+No new measurements or speedups are implied by this census.
