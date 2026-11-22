@@ -844,5 +844,7 @@ def campaign_area(name):
 
 
 def load_tests(loader, tests, pattern):
-    return unittest.TestSuite(Adversarial(name) for name in loader.getTestCaseNames(Adversarial)
-                              if campaign_area(name) == 'adversarial')
+    selected = unittest.TestSuite(Adversarial(name) for name in loader.getTestCaseNames(Adversarial)
+                                  if campaign_area(name) == 'adversarial')
+    selected.addTests(loader.loadTestsFromTestCase(RealImages))
+    return selected
