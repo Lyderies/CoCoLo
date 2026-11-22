@@ -481,9 +481,14 @@ of the run can still be running:
   `settle_lost_run`, entry `settled`, preparation given back) while it runs; at its own stop
   it stops what is left once more (`service_close`) and settles what is gone; another
   instance's container entries are left to the next service's recovery (C4). The detached watchdog gets the container
-  (`--container <json>`, the podman client's environment only) and stops it through the same
-  primitive once its service has died (its parent pid changed); while the service lives it
-  leaves the container to it. Status: `learning-status` `container_holds` (counts by state,
+  (`--container <json>`, the podman client's environment only) and, once its service has died (its
+  parent pid changed), calls the same stop tool ONCE (decision 49: the run's labels checked first, one
+  17 s total for the stop and ending the tree, the result written to `<token>.watchdog` beside the journal
+  entry, exit 0 gone / 2 not gone / 3 tree end unconfirmed / 4 total ran out); while the service lives it
+  leaves the container to it. The stop tool owns every cleanup: each podman command runs under a guard that
+  dies with its caller, one absolute deadline bounds the stop (`deadline`), the grace is capped by the time
+  left, a kill or reap error is reported. The run's deadline is also podman's `--timeout` only when
+  `podman version` shows a client and server of at least 4.0. Status: `learning-status` `container_holds` (counts by state,
   each `stop_failed` with reason, detail, attempts) and one owner alert per `stop_failed`
   container in `account_health.attention`, naming `podman rm --force <name>`. Tests:
   `tests/test_container_stop.py`, `tests/test_hold_lifecycle.py` (ContainerRunHoldTests).

@@ -278,6 +278,19 @@ class LaunchJournal:
             raise JournalError('bridge run id is invalid')
         return self.directory / (bridge_run_id + '.done')
 
+    def watchdog_result_path(self, token):
+        """Where a container run's watchdog writes how its stop ended (decision 49), when its service died: one
+        owner-only JSON file, written atomically and flushed by the watchdog, the only writer. It is not an
+        entry (never listed as one) and goes with the entry (`settled`, `remove`)."""
+        if not _matches(token, _TOKEN):
+            raise JournalError('launch token is invalid')
+        return self.directory / (token + '.watchdog')
+
+    def _forget_watchdog_result(self, key):
+        if _matches(key, _TOKEN):
+            with contextlib.suppress(OSError):
+                self.watchdog_result_path(key).unlink()
+
     def _writable(self):
         if self._released:
             raise JournalError('launch journal is released')
@@ -505,6 +518,7 @@ class LaunchJournal:
         if value['version'] == 1:
             with contextlib.suppress(OSError):
                 self.marker_path(bridge_run_id).unlink()
+        self._forget_watchdog_result(bridge_run_id)
 
     def remove(self, bridge_run_id):
         """A run whose capacity its own service released: nothing is left to settle."""
@@ -513,6 +527,7 @@ class LaunchJournal:
         if _matches(bridge_run_id, _BRIDGE):
             with contextlib.suppress(OSError):
                 self.marker_path(bridge_run_id).unlink()
+        self._forget_watchdog_result(bridge_run_id)
         try:
             path.unlink()
             self._sync_directory()

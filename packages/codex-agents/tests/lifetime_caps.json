@@ -417,6 +417,11 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "container_runtime.py::_timeout_backstop": {
+   "checks": 1,
+   "ends": "not a count of anything kept: one comparison of podman's reported version with MIN_TIMEOUT_PODMAN_VERSION at each launch with a deadline (decision 49); nothing accumulates",
+   "test": "test_an_old_client_gets_no_timeout_and_the_reason_is_recorded"
+  },
   "control_api.py::__init__": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
