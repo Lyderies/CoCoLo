@@ -1131,7 +1131,7 @@
   },
   "process_tree.py::_stop_container": {
    "checks": 1,
-   "ends": "C3 watchdog stop: at most WATCHDOG_STOP_ATTEMPTS (4) tries, each its own process killed on timeout (run_stop_process, no abandoned thread), pauses of 1, 2 and 4 s between them, all inside one monotonic budget (WATCHDOG_STOP_BUDGET_SECONDS 10 s + the container's grace); then the tree is ended (WATCHDOG_TERMINATE_RESERVE_SECONDS 1 s) and one last try gets WATCHDOG_LAST_STOP_SECONDS (5 s) but never past the end of the clock: 16 s + grace in all",
+   "ends": "C3 watchdog stop: at most WATCHDOG_STOP_ATTEMPTS (4) tries, each its own process killed on timeout (run_stop_process, no abandoned thread), pauses of 1, 2 and 4 s between them, all inside one fixed monotonic budget (WATCHDOG_STOP_BUDGET_SECONDS 11 s, the container's grace capped per try to 7 s); then the tree is ended (WATCHDOG_TERMINATE_RESERVE_SECONDS 1 s) and one last try with no grace gets WATCHDOG_LAST_STOP_SECONDS (5 s) but never past the end of the clock: 17 s in all, for any grace",
    "test": "test_cs2_the_watchdog_stops_trying_after_its_stated_bound_and_still_ends_the_tree"
   },
   "project_backup.py::estimate_bytes": {

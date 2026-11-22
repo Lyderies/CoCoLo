@@ -61,13 +61,18 @@ WATCHDOG_READY = b"ready\n"
 # C3 (decision 46): an orphaned watchdog stops the container through the container primitive, each try as
 # a PROCESS OF ITS OWN (`process_tree.py --stop-container`, which runs container_runtime's stop) with its
 # own kill-on-timeout of the whole process group; no thread is ever abandoned, so two tries never overlap
-# and nothing outlives the watchdog. One monotonic clock covers the whole failure path, from the moment the
-# service is found dead: WATCHDOG_STOP_BUDGET_SECONDS plus the container's grace for the tries (at most
-# WATCHDOG_STOP_ATTEMPTS, with the pauses below, a try still running at the end is killed); then the tree is
-# ended (WATCHDOG_TERMINATE_RESERVE_SECONDS reserved for it, its own bound MAX_KILL_ROUNDS rounds); then one
+# and nothing outlives the watchdog. One FIXED monotonic clock covers the whole failure path, from the moment
+# the service is found dead, whatever the container's grace: WATCHDOG_STOP_BUDGET_SECONDS for the tries (at most
+# WATCHDOG_STOP_ATTEMPTS, with the pauses below; a try still running at the end is killed), then the tree is
+# ended (WATCHDOG_TERMINATE_RESERVE_SECONDS reserved for it, its own bound MAX_KILL_ROUNDS rounds), then one
 # last try of up to WATCHDOG_LAST_STOP_SECONDS (never past the end of the clock). Total at most
-# 10 + grace + 1 + 5 = 16 s + grace, so 17 s at the real tests' grace of 1 s, under their 20 s allowance.
-WATCHDOG_STOP_BUDGET_SECONDS = 10.0
+# 11 + 1 + 5 = 17 s, under the 20 s allowance, for ANY grace (see `watchdog_stop_plan`).
+# The grace a try may use is capped to what the budget leaves it: its grace is the smaller of the container's
+# and WATCHDOG_STOP_BUDGET_SECONDS - WATCHDOG_STOP_GRACE_MARGIN_SECONDS (7 s: the margin is what the kill, the
+# removal and asking the OS "gone" need after the grace), and the last try is a kill with no grace at all, so
+# a default grace of 10 s is cut to 7 s here rather than the stop being killed in its grace.
+WATCHDOG_STOP_BUDGET_SECONDS = 11.0
+WATCHDOG_STOP_GRACE_MARGIN_SECONDS = 4.0
 WATCHDOG_TERMINATE_RESERVE_SECONDS = 1.0
 WATCHDOG_LAST_STOP_SECONDS = 5.0
 WATCHDOG_STOP_ATTEMPTS = 4
@@ -987,12 +992,16 @@ class _ContainerWatch:
         self.runtime, self.name, self.grace, self.cgroup, self.parent = runtime, name, grace, cgroup, parent
         self.argument = argument  # the bridge's JSON, handed on to each stop process
 
-    def stop_try(self, seconds: float) -> bool:
-        """One bounded stop try as a process of its own, killed when `seconds` pass; True only when gone."""
+    def stop_try(self, seconds: float, grace: float | None = None) -> bool:
+        """One bounded stop try as a process of its own, killed when `seconds` pass; True only when gone.
+        It uses the smaller of the container's grace and `grace` (the cap the time left allows), whole seconds."""
         if self.argument is None:
             return False
+        argument = self.argument
+        if grace is not None and grace < self.grace:
+            argument = json.dumps({**json.loads(self.argument), "grace": max(int(grace), 0)})
         return run_stop_process([sys.executable, *STOP_PROCESS_FLAGS, os.path.abspath(__file__),
-                                 "--stop-container", self.argument], seconds)
+                                 "--stop-container", argument], seconds)
 
     def parent_alive(self) -> bool:
         # The service that started this watchdog is its parent; once it dies the watchdog is
@@ -1064,10 +1073,22 @@ def run_stop_process(argv: list[str], seconds: float) -> bool:
                 process.wait(timeout=STOP_PROCESS_REAP_SECONDS)
 
 
-def _stop_once(container, seconds: float) -> bool:
-    """One stop try (its own process, killed at `seconds`); True only when the container is gone."""
+def watchdog_stop_plan(grace: float = 0) -> tuple[float, float]:
+    """(seconds the tries may take, seconds the whole failure path may take) for a container with this grace.
+    Both are fixed: the grace never lengthens them, it is capped per try instead (`_try_grace`)."""
+    return (WATCHDOG_STOP_BUDGET_SECONDS,
+            WATCHDOG_STOP_BUDGET_SECONDS + WATCHDOG_TERMINATE_RESERVE_SECONDS + WATCHDOG_LAST_STOP_SECONDS)
+
+
+def _try_grace(budget: float) -> float:
+    """The most grace a try may use inside `budget` seconds: what is left after the kill's own time."""
+    return max(budget - WATCHDOG_STOP_GRACE_MARGIN_SECONDS, 0.0)
+
+
+def _stop_once(container, seconds: float, grace: float = 0.0) -> bool:
+    """One stop try (its own process, killed at `seconds`, told it may use `grace`); True only when gone."""
     try:
-        return bool(container.stop_try(max(seconds, 0.0)))
+        return bool(container.stop_try(max(seconds, 0.0), grace))
     except Exception:
         return False
 
@@ -1075,10 +1096,10 @@ def _stop_once(container, seconds: float) -> bool:
 def _stop_container(container, budget: float | None = None) -> bool:
     """Stop the container until it is gone: a refused or stop_failed answer, an exception or a try that
     hangs (its process is killed at the end of the time left) is retried after a back-off, at most
-    WATCHDOG_STOP_ATTEMPTS times and never past the budget (default WATCHDOG_STOP_BUDGET_SECONDS plus the
-    container's grace). True once gone; False when the bound ends it."""
+    WATCHDOG_STOP_ATTEMPTS times and never past the budget (default WATCHDOG_STOP_BUDGET_SECONDS, grace
+    included: each try's grace is capped, see `_try_grace`). True once gone; False when the bound ends it."""
     if budget is None:
-        budget = WATCHDOG_STOP_BUDGET_SECONDS + float(getattr(container, "grace", 0) or 0)
+        budget = watchdog_stop_plan()[0]
     end = time.monotonic() + budget
     for attempt in range(WATCHDOG_STOP_ATTEMPTS):
         if attempt:
@@ -1087,7 +1108,7 @@ def _stop_container(container, budget: float | None = None) -> bool:
         left = end - time.monotonic()
         if left <= 0:
             break
-        if _stop_once(container, left):
+        if _stop_once(container, left, _try_grace(budget)):
             return True
     return False
 
@@ -1130,15 +1151,15 @@ def watch(root: int, birth: str, deadline: float, announce, marker: str | None =
             if orphaned:
                 # One monotonic clock for the whole failure path (see WATCHDOG_STOP_BUDGET_SECONDS).
                 begun = time.monotonic()
-                initial = WATCHDOG_STOP_BUDGET_SECONDS + float(getattr(container, "grace", 0) or 0)
-                end = begun + initial + WATCHDOG_TERMINATE_RESERVE_SECONDS + WATCHDOG_LAST_STOP_SECONDS
+                initial, total = watchdog_stop_plan(getattr(container, "grace", 0) or 0)
+                end = begun + total
                 stopped = _stop_container(container, initial)  # Nothing records it here: recovery asks the OS again.
             tree.terminate()
             if not stopped:
                 # Hand-off: one last bounded try after the tree is gone (never past the end of the clock),
                 # and a nonzero exit (the bridge's reap() reads it as a backstop that did not finish) for
                 # whatever next asks the OS.
-                stopped = _stop_once(container, min(WATCHDOG_LAST_STOP_SECONDS, end - time.monotonic()))
+                stopped = _stop_once(container, min(WATCHDOG_LAST_STOP_SECONDS, end - time.monotonic()), 0)
             if marker is not None and bridge_run_id is not None and tree.cleanup_confirmed():
                 write_cleanup_marker(marker, bridge_run_id, root, tree.root_birth)
             return stopped
