@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unittest
 from dataclasses import replace
 from pathlib import Path
 
@@ -517,6 +518,38 @@ def outcome_oracle(test, f, batch, report, rows, kind):
 
 
 def fault_outcome_oracle(test, f, batch, report, rows, kind, call, fault):
+    if call.phase == "cleanup":
+        # §10.1.13: "A durable landed/reverted/resolved has no tree direction:
+        # only cleanup runs." ML-23 permits only commit-A-listed empty folders.
+        test.assertEqual("landed", report.state)
+        test.assertTrue(report.recorded)
+        matching = [r for r in rows if r.batch_no == report.batch_no]
+        test.assertEqual(1, len(matching))
+        row = matching[0]
+        test.assertEqual("landed", row.state)
+        test.assertEqual("undo" if kind == "undoing" else "forward", row.kind)
+        test.assertEqual(batch, row.batch)
+        if kind == "undoing":
+            test.assertTrue(any(r.kind == "forward" and r.state == "undone" for r in rows))
+        report_oracle(test, f, report, batch)
+        expected = dict(f.before if kind == "undoing" else f.expected(batch, cleanup=False))
+        actual = tree(f.project)
+        for name, identity in row.emptied_folders.items():
+            test.assertIn(name, expected)
+            test.assertEqual(stat.S_IFDIR, expected[name][0], name)
+            if name in actual:
+                test.assertEqual(expected[name], actual[name], name)
+                test.assertFalse(any(p.startswith(name + "/") for p in actual), name)
+                info = (f.project / name).lstat()
+                test.assertEqual(tuple(identity), (info.st_dev, info.st_ino), name)
+            expected.pop(name)
+            actual.pop(name, None)
+        test.assertEqual(expected, actual, "cleanup changed paths outside listed empty folders")
+        completed_record = (call.operation == "sqlite_commit" and call.when == "after"
+                            and call.detail.get("commit") == "retire")
+        if not completed_record:
+            test.assertFalse(row.cleanup_complete, "failed cleanup must remain retryable")
+        return
     # ML-12: "I/O failure ends reverted or needs_owner(io), with history contents pinned".
     # A handled short write returns a count, not an I/O error. Only SQLite commit
     # uncertainty may resolve to success by reopening the durable terminal row
@@ -526,6 +559,45 @@ def fault_outcome_oracle(test, f, batch, report, rows, kind, call, fault):
     else:
         test.assertIn(report.state, ("reverted", "needs_owner"))
     outcome_oracle(test, f, batch, report, rows, kind)
+
+
+class CleanupFaultOracleSelfTests(unittest.TestCase):
+    """Harness-only controls, kept here so this correction touches one file."""
+
+    def setUp(self):
+        self.f = Fixture()
+        self.addCleanup(self.f.close)
+        self.batch = self.f.batch({"removed/old.txt": None})
+        info = (self.f.project / "removed").stat()
+        self.row = ml.HistoryRow(1, self.batch, "landed",
+                                 emptied_folders={"removed": (info.st_dev, info.st_ino)})
+        (self.f.project / "removed/old.txt").unlink()
+        self.report = ml.Report("landed", batch_no=1, recorded=True,
+                                paths=(ml.PathReport("removed/old.txt", "absent"),))
+        self.call = ml.IOCall("rmdir", "after", "cleanup")
+
+    def check(self, report=None, row=None, call=None):
+        fault_outcome_oracle(self, self.f, self.batch, report or self.report,
+                             (row or self.row,), "forward", call or self.call, errno.EIO)
+
+    def test_cleanup_fault_rejects_reverted(self):
+        self.check()  # A fault before rmdir can leave the listed folder empty.
+        (self.f.project / "removed").rmdir()
+        self.check()  # Lost acknowledgement can leave it removed.
+        with self.assertRaisesRegex(AssertionError, "landed.*reverted"):
+            self.check(replace(self.report, state="reverted"), replace(self.row, state="reverted"))
+        with self.assertRaisesRegex(AssertionError, "failed cleanup must remain retryable"):
+            self.check(row=replace(self.row, cleanup_complete=True))
+        self.check(row=replace(self.row, cleanup_complete=True),
+                   call=ml.IOCall("sqlite_commit", "after", "cleanup", detail={"commit": "retire"}))
+
+    def test_cleanup_fault_rejects_removed_unlisted_folder(self):
+        (self.f.project / "owner-empty").mkdir()
+        self.f.before["owner-empty"] = version_at(self.f.project / "owner-empty")
+        self.check()
+        (self.f.project / "owner-empty").rmdir()
+        with self.assertRaisesRegex(AssertionError, "cleanup changed paths outside listed empty folders"):
+            self.check()
 
 
 def location_refusal_oracle(test, report, before, after):
