@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import os
+import pickle
 import signal
 import stat
 import subprocess
@@ -25,7 +26,9 @@ from tests.support import TEMP_ROOT  # noqa: F401 -- native package bootstrap
 from codex_agents import merge_library as ml
 from tests.merge_library_support import (
     FAULTABLE, Fixture, Trace, checkpoint, child_run, fault_sweep,
-    kill_oracle, put, report_oracle, seed_applied, tree,
+    kill_oracle, put, report_oracle, seed_applied, tree, ReplayPoint, replay_key,
+    owner_preservation_oracle, version_at,
+    outcome_oracle, recover_checked,
 )
 
 
@@ -35,22 +38,26 @@ def forward(f, batch, hook):
 
 def reverse(f, batch, hook):
     seed_applied(f, batch)
+    f.operation_before = tree(f.project)
     return ml.rollback(f.project, f.private, 1, hook=hook)
 
 
 def recovering(f, batch, hook):
     seed_applied(f, batch)
+    f.operation_before = tree(f.project)
     reports = ml.recover(f.project, f.private, hook=hook)
     return reports[-1]
 
 
 def undoing(f, batch, hook):
     landed = f.land(batch)
+    f.operation_before = tree(f.project)
     return ml.undo(f.project, f.private, landed.batch_no, hook=hook)
 
 
 def cleaning(f, batch, hook):
     seed_applied(f, batch, state="landed")
+    f.operation_before = tree(f.project)
     reports = ml.cleanup(f.project, f.private, hook=hook)
     return reports[-1]
 
@@ -72,6 +79,35 @@ class Adversarial(unittest.TestCase):
         """ML-6: actual SIGKILL immediately before and after each A/B commit."""
         kill_oracle(self, forward, select=lambda c: c.operation == "sqlite_commit"
                     and c.detail.get("commit") in ("A", "B"))
+
+    def test_ml_6_kill_at_mkdir_inspects_durable_folder_identities(self):
+        """ML-6/20: A has emptied identities; mkdir cannot already have a created identity."""
+        batch = self.f.batch({"made/add": b"child", "removed/old.txt": None})
+        folder = self.f.project / "removed"
+        emptied = (folder.stat().st_dev, folder.stat().st_ino)
+        marker = self.f.root / "killed-mkdir"
+        def run():
+            def hook(call):
+                if (call.operation == "mkdir" and call.when == "after"
+                        and call.path == str(self.f.project / "made")):
+                    marker.write_text("mkdir completed")
+                    os.kill(os.getpid(), signal.SIGKILL)
+            self.f.land(batch, hook=hook)
+        status = child_run(run)
+        self.assertTrue(os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL)
+        self.assertEqual("mkdir completed", marker.read_text())
+        rows = ml.history(self.f.project, self.f.private)  # real durable A, never _seed_history
+        row = next(r for r in rows if r.batch == batch)
+        self.assertEqual("applying", row.state)
+        self.assertEqual(emptied, row.emptied_folders["removed"])
+        self.assertFalse(row.created_folders.get("made"))
+        created = self.f.project / "made"
+        identity = (created.stat().st_dev, created.stat().st_ino)
+        reports = ml.recover(self.f.project, self.f.private)
+        self.assertEqual(identity, (created.stat().st_dev, created.stat().st_ino))
+        expected = dict(self.f.before, made=(stat.S_IFDIR, 0o755, None))
+        self.assertEqual(expected, tree(self.f.project))
+        self.assertTrue(any(p.path == "made" for r in reports for p in r.paths))
 
     def test_ml_7_safe_save_captured_then_kill(self):
         """ML-7: safe-save B captured by exchange survives kill before displaced inspection."""
@@ -206,12 +242,15 @@ class Adversarial(unittest.TestCase):
             if call.when == "before" and call.operation in ("write", "ftruncate", "sqlite_write"):
                 raise OSError(errno.ENOSPC, "really no restore space in injected profile")
         reports = ml.recover(self.f.project, self.f.private, hook=no_space)
+        for result in reports:
+            report_oracle(self, self.f, result, batch)
         report = reports[-1]
         self.assertEqual("needs_owner", report.state)
         self.assertEqual("io", report.reason)
         self.assertTrue(all(r.contents_kept for r in ml.history(self.f.project, self.f.private)))
         self.assertNotIn("allocation-free", " ".join(report.notes))
         result = ml.retry(self.f.project, self.f.private, 1, policy=self.f.policy)
+        report_oracle(self, self.f, result, batch)
         self.assertEqual("reverted", result.state)
         self.assertEqual(self.f.before, tree(self.f.project))
 
@@ -222,6 +261,7 @@ class Adversarial(unittest.TestCase):
             if call.operation == "sqlite_commit" and call.when == "before" and call.detail.get("commit") != "A":
                 raise OSError(errno.EIO, "terminal commit unavailable")
         report = self.f.land(batch, hook=fail_terminal)
+        report_oracle(self, self.f, report, batch)
         self.assertFalse(report.recorded)
         self.assertEqual("needs_owner", report.state)
         self.assertEqual("io", report.reason)
@@ -229,7 +269,8 @@ class Adversarial(unittest.TestCase):
         self.assertTrue(all(r.contents_kept for r in ml.history(self.f.project, self.f.private)))
         second = self.f.batch({"second": b"two"}, "second")
         self.assertEqual("waiting_owner", self.f.land(second).state)
-        ml.retry(self.f.project, self.f.private, report.batch_no, policy=self.f.policy)
+        result = ml.retry(self.f.project, self.f.private, report.batch_no, policy=self.f.policy)
+        report_oracle(self, self.f, result, batch)
 
     def test_ml_13_undo_kill_around_combined_commit(self):
         """ML-13: crash either side of combined undo/X-undone transaction follows durable state."""
@@ -256,17 +297,20 @@ class Adversarial(unittest.TestCase):
         prepared(self.f)
         trace = Trace()
         ml.cleanup(self.f.project, self.f.private, hook=trace)
-        points = [i for i, c in enumerate(trace.calls) if c.phase == "retirement"]
+        points = [replay_key(trace.calls, i, self.f) for i, c in enumerate(trace.calls) if c.phase == "retirement"]
         self.assertTrue(points)
         for point in points:
             f = Fixture()
             try:
                 prepared(f)
-                def inject(index, call):
-                    if index == point:
-                        os.kill(os.getpid(), signal.SIGKILL)
-                status = child_run(lambda: ml.cleanup(f.project, f.private, hook=Trace(inject)))
-                self.assertTrue(os.WIFSIGNALED(status))
+                marker = f.root / "retirement-fired"
+                def inject(call):
+                    marker.write_text("matched")
+                    os.kill(os.getpid(), signal.SIGKILL)
+                replay = ReplayPoint(point, f, inject)
+                status = child_run(lambda: ml.cleanup(f.project, f.private, hook=Trace(replay)))
+                self.assertTrue(os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL)
+                self.assertEqual("matched", marker.read_text())
                 for row in ml.history(f.project, f.private):
                     self.assertTrue(row.contents_kept or row.cleanup_complete)
                 ml.recover(f.project, f.private)
@@ -337,7 +381,10 @@ def staging_foreign(test, kind):
         displaced.unlink()
     else:
         put(displaced, b"OWNER complete foreign" if kind == "complete" else b"OW")
+    retained = ({str(displaced): version_at(displaced)} if kind != "missing" else {})
     reports = ml.recover(test.f.project, test.f.private)
+    for report in reports:
+        report_oracle(test, test.f, report, batch, retained=retained)
     if kind != "missing":
         expected = b"OWNER complete foreign" if kind == "complete" else b"OW"
         test.assertEqual(expected, displaced.read_bytes())
@@ -381,7 +428,8 @@ def uncertain_commit(test, commit):
     test.assertTrue(fired)
     test.assertTrue(report.recorded)
     test.assertEqual("landed" if commit == "B" else "reverted", report.state)
-    ml.recover(test.f.project, test.f.private)
+    outcome_oracle(test, test.f, batch, report, ml.history(test.f.project, test.f.private), "forward")
+    recover_checked(test, test.f, batch, "forward")
     test.assertEqual(test.f.expected(batch) if commit == "B" else test.f.before, tree(test.f.project))
 
 
@@ -389,25 +437,34 @@ cases("ml_12_uncertain", "ML-12", [(n, n) for n in ("A", "B")], uncertain_commit
 
 
 def compensation_sweep(test, *, kill):
+    owner_bytes = b"OWNER captured race\n"
     def run(f, batch, selected=None, fault=None):
         raced = []
+        def action(call):
+            (f.root / "injection-fired").write_text("matched")
+            if kill:
+                os.kill(os.getpid(), signal.SIGKILL)
+            raise OSError(fault, "compensation fault")
+        point = ReplayPoint(selected, f, action) if selected else None
         def inject(index, call):
             if not raced and call.operation == "exchange" and call.phase == "forward" and call.when == "before":
-                put(f.project / "a.txt", b"OWNER captured race\n")
+                put(f.project / "a.txt", owner_bytes)
+                f.owner_versions["a.txt"] = {(stat.S_IFREG, 0o644, owner_bytes)}
+                (f.root / "owner-snapshot").write_bytes(pickle.dumps(tree(f.project)))
                 raced.append(True)
-            if index == selected:
-                if kill:
-                    os.kill(os.getpid(), signal.SIGKILL)
-                raise OSError(fault, "compensation fault")
+            return point(index, call) if point else None
         trace = Trace(inject)
         report = f.land(batch, hook=trace)
+        if point:
+            point.assert_fired(test)
         return trace, report
     discovery = Fixture()
     try:
         trace, _ = run(discovery, discovery.batch({"a.txt": b"child"}))
-        points = [i for i, c in enumerate(trace.calls) if c.phase == "compensation"
-                  and (kill or c.when == "before" and c.operation in FAULTABLE)]
+        points = [replay_key(trace.calls, i, discovery) for i, c in enumerate(trace.calls)
+                  if c.phase == "compensation" and (kill or c.operation in FAULTABLE)]
         test.assertTrue(points)
+        test.assertTrue({"before", "after"}.issubset({key[0][2] for key in points}))
     finally:
         discovery.close()
     for point in points:
@@ -415,6 +472,7 @@ def compensation_sweep(test, *, kill):
             f = Fixture()
             try:
                 batch = f.batch({"a.txt": b"child"})
+                f.owner_versions["a.txt"] = {(stat.S_IFREG, 0o644, owner_bytes)}
                 if kill:
                     status = child_run(lambda: run(f, batch, point))
                     test.assertTrue(os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL)
@@ -424,15 +482,21 @@ def compensation_sweep(test, *, kill):
                     test.assertEqual("needs_owner", report.state)
                     test.assertEqual("io", report.reason)
                     test.assertTrue(all(r.contents_kept for r in ml.history(f.project, f.private)))
-                    reports = (report, *ml.recover(f.project, f.private))
-                versions = {str(f.project / "a.txt")} | {p for r in reports for row in r.paths for p in row.retained}
-                versions |= {p for r in reports for p in r.leftovers}
-                test.assertTrue(any(Path(p).is_file() and Path(p).read_bytes() == b"OWNER captured race\n" for p in versions))
+                    report_oracle(test, f, report, batch)
+                    owner = pickle.loads((f.root / "owner-snapshot").read_bytes())
+                    owner_preservation_oracle(test, f, batch, (report,), owner)
+                    reports = ml.recover(f.project, f.private)
+                test.assertEqual("matched", (f.root / "injection-fired").read_text())
+                owner = pickle.loads((f.root / "owner-snapshot").read_bytes())
+                owner_preservation_oracle(test, f, batch, reports, owner)
                 for report in reports:
                     report_oracle(test, f, report, batch)
                 first = tree(f.project, control=True)
                 records = ml.history(f.project, f.private)
-                ml.recover(f.project, f.private)
+                again = ml.recover(f.project, f.private)
+                owner_preservation_oracle(test, f, batch, again, owner)
+                for report in again:
+                    report_oracle(test, f, report, batch)
                 test.assertEqual(first, tree(f.project, control=True))
                 test.assertEqual(records, ml.history(f.project, f.private))
             finally:
@@ -454,7 +518,7 @@ def owner_edit(test, value):
                     put(discovery.project / "a.txt", b"FIRST OWNER\n")
             trace.inject = race
         operation(discovery, batch, trace)
-        points = [i for i, c in enumerate(trace.calls) if c.phase == phase]
+        points = [replay_key(trace.calls, i, discovery) for i, c in enumerate(trace.calls) if c.phase == phase]
         test.assertTrue(points, phase)
     finally:
         discovery.close()
@@ -462,12 +526,7 @@ def owner_edit(test, value):
         f = Fixture()
         try:
             batch = f.batch({"a.txt": b"CHILD\n"})
-            fired = []
-            def inject(index, call):
-                if phase == "compensation" and call.operation == "exchange" and call.phase == "forward" and call.when == "before":
-                    put(f.project / "a.txt", b"FIRST OWNER\n")
-                if index != point:
-                    return None
+            def edit_owner(call):
                 target = f.project / "a.txt"
                 if edit == "in_place":
                     put(target, b"OWNER unique final\n")
@@ -479,10 +538,16 @@ def owner_edit(test, value):
                     target.unlink(missing_ok=True)
                 else:
                     target.chmod(0o600)
-                fired.append(True)
-                return None
+                if target.exists():
+                    f.owner_versions.setdefault("a.txt", set()).add(version_at(target))
+            replay = ReplayPoint(point, f, edit_owner)
+            def inject(index, call):
+                if phase == "compensation" and call.operation == "exchange" and call.phase == "forward" and call.when == "before":
+                    put(f.project / "a.txt", b"FIRST OWNER\n")
+                    f.owner_versions.setdefault("a.txt", set()).add(version_at(f.project / "a.txt"))
+                return replay(index, call)
             report = operation(f, batch, Trace(inject))
-            test.assertTrue(fired)
+            replay.assert_fired(test)
             retained = {str(f.project / "a.txt")} | {p for r in report.paths for p in r.retained} | set(report.leftovers)
             if edit == "delete":
                 test.assertFalse((f.project / "a.txt").exists())
@@ -528,35 +593,42 @@ cases("ml_20_created", "ML-20", [(n, n) for n in ("substituted", "unrecorded", "
 
 
 def empty_cleanup(test, kind):
-    batch = test.f.batch({"removed/old.txt": None})
-    folder = test.f.project / "removed"
+    name = "unlisted/removed" if kind == "unlisted_ancestor" else "removed"
+    if kind == "unlisted_ancestor":
+        put(test.f.project / name / "old.txt", b"deleted")
+    batch = test.f.batch({name + "/old.txt": None})
+    folder = test.f.project / name
     identity = (folder.stat().st_dev, folder.stat().st_ino)
     (folder / "old.txt").unlink()
     ml._seed_history(test.f.project, test.f.private, (ml.HistoryRow(1, batch, "landed"),),
-                     emptied_folders={"removed": identity})
+                     emptied_folders={name: identity})
     if kind == "owner_file":
         put(folder / "OWNER", b"keep")
     elif kind == "owner_empty":
+        folder.rename(test.f.outside / "prior-emptied-folder")
+        folder.mkdir()  # an actually empty directory created by the owner
+    elif kind == "owner_nonempty_directory":
         (folder / "OWNER-empty").mkdir()
     elif kind == "swapped":
         folder.rename(test.f.outside / "old-folder")
         folder.mkdir()
     elif kind == "unlisted_ancestor":
-        # The project root is deliberately absent from the recorded cleanup list.
-        pass
+        # This intermediate ancestor becomes empty after the listed child is removed.
+        test.assertEqual([folder], list(folder.parent.iterdir()))
     before = tree(folder, metadata=True)
     ino = folder.stat().st_ino
     ml.cleanup(test.f.project, test.f.private)
     if kind == "unlisted_ancestor":
         test.assertFalse(folder.exists())
-        test.assertTrue(test.f.project.is_dir())
+        test.assertTrue(folder.parent.is_dir())
+        test.assertEqual([], list(folder.parent.iterdir()))
     else:
         test.assertEqual(ino, folder.stat().st_ino)
         test.assertEqual(before, tree(folder, metadata=True))
 
 
 cases("ml_23_cleanup", "ML-23", [(n, n) for n in
-      ("owner_file", "owner_empty", "swapped", "unlisted_ancestor")], empty_cleanup)
+      ("owner_file", "owner_empty", "owner_nonempty_directory", "swapped", "unlisted_ancestor")], empty_cleanup)
 
 
 def swapped_walk(test, kind):
@@ -598,6 +670,8 @@ def moved_report(test, where):
     batch = test.f.batch()
     source = test.f.project / "removed"
     destination = (test.f.outside if where == "outside" else test.f.project) / "owner-moved"
+    info = (source / "old.txt").stat()
+    identity = (info.st_dev, info.st_ino)
     hook, fired = checkpoint("after_intake", lambda _: source.rename(destination))
     report = test.f.land(batch, hook=hook)
     test.assertTrue(fired)
@@ -606,6 +680,11 @@ def moved_report(test, where):
     test.assertIn("moved", [p.classification for p in report.paths])
     test.assertTrue(any("unverified" in n.lower() for n in report.notes))
     test.assertEqual(b"deleted\n", (destination / "old.txt").read_bytes())
+    moved = {"removed/old.txt": (destination / "old.txt", identity)}
+    report_oracle(test, test.f, report, batch, moved=moved)
+    reports = ml.recover(test.f.project, test.f.private)
+    for result in reports:
+        report_oracle(test, test.f, result, batch, moved=moved)
 
 
 cases("ml_14_move", "ML-14", [(n, n) for n in ("inside", "outside")], moved_report)

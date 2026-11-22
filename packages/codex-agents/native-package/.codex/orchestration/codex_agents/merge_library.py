@@ -7,11 +7,16 @@ No caller may derive authority from the editable project .cocolo directory.
 
 Hook contract: EVERY filesystem and SQLite call, including reads, has before
 and after IOCall notifications. `phase` is intake/history/staging/forward/
-compensation/reverse/validation/cleanup/retirement. Semantic checkpoints use
+compensation/reverse/recovery/validation/cleanup/retirement. Semantic checkpoints use
 operation='checkpoint', detail['name']. Normalized mutation operation names
 are exchange, rename_noreplace, mkdir, rmdir, unlink; SQLite uses sqlite_write,
 sqlite_commit (detail['commit'] = A/B/undo/retire). detail['scope'] identifies
-tree/history/staging; commits identify full_flush and parent flush obligations.
+tree/history/staging. All paths are absolute, anchored paths. detail['mutating']
+is required for every call and is true for any write (including write-open,
+metadata changes and subprocess writes). Commit labels queue/retire describe
+admission/retirement transactions, outside the exactly-two landing commits.
+Flush after notifications mean successful completion (errors have no after).
+On macOS fullfsync is required; elsewhere fsync completes the full flush.
 The after notification carries the real result. Raising injects an error;
 returning IOOverride at before replaces that call's result. A short-write
 injector must itself write the prefix before overriding the returned count.
@@ -24,6 +29,10 @@ old_contents, new_contents, batch_digest. Write calls expose fd/data for real
 short-write injection. Project checks have project_checks before/after calls.
 History rows expose recorded directory identities and staging names to the
 independent oracle. Empty-directory cleanup is an explicit post-terminal job.
+merge_file details contain the actual subprocess argv and cwd; its three input
+paths are plain files under child staging. No target-adjacent merge temporaries.
+Emptied identities are in A; created identities follow mkdir, in B or a durable
+non-commit record, never a third history commit. history() reads durable data.
 """
 from __future__ import annotations
 
@@ -112,7 +121,11 @@ class PathReport:
 
 @dataclass(frozen=True)
 class Report:
-    """ML-10, ML-14, ML-17: truthful durable state and every retained version."""
+    """States: refused/reverted/needs_owner/waiting_owner/landed/cancelled.
+
+    recorded means this outcome is durable; needs_owner(io) may be unrecorded
+    when the terminal write failed. Undo success is landed on an undo row.
+    """
     state: str
     reason: str = ""
     batch_no: int | None = None
@@ -146,6 +159,7 @@ class QueueItem:
     child_id: str
     state: str
     base_commit: str
+    kind: str = "child"  # child or owner; owner entries precede stale children
 
 
 def land(project: Path, private_root: Path, batch: SealedBatch, *, policy: Policy,

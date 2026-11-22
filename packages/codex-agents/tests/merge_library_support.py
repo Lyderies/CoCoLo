@@ -114,6 +114,7 @@ class Fixture:
         self.receipts = {}
         self.check_calls = []
         self.builder_calls = []
+        self.owner_versions = {}
         git(self.project, "init", "-q")
         for name, data, mode in (("a.txt", b"one\ntwo\nthree\n", 0o644),
                                  ("z.txt", b"old z\n", 0o644),
@@ -124,6 +125,7 @@ class Fixture:
         git(self.project, "commit", "-qm", "base")
         self.base = git(self.project, "rev-parse", "HEAD").decode().strip()
         self.before = tree(self.project)
+        self.operation_before = self.before
         self.policy = ml.Policy(self.verify, self.checks)
 
     def close(self):
@@ -138,7 +140,26 @@ class Fixture:
         # Receipt location is private, not the child's editable directory.
         receipts = json.loads((self.private / "seals.json").read_text())
         return (hmac.compare_digest(signature, batch.approval)
-                and receipts.get(batch.child_id) == signature)
+                and receipts.get(batch.child_id) == signature
+                and self.verify_records(self.private, batch))
+
+    @staticmethod
+    def write_records(root, batch):
+        """Actual stores for the fixture authority adapter (not production schemas)."""
+        values = {"ledger.json": batch.batch_digest, "signatures.json": batch.approval,
+                  "approvals.json": batch.approval}
+        for filename, value in values.items():
+            path = root / filename
+            records = json.loads(path.read_text()) if path.exists() else {}
+            records[batch.child_id] = value
+            path.write_bytes(canonical(records))
+
+    @staticmethod
+    def verify_records(root, batch):
+        return all(json.loads((root / name).read_text()).get(batch.child_id) == value
+                   for name, value in (("ledger.json", batch.batch_digest),
+                                       ("signatures.json", batch.approval),
+                                       ("approvals.json", batch.approval)))
 
     def batch(self, changes=None, child="child-1", *, modes=None):
         if changes is None:
@@ -171,6 +192,7 @@ class Fixture:
         batch = replace(batch, approval=hmac.new(self.secret, binding(batch), hashlib.sha256).hexdigest())
         self.receipts[child] = batch.approval
         (self.private / "seals.json").write_bytes(canonical(self.receipts))
+        self.write_records(self.private, batch)
         return batch
 
     def land(self, batch=None, *, hook=None, policy=None):
@@ -263,8 +285,15 @@ def fresh_queue(f):
     return json.loads(result.stdout)
 
 
-def report_oracle(test, fixture, report, batch):
-    """ML-14: derive classes from disk independently, never from reported state."""
+def version_at(path):
+    info = Path(path).lstat()
+    return (stat.S_IFMT(info.st_mode), stat.S_IMODE(info.st_mode),
+            Path(path).read_bytes() if stat.S_ISREG(info.st_mode) else None)
+
+
+def report_oracle(test, fixture, report, batch, *, retained=None, moved=None):
+    """Independently verify classes, retained bytes/modes and moved identities."""
+    retained, moved = retained or {}, moved or {}
     events = {e.path: e for e in batch.events if e.kind == "file"}
     listed = {p.path: p for p in report.paths}
     test.assertTrue(set(events).issubset(listed))
@@ -279,11 +308,27 @@ def report_oracle(test, fixture, report, batch):
             observed = "unknown"
         base = None if event.base is None else (event.base.data, event.base.mode_bits)
         new = None if event.new is None else (event.new.data, event.new.mode_bits)
-        kind = ("unknown" if observed == "unknown" else "absent" if observed is None
-                else "base" if observed == base else "new" if observed == new else "owner")
+        if name in moved:
+            destination, identity = moved[name]
+            info = Path(destination).lstat()
+            test.assertEqual(identity, (info.st_dev, info.st_ino))
+            test.assertFalse(path.exists())
+            kind = "moved"
+        else:
+            kind = ("unknown" if observed == "unknown" else "absent" if observed is None
+                    else "base" if observed == base else "new" if observed == new else "owner")
         test.assertEqual(kind, listed[name].classification, name)
-        for retained in listed[name].retained:
-            test.assertTrue(Path(retained).exists(), retained)
+        allowed = {(stat.S_IFREG, v.mode_bits, v.data) for v in (event.base, event.new) if v}
+        allowed.update(fixture.owner_versions.get(name, ()))
+        for saved in listed[name].retained:
+            actual = version_at(saved)
+            if saved in retained:
+                test.assertEqual(retained[saved], actual, saved)
+            else:
+                test.assertIn(actual, allowed, saved)
+    for saved, expected in retained.items():
+        test.assertIn(saved, set(report.leftovers) | {p for r in report.paths for p in r.retained})
+        test.assertEqual(expected, version_at(saved), saved)
     staging = fixture.project / ".cocolo/staging" / batch.child_id
     if staging.exists():
         actual = {str(p) for p in staging.rglob("*") if p.is_file() and p.name != ".gitignore"}
@@ -291,36 +336,187 @@ def report_oracle(test, fixture, report, batch):
         test.assertTrue(actual.issubset(named), actual - named)
 
 
+def assert_no_git_writes(test, fixture, calls):
+    anchor = fixture.project / ".git"
+    for call in calls:
+        mutating = call.operation in MUTATIONS | {"write", "sqlite_write", "ftruncate", "link", "chmod"}
+        mutating |= bool(call.detail.get("mutating"))
+        if call.operation == "open":
+            flags = call.detail.get("flags", 0)
+            mutating |= bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
+        if mutating:
+            for value in (call.path, call.other):
+                if value:
+                    path = Path(os.path.abspath(fixture.project / value))
+                    test.assertFalse(path == anchor or anchor in path.parents, call)
+
+
 def assert_trace(test, calls):
+    """Derive durability obligations from actual writes/mutations, not commit metadata."""
     before = [(i, c) for i, c in enumerate(calls) if c.when == "before"]
     commits = [(i, c) for i, c in before if c.operation == "sqlite_commit"
-               and c.detail.get("commit") != "queue"]
+               and c.detail.get("commit") not in ("queue", "retire")]
     test.assertEqual(["A", "B"], [c.detail["commit"] for _, c in commits])
     a, b = [i for i, _ in commits]
+    for i, call in before:
+        if call.operation == "sqlite_commit" and call.detail.get("commit") == "queue":
+            test.assertTrue(i < a or i > b, "admission transactions are outside A/B")
+        if call.operation == "sqlite_commit" and call.detail.get("commit") == "retire":
+            test.assertGreater(i, b, "retirement is post-terminal cleanup")
+    a_done = next(i for i, c in enumerate(calls) if c.operation == "sqlite_commit"
+                  and c.when == "after" and c.detail.get("commit") == "A")
     mutations = [i for i, c in before if c.detail.get("scope") == "tree" and c.operation in MUTATIONS
                  and c.phase != "cleanup"]
     test.assertTrue(mutations)
-    test.assertLess(a, min(mutations))
+    test.assertLess(a_done, min(mutations))
     test.assertLess(max(mutations), b)
     checked = [i for i, c in enumerate(calls) if c.operation == "project_checks" and c.when == "after"
                and c.result is True]
     test.assertTrue(checked)
     test.assertLess(max(checked), b)
-    for index, call in commits:
-        previous = calls[:index]
-        test.assertTrue(any(c.operation in ("fullfsync", "fsync") and c.when == "after"
-                            and c.detail.get("scope") == "history" for c in previous))
-        test.assertTrue(call.detail.get("full_flush"))
-        for parent in call.detail.get("parents", ()):
-            test.assertTrue(any(c.path == parent and c.operation in ("fsync", "fullfsync")
-                                and c.when == "after" for c in previous), parent)
-            last_change = max((n for n, c in enumerate(previous)
-                               if c.when == "after" and c.operation in MUTATIONS
-                               and c.phase != "cleanup"
-                               and any(p and str(Path(p).parent) == parent for p in (c.path, c.other))), default=-1)
-            test.assertTrue(any(n > last_change and c.path == parent and c.when == "after"
-                                and c.operation in ("fsync", "fullfsync")
-                                for n, c in enumerate(previous)), parent)
+    previous_commit = -1
+    for index, _ in commits:
+        dirty = {}
+        history_writes = []
+        for n, call in enumerate(calls[:index]):
+            if call.when != "after":
+                continue
+            if call.operation in ("write", "sqlite_write", "ftruncate", "chmod"):
+                test.assertTrue(call.path, call)
+                dirty[call.path] = n
+                if call.detail.get("scope") == "history" and n > previous_commit:
+                    history_writes.append(n)
+            if call.operation in MUTATIONS:
+                for path in (call.path, call.other):
+                    if path:
+                        dirty[str(Path(path).parent)] = n
+                if call.operation == "mkdir":
+                    dirty[call.path] = n
+        test.assertTrue(history_writes, "each commit must expose its own history writes")
+        for path, last_change in dirty.items():
+            flushes = [n for n, c in enumerate(calls[:index]) if n > last_change and c.path == path
+                       and c.when == "after" and c.operation in (
+                           ("fullfsync",) if sys.platform == "darwin" else ("fsync", "fullfsync"))]
+            test.assertTrue(flushes, f"missing fresh full flush: {path}")
+        previous_commit = index
+
+
+def call_identity(call, fixture):
+    def normalized(value):
+        if value is None:
+            return None
+        path = Path(os.path.abspath(fixture.project / value))
+        return path.relative_to(fixture.root).as_posix() if path.is_relative_to(fixture.root) else str(path)
+    return (call.operation, call.phase, call.when, normalized(call.path), normalized(call.other),
+            call.detail.get("commit"), call.detail.get("name"))
+
+
+def replay_key(calls, index, fixture):
+    identity = call_identity(calls[index], fixture)
+    occurrence = sum(call_identity(c, fixture) == identity for c in calls[:index + 1])
+    return identity, occurrence
+
+
+class ReplayPoint:
+    """Match a stable boundary and occurrence, independent of incidental call indices."""
+    def __init__(self, key, fixture, action):
+        self.key, self.fixture, self.action = key, fixture, action
+        self.seen = 0
+        self.fired = []
+
+    def __call__(self, index, call):
+        if call_identity(call, self.fixture) == self.key[0]:
+            self.seen += 1
+            if self.seen == self.key[1]:
+                self.fired.append(call)
+                return self.action(call)
+        return None
+
+    def assert_fired(self, test):
+        test.assertEqual(1, len(self.fired), self.key)
+
+
+def assert_discovery(test, calls, operation):
+    selected = [c for c in calls if c.operation != "checkpoint"]
+    test.assertTrue(selected)
+    for call in selected:
+        test.assertTrue(any(c.operation == call.operation and c.phase == call.phase
+                            and c.path == call.path and c.other == call.other
+                            and c.when != call.when for c in selected), call)
+    test.assertTrue(any(c.operation in MUTATIONS for c in selected))
+    kind = operation.__name__
+    phases = {c.phase for c in selected}
+    required = {"forward": {"history", "staging", "forward", "validation"},
+                "reverse": {"reverse"}, "recovering": {"recovery"},
+                "cleaning": {"cleanup"}}.get(kind, set())
+    test.assertTrue(required.issubset(phases), (kind, phases))
+    if kind in ("forward", "undoing"):
+        boundaries = {(c.detail.get("commit"), c.when) for c in selected if c.operation == "sqlite_commit"}
+        labels = {"A", "B"} if kind == "forward" else {"undo"}
+        test.assertTrue({(label, side) for label in labels for side in ("before", "after")}.issubset(boundaries))
+
+
+def durable_endpoint(fixture, batch, rows, kind):
+    """Expected recovery endpoint for this operation, using only durable history."""
+    if kind in ("reverse", "recovering"):
+        landed = False
+    elif kind == "undoing":
+        landed = not any(r.kind == "undo" and r.state == "landed" for r in rows)
+    else:
+        landed = any(r.kind == "forward" and r.state == "landed" for r in rows)
+    return fixture.expected(batch) if landed else fixture.before
+
+
+def outcome_oracle(test, f, batch, report, rows, kind):
+    """Couple returned state, durable row and the operation's exact tree."""
+    report_oracle(test, f, report, batch)
+    matching = [r for r in rows if r.batch_no == report.batch_no]
+    if report.recorded:
+        test.assertTrue(matching)
+        test.assertEqual(report.state, matching[0].state)
+    if report.state == "landed":
+        test.assertTrue(report.recorded)
+        test.assertTrue(any(r.state == "landed" and r.kind == ("undo" if kind == "undoing" else "forward")
+                            for r in matching))
+        if kind == "undoing":
+            test.assertTrue(any(r.kind == "forward" and r.state == "undone" for r in rows))
+        expected = f.before if kind == "undoing" else f.expected(batch)
+        test.assertEqual(expected, tree(f.project))
+    elif report.state == "reverted":
+        test.assertTrue(report.recorded, "reverted requires a durable terminal outcome")
+        test.assertTrue(any(r.state == "reverted" for r in matching))
+        test.assertEqual(f.expected(batch) if kind == "undoing" else f.before, tree(f.project))
+    elif report.state == "refused":
+        test.assertEqual(f.operation_before, tree(f.project))
+    else:
+        test.assertEqual("needs_owner", report.state)
+        test.assertEqual("io", report.reason)
+        test.assertTrue(rows, "unresolved work needs pinned history")
+        test.assertTrue(all(r.contents_kept for r in rows))
+        test.assertTrue(any(r.kind == "forward" and r.batch == batch for r in rows),
+                        "pinned history must retain the exact sealed old/new contents and modes")
+        actual, pre, post = tree(f.project), f.before, f.expected(batch, cleanup=False)
+        for path in set(actual) | set(pre) | set(post):
+            test.assertIn(actual.get(path), (pre.get(path), post.get(path)), path)
+
+
+def owner_preservation_oracle(test, f, batch, reports, owner_tree):
+    """Exact unrelated tree plus both explicitly named versions for unresolved work."""
+    actual = tree(f.project)
+    unrelated = {p: v for p, v in actual.items() if p != "a.txt"}
+    test.assertEqual({p: v for p, v in owner_tree.items() if p != "a.txt"}, unrelated)
+    unresolved = any(r.state in ("needs_owner", "waiting_owner") for r in reports)
+    if not unresolved:
+        test.assertEqual(owner_tree, actual)
+        return
+    rows = [row for r in reports for row in r.paths if row.path == "a.txt"]
+    named = {p for row in rows for p in row.retained} | {p for r in reports for p in r.leftovers}
+    versions = {version_at(p) for p in named if Path(p).is_file() and not Path(p).is_symlink()}
+    owner = owner_tree["a.txt"]
+    child = next(e.new for e in batch.events if e.path == "a.txt")
+    test.assertIn(actual.get("a.txt"), (owner, (stat.S_IFREG, child.mode_bits, child.data)))
+    test.assertIn(owner, versions | {actual.get("a.txt")})
+    test.assertIn((stat.S_IFREG, child.mode_bits, child.data), versions | {actual.get("a.txt")})
 
 
 def seed_applied(f, batch, *, state="applying"):
@@ -357,49 +553,68 @@ def seed_applied(f, batch, *, state="applying"):
     return staging, paths
 
 
+def recover_checked(test, f, batch, kind):
+    reports = ml.recover(f.project, f.private)
+    rows = ml.history(f.project, f.private)
+    for report in reports:
+        row = next((r for r in rows if r.batch_no == report.batch_no), None)
+        report_kind = "undoing" if row and row.kind == "undo" else kind
+        outcome_oracle(test, f, batch, report, rows, report_kind)
+    return reports
+
+
 def kill_oracle(test, operation, *, select=lambda c: c.operation != "checkpoint", oracle=None):
-    """Discover, then SIGKILL at every selected before/after call in a fresh fixture."""
-    with_fixture = Fixture()
+    """Discover stable identities, then SIGKILL at every selected before/after call."""
+    discovery = Fixture()
     try:
-        batch = with_fixture.batch()
+        batch = discovery.batch()
         trace = Trace()
-        operation(with_fixture, batch, trace)
-        boundaries = [i for i, c in enumerate(trace.calls) if select(c)]
+        operation(discovery, batch, trace)
+        assert_discovery(test, trace.calls, operation)
+        boundaries = [(replay_key(trace.calls, i, discovery), c) for i, c in enumerate(trace.calls) if select(c)]
         test.assertTrue(boundaries, "a syscall hook must expose at least one boundary")
+        if operation.__name__ == "forward" and any(c.operation == "sqlite_commit" for _, c in boundaries):
+            test.assertTrue({(label, side) for label in ("A", "B") for side in ("before", "after")}
+                            .issubset({(c.detail.get("commit"), c.when) for _, c in boundaries}))
     finally:
-        with_fixture.close()
-    for boundary in boundaries:
+        discovery.close()
+    for key, selected in boundaries:
         f = Fixture()
         try:
             batch = f.batch()
-            def inject(index, call):
-                if index == boundary:
-                    os.kill(os.getpid(), signal.SIGKILL)
-            status = child_run(lambda: operation(f, batch, Trace(inject)))
+            # A durable marker proves identity matching even though SIGKILL loses Python memory.
+            marker = f.root / "injection-fired"
+            def kill(call):
+                marker.write_bytes(canonical(key))
+                os.kill(os.getpid(), signal.SIGKILL)
+            point = ReplayPoint(key, f, kill)
+            status = child_run(lambda: operation(f, batch, Trace(point)))
             test.assertTrue(os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL)
+            test.assertEqual(canonical(key), marker.read_bytes())
             rows = ml.history(f.project, f.private)
-            landed = any(r.state == "landed" and r.kind == "forward" for r in rows)
-            reports = ml.recover(f.project, f.private)
-            expected = f.expected(batch) if landed else f.before
-            if not landed:
-                expected = dict(expected)
-                recorded = {p: identity for r in rows for p, identity in r.created_folders.items()}
+            expected = dict(durable_endpoint(f, batch, rows, operation.__name__))
+            recorded = {p: identity for r in rows for p, identity in r.created_folders.items()}
+            kept = []
+            if expected == f.before:
                 for event in batch.events:
                     path = f.project / event.path
                     if event.kind == "folder" and path.is_dir() and not recorded.get(event.path):
-                        # A mkdir killed before its identity record must be kept (ML-20).
-                        expected[event.path] = (stat.S_IFDIR, 0o755, None)
-                        test.assertTrue(any(event.path == p.path for r in reports for p in r.paths))
+                        expected[event.path] = version_at(path)
+                        kept.append(event.path)
+            # Permit only specifically observed, unrecorded created folders in the pre-tree.
+            for name in kept:
+                f.before[name] = expected[name]
+            reports = recover_checked(test, f, batch, operation.__name__)
             test.assertEqual(expected, tree(f.project))
+            for name in kept:
+                test.assertTrue(any(name == p.path for r in reports for p in r.paths))
             first = tree(f.project, control=True)
             records = ml.history(f.project, f.private)
-            ml.recover(f.project, f.private)
+            recover_checked(test, f, batch, operation.__name__)
             test.assertEqual(first, tree(f.project, control=True))
             test.assertEqual(records, ml.history(f.project, f.private))
-            for report in reports:
-                report_oracle(test, f, report, batch)
             if oracle:
-                oracle(f, batch, trace.calls[boundary], rows)
+                oracle(f, batch, selected, rows)
         finally:
             f.close()
 
@@ -409,41 +624,44 @@ def fault_sweep(test, operation):
     try:
         trace = Trace()
         operation(discovery, discovery.batch(), trace)
-        points = [(i, c) for i, c in enumerate(trace.calls)
-                  if c.when == "before" and c.operation in FAULTABLE]
+        assert_discovery(test, trace.calls, operation)
+        points = [(replay_key(trace.calls, i, discovery), c) for i, c in enumerate(trace.calls)
+                  if c.operation in FAULTABLE]
         test.assertTrue(points)
+        # Both failed calls and successful calls with lost acknowledgement, including
+        # undo/retire commits and fsync, get injected; short writes apply only before.
+        for call in [c for _, c in points]:
+            test.assertTrue(any(c.operation == call.operation and c.when != call.when for _, c in points))
     finally:
         discovery.close()
-    for boundary, call in points:
-        faults = (errno.ENOSPC, errno.EIO, "short") if call.operation == "write" else (errno.ENOSPC, errno.EIO)
+    for key, call in points:
+        faults = (errno.ENOSPC, errno.EIO, "short") if call.operation == "write" and call.when == "before" else (errno.ENOSPC, errno.EIO)
         for fault in faults:
             f = Fixture()
             try:
                 batch = f.batch()
-                fired = []
-                def inject(index, current):
-                    if index == boundary:
-                        fired.append(current)
-                        if fault == "short":
-                            data = current.detail["data"]
-                            count = os.write(current.detail["fd"], data[:max(1, len(data) // 2)])
-                            return ml.IOOverride(count)
-                        raise OSError(fault, "ML injected filesystem/SQLite failure")
-                    return None
-                report = operation(f, batch, Trace(inject))
-                test.assertTrue(fired)
-                test.assertIn(report.state, ("refused", "reverted", "needs_owner", "landed"))
-                if report.state == "landed":
-                    # Only fully handled short writes or a reread-proven commit can succeed.
-                    test.assertTrue(fault == "short" or call.operation == "sqlite_commit")
-                if report.state == "needs_owner":
-                    test.assertEqual("io", report.reason)
-                    test.assertTrue(all(r.contents_kept for r in ml.history(f.project, f.private)))
-                report_oracle(test, f, report, batch)
-                ml.recover(f.project, f.private)
-                ml.recover(f.project, f.private)
-                if report.batch_no is not None and report.state == "needs_owner":
-                    ml.retry(f.project, f.private, report.batch_no, policy=f.policy)
-                test.assertIn(tree(f.project), (f.before, f.expected(batch)))
+                def inject(current):
+                    if fault == "short":
+                        data = current.detail["data"]
+                        count = os.write(current.detail["fd"], data[:max(1, len(data) // 2)])
+                        return ml.IOOverride(count)
+                    raise OSError(fault, "ML injected filesystem/SQLite failure")
+                point = ReplayPoint(key, f, inject)
+                report = operation(f, batch, Trace(point))
+                point.assert_fired(test)
+                rows = ml.history(f.project, f.private)
+                outcome_oracle(test, f, batch, report, rows, operation.__name__)
+                recover_checked(test, f, batch, operation.__name__)
+                first, records = tree(f.project, control=True), ml.history(f.project, f.private)
+                recover_checked(test, f, batch, operation.__name__)
+                test.assertEqual(first, tree(f.project, control=True))
+                test.assertEqual(records, ml.history(f.project, f.private))
+                unresolved = any(r.batch_no == report.batch_no and r.state in ("applying", "needs_owner")
+                                 for r in records)
+                if unresolved:
+                    retry = ml.retry(f.project, f.private, report.batch_no, policy=f.policy)
+                    outcome_oracle(test, f, batch, retry, ml.history(f.project, f.private), operation.__name__)
+                rows = ml.history(f.project, f.private)
+                test.assertEqual(durable_endpoint(f, batch, rows, operation.__name__), tree(f.project))
             finally:
                 f.close()
