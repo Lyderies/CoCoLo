@@ -20,7 +20,7 @@ from unittest import mock
 
 from tests.support import ORCHESTRATION_ROOT, REPOSITORY_ROOT, TEMP_ROOT
 
-from codex_agents.contracts import routing_task_slice
+from codex_agents.contracts import ContractError, routing_task_slice
 
 from codex_agents.learning_store import (
     CollectorClient,
@@ -648,6 +648,59 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual(16, self.ledger._connection.execute('PRAGMA user_version').fetchone()[0])
         rows = self.ledger._connection.execute('SELECT content,content_digest,probe_id FROM records ORDER BY record_id')
         self.assertEqual([(*row, None) for row in before], [tuple(row) for row in rows])
+
+    def test_or1_ledger_append_refuses_repair_codes_no_new_outcome_may_carry(self):
+        for code in ('inconsistent_axes', 'contract_validation_failed'):
+            record = verification_outcome('append_' + code[:4])
+            record.update(repairs=1, repair_reason_codes=[code])
+            with self.subTest(code=code), self.assertRaisesRegex(LedgerError, 'record admission rejected'):
+                self.ledger.append(self.project_a_id, record, producer='evaluator', now_ms=10)
+
+    def test_or1_ledger_insertion_helper_validates_strictly(self):
+        record = verification_outcome('helper_legacy')
+        record.update(repairs=1, repair_reason_codes=['inconsistent_axes'])
+        with self.assertRaises(ContractError), self.ledger._lock, self.ledger._connection:
+            self.ledger._append_checked_locked(self.project_a_id, record, producer='evaluator', timestamp=10)
+
+    def _store_legacy_rows(self):
+        """Rows an older build left: stored cells, written as they were, not through today's writers."""
+        legacy_outcome = verification_outcome('legacy_outcome')
+        legacy_outcome.update(repairs=1, repair_reason_codes=['inconsistent_axes'])
+        connection = self.ledger._connection
+        sequence = connection.execute('SELECT MAX(source_sequence) FROM records WHERE project_id=?',
+                                      (self.project_a_id,)).fetchone()[0] or 0
+        for number, (record, source) in enumerate(((legacy_outcome, 'host'),), 1):
+            content = canonical_json(record)
+            connection.execute(
+                'INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,'
+                'ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                (self.project_a_id, record['record_id'], record['record_type'], source, sequence + number,
+                 10, 10, None, content, content_digest(record), 0))
+        connection.commit()
+        return [tuple(row) for row in connection.execute(
+            'SELECT record_id,content,content_digest FROM records WHERE record_id=?', ('legacy_outcome',))]
+
+    def test_or3_installer_path_schema15_ledger_with_legacy_stored_records_upgrades_unchanged(self):
+        """OR-3: the installer opens with allow_schema_upgrade and backup_before_upgrade, then registers.
+        The owner's upgrade refused with 'project backup contains a corrupt learning record'."""
+        stored = self._store_legacy_rows()
+        connection = self.ledger._connection
+        with connection:
+            connection.execute('ALTER TABLE records DROP COLUMN probe_id')
+            connection.execute('PRAGMA user_version=15')
+        self.ledger.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients,
+                                     allow_schema_upgrade=True, backup_before_upgrade=True)
+        self.assertEqual(16, self.ledger._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(self.project_a_id, self.ledger.register_project(self.project_a, now_ms=2))
+        after = [tuple(row) for row in self.ledger._connection.execute(
+            'SELECT record_id,content,content_digest FROM records WHERE record_id=?', ('legacy_outcome',))]
+        self.assertEqual(stored, after)
+        backups = self.ledger._connection.execute(
+            "SELECT file_id FROM stored_files WHERE project_id=? AND kind='backup' AND file_id LIKE 'upgrade_schema15_%'",
+            (self.project_a_id,)).fetchall()
+        self.assertEqual(1, len(backups))
+        self.ledger.verify_sanitized_backup(self.project_a_id, file_id=backups[0][0])
 
     def test_goal_statistics_and_original_open_use_schema_ten(self) -> None:
         version = self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]

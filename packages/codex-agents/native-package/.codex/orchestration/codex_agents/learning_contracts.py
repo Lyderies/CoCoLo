@@ -708,7 +708,13 @@ OUTCOME_FIELDS = {
 }
 
 
-def validate_outcome(data: Any) -> dict[str, Any]:
+# Repair codes a released version wrote into stored outcomes and later dropped from the result
+# validation vocabulary: 4b49660c (0.8.43) split `inconsistent_axes` by branch. Stored records stay
+# readable with it (`stored=True`); a new outcome never carries it.
+LEGACY_OUTCOME_REPAIR_CODES = frozenset({"inconsistent_axes"})
+
+
+def validate_outcome(data: Any, *, stored: bool = False) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ContractError("outcome must be an object")
     axis_fields = {
@@ -806,7 +812,10 @@ def validate_outcome(data: Any) -> dict[str, Any]:
         not isinstance(reason_codes, list)
         or len(reason_codes) != data["repairs"]
         or any(
-            not isinstance(code, str) or code not in RESULT_VALIDATION_REASON_CODES
+            not isinstance(code, str) or (
+                code not in RESULT_VALIDATION_REASON_CODES
+                and (not stored or code not in LEGACY_OUTCOME_REPAIR_CODES)
+            )
             for code in reason_codes
         )
     ):
@@ -2387,14 +2396,19 @@ VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
 }
 
 
-def validate_learning_record(data: Any) -> dict[str, Any]:
+_STORED_READABLE = frozenset({"outcome"})
+
+
+def validate_learning_record(data: Any, *, stored: bool = False) -> dict[str, Any]:
+    """Validate one record. The default is for a record being written now. `stored=True` is only for
+    reading bytes that already exist: they may hold a value an earlier release wrote and no writer does."""
     if not isinstance(data, dict):
         raise ContractError("learning record must be an object")
     record_type = data.get("record_type")
     validator = VALIDATORS.get(record_type)
     if validator is None:
         raise ContractError("unsupported learning record type")
-    checked = validator(data)
+    checked = validator(data, stored=stored) if record_type in _STORED_READABLE else validator(data)
     if len(canonical_json(checked)) > MAX_RECORD_BYTES:
         raise ContractError("learning record is oversized")
     return checked
