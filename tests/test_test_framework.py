@@ -618,6 +618,7 @@ class ReviewLifecycleTests(unittest.TestCase):
                 fw.combine_run_records(changed)
 
     def test_A12_unknown_registry_id_is_a_diagnostic_not_a_key_error(self):
+        from unittest import mock
         import generate_test_metadata as generator
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

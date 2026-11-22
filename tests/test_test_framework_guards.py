@@ -279,7 +279,7 @@ class RunnerIntegrationTests(unittest.TestCase):
                       "import parallel_tests as p\nfrom pathlib import Path\n"
                       f"p.ROOT=Path({str(root)!r}); p.SUITES={{'root':p.ROOT}}\n"
                       "p.STAGES=p.ROOT/'scripts/test-stages.json'; p.TIMINGS=p.ROOT/'scripts/test-timings.json'\n"
-                      ("p.legacy_versions=lambda root, current, ceiling: (ceiling, current, [])\n"
+                      + ("p.legacy_versions=lambda root, current, ceiling: (ceiling, current, [])\n"
                        "p.budget_versions=lambda root, current: []\n" if trusted else "")
                       + interruption + f"raise SystemExit(p.main(['--module','root:test_probe','--save-timings',{str(root / 'timings.json')!r}]+{list(extra_args)!r}))\n")
             result = subprocess.run([sys.executable, '-B', '-c', driver], cwd=root,
