@@ -636,6 +636,8 @@ class FakeContainerWatch:
     def __init__(self):
         self.parent = True
         self.stops = 0
+        self.grace = 0
+        self.graces = []  # the grace each try was told it may use (decision 46: capped to the time left)
 
     def parent_alive(self):
         return self.parent
@@ -644,9 +646,10 @@ class FakeContainerWatch:
         self.stops += 1
         return cr.StopResult('gone', 'the container no longer exists')
 
-    def stop_try(self, seconds):
+    def stop_try(self, seconds, grace=None):
         """The watchdog's one bounded try (decision 46: a real container runs it as its own process). This
         in-process double answers inline, so it can only script answers; hangs use HangingProcessWatch."""
+        self.graces.append(grace)
         try:
             return bool(self.stop().gone)
         except Exception:
@@ -667,8 +670,9 @@ class HangingProcessWatch(FakeContainerWatch):
         super().__init__()
         self.log = os.path.join(folder, 'pids')
 
-    def stop_try(self, seconds):
+    def stop_try(self, seconds, grace=None):
         self.stops += 1
+        self.graces.append(grace)
         return process_tree.run_stop_process([sys.executable, '-I', '-B', '-c', HANG_STOP, self.log], seconds)
 
     def pids(self):
@@ -859,11 +863,32 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual([], [pid for pid in container.pids() if alive(pid)])
 
     def test_cs2_the_whole_failure_path_fits_the_20_second_allowance(self):
-        # r2 M2: 15 s + grace, the tree's end and a 5 s last try summed to over 20 s. The production
-        # constants (nothing patched), at the real tests' grace of 1 s, must leave a margin.
-        total = (process_tree.WATCHDOG_STOP_BUDGET_SECONDS + 1 + getattr(process_tree,
-                 'WATCHDOG_TERMINATE_RESERVE_SECONDS', 1.0) + process_tree.WATCHDOG_LAST_STOP_SECONDS)
-        self.assertLessEqual(total, 18.0)
+        # r2 M2: 15 s + grace, the tree's end and a 5 s last try summed to over 20 s. Was: the production
+        # constants summed with a grace of 1 s. Now: the plan the watchdog really follows, for the production
+        # default grace and for a large one (the clock is fixed; the grace is capped to what it leaves).
+        for grace in (1, cr.DEFAULT_GRACE_SECONDS, 60, 3600):
+            with self.subTest(grace=grace):
+                initial, total = process_tree.watchdog_stop_plan(grace)
+                self.assertLessEqual(total, 18.0)  # a margin of 2 s under the 20 s allowance
+                self.assertGreater(initial, process_tree.WATCHDOG_LAST_STOP_SECONDS)
+
+    def test_cs2_a_try_is_told_a_grace_that_fits_the_time_left_and_the_last_try_has_none(self):
+        failed = cr.StopResult('stop_failed', 'still there')
+        process, _ = self.child()
+        container = self.scripted_watch([failed], process)
+        self.assertEqual(process_tree.WATCHDOG_STOP_ATTEMPTS + 1, len(container.graces))
+        cap = process_tree.WATCHDOG_STOP_BUDGET_SECONDS - process_tree.WATCHDOG_STOP_GRACE_MARGIN_SECONDS
+        self.assertEqual([cap] * process_tree.WATCHDOG_STOP_ATTEMPTS + [0], container.graces)
+
+    def test_cs2_the_stop_process_gets_the_smaller_of_the_configured_grace_and_the_cap(self):
+        config = {'project': CONTAINER_PROJECT, 'prefix': cr.DEFAULT_NAME_PREFIX, 'podman': '/opt/example/podman',
+                  'global': [], 'name': 'cocolo-run-' + '2' * 32, 'grace': 60, 'cgroup': None, 'parent': 99_999_999}
+        watcher = process_tree.container_watcher(json.dumps(config))
+        for asked, expected in ((7, 7), (0, 0), (100, 60)):
+            seen = []
+            with mock.patch.object(process_tree, 'run_stop_process', lambda argv, seconds: seen.append(argv) or True):
+                self.assertTrue(watcher.stop_try(5.0, asked))
+            self.assertEqual(expected, json.loads(seen[0][-1])['grace'])
 
     def test_the_launcher_gives_the_watchdog_the_container_and_podman_environment(self):
         launcher = stop_launcher(self, grace_seconds=3)
@@ -964,7 +989,7 @@ elif args[:1] == ['stop']:
             overlap += 1
         except ProcessLookupError:
             pass
-    note('start %d %d overlap=%d' % (os.getpid(), os.getppid(), overlap))
+    note('start %d %d overlap=%d %s' % (os.getpid(), os.getppid(), overlap, args[1]))
     if mode == 'hang':
         time.sleep(3600)
     open(gone, 'w').close()
@@ -991,7 +1016,7 @@ class WatchdogProductionPathTests(unittest.TestCase):
             with contextlib.suppress(ProcessLookupError):
                 os.kill(int(row[1]), signal.SIGKILL)
 
-    def run_watchdog(self, mode, limit=40):
+    def run_watchdog(self, mode, limit=40, grace=1):
         podman = os.path.join(self.folder, 'podman')
         Path(podman).write_text(FAKE_PODMAN.replace('@PYTHON@', sys.executable)
                                 .replace('@FOLDER@', repr(self.folder)).replace('@MODE@', repr(mode)))
@@ -1002,7 +1027,7 @@ class WatchdogProductionPathTests(unittest.TestCase):
         tree = process_tree.ProcessTree(child.pid, None)
         self.assertTrue(wait_until(lambda: tree.identify(process_tree.process_table()), 5))
         config = {'project': 'cocolo-test-x', 'prefix': cr.DEFAULT_NAME_PREFIX, 'podman': podman, 'global': [],
-                  'name': 'cocolo-run-' + '2' * 32, 'grace': 1, 'cgroup': None,
+                  'name': 'cocolo-run-' + '2' * 32, 'grace': grace, 'cgroup': None,
                   'parent': 99_999_999}  # not this test: the service is dead
         started = time.monotonic()
         watchdog = subprocess.Popen(
@@ -1025,6 +1050,28 @@ class WatchdogProductionPathTests(unittest.TestCase):
         for row in rows:
             self.assertTrue(wait_until(lambda: not alive(int(row[1])), 3), f'stop process {row[1]} outlived the watchdog')
         self.assertIsNotNone(child.wait(5))  # the tree is ended
+
+    def assert_hung_stop_fits(self, grace):
+        # r2 M2 / decision 46: the whole failure path, grace included, under 20 s for ANY grace. The stop
+        # never answers, so the budget's try is killed and the last try (a kill with no grace) runs after it.
+        status, seconds, child, _ = self.run_watchdog('hang', limit=45, grace=grace)
+        self.assertEqual(1, status)
+        self.assertLess(seconds, 18.0)
+        rows = self.logged()
+        self.assertEqual(2, len(rows), rows)
+        self.assertEqual(['overlap=0'] * 2, [row[3] for row in rows])
+        first, last = (int(row[4].split('=')[1]) for row in rows)
+        self.assertLessEqual(first, min(grace, 7))  # never longer than the grace the time left can hold
+        self.assertEqual(0, last)  # the last try is a kill with no grace
+        for row in rows:
+            self.assertTrue(wait_until(lambda: not alive(int(row[1])), 3))
+        self.assertIsNotNone(child.wait(5))
+
+    def test_the_failure_path_is_under_20_seconds_with_the_default_grace(self):
+        self.assert_hung_stop_fits(cr.DEFAULT_GRACE_SECONDS)
+
+    def test_the_failure_path_is_under_20_seconds_with_a_large_grace(self):
+        self.assert_hung_stop_fits(60)
 
     def test_each_stop_try_runs_in_its_own_process_and_a_retry_can_still_succeed(self):
         status, seconds, child, watchdog = self.run_watchdog('refuse-once')
