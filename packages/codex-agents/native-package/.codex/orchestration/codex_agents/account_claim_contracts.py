@@ -20,6 +20,18 @@ CLAIM_DENIAL_CODES = frozenset(ADMISSION_REASON_CODES - {"admitted"}) | frozense
     "claim_not_open", "claim_already_consumed", "claim_context_missing",
     "claim_runtime_mismatch", "claim_observation_missing", "claim_client_changed",
 })
+# The reason codes launch_receipts has always allowed (schema 15, 0.8.45). The receipts DDL embeds this list and an
+# existing ledger is checked against that DDL at every open, so it is frozen here, not derived from
+# ADMISSION_REASON_CODES: a later admission code (probe_replay_stale) never reaches a claim receipt, and a change
+# to this list needs a ledger schema bump with a versioned upgrade.
+RECEIPT_DENIAL_CODES = frozenset({
+    "admission_policy_unavailable", "billing_attestation_missing", "billing_unverified", "claim_already_consumed",
+    "claim_client_changed", "claim_context_missing", "claim_not_open", "claim_observation_missing",
+    "claim_runtime_mismatch", "claude_backend_not_subscription", "claude_model_override_present",
+    "claude_subscription_missing", "client_version_unreviewed", "codex_plan_not_subscription",
+    "codex_spend_control_reached", "paid_usage_usable", "probe_cooldown", "provider_api_key_present",
+    "provider_exhausted", "provider_identity_missing", "window_run_cap_reached",
+})
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _HANDLE = re.compile(r"hrn_[0-9a-f]{48}")
 _RUN = re.compile(r"run:[0-9a-f]{64}")

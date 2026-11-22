@@ -151,7 +151,7 @@ from .health_containers import ContainerCheck
 from .health_monitor import HealthMonitor
 from .ledger_waits import LEDGER_LOCK_WAIT_MS, LEDGER_REQUEST_WAIT_MS  # noqa: F401 -- E1a, named here too
 from .account_claim_contracts import (
-    CLAIM_DENIAL_CODES, MAX_CLAIM_INTEGER, ClaimError, LaunchClaimInput,
+    CLAIM_DENIAL_CODES, MAX_CLAIM_INTEGER, RECEIPT_DENIAL_CODES, ClaimError, LaunchClaimInput,
     _DIGEST as _CLAIM_DIGEST, _REQUEST_ID as _CLAIM_REQUEST_ID, _PROJECT as _CLAIM_PROJECT,
     _RUN as _CLAIM_RUN,
     checked_claim_receipt, matches as claim_matches,
@@ -734,7 +734,7 @@ CREATE TABLE IF NOT EXISTS launch_receipts (
     CHECK((state='claimed' AND run_id IS NOT NULL AND bridge_run_id IS NOT NULL
         AND typeof(deadline_at_ms)='integer' AND deadline_at_ms>recorded_at_ms AND reason_code IS NULL)
         OR (state='denied' AND bridge_run_id IS NULL AND deadline_at_ms IS NULL AND reason_code IN (
-""" + ",".join("'" + code + "'" for code in sorted(CLAIM_DENIAL_CODES)) + """))),
+""" + ",".join("'" + code + "'" for code in sorted(RECEIPT_DENIAL_CODES)) + """))),
     FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
     FOREIGN KEY(project_id,handle_digest,run_id,bridge_run_id)
         REFERENCES launch_claims(project_id,handle_digest,run_id,bridge_run_id)
