@@ -630,6 +630,25 @@ class LearningStoreTests(unittest.TestCase):
             empty_ingestion_snapshot(registered=False)["registered_project_state"],
         )
 
+    def test_PC4_schema_15_upgrade_preserves_legacy_bytes_and_null_probe_id(self):
+        event = event_record('legacy_probe_migration', observed_at_ms=10)
+        self.ledger.append(self.project_a_id, event, producer='hook', now_ms=10)
+        from codex_agents.providers import claude_rate_limit_records
+        legacy = claude_rate_limit_records({'status': 'allowed_warning'},
+            account_fingerprint='a'*64, observed_at_ms=10)
+        self.ledger._store_provider_observations(self.project_a_id, legacy, timestamp=10)
+        connection = self.ledger._connection
+        before = [tuple(row) for row in connection.execute('SELECT content,content_digest FROM records ORDER BY record_id')]
+        self.assertIn('probe_id', {r[1] for r in connection.execute('PRAGMA table_info(records)')})
+        with connection:
+            connection.execute('ALTER TABLE records DROP COLUMN probe_id')
+            connection.execute('PRAGMA user_version=15')
+        self.ledger.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True, backup_before_upgrade=True)
+        self.assertEqual(16, self.ledger._connection.execute('PRAGMA user_version').fetchone()[0])
+        rows = self.ledger._connection.execute('SELECT content,content_digest,probe_id FROM records ORDER BY record_id')
+        self.assertEqual([(*row, None) for row in before], [tuple(row) for row in rows])
+
     def test_goal_statistics_and_original_open_use_schema_ten(self) -> None:
         version = self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
         tables = {
@@ -638,7 +657,7 @@ class LearningStoreTests(unittest.TestCase):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        self.assertEqual(15, version)  # O0b RS-A (requirement): schema 15
+        self.assertEqual(16, version)  # PC-4: current schema includes probe provenance
         self.assertIn('account_open_receipts', tables)
         self.assertIn('account_open_requests', tables)
         self.assertIn("active_run_capacity", tables)
@@ -681,7 +700,7 @@ class LearningStoreTests(unittest.TestCase):
         connection.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
         snapshot = self.ledger.ingestion_snapshot(self.project_a_id, now_ms=30)
-        self.assertEqual(15, self.ledger._connection.execute(
+        self.assertEqual(16, self.ledger._connection.execute(
             "PRAGMA user_version"
         ).fetchone()[0])
         self.assertEqual(1, snapshot["accepted_hook_event_count"])
@@ -694,7 +713,7 @@ class LearningStoreTests(unittest.TestCase):
         )
         with self.ledger._connection:
             self.ledger._connection.execute(
-                "INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     self.project_a_id,
                     event["record_id"],
@@ -824,7 +843,7 @@ class LearningStoreTests(unittest.TestCase):
                 ),
             )
             self.ledger._connection.execute(
-                "INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     self.project_a_id, event["record_id"], "event", "host", 1,
                     10, 20, 20 + 90 * 24 * 60 * 60 * 1000,
@@ -905,7 +924,7 @@ class LearningStoreTests(unittest.TestCase):
             )
         with self.ledger._connection:
             self.ledger._connection.executemany(
-                "INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?)", rows
+                "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,?)", rows
             )
         progress_calls = 0
 
@@ -2598,23 +2617,23 @@ class LearningStoreTests(unittest.TestCase):
     def test_billing_probe_backup_expiry_and_restart_preserve_all_sealed_cells(self):
         self._seed_billing_probes(('reserved', 'admitted', 'committed'))
         names = ('account_billing_probe_origins', 'account_billing_probe_requests')
-        before = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        before = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=16)
         path = self.ledger.create_sanitized_backup(
             self.project_a_id, file_id='sealed_probes',
             expires_at_ms=time.time_ns() // 1_000_000 + 600_000)
         body = backup_body(path, self.project_a_id)
         report = self.ledger.verify_sanitized_backup(self.project_a_id, file_id='sealed_probes')
-        self.assertEqual(15, report['ledger_schema_version'])  # O0b RS-A (requirement): schema 15
+        self.assertEqual(16, report['ledger_schema_version'])  # PC-4: current schema includes probe provenance
         for table in names:
             self.assertEqual(3, report['counts'][table])
             self.assertEqual(before['tables'][table], body['tables'][table])
         self.ledger.expire(self.project_a_id, now_ms=10 ** 15)
-        after = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        after = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=16)
         for table in names:
             self.assertEqual(before['tables'][table], after['tables'][table])
         self.ledger.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        after = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        after = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=16)
         for table in names:
             self.assertEqual(before['tables'][table], after['tables'][table])
 
@@ -2729,7 +2748,7 @@ class LearningStoreTests(unittest.TestCase):
 
     def test_billing_probe_backup_rejects_missing_or_changed_original_coverage(self):
         self._seed_billing_probes(('reserved',))
-        original = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        original = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=16)
         for defect in ('missing_request', 'missing_origin', 'digest', 'created_at'):
             with self.subTest(defect=defect):
                 body = deepcopy(original)
@@ -2931,7 +2950,7 @@ class LearningStoreTests(unittest.TestCase):
 
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
 
-        self.assertEqual(15, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
+        self.assertEqual(16, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
         )
         checkpoint = self.ledger._connection.execute(
             "SELECT sequence,status,observed_at_ms FROM orchestration_checkpoints "
@@ -2998,7 +3017,7 @@ class LearningStoreTests(unittest.TestCase):
         finally:
             connection.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
-        self.assertEqual(15, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(16, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
 
     def test_schema_five_migration_rolls_back_an_injected_schema_failure(self) -> None:
         self._downgrade_fixture_to_schema_five()
@@ -3182,10 +3201,10 @@ class LearningStoreTests(unittest.TestCase):
 
     def test_admitted_billing_probe_refuses_project_deletion_after_deadline(self):
         self._seed_billing_probes(('admitted',))
-        before = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        before = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=16)
         with self.assertRaisesRegex(LedgerError, '^project_has_active_billing_probe$'):
             self.ledger.delete_project(self.project_a_id, now_ms=10 ** 15)
-        after = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        after = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=16)
         self.assertEqual(before, after)
         self.ledger.delete_project(self.project_b_id, now_ms=10)
 
@@ -3517,7 +3536,7 @@ class LearningStoreTests(unittest.TestCase):
 
     def test_schema_twelve_client_refuses_schema_thirteen_probe_state(self):
         self._seed_billing_probes(('admitted',))
-        body = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        body = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=16)
         self.ledger.close()
         original = self.state.database.read_bytes()
         with mock.patch.object(learning_store, 'LEDGER_SCHEMA_VERSION', 12):
@@ -3580,7 +3599,7 @@ class LearningStoreTests(unittest.TestCase):
         self.addCleanup(server.stop)
         client = CollectorClient(self.state.socket, timeout=0.2)
         health = client.health(self.project_a)
-        self.assertEqual(15, health["schema_version"])  # O0b RS-A (requirement): schema 15
+        self.assertEqual(16, health["schema_version"])  # PC-4: current schema includes probe provenance
         self.assertEqual(PACKAGE_VERSION, health["runtime_version"])
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, health["runtime_digest"])
         self.assertIsInstance(health["started_at_ms"], int)

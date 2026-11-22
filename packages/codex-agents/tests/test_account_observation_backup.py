@@ -28,7 +28,7 @@ class AccountObservationBackupTests(unittest.TestCase):
 
     def test_both_verifiers_preserve_committed_and_unknown_original_requests(self):
         self.assertTrue(self.ledger.verify_sanitized_backup(self.project, file_id='observations')['verified'])
-        self.assertEqual(15, self.body['ledger_schema_version'])  # O0b RS-A (requirement): schema 15, the register backed up
+        self.assertEqual(16, self.body['ledger_schema_version'])  # PC-4: current schema includes probe provenance
         self.assertEqual(2, self.body['counts']['account_observation_origins'])
         requests = self.body['tables']['account_observation_requests']
         self.assertEqual({'pending', 'committed'}, {row['state'] for row in requests})

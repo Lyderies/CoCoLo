@@ -19,7 +19,7 @@ from .account_observation import ObservationContext
 from .account_open_admission import open_admission_inputs
 from .billing_probe_schema import assert_billing_probe_schema
 from .billing_probe_contracts import (PROBE_COMPLETION_REASONS, PROBE_STEP_REASONS, ProbeAdmissionError,
-    valid_client_version)
+    valid_client_version, valid_probe_retry)
 from .claim_admission import PreparedClaimAdmission, admission_signature_rows, same_admission_inputs
 from .history_contracts import _DIGEST, _ID, _PROJECT, matches, valid_integer
 from .learning_contracts import canonical_json, content_digest, parse_bounded_json_value, validate_learning_record
@@ -547,9 +547,7 @@ class AccountBillingAdmission:
             selected = None
             if latest is not None and judged['decision'] == 'pass':
                 # BR-11: the judged inputs are all kept in `prepared`; the reply cites at most these three.
-                heads = [r for r, _ in prepared['headroom']
-                         if r['account_fingerprint'] == fingerprint and r.get('run_id') is None and r.get('phase') is None]
-                head = max(heads, key=lambda r: r['observed_at_ms'], default=None)  # newest observed, not last stored
+                head = admission_metadata.probe_head(prepared['headroom'], fingerprint, latest)
                 selected = [identity, *([] if head is None else [head]), latest]
                 if repeat and history['probe'] == 'completed' and len(selected) != 3:
                     selected = None  # a completed run's reply needs all three records; none fresh enough
@@ -581,10 +579,11 @@ class AccountBillingAdmission:
                 final = self._commit_reply(row, 'reused', None, selected, result.prepared.rows)
                 appended, yes_kind = None, 'reply'
             if selected is None:
-                cooldown = any(r.record['record_type'] == 'probe_admission'
+                cooldown = max((r.record['observed_at_ms'] for r in result.prepared.rows
+                    if r.record['record_type'] == 'probe_admission'
                     and r.record['provider'] == 'claude' and r.record['decision'] == 'pass'
                     and r.record['account_fingerprint'] == fingerprint and r.record['observed_at_ms'] > now-PROBE_COOLDOWN_MS
-                    for r in result.prepared.rows)
+                    ), default=None)
                 # Owner decision 40 (a): the real problem is reported first; a cooldown names itself only when
                 # nothing else refuses. billing_unverified is the gap the cooling probe itself fills (its bootstrap
                 # is spent), so it is not a real problem and the cooldown names itself.
@@ -602,7 +601,7 @@ class AccountBillingAdmission:
                     decision = {'provider': 'claude', 'decision': 'deny', 'reason_code': 'probe_replay_stale',
                         'admission_basis': None, 'account_fingerprint': fingerprint, 'evidence_digests': [],
                         'observed_at_ms': now}
-                elif cooldown and (decision['decision'] == 'pass' or decision['reason_code'] == 'billing_unverified'):
+                elif cooldown is not None and (decision['decision'] == 'pass' or decision['reason_code'] == 'billing_unverified'):
                     decision = {'provider': 'claude', 'decision': 'deny', 'reason_code': 'probe_cooldown',
                         'admission_basis': None, 'account_fingerprint': fingerprint, 'evidence_digests': [],
                         'observed_at_ms': now}
@@ -639,7 +638,9 @@ class AccountBillingAdmission:
                     if decision['decision'] == 'pass':
                         final, yes_kind = self._update(row, state='admitted'), 'permit'
                     else:
-                        final = self._commit_reply(row, 'denied', decision['reason_code'], [], result.prepared.rows)
+                        final = self._commit_reply(row, 'denied', decision['reason_code'], [], result.prepared.rows,
+                            retry_at=admission_metadata.probe_retry_at(cooldown)
+                                if decision['reason_code'] == 'probe_cooldown' else None)
             # Decision 50 (BR-16, BR-17): every caller callback of this judgment has run when this one returns; the
             # gate follows it in the same transaction and builds the yes. Nothing the caller supplies runs after it.
             self._authorize(reservation.context, reservation.snapshot, reservation.authorize, False)
@@ -1014,9 +1015,10 @@ class AccountBillingAdmission:
             (*(final[n] for n in (*names, 'state_seal')), row['project_id'], row['request_key']))
         return final
 
-    def _commit_reply(self, row, probe, reason, selected, parsed_rows):
+    def _commit_reply(self, row, probe, reason, selected, parsed_rows, *, retry_at=None):
         refs = self._refs(selected, parsed_rows)
-        raw = canonical_json({'probe': probe, 'reason_code': reason, 'records': refs})
+        raw = canonical_json({'probe': probe, 'reason_code': reason, 'records': refs,
+            **({'retry_at': retry_at} if retry_at is not None else {})})
         if len(raw) > 4096:
             raise ProbeAdmissionError()
         return self._update(row, state='committed', references_json=raw.decode())
@@ -1030,8 +1032,10 @@ class AccountBillingAdmission:
         completed = type(value) is dict and value.get('probe') == 'completed'
         # CI-4: a completed probe's row also keeps the client version its init frame reported (rows from
         # before it have none).
-        if (type(value) is not dict or value.keys() - {'client_version'} != ({'probe', 'reason_code', 'records', 'completion_digest'}
+        if (type(value) is not dict or value.keys() - {'client_version', 'retry_at'} != ({'probe', 'reason_code', 'records', 'completion_digest'}
                 if completed else {'probe', 'reason_code', 'records'})
+                or ('retry_at' in value and (value.get('reason_code') != 'probe_cooldown'
+                    or not valid_probe_retry(value['retry_at'])))
                 or ('client_version' in value and not (completed and valid_client_version(value['client_version'])))
                 or value['probe'] not in {'reused', 'denied', 'completed'} or type(value['records']) is not list
                 or (completed and (not matches(value['completion_digest'], _DIGEST)
@@ -1062,6 +1066,8 @@ class AccountBillingAdmission:
             records.append(record)
         reply = {'probe': value['probe'], 'reason_code': value['reason_code'], 'records': records,
             'known': known, 'observed_at_ms': observed_at}
+        if 'retry_at' in value:
+            reply['retry_at'] = value['retry_at']
         if value.get('client_version') is not None:
             reply['client_version'] = value['client_version']
         if len(canonical_json(reply)) > MAX_PROBE_REPLY_BYTES:

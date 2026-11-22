@@ -71,7 +71,11 @@ class AccountObservationSchemaTests(unittest.TestCase):
 
     def assert_old_rows(self, ledger):
         for name, rows in self.before.items():
-            self.assertEqual(rows, [tuple(row) for row in ledger._connection.execute('SELECT * FROM ' + name)], name)
+            columns = [r[1] for r in ledger._connection.execute('PRAGMA table_info(' + name + ')')
+                       if not (name == 'records' and r[1] == 'probe_id')]
+            self.assertEqual(rows, [tuple(row) for row in ledger._connection.execute(
+                'SELECT ' + ','.join(columns) + ' FROM ' + name)], name)
+        self.assertIsNone(ledger._connection.execute('SELECT 1 FROM records WHERE probe_id IS NOT NULL').fetchone())
 
     def test_default_refuses_without_writes_and_explicit_upgrade_keeps_all_original_cells(self):
         self.eleven()
@@ -81,14 +85,14 @@ class AccountObservationSchemaTests(unittest.TestCase):
         self.assertEqual(original, hashlib.sha256(self.state.database.read_bytes()).hexdigest())
         upgraded = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = upgraded
-        self.assertEqual(15, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(16, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(upgraded)
         for name in ('account_observation_origins', 'account_observation_requests'):
             self.assertEqual(0, upgraded._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0])
         project = self.fixture.projects[0]
         upgraded.create_sanitized_backup(project, file_id='schema13', expires_at_ms=time.time_ns() // 1_000_000 + 600_000)
         verified = upgraded.verify_sanitized_backup(project, file_id='schema13')
-        self.assertEqual(15, verified['ledger_schema_version'])  # O0b RS-A (requirement)
+        self.assertEqual(16, verified['ledger_schema_version'])  # O0b RS-A (requirement)
         self.assertEqual(0, verified['counts']['account_observation_requests'])
         self.assertEqual(0, verified['counts']['account_billing_probe_origins'])
         self.assertEqual(0, verified['counts']['account_billing_probe_requests'])
@@ -112,7 +116,7 @@ class AccountObservationSchemaTests(unittest.TestCase):
             Cut(self.state, allow_schema_upgrade=True)
         recovered = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = recovered
-        self.assertEqual(15, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(16, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(recovered)
 
     def twelve(self, *, backups=True):
@@ -142,7 +146,7 @@ class AccountObservationSchemaTests(unittest.TestCase):
         self.assertEqual(original, self.state.database.read_bytes())
         upgraded = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = upgraded
-        self.assertEqual(15, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(16, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(upgraded)
         for name in ('account_billing_probe_origins', 'account_billing_probe_requests'):
             self.assertEqual(0, upgraded._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0])
@@ -173,5 +177,5 @@ class AccountObservationSchemaTests(unittest.TestCase):
                 "'billing_probe_active_machine','billing_probe_active_account')").fetchall())
         recovered = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = recovered
-        self.assertEqual(15, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(16, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(recovered)

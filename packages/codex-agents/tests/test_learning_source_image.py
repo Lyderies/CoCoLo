@@ -210,10 +210,10 @@ class LearningSourceImageTests(unittest.TestCase):
         self.refuse('history_conflict')
 
     def test_schema_version_columns_and_primary_key_are_exact(self):
-        # O0b RS-A (requirement): the image is taken at schema 15, so 16 is the newer one refused.
-        self.connection.execute('PRAGMA user_version=16').close()
+        # PC-4: schema 16 is supported; 17 is newer and refused.
+        self.connection.execute('PRAGMA user_version=17').close()
         self.refuse('history_incompatible')
-        self.connection.execute('PRAGMA user_version=15').close()
+        self.connection.execute('PRAGMA user_version=16').close()
         self.connection.execute('ALTER TABLE sessions ADD COLUMN unexpected TEXT').close()
         self.refuse('history_incompatible')
 
@@ -385,3 +385,11 @@ class LearningSourceImageTests(unittest.TestCase):
             self.refuse('history_conflict')
         with mock.patch.object(self.source.state, 'digest_key', side_effect=[self.key, b'x' * 32]):
             self.refuse('history_conflict')
+
+
+class ProbeSchemaSourceMetadataTests(unittest.TestCase):
+    def test_PC4_schema16_source_metadata_is_supported(self):
+        from codex_agents import project_learning_source as source
+        metadata = {field: 'a'*64 for field in source._FIELDS}
+        metadata.update(project_id='project', ledger_schema_version=16, total_bytes=1)
+        self.assertEqual(metadata, source._metadata(metadata, 'project'))

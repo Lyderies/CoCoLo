@@ -26,6 +26,7 @@ Records are the real ledger's, the signature path is the real worker pool. The o
 ledger's own clock (`ledger._clock_ms`, the one the code reads), call-through spies and injected faults.
 """
 import json
+import secrets
 import os
 import sys
 import threading
@@ -71,7 +72,7 @@ class RejudgeOwnerBase(unittest.TestCase):
     # ---- records, clock, effects -------------------------------------------------------------------
     def store(self, info, *, age=0, run_id=None):
         """Provider records observed `age` ms before the clock, stored now (ingested at the clock)."""
-        options = {} if run_id is None else {'run_id': run_id}
+        options = {'probe_id': secrets.token_hex(32)} if run_id is None else {'run_id': run_id}
         records = claude_rate_limit_records(info, account_fingerprint=self.identity['account_fingerprint'],
                                             observed_at_ms=self.clock-age, **options)
         self.ledger._store_provider_observations(self.fixture.project_id, records, timestamp=self.clock)

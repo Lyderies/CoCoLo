@@ -51,16 +51,29 @@ def decode_billing_probe_input(value):
     return {}
 
 
+def valid_probe_retry(value):
+    from datetime import datetime, timezone
+    if type(value) is not str or not value.endswith('Z'):
+        return False
+    try:
+        return datetime.fromisoformat(value).utcoffset() == timezone.utc.utcoffset(None)
+    except ValueError:
+        return False
+
+
 def checked_billing_probe_reply(value):
     try:
         fields = {'probe', 'reason_code', 'records', 'known', 'observed_at_ms'}
-        if (type(value) is not dict or value.keys() - {'billing_waivers', 'client_version'} != fields
+        if (type(value) is not dict or value.keys() - {'billing_waivers', 'client_version', 'retry_at'} != fields
                 or not valid_client_version(value.get('client_version'))
                 or type(value['probe']) is not str or value['probe'] not in {'reused', 'denied', 'completed'}
                 or type(value['known']) is not bool or not valid_integer(value['observed_at_ms'])
                 or type(value['records']) is not list or len(value['records']) > 3):
             raise ValueError()
         state, reason, records = value['probe'], value['reason_code'], value['records']
+        if 'retry_at' in value and (state != 'denied' or reason != 'probe_cooldown'
+                or not valid_probe_retry(value['retry_at'])):
+            raise ValueError()
         if state == 'denied':
             # A probe settled before its launch is denied with the failed step (0.3.3, C9).
             if (records or type(reason) is not str
