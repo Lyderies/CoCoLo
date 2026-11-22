@@ -526,6 +526,24 @@ class ContainerLaunchTests(unittest.TestCase):
         self.assertIn(int(timeout[0][len('--timeout='):]), (42, 43))
         self.assertIn('--label=cocolo.kind=run', create)
 
+    def test_dec49_the_backstop_is_applied_and_named_when_podman_supports_it(self):
+        self.admit()
+        started = self.start()
+        self.assertTrue(started.timeout_backstop.startswith('applied'), started)
+
+    def test_dec49_a_podman_without_the_run_time_limit_starts_it_without_and_says_why(self):
+        self.admit()
+        self.podman.versions = ('3.4.2', '3.4.2')
+        started = self.start()
+        [create] = self.podman.commands('create')
+        self.assertFalse([arg for arg in create if arg.startswith('--timeout')], create)
+        self.assertTrue(started.timeout_backstop.startswith('skipped'), started)
+        self.assertIn('3.4.2', started.timeout_backstop)
+        self.assertEqual('started', self.journal.entry(self.token)['state'])  # the run still launched
+
+    def test_dec49_the_switch_stays_off(self):
+        self.assertIsNone(container_launch.SETTINGS)
+
     def test_a_container_whose_deadline_podman_did_not_take_is_refused_and_removed(self):
         self.admit()
         self.podman.reported_timeout = 0

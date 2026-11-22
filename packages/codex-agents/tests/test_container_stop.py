@@ -633,52 +633,30 @@ class StopAtServiceExitTests(unittest.TestCase):
 # --------------------------------------------------------------------------------------------
 
 class FakeContainerWatch:
-    def __init__(self):
+    """The container as the watchdog sees it (`process_tree._ContainerWatch`, decision 49): `stop(deadline)`
+    is the watchdog's ONE call of the stop tool and answers from `result` (an exception instance is
+    raised); `record` is where the watchdog writes its result."""
+
+    def __init__(self, record=None):
         self.parent = True
         self.stops = 0
         self.grace = 0
-        self.graces = []  # the grace each try was told it may use (decision 46: capped to the time left)
+        self.name = 'cocolo-run-' + '2' * 32
+        self.record = record
+        self.result = cr.StopResult('gone', 'the container no longer exists')
+        self.deadlines = []
+        self.threads = []
 
     def parent_alive(self):
         return self.parent
 
-    def stop(self):
+    def stop(self, deadline):
         self.stops += 1
-        return cr.StopResult('gone', 'the container no longer exists')
-
-    def stop_try(self, seconds, grace=None):
-        """The watchdog's one bounded try (decision 46: a real container runs it as its own process). This
-        in-process double answers inline, so it can only script answers; hangs use HangingProcessWatch."""
-        self.graces.append(grace)
-        try:
-            return bool(self.stop().gone)
-        except Exception:
-            return False
-
-
-# A stand-in for one stop process that never answers: it records its pid, then sleeps.
-HANG_STOP = ('import os, sys, time\n'
-             'fd = os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)\n'
-             'os.write(fd, (str(os.getpid()) + "\\n").encode())\nos.close(fd)\ntime.sleep(3600)\n')
-
-
-class HangingProcessWatch(FakeContainerWatch):
-    """A container whose every stop try is a real process that hangs; the watchdog's own bounded runner
-    (process_tree.run_stop_process) must end it. Records each pid, so the test can see none survives."""
-
-    def __init__(self, folder):
-        super().__init__()
-        self.log = os.path.join(folder, 'pids')
-
-    def stop_try(self, seconds, grace=None):
-        self.stops += 1
-        self.graces.append(grace)
-        return process_tree.run_stop_process([sys.executable, '-I', '-B', '-c', HANG_STOP, self.log], seconds)
-
-    def pids(self):
-        with contextlib.suppress(FileNotFoundError):
-            return [int(line) for line in Path(self.log).read_text().split()]
-        return []
+        self.deadlines.append(deadline)
+        self.threads.append(threading.current_thread())
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
 
 
 def alive(pid):
@@ -752,143 +730,147 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(0, container.stops)
         self.assertIsNotNone(process.wait(5))
 
-    def scripted_watch(self, results, process, fast=True, **patches):
-        """watch() directly, the service gone, with a container whose stops answer from `results` (an
-        exception instance is raised; an Event blocks until set); records whether the child was alive at each
-        stop. `fast` shortens only the pauses between tries (the retry test); the bound test passes fast=False."""
-        container = FakeContainerWatch()
+    def orphan_watch(self, container, process, **patches):
+        """watch() in this thread, the service gone: the watchdog's whole failure path. Records whether the
+        child was still alive when the stop was called."""
         container.parent = False
         container.alive_at_stop = []
+        original = container.stop
 
-        def stop():
-            container.stops += 1
+        def stop(deadline):
             container.alive_at_stop.append(process.poll() is None)
-            result = results[min(container.stops, len(results)) - 1]
-            if isinstance(result, Exception):
-                raise result
-            if isinstance(result, threading.Event):
-                result.wait(60)
-                return cr.StopResult('stop_failed', 'hung')
-            return result
+            return original(deadline)
 
         container.stop = stop
         tree = process_tree.ProcessTree(process.pid, None)
         self.assertTrue(tree.identify(process_tree.process_table()))
         with contextlib.ExitStack() as stack:
-            if fast:
-                stack.enter_context(mock.patch.object(process_tree, 'WATCHDOG_STOP_BACKOFF_SECONDS',
-                                                      (0.01, 0.01, 0.01)))
             for name, value in patches.items():
                 stack.enter_context(mock.patch.object(process_tree, name, value))
+            container.began = time.monotonic()
             container.returned = process_tree.watch(process.pid, tree.root_birth, time.monotonic() + 60,
                                                     lambda: None, container=container)
+            container.seconds = time.monotonic() - container.began
         return container
 
-    def test_cs2_a_refused_stop_is_retried_and_the_tree_is_killed_only_after_the_container_is_gone(self):
-        gone = cr.StopResult('gone', 'the container no longer exists')
+    def test_dec49_the_stop_is_one_call_never_retried_and_the_tree_is_ended_after_it(self):
+        # Was (decision 46): up to 4 tries with back-offs, each its own process, then a last try. Now (decision
+        # 49): ONE call of the stop tool, in this thread; whatever it answers, no second call.
         refused = cr.StopResult('refused', 'podman is unusable')
-        for first in (refused, cr.StopResult('stop_failed', 'still there'), RuntimeError('podman exploded')):
-            with self.subTest(first=type(first).__name__ if isinstance(first, Exception) else first.outcome):
+        failed = cr.StopResult('stop_failed', 'still there')
+        late = cr.StopResult('deadline', 'the time ran out')
+        for answer, status in ((refused, process_tree.WATCHDOG_EXIT_NOT_GONE),
+                               (failed, process_tree.WATCHDOG_EXIT_NOT_GONE),
+                               (RuntimeError('podman exploded'), process_tree.WATCHDOG_EXIT_NOT_GONE),
+                               (late, process_tree.WATCHDOG_EXIT_DEADLINE)):
+            with self.subTest(answer=answer if isinstance(answer, Exception) else answer.outcome):
                 process, _ = self.child()
-                container = self.scripted_watch([first, gone], process)
-                self.assertEqual(2, container.stops)
-                self.assertEqual([True, True], container.alive_at_stop)  # killed only after the second stop
-                self.assertIs(True, container.returned)
-                self.assertIsNotNone(process.wait(5))
+                container = FakeContainerWatch()
+                container.result = answer
+                threads = threading.active_count()
+                self.orphan_watch(container, process)
+                self.assertEqual(1, container.stops)
+                self.assertEqual([True], container.alive_at_stop)  # the tree is ended only after the stop
+                self.assertEqual([threading.main_thread()], container.threads)  # no helper thread
+                self.assertEqual(threads, threading.active_count())
+                self.assertEqual(status, container.returned)
+                self.assertIsNotNone(process.wait(5))  # and it is ended, whatever the stop answered
 
-    def test_cs2_the_watchdog_stops_trying_after_its_stated_bound_and_still_ends_the_tree(self):
-        # The production attempts and pauses (nothing patched): 4 tries, 1 + 2 + 4 s of pauses, then the one
-        # last try after the tree is ended.
-        failed = cr.StopResult('stop_failed', 'still there')
-        for results in ([failed], [RuntimeError('podman exploded')]):
-            process, _ = self.child()
-            started = time.monotonic()
-            container = self.scripted_watch(results, process, fast=False)
-            seconds = time.monotonic() - started
-            self.assertEqual(process_tree.WATCHDOG_STOP_ATTEMPTS + 1, container.stops)
-            self.assertEqual([True] * process_tree.WATCHDOG_STOP_ATTEMPTS + [False], container.alive_at_stop)
-            self.assertGreaterEqual(seconds, sum(process_tree.WATCHDOG_STOP_BACKOFF_SECONDS))
-            self.assertLess(seconds, process_tree.WATCHDOG_STOP_BUDGET_SECONDS)
-            self.assertIs(False, container.returned)  # not proven gone: visible to the caller and the exit status
-            self.assertIsNotNone(process.wait(5))
-
-    def test_cs2_the_last_try_after_the_tree_is_ended_can_still_remove_the_container(self):
-        failed = cr.StopResult('stop_failed', 'still there')
+    def test_dec49_the_exit_codes_are_distinct_and_zero_only_for_gone_and_the_tree_ended(self):
+        codes = [process_tree.WATCHDOG_EXIT_GONE, process_tree.WATCHDOG_EXIT_NOT_GONE,
+                 process_tree.WATCHDOG_EXIT_TREE_UNCONFIRMED, process_tree.WATCHDOG_EXIT_DEADLINE]
+        self.assertEqual(4, len(set(codes)))
+        self.assertEqual(0, process_tree.WATCHDOG_EXIT_GONE)
+        self.assertNotIn(1, codes)  # 1 stays "could not take the container on" (an exception before the watch)
         process, _ = self.child()
-        container = self.scripted_watch([failed] * 4 + [cr.StopResult('gone', 'gone')], process)
-        self.assertEqual(5, container.stops)
-        self.assertIs(True, container.returned)
-
-    def hanging_process_watch(self):
-        folder = tempfile.mkdtemp(prefix='cocolo-test-', dir=SHORT_TMP)
-        container = HangingProcessWatch(folder)
-        container.parent = False
-
-        def clean():
-            for pid in container.pids():
-                with contextlib.suppress(ProcessLookupError):
-                    os.kill(pid, signal.SIGKILL)
-            shutil.rmtree(folder, ignore_errors=True)
-
-        self.addCleanup(clean)
-        return container
-
-    def test_cs2_a_hanging_stop_cannot_hold_the_tree_past_the_budget(self):
-        # Was: the hung try ran in a thread that was abandoned at the budget, and the test expected the
-        # last try to start while it still ran (r2 M4). Now: each try is its own process, killed on its
-        # timeout, so the first is dead before the last begins.
-        process, tree = self.child()
-        container = self.hanging_process_watch()
-        started = time.monotonic()
-        with mock.patch.object(process_tree, 'WATCHDOG_STOP_BUDGET_SECONDS', 1.0), \
-                mock.patch.object(process_tree, 'WATCHDOG_LAST_STOP_SECONDS', 0.5):
-            returned = process_tree.watch(process.pid, tree, time.monotonic() + 60, lambda: None,
-                                          container=container)
-        seconds = time.monotonic() - started
-        self.assertEqual(2, container.stops)  # the hung try, ended at the budget; then the last try
-        self.assertEqual(2, len(container.pids()))
-        self.assertEqual([], [pid for pid in container.pids() if alive(pid)], 'a stop process outlived watch()')
-        self.assertLess(seconds, 4.0)
-        self.assertIs(False, returned)
+        container = self.orphan_watch(FakeContainerWatch(), process)
+        self.assertEqual(process_tree.WATCHDOG_EXIT_GONE, container.returned)
         self.assertIsNotNone(process.wait(5))
 
-    def test_cs2_each_try_is_capped_to_the_time_left(self):
-        # Was: a thread blocked on an Event, abandoned at the budget. Now: a real hanging process, killed.
-        container = self.hanging_process_watch()
-        started = time.monotonic()
-        with mock.patch.object(process_tree, 'WATCHDOG_STOP_BUDGET_SECONDS', 1.5):
-            self.assertFalse(process_tree._stop_container(container))
-        self.assertLess(time.monotonic() - started, 2.5)
-        self.assertEqual(1, container.stops)
-        self.assertEqual([], [pid for pid in container.pids() if alive(pid)])
-
-    def test_cs2_the_whole_failure_path_fits_the_20_second_allowance(self):
-        # r2 M2: 15 s + grace, the tree's end and a 5 s last try summed to over 20 s. Was: the production
-        # constants summed with a grace of 1 s. Now: the plan the watchdog really follows, for the production
-        # default grace and for a large one (the clock is fixed; the grace is capped to what it leaves).
-        for grace in (1, cr.DEFAULT_GRACE_SECONDS, 60, 3600):
-            with self.subTest(grace=grace):
-                initial, total = process_tree.watchdog_stop_plan(grace)
-                self.assertLessEqual(total, 18.0)  # a margin of 2 s under the 20 s allowance
-                self.assertGreater(initial, process_tree.WATCHDOG_LAST_STOP_SECONDS)
-
-    def test_cs2_a_try_is_told_a_grace_that_fits_the_time_left_and_the_last_try_has_none(self):
-        failed = cr.StopResult('stop_failed', 'still there')
+    def test_dec49_the_stop_gets_one_absolute_deadline_and_the_tree_keeps_a_reserve(self):
+        self.assertEqual(17.0, process_tree.WATCHDOG_STOP_TOTAL_SECONDS)
+        self.assertGreater(process_tree.WATCHDOG_TERMINATE_RESERVE_SECONDS, 0)
         process, _ = self.child()
-        container = self.scripted_watch([failed], process)
-        self.assertEqual(process_tree.WATCHDOG_STOP_ATTEMPTS + 1, len(container.graces))
-        cap = process_tree.WATCHDOG_STOP_BUDGET_SECONDS - process_tree.WATCHDOG_STOP_GRACE_MARGIN_SECONDS
-        self.assertEqual([cap] * process_tree.WATCHDOG_STOP_ATTEMPTS + [0], container.graces)
+        container = self.orphan_watch(FakeContainerWatch(), process)
+        (deadline,) = container.deadlines
+        self.assertAlmostEqual(container.began + process_tree.WATCHDOG_STOP_TOTAL_SECONDS
+                               - process_tree.WATCHDOG_TERMINATE_RESERVE_SECONDS, deadline, delta=1.0)
 
-    def test_cs2_the_stop_process_gets_the_smaller_of_the_configured_grace_and_the_cap(self):
+    def test_cs3_a_stop_that_spends_all_its_time_still_ends_the_tree_inside_the_total(self):
+        process, _ = self.child()
+        container = FakeContainerWatch()
+        late = cr.StopResult('deadline', 'the time ran out')
+
+        def spend(deadline):
+            container.deadlines.append(deadline)
+            time.sleep(max(deadline - time.monotonic(), 0))
+            return late
+
+        container.stop = spend
+        self.orphan_watch(container, process, WATCHDOG_STOP_TOTAL_SECONDS=2.5, WATCHDOG_TERMINATE_RESERVE_SECONDS=1.0)
+        self.assertEqual(process_tree.WATCHDOG_EXIT_DEADLINE, container.returned)
+        self.assertLess(container.seconds, 2.5 + 0.8)
+        self.assertIsNotNone(process.wait(5))
+
+    def test_cs6_a_failed_process_listing_is_retried_then_reported_never_as_a_tree_ended(self):
+        process, _ = self.child()
+        real = process_tree.process_table
+        calls = []
+
+        def flaky(*args, **kwargs):
+            calls.append(1)
+            return real(*args, **kwargs) if len(calls) == 1 else None  # only the first listing (identify) works
+
+        container = self.orphan_watch(FakeContainerWatch(), process, process_table=flaky)
+        self.assertEqual(process_tree.WATCHDOG_EXIT_TREE_UNCONFIRMED, container.returned)
+        self.assertGreaterEqual(len(calls), 4)  # identify, the poll, and the end of the tree asked again
+        self.assertLess(container.seconds, process_tree.WATCHDOG_STOP_TOTAL_SECONDS)
+        self.assertIsNotNone(process.wait(5))  # what it had tracked is still killed
+
+    def record_of(self, path):
+        self.assertEqual(0o600, os.stat(path).st_mode & 0o777)
+        return json.loads(Path(path).read_text())
+
+    def test_dec49_the_result_is_written_durably_whatever_it_was(self):
+        folder = tempfile.mkdtemp(prefix='cocolo-test-', dir=SHORT_TMP)
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        for answer, outcome, status in ((cr.StopResult('gone', 'gone for good'), 'gone', 0),
+                                        (cr.StopResult('stop_failed', 'still there'), 'stop_failed',
+                                         process_tree.WATCHDOG_EXIT_NOT_GONE),
+                                        (cr.StopResult('deadline', 'the time ran out'), 'deadline',
+                                         process_tree.WATCHDOG_EXIT_DEADLINE),
+                                        (RuntimeError('podman exploded'), 'error',
+                                         process_tree.WATCHDOG_EXIT_NOT_GONE)):
+            with self.subTest(outcome=outcome):
+                process, _ = self.child()
+                container = FakeContainerWatch(record=os.path.join(folder, outcome + '.json'))
+                container.result = answer
+                synced = []
+                real = os.fsync
+                with mock.patch.object(os, 'fsync', lambda fd: synced.append(fd) or real(fd)):
+                    self.orphan_watch(container, process)
+                self.assertGreaterEqual(len(synced), 2)  # the file, then its folder
+                record = self.record_of(container.record)
+                self.assertEqual(container.name, record['name'])
+                self.assertEqual(outcome, record['outcome'])
+                self.assertEqual(status, record['exit'])
+                self.assertIn(str(answer) if isinstance(answer, Exception) else answer.detail, record['detail'])
+        self.assertFalse([name for name in os.listdir(folder) if name.startswith('.')])
+
+    def test_dec49_nothing_is_written_while_the_service_lives(self):
+        folder = tempfile.mkdtemp(prefix='cocolo-test-', dir=SHORT_TMP)
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        process, birth = self.child('0.3')
+        container = FakeContainerWatch(record=os.path.join(folder, 'record.json'))
+        self.watch(process, birth, container).join(10)
+        self.assertEqual([], os.listdir(folder))
+
+    def watcher(self, **changes):
         config = {'project': CONTAINER_PROJECT, 'prefix': cr.DEFAULT_NAME_PREFIX, 'podman': '/opt/example/podman',
-                  'global': [], 'name': 'cocolo-run-' + '2' * 32, 'grace': 60, 'cgroup': None, 'parent': 99_999_999}
-        watcher = process_tree.container_watcher(json.dumps(config))
-        for asked, expected in ((7, 7), (0, 0), (100, 60)):
-            seen = []
-            with mock.patch.object(process_tree, 'run_stop_process', lambda argv, seconds: seen.append(argv) or True):
-                self.assertTrue(watcher.stop_try(5.0, asked))
-            self.assertEqual(expected, json.loads(seen[0][-1])['grace'])
+                  'global': [], 'name': 'cocolo-run-' + '2' * 32, 'grace': 2, 'cgroup': None,
+                  'parent': os.getppid(),  # in the watchdog, the service is its parent
+                  'run': 'lnc_' + '1' * 32, 'record': None, **changes}
+        return config, process_tree.container_watcher(json.dumps(config))
 
     def test_the_launcher_gives_the_watchdog_the_container_and_podman_environment(self):
         launcher = stop_launcher(self, grace_seconds=3)
@@ -902,32 +884,65 @@ class WatchdogTests(unittest.TestCase):
         argument = json.loads(config['argument'])
         self.assertEqual({'project': CONTAINER_PROJECT, 'prefix': cr.DEFAULT_NAME_PREFIX,
                           'podman': '/opt/example/podman', 'global': ['--url', 'unix:///run/x.sock'],
-                          'name': started.name, 'grace': 3, 'cgroup': started.cgroup_path, 'parent': os.getpid()},
-                         argument)
+                          'name': started.name, 'grace': 3, 'cgroup': started.cgroup_path, 'parent': os.getpid(),
+                          'run': started.token,  # decision 49: the run label the stop checks before it stops
+                          'record': str(launcher.journal.watchdog_result_path(started.token))}, argument)
         self.assertEqual('/var/empty/cocolo-home', config['environment']['HOME'])
         self.assertEqual('/run/user/501', config['environment']['XDG_RUNTIME_DIR'])
         # Over the fake podman there is no client to hand over: the watchdog guards only the attach.
         self.assertIsNone(launcher.watchdog_config(started))
 
-    def test_the_watchdog_stops_through_container_runtime_stop(self):
-        config = {'project': CONTAINER_PROJECT, 'prefix': cr.DEFAULT_NAME_PREFIX, 'podman': '/opt/example/podman',
-                  'global': [], 'name': 'cocolo-run-' + '2' * 32, 'grace': 2, 'cgroup': None,
-                  'parent': os.getppid()}  # in the watchdog, the service is its parent
-        watcher = process_tree.container_watcher(json.dumps(config))
+    def test_dec49_the_result_record_goes_with_its_entry(self):
+        launcher = stop_launcher(self)
+        token = write_intent(launcher)
+        path = launcher.journal.watchdog_result_path(token)
+        self.assertEqual(os.path.dirname(path), str(launcher.journal.directory))
+        self.assertFalse(path.name.endswith('.json'))  # never mistaken for an entry file
+        self.assertEqual(sorted(launcher.journal.tokens() or []), [token])
+        path.write_text('{}')
+        launcher.journal.remove(token)
+        self.assertFalse(path.exists())
+        token = write_intent(launcher)
+        launcher.journal.admitted(token, BRIDGE, deadline_ms())
+        launcher.journal.watchdog_result_path(token).write_text('{}')
+        launcher.journal.settled(token, 'settled')
+        self.assertFalse(launcher.journal.watchdog_result_path(token).exists())
+
+    def test_the_watchdog_stops_through_container_runtime_stop_and_checks_the_run_label_first(self):
+        config, watcher = self.watcher()
         self.assertTrue(watcher.parent_alive())
         self.assertEqual('container_runtime.py', os.path.basename(sys.modules[type(watcher.runtime).__module__]
                                                                   .__file__))
         host = FakeHostFiles()
         podman = TimeoutPodman(host)
-        podman.add_container(config['name'], {cr.PROJECT_LABEL: CONTAINER_PROJECT})
         watcher.runtime.runner, watcher.runtime.host_files = podman, host
-        result = watcher.stop()
+        # Another run's container under this name (the project label right, the run label not): left alone.
+        podman.add_container(config['name'], {cr.PROJECT_LABEL: CONTAINER_PROJECT, cr.RUN_LABEL: 'lnc_' + '9' * 32})
+        result = watcher.stop(time.monotonic() + 30)
+        self.assertEqual('stop_failed', result.outcome)
+        self.assertEqual([], podman.commands('stop'))
+        podman.containers.clear()
+        podman.add_container(config['name'], {cr.PROJECT_LABEL: CONTAINER_PROJECT, cr.RUN_LABEL: config['run']})
+        result = watcher.stop(time.monotonic() + 30)
         self.assertEqual('gone', result.outcome)
         self.assertEqual([('stop', '--time=2', config['name'])], podman.commands('stop'))
         for bad in ({**config, 'name': '../x'}, {**config, 'podman': 'podman'}, {**config, 'grace': -1},
-                    {k: v for k, v in config.items() if k != 'parent'}):
+                    {**config, 'run': 'x y'}, {**config, 'record': 'relative.json'}, {**config, 'record': 5},
+                    {k: v for k, v in config.items() if k != 'parent'},
+                    {k: v for k, v in config.items() if k != 'run'},
+                    {k: v for k, v in config.items() if k != 'record'}):
             with self.assertRaises(ValueError):
                 process_tree.container_watcher(json.dumps(bad))
+
+    def test_cs4_the_watchdogs_stop_passes_its_deadline_so_the_grace_is_capped_by_the_time_left(self):
+        config, watcher = self.watcher(grace=60)
+        host = FakeHostFiles()
+        podman = TimeoutPodman(host)
+        watcher.runtime.runner, watcher.runtime.host_files = podman, host
+        podman.add_container(config['name'], {cr.PROJECT_LABEL: CONTAINER_PROJECT, cr.RUN_LABEL: config['run']})
+        self.assertEqual('gone', watcher.stop(time.monotonic() + 10.5).outcome)
+        (command,) = podman.commands('stop')
+        self.assertEqual(('stop', '--time=6'), command[:2])  # 10.5 s less the 4 s margin, whole seconds
 
 
 class WatchdogArmedProbeTests(unittest.TestCase):
@@ -954,12 +969,11 @@ class WatchdogArmedProbeTests(unittest.TestCase):
 
 
 # The container stand-in for the production path: a podman client that is a real script (the watchdog runs
-# it through container_runtime.SubprocessPodman, in a process of its own). Each `stop` logs its pid, its
-# parent and how many earlier stops were still alive. Modes: hang (a stop never answers), ok (gone after one
-# stop), refuse-once (the first inspect says podman is unreachable, then ok).
+# it through container_runtime.SubprocessPodman). Modes: ok (gone after one stop), hang (the stop never
+# answers and leaves a child of its own behind), refuse (podman unreachable). The labels are the container's.
 FAKE_PODMAN = r"""#!@PYTHON@
 import json, os, sys, time
-folder, mode = @FOLDER@, @MODE@
+folder, mode, labels = @FOLDER@, @MODE@, @LABELS@
 args = sys.argv[1:]
 log, gone = os.path.join(folder, 'log'), os.path.join(folder, 'gone')
 
@@ -969,57 +983,58 @@ def note(text):
     os.close(fd)
 
 if args[:2] == ['container', 'inspect']:
-    refused = os.path.join(folder, 'refused')
-    if mode == 'refuse-once' and not os.path.exists(refused):
-        open(refused, 'w').close()
+    note('inspect %d' % os.getpid())
+    if mode == 'refuse':
         sys.stderr.write('Error: cannot connect to Podman')
         sys.exit(125)
     if os.path.exists(gone):
         sys.stderr.write('Error: no such container')
         sys.exit(1)
-    print(json.dumps([{'State': {'Status': 'running'}, 'Config': {'Labels': {}}}]))
+    print(json.dumps([{'State': {'Status': 'running'}, 'Config': {'Labels': labels}}]))
 elif args[:1] == ['stop']:
-    earlier = []
-    if os.path.exists(log):
-        earlier = [int(line.split()[1]) for line in open(log) if line.startswith('start')]
-    overlap = 0
-    for pid in earlier:
-        try:
-            os.kill(pid, 0)
-            overlap += 1
-        except ProcessLookupError:
-            pass
-    note('start %d %d overlap=%d %s' % (os.getpid(), os.getppid(), overlap, args[1]))
+    note('start %d %d %s' % (os.getpid(), os.getppid(), args[1]))
     if mode == 'hang':
-        time.sleep(3600)
+        child = os.fork()
+        if child == 0:  # podman's own child, with its pipes closed: it must not outlive the stop either
+            null = os.open(os.devnull, os.O_RDWR)
+            for number in (0, 1, 2):
+                os.dup2(null, number)
+            time.sleep(600)
+            os._exit(0)
+        note('child %d' % child)
+        time.sleep(600)
     open(gone, 'w').close()
-    note('end %d' % os.getpid())
 """
 
 
 class WatchdogProductionPathTests(unittest.TestCase):
-    """Decision 46: the real watchdog process (process_tree.py as a script, as the bridge starts it), the
-    service dead, over a real podman-shaped client. Checks the exit status, the processes and the time."""
+    """Decision 49: the real watchdog process (process_tree.py as a script, as the bridge starts it), the
+    service dead, over a real podman-shaped client: the exit status, the written result, the processes, the time."""
+
+    RUN = 'lnc_' + '1' * 32
+    LABELS = {cr.PROJECT_LABEL: 'cocolo-test-x', cr.RUN_LABEL: RUN}
 
     def setUp(self):
         self.folder = tempfile.mkdtemp(prefix='cocolo-test-', dir=SHORT_TMP)
         self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
         self.addCleanup(self.kill_logged)
+        self.record = os.path.join(self.folder, 'record.json')
 
-    def logged(self):
+    def rows(self, kind):
         path = os.path.join(self.folder, 'log')
         rows = [line.split() for line in Path(path).read_text().splitlines()] if os.path.exists(path) else []
-        return [row for row in rows if row[0] == 'start']
+        return [row for row in rows if row[0] == kind]
 
     def kill_logged(self):
-        for row in self.logged():
+        for row in self.rows('start') + self.rows('child'):
             with contextlib.suppress(ProcessLookupError):
                 os.kill(int(row[1]), signal.SIGKILL)
 
-    def run_watchdog(self, mode, limit=40, grace=1):
+    def start_watchdog(self, mode, grace=1, labels=None):
         podman = os.path.join(self.folder, 'podman')
         Path(podman).write_text(FAKE_PODMAN.replace('@PYTHON@', sys.executable)
-                                .replace('@FOLDER@', repr(self.folder)).replace('@MODE@', repr(mode)))
+                                .replace('@FOLDER@', repr(self.folder)).replace('@MODE@', repr(mode))
+                                .replace('@LABELS@', repr(labels or self.LABELS)))
         os.chmod(podman, 0o700)
         child = subprocess.Popen(['/bin/sleep', '600'], start_new_session=True)
         self.addCleanup(child.wait)
@@ -1028,65 +1043,89 @@ class WatchdogProductionPathTests(unittest.TestCase):
         self.assertTrue(wait_until(lambda: tree.identify(process_tree.process_table()), 5))
         config = {'project': 'cocolo-test-x', 'prefix': cr.DEFAULT_NAME_PREFIX, 'podman': podman, 'global': [],
                   'name': 'cocolo-run-' + '2' * 32, 'grace': grace, 'cgroup': None,
-                  'parent': 99_999_999}  # not this test: the service is dead
-        started = time.monotonic()
+                  'parent': 99_999_999,  # not this test: the service is dead
+                  'run': self.RUN, 'record': self.record}
+        self.started = time.monotonic()
         watchdog = subprocess.Popen(
             [sys.executable, '-I', '-B', '-S', '-X', 'pycache_prefix=/dev/null', process_tree.__file__,
              str(child.pid), tree.root_birth, repr(time.monotonic() + 600), '--container', json.dumps(config)],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True, env={'PATH': os.defpath})
         self.addCleanup(lambda: watchdog.poll() is None and watchdog.kill())
+        return child, watchdog
+
+    def run_watchdog(self, mode, limit=40, **options):
+        child, watchdog = self.start_watchdog(mode, **options)
         status = watchdog.wait(limit)
-        return status, time.monotonic() - started, child, watchdog
+        return status, time.monotonic() - self.started, child, watchdog
 
-    def test_a_stop_that_never_answers_ends_nonzero_in_under_20_seconds_with_no_process_left(self):
-        status, seconds, child, _ = self.run_watchdog('hang')
-        self.assertEqual(1, status)  # not proven gone: the exit status the bridge's reap() reads
-        self.assertLess(seconds, 18.0)  # the whole failure path, with a 2 s margin under the 20 s allowance
-        self.assertGreater(seconds, 8.0)  # it did try for its budget
-        rows = self.logged()
-        self.assertEqual(2, len(rows), rows)  # the budget's try and the last try
-        self.assertEqual(['overlap=0'] * 2, [row[3] for row in rows], 'two stops ran at once')
+    def written(self):
+        self.assertEqual(0o600, os.stat(self.record).st_mode & 0o777)
+        return json.loads(Path(self.record).read_text())
+
+    def assert_dead(self, rows):
         for row in rows:
-            self.assertTrue(wait_until(lambda: not alive(int(row[1])), 3), f'stop process {row[1]} outlived the watchdog')
-        self.assertIsNotNone(child.wait(5))  # the tree is ended
+            self.assertTrue(wait_until(lambda: not alive(int(row[1])), 3), f'process {row[1]} outlived the watchdog')
 
-    def assert_hung_stop_fits(self, grace):
-        # r2 M2 / decision 46: the whole failure path, grace included, under 20 s for ANY grace. The stop
-        # never answers, so the budget's try is killed and the last try (a kill with no grace) runs after it.
-        status, seconds, child, _ = self.run_watchdog('hang', limit=45, grace=grace)
-        self.assertEqual(1, status)
-        self.assertLess(seconds, 18.0)
-        rows = self.logged()
-        self.assertEqual(2, len(rows), rows)
-        self.assertEqual(['overlap=0'] * 2, [row[3] for row in rows])
-        first, last = (int(row[4].split('=')[1]) for row in rows)
-        self.assertLessEqual(first, min(grace, 7))  # never longer than the grace the time left can hold
-        self.assertEqual(0, last)  # the last try is a kill with no grace
-        for row in rows:
-            self.assertTrue(wait_until(lambda: not alive(int(row[1])), 3))
-        self.assertIsNotNone(child.wait(5))
-
-    def test_the_failure_path_is_under_20_seconds_with_the_default_grace(self):
-        self.assert_hung_stop_fits(cr.DEFAULT_GRACE_SECONDS)
-
-    def test_the_failure_path_is_under_20_seconds_with_a_large_grace(self):
-        self.assert_hung_stop_fits(60)
-
-    def test_each_stop_try_runs_in_its_own_process_and_a_retry_can_still_succeed(self):
-        status, seconds, child, watchdog = self.run_watchdog('refuse-once')
-        self.assertEqual(0, status)
-        self.assertLess(seconds, 10.0)
-        rows = self.logged()
-        self.assertEqual(1, len(rows), rows)  # the first try was refused before any stop; the second stopped it
-        self.assertNotEqual(str(watchdog.pid), rows[0][2], 'podman ran as a child of the watchdog, not of a try process')
-        self.assertIsNotNone(child.wait(5))
-
-    def test_a_stop_that_succeeds_exits_zero(self):
+    def test_a_stop_that_succeeds_exits_zero_with_one_stop_and_a_written_result(self):
         status, seconds, child, watchdog = self.run_watchdog('ok')
-        self.assertEqual(0, status)
-        self.assertEqual(1, len(self.logged()))
-        self.assertNotEqual(str(watchdog.pid), self.logged()[0][2])
+        self.assertEqual(process_tree.WATCHDOG_EXIT_GONE, status)
+        self.assertLess(seconds, 10.0)
+        (start,) = self.rows('start')
+        self.assertEqual('--time=1', start[3])
+        self.assertIsNotNone(child.wait(5))  # the tree is ended
+        record = self.written()
+        self.assertEqual(('gone', 0), (record['outcome'], record['exit']))
+        self.assertEqual('cocolo-run-' + '2' * 32, record['name'])
+
+    def test_the_stop_is_told_a_grace_that_fits_the_time_left(self):
+        status, _, child, _ = self.run_watchdog('ok', grace=3600)
+        self.assertEqual(process_tree.WATCHDOG_EXIT_GONE, status)
+        (start,) = self.rows('start')
+        cap = process_tree.WATCHDOG_STOP_TOTAL_SECONDS - process_tree.WATCHDOG_TERMINATE_RESERVE_SECONDS \
+            - cr.STOP_GRACE_MARGIN_SECONDS
+        self.assertLessEqual(int(start[3].split('=')[1]), cap)
+        self.assertGreaterEqual(int(start[3].split('=')[1]), cap - 2)
+        self.assertIsNotNone(child.wait(5))
+
+    def test_a_stop_that_never_answers_ends_by_the_total_with_a_deadline_status_and_nothing_left(self):
+        status, seconds, child, _ = self.run_watchdog('hang')
+        self.assertEqual(process_tree.WATCHDOG_EXIT_DEADLINE, status)
+        total = process_tree.WATCHDOG_STOP_TOTAL_SECONDS
+        self.assertLess(seconds, total + 2.0)  # the whole failure path, reap included, inside its total
+        self.assertGreater(seconds, total - process_tree.WATCHDOG_TERMINATE_RESERVE_SECONDS - 3.0)  # it used its time
+        starts = self.rows('start')
+        self.assertEqual(1, len(starts), 'the stop was tried again')
+        self.assert_dead(starts + self.rows('child'))  # the stop's podman and the child it left behind
+        self.assertIsNotNone(child.wait(5))  # the tree is ended
+        record = self.written()  # "not gone" is kept for whatever asks the OS next
+        self.assertEqual(('deadline', process_tree.WATCHDOG_EXIT_DEADLINE), (record['outcome'], record['exit']))
+        print(f'\n[decision 49] hung stop: watchdog exit {status} after {seconds:.2f} s (total {total} s)',
+              file=sys.stderr)
+
+    def test_cs1_a_watchdog_killed_in_the_middle_of_a_stop_leaves_no_process_of_that_stop(self):
+        child, watchdog = self.start_watchdog('hang')
+        self.assertTrue(wait_until(lambda: self.rows('child'), 15), 'the stop never started')
+        starts, children = self.rows('start'), self.rows('child')
+        watchdog.kill()  # SIGKILL: nothing in its own code runs again
+        watchdog.wait(10)
+        self.assert_dead(starts + children)
+
+    def test_an_unreachable_podman_is_one_call_and_exits_not_gone_with_the_result_written(self):
+        status, seconds, child, _ = self.run_watchdog('refuse')
+        self.assertEqual(process_tree.WATCHDOG_EXIT_NOT_GONE, status)
+        self.assertLess(seconds, 10.0)
+        self.assertEqual(1, len(self.rows('inspect')), 'podman was asked again')
+        self.assertEqual([], self.rows('start'))
+        self.assertEqual('refused', self.written()['outcome'])
+        self.assertIsNotNone(child.wait(5))  # the tree is still ended
+
+    def test_a_container_that_is_not_this_runs_is_left_alone(self):
+        status, _, child, _ = self.run_watchdog('ok', labels={cr.PROJECT_LABEL: 'cocolo-test-x',
+                                                              cr.RUN_LABEL: 'lnc_' + '9' * 32})
+        self.assertEqual(process_tree.WATCHDOG_EXIT_NOT_GONE, status)
+        self.assertEqual([], self.rows('start'))  # the run label is checked before anything is stopped
+        self.assertEqual('stop_failed', self.written()['outcome'])
         self.assertIsNotNone(child.wait(5))
 
 

@@ -14,14 +14,18 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import unittest
+from unittest import mock
 
 import tests.support  # noqa: F401
-from tests.support import SHORT_TMP
+from tests.support import ORCHESTRATION_ROOT, SHORT_TMP
 
 from codex_agents import container_runtime as cr
 
@@ -88,6 +92,9 @@ class FakePodman:
         self.status_overrides: dict[str, str] = {}
         self.extra_ps_rows: list[dict] = []
         self.on_create = None
+        # Decision 49: `podman version` (the client and the server it talks to), for the --timeout backstop check.
+        self.versions = ("6.1.0", "6.1.4")  # (client, server); a None server is a client that cannot reach one
+        self.version_fails = False
         self._next = 1
 
     # -- helpers
@@ -196,6 +203,12 @@ class FakePodman:
                 "`podman system connection list`, or try `podman machine init` and `podman machine start`"
                 "\nError: unable to connect to Podman socket: dial unix /x.sock: connect: no such file"))
         head = args[0]
+        if head == "version":
+            if self.version_fails:
+                return cr.PodmanResult(125, "", "Error: version failed")
+            client, server = self.versions
+            return cr.PodmanResult(0, json.dumps({"Client": {"Version": client},
+                                                  **({"Server": {"Version": server}} if server else {})}), "")
         if head == "network" and args[1] == "inspect":
             name = args[-1]
             if name not in self.networks:
@@ -759,6 +772,333 @@ class UnavailablePodmanTests(RuntimeCase):
         runtime = cr.ContainerRuntime(self.project, runner=runner, host_files=self.host)
         self.assertEqual("podman_missing", runtime.gone("x").refusal.reason)
         self.assertEqual("podman_missing", runtime.sweep_orphans(set()).refusal.reason)
+
+
+# --------------------------------------------------------------------------------------------
+# Decision 49: the one stop tool carries CS-1..CS-6 of ANALYSIS-0.4.0-container-stop.md. (Their numbers
+# are that analysis's; the CS-1..CS-6 of this module's docstring are the container primitive's own.)
+# --------------------------------------------------------------------------------------------
+
+class SlowPodman(FakePodman):
+    """The fake podman on a fake clock: each command takes `delays[head]` seconds of it and records the
+    clock when it started and the time limit it was given."""
+
+    def __init__(self, host, clock):
+        super().__init__(host)
+        self.clock = clock
+        self.delays: dict[str, float] = {}
+        self.timed: list[tuple[tuple[str, ...], float, float]] = []  # (args, clock at the start, timeout given)
+
+    def __call__(self, args, timeout):
+        args = tuple(args)
+        self.timed.append((args, self.clock.now, timeout))
+        self.clock.now += self.delays.get("inspect" if args[0] == "container" else args[0], 0.0)
+        return super().__call__(args, timeout)
+
+
+class StopToolDeadlineTests(RuntimeCase):
+    """CS-3 one absolute deadline, CS-4 grace capped by the time left, CS-5 errors reported, CS-6 truthful."""
+
+    def setUp(self):
+        super().setUp()
+        self.podman = SlowPodman(self.host, self.clock)
+        self.runtime = self.make_runtime()
+        launched = self.launch()
+        self.assertTrue(launched.ok, launched)
+        self.name, self.cgroup = launched.identity.name, launched.cgroup_path
+        self.podman.calls.clear()
+        self.podman.timed.clear()
+
+    def stop(self, seconds, **options):
+        self.deadline = self.clock.now + seconds
+        return self.runtime.stop(self.name, cgroup_path=self.cgroup, deadline=self.deadline, **options)
+
+    def test_cs3_no_command_is_given_more_time_than_the_deadline_leaves(self):
+        self.podman.delays.update({"inspect": 1.0, "stop": 5.0, "rm": 1.0})
+        result = self.stop(17, grace_seconds=10)
+        self.assertEqual("gone", result.outcome, result)
+        self.assertTrue(self.podman.timed)
+        for args, started, limit in self.podman.timed:
+            self.assertLessEqual(started + limit, self.deadline, f"{args} could run past the deadline")
+
+    def test_cs3_a_stop_that_spends_the_time_ends_as_deadline_and_starts_nothing_after_it(self):
+        self.podman.delays["stop"] = 20.0  # the clock is past the deadline when podman stop returns
+        result = self.stop(17, grace_seconds=10)
+        self.assertEqual("deadline", result.outcome, result)
+        self.assertFalse(result.gone)
+        self.assertIn("hold its slot", result.detail)
+        for args, started, _ in self.podman.timed:
+            self.assertLess(started, self.deadline, f"{args} was started after the deadline")
+        self.assertEqual([], self.podman.commands("rm"))
+
+    def test_cs3_a_command_the_deadline_cut_short_is_the_deadline_not_a_hung_podman(self):
+        self.podman.time_out = True  # every command ends by its time limit
+        result = self.stop(5, grace_seconds=0)
+        self.assertEqual("deadline", result.outcome, result)
+        self.assertIsNone(result.refusal)
+
+    def test_cs3_a_deadline_already_passed_starts_no_command(self):
+        result = self.runtime.stop(self.name, cgroup_path=self.cgroup, deadline=self.clock.now - 1)
+        self.assertEqual("deadline", result.outcome, result)
+        self.assertEqual([], self.podman.calls)
+
+    def test_cs4_the_grace_is_the_smaller_of_the_grace_and_the_time_left_less_the_margin(self):
+        for seconds, grace, expected in ((17, 20, 13), (17, 10, 10), (6, 10, 2), (3, 10, 0)):
+            with self.subTest(seconds=seconds, grace=grace):
+                self.clock.now += 100
+                launched = self.launch(self.spec(run_id="run:" + secrets.token_hex(8)))
+                self.assertTrue(launched.ok, launched)
+                self.podman.calls.clear()
+                result = self.runtime.stop(launched.identity.name, grace_seconds=grace,
+                                           deadline=self.clock.now + seconds)
+                self.assertEqual("gone", result.outcome, result)
+                self.assertEqual(("stop", f"--time={expected}", launched.identity.name),
+                                 self.podman.commands("stop")[0])
+        self.assertEqual(4.0, cr.STOP_GRACE_MARGIN_SECONDS)
+
+    def test_cs4_the_grace_shrinks_with_the_time_spent_before_it(self):
+        self.podman.delays["inspect"] = 4.0  # the first look at the container takes 4 s of the 10
+        result = self.stop(10, grace_seconds=10)
+        self.assertEqual("gone", result.outcome, result)
+        self.assertEqual(("stop", "--time=2", self.name), self.podman.commands("stop")[0])  # 10 - 4 - margin 4
+
+    def test_cs5_a_failed_removal_is_named_in_the_answer(self):
+        self.podman.stop_does_nothing = True
+        self.podman.rm_fails = True
+        result = self.stop(30, gone_timeout=2, grace_seconds=0)
+        self.assertEqual("stop_failed", result.outcome, result)
+        self.assertIn("resource busy", result.detail)  # podman's own words, not swallowed
+
+    def test_cs6_an_unreadable_container_state_is_never_gone(self):
+        original = self.podman.__call__
+
+        def garbled(args, timeout):
+            if args[0] == "container":
+                return cr.PodmanResult(0, "this is not json", "")
+            return original(args, timeout)
+
+        self.runtime.runner = garbled
+        result = self.stop(30, gone_timeout=2, grace_seconds=0)
+        self.assertFalse(result.gone, result)
+        self.assertEqual("refused", result.outcome)
+
+
+FAKE_PODMAN_SCRIPT = r"""#!@PYTHON@
+import json, os, sys, time
+folder = @FOLDER@
+args = sys.argv[1:]
+
+def note(text):
+    fd = os.open(os.path.join(folder, 'log'), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    os.write(fd, (text + chr(10)).encode())
+    os.close(fd)
+
+mode = open(os.path.join(folder, 'mode')).read().strip()
+note('call %d %s' % (os.getpid(), ' '.join(args[:2])))
+gone = os.path.join(folder, 'gone')
+if mode == 'ok' and args[:1] in (['stop'], ['rm']):
+    open(gone, 'w').close()
+elif args[:2] == ['container', 'inspect'] and mode != 'hang-inspect':
+    if os.path.exists(gone):
+        sys.stderr.write('Error: no such container')
+        sys.exit(1)
+    print(json.dumps([{'State': {'Status': 'running'}, 'Config': {'Labels': {}}}]))
+elif mode in ('leave-child', 'hang', 'hang-inspect'):
+    child = os.fork()
+    if child == 0:  # a process of podman's own group that podman leaves behind, with its pipes closed
+        null = os.open(os.devnull, os.O_RDWR)
+        for number in (0, 1, 2):
+            os.dup2(null, number)
+        time.sleep(600)
+        os._exit(0)
+    note('child %d' % child)
+    if mode != 'leave-child':
+        time.sleep(600)
+"""
+
+KILLABLE_STOP_TOOL = textwrap.dedent('''
+    import sys
+    sys.path.insert(0, sys.argv[1])
+    from codex_agents import container_runtime as cr
+    cr.SubprocessPodman(sys.argv[2])(["stop", "x"], 120)
+''')
+
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def wait_for(predicate, seconds):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+class StopToolProcessTests(unittest.TestCase):
+    """CS-1, CS-2, CS-3 and CS-5 for the processes the stop tool starts: a real podman-shaped script, run
+    through `SubprocessPodman` as the supervisor, the health check and the watchdog run it."""
+
+    def setUp(self):
+        self.folder = tempfile.mkdtemp(prefix="cocolo-test-", dir=SHORT_TMP)
+        self.addCleanup(self.cleanup)
+        self.podman = os.path.join(self.folder, "podman")
+        Path(self.podman).write_text(FAKE_PODMAN_SCRIPT.replace("@PYTHON@", sys.executable)
+                                     .replace("@FOLDER@", repr(self.folder)))
+        os.chmod(self.podman, 0o700)
+
+    def cleanup(self):
+        for pid in self.pids("call") + self.pids("child"):
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(pid, signal.SIGKILL)
+        shutil.rmtree(self.folder, ignore_errors=True)
+
+    def mode(self, mode):
+        Path(self.folder, "mode").write_text(mode)
+
+    def pids(self, kind):
+        path = Path(self.folder, "log")
+        rows = [line.split() for line in path.read_text().splitlines()] if path.exists() else []
+        return [int(row[1]) for row in rows if row[0] == kind]
+
+    def runtime(self):
+        return cr.ContainerRuntime("cocolo-test-x", runner=cr.SubprocessPodman(self.podman),
+                                   host_files=FakeHostFiles())
+
+    def test_cs2_a_child_left_behind_by_a_podman_that_exited_is_dead_when_the_call_returns(self):
+        self.mode("leave-child")
+        result = cr.SubprocessPodman(self.podman)(["stop", "x"], 20)
+        self.assertEqual(0, result.returncode)
+        (child,) = self.pids("child")
+        self.assertTrue(wait_for(lambda: not pid_alive(child), 3), "the child of an exited podman outlived the call")
+
+    def test_cs1_killing_the_process_that_runs_podman_leaves_no_podman_process(self):
+        self.mode("hang")
+        tool = subprocess.Popen([sys.executable, "-B", "-c", KILLABLE_STOP_TOOL, str(ORCHESTRATION_ROOT),
+                                 self.podman], stdin=subprocess.DEVNULL, start_new_session=True)
+        self.addCleanup(tool.wait)
+        self.addCleanup(lambda: tool.poll() is None and tool.kill())
+        self.assertTrue(wait_for(lambda: self.pids("child"), 15), "podman never started")
+        (podman,), (child,) = self.pids("call"), self.pids("child")
+        os.kill(tool.pid, signal.SIGKILL)
+        tool.wait(10)
+        self.assertTrue(wait_for(lambda: not pid_alive(podman) and not pid_alive(child), 5),
+                        "a process the stop tool started outlived the stop tool")
+
+    def test_cs3_the_deadline_ends_a_hanging_podman_inside_the_time_given_and_leaves_nothing(self):
+        self.mode("hang")
+        runtime = self.runtime()
+        started = time.monotonic()
+        result = runtime.stop("cocolo-run-x", grace_seconds=0, deadline=started + 3.0)
+        seconds = time.monotonic() - started
+        self.assertEqual("deadline", result.outcome, result)
+        self.assertLess(seconds, 3.5)  # the reap is inside the deadline, not after it
+        self.assertGreater(seconds, 1.0)
+        self.assertEqual(1, len(self.pids("call")), "a second command started")
+        for pid in self.pids("call") + self.pids("child"):
+            self.assertTrue(wait_for(lambda: not pid_alive(pid), 3), f"process {pid} outlived the stop")
+
+    def test_cs5_a_failed_kill_of_the_group_is_reported_and_no_later_command_starts(self):
+        self.mode("ok")
+        with mock.patch.object(cr.os, "killpg", side_effect=PermissionError(1, "Operation not permitted")):
+            result = self.runtime().stop("cocolo-run-x", grace_seconds=0)
+        self.assertEqual("refused", result.outcome, result)
+        self.assertEqual("podman_cleanup_failed", result.refusal.reason)
+        self.assertFalse(result.gone)
+        self.assertEqual(1, len(self.pids("call")))
+
+    def test_cs5_a_group_already_empty_is_not_an_error(self):
+        self.mode("ok")
+        with mock.patch.object(cr.os, "killpg", side_effect=ProcessLookupError()):
+            result = self.runtime().stop("cocolo-run-x", grace_seconds=0)
+        self.assertEqual("gone", result.outcome, result)
+
+    def test_cs5_a_process_that_cannot_be_reaped_is_reported_and_no_later_command_starts(self):
+        self.mode("hang-inspect")
+        with mock.patch.object(cr, "_reap", lambda process, seconds: False, create=True):
+            with self.assertRaises(cr.ProcessCleanupError):
+                cr.SubprocessPodman(self.podman)(["stop", "x"], 0.5)
+            result = self.runtime().stop("cocolo-run-x", grace_seconds=0, deadline=time.monotonic() + 5)
+        self.assertEqual("refused", result.outcome, result)
+        self.assertEqual("podman_cleanup_failed", result.refusal.reason)
+        self.assertEqual(2, len(self.pids("call")), "a command started after the failure")
+
+
+# --------------------------------------------------------------------------------------------
+# Decision 49: podman's own run time limit (`--timeout`) as the backstop, after a version check
+# --------------------------------------------------------------------------------------------
+
+class ReportingPodman(FakePodman):
+    """The fake podman, reporting the configured `--timeout` the way podman's inspect does."""
+
+    def inspect_json(self, container):
+        value = super().inspect_json(container)
+        configured = [arg[len("--timeout="):] for arg in container.args if arg.startswith("--timeout=")]
+        value["Config"]["Timeout"] = int(configured[0]) if configured else 0
+        return value
+
+
+class TimeoutBackstopTests(RuntimeCase):
+    def setUp(self):
+        super().setUp()
+        self.podman = ReportingPodman(self.host)
+        self.runtime = self.make_runtime()
+
+    def launched(self, **changes):
+        result = self.launch(self.spec(**changes))
+        self.assertTrue(result.ok, result)
+        (create,) = self.podman.commands("create")
+        return result, create
+
+    def backstop(self, result):
+        return dict(result.checks).get("timeout backstop")
+
+    def test_a_podman_that_supports_it_gets_the_timeout_and_the_check_says_so(self):
+        result, create = self.launched(timeout_seconds=90)
+        self.assertIn("--timeout=90", create)
+        self.assertEqual(1, len(self.podman.commands("version")))
+        self.assertTrue((self.backstop(result) or "").startswith("applied"), result.checks)
+
+    def test_an_old_client_gets_no_timeout_and_the_reason_is_recorded(self):
+        self.podman.versions = ("3.4.2", "6.1.4")
+        result, create = self.launched(timeout_seconds=90)
+        self.assertFalse([arg for arg in create if arg.startswith("--timeout")], create)
+        self.assertTrue((self.backstop(result) or "").startswith("skipped"), result.checks)
+        self.assertIn("3.4.2", self.backstop(result))
+
+    def test_an_old_server_behind_a_new_client_gets_no_timeout(self):
+        self.podman.versions = ("6.1.0", "3.4.2")
+        result, create = self.launched(timeout_seconds=90)
+        self.assertFalse([arg for arg in create if arg.startswith("--timeout")], create)
+        self.assertIn("3.4.2", self.backstop(result) or "")
+
+    def test_a_version_that_cannot_be_read_gets_no_timeout_and_the_run_still_launches(self):
+        for label, change in (("failed", lambda: setattr(self.podman, "version_fails", True)),
+                              ("not a version", lambda: setattr(self.podman, "versions", ("banana", "banana")))):
+            with self.subTest(label):
+                self.podman.version_fails = False
+                self.podman.versions = ("6.1.0", "6.1.4")
+                self.podman.calls.clear()
+                self.podman.containers.clear()
+                change()
+                result, create = self.launched(timeout_seconds=90)
+                self.assertFalse([arg for arg in create if arg.startswith("--timeout")], create)
+                self.assertTrue((self.backstop(result) or "").startswith("skipped"), result.checks)
+
+    def test_a_run_with_no_deadline_asks_nothing_and_records_nothing(self):
+        result, create = self.launched()
+        self.assertEqual([], self.podman.commands("version"))
+        self.assertIsNone(self.backstop(result))
+
+    def test_the_minimum_version_is_named(self):
+        self.assertEqual((4, 0), cr.MIN_TIMEOUT_PODMAN_VERSION)
+
 
 
 class SeccompProfileTests(unittest.TestCase):
