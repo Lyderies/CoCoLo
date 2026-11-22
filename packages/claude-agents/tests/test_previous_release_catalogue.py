@@ -85,7 +85,7 @@ class CatalogueTests(unittest.TestCase):
         self.assertEqual(frozenset({RELEASED_0_8_40, RELEASED_0_8_41}), packaging.PINNED_RELEASE_DIGESTS)
 
     def test_the_shipped_catalogue_is_accepted(self) -> None:
-        self.assertEqual(8, len(released_bundles(self.source)))  # 0.8.40, 0.8.41, 0.8.42, 0.8.43, 0.8.44, 0.8.45, 0.8.46, 0.8.47 (last seven: same bundle)
+        self.assertEqual(9, len(released_bundles(self.source)))  # 0.8.40, 0.8.41, 0.8.42, 0.8.43, 0.8.44, 0.8.45, 0.8.46, 0.8.47, 0.8.48 (last eight: same bundle)
 
     def padded(self, size: int) -> None:
         body = json.dumps({"releases": self.records()}).encode()
