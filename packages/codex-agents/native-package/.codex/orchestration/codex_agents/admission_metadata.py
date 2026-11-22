@@ -509,9 +509,6 @@ def probe_head(headroom: list[tuple[dict[str, Any], str]], fingerprint: str) -> 
     )
 
 
-PROBE_OWN_NEAR_MS = 60_000  # PC-1: a probe's headroom reading counts as its own within this of its billing reading
-
-
 def newer_run_restricts(
     latest: dict[str, Any],
     billing: list[tuple[dict[str, Any], str]],
@@ -548,14 +545,28 @@ def newer_run_restricts(
         return False
     # PC-1: a newer run record blocks the reuse only when it is MORE restrictive than the reused probe's own
     # reading; one as constrained as the probe's own changes nothing the probe did not already show (the
-    # re-evaluation and the final gate still judge it). The probe's own state is rated from its own untagged
-    # headroom taken with its newest reading (none: ample, so any restriction blocks, as before).
+    # re-evaluation and the final gate still judge it). Equal rank is left to that re-evaluation even when the
+    # restriction sits on another window (LOW-3): it reads every headroom record, the run's included.
+    #
+    # MED-1: the probe's own reading is the headroom its own probe wrote with the reused billing record. One
+    # probe stamps every record of its reply with the same `observed_at_ms` (billing_probe_worker._normalized,
+    # learning_store.observe_claude_billing), and the probe's reply carries at most one headroom and one billing
+    # record, so a probe's own headroom is the untagged headroom of this account stamped exactly as `latest`.
+    # Nearness in time proves nothing (another probe's headroom, an earlier, later or future one, is not this
+    # probe's), so the association needs the exact stamp AND to be unambiguous: when the stamp carries more than
+    # one distinct headroom or billing record (two probes at the same instant) nothing shows which one is this
+    # probe's. With no or an ambiguous own reading the baseline is ample, so any restriction blocks, as before.
     rank = {"ample": 0, "constrained": 1, "exhausted": 2}
-    head = probe_head(headroom, fingerprint)
-    own = [] if head is None or abs(head["observed_at_ms"] - since) > PROBE_OWN_NEAR_MS else [
+    probes_own = [
         (record, digest) for record, digest in headroom
         if record["account_fingerprint"] == fingerprint and record.get("run_id") is None
-        and record.get("phase") is None and record["observed_at_ms"] == head["observed_at_ms"]]
+        and record.get("phase") is None and record["observed_at_ms"] == since]
+    probes_billing = {
+        record["record_id"] for record, _ in billing
+        if record["account_fingerprint"] == fingerprint and record.get("run_id") is None
+        and record.get("phase") is None and record["observed_at_ms"] == since}
+    unambiguous = len({record["record_id"] for record, _ in probes_own}) == 1 and len(probes_billing) == 1
+    own = probes_own if unambiguous else []
     return (rank[headroom_state("claude", fingerprint, newer, [], now_ms)[0]]
             > rank[headroom_state("claude", fingerprint, own, [], now_ms)[0]])
 
