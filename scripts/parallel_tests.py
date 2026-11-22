@@ -24,6 +24,7 @@ when every unit passed.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 from pathlib import Path
@@ -34,9 +35,14 @@ import sys
 import tempfile
 import time
 
+import test_framework as framework
+
 ROOT = Path(__file__).resolve().parents[1]
 SUITES = {"root": ROOT, "codex": ROOT / "packages" / "codex-agents", "claude": ROOT / "packages" / "claude-agents"}
 EXTRA_ENV = {"claude": {"PYTHONPATH": "src"}}
+FRAMEWORK_SCRIPTS = Path(__file__).resolve().parent
+REVIEW_BASE = None
+_CURRENT_DISCOVERY = None
 # A module expected to take longer than this is split into groups of its classes.
 SPLIT_SECONDS = 20.0
 UNKNOWN_SECONDS = 5.0  # Assumed for a unit with no earlier measurement.
@@ -53,31 +59,17 @@ PROGRESS_SECONDS = 60
 # With COCOLO_TEST_STAGE=unit, starting a process, opening a socket or sleeping raises, so
 # a unit test that does any of them fails and names what it did.
 _RUNNER = (
-    "import faulthandler, os, sys, unittest\n"
-    f"faulthandler.dump_traceback_later({UNIT_SECONDS}, exit=True)\n"
-    "if os.environ.get('COCOLO_TEST_STAGE') == 'unit':\n"
-    "    import time\n"
-    "    _DENIED = {'subprocess.Popen': 'start a process', 'os.posix_spawn': 'start a process',\n"
-    "               'os.spawn': 'start a process', 'os.exec': 'start a process', 'os.fork': 'start a process',\n"
-    "               'os.forkpty': 'start a process', 'os.system': 'start a process',\n"
-    "               'socket.connect': 'open a socket', 'socket.bind': 'open a socket'}\n"
-    "    def _unit_only(event, args):\n"
-    "        if event in _DENIED:\n"
-    "            raise RuntimeError(f'a unit test must not {_DENIED[event]} ({event}); '\n"
-    "                               'tag its module integration in scripts/test-stages.json')\n"
-    "    def _no_sleep(seconds):\n"
-    "        raise RuntimeError('a unit test must not sleep; '\n"
-    "                           'tag its module integration in scripts/test-stages.json')\n"
-    "    sys.addaudithook(_unit_only)\n"
-    "    time.sleep = _no_sleep\n"
-    "sys.path.insert(0, '.')\n"
-    "sys.path.insert(0, 'tests')\n"
-    "unittest.main(module=None, argv=['tests', *sys.argv[1:]])\n"
+    "import sys\n"
+    f"sys.path.insert(0, {str(ROOT / 'scripts')!r})\n"
+    "from test_worker import main\n"
+    "raise SystemExit(main())\n"
 )
 
 
 def discover(suite: str) -> dict[str, list[str]]:
     """Module name -> its test ids, named as a discovery of the suite's tests folder names them."""
+    if _CURRENT_DISCOVERY is not None and suite in _CURRENT_DISCOVERY:
+        return _CURRENT_DISCOVERY[suite]
     cwd = SUITES[suite]
     code = (
         "import json, os, sys, unittest\n"
@@ -131,9 +123,79 @@ STAGES = ROOT / "scripts" / "test-stages.json"
 STAGE_NAMES = ("unit", "integration", "e2e")
 
 
+def inventory():
+    found = {}
+    for suite, cwd in SUITES.items():
+        code = (f"import sys,json; sys.path.insert(0,{str(FRAMEWORK_SCRIPTS)!r}); sys.path.insert(0,'.'); "
+                f"from test_framework import inventory_suite; print(json.dumps(inventory_suite({suite!r})))")
+        result = subprocess.run([sys.executable, '-B', '-c', code], cwd=cwd,
+                                env={**os.environ, **EXTRA_ENV.get(suite, {})}, capture_output=True, text=True)
+        if result.returncode:
+            raise ValueError(f'{suite}: test discovery failed: {result.stderr[-1500:]}')
+        found.update(framework.decode_json(result.stdout))
+    return found
+
+
+def legacy_versions(root, current, ceiling):
+    """Compare working files with committed introduction and every historical shrink transition."""
+    errors = []
+    def git(*args):
+        return subprocess.check_output(['git', *args], cwd=root, text=True, stderr=subprocess.DEVNULL)
+    def version(commit, name):
+        return framework.decode_json(git('show', commit + ':scripts/' + name))
+    try:
+        commits = git('log', '--reverse', '--format=%H', 'HEAD', '--', 'scripts/test-legacy-ceiling.json').split()
+        if not commits:
+            raise ValueError('initial ceiling is not committed')
+        original = version(commits[0], 'test-legacy-ceiling.json')
+        if ceiling != original:
+            errors.append('legacy initial ceiling changed')
+        previous = version(REVIEW_BASE or 'HEAD', 'test-legacy.json')
+        for commit in git('rev-list', 'HEAD', '--', 'scripts/test-legacy.json').split():
+            this = version(commit, 'test-legacy.json')
+            parent_ids = git('rev-list', '--parents', '-n', '1', commit).split()[1:]
+            for parent in parent_ids:
+                try:
+                    before = version(parent, 'test-legacy.json')
+                except subprocess.CalledProcessError:
+                    before = original
+                if this['baseline'] != before['baseline'] or any(before['tests'].get(k) != v for k, v in this['tests'].items()):
+                    errors.append('legacy history grew or changed fingerprints at ' + commit[:12])
+        return original, previous, errors
+    except (subprocess.CalledProcessError, ValueError, KeyError):
+        return ceiling, {'baseline': current['baseline'], 'tests': {}}, ['cannot verify committed legacy history/review base']
+
+
+def metadata():
+    discovered = inventory()
+    def read(name):
+        return framework.decode_json((ROOT / 'scripts' / name).read_text())
+    stages, layers = read('test-stages.json'), read('test-layers.json')
+    catalogue, legacy, ceiling = read('test-requirements.json'), read('test-legacy.json'), read('test-legacy-ceiling.json')
+    ceiling, previous, errors = legacy_versions(ROOT, legacy, ceiling)
+    # Lifecycle checks use the same catalogue and remain required even in a module-only run.
+    lifecycle = ROOT / 'scripts/e2e_lifecycle.py'
+    checked = {}
+    if lifecycle.exists():
+        for node in ast.walk(ast.parse(lifecycle.read_text())):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for tag in node.decorator_list:
+                    if isinstance(tag, ast.Call) and isinstance(tag.func, ast.Name) and tag.func.id == 'check':
+                        checked['lifecycle:' + node.name] = {'requirements': [arg.value for arg in tag.args],
+                                                           'rationale': 'Canonical lifecycle scenario', 'fingerprint': ''}
+    checked_inventory = dict(discovered)
+    checked_stages, checked_layers = dict(stages), dict(layers)
+    if checked:
+        checked_inventory['lifecycle:checks'] = checked
+        checked_stages['lifecycle:checks'], checked_layers['lifecycle:checks'] = 'e2e', 'scenario'
+    errors += framework.validate_metadata(inventory=checked_inventory, stages=checked_stages, layers=checked_layers,
+                                         catalogue=catalogue, legacy=legacy, ceiling=ceiling, previous=previous)
+    return discovered, stages, layers, catalogue, errors
+
+
 def stage_of(suite: str, unit: str, stages: dict[str, str]) -> str:
-    """A module with no stage yet counts as integration: it runs, but is not held to the unit rules."""
-    return stages.get(f"{suite}:{unit.split('#')[0]}", "integration")
+    """An undeclared module is rejected; selection never grants an implicit resource layer."""
+    return stages[f"{suite}:{unit.split('#')[0]}"]
 
 
 def select(planned: list[tuple[float, str, list[str]]], suite: str, wanted: set[str],
@@ -163,21 +225,36 @@ def parse_shard(text: str) -> tuple[int, int]:
 
 def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
         wanted: set[str] = frozenset(STAGE_NAMES), modules: dict[str, set[str]] | None = None,
-        part: tuple[int, int] = (1, 1)) -> int:
+        part: tuple[int, int] = (1, 1), profile: str = 'ci') -> int:
     """Run the suites' units in the wanted stages; with `modules` ({suite: module names}), only those."""
+    global _CURRENT_DISCOVERY
+    _CURRENT_DISCOVERY = None
     timings = json.loads(TIMINGS.read_text()) if TIMINGS.is_file() else {}
-    stages = json.loads(STAGES.read_text())
+    discovered, stages, layers, catalogue, metadata_errors = metadata()
+    _CURRENT_DISCOVERY = {suite: {module.split(':', 1)[1]: [key.split(':', 1)[1] for key in cases]
+                                 for module, cases in discovered.items() if module.startswith(suite + ':')}
+                          for suite in SUITES}
+    eligible = framework.select_layers(layers, profile)
+    for error in metadata_errors:
+        print('METADATA: ' + error, flush=True)
     if modules is not None:
         unknown = sorted(f"{suite}:{module}" for suite in suites for module in modules[suite] - set(discover(suite)))
         if unknown:
             print(f"no such test module: {', '.join(unknown)}", file=sys.stderr)
             return 2
+    # Invalid layer/stage declarations fail preflight and never execute a body.
+    runnable = {key for key in eligible if layers[key] in framework.STAGES and stages.get(key) in framework.STAGES[layers[key]]}
+    for suite in _CURRENT_DISCOVERY:
+        _CURRENT_DISCOVERY[suite] = {m: names for m, names in _CURRENT_DISCOVERY[suite].items() if suite + ':' + m in runnable}
     queue = sorted(((seconds, suite, name, names) for suite in suites
                     for seconds, name, names in select(
                         units(suite, timings, None if modules is None else modules[suite]), suite, wanted, stages)),
                    reverse=True)
     if part != (1, 1):
         queue = shard(queue, *part)
+    selection = sorted(f'{suite}:{module}' for suite in suites for module in
+                       (modules[suite] if modules is not None else discover(suite))
+                       if f'{suite}:{module}' in runnable and stages[f'{suite}:{module}'] in wanted)
     base = Path(tempfile.mkdtemp(prefix="pt", dir="/private/tmp" if sys.platform == "darwin" else None))
     running, results, started = {}, [], time.monotonic()
     environment = {k: v for k, v in os.environ.items()
@@ -195,7 +272,11 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
             process = subprocess.Popen(
                 [sys.executable, "-B", "-c", _RUNNER, *names], cwd=SUITES[suite],
                 env={**environment, **EXTRA_ENV.get(suite, {}), "TMPDIR": str(folder),
-                     "COCOLO_TEST_STAGE": stage_of(suite, name, stages)},
+                     "COCOLO_TEST_STAGE": stage_of(suite, name, stages),
+                     "COCOLO_TEST_LAYER": layers[f'{suite}:{name.split("#")[0]}'],
+                     "COCOLO_TEST_MODULE": f'{suite}:{name.split("#")[0]}',
+                     "COCOLO_TEST_PROFILE": profile, "HYPOTHESIS_STORAGE_DIRECTORY": str(folder / 'hypothesis'),
+                     "COCOLO_TEST_RESULTS": str(folder.with_suffix('.results.json'))},
                 stdout=handle, stderr=subprocess.STDOUT)
             running[process] = (suite, name, names, log, handle, time.monotonic(), folder)
         time.sleep(0.05)
@@ -213,18 +294,41 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
             suite, name, names, log, handle, began, folder = running.pop(process)
             handle.close()
             output = log.read_text(errors="replace")
-            ran = sum(int(n) for n in _RAN.findall(output))
+            result_file = folder.with_suffix('.results.json')
+            try:
+                record = framework.decode_json(result_file.read_text())
+                if not isinstance(record['tests'], int) or not isinstance(record['outcomes'], dict) or not isinstance(record['violations'], list):
+                    raise ValueError('invalid worker result')
+                returncode = process.returncode
+            except (OSError, ValueError, KeyError, TypeError):
+                record = {'tests': 0, 'outcomes': {}, 'violations': []}
+                returncode = process.returncode or 1
+            ran = record['tests']
             outcome = _RESULT.findall(output)
             results.append({"suite": suite, "unit": name, "names": names, "seconds": time.monotonic() - began,
-                            "returncode": process.returncode, "tests": ran,
-                            "summary": outcome[-1][1] if outcome else "", "log": str(log)})
-            if process.returncode != 0:
+                            "returncode": returncode, "tests": ran,
+                            "summary": outcome[-1][1] if outcome else "", "log": str(log),
+                            "timed_out": 'Timeout (' in output,
+                            "outcomes": {suite + ':' + key: value for key, value in record['outcomes'].items()},
+                            "violations": record['violations']})
+            if returncode != 0:
                 timed_out = "Timeout (" in output
                 tail = "\n".join(output.strip().splitlines()[-(80 if timed_out else 25):])
-                print(f"FAILED {suite}:{name} (exit {process.returncode}) -> {log}\n{tail}\n", flush=True)
+                print(f"FAILED {suite}:{name} (exit {returncode}) -> {log}\n{tail}\n", flush=True)
             if not keep:
                 shutil.rmtree(folder, ignore_errors=True)
     elapsed = time.monotonic() - started
+    fingerprints = {key: value.get('fingerprint', 'import_error') for cases in discovered.values() for key, value in cases.items()}
+    detail = framework.measurements(results, layers, stages, jobs=jobs, elapsed=elapsed, selection=selection, part=part,
+                                    profile=profile, catalogue=catalogue, fingerprints=fingerprints)
+    detail['profile'], detail['metadata_errors'] = profile, metadata_errors
+    outcomes = {key: value for row in results for key, value in row['outcomes'].items()}
+    detail['requirements'] = framework.coverage(catalogue, outcomes)
+    requirement_failures = [key for key, value in detail['requirements'].items() if value == 'failed' and
+                            any(name in outcomes for name in catalogue[key]['checks'])]
+    for entry in detail['over_budget']:
+        print(f'OVER BUDGET: {entry["module"]} {entry["stage"]}/{entry["layer"]} '
+              f'{entry["seconds"]:.3f}s > {entry["budget"]:.3f}s ({entry["fragments"]} fragments)', flush=True)
     measured = dict(timings)
     for item in results:
         if "#" not in item["unit"]:
@@ -237,9 +341,13 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                 r["seconds"] for r in results if r["unit"].split("#")[0] == module and r["suite"] == item["suite"]), 2)
     if save is not None:
         save.write_text(json.dumps(measured, indent=1, sort_keys=True) + "\n")
+        Path(str(save) + '.run.json').write_text(json.dumps(detail, indent=1, sort_keys=True) + '\n')
     failed = [r for r in results if r["returncode"] != 0]
     totals = {suite: sum(r["tests"] for r in results if r["suite"] == suite) for suite in suites}
     print(json.dumps({"elapsed_seconds": round(elapsed, 1), "jobs": jobs, "stages": sorted(wanted),
+                      "job_seconds": round(detail['job_seconds'], 3), "over_budget": detail['over_budget'],
+                      "metadata_errors": metadata_errors, "partial": detail['partial'], "profile": profile,
+                      "requirement_failures": requirement_failures,
                       "units": len(results),
                       "tests": totals, "failed_units": [f"{r['suite']}:{r['unit']}" for r in failed],
                       "slowest_units": [(f"{r['suite']}:{r['unit']}", round(r["seconds"], 1))
@@ -247,21 +355,32 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                       "logs": str(base)}, indent=1))
     if not failed and not keep:
         shutil.rmtree(base, ignore_errors=True)
-    return 1 if failed else 0
+    return 1 if failed or metadata_errors or detail['over_budget'] or requirement_failures else 0
 
 
 def main(argv: list[str] | None = None) -> int:
+    global REVIEW_BASE
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     parser.add_argument("--suite", action="append", choices=sorted(SUITES))
     parser.add_argument("--stage", action="append", choices=STAGE_NAMES, help="run only these stages")
     parser.add_argument("--save-timings", type=Path, help="write this run's measurements here")
     parser.add_argument("--keep", action="store_true", help="keep every unit's folder and log")
+    parser.add_argument('--profile', choices=('dev', 'ci', 'soak'), default='ci')
+    parser.add_argument('--base', help='trusted review-base commit for the shrink-only legacy check')
+    parser.add_argument('--combine-timings', nargs='+', type=Path, help='combine complete disjoint shard .run.json files')
     parser.add_argument("--shard", type=parse_shard, default=(1, 1), metavar="K/N",
                         help="run only shard K of N, balanced by recorded time (CI)")
     parser.add_argument("--module", action="append", metavar="SUITE:MODULE",
                         help="run only this test module (repeatable), for example codex:tests.test_bridge")
     args = parser.parse_args(argv)
+    REVIEW_BASE = args.base
+    if args.combine_timings:
+        report = framework.combine_measurements([framework.decode_json(path.read_text()) for path in args.combine_timings])
+        print(json.dumps(report, indent=1))
+        return 1 if report['over_budget'] or report['metadata_errors'] or any(row['returncode'] for row in report['workers']) or 'failed' in report['requirements'].values() else 0
+    if args.jobs < 1:
+        parser.error('--jobs must be positive')
     suites = args.suite or sorted(SUITES)
     modules = None
     if args.module:
@@ -274,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error(f"--module wants SUITE:MODULE, got {item!r}")
             modules[suite].add(module)
         suites = [suite for suite in suites if modules[suite]]
-    return run(args.jobs, suites, args.save_timings, args.keep, set(args.stage or STAGE_NAMES), modules, args.shard)
+    return run(args.jobs, suites, args.save_timings, args.keep, set(args.stage or STAGE_NAMES), modules, args.shard, args.profile)
 
 
 if __name__ == "__main__":

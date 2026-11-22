@@ -1,0 +1,576 @@
+{
+ "API-1": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Headless core. Check: the core starts with no screen; the runner keeps running and `orch` commands fall back to the files when the core dies."
+ },
+ "API-10": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Files stay canonical. Check: deleting the core's cache and restarting gives identical answers; records survive a restart."
+ },
+ "API-11": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Ordered events. Check: events have a gap-free increasing seq and the envelope {seq, ts, kind, data, v}."
+ },
+ "API-12": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Resume. Check: `events.subscribe from_seq` replays exactly the missed events; an expired cursor returns cursor_expired with a snapshot."
+ },
+ "API-13": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Filtering and bounds. Check: a kind filter works; a slow subscriber is dropped without delaying others or the writer."
+ },
+ "API-14": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Events carry no secrets. Check: events hold ids and summaries only; a planted secret and transcript text never appear."
+ },
+ "API-15": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Records-first answers. Check: canned questions (status, usage, CI, versions, history, why stopped) are answered from records with sources, as_of and tokens_used 0, and nothing is written to the inbox."
+ },
+ "API-16": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Forwarding at safe points. Check: a judgment question is queued only in the inbox, delivered at a safe point as at most 300 tokens with a TTL; query.reply produces query.answered for the asker."
+ },
+ "API-17": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Talk is labelled and capped. Check: context.push is labelled by source, capped (2 KB, 10 per minute), delivered as quoted untrusted data, and never counted as an owner decision."
+ },
+ "API-18": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Tokens. Check: 256-bit, stored hashed, revocable, minted only at the owner's terminal (refused over the API); an agent token defaults to read plus context.push."
+ },
+ "API-19": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Scope matrix. Check: read, confirm and owner scopes each allow exactly their methods; others return forbidden."
+ },
+ "API-2": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Socket. Check: socket mode 0600 in a 0700 directory, path under 104 bytes, a stale socket is replaced, no TCP listener."
+ },
+ "API-20": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Decisions. Check: decision.answer works for the owner role only."
+ },
+ "API-21": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Two-step confirm. Check: a control call first returns confirm_required with an id; the second call within 60 s executes once; reuse, expiry and a different token or params are refused."
+ },
+ "API-22": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Owner-only wall. Check: install, update, setup, reviewed install, live-record writes, billing attestation, client-range widening and token minting are refused over the API even with an owner token."
+ },
+ "API-23": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Audit. Check: every change and confirm is a commands.jsonl line; every refusal is an audit.jsonl line (rotated separately, so refusals cannot push changes out); each line has caller, method, outcome; no token or secret appears."
+ },
+ "API-24": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Limits. Check: request size, string length, method time, connection count and subscription count are capped with fixed error codes."
+ },
+ "API-25": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Provider neutrality. Check: no provider name in method, event or field names; provider detail only under `extra`."
+ },
+ "API-26": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "(later adapter) HTTP+SSE bridge on 127.0.0.1 with Host/Origin/token checks, SSE id = seq. Tested with the dashboard milestone."
+ },
+ "API-27": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "(later adapter) stdio MCP adapter on a pinned spec exposing the same operations. Tested last."
+ },
+ "API-3": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Peer identity. Check: a connection from another uid is refused before any method runs."
+ },
+ "API-4": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Framing. Check: JSON-RPC 2.0 as newline-delimited JSON; a malformed line gets a parse error and the connection lives; an oversize line is refused."
+ },
+ "API-5": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Handshake and versioning. Check: `initialize` returns protocol version and features; a major mismatch is refused; any other method before it is refused."
+ },
+ "API-6": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "One contract. Check: `schema.get` lists methods, event kinds and error codes; every response carries `seq_at`; the in-process adapter and the socket give identical results."
+ },
+ "API-7": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "State, units and runs. Check: state.get, units.list/get/history and runs.list equal the record files field for field."
+ },
+ "API-8": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Usage, history, CI, versions. Check: values equal the records; unreadable or missing data is \"unknown\", never a guessed number."
+ },
+ "API-9": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Health. Check: health.get gives each finding with a plain reason code and text."
+ },
+ "G1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Every step exits 0, or refuses with a reason the step expects; a bare run_unavailable, account_unavailable or probe_unavailable is a failure."
+ },
+ "G2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Worker: every answer value matches the oracle; each required evidence outcome is pass or observed."
+ },
+ "G3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Verifier: opened for the worker's digest; each required evidence outcome is pass; no discrepancy; verdict pass or ready."
+ },
+ "G4": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Operational QA: accepted: true."
+ },
+ "G5": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Capacity: after close, a supported per-run read shows every claimed run released, and the next billing probe gets a slot; final statistics show zero active or pending runs."
+ },
+ "G6": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "An update never needs the collector stopped by hand, and finishes with the collector healthy on the new build."
+ },
+ "G7": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Records keep their history across every update: counts by kind, never content."
+ },
+ "G8": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "No private value appears in any output: keys, fingerprints, paths under the temporary HOME."
+ },
+ "G9": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A content-free JSON report with phases, seconds, reason codes and pass or fail per requirement is written, kept as the CI artifact."
+ },
+ "L1.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A fresh install through the scripted setup (S1 answers file and passphrase) finishes with every step ok, the protected command rule installed and the collector ready."
+ },
+ "L1.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Setup run again on an installed project changes nothing: same files, same digests, no new records except its own checks."
+ },
+ "L10.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Hook events are ingested with recording on and not with it off (S2)."
+ },
+ "L10.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "The learning history moves to the project store; learning-run-cycle runs."
+ },
+ "L10.3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Retention removes expired raw events and keeps their summaries (controllable clock)."
+ },
+ "L11.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "learning-backup-project and learning-verify-backup succeed."
+ },
+ "L11.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A failed upgrade forced part-way leaves the records unchanged, learning-rollback works and the next attempt succeeds."
+ },
+ "L12.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "From each earlier release tag (v0.3.1 on), with history built on it, an update to HEAD succeeds and the full run passes again."
+ },
+ "L12.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A one-command update with an admitted-never-launched run and 0.2.x leftovers present needs no manual stop."
+ },
+ "L12.3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "An update with a child really running refuses plainly and changes nothing."
+ },
+ "L12.4": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "An update with uncommitted managed files is refused."
+ },
+ "L12.5": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A second project updated after the first works (no other project stops working)."
+ },
+ "L12.6": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "History built on an earlier release with more than 512 admission records, runs left by 0.2.x and a project over 128 MiB still opens, dispatches and upgrades (the four live-test bugs: unbounded admission history, a masked busy probe, 0.2.x leftovers blocking updates, a protected copy without role files)."
+ },
+ "L12.7": {
+  "checks": [],
+  "source": "DESIGN-0.3.3-claim-capture.md",
+  "statement": "A dispatch refused at its claim on a project with long history closes by itself, and after an update from the release before, the next service closes any such run an earlier version left (0.3.3 C2, C3, C3f)."
+ },
+ "L13.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A session with danger-full-access, an unknown host, or opened above the project is refused with its reason."
+ },
+ "L13.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "The protected copy refuses a project it is not bound to."
+ },
+ "L14.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "learning-status, learning-run-status, earlier_version_runs and learning-orchestration-report give the right values at each phase, and none is private."
+ },
+ "L15.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "learning-delete-project removes the project's records and services and leaves another project untouched."
+ },
+ "L2.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "The owner key is configured; a wrong passphrase is refused with its fixed reason and changes nothing."
+ },
+ "L2.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Replacing the owner key refuses signatures made with the old key and accepts the new one's."
+ },
+ "L3.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "provider-observe succeeds for both fake clients, and the Claude billing probe succeeds."
+ },
+ "L3.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Billing attestation is recorded and admission accepts it."
+ },
+ "L3.3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Paid usage on is refused with paid_usage_usable; an API key in the environment with provider_api_key_present; an unreviewed client version with client_version_unreviewed; a signed-out client with observation_unavailable."
+ },
+ "L4.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Routing for a Codex primary and a Claude primary returns the policy's role, model, effort, agent and sandbox, and the child runs with exactly those."
+ },
+ "L4.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A route edited after learning-route is refused."
+ },
+ "L5.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "For each primary, readiness, assignment and result preflight and export preflight pass."
+ },
+ "L5.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Open, dispatch, validate (with one structural repair on a native path where one applies) and record the result succeed; the worker's answer values match the oracle and each required evidence outcome is pass or observed."
+ },
+ "L5.3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "The verifier opened for the worker's outcome digest passes every required evidence item with no discrepancy and verdict pass or ready; operational checks pass and QA records accepted: true; the orchestration closes and its report is right."
+ },
+ "L6.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A child that tries to read outside its export, write anywhere or use the network is stopped, and its result says so."
+ },
+ "L6.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Uncommitted read paths are refused before admission."
+ },
+ "L7.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "learning-cancel-run stops a running child; it ends cancelled with its capacity released."
+ },
+ "L7.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A child that goes silent is stopped at the cutoff (controllable clock) and ends with work_silence and its capacity released."
+ },
+ "L7.3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A hard timeout stops a child and ends it with the right terminal state and released capacity."
+ },
+ "L8.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Killing the project service mid-run: the next service settles the run (run_lost), frees its slot and records nothing twice."
+ },
+ "L8.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Killing the collector mid-run: the same, once it is back."
+ },
+ "L8.3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7 L8b (control project, 2026-11-16)",
+  "statement": "A project service replaced while its dispatch runs (another project's setup restarting the shared collector) leaves no run in limbo: the run ends run_lost with its slot freed, the dispatching CLI says so plainly instead of dispatch_not_authorized, and the orchestration can close."
+ },
+ "L9.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Two children at once run; a third is refused with claim_busy and the probe with probe_busy."
+ },
+ "L9.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Capacity is released after each terminal, shown by a supported per-run read."
+ },
+ "L9.3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Two projects share one collector, each with its own runs and capacity."
+ },
+ "TERM-13": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 4",
+  "statement": "Authority tiers are enforced in the core, not the client."
+ },
+ "TERM-17": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 4",
+  "statement": "Every terminal read goes through the API only."
+ },
+ "TERM-5": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 4",
+  "statement": "The terminal and the core are separate processes; the core runs headless."
+ },
+ "TERM-6": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 4",
+  "statement": "Run counts through the API match learning-orchestration-status."
+ },
+ "TERM-7": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 4",
+  "statement": "Usage through the API matches usage-report --json and is 'unknown' when unreadable."
+ },
+ "TF-1": {
+  "checks": [
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_a_worker_exiting_zero_without_a_result_is_not_a_passing_check",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_runner_counts_structured_results_and_saves_only_current_job_seconds",
+   "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-1",
+  "statement": "**TF-1 \u2014 Retain the supported runner and isolation.** Keep unittest and `scripts/parallel_tests.py`, the three\nsuites, module/stage/shard selection, separate worker processes and per-worker temporary directories, secret\nstripping, and bounded worker teardown. A full normal run uses the runner's DEFAULT job count (no fixed 6).\nSharding/module splitting must not omit or duplicate tests. Preserve existing `load_tests` discovery hooks.\nWitness: discovery and execution of inherited, ordinary, `load_tests`-filtered and generated unittest cases;\nstable shard partition; failing worker and import error both make the\nrunner nonzero; default jobs remains `max(1, (os.cpu_count() or 2) - 2)`."
+ },
+ "TF-10": {
+  "checks": [
+   "root:test_test_framework_guards.WorkerTests.test_import_time_and_caught_denials_still_fail_the_worker",
+   "root:test_test_framework_guards.WorkerTests.test_process_apis_are_denied_in_unit_and_component_before_os_effects"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-10",
+  "statement": "**TF-10 \u2014 Refuse real processes and git in unit/component.** Extend the existing audit guard, installed before\ntest-module imports, to both restricted layers. Deny subprocess starts, spawn, exec, fork/forkpty and system\nshell calls; a real git invocation is denied regardless of executable spelling or wrapper. Fakes/in-process\nfunctions remain allowed. Guard violations name layer, module, operation and test ID if known, and cannot be\nturned into green by catching the exception (worker records the violation and fails at completion). Witness:\ntry each available process API, git under an absolute path, an import-time spawn and a caught denial; verify\nno child-side marker is created. Run platform-specific API witnesses on their supported OS; the matrix must\ncontain evidence for both macOS and Linux."
+ },
+ "TF-11": {
+  "checks": [
+   "root:test_test_framework_guards.WorkerTests.test_import_time_and_caught_denials_still_fail_the_worker",
+   "root:test_test_framework_guards.WorkerTests.test_socket_creation_pair_bind_and_resolution_are_denied"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-11",
+  "statement": "**TF-11 \u2014 Refuse real sockets in unit/component.** Deny socket creation/connect/bind and applicable address\nresolution/network APIs before OS effects; include AF_UNIX and AF_INET and socketpair. Patch/audit supported\nstdlib entry points without blocking construction of test doubles. The denial is sticky as in TF-10. Witness:\nimport-time creation, bind/connect, socketpair and caught denial fail without creating socket files or contacting\na service; in-memory transport fakes pass. Allowed-layer probes use only local fixture sockets."
+ },
+ "TF-12": {
+  "checks": [
+   "root:test_test_framework_guards.WorkerTests.test_blocking_unit_waits_fail_but_ready_events_and_nonblocking_polls_pass"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-12",
+  "statement": "**TF-12 \u2014 Keep unit time deterministic.** Preserve the existing unit sleep prohibition; reject positive-duration\nexplicit waits/polls in unit tests (thread condition/event waits, select/poll and joins that would block).\nAllow immediately ready/nonblocking operations and injected clocks. Component may wait on in-process\nthreads, subject to its budget. Witness: unit sleep still fails; a positive wait fails without waiting; zero-time\npoll and a ready event succeed; a fake clock advances without real time. This is an accidental-I/O guard,\nnot a security sandbox against malicious tests using native libraries or disabling the harness."
+ },
+ "TF-13": {
+  "checks": [
+   "root:test_test_framework_guards.WorkerTests.test_real_process_git_and_local_socket_contracts_still_work_in_allowed_layers"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-13",
+  "statement": "**TF-13 \u2014 Allowed layers retain real boundary evidence.** Crash/scenario/soak may use real processes, git and\nlocal sockets under isolated fixtures and their budgets. Do not globally stub these resources to obtain speed.\nWitness: the same tiny process/git/socket fixture refused in unit/component succeeds in each allowed layer,\nand all owned resources are reaped. Keep at least one real invocation per product entry point during pruning;\nprocess-boundary/concurrency/durability assertions require suitable real contract evidence, not only a fake."
+ },
+ "TF-14": {
+  "checks": [
+   "root:test_test_framework.GoldenTests.test_equal_update_mode_is_not_green_and_newlines_are_not_silently_normalized",
+   "root:test_test_framework.GoldenTests.test_expected_output_is_exact_and_missing_or_different_fails"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-14",
+  "statement": "**TF-14 \u2014 One shared golden-output comparison.** Provide one stdlib test-only helper (about 30 lines of core\ncomparison/update logic; security/metadata checks may be separate). New/migrated file-based expected output\ngoes through it. Exact bytes or canonical UTF-8 text comparison produces a bounded useful diff; missing\ngoldens fail. Deterministic, explicitly reviewed normalization happens before the helper; never silently mask\nstates, reason codes, content, permissions or evidence required by a statement. Ordinary scalar/value assertions\nare not forced into snapshots. Witness: equal, differing and missing golden, binary or documented text-only\nbehavior, and a changed required reason code. Existing assertions are retained until a named equal proof exists."
+ },
+ "TF-15": {
+  "checks": [
+   "root:test_test_framework.GoldenTests.test_equal_update_mode_is_not_green_and_newlines_are_not_silently_normalized",
+   "root:test_test_framework.GoldenTests.test_provenance_symlink_cannot_write_outside_the_golden_root",
+   "root:test_test_framework.GoldenTests.test_update_cannot_escape_through_dotdot_absolute_path_or_symlink",
+   "root:test_test_framework.GoldenTests.test_update_requires_exact_environment_and_a_known_declared_requirement"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-15",
+  "statement": "**TF-15 \u2014 Golden updates need explicit intent and requirement provenance.** A golden can be created or changed\nonly with exactly `UPDATE_GOLDEN=1` AND a valid requirement ID supplied to the helper and declared by the\ncalling test. Fail closed for missing/unknown/unrelated IDs and other environment values. Restrict writes to\nthe checked-in test golden root; reject traversal and symlink escapes. Persist/review the requirement ID with\nthe golden change; report update mode visibly, and do not count an update run as passing evidence. Witness:\nunset/0/true without exact 1 cannot write; invalid ID and escape leave files untouched; authorized update\nrecords its ID, and a subsequent normal run is needed for green evidence. Never update a golden to fit code\nthat contradicts its requirement."
+ },
+ "TF-16": {
+  "checks": [
+   "root:test_test_framework.DependencyTests.test_dependencies_are_exactly_pinned_hashed_and_excluded_from_shipped_imports",
+   "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-16",
+  "statement": "**TF-16 \u2014 Only pinned test-only dependencies.** Hypothesis is the only newly introduced third-party test tool.\nRecord its exact version and SHA-256 artifact hash(es) in a test-only requirements file; also pin/hash required\ntransitive dependencies so a hash-required offline-prepared environment is reproducible. No shipped module,\nruntime manifest, installer or provider imports/installs them. Keep shipped code stdlib only and runnable with\nPython 3.11. Only the subsequently owner-authorized temporary test-only environment may receive these dependencies. Witness: static distribution-boundary check and a\nshipped-code smoke test with test packages unavailable; dependency file rejects unpinned/unhashed additions.\nSelect/verify the concrete Hypothesis release and artifact hashes from primary sources in step 2, not from the\nunverified version claim in a review packet. If an existing prepared interpreter lacks it, record that limitation\nand use the authorized temporary test environment; do not silently skip required property checks."
+ },
+ "TF-17": {
+  "checks": [
+   "root:test_test_framework.DependencyTests.test_hypothesis_profiles_are_bounded_and_io_deadline_is_disabled",
+   "root:test_test_framework_guards.WorkerTests.test_a_failing_hypothesis_machine_retains_its_reproducer_and_nonzero_exit"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-17",
+  "statement": "**TF-17 \u2014 Explicit reproducible Hypothesis profiles.** Provide test-only `dev` (20 examples), `ci` (100 examples,\n`derandomize=True`), and `soak` (at least 1000 examples). Normal automated runs select ci; explicit local dev\nselects dev; unknown profiles fail. I/O/stateful rules use `deadline=None`, and still obey module budgets and\nhard timeouts. Keep unittest-compatible generated TestCases. Witness: inspect each loaded setting; reproduce\na deliberately failing state machine and verify its minimized trace and unittest failure are retained in the\nrunner log and yield nonzero. Parser compatibility must be demonstrated, not assumed from unittest ancestry."
+ },
+ "TF-18": {
+  "checks": [
+   "root:test_test_framework.MetadataTests.test_complete_sweep_is_explicit_soak_only_and_profiles_are_validated"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-18",
+  "statement": "**TF-18 \u2014 Normal sampling and soak separation.** Normal crash runs include the durable/volatile disk model,\nnamed samples covering each persistence-significant operation kind and its relevant before/after boundaries,\nand ci-profile generated cases. Complete crash/fault sweeps, including recovery faults, run only by explicit soak\nselection in local-routing. Reject contradictory profile/layer requests, and report the profile and sample seed\nor reproducer. Do not replace the complete sweep with persistence-point-only sampling. Witness: normal\nselection excludes a marked complete sweep but includes each named sample and the model; soak includes the\ncomplete inventory. The Linux/podman power-loss lane is later work (81 A), not claimed as achieved by kills or\nthe model; no podman installation is part of this task."
+ },
+ "TF-19": {
+  "checks": [],
+  "source": "REQUIREMENTS-test-framework.md#TF-19",
+  "statement": "**TF-19 \u2014 Preserve the single merge oracle and its review gate.** Step 3's `check_end_state` is derived from\nsections 1, 2, 3 and 5 of `ANALYSIS-0.4.0-merge-library-states.md`, with one POLICY dictionary at Q1\u2013Q6 recommended\ndefaults. Read durable history independently; never infer direction from a report or all-new tree. The state\nmachine selects land/retry/cancel/undo/crash/recover and fault points, not a second handwritten outcome oracle.\nTrace every replaced assertion to a table cell and replacement file:line; primary checks the table line by line.\nWitness: deliberately wrong outcomes for all 41 cells are rejected; the four required mutations (private-location\ncheck, flush before A, third history commit, injected EIO falsely landed) each have a named catching test.\nIf a current test contradicts its requirement, stop on it and record test name, exact requirement and conflict;\nthe already-identified oracle corrections are requirement-driven work, not permission to fit expectations to code."
+ },
+ "TF-2": {
+  "checks": [
+   "root:test_test_framework.MetadataTests.test_layer_is_required_for_every_module_even_outside_selection",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_missing_layer_in_unselected_module_is_not_hidden_by_module_filter"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-2",
+  "statement": "**TF-2 \u2014 Every module declares one valid layer.** Before running bodies, reject missing, duplicate, unknown,\nor stale module declarations and incompatible stage/layer pairs. Check all discovered suites, including\nmodules selected out of the current run, and import failures; never silently default an undeclared module to\nintegration. Witness: remove one module's layer, add a bogus layer, add a stale entry, duplicate a JSON key,\nor assign a component module to unit; each is rejected with the full module ID. Valid mappings above pass."
+ },
+ "TF-20": {
+  "checks": [],
+  "source": "REQUIREMENTS-test-framework.md#TF-20",
+  "statement": "**TF-20 \u2014 Scenario coverage uses the shared fixture and exact statements.** Step 4 extends the existing\n`scripts/e2e_lifecycle.py` with a shared temporary project, prepared git repo, scripted stand-in Claude/Codex\nbinaries and service on a Unix socket. Cover all 80 requirements, not necessarily exactly 80 checks, in six\nparts: API (27), G1\u2013G9 (9), L12 (7), TERM (5), and two parts containing the other L requirements (32 total).\nEach part obeys the scenario budget, preserves all-flow checks and AND aggregation, and emits per-requirement\npass/fail with content-free reports. Every assertion matches its statement's exact reason codes/states. One\ndeliberate fault per group must make that group's checks red; shared G checks may also detect it and must\nnever be suppressed to obtain an 'exactly one group' presentation. `test_e2e_requirements` must pass unchanged\nin meaning. Witness: all-80 execution, isolated and combined part execution, fault matrix, private-value checks."
+ },
+ "TF-21": {
+  "checks": [],
+  "source": "REQUIREMENTS-test-framework.md#TF-21",
+  "statement": "**TF-21 \u2014 Prune only with equivalent named proof.** Before each step-5 module change, record its requirement\nIDs and keep/move/remove disposition. A removed test requires a named start-to-finish check proving the same\nstatement and relevant edge cases; a moved function test keeps identical assertions/expected values and cites\nthe requirement. Every removed/changed assertion is listed with old and replacement file:line; no weakening.\nKeep real boundary checks per TF-13 and remeasure the affected module after each change, quoting the timing\nfile's job-seconds. Witness: report links to executed replacement and retained assertions, with before/after\nmeasurements; metadata-only replacement is insufficient. No pruning precedes the matching scenario proof."
+ },
+ "TF-22": {
+  "checks": [],
+  "source": "REQUIREMENTS-test-framework.md#TF-22",
+  "statement": "**TF-22 \u2014 Review checkpoints and evidence.** Step reports are under 15 lines each and name commits,\nrequirements -> red/green or measurement evidence, every assertion replacement, and open issues. Owner amended the checkpoints on 2026-11-22: continue through all steps and review once at completion. Use only own worktrees/branches; never push/install or modify the\ncontrol project or 0.3.3. Step 2 is authorized; step 3 rebases the existing merge\nbranch only after step 2 is committed. Acceptance includes macOS and Linux / Python 3.11 evidence or an\nexplicit outstanding platform gate; this Mac run alone cannot prove portability."
+ },
+ "TF-3": {
+  "checks": [
+   "root:test_test_framework.MetadataTests.test_decorator_inheritance_and_override_follow_the_actual_implementation",
+   "root:test_test_framework.MetadataTests.test_unknown_empty_and_untagged_proofs_and_missing_rationale_are_rejected",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_untagged_new_test_fails_the_actual_runner"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-3",
+  "statement": "**TF-3 \u2014 Every new or migrated test names its requirements.** Use one stdlib test-only decorator\n`@requirements(\"TF-3\", ...)` (method or class, resolved to a concrete set for each discovered test) and the\nexisting lifecycle `@check(...)`. Empty, malformed, unknown or stale requirement IDs fail preflight. A subclass\noverride cannot accidentally inherit a method's old proof: it must redeclare its IDs or inherit an explicit\nclass declaration. Every generated state-machine TestCase names its ML/TF IDs. Witness: new untagged test,\nunknown ID, empty tag, untagged override and untagged generated case fail with their stable IDs; tagged\ninherited and generated cases pass. Existing exceptions are solely TF-7."
+ },
+ "TF-4": {
+  "checks": [
+   "root:test_test_framework.MetadataTests.test_requirement_and_check_links_are_checked_in_both_directions",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_untagged_new_test_fails_the_actual_runner"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-4",
+  "statement": "**TF-4 \u2014 Requirements have text and a real check.** Maintain a checked-in catalogue of active requirements\n(unique ID, exact statement, source document/section, check IDs). Import all TF requirements and all 80\n`tests/e2e/requirements.json` requirements without paraphrasing; import ML-1..ML-30 when the merge-library\nbranch is integrated; other existing requirements are added with their source as legacy tests migrate.\nReject an active requirement with no discoverable check and a check naming no known requirement, in both\ndirections. A requirement cannot be removed or marked inactive just to clear this gate. Witness: absent\ncheck, missing reverse mapping, duplicate requirement ID, unknown check and empty statement each fail.\nThe 80 missing lifecycle checks remain failures until step 4 supplies them; they receive no coverage waiver."
+ },
+ "TF-5": {
+  "checks": [
+   "root:test_test_framework.MetadataTests.test_a_requirement_passes_only_when_all_checks_passed_and_actually_ran",
+   "root:test_test_framework.MetadataTests.test_shards_preserve_metadata_failures_and_reject_duplicate_tests_and_invalid_time",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_a_worker_exiting_zero_without_a_result_is_not_a_passing_check",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_skipped_only_requirement_is_not_a_passing_run",
+   "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-5",
+  "statement": "**TF-5 \u2014 Coverage metadata is not a passing outcome.** A full gate reports a requirement passing only when\nevery registered required check has run and passed. Skipped, missing, errored, assertion-free lifecycle checks,\nand unexpected successes cannot establish a passing requirement. Partial runs report unselected requirements\nas not run, never green; global structural validation still runs, and the selected checks determine runtime\nresults. Expected failures also cannot count as a passing proof. Preserve `Phase.expect` assertion counting and requirement-level AND across all scenario parts,\nincluding G1\u2013G9 checks selected for every affected flow. Witness: two checks for one ID, one failing or\nmissing from a shard result, cannot aggregate to pass; a skipped-only proof is not coverage. Assertion counting\nis not proof of semantic correctness: review against the statement and fault sensitivity are also required."
+ },
+ "TF-6": {
+  "checks": [
+   "root:test_test_framework.MetadataTests.test_unknown_empty_and_untagged_proofs_and_missing_rationale_are_rejected"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-6",
+  "statement": "**TF-6 \u2014 Make duplicate slow proof reviewable.** Every non-unit new or migrated test declares a nonempty\n`why_not_scenario` rationale (class-level rationale may cover inherited cases) naming the boundary, fault,\nconcurrency or edge condition a named lifecycle check cannot prove, or records that it IS the canonical\nscenario check. Enforce presence; review truth against the requirement. Witness: a tagged slow test without\nthe rationale fails and names its ID. Existing tests in TF-7 are temporarily exempt from this metadata only.\nRationale alone never authorizes deleting another proof."
+ },
+ "TF-7": {
+  "checks": [
+   "root:test_test_framework.MetadataTests.test_legacy_list_cannot_grow_restore_entries_change_fingerprints_or_rename_tests",
+   "root:test_test_framework.MetadataTests.test_migration_removes_legacy_entry_and_new_tagged_proof_is_required",
+   "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-7",
+  "statement": "**TF-7 \u2014 Grandfather only the unchanged baseline, and only shrink it.** Generate and commit the initial\nlegacy list from discovery on `a1d25560`, recording full suite/test IDs, baseline commit and a SHA-256 source\nfingerprint of the test implementation (including an inherited implementation's defining source and class\nsetup/teardown sources). Keep deterministic sorted output and the generator command. The list exempts only\nmissing requirement/rationale metadata. Compare later lists against an immutable initial ceiling AND the\nreview base version: reject additions, restored removed entries, changed fingerprints or a replaced baseline.\nRenamed, overridden or changed tests must be tagged and removed from the list; missing/stale IDs must be\nremoved. Duplicate IDs are rejected. Witness: add a new test, rename a legacy test, edit its assertion, grow\nthe list, re-add a migrated entry, or replace its fingerprint; each fails. A tagged migration removes the entry\nand passes. The checker must fail closed if the review-base comparison cannot be made; use an explicit base\ncommit argument/CI merge-base, never trust a base supplied by the candidate manifest itself."
+ },
+ "TF-8": {
+  "checks": [
+   "root:test_test_framework.MetadataTests.test_module_budgets_sum_fragments_and_name_every_offender",
+   "root:test_test_framework.MetadataTests.test_shards_preserve_metadata_failures_and_reject_duplicate_tests_and_invalid_time",
+   "root:test_test_framework.MetadataTests.test_shards_require_complete_disjoint_evidence_before_aggregate_budget_can_pass",
+   "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-8",
+  "statement": "**TF-8 \u2014 Enforce module budgets, not worker-fragment budgets.** For each module sum actual elapsed seconds\nof every executed fragment (including import/setup/body/teardown), compare with the layer budget above, and\nname EVERY over-budget module with stage, layer, measured seconds, limit and fragment count. Over-budget\nis a nonzero result; do not bail out after the first. A partial-test selection cannot certify an entire module's\nbudget. Separate shards must produce mergeable records and enforce the aggregate budget at the combined\ngate; a shard alone labels its measurement partial. Witness: two 20s component fragments fail the 30s module\nlimit; equality passes, a value just above fails, two offending modules are both printed. Use an injected clock\nfor budget tests, not real sleeps. Existing modules are not exempt; early framework runs may remain red until\nsteps 4\u20135 migrate them."
+ },
+ "TF-9": {
+  "checks": [
+   "root:test_test_framework.MetadataTests.test_module_budgets_sum_fragments_and_name_every_offender",
+   "root:test_test_framework.MetadataTests.test_shards_preserve_metadata_failures_and_reject_duplicate_tests_and_invalid_time",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_a_worker_exiting_zero_without_a_result_is_not_a_passing_check",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_runner_counts_structured_results_and_saves_only_current_job_seconds",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_worker_timeout_retains_measurements_and_names_its_module",
+   "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-9",
+  "statement": "**TF-9 \u2014 Preserve honest timing and timeout evidence.** Save per-worker elapsed values and run identity,\nselected tests, actual jobs, platform/interpreter, completion/timeout status and module totals. Sum only\ncurrent-run workers for job-seconds (never stale seed timings, module totals plus per-test estimates, or CPU).\nKeep wall time separate; always write available measurements on test failure and timeout. Name timed-out\nworkers and keep their diagnostic log. The scheduler's historical estimates are not measurements. Witness:\nseed timings with obsolete entries, fail one worker and time out another; current totals and diagnostics remain\ncorrect. Hard worker timeout is a safety bound separate from the module's budget. Overall elapsed time is\nreported without a five-minute failure threshold."
+ }
+}

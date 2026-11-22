@@ -1,6 +1,7 @@
 # Test framework requirements for CoCoLo 0.4.0
 
-Status: step 1 proposal, ready for primary/owner review; no framework implementation or test changes yet.
+Status: implementation authorized; owner moved review to completion of all steps (2026-11-22).
+Owner also authorized a temporary test-only dependency environment; no product installation is authorized.
 Baseline: `a1d25560` (0.8.47), branch `feat/test-framework`.
 
 Authority: owner decisions 67, 69, 71–73, 75 and 76–81, and the owner's test-framework work order.
@@ -171,11 +172,11 @@ that contradicts its requirement.
 Record its exact version and SHA-256 artifact hash(es) in a test-only requirements file; also pin/hash required
 transitive dependencies so a hash-required offline-prepared environment is reproducible. No shipped module,
 runtime manifest, installer or provider imports/installs them. Keep shipped code stdlib only and runnable with
-Python 3.11. Do not install anything in this work session. Witness: static distribution-boundary check and a
+Python 3.11. Only the subsequently owner-authorized temporary test-only environment may receive these dependencies. Witness: static distribution-boundary check and a
 shipped-code smoke test with test packages unavailable; dependency file rejects unpinned/unhashed additions.
 Select/verify the concrete Hypothesis release and artifact hashes from primary sources in step 2, not from the
 unverified version claim in a review packet. If an existing prepared interpreter lacks it, record that limitation
-and await a prepared environment; do not silently skip the required property checks or install it here.
+and use the authorized temporary test environment; do not silently skip required property checks.
 
 **TF-17 — Explicit reproducible Hypothesis profiles.** Provide test-only `dev` (20 examples), `ci` (100 examples,
 `derandomize=True`), and `soak` (at least 1000 examples). Normal automated runs select ci; explicit local dev
@@ -222,9 +223,8 @@ file's job-seconds. Witness: report links to executed replacement and retained a
 measurements; metadata-only replacement is insufficient. No pruning precedes the matching scenario proof.
 
 **TF-22 — Review checkpoints and evidence.** Step reports are under 15 lines each and name commits,
-requirements -> red/green or measurement evidence, every assertion replacement, and open issues. Stop for
-primary/owner review after steps 1, 3 and 5. Use only own worktrees/branches; never push/install or modify the
-control project or 0.3.3. Step 2 starts only after this requirements review; step 3 rebases the existing merge
+requirements -> red/green or measurement evidence, every assertion replacement, and open issues. Owner amended the checkpoints on 2026-11-22: continue through all steps and review once at completion. Use only own worktrees/branches; never push, install outside the authorized temporary test environment, or modify the
+control project or 0.3.3. Step 2 is authorized; step 3 rebases the existing merge
 branch only after step 2 is committed. Acceptance includes macOS and Linux / Python 3.11 evidence or an
 explicit outstanding platform gate; this Mac run alone cannot prove portability.
 

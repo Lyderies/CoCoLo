@@ -21,3 +21,14 @@
 - Open for review: numeric budgets and stage/layer mapping (`:25`), catalogue and legacy fingerprint/base contract (`:69`, `:94`).
 - Grandfather manifest generation and verified Hypothesis version/hash are step 2; committed baseline inventory supplies the starting IDs.
 - Stopped after step 1 for primary/owner CoCoLo review; merge-library worktree untouched, no rebase or implementation begun.
+
+## Step 2 — runner rules and test tools (implementation complete)
+- Commits: `05225579` immutable 5,683-test baseline; framework implementation follows this report in the same commit.
+- TF-1..18 -> `tests/test_test_framework.py`, `tests/test_test_framework_guards.py`; red/green witnesses in `measurements/test-framework/step2-evidence.json`.
+- Latest affected run: 45 tests, four modules, no failed workers or over-budget modules; 8.534 job-seconds (`measurements/test-framework/step2-run.json`).
+- Global exit remains 1: 80 missing lifecycle checks and TF-19..22 later-step checks; none waived or marked passing.
+- Existing runner/CI-stage tests pass unchanged. Structured worker outcomes reject skipped-only proofs, zero exits without results and caught guard violations.
+- CI prepares hashed test dependencies on Python 3.11 and combines six shard records before enforcing complete module budgets.
+- Hypothesis 6.170.17 and sortedcontainers 2.4.0 installed only in the owner-authorized temporary test environment; hashes and primary-source provenance committed.
+- Removed/changed assertions: none; deleted tests: none. New negative tests were run red before corresponding code changes.
+- Review checkpoints moved to completion by owner; continuing to step 3. Linux execution remains an outstanding CI gate; local evidence is macOS.
