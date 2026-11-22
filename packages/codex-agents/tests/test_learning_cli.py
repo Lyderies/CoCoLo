@@ -476,6 +476,57 @@ class LearningCliTests(unittest.TestCase):
         finally:
             self._stop_collector()
 
+    def test_status_and_key_replacement_carry_no_private_value_anywhere(self) -> None:
+        # Review 040-screens-r1 MED-1 (owner decision 36): a sentinel scan over the whole output (stdout and
+        # stderr, not one field) of status and the replacement, and over every saved file that is not the
+        # ledger or the signer file (which hold the public key by design): no fingerprint, key text or home path.
+        try:
+            directory = Path(self.temporary.name) / "replacement"
+            directory.mkdir()
+            key, public = generate_test_owner_key(directory)
+            sentinels = {"home path": str(Path.home())}
+            for name, pub in (("old", self.owner_private_key.with_suffix(".pub")), ("new", Path(f"{key}.pub"))):
+                listed = subprocess.run(["ssh-keygen", "-lf", str(pub)], capture_output=True, text=True, check=True).stdout
+                fingerprint = listed.split()[1]
+                self.assertTrue(fingerprint.startswith("SHA256:"), listed)
+                sentinels[f"{name} fingerprint"] = fingerprint
+                sentinels[f"{name} fingerprint body"] = fingerprint.split(":", 1)[1]
+                sentinels[f"{name} key text"] = pub.read_text().split()[1]
+
+            def output(*command: str) -> str:
+                completed = subprocess.run(
+                    [sys.executable, str(ORCHESTRATION_ROOT / "cli.py"), command[0], "--state-root", str(self.state_root),
+                     "--project-root", str(self.project), *command[1:]],
+                    text=True, capture_output=True, env=self._environment(), check=False)
+                self.assertEqual(0, completed.returncode, completed.stderr or completed.stdout)
+                return completed.stdout + "\n--stderr--\n" + completed.stderr
+
+            reports = {"status before": output("learning-status"),
+                       "replacement": output("learning-replace-owner-key", "--public-key", f"{key}.pub"),
+                       "status after": output("learning-status")}
+            for report, text in reports.items():
+                for name, value in sentinels.items():
+                    with self.subTest(report=report, sentinel=name):
+                        self.assertNotIn(value, text)
+                        self.assertNotIn("fingerprint", json.loads(text.split("\n--stderr--\n")[0]).get("owner_key", {}))
+            saved = [path for path in self.state_root.rglob("*")
+                     if path.is_file() and path.name != "owner-allowed-signers"
+                     and not path.name.endswith((".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3"))
+                     and "sqlite" not in path.name]
+            self.assertTrue(saved)
+            for path in saved:
+                data = path.read_bytes()
+                for name, value in sentinels.items():
+                    with self.subTest(saved=path.name, sentinel=name):
+                        self.assertNotIn(value.encode(), data)
+            # The owner's own terminal output still names the key where it matters: status says whether a key is
+            # set and how often it was replaced, which is what the owner needs to proceed or troubleshoot.
+            owner_key = json.loads(reports["status after"].split("\n--stderr--\n")[0])["owner_key"]
+            self.assertEqual(("ok", 1), (owner_key["state"], owner_key["replacements"]))
+            self.assertIsInstance(owner_key["last_replaced_at_ms"], int)
+        finally:
+            self._stop_collector()
+
     def test_missing_billing_attestation_names_the_wizard_option(self) -> None:
         for failure, field, reason in (
             (AdmissionDenied("billing_attestation_missing"),

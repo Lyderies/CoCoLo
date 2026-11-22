@@ -202,6 +202,79 @@ class SetupStraightTests(SetupUpdateTests):
                 self.assertEqual(runs == 0, "already attested" in screen)
                 self._reap()
 
+    def test_S4_3_an_answers_rerun_signs_for_every_signature_that_is_not_current_and_shows_no_private_value(self):
+        # Review 040-screens-r1 MED-1 (owner decisions 36 and 37): an expired or unknown state, a signature of a
+        # replaced key (status "missing"), an account with no identity, an unavailable status or an observation
+        # that is not ready never count as current, so the answers run signs; the current case skips. Every
+        # screen is scanned for a fingerprint, key text or passphrase the status reply carries as a sentinel.
+        project, checks = self.make_project()
+        sentinels = ("SHA256:SENTINELFINGERPRINT0123456789", "AAAASENTINELKEYTEXT", "sentinel-passphrase-value")
+        private = ', "owner_key": {"state": "ok", "fingerprint": "%s", "public_key": "%s", "passphrase": "%s"}' % sentinels
+
+        def reply(claude):
+            return self.ATTESTED.replace('"claude": {"state": "present"}', '"claude": {"state": "%s"}' % claude) \
+                .replace('"provider_attestations"', '"ignored": 1%s, "provider_attestations"' % private)
+        not_ready = '{"ready": false, "provider": "claude"}'
+        cases = [("current", reply("present"), self.OBSERVED, 0), ("expired", reply("expired"), self.OBSERVED, 1),
+                 ("replaced key", reply("missing"), self.OBSERVED, 1),
+                 ("no identity", reply("identity_missing"), self.OBSERVED, 1),
+                 ("unavailable", reply("unavailable"), self.OBSERVED, 1),
+                 ("observation not ready", reply("present"), not_ready, 1)]
+        for name, status, observed, runs in cases:
+            with self.subTest(name):
+                self.attest_count = self.base / "attest.count"
+                self.attest_count.unlink(missing_ok=True)
+                (self.base / "status.count").unlink(missing_ok=True)
+                code, screen = self.scripted(self.answers_for(project, checks), {"FAKE_STATUS_REPLY": status, "FAKE_OBSERVE": observed})
+                self.assertEqual(0, code, screen[-1500:])
+                self.assertEqual(runs, self.attested())
+                self.assertEqual(runs == 0, "already attested" in screen)
+                for value in sentinels:
+                    self.assertNotIn(value, screen)
+                if runs == 0:  # the owner still sees what they need: why nothing was asked, and how to sign again
+                    self.assertIn("no passphrase needed", screen)
+                    self.assertIn("billing_sign_again", screen)
+                self._reap()
+
+    def test_S4_3_an_update_without_answers_tells_the_owner_how_to_sign_again(self):
+        project = self.installed()
+        code, screen = self.update(project, {"FAKE_STATUS_REPLY": self.ATTESTED, "FAKE_OBSERVE": self.OBSERVED})
+        self.assertEqual(0, code, screen[-1500:])
+        self.assertIn("already attested", screen)
+        self.assertIn("Re-run the billing attestation only", screen)
+
+    def walk_through_to_billing(self, env):
+        """Configure, walk through every step, as far as the billing step's own question."""
+        project = self.installed()
+        self.attest_count = self.base / "attest.count"
+        self.start(project, {**REGISTERED, "FAKE_ATTEST": str(self.attest_count), "FAKE_OBSERVE": self.OBSERVED, **env})
+        self.expect("Everything looks good")
+        self.send("\r")
+        self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # Configure
+        self.expect("Update the install and walk through every step")
+        self.send("\x1b[B\r")
+        for wait in ("Continue", "Keep the existing configuration", "Install now", "Continue", "Register now", "Continue"):
+            self.expect(wait, timeout=60)
+            self.send("\r")
+        self.expect("Keep the current signature", timeout=90)
+
+    def test_S4_3_a_bare_enter_on_a_current_signature_keeps_it(self):
+        # Review 040-screens-r1 MED-2 (owner decision 37): signing again is opt-in, never the highlighted default.
+        self.walk_through_to_billing({"FAKE_STATUS_REPLY": self.ATTESTED})
+        self.assertIn("Sign again", self.screen)
+        self.send("\r")
+        self.expect("Step 7 of 9")  # on to the next step with nothing signed
+        self.assertEqual(0, self.attested())
+        self.assertNotIn("attest stub run", self.screen)
+
+    def test_S4_3_choosing_sign_again_on_a_current_signature_signs(self):
+        self.walk_through_to_billing({"FAKE_STATUS_REPLY": self.ATTESTED})
+        self.send("\x1b[B\r")  # Keep the current signature is first; Sign again is the second entry
+        self.expect("attest stub run 1")
+        self.assertEqual(1, self.attested())
+
     # Review 040-s4-code: Quit changes nothing; the owner's profile, rule and records choices stay asked.
 
     def test_S4_1_quit_on_an_installed_project_changes_nothing_in_it(self):

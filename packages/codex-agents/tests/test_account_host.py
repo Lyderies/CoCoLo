@@ -243,7 +243,9 @@ class AccountHostTests(unittest.TestCase):
         after = self.cli('learning-status', project=root, terminal=True)
         self.assertEqual('ok', after['owner_key']['state'], after)
         self.assertNotIn('fingerprint', after['owner_key'])
-        self.assertIsNotNone(after['owner_key']['replacements'])  # the recorded key's state field, not its fingerprint
+        self.assertEqual({'state', 'replacements', 'last_replaced_at_ms'}, set(after['owner_key']))  # whitelist, D36
+        self.assertEqual(0, after['owner_key']['replacements'])  # a first key: never replaced
+        self.assertIsNone(after['owner_key']['last_replaced_at_ms'])
 
     def test_a_key_reader_without_write_access_and_a_stopped_collector_get_nothing(self):
         root, project_id = self.projects[0]

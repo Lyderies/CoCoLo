@@ -1320,6 +1320,8 @@ class Wizard:
             t.list_add("ok", "Every enabled provider's current account is already attested; no passphrase needed")
             if self.answers is not None:
                 t.list_sub('To sign again, set "billing_sign_again": true in the answers file.')
+            else:
+                t.list_sub('To sign again, run ./setup.sh, choose Configure, then "Re-run the billing attestation only".')
             self.mark_step(6, "ok", "already attested")
             return
         t.body("No child agent runs until you confirm that each account cannot be charged beyond its subscription. "
@@ -1330,10 +1332,13 @@ class Wizard:
         if self.mode == "full":
             if signed:
                 t.body("This project's billing statements are signed and current for every enabled provider.")
-                choice = self.ask(["Sign again", "Keep the current signature", "Quit"], implied=True)
-                if choice == 1:
+                # Owner decision 37 (review 040-screens-r1 MED-2): signing again is opt-in, so Keep is the first
+                # entry, the one a bare Enter and every no-menu answer (ask's index 0) takes.
+                choice = self.ask(["Keep the current signature", "Sign again", "Quit"], implied=True)
+                if choice == 0:
                     self.mark_step(6, "ok", "already attested")
                     return
+                choice = 0 if choice == 1 else choice  # Sign again goes on to attest.py like Start the attestation
             else:
                 choice = self.ask(["Start the attestation", "Skip for now", "Quit"], implied=True)
                 if choice == 1:

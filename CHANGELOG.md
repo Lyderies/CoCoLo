@@ -10,8 +10,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   replacement report no longer include the owner key fingerprint (they say whether a key is configured and how
   often it was replaced). An answers-file re-run (`./setup.sh --answers`) now skips signing the billing
   statements when this project's attestation is already signed and current, as an update does; the new answer
-  `"billing_sign_again": true` signs again, and the step-by-step menu offers "Sign again" or "Keep the current
-  signature" when the signature is current.
+  `"billing_sign_again": true` signs again, and the step-by-step menu offers "Keep the current signature" (the
+  default, so a bare Enter never signs) or "Sign again" when the signature is current, and an update without an answers file says how to sign again.
 
 - Package 0.8.45 (Phase 1.2, core API round 6): the owner-facing core API (TM0) joins the 0.8.44 base after six
   review rounds (owner decision 34, no seventh). Fixed with tests that failed first: a single-digit price ("$5")

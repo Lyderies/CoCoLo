@@ -52,6 +52,21 @@ class BillingCurrentTests(unittest.TestCase):
             with self.subTest(name):
                 self.assertIs(expected, steps.billing_current(routing, observed, status))
 
+    def test_S4_3_only_the_exact_present_state_counts_and_an_empty_routing_never_skips(self) -> None:
+        # Review 040-screens-r1 MED-1 and LOW (owner decision 37): an expired, replaced-key, changed-statement or
+        # unknown state is not "present", and with nothing enabled the check is not vacuously true.
+        ok = {"codex": True, "claude": True}
+        for state in ("expired", "stale", "replaced", "changed", "Present", "present ", "", None, True, "missing"):
+            with self.subTest(state=state):
+                self.assertIs(False, steps.billing_current(self.BOTH, ok, self.status(claude=state)))
+        for routing in ('{"version": 1, "providers": {}}',
+                        '{"version": 1, "providers": {"codex": {"enabled": false}, "claude": {"enabled": false}}}'):
+            with self.subTest(routing=routing):
+                self.assertIs(False, steps.billing_current(routing, {}, self.status()))
+                self.assertIs(False, steps.billing_current(routing, ok, self.status()))
+        self.assertIs(False, steps.billing_current(self.BOTH, {}, self.status()))
+        self.assertIs(False, steps.billing_current(self.BOTH, {"codex": 1, "claude": "yes"}, self.status()))
+
 
 class HomeMarkerTests(unittest.TestCase):
     """W3.1: leading home markers are expanded; everything else is left alone."""
