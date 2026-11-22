@@ -612,6 +612,68 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertEqual('denied', denied['probe'], denied)
         self.assertEqual({**denied, 'known': True}, self.reserve('probe-replay-deny'))
 
+    # ---- PC-1..PC-2 (2026-11-22 probe reuse): a run record as constrained as the probe's own reading ----------
+    CONSTRAINED = {'status': 'allowed_warning', 'isUsingOverage': False, 'overageStatus': 'rejected',
+                   'overageDisabledReason': 'org_level_disabled',
+                   'unifiedWindows': {'five_hour': {'utilization': 0.38, 'status': 'allowed'},
+                                      'seven_day': {'utilization': 0.74, 'status': 'allowed_warning'}}}
+
+    def store_probe_info_then_run(self, probe_info, run_info, *, probe_age, run_age):
+        fingerprint = self.identity['account_fingerprint']
+        probe = claude_rate_limit_records(probe_info, account_fingerprint=fingerprint,
+                                          observed_at_ms=self.clock-probe_age)
+        self.ledger._store_provider_observations(self.fixture.project_id, probe, timestamp=self.clock-probe_age)
+        if run_info is not None:
+            run = claude_rate_limit_records(run_info, account_fingerprint=fingerprint,
+                                            observed_at_ms=self.clock-run_age, run_id='run-finished-1')
+            self.ledger._store_provider_observations(self.fixture.project_id, run, timestamp=self.clock-run_age)
+        return probe
+
+    def test_PC1_a_run_record_as_constrained_as_the_probe_does_not_block_reuse(self):
+        """PC-1: probe allowed_warning (5h 38%, weekly 74%), the child's record the same state at +30 s, the
+        request at +78 s: the reuse proceeds (re-evaluated and gated) instead of a fresh probe and a cooldown."""
+        probe = self.store_probe_info_then_run(self.CONSTRAINED, self.CONSTRAINED, probe_age=78_000, run_age=48_000)
+        original = self.reserve('probe-pc1')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), dict, result)
+        self.assertEqual('reused', result['probe'], result)
+        self.assertEqual([self.identity, *probe], result['records'])
+
+    def test_PC2_an_ample_probe_and_a_constrained_run_record_still_blocks_reuse(self):
+        self.store_probe_info_then_run(self.FAVOURABLE, self.CONSTRAINED, probe_age=78_000, run_age=48_000)
+        original = self.reserve('probe-pc2-a')
+        self.prepared(original)
+        self.assertIs(type(self.owner.admit(original)), ProbeAdmission)
+
+    def test_PC2_a_constrained_probe_and_an_exhausted_run_record_still_blocks_reuse(self):
+        exhausted = {**self.CONSTRAINED, 'status': 'rejected'}
+        self.store_probe_info_then_run(self.CONSTRAINED, exhausted, probe_age=78_000, run_age=48_000)
+        original = self.reserve('probe-pc2-b')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), dict, result)
+        self.assertEqual(('denied', 'provider_exhausted'), (result['probe'], result['reason_code']), result)
+
+    def test_PC2_a_constrained_probe_and_a_paid_usage_run_record_still_blocks_reuse(self):
+        paid = {**self.CONSTRAINED, 'isUsingOverage': True, 'overageStatus': 'allowed'}
+        self.store_probe_info_then_run(self.CONSTRAINED, paid, probe_age=78_000, run_age=48_000)
+        original = self.reserve('probe-pc2-c')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), dict, result)
+        self.assertEqual(('denied', 'paid_usage_usable'), (result['probe'], result['reason_code']), result)
+
+    def test_PC2_an_equal_state_does_not_reuse_a_stale_or_future_stamped_probe(self):
+        for name, age in (('stale', 300_001), ('future', -5_000)):
+            with self.subTest(name):
+                self.tearDown_probe_state()
+                self.store_probe_info_then_run(self.CONSTRAINED, self.CONSTRAINED, probe_age=age, run_age=age-30_000)
+                original = self.reserve(f'probe-pc2-{name}')
+                self.prepared(original)
+                result = self.owner.admit(original)
+                self.assertNotEqual('reused', result['probe'] if type(result) is dict else None, result)
+
     def tearDown_probe_state(self):
         connection = self.ledger._connection
         with self.ledger._lock, connection:

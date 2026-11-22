@@ -1061,6 +1061,42 @@ class BR21LedgerReuse(LedgerReuseBase):
         self.store(warning, run_id='run-z', phase='during')
         self.assertNotEqual('reused', self.probe()['probe'])
 
+    # ---- PC-1..PC-2 (2026-11-22 probe reuse): the same rule on the ledger path -----------------------------
+    CONSTRAINED = {**FAVOURABLE, 'status': 'allowed_warning',
+                   'unifiedWindows': {'five_hour': {'utilization': 0.38, 'status': 'allowed'},
+                                      'seven_day': {'utilization': 0.74, 'status': 'allowed_warning'}}}
+
+    def probe_then_run(self, probe_info, run_info, *, between=30_000):
+        self.ready_account(probe_records=False)
+        self.store(probe_info)
+        self.clock += between
+        self.store(run_info, run_id='run-pc', phase='during')
+
+    def test_PC1_a_run_record_as_constrained_as_the_probe_does_not_block_the_ledger_reuse(self):
+        self.probe_then_run(self.CONSTRAINED, self.CONSTRAINED)
+        answer = self.probe(plus=48_000)
+        self.assertEqual('reused', answer['probe'], answer)
+
+    def test_PC2_an_ample_probe_and_a_constrained_run_record_still_stop_the_ledger_reuse(self):
+        self.probe_then_run(FAVOURABLE, self.CONSTRAINED)
+        self.assertNotEqual('reused', self.probe(plus=48_000)['probe'])
+
+    def test_PC2_a_constrained_probe_and_an_exhausted_run_record_still_stop_the_ledger_reuse(self):
+        self.probe_then_run(self.CONSTRAINED, {**self.CONSTRAINED, 'status': 'rejected'})
+        with self.assertRaises(AdmissionDenied) as raised:
+            self.probe(plus=48_000)
+        self.assertEqual('provider_exhausted', raised.exception.reason_code)
+
+    def test_PC2_a_constrained_probe_and_a_paid_usage_run_record_still_stop_the_ledger_reuse(self):
+        self.probe_then_run(self.CONSTRAINED, {**self.CONSTRAINED, 'isUsingOverage': True, 'overageStatus': 'allowed'})
+        with self.assertRaises(AdmissionDenied) as raised:
+            self.probe(plus=48_000)
+        self.assertEqual('paid_usage_usable', raised.exception.reason_code)
+
+    def test_PC2_an_equal_state_does_not_reuse_a_stale_probe_on_the_ledger_path(self):
+        self.probe_then_run(self.CONSTRAINED, self.CONSTRAINED)
+        self.assertNotEqual('reused', self.probe(plus=PROBE_REUSE_MS + 1_000)['probe'])
+
     # ---- the shared gate function itself (G4): a reason code, or None when the yes may be built ----------
     def gate(self, **changes):
         arguments = dict(environ={}, process_environ={}, identity_at=1_000_000, reuse_at=1_000_000,

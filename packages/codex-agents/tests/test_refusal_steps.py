@@ -46,6 +46,27 @@ class RefusalStepTests(unittest.TestCase):
             cli._print({'ready': True, 'reason_code': None})  # not a refusal: unchanged
         self.assertNotIn('next_step', json.loads(out.getvalue()))
 
+    def test_PC3_the_probe_cooldown_names_its_wait_and_other_probe_failures_keep_the_generic_text(self):
+        step = refusal_steps.next_step('probe_cooldown')
+        self.assertNotIn('did not complete', step)
+        self.assertIn('five minutes', step)
+        self.assertIn('provider-observe', step)
+        self.assertRegex(step, r"^[A-Z][^/\\\\]{9,239}[.)]$")
+        self.assertEqual("The billing probe did not complete: wait a moment and run provider-observe again.",
+                         refusal_steps.next_step('probe_unavailable'))
+
+    def test_PC3_a_printed_probe_cooldown_refusal_carries_the_cooldown_step(self):
+        import contextlib
+        import io
+        import json
+        from tests.test_bridge import cli
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli._print({'ready': False, 'reason_code': 'probe_cooldown'})
+        printed = json.loads(out.getvalue())
+        self.assertEqual(refusal_steps.next_step('probe_cooldown'), printed['next_step'])
+        self.assertNotIn('did not complete', printed['next_step'])
+
     def test_result_validation_codes_name_the_contract_step(self):
         from codex_agents.contracts import RESULT_VALIDATION_REASON_CODES
         for code in RESULT_VALIDATION_REASON_CODES:
