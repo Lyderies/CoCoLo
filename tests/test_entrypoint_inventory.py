@@ -32,6 +32,12 @@ class EntryPointTests(unittest.TestCase):
     def test_argparse_entrypoints_start_in_real_stdlib_only_processes(self):
         manifest = json.loads((ROOT / 'scripts/test-entrypoints.json').read_text())
         orchestration = ROOT / 'packages/codex-agents/native-package/.codex/orchestration'
+        expected = {
+            'packages/codex-agents/native-package/.codex/orchestration/' + name for name in
+            ('cli.py', 'learning_hook.py', 'codex_agents/core_api.py', 'codex_agents/egress_proxy.py')}
+        expected.update(('packages/codex-agents/scripts/install.py', 'scripts/install.py', 'scripts/setup-wizard.py'))
+        self.assertEqual(expected, {name for name, record in manifest.items() if record.get('probe') == 'help'})
+        exercised = set()
         with tempfile.TemporaryDirectory() as directory:
             for name, record in manifest.items():
                 if record.get('probe') != 'help':
@@ -44,6 +50,8 @@ class EntryPointTests(unittest.TestCase):
                                             env={**os.environ, 'PYTHONPATH': str(orchestration)}, capture_output=True)
                     self.assertEqual(0, result.returncode, result.stderr.decode(errors='replace'))
                     self.assertIn(b'usage:', result.stdout.lower())
+                    exercised.add(name)
+        self.assertEqual(expected, exercised)
 
     def test_job_reader_process_refuses_unbound_invocation_without_output(self):
         script = ROOT / 'packages/claude-agents/src/claude_agents/job_read_tool.py'
