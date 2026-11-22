@@ -871,7 +871,7 @@ def answer_frames(provider: str, world, result: dict) -> None:
         (world.tools / "codex-last-message.json").write_text(json.dumps({**{key: None for key in keys}, **result}))
 
 
-def child_answer(template: dict, verifier: bool) -> dict:
+def child_answer(template: dict, verifier: bool, verdict: str = "pass") -> dict:
     """The answer a correct child gives: the result-preflight template filled in. The worker states each oracle
     value in its evidence; the verifier confirms each one against the source."""
     evidence = []
@@ -879,7 +879,7 @@ def child_answer(template: dict, verifier: bool) -> dict:
         name = entry["criterion_id"]
         detail = f"{name}={ORACLE[name]}" + (" confirmed in the source" if verifier else "")
         evidence.append({**entry, "type": "source", "outcome": "pass", "reference": f"{WORK_PATH}:1", "details": detail})
-    return {**template, "evidence": evidence, "semantic_verdict": "pass",
+    return {**template, "evidence": evidence, "semantic_verdict": verdict if verifier else "pass",
             "summary": "values confirmed" if verifier else "found both values"}
 
 
@@ -904,12 +904,12 @@ def trusted_interpreter_checks(world) -> None:
     world.git("commit", "-qm", "checks that run in the sandbox")
 
 
-def lifecycle_scene(primary: str):
+def lifecycle_scene(primary: str, verifier_verdict: str = "pass"):
     """L5: one primary's whole run on the fake project, every step recorded: readiness, assignment and result
     preflight, export preflight, open, dispatch, record, then the verifier the same way, operational checks and
     QA, close and the report. The children are the fake clients, answering correctly. After a refused step
     nothing later runs except the close (an owner closes what was opened); the checks name the refused step."""
-    name = "life_" + primary
+    name = "life_" + primary + ("" if verifier_verdict == "pass" else "_" + verifier_verdict)
     if name in _SCENES:
         return _SCENES[name]
     world = e2e_support.World().__enter__()
@@ -971,7 +971,7 @@ def lifecycle_scene(primary: str):
         if opened is None or template is None:
             return
         scene.answers = getattr(scene, "answers", {})
-        scene.answers[prefix] = child_answer(template, verifier)
+        scene.answers[prefix] = child_answer(template, verifier, verifier_verdict)
         answer_frames(provider, world, scene.answers[prefix])
         launched = step(prefix + "dispatch", "dispatch", *common, "--route", route_file,
                         "--run-handle", opened.get("run_handle", ""))
@@ -1165,6 +1165,16 @@ def l5_2_codex_primary_open_dispatch_validate_record(phase: Phase) -> None:
 @check("L5.3")
 def l5_3_claude_primary_verifier_qa_accepted_and_close(phase: Phase) -> None:
     lifecycle_verified_and_closed(phase, lifecycle_scene("claude"))
+
+
+@check("L5.3")
+def l5_3_claude_primary_worker_pass_verifier_ready_qa_accepted(phase: Phase) -> None:
+    """The verifier may say ready where the worker said pass; QA must still accept (requirement L5.3)."""
+    scene = lifecycle_scene("claude", "ready")
+    phase.expect(scene.answers.get("v", {}).get("semantic_verdict") == "ready" and
+                 scene.answers.get("", {}).get("semantic_verdict") == "pass",
+                 "the worker answered pass and the verifier answered ready")
+    lifecycle_verified_and_closed(phase, scene)
 
 
 @check("L5.3")

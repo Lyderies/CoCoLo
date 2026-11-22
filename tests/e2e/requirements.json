@@ -133,6 +133,7 @@
    "statement": "The verifier opened for the worker's outcome digest passes every required evidence item with no discrepancy and verdict pass or ready; operational checks pass and QA records accepted: true; the orchestration closes and its report is right.",
    "checks": [
     "l5_3_claude_primary_verifier_qa_accepted_and_close",
+    "l5_3_claude_primary_worker_pass_verifier_ready_qa_accepted",
     "l5_3_codex_primary_verifier_qa_accepted_and_close"
    ]
   },
