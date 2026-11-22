@@ -167,15 +167,50 @@ class LearningContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "repair reason codes"):
             validate_learning_record(record)
 
-    def test_or1_legacy_diagnostic_repair_codes_stay_readable(self) -> None:
-        """OR-1: 0.8.43 split `inconsistent_axes`; outcomes that older releases wrote still validate."""
-        from codex_agents.contracts import RESULT_DIAGNOSTIC_REASON_CODES
+    def test_or1_stored_outcome_keeps_only_the_historical_repair_code_readable(self) -> None:
+        """OR-1: 4b49660c (0.8.43) split `inconsistent_axes`; outcomes older releases wrote still validate.
+        Nothing else widens: `contract_validation_failed` was never written into an outcome."""
+        from codex_agents.contracts import RESULT_VALIDATION_REASON_CODES
+        from codex_agents.learning_contracts import LEGACY_OUTCOME_REPAIR_CODES
 
-        for code in sorted(RESULT_DIAGNOSTIC_REASON_CODES):
+        self.assertEqual(frozenset({"inconsistent_axes"}), LEGACY_OUTCOME_REPAIR_CODES)
+        for code in sorted(RESULT_VALIDATION_REASON_CODES | {"inconsistent_axes"}):
             record = verification_outcome("legacy_repair_" + code)
             record["repairs"] = 1
             record["repair_reason_codes"] = [code]
             self.assertEqual(record, validate_learning_record(record), code)
+        record = verification_outcome("never_written")
+        record["repairs"] = 1
+        record["repair_reason_codes"] = ["contract_validation_failed"]
+        with self.assertRaisesRegex(ContractError, "repair reason codes"):
+            validate_learning_record(record)
+
+    def test_or1_a_new_outcome_takes_only_codes_a_rejected_attempt_can_carry(self) -> None:
+        for code in ("inconsistent_axes", "contract_validation_failed", "free text"):
+            record = verification_outcome("fresh_" + code[:4])
+            record["repairs"] = 1
+            record["repair_reason_codes"] = [code]
+            with self.subTest(code=code), self.assertRaisesRegex(ContractError, "repair reason codes"):
+                validate_learning_record(record, fresh=True)
+        record = verification_outcome("fresh_ok")
+        record["repairs"] = 1
+        record["repair_reason_codes"] = ["missing_evidence"]
+        self.assertEqual(record, validate_learning_record(record, fresh=True))
+
+    def test_med3_stored_billing_keeps_the_historical_overage_status_readable(self) -> None:
+        """cc2c1164 removed overage status 'disabled' (the parent's providers.py wrote it)."""
+        from codex_agents.learning_contracts import LEGACY_OVERAGE_STATUSES
+        from codex_agents.providers import claude_rate_limit_records
+
+        self.assertEqual(frozenset({"disabled"}), LEGACY_OVERAGE_STATUSES)
+        billing = claude_rate_limit_records({"status": "allowed_warning"}, account_fingerprint="a" * 64, observed_at_ms=10)[1]
+        billing["overage_status"] = "disabled"
+        self.assertEqual(billing, validate_learning_record(billing))
+        with self.assertRaisesRegex(ContractError, "overage_status"):
+            validate_learning_record(billing, fresh=True)
+        billing["overage_status"] = "something_else"
+        with self.assertRaisesRegex(ContractError, "overage_status"):
+            validate_learning_record(billing)
 
     def test_or1_repair_codes_still_match_repairs_and_refuse_unknown_strings(self) -> None:
         for repairs, codes in (

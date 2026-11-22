@@ -124,6 +124,14 @@ class ProjectHistoryTests(unittest.TestCase):
         self.assertEqual(0, self.store._connection.execute('SELECT COUNT(*) FROM records').fetchone()[0])
         self.assertEqual(1, self.store._connection.execute('SELECT next_source_sequence FROM history_identity').fetchone()[0])
 
+    def test_or1_generic_append_refuses_repair_codes_no_new_outcome_may_carry(self):
+        for code in ('inconsistent_axes', 'contract_validation_failed'):
+            record = verification_outcome('append-' + code[:4])
+            record.update(status='unverified', admission_state='unverified', accepted=False,
+                          repairs=1, repair_reason_codes=[code])
+            with self.subTest(code=code), self.assertRaisesRegex(HistoryError, 'history_invalid_input'):
+                self.store.append_record(canonical_json(record), source='host', ingested_at_ms=5)
+
     def test_generic_unverified_outcome_remains_byte_exact_and_replayable(self):
         record = verification_outcome('generic-unverified')
         record.update(status='unverified', accepted=False, admission_state='unverified')

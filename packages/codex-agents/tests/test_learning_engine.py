@@ -1760,6 +1760,26 @@ class OutcomeAndCaseTests(unittest.TestCase):
                 self.assertEqual([code], record["repair_reason_codes"])
                 self.assertEqual(record, validate_learning_record(record))
 
+    def test_or1_build_outcome_refuses_codes_a_rejected_attempt_cannot_carry(self) -> None:
+        for code in ("inconsistent_axes", "contract_validation_failed"):
+            with self.subTest(code=code), self.assertRaisesRegex(ContractError, "repair reason codes"):
+                self._build(repairs=1, repair_reason_codes=[code])
+        self.assertEqual(["missing_evidence"], self._build(repairs=1, repair_reason_codes=["missing_evidence"])["repair_reason_codes"])
+
+    @staticmethod
+    def _build(**changes: object) -> dict:
+        arguments = dict(
+            assignment=assignment(), result=result(), digest_key=DIGEST_KEY, run_id="run_observed",
+            task_slice="coding-low-low", fixture_digest=DIGEST_A, topology="delegated", max_parallel=1,
+            verification_required=True, verifier_digest=DIGEST_A, bounds_digest=DIGEST_B, package_digest=DIGEST_A,
+            policy_digest=DIGEST_B, agent_digest=DIGEST_C, skill_digests=[DIGEST_A], prompt_digest=DIGEST_B,
+            client_digest=DIGEST_C, deterministic_pass=True, security_pass=True, quality_score=1.0, repairs=0,
+            repair_reason_codes=[], delegation_overhead_tokens=10, no_progress_events=0, terminal_failure=False,
+            verifier_disagreement=False, accepted=True, coverage="end_to_end_complete", workflow_usage=full_usage(),
+            observed_at_ms=1000,
+        )
+        return build_outcome(**{**arguments, **changes})
+
     def test_accepted_outcome_cannot_hide_a_failed_gate(self) -> None:
         with self.assertRaisesRegex(ContractError, "failed hard gate"):
             build_outcome(
