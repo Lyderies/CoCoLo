@@ -226,3 +226,16 @@ strict nested-folder requirement conflict is described in `../cocolo-mergelib/CO
 Normal setup copies a disposable prepared repository, replay-key discovery is linear, and child exit polling
 uses a bounded 1ms wait. Full persistence-kind coverage is in the model sample inventory; real process samples
 retain OS boundary checks. Exact assertions and their complete-soak replacements are listed in the merge ledger.
+
+## Step-2 r1 review measurement
+
+Default 16 jobs, five affected modules, 94 passing tests: **20.502791041042656 job-seconds**. Discovery 16.54204099997878s; preflight 0.6366840830305591s; trusted history validation 0.201113874965813s (inside preflight, not added to job-seconds). History validation is below even the 5s unit budget; no cache is justified. The new deterministic-value/source baseline makes discovery more expensive; it is recorded separately and is not hidden as worker time. No full suite was rerun. All baseline debt entries remain warned; unselected modules are explicitly unmeasured.
+
+Cross-worktree integration exposed 522 root-dependent value hashes. The portable baseline preserves all 5683 IDs and the original immutable baselines, with 306 original source files verified against commit 438e1af1. It normalizes only worktree-root path prefixes; the relocation witness proves equality across roots and inequality after a real expected-constant edit.
+
+| R1 portable baseline verification | Tests | Worker job-seconds | Discovery seconds | Preflight seconds |
+|---|---:|---:|---:|---:|
+| Five affected modules, portable fingerprints | 95 | 19.20834891695995 | 44.57896899996558 | 0.6031110000330955 |
+| After resolving root once per fingerprint, affected core module | 44 | 0.7585082500008866 | 15.707939458952751 | 0.5907899580779485 |
+
+Both runs have no worker/budget failures and exactly 80 missing step-4 requirements. The latter validates every immutable legacy fingerprint during discovery, then executes only the affected core module. History validation is 0.2059470409876667s in the latter run. Neither original nor portable baseline was regenerated.
