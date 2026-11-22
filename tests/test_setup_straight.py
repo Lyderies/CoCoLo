@@ -3,6 +3,7 @@
 Integration stage: the in-process wizard driver (tests/wizard_direct_driver.py), with fake clients.
 """
 
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -371,10 +372,13 @@ class SetupStraightTests(SetupUpdateTests):
         self.send("\x1b[B\r")  # No
         self.finish(timeout=90)
         self.assertIn("old records not moved", self.plain(self.transcript))  # the summary keeps it
-        # Nothing was registered (so nothing moved). The billing step now also asks the project CLI whether a
-        # signature is current on the straight path (decision 37), so the log may hold its provider-observe calls.
+        # Nothing was registered or moved: the only CLI call allowed in the log is the straight billing step's
+        # provider-observe (the current-signature check, decision 37).
         log = self.base / "register.log"
-        self.assertNotIn("learning-register", log.read_text() if log.exists() else "")
+        check = (r"-I -B -S -X pycache_prefix=/dev/null \S+/cli\.py provider-observe "
+                 r"--provider claude --project-root " + re.escape(str(project)))
+        for line in (log.read_text().splitlines() if log.exists() else []):
+            self.assertRegex(line, "^" + check + "$")  # only the current-signature check; any other call fails here
 
 
 def load_tests(loader, tests, pattern):
