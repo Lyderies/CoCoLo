@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import select
+import selectors
+from threading import local as ThreadContext
 import socket
 import sys
 import threading
@@ -61,9 +63,18 @@ class Guard:
                 return real_sleep(seconds)
             self.deny('sleep')
         time.sleep = no_sleep
+        context = ThreadContext()
+        real_start = threading.Thread.start
+        def start(thread, *args, **kwargs):
+            context.starting = True
+            try:
+                return real_start(thread, *args, **kwargs)
+            finally:
+                context.starting = False
+        threading.Thread.start = start
         real_wait, real_join, real_select = threading.Condition.wait, threading.Thread.join, select.select
         def wait(condition, timeout=None):
-            if self.layer != 'unit':
+            if self.layer != 'unit' or getattr(context, 'starting', False):
                 return real_wait(condition, timeout)
             if timeout is None or timeout > 0:
                 self.deny('block on a condition/event wait')
@@ -104,26 +115,37 @@ class Guard:
                 def __exit__(self, *args):
                     self.inner.close()
             setattr(select, name, Poll)
-        if hasattr(select, 'kqueue'):
-            factory = select.kqueue
-            guard = self
-            class Kqueue:
-                def __init__(self):
-                    self.inner = factory()
-                def __getattr__(self, name):
-                    return getattr(self.inner, name)
-                def control(self, changelist, max_events, timeout=None):
-                    if guard.layer != 'unit':
-                        return self.inner.control(changelist, max_events, timeout)
-                    ready = self.inner.control(changelist, max_events, 0)
-                    if max_events and timeout != 0 and not ready:
-                        guard.deny('block on kqueue')
-                    return ready
-                def __enter__(self):
-                    return self
-                def __exit__(self, *args):
-                    self.inner.close()
-            select.kqueue = Kqueue
+        # Selector classes cache OS functions before Guard.install. Guard both
+        # public selection and cached call sites, preserving ready-only polls.
+        def selector_guard(original, operation, bound=True):
+            def guarded(*args, **kwargs):
+                if self.layer != 'unit':
+                    return original(*args, **kwargs)
+                positional = list(args)
+                minimum = 1 if bound else 0
+                timeout = kwargs.get('timeout', positional[-1] if len(positional) > minimum else None)
+                if 'timeout' in kwargs or len(positional) == minimum:
+                    kwargs['timeout'] = 0
+                else:
+                    positional[-1] = 0
+                ready = original(*positional, **kwargs)
+                if timeout != 0 and not (any(ready) if isinstance(ready, tuple) else ready):
+                    self.deny('block on ' + operation)
+                return ready
+            return guarded
+        for name in ('SelectSelector', 'PollSelector', 'EpollSelector', 'KqueueSelector'):
+            cls = getattr(selectors, name, None)
+            if cls is None:
+                continue
+            cls.select = selector_guard(cls.select, name + '.select')
+            if '_select' in vars(cls):
+                original = vars(cls)['_select']
+                if isinstance(original, staticmethod) or not hasattr(original, '__get__'):
+                    original = original.__func__ if isinstance(original, staticmethod) else original
+                    cls._select = staticmethod(selector_guard(original, name + '._select', bound=False))
+                else:
+                    cls._select = selector_guard(original, name + '._select')
+
 
 
 class Result(unittest.TextTestResult):
@@ -134,6 +156,12 @@ class Result(unittest.TextTestResult):
     def startTest(self, test):
         self.guard.test = test.id()
         super().startTest(test)
+
+    def stopTest(self, test):
+        try:
+            super().stopTest(test)
+        finally:
+            self.guard.test = None
 
     def addSuccess(self, test):
         self.outcomes.setdefault(test.id(), 'passed')

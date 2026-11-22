@@ -13,7 +13,7 @@ import re
 import subprocess
 
 import parallel_tests
-from test_framework import BASELINE, decode_json
+from test_framework import BASELINE, decode_json, requirement_statements
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,13 +59,9 @@ def main():
         path.write_text(json.dumps(doc, indent=1, sort_keys=True) + '\n')
     if args.catalogue:
         text = (ROOT / 'REQUIREMENTS-test-framework.md').read_text()
-        matches = list(re.finditer(r'^\*\*(TF-\d+) —', text, re.M))
         catalogue = {}
-        for index, match in enumerate(matches):
-            end = matches[index + 1].start() if index + 1 < len(matches) else text.index('\n## ', match.end())
-            requirement = match[1]
-            catalogue[requirement] = {'statement': text[match.start():end].strip(),
-                                     'source': 'REQUIREMENTS-test-framework.md#' + requirement,
+        for requirement, statement in requirement_statements(text).items():
+            catalogue[requirement] = {'statement': statement, 'source': 'REQUIREMENTS-test-framework.md#' + requirement,
                                      'checks': sorted(key for key, row in tests.items() if requirement in row.get('requirements', []))}
         for row in decode_json((ROOT / 'tests/e2e/requirements.json').read_text())['requirements']:
             if row['id'] in catalogue:
@@ -82,6 +78,8 @@ def main():
         if registry.exists():
             for name, check in decode_json(registry.read_text()).items():
                 for requirement in check['requirements']:
+                    if requirement not in catalogue:
+                        raise SystemExit(name + ': unknown registered requirement ' + requirement)
                     catalogue[requirement]['checks'].append(name)
                     catalogue[requirement]['checks'].sort()
         target.write_text(json.dumps(catalogue, indent=1, sort_keys=True) + '\n')

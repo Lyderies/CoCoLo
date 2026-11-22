@@ -48,10 +48,10 @@ def _source(value):
                      code.co_code.hex() if code else 'generated'))
 
 
-def describe_test(test):
+def describe_test(test, source_dependencies=()):
     method = getattr(type(test), test._testMethodName)
     ids = getattr(method, '__requirements__', getattr(type(test), '__requirements__', ()))
-    rationale = getattr(method, '__why_not_scenario__', getattr(type(test), '__why_not_scenario__', ''))
+    rationale = getattr(method, '__why_not_scenario__', None) or getattr(type(test), '__why_not_scenario__', '') or ''
     # Include each defining fixture, including superclass fixtures used through super().
     sources = [_source(method)]
     for cls in type(test).__mro__:
@@ -62,18 +62,22 @@ def describe_test(test):
                 sources.append(_source(cls.__dict__[name]))
     return {'requirements': list(ids), 'rationale': rationale,
             'fingerprint': hashlib.sha256('\n'.join(sources).encode()).hexdigest(),
-            'dependencies': dependency_fingerprint(test)}
+            'dependencies': dependency_fingerprint(test, include_values=False),
+            'dependency_values': dependency_fingerprint(test, source_dependencies=source_dependencies)}
 
 
 def inventory_suite(suite, layers=None):
     """Called only inside a suite's discovery child, honoring its load_tests hooks."""
     found = {}
+    root = Path(__file__).resolve().parents[1]
+    baseline_file = root / 'scripts/test-legacy-values.json'
+    baseline = decode_json(baseline_file.read_text()) if baseline_file.exists() else {}
     def walk(tests):
         for test in tests:
             if isinstance(test, unittest.TestSuite):
                 walk(test)
             elif type(test).__name__ == '_FailedTest':
-                name = test.id().split('.')[-1]
+                name = test._testMethodName
                 found.setdefault(f'{suite}:{name}', {})[f'{suite}:{test.id()}'] = {'import_error': True}
             else:
                 name = type(test).__module__
@@ -81,7 +85,7 @@ def inventory_suite(suite, layers=None):
                 module = found.setdefault(f'{suite}:{name}', {})
                 if key in module:
                     raise ValueError(f'duplicate discovered test: {key}')
-                module[key] = describe_test(test)
+                module[key] = describe_test(test, tuple(root / name for name in baseline.get(key, {}).get('source_dependencies', ())))
     from test_profiles import activate
     from test_worker import Guard
     activate()
@@ -92,10 +96,12 @@ def inventory_suite(suite, layers=None):
         def _get_module_from_name(self, name):
             guard.module = suite + ':' + name
             guard.layer = (layers or {}).get(guard.module, 'component')
-            try:
-                return super()._get_module_from_name(name)
-            finally:
-                guard.layer = 'scenario'
+            return super()._get_module_from_name(name)
+
+        def loadTestsFromModule(self, module, *args, **kwargs):
+            guard.module = suite + ':' + module.__name__
+            guard.layer = (layers or {}).get(guard.module, 'component')
+            return super().loadTestsFromModule(module, *args, **kwargs)
     top = '.' if Path('tests/__init__.py').exists() else 'tests'
     walk(Loader().discover('tests', top_level_dir=top))
     for violation in guard.violations:
@@ -130,9 +136,11 @@ def validate_metadata(*, inventory, stages, layers, catalogue, legacy, ceiling, 
                     errors.append(f'{name}: unknown requirement {requirement!r}')
                 elif name not in catalogue[requirement]['checks']:
                     errors.append(f'{name}: {requirement} does not list its check')
-            if layer != 'unit' and not record.get('rationale', '').strip() and name not in legacy['tests']:
+            if layer != 'unit' and not (record.get('rationale') or '').strip() and name not in legacy['tests']:
                 errors.append(f'{name}: why_not_scenario missing')
     for requirement, row in catalogue.items():
+        if row.get('active') is False:
+            errors.append(requirement + ': requirement cannot be marked inactive')
         if not row.get('statement', '').strip() or not row.get('source', '').strip() or not row.get('checks'):
             errors.append(f'{requirement}: requirement has no statement, source or check')
         if len(row.get('checks', [])) != len(set(row.get('checks', []))):
@@ -180,7 +188,7 @@ def validate_budget_debt(current, ceiling, previous):
     return errors
 
 def measurements(rows, layers, stages, *, jobs, elapsed, selection, part=(1, 1), profile='ci', catalogue=None, fingerprints=None,
-                 budget_debt=None, discovery_seconds=0., preflight_seconds=0.):
+                 budget_debt=None, discovery_seconds=0., preflight_seconds=0., invocation_id=None, expected_fragments=None):
     modules = {}
     fragments = {}
     for row in rows:
@@ -197,10 +205,14 @@ def measurements(rows, layers, stages, *, jobs, elapsed, selection, part=(1, 1),
     warnings = [{'module': name, 'ceiling': value, 'seconds': modules.get(name),
                  'status': 'measured' if name in modules else 'not_measured'}
                 for name, value in sorted(debt.items())]
-    retirement = sorted(name for name in debt if name in modules and modules[name] <= BUDGETS[layers[name]]) if part == (1, 1) else []
-    plan = {'budget_debt': budget_debt or {}, 'layers': layers, 'stages': stages, 'selection': sorted(selection), 'profile': profile,
+    supplied_fragments = expected_fragments
+    expected_fragments = expected_fragments or {name: [row['unit'] for row in rows if row['suite'] + ':' + row['unit'].split('#')[0] == name] for name in modules}
+    complete = {name for name, units in expected_fragments.items() if units and
+                set(units) == {row['unit'] for row in rows if row['suite'] + ':' + row['unit'].split('#')[0] == name and row.get('returncode') == 0 and not row.get('timed_out')} }
+    retirement = sorted(name for name in debt if name in complete and name in modules and modules[name] <= BUDGETS[layers[name]]) if part == (1, 1) else []
+    plan = {'expected_fragments': supplied_fragments or {}, 'budget_debt': budget_debt or {}, 'layers': layers, 'stages': stages, 'selection': sorted(selection), 'profile': profile,
             'catalogue': catalogue or {}, 'fingerprints': fingerprints or {}}
-    return {'schema': 1, 'run_id': uuid.uuid4().hex, 'python': platform.python_version(),
+    return {'schema': 1, 'run_id': uuid.uuid4().hex, 'invocation_id': invocation_id or __import__('os').environ.get('COCOLO_TEST_RUN_ID') or uuid.uuid4().hex, 'python': platform.python_version(),
             'platform': platform.system(), 'jobs': jobs, 'elapsed_seconds': elapsed,
             'job_seconds': sum(row['seconds'] for row in rows), 'workers': rows, 'modules': modules,
             'budget_failures': failures, 'budget_warnings': warnings, 'debt_retirement_required': retirement,
@@ -213,6 +225,8 @@ def combine_measurements(reports):
     if not reports:
         raise ValueError('no shard reports')
     first = reports[0]
+    if not first.get('invocation_id') or any(r.get('invocation_id') != first['invocation_id'] for r in reports):
+        raise ValueError('mixed or missing invocation identity')
     count = first['shard'][1]
     if len(reports) != count or {r['shard'][0] for r in reports} != set(range(1, count + 1)):
         raise ValueError('missing or repeated shards')
@@ -222,6 +236,9 @@ def combine_measurements(reports):
     keys = [(row['suite'], row['unit']) for row in rows]
     if len(keys) != len(set(keys)):
         raise ValueError('overlapping shard workers')
+    expected = {(name.split(':', 1)[0], unit) for name, units in first['plan'].get('expected_fragments', {}).items() for unit in units}
+    if expected and set(keys) != expected:
+        raise ValueError('incomplete expected worker fragments')
     test_keys = [(row['suite'], name) for row in rows for name in row['names']]
     if len(test_keys) != len(set(test_keys)):
         raise ValueError('overlapping shard tests')
@@ -231,11 +248,51 @@ def combine_measurements(reports):
                           catalogue=first['plan']['catalogue'], fingerprints=first['plan']['fingerprints'],
                           budget_debt=first['plan']['budget_debt'],
                           discovery_seconds=sum(r['discovery_seconds'] for r in reports),
-                          preflight_seconds=sum(r['preflight_seconds'] for r in reports))
+                          preflight_seconds=sum(r['preflight_seconds'] for r in reports), invocation_id=first['invocation_id'],
+                          expected_fragments=first['plan'].get('expected_fragments'))
     result['metadata_errors'] = sorted({error for report in reports for error in report.get('metadata_errors', [])})
     outcomes = {key: value for row in rows for key, value in row.get('outcomes', {}).items()}
     result['requirements'] = coverage(first['plan']['catalogue'], outcomes)
     return result
+
+
+def combine_run_records(reports):
+    """Complete stage evidence for one invocation; not_run is never green."""
+    if not reports:
+        raise ValueError('missing run records')
+    first = reports[0]
+    groups = {}
+    for report in reports:
+        if report.get('invocation_id') != first.get('invocation_id'):
+            raise ValueError('mixed invocation identity')
+        if any(report['plan'][key] != first['plan'][key] for key in ('catalogue', 'profile', 'fingerprints', 'layers', 'stages', 'budget_debt')):
+            raise ValueError('incompatible requirement/source/layer plan')
+        groups.setdefault(report['plan_digest'], []).append(report)
+    complete = [combine_measurements(group) for group in groups.values()]
+    selected = {name for report in complete for name in report['plan']['selection']}
+    required = {name for name, layer in first['plan']['layers'].items() if layer != 'soak'}
+    if not required.issubset(selected):
+        raise ValueError('missing/incomplete stage evidence: ' + repr(sorted(required - selected)))
+    outcomes = {}
+    for report in complete:
+        if report.get('metadata_errors') or report['budget_failures'] or report['debt_retirement_required'] or any(w['returncode'] or w.get('timed_out') for w in report['workers']):
+            raise ValueError('failed worker, metadata or budget evidence')
+        for worker in report['workers']:
+            for name, status in worker.get('outcomes', {}).items():
+                if name in outcomes:
+                    raise ValueError('duplicate stage check: ' + name)
+                outcomes[name] = status
+    for report in reports:
+        for name, status in report.get('registered_outcomes', {}).items():
+            if name in outcomes and outcomes[name] != status:
+                raise ValueError('incompatible registered evidence: ' + name)
+            outcomes[name] = status
+    result = coverage(first['plan']['catalogue'], outcomes)
+    failures = {name: status for name, status in result.items() if status != 'passed'}
+    if failures:
+        raise ValueError('requirements failed/not_run: ' + repr(failures))
+    return {'invocation_id': first['invocation_id'], 'requirements': result,
+            'job_seconds': sum(r['job_seconds'] for r in reports)}
 
 
 def validate_dependencies(root):
@@ -252,23 +309,64 @@ def validate_dependencies(root):
             names.add(match[1])
     if names != {'hypothesis', 'sortedcontainers'}:
         errors.append('unexpected test dependency set')
-    for package in (root / 'packages').iterdir():
-        for file in (package / 'native-package').rglob('*.py'):
-            tree = ast.parse(file.read_text())
+    shipped = ('packages/codex-agents/native-package', 'packages/claude-agents/src',
+               'setup.sh', 'scripts/install.py', 'scripts/setup-wizard.py', 'packages/codex-agents/scripts/install.py')
+    files = set()
+    for name in shipped:
+        path = root / name
+        if not path.exists():
+            errors.append(name + ': missing shipped root')
+        elif path.is_dir():
+            files.update(path.rglob('*.py'))
+            files.update(path.rglob('*requirements*.txt'))
+            files.update(path.rglob('pyproject.toml'))
+        else:
+            files.add(path)
+    for folder in (root, root / 'packages/claude-agents', root / 'packages/codex-agents'):
+        for pattern in ('pyproject.toml', 'setup.py', 'setup.cfg', '*requirements*.txt'):
+            files.update(path for path in folder.glob(pattern) if path.name != 'requirements-test.txt')
+    for file in sorted(files):
+        text = file.read_text()
+        if file.suffix == '.py':
+            tree = ast.parse(text)
             for node in ast.walk(tree):
                 modules = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ''] if isinstance(node, ast.ImportFrom) else []
-                if any(m.split('.')[0] in names for m in modules):
+                if any(m.split('.')[0] in {'hypothesis', 'sortedcontainers'} for m in modules):
                     errors.append(f'{file.relative_to(root)}: shipped test dependency import')
+        elif re.search(r'\b(hypothesis|sortedcontainers)\b', text, re.I):
+            errors.append(f'{file.relative_to(root)}: shipped test dependency manifest/install reference')
     return errors
 
 
-def dependency_fingerprint(test):
+@lru_cache(maxsize=None)
+def source_bindings(filename):
+    try:
+        tree = ast.parse(Path(filename).read_text())
+    except (OSError, TypeError, SyntaxError):
+        return {}
+    bindings = {}
+    for node in tree.body:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    bindings[target.id] = node.value
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                bindings[alias.asname or alias.name] = (node.module, alias.name)
+    return bindings
+
+
+def dependency_fingerprint(test, *, include_values=True, source_dependencies=()):
     """Hash local test fixtures/helpers transitively, including generated closure constants."""
     import sys
     import types
     seen, records = set(), {}
+    unresolved = []
     cls = type(test)
     module = sys.modules[cls.__module__]
+    explicit = tuple(getattr(cls, '__fixture_dependencies__', ())) + tuple(source_dependencies)
+    source_backed = any(isinstance(value, (str, Path)) for value in explicit)
     def stable(value):
         if isinstance(value, types.CodeType):
             return code_value(value)
@@ -282,16 +380,40 @@ def dependency_fingerprint(test):
             return repr(value)
         if inspect.isfunction(value) or inspect.isclass(value):
             return (value.__module__, value.__qualname__)
+        if include_values:
+            if isinstance(value, Path):
+                root = Path(__file__).resolve().parents[1]
+                return ('path', value.relative_to(root).as_posix() if value.is_relative_to(root) else value.as_posix())
+            if not source_backed:
+                unresolved.append(type(value).__module__ + ':' + type(value).__qualname__)
         return type(value).__module__ + ':' + type(value).__qualname__
+    def global_value(name, globals_, visited=()):
+        value = globals_.get(name)
+        filename = globals_.get('__file__')
+        binding = source_bindings(filename).get(name) if filename else None
+        if isinstance(binding, tuple) and binding not in visited:
+            imported = sys.modules.get(binding[0])
+            if imported is not None and (binding[0].startswith(('tests.', 'test_')) or local(imported)):
+                return global_value(binding[1], vars(imported), visited + (binding,))
+        dynamic = binding is not None and not isinstance(binding, tuple) and any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and ast.unparse(n.func).startswith(('secrets.', 'random.', 'time.', 'tempfile.', 'os.path.realpath'))
+            or isinstance(n, ast.Attribute) and ast.unparse(n) == 'os.environ'
+            for n in ast.walk(binding))
+        if dynamic:
+            if not source_backed:
+                unresolved.append(name + ': runtime fixture value needs explicit source dependency')
+            return ('source-defined', ast.dump(binding, include_attributes=False))
+        return stable(value)
+
     def code_value(code):
         return (code.co_code.hex(), code.co_names, tuple(stable(v) for v in code.co_consts))
     def local(value):
         owner = getattr(value, '__module__', '')
         try:
-            path = inspect.getsourcefile(value) if inspect.isfunction(value) or inspect.isclass(value) else None
+            path = getattr(value, '__file__', None) if isinstance(value, types.ModuleType) else inspect.getsourcefile(value) if inspect.isfunction(value) or inspect.isclass(value) else None
         except TypeError:
             path = None
-        return owner == cls.__module__ or owner.startswith(('tests.', 'test_')) or bool(path and '/tests/' in path)
+        return owner == cls.__module__ or owner.startswith(('tests.', 'test_')) or bool(path and ('/tests/' in path or include_values and Path(path).parent == Path(getattr(module, '__file__', '')).parent))
     def walk(value):
         if id(value) in seen:
             return
@@ -303,16 +425,28 @@ def dependency_fingerprint(test):
         elif inspect.isfunction(value) and local(value):
             key = value.__module__ + ':' + value.__qualname__
             records[key] = (_source(value), code_value(value.__code__))
+            if include_values and any(name in value.__code__.co_names for name in ('getattr', '__import__', 'import_module', 'eval', 'exec')) and not source_backed:
+                unresolved.append(key + ': dynamic helper needs explicit source dependency')
             for name in value.__code__.co_names:
                 dependency = value.__globals__.get(name)
                 if inspect.isfunction(dependency) or inspect.isclass(dependency):
                     walk(dependency)
-                elif isinstance(dependency, types.ModuleType) and dependency.__name__.startswith(('tests.', 'test_')):
+                elif isinstance(dependency, types.ModuleType) and (dependency.__name__.startswith(('tests.', 'test_')) or include_values and local(dependency)):
                     for referenced in value.__code__.co_names:
-                        walk(getattr(dependency, referenced, None))
+                        item = getattr(dependency, referenced, None)
+                        if include_values and referenced in vars(dependency) and not callable(item) and not isinstance(item, types.ModuleType):
+                            records[key + ':module:' + dependency.__name__ + ':' + referenced] = global_value(referenced, vars(dependency))
+                        else:
+                            walk(item)
+                elif include_values and name in value.__globals__ and not isinstance(dependency, types.ModuleType):
+                    records[key + ':global:' + name] = global_value(name, value.__globals__)
                 for parent in cls.__mro__:
                     if parent not in (object, unittest.TestCase) and name in vars(parent):
-                        walk(vars(parent)[name])
+                        item = vars(parent)[name]
+                        if include_values and not callable(item) and not isinstance(item, (classmethod, staticmethod)):
+                            records[key + ':class:' + parent.__qualname__ + ':' + name] = stable(item)
+                        else:
+                            walk(item)
             for index, cell in enumerate(value.__closure__ or ()):
                 item = cell.cell_contents
                 if inspect.isfunction(item) or inspect.isclass(item):
@@ -330,15 +464,35 @@ def dependency_fingerprint(test):
             walk(vars(parent).get(name))
     for name in ('setUpModule', 'tearDownModule'):
         walk(getattr(module, name, None))
-    for value in getattr(cls, '__fixture_dependencies__', ()):
-        walk(value)
+    for value in explicit:
+        if include_values and isinstance(value, (str, Path)):
+            path = Path(value)
+            try:
+                records['explicit:' + path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError:
+                unresolved.append(str(path))
+        else:
+            walk(value)
+    if include_values and unresolved:
+        return None
     return hashlib.sha256(json.dumps(records, sort_keys=True).encode()).hexdigest()
+
+
+def validate_legacy_values(records, legacy, baseline):
+    errors = []
+    for name in legacy['tests']:
+        observed = records.get(name, {}).get('dependency_values')
+        expected = baseline.get(name, {}).get('fingerprint')
+        if observed is None or expected is None or observed != expected:
+            errors.append(name + ': legacy constants/helper sources changed or unresolved; migrate its requirement proof')
+    return errors
 
 
 def golden_bypasses(source):
     """Reject direct reads of declared golden paths; ordinary fixture/scalar reads remain valid."""
     tree = ast.parse(source)
-    golden_names, temporary_names = set(), set()
+    golden_names = {a.asname or a.name for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names if 'golden' in a.name.lower()}
+    temporary_names = set()
     def references(node, names):
         return any(isinstance(n, (ast.Name, ast.Attribute)) and ast.unparse(n) in names for n in ast.walk(node))
     def temporary(node):
@@ -380,12 +534,32 @@ def registered_outcomes(checks, evidence):
         record = evidence.get(name)
         if record is None:
             outcomes[name] = 'not_run'
-        elif (check['kind'] == 'review' and record.get('revision') == check.get('revision')
-              and record.get('record') and record.get('outcome') == 'passed'):
-            outcomes[name] = 'passed'
         else:
             outcomes[name] = 'failed'
+            try:
+                revision = check.get('revision')
+                path = Path(record['record'])
+                data = path.read_bytes()
+                contents = decode_json(data.decode())
+                if (check['kind'] == 'review' and isinstance(revision, str) and revision.strip()
+                        and record.get('revision') == revision == contents.get('revision')
+                        and record.get('sha256') == hashlib.sha256(data).hexdigest()
+                        and record.get('outcome') == contents.get('outcome') == 'passed'):
+                    outcomes[name] = 'passed'
+            except (OSError, KeyError, ValueError, TypeError):
+                pass
     return outcomes
+
+
+def requirement_statements(text):
+    """One exact, EOF-safe requirement splitter for generation and validation."""
+    pattern = r'^\*\*([A-Z][A-Za-z0-9_.-]*) —.*?(?=\n\*\*[A-Z][A-Za-z0-9_.-]* —|\n## |\Z)'
+    result = {}
+    for match in re.finditer(pattern, text, re.M | re.S):
+        if match[1] in result:
+            raise ValueError('duplicate requirement: ' + match[1])
+        result[match[1]] = match[0].strip()
+    return result
 
 
 def validate_sources(root, catalogue):
@@ -393,6 +567,12 @@ def validate_sources(root, catalogue):
     errors = []
     lifecycle = root / 'tests/e2e/requirements.json'
     lifecycle_rows = {r['id']: r for r in decode_json(lifecycle.read_text())['requirements']} if lifecycle.exists() else {}
+    authority = set(lifecycle_rows)
+    for path in root.glob('REQUIREMENTS*.md'):
+        authority.update(requirement_statements(path.read_text()))
+    if not catalogue:
+        errors.append('empty requirement catalogue')
+    errors.extend(name + ': missing authoritative requirement' for name in sorted(authority - set(catalogue)))
     for name, record in catalogue.items():
         try:
             if name in lifecycle_rows:
@@ -408,8 +588,7 @@ def validate_sources(root, catalogue):
             if path.suffix == '.json':
                 expected = next(r['statement'] for r in decode_json(text)['requirements'] if r['id'] == name)
             else:
-                match = re.search(r'^\*\*' + re.escape(name) + r' —.*?(?=\n\*\*[A-Z][A-Z0-9-]+ —|\n## |\Z)', text, re.M | re.S)
-                expected = match[0].strip() if match else None
+                expected = requirement_statements(text).get(name)
             if record['statement'] != expected:
                 raise ValueError('statement differs from cited source')
         except (OSError, ValueError, KeyError, StopIteration):
