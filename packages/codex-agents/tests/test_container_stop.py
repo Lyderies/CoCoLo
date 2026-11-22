@@ -686,10 +686,12 @@ def alive(pid):
 
 
 def watchdog_armed(name, service_pid):
-    """True once the watchdog guarding container `name` is armed: a process_tree.py --container process
-    whose parent is the service (so orphan detection will trigger) that has acknowledged. The
-    acknowledgement is the moment it replaces its stdout pipe with /dev/null (process_tree._announce),
-    seen through lsof. Every external call has a timeout; a failing probe is an error, not 'not yet'."""
+    """True once the watchdog guarding container `name` has identified its tree and announced: a
+    process_tree.py --container process whose parent is the service (so orphan detection will trigger) whose
+    stdout is /dev/null, which process_tree._announce does after it has written the acknowledgement. That is
+    evidence of identification and the announce transition, NOT of the service having received the
+    acknowledgement (r2 L1). Every external call has a timeout and a failing probe is an error, never
+    'not yet': ps must exit 0, lsof 0 (found) or 1 (nothing to list)."""
     env = {'PATH': os.defpath, 'LC_ALL': 'C'}
     listing = subprocess.run(['/bin/ps', '-axww', '-o', 'pid=,ppid=,command='], capture_output=True, text=True,
                              env=env, timeout=10, check=True).stdout
@@ -698,8 +700,10 @@ def watchdog_armed(name, service_pid):
         if len(fields) == 3 and int(fields[1]) == service_pid and 'process_tree.py' in fields[2] \
                 and '--container' in fields[2] and name in fields[2]:
             described = subprocess.run(['/usr/sbin/lsof', '-a', '-p', fields[0], '-d', '1', '-Fn'],
-                                       capture_output=True, text=True, env=env, timeout=10).stdout
-            return 'n/dev/null' in described.splitlines()
+                                       capture_output=True, text=True, env=env, timeout=10)
+            if described.returncode not in (0, 1):
+                raise RuntimeError(f'lsof failed (exit {described.returncode}): {described.stderr[:200]}')
+            return 'n/dev/null' in described.stdout.splitlines()
     return False
 
 

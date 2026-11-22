@@ -9,8 +9,12 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   is ended only once the container is gone or the tries are used up; before, one failed try abandoned the
   container. The real-watchdog test now waits until the watchdog process exists instead of sleeping 1 s (the
   watchdog starts after the container runs; the sleep raced it under load). The whole stop phase has one time budget
-  (15 s plus the container's grace; a hanging try is abandoned), and a stop not proven gone gets one last try
-  after the tree is ended and a nonzero exit.
+  and a stop not proven gone gets one last try after the tree is ended and a nonzero exit. Round 3 (owner decision
+  46): each try runs as a process of its own (`process_tree.py --stop-container`) that is killed with its whole
+  process group at its timeout, so no thread is abandoned and two stops never overlap; one monotonic clock covers
+  the failure path (10 s plus the grace for the tries, 1 s reserved for ending the tree, a last try of up to 5 s:
+  17 s at grace 1, measured 16.3 s). Tests include the real watchdog script over a podman-shaped client, with
+  its exit status and the processes left.
 
 - Package 0.8.45 (Phase 1.2, core API round 6): the owner-facing core API (TM0) joins the 0.8.44 base after six
   review rounds (owner decision 34, no seventh). Fixed with tests that failed first: a single-digit price ("$5")
