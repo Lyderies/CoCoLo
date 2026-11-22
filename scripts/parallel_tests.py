@@ -193,9 +193,10 @@ def legacy_versions(root, current, ceiling):
         dep_commits = git('log', '--reverse', '--format=%H', 'HEAD', '--', 'scripts/test-legacy-dependencies.json').split()
         if not dep_commits or framework.decode_json((root / 'scripts/test-legacy-dependencies.json').read_text()) != version(dep_commits[0], 'test-legacy-dependencies.json'):
             errors.append('legacy fixture/helper baseline changed or is uncommitted')
-        value_commits = git('log', '--reverse', '--format=%H', 'HEAD', '--', 'scripts/test-legacy-values.json').split()
-        if not value_commits or framework.decode_json((root / 'scripts/test-legacy-values.json').read_text()) != version(value_commits[0], 'test-legacy-values.json'):
-            errors.append('legacy constants/source baseline changed or is uncommitted')
+        for value_name in ('test-legacy-values.json', 'test-legacy-portable-values.json'):
+            value_commits = git('log', '--reverse', '--format=%H', 'HEAD', '--', 'scripts/' + value_name).split()
+            if not value_commits or framework.decode_json((root / 'scripts' / value_name).read_text()) != version(value_commits[0], value_name):
+                errors.append(value_name + ': legacy constants/source baseline changed or is uncommitted')
         if ceiling != original:
             errors.append('legacy initial ceiling changed')
         try:
@@ -309,7 +310,7 @@ def metadata():
                     errors.append(name + ': legacy fixture/helper dependency changed; migrate its requirement proof')
     else:
         errors.append('missing legacy fixture/helper dependency baseline')
-    value_file = ROOT / 'scripts/test-legacy-values.json'
+    value_file = ROOT / 'scripts/test-legacy-portable-values.json'
     values = framework.decode_json(value_file.read_text()) if value_file.exists() else {}
     errors += framework.validate_legacy_values({key: rec for cases in discovered.values() for key, rec in cases.items()}, legacy, values)
     entrypoints = ROOT / 'scripts/test-entrypoints.json'

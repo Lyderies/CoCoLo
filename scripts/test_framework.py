@@ -377,6 +377,10 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
         if isinstance(value, dict):
             return ('dict', sorted(((stable(k), stable(v)) for k, v in value.items()), key=repr))
         if isinstance(value, (str, bytes, int, float, bool, type(None))):
+            if include_values and isinstance(value, str):
+                root = str(Path(__file__).resolve().parents[1])
+                if value == root or value.startswith(root + '/'):
+                    return repr('<worktree>' + value[len(root):])
             return repr(value)
         if inspect.isfunction(value) or inspect.isclass(value):
             return (value.__module__, value.__qualname__)
