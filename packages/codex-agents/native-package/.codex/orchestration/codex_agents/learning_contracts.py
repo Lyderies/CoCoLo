@@ -708,7 +708,13 @@ OUTCOME_FIELDS = {
 }
 
 
-def validate_outcome(data: Any) -> dict[str, Any]:
+# Repair codes a released version wrote into stored outcomes and later dropped from the result
+# validation vocabulary: 4b49660c (0.8.43) split `inconsistent_axes` by branch. Stored records stay
+# readable with it; a new outcome (`fresh=True`) never carries it.
+LEGACY_OUTCOME_REPAIR_CODES = frozenset({"inconsistent_axes"})
+
+
+def validate_outcome(data: Any, *, fresh: bool = False) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ContractError("outcome must be an object")
     axis_fields = {
@@ -806,8 +812,10 @@ def validate_outcome(data: Any) -> dict[str, Any]:
         not isinstance(reason_codes, list)
         or len(reason_codes) != data["repairs"]
         or any(
-            # Older releases wrote `inconsistent_axes` here; stored outcomes stay readable.
-            not isinstance(code, str) or code not in RESULT_DIAGNOSTIC_REASON_CODES
+            not isinstance(code, str) or (
+                code not in RESULT_VALIDATION_REASON_CODES
+                and (fresh or code not in LEGACY_OUTCOME_REPAIR_CODES)
+            )
             for code in reason_codes
         )
     ):
@@ -1769,6 +1777,8 @@ ADMISSION_REASON_CODES = {
 }
 CLAUDE_HEADROOM_STATUSES = {"allowed", "allowed_warning", "rejected"}
 CLAUDE_OVERAGE_STATUSES = {"allowed", "allowed_warning", "rejected"}
+# cc2c1164 removed "disabled", which the parent's providers.py wrote; stored billing records stay readable.
+LEGACY_OVERAGE_STATUSES = frozenset({"disabled"})
 CLAUDE_AUTH_METHODS = frozenset({"claude.ai"})
 CLAUDE_SUBSCRIPTION_TYPES = frozenset({"max", "pro", "team", "enterprise"})
 # The app-server PlanType enum, without its catch-all unknown value.
@@ -1871,7 +1881,7 @@ def validate_provider_headroom(data: Any) -> dict[str, Any]:
     return data
 
 
-def validate_provider_billing(data: Any) -> dict[str, Any]:
+def validate_provider_billing(data: Any, *, fresh: bool = False) -> dict[str, Any]:
     data = _closed_optional(
         data, PROVIDER_BILLING_REQUIRED_FIELDS, PROVIDER_BILLING_FIELDS,
         "provider_billing",
@@ -1883,7 +1893,11 @@ def validate_provider_billing(data: Any) -> dict[str, Any]:
     ):
         if data.get(field) is not None:
             _boolean(data[field], field)
-    _enum(data["overage_status"], CLAUDE_OVERAGE_STATUSES, "overage_status", nullable=True)
+    _enum(
+        data["overage_status"],
+        CLAUDE_OVERAGE_STATUSES if fresh else CLAUDE_OVERAGE_STATUSES | LEGACY_OVERAGE_STATUSES,
+        "overage_status", nullable=True,
+    )
     _enum(
         data["overage_disabled_reason"], set(CLAUDE_OVERAGE_DISABLED_REASONS),
         "overage_disabled_reason", nullable=True,
@@ -2388,14 +2402,19 @@ VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
 }
 
 
-def validate_learning_record(data: Any) -> dict[str, Any]:
+_LEGACY_READABLE = frozenset({"outcome", "provider_billing"})
+
+
+def validate_learning_record(data: Any, *, fresh: bool = False) -> dict[str, Any]:
+    """Validate one record. `fresh=True` is for a record being written now; the default reads
+    stored records, which may hold values an earlier release wrote and today's writers do not."""
     if not isinstance(data, dict):
         raise ContractError("learning record must be an object")
     record_type = data.get("record_type")
     validator = VALIDATORS.get(record_type)
     if validator is None:
         raise ContractError("unsupported learning record type")
-    checked = validator(data)
+    checked = validator(data, fresh=fresh) if record_type in _LEGACY_READABLE else validator(data)
     if len(canonical_json(checked)) > MAX_RECORD_BYTES:
         raise ContractError("learning record is oversized")
     return checked

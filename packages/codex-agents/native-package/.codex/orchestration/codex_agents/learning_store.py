@@ -4230,7 +4230,7 @@ class LearningLedger:
         now_ms: int | None = None,
     ) -> dict[str, Any]:
         try:
-            checked = validate_learning_record(record)
+            checked = validate_learning_record(record, fresh=True)
         except ContractError as exc:
             raise LedgerError("record admission rejected") from exc
         allowed = PRODUCER_AUTHORITY.get(producer, set())
@@ -5690,7 +5690,7 @@ class LearningLedger:
         timestamp: int,
     ) -> list[dict[str, Any]]:
         try:
-            checked = [validate_learning_record(record) for record in records]
+            checked = [validate_learning_record(record, fresh=True) for record in records]
         except ContractError as exc:
             raise LedgerError("record admission rejected") from exc
         if any(record["record_type"] not in PROVIDER_OBSERVATION_TYPES for record in checked):
@@ -6328,7 +6328,7 @@ class LearningLedger:
                 phase="during",
             )
             try:
-                checked = [validate_learning_record(record) for record in records]
+                checked = [validate_learning_record(record, fresh=True) for record in records]
             except ContractError as exc:
                 raise LedgerError("record admission rejected") from exc
             kept = [

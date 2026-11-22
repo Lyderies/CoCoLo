@@ -652,7 +652,7 @@ def build_outcome(
             for field, value in normalized_usage.items()
         },
     }
-    return validate_outcome(record)
+    return validate_outcome(record, fresh=True)
 
 
 def build_host_result_records(

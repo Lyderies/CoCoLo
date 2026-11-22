@@ -614,7 +614,7 @@ class ProjectHistory:
                     os.close(descriptor)
 
     @staticmethod
-    def _checked_record(content: bytes, source: str, ingested_at_ms: int) -> dict:
+    def _checked_record(content: bytes, source: str, ingested_at_ms: int, *, fresh: bool = False) -> dict:
         if (
             type(content) is not bytes or not 0 < len(content) <= MAX_RECORD_BYTES
             or type(source) is not str or source not in SOURCES or not valid_integer(ingested_at_ms)
@@ -631,7 +631,7 @@ class ProjectHistory:
                 or type(parsed.get("schema_version")) is not int
             ):
                 raise HistoryError("history_invalid_input")
-            checked = validate_learning_record(parsed)
+            checked = validate_learning_record(parsed, fresh=fresh)
             if (
                 canonical_json(checked) != content
                 or not valid_integer(checked.get("observed_at_ms"))
@@ -694,7 +694,7 @@ class ProjectHistory:
 
     @_operation
     def append_record(self, content: bytes, *, source: str, ingested_at_ms: int) -> HistoryEntry:
-        checked = self._checked_record(content, source, ingested_at_ms)
+        checked = self._checked_record(content, source, ingested_at_ms, fresh=True)
         if checked["record_type"] in {"dispatch_result", "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance", "host_open_provenance"}:
             # Closed business writers own terminal, usage and admission records.
             raise HistoryError("history_invalid_input")
