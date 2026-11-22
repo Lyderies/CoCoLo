@@ -1355,5 +1355,79 @@ class RealContainerStopTests(unittest.TestCase):
               file=sys.stderr)
 
 
+class FailurePathBudgetTests(unittest.TestCase):
+    """r5 R1/R2 (decision 56 A): the listing retries respect the deadline, and the whole failure path fits the total."""
+
+    def fake_time(self):
+        clock = FakeClock()
+        slept = []
+
+        def sleep(seconds):
+            slept.append((clock.now, seconds))
+            clock.sleep(seconds)
+
+        return clock, slept, mock.Mock(monotonic=clock.monotonic, sleep=sleep)
+
+    def slow_failing_listing(self, clock):
+        calls = []
+
+        def table(timeout=None):
+            calls.append((clock.now, timeout))
+            clock.now += timeout  # a listing that fails slowly: it eats all the time it was given
+            return None
+
+        return table, calls
+
+    def test_r1_listing_retries_never_start_or_sleep_past_the_deadline(self):
+        clock, slept, fake = self.fake_time()
+        table, calls = self.slow_failing_listing(clock)
+        tree = process_tree.ProcessTree(2 ** 30, None)
+        deadline = clock.now + 7.0  # the first attempt eats 5 s (SNAPSHOT_TIMEOUT_SECONDS), 2 s are left
+        with mock.patch.object(process_tree, 'time', fake), mock.patch.object(process_tree, 'process_table', table):
+            self.assertIsNone(tree._listing(deadline))
+        self.assertLessEqual(clock.now, deadline + 1e-9, 'a retry ran past the deadline')
+        for started, seconds in slept:
+            self.assertLessEqual(started + seconds, deadline + 1e-9)
+        for started, timeout in calls:
+            self.assertLessEqual(started + timeout, deadline + 1e-9)
+        self.assertGreater(len(calls), 1)  # it did retry
+
+    def test_r2_the_whole_failure_path_fits_the_total_for_any_grace(self):
+        total = process_tree.WATCHDOG_STOP_TOTAL_SECONDS
+        reserve = process_tree.WATCHDOG_TERMINATE_RESERVE_SECONDS
+        # The stop tool's last command is given room = left - REAP_SECONDS and its process group may then take
+        # REAP_SECONDS to end: it ends by the deadline it was handed, whatever the grace (the grace is cut to
+        # the time left less STOP_GRACE_MARGIN_SECONDS, and is itself a command inside that same budget).
+        stop_worst = (total - reserve - cr.REAP_SECONDS) + cr.REAP_SECONDS
+        # The tree phase: a pause or one listing at a time, each given at most the time left to `end`.
+        tree_worst = reserve
+        worst = stop_worst + tree_worst
+        print(f'\n[r5 R2] worst case of the failure path: {worst:g} s of {total:g} s', file=sys.stderr)
+        self.assertLessEqual(worst, 17.0)
+        self.assertLessEqual(worst, total)
+        # The same, run on a fake clock: a stop that uses every second it is offered, a tree whose listings
+        # all fail slowly.
+        for grace in (0, 3, 3600):
+            clock, _, fake = self.fake_time()
+            table, _ = self.slow_failing_listing(clock)
+            tree = process_tree.ProcessTree(2 ** 30, None)
+            tree.identified = True
+            tree.tracked = {2 ** 30: 'birth'}
+
+            class Stop:
+                name, record, grace_given = 'x', None, grace
+
+                def stop(self, deadline, clock=clock):
+                    clock.now = deadline  # takes all it is given
+                    return mock.Mock(outcome='deadline', detail='cut', gone=False)
+
+            begun = clock.now
+            with mock.patch.object(process_tree, 'time', fake), \
+                    mock.patch.object(process_tree, 'process_table', table), \
+                    mock.patch.object(process_tree, 'write_json_record', lambda *a, **k: True):
+                process_tree._stop_and_end(Stop(), tree)
+            self.assertLessEqual(clock.now - begun, worst + 1e-9, f'grace {grace}')
+
+
 if __name__ == '__main__':
     unittest.main()
