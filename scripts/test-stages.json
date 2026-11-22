@@ -133,6 +133,7 @@
  "codex:tests.test_large_project_backups": "integration",
  "codex:tests.test_launch_journal": "integration",
  "codex:tests.test_launch_signature_preparation": "integration",
+ "codex:tests.test_launch_receipts_layout": "unit",
  "codex:tests.test_learning_adapters": "unit",
  "codex:tests.test_learning_analysis": "integration",
  "codex:tests.test_learning_benchmark": "unit",
