@@ -708,8 +708,12 @@ def _check_end_state(test, f, batch, report, *, kind='forward', read_history=Non
         test.assertEqual(terminal_before, row.state)
     state = row.state
     test.assertIn(state, ('applying', 'landed', 'reverted', 'needs_owner', 'resolved', 'undone'))
+    report_read = (call and call.detail.get('reporting') and not call.detail.get('mutating')
+                   and call.operation in ('open', 'read', 'fstat', 'lstat')
+                   and (call.operation != 'open' or not call.detail.get('flags', 0)
+                        & (os.O_ACCMODE | os.O_CREAT | os.O_TRUNC | os.O_APPEND)))
     unreadable = set()
-    if call and fault not in (None, 'short') and call.detail.get('reporting') and call.operation in ('open', 'read', 'fstat', 'lstat'):
+    if report_read and fault not in (None, 'short'):
         if call.path and Path(call.path).is_relative_to(f.project):
             unreadable.add(Path(call.path).relative_to(f.project).as_posix())
     report_oracle(test, f, report, batch, unreadable=unreadable, moved=getattr(f, 'moved_paths', {}))
@@ -743,7 +747,7 @@ def _check_end_state(test, f, batch, report, *, kind='forward', read_history=Non
                     and call.detail.get('commit') == 'retire'):
                 test.assertFalse(row.cleanup_complete, 'failed cleanup must remain retryable')
         elif state == 'landed':
-            test.assertTrue(fault == 'short' or call.operation == 'sqlite_commit' or (call.operation in ('open', 'read', 'fstat', 'lstat') and call.detail.get('reporting') and terminal_before == 'landed'),
+            test.assertTrue(fault == 'short' or call.operation == 'sqlite_commit' or (report_read and terminal_before == 'landed'),
                             'ordinary I/O failure cannot end landed')
         else:
             test.assertIn(state, ('applying', 'reverted', 'needs_owner'))
