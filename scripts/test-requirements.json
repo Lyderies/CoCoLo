@@ -491,6 +491,7 @@
    "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_missing_staging_failed_restore_then_retry",
    "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_uncertain_A",
    "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_uncertain_B",
+   "codex:tests.test_merge_library_adversarial.RealImages.test_ml_12_really_full_image",
    "codex:tests.test_merge_library_forward_faults.Campaign.test_ml_12_fault_sweep_forward",
    "codex:tests.test_merge_library_harness.HarnessOracles.test_ML12_rejects_swallowed_IO_failures_even_with_landed_tree_and_row",
    "codex:tests.test_merge_library_harness.HarnessOracles.test_ml_12_campaign_partition_preserves_every_discovered_check_once",
@@ -872,6 +873,8 @@
  },
  "ML-4": {
   "checks": [
+   "codex:tests.test_merge_library_adversarial.RealImages.test_ml_4_FAT_HFS_images",
+   "codex:tests.test_merge_library_adversarial.RealImages.test_ml_4_actual_mounted_target_and_staging",
    "codex:tests.test_merge_library_contract.Contract.test_ml_4_filesystem_cross_drive_history",
    "codex:tests.test_merge_library_contract.Contract.test_ml_4_filesystem_cross_drive_staging",
    "codex:tests.test_merge_library_contract.Contract.test_ml_4_filesystem_fat_no_exchange",
