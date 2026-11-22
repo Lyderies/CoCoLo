@@ -618,9 +618,10 @@ class AccountBillingJobs:
         history = None if job.reservation is None else job.reservation.history
         if result is not None:
             try:
-                # BR-8, M1: integrity of the exact row and reply of this job's judgment generation.
+                # BR-8, M1: integrity of the exact row and reply of this job's judgment generation. Decision 50: the
+                # yes itself is gated at publication (the one final gate); this check builds none.
                 self._owner.verify_committed(*job.key, job.context, before_commit=job.before_publish,
-                                             reply=result, history=history, judgment=job.judgment)
+                                             reply=result, history=history, judgment=job.judgment, gate=False)
             except ProbeAdmissionError as error:
                 result, reason = None, error.reason_code
             except Exception as error:
@@ -633,7 +634,7 @@ class AccountBillingJobs:
 
     def _current(self, job):
         try:
-            return job.judgment is not None and self._owner.judgment_current(job.judgment)
+            return job.judgment is not None and self._owner.gate_current(job.judgment)
         except Exception:
             return False
 

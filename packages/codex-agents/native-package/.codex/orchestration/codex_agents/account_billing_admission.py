@@ -13,7 +13,8 @@ import time
 
 from .account_claim_contracts import ClaimError
 from .admission_inputs import AdmissionCaptureLimits
-from .admission_metadata import API_KEY_VARIABLES, evaluate_admission, headroom_state
+from . import admission_metadata
+from .admission_metadata import API_KEY_VARIABLES, evaluate_admission
 from .account_observation import ObservationContext
 from .account_open_admission import open_admission_inputs
 from .billing_probe_schema import assert_billing_probe_schema
@@ -72,6 +73,16 @@ class ProbeAdmission:
 
 
 @dataclass(frozen=True, repr=False, eq=False)
+class Yes:
+    """Decision 50 (BR-19): a sealed yes. It is built only by `AccountBillingAdmission._seal_yes`, which only the
+    final gate (`_gate`, `_gate_permit`) calls, after every caller callback and with nothing external after it.
+    `kind` is 'reply' (a reused or completed answer) or 'permit' (an admitted probe); `gated_at_ms` is the
+    ledger time of the gate."""
+    kind: str
+    gated_at_ms: int
+
+
+@dataclass(frozen=True, repr=False, eq=False)
 class _Judgment:
     """Decision 47 (H1, M1): what one judgment generation answered, kept so that delivery can be checked against
     it. `row` is the committed row the answer is about (a repeat's unchanged history); `digest` is the digest
@@ -83,6 +94,10 @@ class _Judgment:
     digest: str
     snapshot: object = None
     guard: object = None
+    # Decision 50 (BR-18): the time facts the yes stood on, tested again by the gate: the observation time of
+    # the identity judged and, for a reuse, of the probe billing reading it cited.
+    identity_at: object = None
+    reuse_at: object = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -266,7 +281,7 @@ class AccountBillingAdmission:
             decision = {'provider': 'claude', 'decision': 'deny', 'reason_code': 'probe_replay_stale',
                         'admission_basis': None, 'account_fingerprint': None, 'evidence_digests': [],
                         'observed_at_ms': now}
-            self._ledger._store_probe_admission_locked(reservation.project, decision, timestamp=now)
+            self._ledger._store_probe_denial_locked(reservation.project, decision, timestamp=now)  # BR-22
             self._authorize(reservation.context, reservation.snapshot, reservation.authorize, False)
             if self._row(reservation.project, reservation.key) != row:
                 raise ProbeAdmissionError('probe_conflict')
@@ -284,7 +299,7 @@ class AccountBillingAdmission:
         decision = {'provider': 'claude', 'decision': 'deny', 'reason_code': 'provider_api_key_present',
                     'admission_basis': None, 'account_fingerprint': None, 'evidence_digests': [],
                     'observed_at_ms': now}
-        self._ledger._store_probe_admission_locked(project, decision, timestamp=now)
+        self._ledger._store_probe_denial_locked(project, decision, timestamp=now)  # BR-22
         self._authorize(context, snapshot, before_commit, False)
         if self._project(project, context) != root or self._row(project, key) != row:
             raise ProbeAdmissionError('probe_conflict')
@@ -407,20 +422,8 @@ class AccountBillingAdmission:
 
     @staticmethod
     def _newer_run_restricts(latest, billing, headroom, fingerprint, now, order):
-        """R2: a run record newer than the probe's latest billing that is more restrictive (paid usage usable,
-        overage in use, or headroom that is not ample) means the probe's favourable reading is not enough.
-        BR-2 (decision 44): "newer" is serialized insertion order (`order`: record id to its row's insertion
-        number) OR a later-or-equal observation time, so a restriction stored late with an earlier stamp still
-        counts; freshness itself always uses the real observation time."""
-        since, seen = latest['observed_at_ms'], order.get(latest['record_id'])
-        newer_than = lambda r: (r['observed_at_ms'] >= since  # noqa: E731
-                                or (seen is not None and order.get(r['record_id'], -1) > seen))
-        if any(r.get('run_id') is not None and newer_than(r)
-               and (r.get('paid_usage_usable') is True or r.get('is_using_overage') is True) for r, _ in billing):
-            return True
-        newer = [(r, d) for r, d in headroom if r['account_fingerprint'] == fingerprint
-                 and r.get('run_id') is not None and newer_than(r)]
-        return bool(newer) and headroom_state('claude', fingerprint, newer, [], now)[0] != 'ample'
+        """R2 / BR-2: shared with the ledger's own reuse path (decision 50, BR-21); see admission_metadata."""
+        return admission_metadata.newer_run_restricts(latest, billing, headroom, fingerprint, now, order)
 
     def admit(self, reservation):
         try:
@@ -452,10 +455,16 @@ class AccountBillingAdmission:
         row = self._original(reservation, False)
         repeat = reservation.history is not None
         if row['state'] == 'admitted':
-            self._original(reservation)  # a repeat admit() re-checks the API key (launch is still guarded)
+            self._original(reservation)  # a repeat admit() re-checks the API key; callbacks end here
             original = self._permits.get(reservation)
-            if original is None:
+            inputs = None if original is None else self._execution_inputs.get(original)
+            if inputs is None:
                 raise ProbeAdmissionError()
+            # Decision 50 (BR-19): the stored permit is a yes again only through the gate, against the inputs
+            # it was judged on; it is never handed back from memory.
+            with ExitStack() as turn, self._ledger._account_transaction():
+                self._gate_permit(original, inputs, parse_bounded_json_value(
+                    inputs.admission, max_bytes=MAX_PROBE_REPLY_BYTES), stack=turn)
             return original
         handle = self._signatures.get(reservation)
         if handle is None:
@@ -516,6 +525,7 @@ class AccountBillingAdmission:
                                               {r.raw[2]: r.raw[0] for r in result.prepared.rows})):
                 latest = None
             judged = None
+            yes_kind = None  # decision 50: 'reply' / 'permit' when this judgment ends in a yes (gated below)
             history = self._value(row) if repeat else None
             if latest is not None:
                 # B1: a reuse skips only the provider call, never the judgment. Paid usage, an API key, the client
@@ -554,14 +564,14 @@ class AccountBillingAdmission:
                     # also on a repeat's fresh yes; the time of the judgment is `now`, which freshness above used.
                     repeat_reply = self._build_reply(value, known=reservation.known, observed_at=row['created_at_ms'],
                                                      gone='probe_replay_stale')
-                    final, appended = row, None
+                    final, appended, yes_kind = row, None, 'reply'
                 except ProbeAdmissionError as error:
                     if error.reason_code != 'probe_replay_stale':
                         raise
                     selected = None  # a judged record is gone, expired or out of retention: a new probe is needed
             elif selected is not None:
                 final = self._commit_reply(row, 'reused', None, selected, result.prepared.rows)
-                appended = None
+                appended, yes_kind = None, 'reply'
             if selected is None:
                 cooldown = any(r.record['record_type'] == 'probe_admission'
                     and r.record['provider'] == 'claude' and r.record['decision'] == 'pass'
@@ -599,9 +609,17 @@ class AccountBillingAdmission:
                     if self._one("SELECT 1 FROM account_billing_probe_requests INDEXED BY billing_probe_active_account "
                             "WHERE state='admitted' AND account_fingerprint=? LIMIT 1", (fingerprint,)) is not None:
                         raise ProbeAdmissionError('probe_busy')
-                material = {'schema_version': 1, 'record_type': 'probe_admission', **decision}
-                appended = validate_learning_record({**material, 'record_id': 'probe_admission:'+content_digest(material)})
-                self._ledger._store_probe_admission_locked(reservation.project, decision, timestamp=now)
+                if decision['decision'] == 'pass':
+                    material = {'schema_version': 1, 'record_type': 'probe_admission', **decision}
+                    stored = appended = validate_learning_record(
+                        {**material, 'record_id': 'probe_admission:'+content_digest(material)})
+                    self._ledger._store_probe_admission_locked(reservation.project, decision, timestamp=now)
+                else:
+                    # BR-22: one denial record per reason and account per window; a refusal asked again inside the
+                    # window is answered from the record that stands for it and writes none.
+                    stored, is_new = self._ledger._store_probe_denial_locked(reservation.project, decision,
+                                                                             timestamp=now)
+                    appended = stored if is_new else None
                 if repeat:
                     # Recorded as a denial (owner decision 44); the history row stays as it is.
                     repeat_reply = {'probe': 'denied', 'reason_code': decision['reason_code'], 'records': [],
@@ -609,22 +627,21 @@ class AccountBillingAdmission:
                     final = row
                 else:
                     row = {**row, 'account_fingerprint': fingerprint,
-                        'admission_record_id': appended['record_id'], 'admission_digest': content_digest(appended)}
+                        'admission_record_id': stored['record_id'], 'admission_digest': content_digest(stored)}
                     if decision['decision'] == 'pass':
-                        final = self._update(row, state='admitted')
+                        final, yes_kind = self._update(row, state='admitted'), 'permit'
                     else:
                         final = self._commit_reply(row, 'denied', decision['reason_code'], [], result.prepared.rows)
+            # Decision 50 (BR-16, BR-17): every caller callback of this judgment has run when this one returns; the
+            # gate follows it in the same transaction and builds the yes. Nothing the caller supplies runs after it.
             self._authorize(reservation.context, reservation.snapshot, reservation.authorize, False)
-            self._fresh(reservation, snapshot, appended=appended)
             if (execution_owner is not None and not repeat
                     and execution_owner._prepared_identity(reservation) != canonical_json(identity)):
                 raise ProbeAdmissionError('probe_conflict')
-            if ({n: 'present' for n in API_KEY_VARIABLES if os.environ.get(n)} != guard
-                    or self._row(reservation.project, reservation.key) != final):
-                raise ProbeAdmissionError('probe_conflict')
-            # BR-15: the last thing before the commit; the signer cannot change until the commit is done.
-            signer_turn.enter_context(self._signer_stable())
-            self._inputs_unchanged(snapshot)
+            identity_at = None if identity is None else identity['observed_at_ms']
+            reuse_at = None if latest is None or yes_kind != 'reply' else latest['observed_at_ms']
+            yes = self._gate(reservation, snapshot, guard, final, kind=yes_kind, identity_at=identity_at,
+                             reuse_at=reuse_at, appended=appended, stack=signer_turn)
         self._pool.discard(handle)
         self._signatures.pop(reservation)
         if final['state'] == 'admitted':
@@ -636,17 +653,78 @@ class AccountBillingAdmission:
                  original.admitted_at_ms), reservation,
                 replace(snapshot, policy=replace(snapshot.policy)), canonical_json(identity),
                 canonical_json(appended), reservation.deadline_ns)
-            self._original(reservation)
+            if self._row(reservation.project, reservation.key) != final:  # no callback after the gate (BR-17)
+                raise ProbeAdmissionError('probe_conflict')
             return original
         self._pending.pop((reservation.project, reservation.key))
         self._reserved_inputs.pop(reservation)
         reply = repeat_reply if repeat else self._reply(final, known=False)
-        # Decision 47 (H3): no authorization callback after the final input comparison (the last one ran above,
-        # inside the transaction, before it); delivery asks the caller again and checks what that changed.
+        # Decision 47 (H3), 50 (BR-17): no authorization callback after the gate; delivery asks the caller again
+        # and the publication gate checks what that changed.
         if self._row(reservation.project, reservation.key) != final:
             raise ProbeAdmissionError('probe_conflict')
-        self._judged[reservation] = _Judgment(reservation, final, content_digest(reply), snapshot, guard)
+        self._judged[reservation] = _Judgment(reservation, final, content_digest(reply), snapshot, guard,
+                                              identity_at, reuse_at)
         return reply
+
+    def _seal_yes(self, kind, now):
+        """The one place a yes is built (decision 50, BR-19); only the gate calls it."""
+        return Yes(kind, now)
+
+    def _gate(self, reservation, snapshot, guard, row, *, kind, identity_at, reuse_at, appended, stack):
+        """Decision 50, the final gate: the only code that builds a yes (`kind` 'reply' or 'permit'); with `kind`
+        None the same comparison runs for an answer that is not a yes (a refusal), which builds nothing.
+
+        Runs inside the caller's account transaction, after every caller callback, and runs none itself. It takes
+        the owner-signer turn first (BR-15: ledger lock, then turn, held to the commit), then compares everything
+        the judgment used with the current state: the rows, policy, signer and owner generation of the judgment's
+        own snapshot (not a capture taken later), the API-key environment, the committed row, and, for a yes,
+        freshness at the gate's own time: the identity reading's window and the reuse age of the billing reading
+        it stands on (BR-18), with the deadline. Any difference raises probe_conflict."""
+        self._guard()
+        stack.enter_context(self._signer_stable())
+        self._project(reservation.project, reservation.context)
+        now = self._fresh(reservation, snapshot, appended=appended)  # inputs vs the snapshot, and the deadline
+        if {n: 'present' for n in API_KEY_VARIABLES if os.environ.get(n)} != guard:
+            raise ProbeAdmissionError('probe_conflict')
+        if self._row(reservation.project, reservation.key) != row:
+            raise ProbeAdmissionError('probe_conflict')
+        if kind is not None:
+            repeat = reservation.history is not None
+            refusal = admission_metadata.reuse_gate(
+                environ=os.environ, process_environ=os.environ, identity_at=identity_at, reuse_at=reuse_at, now_ms=now,
+                since_ms=now-PROBE_REUSE_MS if repeat else reservation.created,
+                reuse_ms=PROBE_REUSE_MS if kind == 'reply' else None)
+            if refusal is not None:
+                raise ProbeAdmissionError('provider_api_key_present' if refusal == 'provider_api_key_present'
+                                          else 'probe_conflict')
+        self._inputs_unchanged(snapshot)  # BR-15: the signer and the policy, under the turn
+        return None if kind is None else self._seal_yes(kind, now)
+
+    def _gate_permit(self, permit, inputs, admission, *, stack):
+        """The final gate of a stored permit (a repeat admit, a launch): the same comparison against the inputs the
+        permit was judged on, with its own admission record, as `_gate` makes. Runs after the caller callbacks of
+        its path and none of its own."""
+        self._guard()
+        stack.enter_context(self._signer_stable())
+        reservation = inputs.reservation
+        self._project(reservation.project, reservation.context)
+        now = self._fresh(reservation, inputs.snapshot, appended=admission)
+        if any(os.environ.get(n) for n in API_KEY_VARIABLES):
+            raise ProbeAdmissionError('provider_api_key_present')
+        row = self._row(reservation.project, reservation.key)
+        if (row is None or row['state'] != 'admitted' or (row['account_fingerprint'], row['admission_record_id'],
+                row['admission_digest']) != inputs.permit_fields[:3]):
+            raise ProbeAdmissionError('probe_conflict')
+        identity = parse_bounded_json_value(inputs.identity, max_bytes=MAX_PROBE_REPLY_BYTES)
+        refusal = admission_metadata.reuse_gate(
+            environ=os.environ, process_environ=os.environ, identity_at=identity['observed_at_ms'], reuse_at=None,
+            now_ms=now, since_ms=reservation.created, reuse_ms=None)
+        if refusal is not None:
+            raise ProbeAdmissionError('provider_api_key_present' if refusal == 'provider_api_key_present'
+                                      else 'probe_conflict')
+        self._inputs_unchanged(inputs.snapshot)
+        return self._seal_yes('permit', now)
 
     def judgment_of(self, reservation):
         """The judgment of a finished generation (None when there is none); handed over once (decision 47)."""
@@ -663,22 +741,20 @@ class AccountBillingAdmission:
             raise ProbeAdmissionError('probe_conflict')
         return _Judgment(None, row, content_digest(reply))
 
-    def judgment_current(self, judgment):
-        """Decision 47 (H1): whether every input a judgment used is still exactly as it was (rows, policy, signer,
-        attestations, the API-key environment) and its generation is still within its deadline. Runs no callback
-        and never raises for a changed input; a judgment that named no inputs is never current."""
+    def gate_current(self, judgment):
+        """Decision 50: whether a judgment's yes would still pass the final gate now (the check at take, which
+        decides whether a ready yes is judged again). It is the gate itself: every input the judgment used against
+        its own snapshot, plus freshness. Runs no callback and never raises for a changed input; a judgment that
+        named no inputs never passes."""
         self._guard()
         reservation = judgment.reservation
         if reservation is None or judgment.snapshot is None:
             return False
         try:
-            with self._ledger._account_transaction():
-                self._project(reservation.project, reservation.context)
-                if self._row(reservation.project, reservation.key) != judgment.row:
-                    return False
-                self._fresh(reservation, judgment.snapshot)
-                self._inputs_unchanged(judgment.snapshot)
-                return {n: 'present' for n in API_KEY_VARIABLES if os.environ.get(n)} == judgment.guard
+            with ExitStack() as turn, self._ledger._account_transaction():
+                self._gate(reservation, judgment.snapshot, judgment.guard, judgment.row, kind='reply',
+                           identity_at=judgment.identity_at, reuse_at=judgment.reuse_at, appended=None, stack=turn)
+            return True
         except ProbeAdmissionError:
             return False
 
@@ -903,7 +979,9 @@ class AccountBillingAdmission:
                 or content_digest(admission) != permit.admission_digest):
             raise ProbeAdmissionError('probe_conflict')
         if launching:
-            self._fresh(inputs.reservation, inputs.snapshot, appended=admission)
+            # Decision 50 (BR-19): a launch is a yes again; the gate follows the callbacks of `_original` above.
+            with ExitStack() as turn, self._ledger._account_transaction():
+                self._gate_permit(permit, inputs, admission, stack=turn)
             if time.monotonic_ns() >= inputs.deadline_ns:
                 raise ProbeAdmissionError('probe_conflict')
         return inputs, row
@@ -972,15 +1050,20 @@ class AccountBillingAdmission:
         return reply
 
     def verify_committed(self, project, runtime, caller, identity, context, *, before_commit, reply, history=None,
-                         judgment=None):
-        """BR-8 (decision 44): publication checks the exact row the job committed, for integrity only: its seal,
-        its request binding and the caller's authorization. A repeat's judgment committed nothing: its row must
-        be the unchanged history it was judged against. Never a judgment, never a reason for a false conflict
-        when unrelated evidence arrived. Raises probe_conflict on any difference.
+                         judgment=None, gate=True):
+        """BR-8 (decision 44): publication checks the exact row the job committed, for integrity: its seal, its
+        request binding and the caller's authorization. A repeat's judgment committed nothing: its row must be the
+        unchanged history it was judged against. Never a reason for a false conflict when unrelated evidence
+        arrived. Raises probe_conflict on any difference.
 
         Decision 47: with the job's `judgment`, the committed row must be exactly the one that generation answered
-        about and the reply exactly the one it built (M1). A yes is also checked across the last callback: the
-        inputs are captured just before it and just after it, in one transaction, and a difference refuses (H3)."""
+        about and the reply exactly the one it built (M1).
+
+        Decision 50: a yes (a reused or completed answer) is also gated: the caller's callback runs first (BR-16, it
+        is untrusted), then the one final gate compares everything the judgment used with the current state, against
+        the judgment's own snapshot, and tests freshness again. It returns a sealed `Yes`; a yes with no judgment to
+        gate it against is refused. `gate=False` (the check at take, which hands the answer on for publication)
+        checks integrity only and builds no yes."""
         self._guard()
         if (not matches(project, _PROJECT) or not matches(runtime, _DIGEST) or not matches(caller, _DIGEST)
                 or not matches(identity, _ID) or type(context) is not ObservationContext or type(reply) is not dict):
@@ -988,7 +1071,8 @@ class AccountBillingAdmission:
         snapshot = context.snapshot()
         self._authorize(context, snapshot, before_commit)
         key = keyed(self._key, b'billing-probe-request-v1\0', [project, runtime, caller, identity])
-        with self._ledger._account_transaction():
+        positive = gate and self._rejudges(reply)
+        with ExitStack() as turn, self._ledger._account_transaction():
             root = self._project(project, context)
             row = self._row(project, key)
             if (row is None or row['state'] != 'committed'
@@ -1005,16 +1089,14 @@ class AccountBillingAdmission:
                 if not (reply['probe'] == 'denied' and reply.get('records') == [] and reply.get('known') is True
                         and self._rejudges(self._value(row))):
                     raise ProbeAdmissionError('probe_conflict')
-            if self._rejudges(reply):
-                before = self._capture(project)
-                self._authorize(context, snapshot, before_commit)  # the last callback
-                if not same_admission_inputs(before, self._capture(project, before.anchor_ms)):
-                    raise ProbeAdmissionError('probe_conflict')
-            else:
-                self._authorize(context, snapshot, before_commit)
             if self._project(project, context) != root or self._row(project, key) != row:
                 raise ProbeAdmissionError('probe_conflict')
-        return True
+            if not positive:
+                return True
+            if judgment is None or judgment.reservation is None or judgment.snapshot is None:
+                raise ProbeAdmissionError('probe_conflict')  # no judgment to gate the yes against
+            return self._gate(judgment.reservation, judgment.snapshot, judgment.guard, judgment.row, kind='reply',
+                              identity_at=judgment.identity_at, reuse_at=judgment.reuse_at, appended=None, stack=turn)
 
     @contextmanager
     def _signer_stable(self):

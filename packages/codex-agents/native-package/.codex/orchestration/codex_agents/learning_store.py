@@ -241,6 +241,8 @@ BRIDGE_CLIENT_VERSION = "bridge-v1"
 PROBE_REUSE_SECONDS = 300
 # A launched probe reserves its account for this long, whatever it returned.
 PROBE_COOLDOWN_SECONDS = 300
+# Decision 50 (BR-22): the window of the denial-record bound (one record per reason and account per window).
+PROBE_DENIAL_WINDOW_MS = PROBE_COOLDOWN_SECONDS * 1000
 # A run keeps only rate-limit events more restrictive than those it already
 # recorded, so this cap is reached only by a stream that keeps escalating.
 MAX_RUN_RATE_LIMIT_RECORDS = 64
@@ -6025,11 +6027,16 @@ class LearningLedger:
         it reports is kept as one conservative merge.
         """
 
+        from . import admission_metadata
         from .bridge import BridgeRefused, claude_billing_probe
         from .claude_host import ClaudeHostDenied, check_backend
         from .providers import AdmissionDenied, _headroom_state, claude_rate_limit_records
 
         environ = os.environ if environ is None else environ
+        # Decision 50 (BR-21): a provider API key in the caller's environment or in the process's own refuses,
+        # whichever the caller passed; the passed one still decides what a launched probe runs with.
+        checked_environ = {**dict(os.environ), **dict(environ)}
+        started = self._clock_ms()
 
         def deny(reason: str, timestamp: int, decision: dict[str, Any] | None = None):
             record = decision or {
@@ -6038,7 +6045,8 @@ class LearningLedger:
                 "evidence_digests": [], "observed_at_ms": timestamp,
             }
             with self._held(), self._connection:
-                self._store_probe_admission_locked(project_id, record, timestamp=timestamp)
+                # Decision 50 (BR-22): one denial record per reason and account per window.
+                self._store_probe_denial_locked(project_id, record, timestamp=timestamp)
             self.state.harden_database_files()
 
         try:
@@ -6053,34 +6061,56 @@ class LearningLedger:
         with self._held(), self._connection:
             # Read under the lock that orders admission decisions.
             timestamp = self._clock_ms()
-            billing = [
-                record for record, _ in self._account_records_locked(
-                    project_id, "provider_billing", "claude"
-                )[0]
-                if record["account_fingerprint"] == fingerprint
-            ]
-            latest = max(billing, key=lambda record: record["observed_at_ms"], default=None)
-            reuse = latest is not None and 0 <= timestamp - latest["observed_at_ms"] < (
-                PROBE_REUSE_SECONDS * 1000
+            account_billing, _ = self._account_records_locked(project_id, "provider_billing", "claude")
+            account_headroom, _ = self._account_records_locked(project_id, "provider_headroom", "claude")
+            billing = [(record, digest) for record, digest in account_billing
+                       if record["account_fingerprint"] == fingerprint]
+            # Decision 50 (BR-21): the reading a reuse stands on is the probe's own (a finished child's
+            # records neither stand in for it nor refresh its age), and a newer run record that is more
+            # restrictive stops the reuse, as it does on the account path (R2, BR-2).
+            latest = admission_metadata.probe_latest(billing, fingerprint)
+            order = {
+                str(row[0]): int(row[1]) for row in self._connection.execute(
+                    "SELECT record_id,rowid FROM records WHERE source='provider' "
+                    "AND record_type IN ('provider_billing','provider_headroom')"
+                ).fetchall()
+            }
+            reuse = (
+                latest is not None
+                and 0 <= timestamp - latest["observed_at_ms"] < (
+                    PROBE_REUSE_SECONDS * 1000
+                )
+                and not admission_metadata.newer_run_restricts(
+                    latest, billing, account_headroom, fingerprint, timestamp, order)
             )
             decision = self._evaluate_admission_locked(
-                project_id, provider="claude", environ=environ, timestamp=timestamp,
+                project_id, provider="claude", environ=checked_environ, timestamp=timestamp,
                 probe=True,
             )
             if reuse and decision["decision"] == "pass":
                 # B1: fresh evidence bounds the spend when children open back to back,
                 # but never without a judgment: paid usage, a client version or an
                 # attestation problem is refused below with its own reason.
-                headroom = [
-                    record for record, _ in self._account_records_locked(
-                        project_id, "provider_headroom", "claude"
-                    )[0]
-                    if record["account_fingerprint"] == fingerprint
-                ]
-                return {
-                    "probe": "reused",
-                    "records": [identity, *headroom[-1:], latest],
-                }
+                head = admission_metadata.probe_head(account_headroom, fingerprint)
+                # Decision 50 (BR-21): the yes is built here and nowhere else, by the shared gate, after the
+                # last read and with nothing external after it.
+                refusal = admission_metadata.reuse_gate(
+                    environ=environ, process_environ=os.environ, identity_at=identity["observed_at_ms"],
+                    reuse_at=latest["observed_at_ms"], now_ms=self._clock_ms(), since_ms=started,
+                    reuse_ms=PROBE_REUSE_SECONDS * 1000,
+                )
+                if refusal is None:
+                    return {
+                        "probe": "reused",
+                        "records": [identity, *([] if head is None else [head]), latest],
+                    }
+                if refusal == "provider_api_key_present":
+                    decision = {
+                        "provider": "claude", "decision": "deny", "reason_code": refusal,
+                        "admission_basis": None, "account_fingerprint": fingerprint,
+                        "evidence_digests": [], "observed_at_ms": timestamp,
+                    }
+                reuse = False
             # Owner decision 40 (a): the real problem is reported first; the cooldown
             # names itself only when nothing else refuses. billing_unverified is the
             # gap the cooling probe itself fills, so it does not count as a real problem.
@@ -6172,7 +6202,7 @@ class LearningLedger:
 
     def _store_probe_admission_locked(
         self, project_id: str, decision: dict[str, Any], *, timestamp: int
-    ) -> None:
+    ) -> dict[str, Any]:
         material = {"schema_version": 1, "record_type": "probe_admission", **decision}
         try:
             record = validate_learning_record(
@@ -6183,6 +6213,31 @@ class LearningLedger:
         self._append_checked_locked(
             project_id, record, producer="lifecycle", timestamp=timestamp
         )
+        return record
+
+    def _store_probe_denial_locked(
+        self, project_id: str, decision: dict[str, Any], *, timestamp: int
+    ) -> tuple[dict[str, Any], bool]:
+        """Decision 50 (BR-22): one denial record per reason per account per window.
+
+        A refusal whose (reason, account) already has a denial record inside PROBE_DENIAL_WINDOW_MS of this
+        time (before or after it, so a clock step does not reopen it) is answered from that record and stores
+        nothing, so a client asking again and again cannot grow the ledger. The window is the probe cooldown;
+        a stored record keeps the ordinary retention. Returns (the record that stands for it, whether it is new).
+        A pass admission is never bounded: it is stored by _store_probe_admission_locked."""
+
+        window = PROBE_DENIAL_WINDOW_MS
+        row = self._connection.execute(
+            "SELECT content FROM records WHERE record_type='probe_admission' AND source='lifecycle' "
+            "AND json_extract(CAST(content AS TEXT),'$.decision')='deny' "
+            "AND json_extract(CAST(content AS TEXT),'$.reason_code')=? "
+            "AND json_extract(CAST(content AS TEXT),'$.account_fingerprint') IS ? "
+            "AND observed_at_ms>? AND observed_at_ms<? ORDER BY observed_at_ms DESC LIMIT 1",
+            (decision["reason_code"], decision["account_fingerprint"], timestamp - window, timestamp + window),
+        ).fetchone()
+        if row is not None:
+            return validate_learning_record(json.loads(bytes(row[0]))), False
+        return self._store_probe_admission_locked(project_id, decision, timestamp=timestamp), True
 
     def record_claude_rate_limit_event(
         self,

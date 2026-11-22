@@ -862,7 +862,11 @@ class RejudgeServiceTests(unittest.TestCase):
         self.assertIn('completed', [a['probe'] for a in self.answers()], 'the completed history is gone')
         self.assertEqual(history[0], [a for a in self.answers() if a['probe'] == 'completed'][0])
 
-    def test_BR4_and_BR8_unrelated_favourable_evidence_between_commit_and_publish_is_no_false_conflict(self):
+    def test_BR4_and_BR8_unrelated_favourable_evidence_between_commit_and_publish_is_refused_and_a_retry_is_judged_again(self):
+        # Decision 50 (BR-16): was "is_no_false_conflict" (decision 44, BR-8: unrelated evidence between commit and
+        # publish never refused). The final gate compares everything the judgment used with the current state, so
+        # evidence that arrives after take refuses the publication; the client asks again and the next judgment
+        # (which sees that evidence) answers.
         self.store(FAVOURABLE, age=2000)
         real, added = self.billing.take, []
 
@@ -872,10 +876,12 @@ class RejudgeServiceTests(unittest.TestCase):
                 added.append(self.store({**FAVOURABLE, 'utilization': .3}, age=0))
             return reply
 
-        self.enterContext(mock.patch.object(self.billing, 'take', side_effect=take))
-        answer = self.take(self.begin())
+        with mock.patch.object(self.billing, 'take', side_effect=take):
+            with self.assertRaisesRegex(AccountError, '^probe_conflict$'):
+                self.take(self.begin())
         self.assertTrue(added, 'the hook never ran between commit and publish')
-        self.assertEqual(('reused', False), (answer['probe'], answer['known']), answer)
+        answer = self.take(self.begin())  # the retry: a new judgment of the request, over the evidence now stored
+        self.assertEqual(('reused', True), (answer['probe'], answer['known']), answer)
         self.assertEqual([], self.launches())
 
 

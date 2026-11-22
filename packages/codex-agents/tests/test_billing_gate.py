@@ -48,7 +48,12 @@ from tests.learning_support import trusted_tools
 PLATFORM = _rj.PLATFORM
 FAVOURABLE, PAID, KEY = _rj.FAVOURABLE, _rj.PAID, _rj.KEY
 YES_KINDS = frozenset({'reused', 'completed'})
-MAX_K = 4  # callback invocations the matrix reaches for (a path with fewer skips the rest, after its control counted them)
+# Callback invocations the matrix aims at, per path: what f0f43fbd made (the final one of the permit path and the
+# second of the publication check ran after the last comparison) or what the gate design makes, whichever is more.
+# A path that now makes fewer callbacks skips the rest, after its control counted them.
+MAX_K = {'reply_of_a_repeat': 3, 'reply_of_a_new_request': 3, 'permit_of_a_new_probe': 4, 'permit_returned_again': 2,
+         'launch_of_a_permit': 1, 'publication_check_of_a_yes': 2}
+SERVICE_MAX_K = 5
 
 
 def is_yes(result):
@@ -267,7 +272,7 @@ class OwnerMatrixBase(_rj.RejudgeOwnerBase, MutationsOwner):
 def add_matrix(cls, paths, prefix='test_matrix'):
     for path in paths:
         for name in MUTATIONS:
-            for k in range(1, MAX_K+1):
+            for k in range(1, MAX_K[path]+1):
                 def test(self, path=path, name=name, k=k):
                     self.injected(path, name, k)
                 test.__name__ = f'{prefix}_{path}_{name.replace(" ", "_")}_k{k}'
@@ -656,7 +661,7 @@ class ServiceMatrix(unittest.TestCase, MutationsOwner):
 
 
 for _name in MUTATIONS:
-    for _k in range(1, 6):
+    for _k in range(1, SERVICE_MAX_K+1):
         def _test(self, _name=_name, _k=_k):
             self.injected(_name, _k)
         _test.__name__ = f'test_matrix_service_take_and_publish_{_name.replace(" ", "_")}_k{_k}'
@@ -699,7 +704,7 @@ POSITIVE_SITES = {
         'LearningLedger.observe_claude_billing': {'gates': {'reuse_gate'}, 'after': set()},
     },
 }
-SEAL_BUILDERS = {'account_billing_admission': ('Yes', {'AccountBillingAdmission._seal'})}
+SEAL_BUILDERS = {'account_billing_admission': ('Yes', {'AccountBillingAdmission._seal_yes'})}
 
 
 def functions(tree):
@@ -844,8 +849,8 @@ class BR20StructuralCheck(unittest.TestCase):
         source = module_source(account_billing_admission)
         tree = ast.parse(source)
         table = dict(functions(tree))
-        self.assertIn('AccountBillingAdmission._seal', table, 'the one place a yes is built')
-        builders = {q for q, f in table.items() for name, _ in called_names(f) if name == '_seal'}
+        self.assertIn('AccountBillingAdmission._seal_yes', table, 'the one place a yes is built')
+        builders = {q for q, f in table.items() for name, _ in called_names(f) if name == '_seal_yes'}
         self.assertEqual({'AccountBillingAdmission._gate', 'AccountBillingAdmission._gate_permit'}, builders)
         for gate in ('AccountBillingAdmission._gate', 'AccountBillingAdmission._gate_permit'):
             self.assertIn(gate, table)

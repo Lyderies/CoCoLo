@@ -792,6 +792,11 @@ class AccountService:
                   'request_digest': account_request_digest(request)}
         try:
             records = result['records']
+            # Decision 50 (BR-16): the caller's callback runs first and is untrusted; the waiver display and the
+            # provenance are read next; the one final gate (verify_committed, which asks the caller once more
+            # before it) is the last thing, and nothing external runs after it.
+            if before_publish() is not True:
+                raise ProbeAdmissionError('probe_not_authorized')
             waivers = self._observation_jobs._owner.billing_waivers(project, records) if records else {}
             raw = self._reply(labels, result={**result, 'billing_waivers': waivers})
             try:
@@ -801,16 +806,10 @@ class AccountService:
                 lane_health.safely(lambda: self._billing_jobs.health.note_failure(
                     self._billing_jobs._note, 'probe_reply_invalid', None))
                 raise ProbeAdmissionError('probe_reply_invalid') from None
-            if before_publish() is not True:
-                raise ProbeAdmissionError('probe_not_authorized')
-            # BR-8 (decision 44, 47): the exact committed row and reply of the judgment, integrity only; a stored
-            # success is never re-served. Its last callback has run when it returns, so the waivers are read after.
+            self._provenance_live()
+            # BR-8 (decision 44, 47, 50): the exact committed row and reply of the judgment; a yes is gated here.
             self._billing_jobs._owner.verify_committed(*key, context, before_commit=before_publish,
                                                        reply=result, history=history, judgment=judgment)
-            current = self._observation_jobs._owner.billing_waivers(project, records) if records else {}
-            if waivers != current:
-                raise ProbeAdmissionError('probe_not_authorized')
-            self._provenance_live()
             with self._front_lock:
                 if self._closed:
                     raise ProbeAdmissionError('probe_not_authorized')
