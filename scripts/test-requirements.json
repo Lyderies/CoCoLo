@@ -969,11 +969,21 @@
  },
  "TF-1": {
   "checks": [
+   "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
+   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B5_workflow_has_validated_merge_base_and_no_parent_fallback",
+   "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B6_full_gate_rejects_not_run_and_incomplete_stage_evidence",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_B5_missing_base_fails_and_advanced_PR_base_uses_merge_base",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_a_worker_exiting_zero_without_a_result_is_not_a_passing_check",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_owned_descendants_are_reaped_when_a_worker_finishes",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_C13_unpatched_runner_fails_closed_without_trusted_base",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_runner_counts_structured_results_and_saves_only_current_job_seconds",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_worker_secrets_are_stripped_and_temporary_roots_are_isolated",
-   "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error"
+   "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error",
+   "root:test_test_framework_guards.WorkerTests.test_review_C8_discovery_and_shards_have_a_stable_disjoint_union"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-1",
   "statement": "**TF-1 \u2014 Retain the supported runner and isolation.** Keep unittest and `scripts/parallel_tests.py`, the three\nsuites, module/stage/shard selection, separate worker processes and per-worker temporary directories, secret\nstripping, and bounded worker teardown. A full normal run uses the runner's DEFAULT job count (no fixed 6).\nSharding/module splitting must not omit or duplicate tests. Preserve existing `load_tests` discovery hooks.\nWitness: discovery and execution of inherited, ordinary, `load_tests`-filtered and generated unittest cases;\nstable shard partition; failing worker and import error both make the\nrunner nonzero; child environments omit fixture secrets; concurrent workers have distinct temporary roots\nand cannot see each other's fixture files; an intentionally stuck worker and its owned descendants are\nreaped within the configured teardown bound with diagnostics; default jobs remains `max(1, (os.cpu_count() or 2) - 2)`."
@@ -981,8 +991,10 @@
  "TF-10": {
   "checks": [
    "root:test_test_framework_guards.RunnerIntegrationTests.test_discovery_cannot_run_a_restricted_module_import_side_effect",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B7_discovery_filters_secrets",
    "root:test_test_framework_guards.WorkerTests.test_import_time_and_caught_denials_still_fail_the_worker",
-   "root:test_test_framework_guards.WorkerTests.test_process_apis_are_denied_in_unit_and_component_before_os_effects"
+   "root:test_test_framework_guards.WorkerTests.test_process_apis_are_denied_in_unit_and_component_before_os_effects",
+   "root:test_test_framework_guards.WorkerTests.test_review_A9_discovery_hooks_keep_the_declared_guard"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-10",
   "statement": "**TF-10 \u2014 Refuse real processes and git in unit/component.** Extend the existing audit guard, installed before\ntest-module imports, to both restricted layers. Deny subprocess starts, spawn, exec, fork/forkpty and system\nshell calls; a real git invocation is denied regardless of executable spelling or wrapper. Fakes/in-process\nfunctions remain allowed. Guard violations name layer, module, operation and test ID if known, and cannot be\nturned into green by catching the exception (worker records the violation and fails at completion). Witness:\ntry each available process API, git under an absolute path, an import-time spawn and a caught denial; verify\nno child-side marker is created. Run platform-specific API witnesses on their supported OS; the matrix must\ncontain evidence for both macOS and Linux."
@@ -991,6 +1003,8 @@
   "checks": [
    "root:test_test_framework_guards.WorkerTests.test_import_time_and_caught_denials_still_fail_the_worker",
    "root:test_test_framework_guards.WorkerTests.test_inherited_socket_methods_and_asyncio_have_no_guard_exemption",
+   "root:test_test_framework_guards.WorkerTests.test_review_A9_discovery_hooks_keep_the_declared_guard",
+   "root:test_test_framework_guards.WorkerTests.test_review_C5_inherited_and_convenience_socket_apis_in_both_layers",
    "root:test_test_framework_guards.WorkerTests.test_socket_creation_pair_bind_and_resolution_are_denied"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-11",
@@ -998,7 +1012,10 @@
  },
  "TF-12": {
   "checks": [
-   "root:test_test_framework_guards.WorkerTests.test_blocking_unit_waits_fail_but_ready_events_and_nonblocking_polls_pass"
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_C13_ready_join_fake_clock_poll_and_elapsed_bound",
+   "root:test_test_framework_guards.WorkerTests.test_blocking_unit_waits_fail_but_ready_events_and_nonblocking_polls_pass",
+   "root:test_test_framework_guards.WorkerTests.test_review_B1_thread_start_handshake_and_B2_cached_selectors",
+   "root:test_test_framework_guards.WorkerTests.test_review_B2_nonblocking_cached_selectors_are_allowed"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-12",
   "statement": "**TF-12 \u2014 Keep unit time deterministic.** Preserve the existing unit sleep prohibition; reject positive-duration\nexplicit waits/polls in unit tests (thread condition/event waits, select/poll and joins that would block).\nAllow immediately ready/nonblocking operations and injected clocks. Component may wait on in-process\nthreads, subject to its budget. Witness: unit sleep still fails; a positive wait fails without waiting; zero-time\npoll and a ready event succeed; a fake clock advances without real time. This is an accidental-I/O guard,\nnot a security sandbox against malicious tests using native libraries or disabling the harness."
@@ -1008,6 +1025,8 @@
    "root:test_entrypoint_inventory.EntryPointTests.test_argparse_entrypoints_start_in_real_stdlib_only_processes",
    "root:test_entrypoint_inventory.EntryPointTests.test_inventory_rejects_missing_entry_points_and_missing_real_checks",
    "root:test_entrypoint_inventory.EntryPointTests.test_job_reader_process_refuses_unbound_invocation_without_output",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_C13_failing_and_timed_out_workers_keep_both_logs",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B3_runner_reaps_disabled_watchdog_with_diagnostics",
    "root:test_test_framework_guards.WorkerTests.test_real_process_git_and_local_socket_contracts_still_work_in_allowed_layers"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-13",
@@ -1017,6 +1036,20 @@
   "checks": [
    "root:test_test_framework.GoldenTests.test_equal_update_mode_is_not_green_and_newlines_are_not_silently_normalized",
    "root:test_test_framework.GoldenTests.test_expected_output_is_exact_and_missing_or_different_fails",
+   "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
+   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
+   "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
+   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
+   "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
+   "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
+   "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
+   "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
+   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
    "root:test_test_framework_review.ReviewTests.test_direct_golden_read_and_assert_bypass_is_rejected",
    "root:test_test_framework_review.ReviewTests.test_temporary_helper_output_and_unrelated_owner_files_are_not_repository_goldens"
   ],
@@ -1039,6 +1072,15 @@
    "root:test_entrypoint_inventory.EntryPointTests.test_inventory_rejects_missing_entry_points_and_missing_real_checks",
    "root:test_entrypoint_inventory.EntryPointTests.test_job_reader_process_refuses_unbound_invocation_without_output",
    "root:test_test_framework.DependencyTests.test_dependencies_are_exactly_pinned_hashed_and_excluded_from_shipped_imports",
+   "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
+   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
+   "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
+   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
+   "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
+   "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
+   "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
+   "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
    "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-16",
@@ -1047,6 +1089,7 @@
  "TF-17": {
   "checks": [
    "root:test_test_framework.DependencyTests.test_hypothesis_profiles_are_bounded_and_io_deadline_is_disabled",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_unknown_profile_environment_is_rejected_by_runner_discovery",
    "root:test_test_framework_guards.WorkerTests.test_a_failing_hypothesis_machine_retains_its_reproducer_and_nonzero_exit"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-17",
@@ -1085,7 +1128,8 @@
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_undoing_persistence_samples",
    "root:test_test_framework.MetadataTests.test_complete_sweep_is_explicit_soak_only_and_profiles_are_validated",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_conflicting_explicit_profile_selectors_are_rejected",
-   "root:test_test_framework_guards.RunnerIntegrationTests.test_explicit_soak_module_requires_explicit_soak_profile"
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_explicit_soak_module_requires_explicit_soak_profile",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_unknown_profile_environment_is_rejected_by_runner_discovery"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-18",
   "statement": "**TF-18 \u2014 Normal sampling and soak separation.** Normal crash runs include an in-memory disk model\nwith separate volatile and durable file-content, mode and namespace states. Writes change volatile file\ncontents; create/unlink/rename/exchange/mkdir/rmdir change volatile namespace links. A file flush persists\nthat file's complete bytes/mode; a directory flush persists that directory's name-to-object links, never\nimplicitly an unflushed child's contents. SQLite commit state is tracked separately. Crash discards volatile\nstate and exposes only durable contents reachable through durable namespace links; recovery is then checked\nagainst the single ML invariant and table. Permitted outcomes include complete S or T according to the\ndurable row, preserved owner objects and named unrecorded directories; torn published contents, lost\nowner edits and a history direction inconsistent with recovered contents are rejected.\nWitnesses distinguish flushed from unflushed writes, creates and renames, including flushing only one\nrename parent; a missing production flush must change the model's post-crash outcome and fail the check.\nA checked-in `tests/merge-persistence-samples.json` names the normal sample inventory by operation,\nphase, before/after side and commit label where applicable, plus stable occurrence/reproducer. Validate it\nagainst discovered persistence-significant calls; every operation kind and relevant boundary needs a normal\nsample. Normal selection includes the model and ci-profile generated cases, excluding complete sweeps.\nComplete crash/fault sweeps, including recovery faults, run only under explicit `--profile soak` in\nlocal-routing; soak includes the complete inventory, not merely persistence samples. Reject explicit soak\nmodule selection with dev/ci, a complete-sweep request without soak, conflicting profile selectors and\nunknown profiles. Report the effective profile and sample seed or minimized reproducer. The Linux/podman\npower-loss lane is later work (81 A); kills and the model do not prove it, and this task installs no podman."
@@ -1226,6 +1270,11 @@
   "checks": [
    "root:test_test_framework.MetadataTests.test_decorator_inheritance_and_override_follow_the_actual_implementation",
    "root:test_test_framework.MetadataTests.test_unknown_empty_and_untagged_proofs_and_missing_rationale_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
+   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_untagged_new_test_fails_the_actual_runner"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-3",
@@ -1234,6 +1283,20 @@
  "TF-4": {
   "checks": [
    "root:test_test_framework.MetadataTests.test_requirement_and_check_links_are_checked_in_both_directions",
+   "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
+   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
+   "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
+   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
+   "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
+   "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
+   "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
+   "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
+   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_untagged_new_test_fails_the_actual_runner",
    "root:test_test_framework_review.ReviewTests.test_catalogue_statement_must_equal_its_exact_cited_source",
    "root:test_test_framework_review.ReviewTests.test_registered_future_check_and_review_record_are_not_passing_evidence"
@@ -1246,7 +1309,29 @@
    "review:TF-5",
    "root:test_test_framework.MetadataTests.test_a_requirement_passes_only_when_all_checks_passed_and_actually_ran",
    "root:test_test_framework.MetadataTests.test_shards_preserve_metadata_failures_and_reject_duplicate_tests_and_invalid_time",
+   "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
+   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
+   "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
+   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
+   "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
+   "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
+   "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
+   "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
+   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework.ReviewLifecycleTests.test_A12_unknown_registry_id_is_a_diagnostic_not_a_key_error",
+   "root:test_test_framework.ReviewLifecycleTests.test_B6_complete_shard_labels_cannot_hide_a_missing_worker",
+   "root:test_test_framework.ReviewLifecycleTests.test_B6_stage_records_must_share_source_and_layer_plans",
+   "root:test_test_framework.ReviewLifecycleTests.test_C3_C13_cross_module_helper_is_found_by_source_path",
+   "root:test_test_framework.ReviewLifecycleTests.test_C9_assertion_free_lifecycle_check_fails_the_real_gate",
+   "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B5_workflow_has_validated_merge_base_and_no_parent_fallback",
+   "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B6_full_gate_rejects_not_run_and_incomplete_stage_evidence",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_a_worker_exiting_zero_without_a_result_is_not_a_passing_check",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_C9_executed_expected_failure_and_unexpected_success_do_not_pass_gate",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_skipped_only_requirement_is_not_a_passing_run",
    "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error"
   ],
@@ -1265,6 +1350,25 @@
   "checks": [
    "root:test_test_framework.MetadataTests.test_legacy_list_cannot_grow_restore_entries_change_fingerprints_or_rename_tests",
    "root:test_test_framework.MetadataTests.test_migration_removes_legacy_entry_and_new_tagged_proof_is_required",
+   "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
+   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
+   "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
+   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
+   "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
+   "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
+   "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
+   "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
+   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework.ReviewLifecycleTests.test_A12_unknown_registry_id_is_a_diagnostic_not_a_key_error",
+   "root:test_test_framework.ReviewLifecycleTests.test_B6_complete_shard_labels_cannot_hide_a_missing_worker",
+   "root:test_test_framework.ReviewLifecycleTests.test_B6_stage_records_must_share_source_and_layer_plans",
+   "root:test_test_framework.ReviewLifecycleTests.test_C3_C13_cross_module_helper_is_found_by_source_path",
+   "root:test_test_framework.ReviewLifecycleTests.test_C9_assertion_free_lifecycle_check_fails_the_real_gate",
    "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards",
    "root:test_test_framework_review.ReviewTests.test_fixture_and_transitive_helper_changes_change_dependency_fingerprint",
    "root:test_test_framework_review.ReviewTests.test_missing_trusted_base_fails_closed_without_using_candidate_head"
@@ -1280,6 +1384,15 @@
    "root:test_test_framework.MetadataTests.test_module_budgets_sum_fragments_and_name_every_offender",
    "root:test_test_framework.MetadataTests.test_shards_preserve_metadata_failures_and_reject_duplicate_tests_and_invalid_time",
    "root:test_test_framework.MetadataTests.test_shards_require_complete_disjoint_evidence_before_aggregate_budget_can_pass",
+   "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
+   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
+   "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
+   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
+   "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
+   "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
+   "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
+   "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
    "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-8",
@@ -1290,9 +1403,34 @@
    "root:test_test_framework.BudgetDebtTests.test_shards_use_combined_debt_ceiling_and_preserve_preflight_time",
    "root:test_test_framework.MetadataTests.test_module_budgets_sum_fragments_and_name_every_offender",
    "root:test_test_framework.MetadataTests.test_shards_preserve_metadata_failures_and_reject_duplicate_tests_and_invalid_time",
+   "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
+   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
+   "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
+   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
+   "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
+   "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
+   "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
+   "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
+   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework.ReviewLifecycleTests.test_A12_unknown_registry_id_is_a_diagnostic_not_a_key_error",
+   "root:test_test_framework.ReviewLifecycleTests.test_B6_complete_shard_labels_cannot_hide_a_missing_worker",
+   "root:test_test_framework.ReviewLifecycleTests.test_B6_stage_records_must_share_source_and_layer_plans",
+   "root:test_test_framework.ReviewLifecycleTests.test_C3_C13_cross_module_helper_is_found_by_source_path",
+   "root:test_test_framework.ReviewLifecycleTests.test_C9_assertion_free_lifecycle_check_fails_the_real_gate",
+   "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B5_workflow_has_validated_merge_base_and_no_parent_fallback",
+   "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B6_full_gate_rejects_not_run_and_incomplete_stage_evidence",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_C13_failing_and_timed_out_workers_keep_both_logs",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_a_worker_exiting_zero_without_a_result_is_not_a_passing_check",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_owned_descendants_are_reaped_when_a_worker_finishes",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_preflight_failure_writes_zero_job_seconds_and_discovery_time",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B3_runner_reaps_disabled_watchdog_with_diagnostics",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B4_preflight_retains_default_run_record",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B8_preflight_preserves_estimates",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_runner_counts_structured_results_and_saves_only_current_job_seconds",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_worker_timeout_retains_measurements_and_names_its_module",
    "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error"

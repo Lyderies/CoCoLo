@@ -54,3 +54,16 @@
 - Assertion replacements: `ASSERTIONS-test-framework.md:10` lists the two removed host help-probe cases and their unchanged start-to-finish replacements; no test function deleted and no existing assertion weakened.
 - Global exit still 1 for the 80 missing lifecycle checks; future ML/scenario/review records remain not_run, not passing. Linux/Python 3.11 execution still awaits CI; source grammar checked for 3.11.
 - Next: carry reconciliation to merge branch and finish step 3; stop for review after step 3, as owner requested. No push or product install performed.
+
+## Step 3 — implementation committed; requirement conflict needs review
+- Commits on `feat/merge-library`: `8b060c4f` checker migration, `1f44c386` new witnesses, `ee12c570` durability model/library fixes and evidence; rebased on framework `4e5ca6a1`.
+- TF-18/19 -> `../cocolo-mergelib/MERGE-test-framework-step3.md:9`; one checker, six-action Hypothesis machine, volatile/durable model, committed normal inventory and explicit soak lane.
+- TF-19 table evidence: 40 explicit source labels / 63 positive-and-negative variants; the source's “41” count discrepancy is documented at `../cocolo-mergelib/CONTRADICTIONS-merge-checker.md:70`.
+- Red/green evidence -> `../cocolo-mergelib/measurements/test-framework/merge-step3-evidence.json`; default 16-job affected run passed 204 tests in 77.310938334 job-seconds, no worker/budget failures.
+- Unaffected crash subset: 81 tests (3 existing opt-in skips), 63.539055000 job-seconds; explicitly partial and excludes the two stopped C-3 cases (`merge-unblocked-final.json`).
+- Four mutation proofs pass -> `../cocolo-mergelib/packages/codex-agents/tests/test_merge_library_mutations.py:24` (private location), `:35` (third commit), `:47` (missing A flush), `:54` (swallowed EIO).
+- Assertion replacements -> `../cocolo-mergelib/ASSERTIONS-merge-checker.md:7` (38 changed/moved accepted assertions, each with replacement line); no test deleted; C-1/C-2 owner-approved corrections applied.
+- Open C-3 -> `../cocolo-mergelib/CONTRADICTIONS-merge-checker.md:41`: nested recorded folders after undo cleanup failure conflict with literal empty-folder endpoints; two tests remain red, unchanged, stopped. No waiver or expected-failure marker.
+- Latest portability/mutation follow-up: 16 tests pass in 1.527262709 job-seconds; ci selection of the soak module correctly refuses before execution. Full soak, Linux/Python 3.11 runtime and Ruff remain unverified.
+- Global gate still reports the 80 missing step-4 lifecycle checks. Step 3 is not complete; steps 4–5 have not begun. No push, product install or control-project edit.
+- Ready for review of the committed implementation and C-3 requirement decision; preserved the mandatory stop-on-contradiction rule without asking further questions while the owner is away.

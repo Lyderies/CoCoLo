@@ -204,3 +204,25 @@ Source: `baseline-timings.json`, one complete module total per declared baseline
 Option A records these modules and their original ceilings in `scripts/test-budget-debt.json`.
 Every remaining entry is named even in filtered runs; only a complete under-budget result permits retirement.
 No new measurements or speedups are implied by this census.
+
+## Step 3 — affected merge validation measurements
+
+All values below come from the saved worker timing records in the merge worktree's
+`measurements/test-framework/` directory. These are affected-module runs, not a new full-suite measurement.
+The normal inventory changed under TF-18 and complete enumeration moved to explicit soak; these runs do
+not establish a like-for-like full-sweep speedup. Step-5 heaviest-module pruning has not started.
+
+| Scope | Tests | Job-seconds | Evidence / result |
+|---|---:|---:|---|
+| Eight unaffected merge modules, default 16 jobs | 204 | 77.310938334 | `merge-review-final.run.json`; all workers pass, no budget failure |
+| Explicit unaffected adversarial subset | 77 | 55.348261750 | `merge-unblocked-final.json`; pass, 3 existing image skips; one C-3 test not run |
+| Explicit unaffected model subset | 4 | 8.190793250 | `merge-unblocked-final.json`; pass; undo C-3 test not run |
+| Last complete model sample module | 5 | 9.710025250 | `merge-model-sweep-third.run.json`; 16 nested-folder subcases red in one test |
+| Portable replay and four mutation proofs | 16 | 1.527262709 | `merge-portable-green.run.json`; pass |
+| Invalid ci/complete-soak selection | 0 | 0 | `merge-soak-refusal.run.json`; expected preflight refusal |
+
+The two explicitly partial rows do not retire module budget debt or certify a complete module. The current
+strict nested-folder requirement conflict is described in `../cocolo-mergelib/CONTRADICTIONS-merge-checker.md`.
+Normal setup copies a disposable prepared repository, replay-key discovery is linear, and child exit polling
+uses a bounded 1ms wait. Full persistence-kind coverage is in the model sample inventory; real process samples
+retain OS boundary checks. Exact assertions and their complete-soak replacements are listed in the merge ledger.

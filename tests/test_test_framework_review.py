@@ -66,6 +66,12 @@ class Fixture:
         evidence = {'review': {'revision': 'wrong', 'outcome': 'passed', 'record': 'reviews/r1.json'}}
         self.assertEqual('failed', self.fw.registered_outcomes(checks, evidence)['review'])
         evidence['review']['revision'] = 'abc'
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        record = Path(temporary.name) / 'review.json'
+        record.write_text(json.dumps({'revision': 'abc', 'outcome': 'passed'}))
+        evidence['review']['record'] = str(record)
+        evidence['review']['sha256'] = __import__('hashlib').sha256(record.read_bytes()).hexdigest()
         self.assertEqual('passed', self.fw.registered_outcomes(checks, evidence)['review'])
         evidence['review'].pop('record')
         self.assertEqual('failed', self.fw.registered_outcomes(checks, evidence)['review'])
@@ -98,7 +104,7 @@ class Case(unittest.TestCase):
     def test_missing_trusted_base_fails_closed_without_using_candidate_head(self):
         import parallel_tests as runner
         empty = {'baseline': 'baseline', 'tests': {}}
-        with mock.patch.object(runner, 'REVIEW_BASE', None), mock.patch.object(runner.subprocess, 'check_output', side_effect=AssertionError('must not consult candidate HEAD')):
+        with mock.patch.object(runner, 'REVIEW_BASE', None), mock.patch.object(runner.subprocess, 'check_output', side_effect=AssertionError('must not consult candidate HEAD')), mock.patch.object(runner.subprocess, 'run', side_effect=AssertionError('must not run candidate HEAD')), mock.patch.object(runner.subprocess, 'Popen', side_effect=AssertionError('must not spawn candidate HEAD')):
             errors = runner.legacy_versions(ROOT, empty, empty)[2]
         self.assertTrue(errors)
         self.assertIn('trusted', ' '.join(errors))

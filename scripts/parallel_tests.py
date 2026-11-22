@@ -35,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 import test_framework as framework
 
@@ -67,6 +68,28 @@ _RUNNER = (
 )
 
 
+def worker_environment():
+    return {k: v for k, v in os.environ.items()
+            if not any(marker in k.upper() for marker in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
+
+
+def run_record_path(save=None):
+    if save is not None:
+        return Path(str(save) + '.run.json')
+    explicit = os.environ.get('COCOLO_TEST_RUN_RECORD')
+    if explicit:
+        return Path(explicit)
+    return Path(tempfile.mkdtemp(prefix='cocolo-test-record-')) / 'run.json'
+
+
+def persist_record(detail, save=None):
+    path = run_record_path(save)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(detail, indent=1, sort_keys=True) + '\n')
+    print('RUN RECORD: ' + str(path), flush=True)
+    return path
+
+
 def discover(suite: str) -> dict[str, list[str]]:
     """Module name -> its test ids, named as a discovery of the suite's tests folder names them."""
     if _CURRENT_DISCOVERY is not None and suite in _CURRENT_DISCOVERY:
@@ -88,7 +111,7 @@ def discover(suite: str) -> dict[str, list[str]]:
         "walk(unittest.defaultTestLoader.discover('tests', top_level_dir=top))\n"
         "print(json.dumps(found))\n"
     )
-    environment = {**os.environ, **EXTRA_ENV.get(suite, {})}
+    environment = {**worker_environment(), **EXTRA_ENV.get(suite, {})}
     output = subprocess.run([sys.executable, "-B", "-c", code], cwd=cwd, env=environment,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout
     return json.loads(output)
@@ -131,13 +154,28 @@ def inventory():
         code = (f"import sys,json; sys.path.insert(0,{str(FRAMEWORK_SCRIPTS)!r}); sys.path.insert(0,'.'); "
                 f"from test_framework import inventory_suite; print(json.dumps(inventory_suite({suite!r}, {layers!r})))")
         result = subprocess.run([sys.executable, '-B', '-c', code], cwd=cwd,
-                                env={**os.environ, **EXTRA_ENV.get(suite, {})}, capture_output=True, text=True)
+                                env={**worker_environment(), **EXTRA_ENV.get(suite, {})}, capture_output=True, text=True)
         if result.returncode:
             raise ValueError(f'{suite}: test discovery failed: {result.stderr[-1500:]}')
         found.update(framework.decode_json(result.stdout))
     return found
 
 
+HISTORY_VALIDATION_SECONDS = 0.
+
+
+def measured_history(function):
+    def measured(*args, **kwargs):
+        global HISTORY_VALIDATION_SECONDS
+        began = time.monotonic()
+        try:
+            return function(*args, **kwargs)
+        finally:
+            HISTORY_VALIDATION_SECONDS += time.monotonic() - began
+    return measured
+
+
+@measured_history
 def legacy_versions(root, current, ceiling):
     """Compare working files with committed introduction and every historical shrink transition."""
     errors = []
@@ -155,6 +193,9 @@ def legacy_versions(root, current, ceiling):
         dep_commits = git('log', '--reverse', '--format=%H', 'HEAD', '--', 'scripts/test-legacy-dependencies.json').split()
         if not dep_commits or framework.decode_json((root / 'scripts/test-legacy-dependencies.json').read_text()) != version(dep_commits[0], 'test-legacy-dependencies.json'):
             errors.append('legacy fixture/helper baseline changed or is uncommitted')
+        value_commits = git('log', '--reverse', '--format=%H', 'HEAD', '--', 'scripts/test-legacy-values.json').split()
+        if not value_commits or framework.decode_json((root / 'scripts/test-legacy-values.json').read_text()) != version(value_commits[0], 'test-legacy-values.json'):
+            errors.append('legacy constants/source baseline changed or is uncommitted')
         if ceiling != original:
             errors.append('legacy initial ceiling changed')
         try:
@@ -179,6 +220,7 @@ def legacy_versions(root, current, ceiling):
 
 
 
+@measured_history
 def budget_versions(root, current):
     """Baseline ceilings are derived from committed measurements, never candidate estimates."""
     def git(*args):
@@ -267,6 +309,9 @@ def metadata():
                     errors.append(name + ': legacy fixture/helper dependency changed; migrate its requirement proof')
     else:
         errors.append('missing legacy fixture/helper dependency baseline')
+    value_file = ROOT / 'scripts/test-legacy-values.json'
+    values = framework.decode_json(value_file.read_text()) if value_file.exists() else {}
+    errors += framework.validate_legacy_values({key: rec for cases in discovered.values() for key, rec in cases.items()}, legacy, values)
     entrypoints = ROOT / 'scripts/test-entrypoints.json'
     entries = framework.decode_json(entrypoints.read_text()) if entrypoints.exists() else {}
     check_layers = {name: layers.get(module) for module, cases in discovered.items() for name in cases}
@@ -314,6 +359,7 @@ def reap_worker_group(process):
         return
     deadline = time.monotonic() + .5
     while time.monotonic() < deadline:
+        process.poll()
         try:
             os.killpg(process.pid, 0)
         except ProcessLookupError:
@@ -330,9 +376,7 @@ def preflight_failure(message, jobs, save, started):
                                     discovery_seconds=DISCOVERY_SECONDS,
                                     preflight_seconds=max(0., elapsed - DISCOVERY_SECONDS))
     detail.update(metadata_errors=[message], failed_units=[], tests={}, requirements={}, units=0)
-    if save is not None:
-        save.write_text('{}\n')
-        Path(str(save) + '.run.json').write_text(json.dumps(detail, indent=1, sort_keys=True) + '\n')
+    persist_record(detail, save)
     print(json.dumps(detail, indent=1), flush=True)
     return 1
 
@@ -340,8 +384,9 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
         wanted: set[str] = frozenset(STAGE_NAMES), modules: dict[str, set[str]] | None = None,
         part: tuple[int, int] = (1, 1), profile: str = 'ci') -> int:
     """Run the suites' units in the wanted stages; with `modules` ({suite: module names}), only those."""
-    global _CURRENT_DISCOVERY
+    global _CURRENT_DISCOVERY, HISTORY_VALIDATION_SECONDS
     _CURRENT_DISCOVERY = None
+    HISTORY_VALIDATION_SECONDS = 0.
     timings = json.loads(TIMINGS.read_text()) if TIMINGS.is_file() else {}
     preflight_started = time.monotonic()
     try:
@@ -374,6 +419,9 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                     for seconds, name, names in select(
                         units(suite, timings, None if modules is None else modules[suite]), suite, wanted, stages)),
                    reverse=True)
+    expected_fragments = {}
+    for _, suite, name, names in queue:
+        expected_fragments.setdefault(suite + ':' + name.split('#')[0], []).append(name)
     if part != (1, 1):
         queue = shard(queue, *part)
     selection = sorted(f'{suite}:{module}' for suite in suites for module in
@@ -381,72 +429,93 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                        if f'{suite}:{module}' in runnable and stages[f'{suite}:{module}'] in wanted)
     base = Path(tempfile.mkdtemp(prefix="pt", dir="/private/tmp" if sys.platform == "darwin" else None))
     running, results, started = {}, [], time.monotonic()
-    environment = {k: v for k, v in os.environ.items()
-                   if not any(marker in k.upper() for marker in ("API_KEY", "ACCESS_TOKEN", "SECRET"))}
+    environment = worker_environment()
+    worker_timeout = float(os.environ.get('COCOLO_WORKER_TIMEOUT', UNIT_SECONDS))
+    timed_out_workers = set()
     counter, total, reported = 0, len(queue), time.monotonic()
-    while queue or running:
-        while queue and len(running) < jobs:
-            expected, suite, name, names = queue.pop(0)
-            counter += 1
-            # Short: Unix socket paths built under it must stay under the platform limit.
-            folder = base / str(counter)
-            folder.mkdir()
-            log = folder.with_suffix(".log")
-            handle = log.open("wb")
-            process = subprocess.Popen(
-                [sys.executable, "-B", "-c", _RUNNER, *names], cwd=SUITES[suite],
-                env={**environment, **EXTRA_ENV.get(suite, {}), "TMPDIR": str(folder),
-                     "COCOLO_TEST_STAGE": stage_of(suite, name, stages),
-                     "COCOLO_TEST_LAYER": layers[f'{suite}:{name.split("#")[0]}'],
-                     "COCOLO_TEST_MODULE": f'{suite}:{name.split("#")[0]}',
-                     "COCOLO_TEST_PROFILE": profile, "HYPOTHESIS_STORAGE_DIRECTORY": str(folder / 'hypothesis'),
-                     "COCOLO_TEST_RESULTS": str(folder.with_suffix('.results.json'))},
-                stdout=handle, stderr=subprocess.STDOUT, start_new_session=True)
-            running[process] = (suite, name, names, log, handle, time.monotonic(), folder)
-        time.sleep(0.05)
-        if time.monotonic() - reported >= PROGRESS_SECONDS:
-            # A passing run otherwise prints nothing until the end, which looks like a hang.
-            reported = time.monotonic()
-            now = ", ".join(f"{entry[0]}:{entry[1]} {reported - entry[5]:.0f}s"
-                            for entry in sorted(running.values(), key=lambda e: e[5]))
-            print(f"[{reported - started:.0f}s] {len(results)}/{total} units done, "
-                  f"{sum(1 for r in results if r['returncode'] != 0)} failed; running: {now}", flush=True)
+    try:
+        while queue or running:
+            while queue and len(running) < jobs:
+                expected, suite, name, names = queue.pop(0)
+                counter += 1
+                # Short: Unix socket paths built under it must stay under the platform limit.
+                folder = base / str(counter)
+                folder.mkdir()
+                log = folder.with_suffix(".log")
+                handle = log.open("wb")
+                process = subprocess.Popen(
+                    [sys.executable, "-B", "-c", _RUNNER, *names], cwd=SUITES[suite],
+                    env={**environment, **EXTRA_ENV.get(suite, {}), "TMPDIR": str(folder),
+                         "COCOLO_TEST_STAGE": stage_of(suite, name, stages),
+                         "COCOLO_TEST_LAYER": layers[f'{suite}:{name.split("#")[0]}'],
+                         "COCOLO_TEST_MODULE": f'{suite}:{name.split("#")[0]}',
+                         "COCOLO_WORKER_TIMEOUT": str(worker_timeout),
+                         "COCOLO_TEST_PROFILE": profile, "HYPOTHESIS_STORAGE_DIRECTORY": str(folder / 'hypothesis'),
+                         "COCOLO_TEST_RESULTS": str(folder.with_suffix('.results.json'))},
+                    stdout=handle, stderr=subprocess.STDOUT, start_new_session=True)
+                running[process] = (suite, name, names, log, handle, time.monotonic(), folder)
+            time.sleep(0.05)
+            if time.monotonic() - reported >= PROGRESS_SECONDS:
+                # A passing run otherwise prints nothing until the end, which looks like a hang.
+                reported = time.monotonic()
+                now = ", ".join(f"{entry[0]}:{entry[1]} {reported - entry[5]:.0f}s"
+                                for entry in sorted(running.values(), key=lambda e: e[5]))
+                print(f"[{reported - started:.0f}s] {len(results)}/{total} units done, "
+                      f"{sum(1 for r in results if r['returncode'] != 0)} failed; running: {now}", flush=True)
+            for process, entry in running.items():
+                if process.poll() is None and time.monotonic() - entry[5] > worker_timeout + .1:
+                    timed_out_workers.add(process.pid)
+                    reap_worker_group(process)  # Includes owned children if the worker could not stop itself.
+                    entry[4].write(f"\nTIMED OUT {entry[0]}:{entry[1]} after {worker_timeout:g}s; owned process group reaped\n".encode())
+                    entry[4].flush()
+            for process in [p for p in running if p.poll() is not None]:
+                suite, name, names, log, handle, began, folder = running.pop(process)
+                reap_worker_group(process)
+                handle.close()
+                output = log.read_text(errors="replace")
+                result_file = folder.with_suffix('.results.json')
+                try:
+                    record = framework.decode_json(result_file.read_text())
+                    if not isinstance(record['tests'], int) or not isinstance(record['outcomes'], dict) or not isinstance(record['violations'], list):
+                        raise ValueError('invalid worker result')
+                    returncode = process.returncode
+                except (OSError, ValueError, KeyError, TypeError):
+                    record = {'tests': 0, 'outcomes': {}, 'violations': []}
+                    returncode = process.returncode or 1
+                ran = record['tests']
+                outcome = _RESULT.findall(output)
+                results.append({"suite": suite, "unit": name, "names": names, "seconds": time.monotonic() - began,
+                                "returncode": returncode, "tests": ran,
+                                "summary": outcome[-1][1] if outcome else "", "log": str(log),
+                                "timed_out": process.pid in timed_out_workers or (time.monotonic() - began >= worker_timeout and not result_file.exists()),
+                                "log_tail": "\n".join(output.splitlines()[-80:]),
+                                "outcomes": {suite + ':' + key: value for key, value in record['outcomes'].items()},
+                                "violations": record['violations']})
+                if returncode != 0:
+                    timed_out = results[-1]['timed_out']
+                    tail = "\n".join(output.strip().splitlines()[-(80 if timed_out else 25):])
+                    print(f"FAILED {suite}:{name} (exit {returncode}) -> {log}\n{tail}\n", flush=True)
+                if not keep:
+                    shutil.rmtree(folder, ignore_errors=True)
+    except BaseException as error:
+        detail = framework.measurements(results, layers, stages, jobs=jobs, elapsed=time.monotonic() - started,
+                                        selection=selection, expected_fragments=expected_fragments)
+        detail['metadata_errors'] = ['runner interrupted: ' + type(error).__name__]
+        detail['pending_workers'] = [{'suite': e[0], 'unit': e[1], 'log': str(e[3])} for e in running.values()]
+        persist_record(detail, save)
+        raise
+    finally:
         for process, entry in running.items():
-            if process.poll() is None and time.monotonic() - entry[5] > UNIT_SECONDS + 60:
-                reap_worker_group(process)  # Includes owned children if the worker could not stop itself.
-        for process in [p for p in running if p.poll() is not None]:
-            suite, name, names, log, handle, began, folder = running.pop(process)
             reap_worker_group(process)
-            handle.close()
-            output = log.read_text(errors="replace")
-            result_file = folder.with_suffix('.results.json')
-            try:
-                record = framework.decode_json(result_file.read_text())
-                if not isinstance(record['tests'], int) or not isinstance(record['outcomes'], dict) or not isinstance(record['violations'], list):
-                    raise ValueError('invalid worker result')
-                returncode = process.returncode
-            except (OSError, ValueError, KeyError, TypeError):
-                record = {'tests': 0, 'outcomes': {}, 'violations': []}
-                returncode = process.returncode or 1
-            ran = record['tests']
-            outcome = _RESULT.findall(output)
-            results.append({"suite": suite, "unit": name, "names": names, "seconds": time.monotonic() - began,
-                            "returncode": returncode, "tests": ran,
-                            "summary": outcome[-1][1] if outcome else "", "log": str(log),
-                            "timed_out": 'Timeout (' in output,
-                            "outcomes": {suite + ':' + key: value for key, value in record['outcomes'].items()},
-                            "violations": record['violations']})
-            if returncode != 0:
-                timed_out = "Timeout (" in output
-                tail = "\n".join(output.strip().splitlines()[-(80 if timed_out else 25):])
-                print(f"FAILED {suite}:{name} (exit {returncode}) -> {log}\n{tail}\n", flush=True)
-            if not keep:
-                shutil.rmtree(folder, ignore_errors=True)
+            process.wait(timeout=2)
+            entry[4].close()
     elapsed = time.monotonic() - started
     fingerprints = {key: value.get('fingerprint', 'import_error') for cases in discovered.values() for key, value in cases.items()}
     detail = framework.measurements(results, layers, stages, jobs=jobs, elapsed=elapsed, selection=selection, part=part,
                                     profile=profile, catalogue=catalogue, fingerprints=fingerprints,
-                                    budget_debt=budget_debt, discovery_seconds=DISCOVERY_SECONDS, preflight_seconds=preflight_seconds)
+                                    budget_debt=budget_debt, discovery_seconds=DISCOVERY_SECONDS, preflight_seconds=preflight_seconds,
+                                    expected_fragments=expected_fragments)
+    detail['history_validation_seconds'] = HISTORY_VALIDATION_SECONDS
     detail['profile'], detail['metadata_errors'] = profile, metadata_errors
     outcomes = {key: value for row in results for key, value in row['outcomes'].items()}
     registry_path = ROOT / 'scripts/test-checks.json'
@@ -480,7 +549,7 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                 r["seconds"] for r in results if r["unit"].split("#")[0] == module and r["suite"] == item["suite"]), 2)
     if save is not None:
         save.write_text(json.dumps(measured, indent=1, sort_keys=True) + "\n")
-        Path(str(save) + '.run.json').write_text(json.dumps(detail, indent=1, sort_keys=True) + '\n')
+    persist_record(detail, save)
     failed = [r for r in results if r["returncode"] != 0]
     totals = {suite: sum(r["tests"] for r in results if r["suite"] == suite) for suite in suites}
     print(json.dumps({"elapsed_seconds": round(elapsed, 1), "jobs": jobs, "stages": sorted(wanted),
@@ -495,7 +564,7 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                       "slowest_units": [(f"{r['suite']}:{r['unit']}", round(r["seconds"], 1))
                                         for r in sorted(results, key=lambda r: -r["seconds"])[:8]],
                       "logs": str(base)}, indent=1))
-    if not failed and not keep:
+    if not failed and not keep and not metadata_errors and not detail['budget_failures'] and not requirement_failures:
         shutil.rmtree(base, ignore_errors=True)
     return 1 if failed or metadata_errors or detail['budget_failures'] or detail['debt_retirement_required'] or requirement_failures else 0
 
@@ -509,7 +578,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--save-timings", type=Path, help="write this run's measurements here")
     parser.add_argument("--keep", action="store_true", help="keep every unit's folder and log")
     parser.add_argument('--profile', choices=('dev', 'ci', 'soak'), action='append')
+    parser.add_argument('--invocation-id', help='shared identity for every shard/stage in one run')
     parser.add_argument('--base', help='trusted review-base commit for the shrink-only legacy check')
+    parser.add_argument('--requirement-gate', nargs='+', type=Path, help='combine all stages and enforce every requirement')
+    parser.add_argument('--budgets-only', action='store_true', help='only check complete shard budgets; final requirement gate remains mandatory')
     parser.add_argument('--combine-timings', nargs='+', type=Path, help='combine complete disjoint shard .run.json files')
     parser.add_argument("--shard", type=parse_shard, default=(1, 1), metavar="K/N",
                         help="run only shard K of N, balanced by recorded time (CI)")
@@ -517,13 +589,23 @@ def main(argv: list[str] | None = None) -> int:
                         help="run only this test module (repeatable), for example codex:tests.test_bridge")
     args = parser.parse_args(argv)
     REVIEW_BASE = args.base
+    if args.invocation_id:
+        os.environ['COCOLO_TEST_RUN_ID'] = args.invocation_id
     if args.profile and len(args.profile) != 1:
         parser.error('conflicting profile selectors; choose one explicit profile')
     args.profile = args.profile[0] if args.profile else 'ci'
+    if args.requirement_gate:
+        try:
+            report = framework.combine_run_records([framework.decode_json(path.read_text()) for path in args.requirement_gate])
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        print(json.dumps(report, indent=1))
+        return 0
     if args.combine_timings:
         report = framework.combine_measurements([framework.decode_json(path.read_text()) for path in args.combine_timings])
         print(json.dumps(report, indent=1))
-        return 1 if report['budget_failures'] or report['debt_retirement_required'] or report['metadata_errors'] or any(row['returncode'] for row in report['workers']) or 'failed' in report['requirements'].values() else 0
+        return 1 if report['budget_failures'] or report['debt_retirement_required'] or report['metadata_errors'] or any(row['returncode'] for row in report['workers']) or (not args.budgets_only and any(value != 'passed' for value in report['requirements'].values())) else 0
     if args.jobs < 1:
         parser.error('--jobs must be positive')
     suites = args.suite or sorted(SUITES)
