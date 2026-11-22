@@ -16,7 +16,7 @@ import parallel_tests
 
 
 class WorkerTests(unittest.TestCase):
-    def probe(self, body, layer, before=''):
+    def probe(self, body, layer, before='', bootstrap=''):
         with tempfile.TemporaryDirectory(prefix='tf-') as folder:
             root = Path(folder)
             (root / 'test_probe.py').write_text(before + '\nimport unittest\nclass Probe(unittest.TestCase):\n' +
@@ -24,7 +24,7 @@ class WorkerTests(unittest.TestCase):
             environment = {**os.environ, 'COCOLO_TEST_STAGE': 'unit' if layer == 'unit' else 'integration',
                            'COCOLO_TEST_LAYER': layer, 'COCOLO_TEST_MODULE': 'root:test_probe',
                            'COCOLO_TEST_RESULTS': str(root / 'results.json'), 'TMPDIR': folder}
-            completed = subprocess.run([sys.executable, '-B', '-c', parallel_tests._RUNNER, 'test_probe'],
+            completed = subprocess.run([sys.executable, '-B', '-c', bootstrap + '\n' + parallel_tests._RUNNER, 'test_probe'],
                                        cwd=root, env=environment, capture_output=True, text=True, timeout=15)
             result = json.loads((root / 'results.json').read_text()) if (root / 'results.json').exists() else None
             return completed.returncode, completed.stdout + completed.stderr, result
@@ -69,6 +69,22 @@ class WorkerTests(unittest.TestCase):
                     code, output, _ = self.probe(body, layer)
                     self.assertNotEqual(0, code, output)
                     self.assertIn('socket', output)
+
+
+    @proves('TF-11')
+    def test_inherited_socket_methods_and_asyncio_have_no_guard_exemption(self):
+        bootstrap = 'import socket,builtins; builtins.TF_PAIR = socket.socketpair()'
+        for method, arguments in [('listen', '1'), ('accept', ''), ('sendmsg', "[b'fixture']")]:
+            if not hasattr(__import__('socket').socket, method):
+                continue
+            body = ("import builtins\ntry:\n    builtins.TF_PAIR[0]." + method + '(' + arguments +
+                    ")\nexcept Exception:\n    pass\nfinally:\n    [s.close() for s in builtins.TF_PAIR]\nself.assertTrue(True)")
+            code, output, result = self.probe(body, 'component', bootstrap=bootstrap)
+            self.assertNotEqual(0, code, output)
+            self.assertTrue(result['violations'])
+        code, output, _ = self.probe("import asyncio\nasyncio.run(asyncio.open_unix_connection('absent-fixture.sock'))", 'component')
+        self.assertNotEqual(0, code, output)
+        self.assertIn('socket', output)
 
     @proves('TF-12')
     def test_blocking_unit_waits_fail_but_ready_events_and_nonblocking_polls_pass(self):
@@ -120,38 +136,53 @@ class WorkerTests(unittest.TestCase):
 
 
 class RunnerIntegrationTests(unittest.TestCase):
-    def run_fixture(self, body='self.assertEqual(2, 1 + 1)', tagged=True, timeout='600', extra_module=False):
+    def run_fixture(self, body='self.assertEqual(2, 1 + 1)', tagged=True, timeout='600', extra_module=False, malformed=False, layer='scenario', extra_args=(), siblings=False, module_import=''):
         with tempfile.TemporaryDirectory(prefix='tf-run-') as folder:
             root = Path(folder)
             (root / 'tests').mkdir()
             (root / 'scripts').mkdir()
             tag = "@requirements('TF-1', why_not_scenario='runner boundary fixture')\n    " if tagged else ''
             (root / 'tests/test_probe.py').write_text(
-                "import unittest\nfrom test_framework import requirements\nclass Probe(unittest.TestCase):\n    " + tag +
+                module_import + "\nimport unittest\nfrom test_framework import requirements\nclass Probe(unittest.TestCase):\n    " + tag +
                 "def test_value(self):\n" + textwrap.indent(body, '        ') + '\n')
             stages = {'root:test_probe': 'integration'}
-            layers = {'root:test_probe': 'scenario'}
+            layers = {'root:test_probe': layer}
             if extra_module:
                 (root / 'tests/test_other.py').write_text('import unittest\nclass Other(unittest.TestCase):\n    def test_value(self):\n        self.fail("should not run")\n')
                 stages['root:test_other'] = 'integration'
-            catalogue = {'TF-1': {'statement': 'Retain isolated worker execution.', 'source': 'fixture',
+            catalogue = {'TF-1': {'statement': 'Retain isolated worker execution.', 'source': 'source.json#TF-1',
                                   'checks': ['root:test_probe.Probe.test_value']}}
-            for name, data in [('test-stages.json', stages), ('test-layers.json', layers),
+            if siblings:
+                (root / 'tests/test_sibling.py').write_text((root / 'tests/test_probe.py').read_text())
+                stages['root:test_sibling'] = 'integration'
+                layers['root:test_sibling'] = layer
+                catalogue['TF-1']['checks'].append('root:test_sibling.Probe.test_value')
+                extra_args = (*extra_args, '--module', 'root:test_sibling')
+            (root / 'source.json').write_text(json.dumps({'requirements': [{'id': 'TF-1', 'statement': 'Retain isolated worker execution.'}]}))
+            for name, data in [('test-legacy-dependencies.json', {}), ('test-stages.json', stages), ('test-layers.json', layers),
                                ('test-requirements.json', catalogue), ('test-timings.json', {'obsolete': 99999}),
+                               ('test-budget-debt.json', {'baseline': 'fixture', 'modules': {}}),
                                ('test-legacy.json', {'baseline': 'fixture', 'tests': {}}),
                                ('test-legacy-ceiling.json', {'baseline': 'fixture', 'tests': {}})]:
                 (root / 'scripts' / name).write_text(json.dumps(data))
+            if malformed:
+                (root / 'scripts/test-layers.json').write_text('{invalid json')
             driver = (f"import sys; sys.path.insert(0,{str(ROOT / 'scripts')!r})\n"
                       "import parallel_tests as p\nfrom pathlib import Path\n"
                       f"p.ROOT=Path({str(root)!r}); p.SUITES={{'root':p.ROOT}}\n"
                       "p.STAGES=p.ROOT/'scripts/test-stages.json'; p.TIMINGS=p.ROOT/'scripts/test-timings.json'\n"
                       "p.legacy_versions=lambda root, current, ceiling: (ceiling, current, [])\n"
-                      f"raise SystemExit(p.main(['--module','root:test_probe','--save-timings',{str(root / 'timings.json')!r}]))\n")
+                      "p.budget_versions=lambda root, current: []\n"
+                      f"raise SystemExit(p.main(['--module','root:test_probe','--save-timings',{str(root / 'timings.json')!r}]+{list(extra_args)!r}))\n")
             result = subprocess.run([sys.executable, '-B', '-c', driver], cwd=root,
-                                    env={**os.environ, 'COCOLO_WORKER_TIMEOUT': timeout},
+                                    env={**os.environ, 'COCOLO_WORKER_TIMEOUT': timeout, 'TF_FIXTURE_SECRET': 'synthetic-secret'},
                                     capture_output=True, text=True, timeout=20)
             detail = root / 'timings.json.run.json'
-            return result.returncode, result.stdout + result.stderr, json.loads(detail.read_text()) if detail.exists() else None
+            report = json.loads(detail.read_text()) if detail.exists() else None
+            if report is not None:
+                report['fixture_child_stopped'] = (root / 'child-stopped').exists()
+                report['fixture_import_child'] = (root / 'import-child').exists()
+            return result.returncode, result.stdout + result.stderr, report
 
     @proves('TF-1', 'TF-9')
     def test_runner_counts_structured_results_and_saves_only_current_job_seconds(self):
@@ -199,6 +230,65 @@ class RunnerIntegrationTests(unittest.TestCase):
         code, output, report = self.run_fixture('self.skipTest("fixture unavailable")')
         self.assertNotEqual(0, code, output)
         self.assertEqual('failed', report['requirements']['TF-1'])
+
+    @proves('TF-9')
+    def test_preflight_failure_writes_zero_job_seconds_and_discovery_time(self):
+        code, output, report = self.run_fixture(malformed=True)
+        self.assertNotEqual(0, code, output)
+        self.assertIsNotNone(report)
+        self.assertEqual(0, report['job_seconds'])
+        self.assertGreaterEqual(report['discovery_seconds'], 0)
+        self.assertGreaterEqual(report['preflight_seconds'], 0)
+        self.assertTrue(report['metadata_errors'])
+
+    @proves('TF-18')
+    def test_explicit_soak_module_requires_explicit_soak_profile(self):
+        code, output, report = self.run_fixture(layer='soak')
+        self.assertNotEqual(0, code, output)
+        self.assertIn('soak', output)
+        code, output, report = self.run_fixture(layer='soak', extra_args=('--profile', 'soak'))
+        self.assertEqual(0, code, output)
+        self.assertEqual('soak', report['profile'])
+
+    @proves('TF-1')
+    def test_worker_secrets_are_stripped_and_temporary_roots_are_isolated(self):
+        body = ("import os,tempfile\nfrom pathlib import Path\n"
+                "self.assertNotIn('TF_FIXTURE_SECRET', os.environ)\n"
+                "path=Path(tempfile.gettempdir())/'exclusive-fixture'\n"
+                "with path.open('x') as stream:\n    stream.write('private fixture')\n"
+                "self.assertEqual('private fixture', path.read_text())")
+        code, output, report = self.run_fixture(body, siblings=True)
+        self.assertEqual(0, code, output)
+        self.assertEqual(2, len(report['workers']))
+        self.assertEqual(2, len({row['log'] for row in report['workers']}))
+
+    @proves('TF-1', 'TF-9')
+    def test_owned_descendants_are_reaped_when_a_worker_finishes(self):
+        child = ("import signal,time\nfrom pathlib import Path\n"
+                 "def stop(*args):\n    Path('child-stopped').write_text('stopped'); raise SystemExit\n"
+                 "signal.signal(signal.SIGTERM, stop)\nPath('child-ready').write_text('ready')\ntime.sleep(10)")
+        body = ("import subprocess,sys,time\nfrom pathlib import Path\n"
+                f"subprocess.Popen([sys.executable,'-c',{child!r}])\n"
+                "end=time.monotonic()+2\nwhile not Path('child-ready').exists() and time.monotonic()<end:\n    time.sleep(.01)\n"
+                "self.assertTrue(Path('child-ready').exists())")
+        code, output, report = self.run_fixture(body)
+        self.assertEqual(0, code, output)
+        self.assertTrue(report['fixture_child_stopped'], 'worker completion must reap owned descendants')
+
+    @proves('TF-18')
+    def test_conflicting_explicit_profile_selectors_are_rejected(self):
+        code, output, _ = self.run_fixture(extra_args=('--profile', 'dev', '--profile', 'ci'))
+        self.assertNotEqual(0, code, output)
+        self.assertIn('profile', output)
+
+    @proves('TF-10')
+    def test_discovery_cannot_run_a_restricted_module_import_side_effect(self):
+        command = "from pathlib import Path; Path('import-child').write_text('ran')"
+        imported = f"import subprocess,sys; subprocess.run([sys.executable,'-c',{command!r}])"
+        code, output, report = self.run_fixture(layer='component', module_import=imported)
+        self.assertNotEqual(0, code, output)
+        self.assertIsNotNone(report)
+        self.assertFalse(report['fixture_import_child'], 'preflight import must not start the prohibited child')
 
 
 if __name__ == '__main__':

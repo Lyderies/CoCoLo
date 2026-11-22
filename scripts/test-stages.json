@@ -267,6 +267,7 @@
  "root:test_ci_stages": "unit",
  "root:test_e2e_requirements": "e2e",
  "root:test_e2e_strictness": "unit",
+ "root:test_entrypoint_inventory": "integration",
  "root:test_identifiers_parity": "integration",
  "root:test_install": "e2e",
  "root:test_install_claude_upgrade": "e2e",
@@ -287,6 +288,7 @@
  "root:test_setup_wizard_terminal": "unit",
  "root:test_test_framework": "integration",
  "root:test_test_framework_guards": "integration",
+ "root:test_test_framework_review": "integration",
  "root:test_test_stages": "integration",
  "root:test_wizard_clock": "integration"
 }

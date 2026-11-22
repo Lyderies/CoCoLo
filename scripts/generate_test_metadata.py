@@ -78,6 +78,12 @@ def main():
             for requirement, row in decode_json(target.read_text()).items():
                 if requirement not in catalogue:
                     catalogue[requirement] = {**row, 'checks': sorted(key for key, rec in tests.items() if requirement in rec.get('requirements', []))}
+        registry = ROOT / 'scripts/test-checks.json'
+        if registry.exists():
+            for name, check in decode_json(registry.read_text()).items():
+                for requirement in check['requirements']:
+                    catalogue[requirement]['checks'].append(name)
+                    catalogue[requirement]['checks'].sort()
         target.write_text(json.dumps(catalogue, indent=1, sort_keys=True) + '\n')
 
 

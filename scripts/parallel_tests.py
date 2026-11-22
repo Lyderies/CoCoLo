@@ -30,6 +30,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -125,9 +126,10 @@ STAGE_NAMES = ("unit", "integration", "e2e")
 
 def inventory():
     found = {}
+    layers = framework.decode_json((ROOT / 'scripts/test-layers.json').read_text())
     for suite, cwd in SUITES.items():
         code = (f"import sys,json; sys.path.insert(0,{str(FRAMEWORK_SCRIPTS)!r}); sys.path.insert(0,'.'); "
-                f"from test_framework import inventory_suite; print(json.dumps(inventory_suite({suite!r})))")
+                f"from test_framework import inventory_suite; print(json.dumps(inventory_suite({suite!r}, {layers!r})))")
         result = subprocess.run([sys.executable, '-B', '-c', code], cwd=cwd,
                                 env={**os.environ, **EXTRA_ENV.get(suite, {})}, capture_output=True, text=True)
         if result.returncode:
@@ -139,6 +141,8 @@ def inventory():
 def legacy_versions(root, current, ceiling):
     """Compare working files with committed introduction and every historical shrink transition."""
     errors = []
+    if not REVIEW_BASE:
+        return ceiling, {'baseline': current['baseline'], 'tests': {}}, ['legacy list requires an explicit trusted --base']
     def git(*args):
         return subprocess.check_output(['git', *args], cwd=root, text=True, stderr=subprocess.DEVNULL)
     def version(commit, name):
@@ -148,9 +152,17 @@ def legacy_versions(root, current, ceiling):
         if not commits:
             raise ValueError('initial ceiling is not committed')
         original = version(commits[0], 'test-legacy-ceiling.json')
+        dep_commits = git('log', '--reverse', '--format=%H', 'HEAD', '--', 'scripts/test-legacy-dependencies.json').split()
+        if not dep_commits or framework.decode_json((root / 'scripts/test-legacy-dependencies.json').read_text()) != version(dep_commits[0], 'test-legacy-dependencies.json'):
+            errors.append('legacy fixture/helper baseline changed or is uncommitted')
         if ceiling != original:
             errors.append('legacy initial ceiling changed')
-        previous = version(REVIEW_BASE or 'HEAD', 'test-legacy.json')
+        try:
+            previous = version(REVIEW_BASE, 'test-legacy.json')
+        except subprocess.CalledProcessError:
+            git('merge-base', '--is-ancestor', framework.BASELINE, REVIEW_BASE)
+            git('merge-base', '--is-ancestor', REVIEW_BASE, commits[0])
+            previous = original  # Explicit trusted base before the manifest was introduced.
         for commit in git('rev-list', 'HEAD', '--', 'scripts/test-legacy.json').split():
             this = version(commit, 'test-legacy.json')
             parent_ids = git('rev-list', '--parents', '-n', '1', commit).split()[1:]
@@ -166,8 +178,46 @@ def legacy_versions(root, current, ceiling):
         return ceiling, {'baseline': current['baseline'], 'tests': {}}, ['cannot verify committed legacy history/review base']
 
 
+
+def budget_versions(root, current):
+    """Baseline ceilings are derived from committed measurements, never candidate estimates."""
+    def git(*args):
+        return subprocess.check_output(['git', *args], cwd=root, text=True, stderr=subprocess.DEVNULL)
+    if not REVIEW_BASE:
+        return ['budget debt requires an explicit trusted --base']
+    try:
+        origin = git('log', '--reverse', '--format=%H', 'HEAD', '--',
+                     'measurements/test-framework/baseline-timings.json').split()[0]
+        baseline = framework.decode_json(git('show', origin + ':measurements/test-framework/baseline-timings.json'))
+        layer_origin = git('log', '--reverse', '--format=%H', 'HEAD', '--', 'scripts/test-layers.json').split()[0]
+        initial_layers = framework.decode_json(git('show', layer_origin + ':scripts/test-layers.json'))
+        ceiling = {'baseline': framework.BASELINE, 'modules': {name: baseline[name] for name, layer in initial_layers.items()
+                   if name in baseline and baseline[name] > framework.BUDGETS[layer]}}
+        # A base before this file's introduction has the full generated debt ceiling.
+        git('rev-parse', '--verify', REVIEW_BASE + '^{commit}')
+        def version(commit):
+            try:
+                return framework.decode_json(git('show', commit + ':scripts/test-budget-debt.json'))
+            except subprocess.CalledProcessError:
+                return ceiling
+        errors = framework.validate_budget_debt(current, ceiling, version(REVIEW_BASE))
+        for commit in git('rev-list', 'HEAD', '--', 'scripts/test-budget-debt.json').split():
+            for parent in git('rev-list', '--parents', '-n', '1', commit).split()[1:]:
+                errors += framework.validate_budget_debt(version(commit), ceiling, version(parent))
+        return errors
+    except (subprocess.CalledProcessError, ValueError, KeyError, IndexError):
+        return ['cannot verify budget debt baseline/trusted base']
+
+
+DISCOVERY_SECONDS = 0.
+
 def metadata():
-    discovered = inventory()
+    global DISCOVERY_SECONDS
+    discovery_started = time.monotonic()
+    try:
+        discovered = inventory()
+    finally:
+        DISCOVERY_SECONDS = time.monotonic() - discovery_started
     def read(name):
         return framework.decode_json((ROOT / 'scripts' / name).read_text())
     stages, layers = read('test-stages.json'), read('test-layers.json')
@@ -188,8 +238,39 @@ def metadata():
     if checked:
         checked_inventory['lifecycle:checks'] = checked
         checked_stages['lifecycle:checks'], checked_layers['lifecycle:checks'] = 'e2e', 'scenario'
+    registry_path = ROOT / 'scripts/test-checks.json'
+    if registry_path.exists():
+        registry = framework.decode_json(registry_path.read_text())
+        checked_inventory['registered:checks'] = {
+            name: {'requirements': check['requirements'], 'rationale': 'Registered executable or review evidence', 'fingerprint': ''}
+            for name, check in registry.items()}
+        checked_stages['registered:checks'], checked_layers['registered:checks'] = 'e2e', 'scenario'
+        for name, check in registry.items():
+            if check.get('kind') not in ('executable', 'review'):
+                errors.append(name + ': unknown registered check kind')
+    errors += framework.validate_sources(ROOT, catalogue)
     errors += framework.validate_metadata(inventory=checked_inventory, stages=checked_stages, layers=checked_layers,
                                          catalogue=catalogue, legacy=legacy, ceiling=ceiling, previous=previous)
+    for module, cases in discovered.items():
+        if all(name in legacy['tests'] for name in cases):
+            continue
+        suite, name = module.split(':', 1)
+        source = SUITES[suite] / (('tests/' if suite == 'root' else '') + name.replace('.', '/') + '.py')
+        if source.exists():
+            errors += [module + ': ' + error for error in framework.golden_bypasses(source.read_text())]
+    dependency_file = ROOT / 'scripts/test-legacy-dependencies.json'
+    if dependency_file.exists():
+        dependencies = framework.decode_json(dependency_file.read_text())
+        for cases in discovered.values():
+            for name, record in cases.items():
+                if name in legacy['tests'] and record.get('dependencies') != dependencies.get(name):
+                    errors.append(name + ': legacy fixture/helper dependency changed; migrate its requirement proof')
+    else:
+        errors.append('missing legacy fixture/helper dependency baseline')
+    entrypoints = ROOT / 'scripts/test-entrypoints.json'
+    entries = framework.decode_json(entrypoints.read_text()) if entrypoints.exists() else {}
+    check_layers = {name: layers.get(module) for module, cases in discovered.items() for name in cases}
+    errors += framework.validate_entrypoints(ROOT, entries, check_layers)
     return discovered, stages, layers, catalogue, errors
 
 
@@ -223,6 +304,38 @@ def parse_shard(text: str) -> tuple[int, int]:
     return int(index), int(count)
 
 
+
+
+def reap_worker_group(process):
+    """Only signal the process group created for this worker; teardown is bounded."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + .5
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(.01)
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+def preflight_failure(message, jobs, save, started):
+    elapsed = time.monotonic() - started
+    detail = framework.measurements([], {}, {}, jobs=jobs, elapsed=elapsed, selection=[],
+                                    discovery_seconds=DISCOVERY_SECONDS,
+                                    preflight_seconds=max(0., elapsed - DISCOVERY_SECONDS))
+    detail.update(metadata_errors=[message], failed_units=[], tests={}, requirements={}, units=0)
+    if save is not None:
+        save.write_text('{}\n')
+        Path(str(save) + '.run.json').write_text(json.dumps(detail, indent=1, sort_keys=True) + '\n')
+    print(json.dumps(detail, indent=1), flush=True)
+    return 1
+
 def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
         wanted: set[str] = frozenset(STAGE_NAMES), modules: dict[str, set[str]] | None = None,
         part: tuple[int, int] = (1, 1), profile: str = 'ci') -> int:
@@ -230,7 +343,14 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
     global _CURRENT_DISCOVERY
     _CURRENT_DISCOVERY = None
     timings = json.loads(TIMINGS.read_text()) if TIMINGS.is_file() else {}
-    discovered, stages, layers, catalogue, metadata_errors = metadata()
+    preflight_started = time.monotonic()
+    try:
+        discovered, stages, layers, catalogue, metadata_errors = metadata()
+        budget_debt = framework.decode_json((ROOT / 'scripts/test-budget-debt.json').read_text())
+        metadata_errors += budget_versions(ROOT, budget_debt)
+    except (ValueError, OSError, KeyError, TypeError) as error:
+        return preflight_failure(str(error), jobs, save, preflight_started)
+    preflight_seconds = time.monotonic() - preflight_started - DISCOVERY_SECONDS
     _CURRENT_DISCOVERY = {suite: {module.split(':', 1)[1]: [key.split(':', 1)[1] for key in cases]
                                  for module, cases in discovered.items() if module.startswith(suite + ':')}
                           for suite in SUITES}
@@ -240,8 +360,12 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
     if modules is not None:
         unknown = sorted(f"{suite}:{module}" for suite in suites for module in modules[suite] - set(discover(suite)))
         if unknown:
-            print(f"no such test module: {', '.join(unknown)}", file=sys.stderr)
-            return 2
+            return preflight_failure('no such test module: ' + ', '.join(unknown), jobs, save, preflight_started)
+        contradictory = sorted(f'{suite}:{module}' for suite in suites for module in modules[suite]
+                               if layers.get(f'{suite}:{module}') == 'soak' and profile != 'soak')
+        if contradictory:
+            return preflight_failure('explicit soak module requires --profile soak: ' + ', '.join(contradictory),
+                                     jobs, save, preflight_started)
     # Invalid layer/stage declarations fail preflight and never execute a body.
     runnable = {key for key in eligible if layers[key] in framework.STAGES and stages.get(key) in framework.STAGES[layers[key]]}
     for suite in _CURRENT_DISCOVERY:
@@ -277,7 +401,7 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                      "COCOLO_TEST_MODULE": f'{suite}:{name.split("#")[0]}',
                      "COCOLO_TEST_PROFILE": profile, "HYPOTHESIS_STORAGE_DIRECTORY": str(folder / 'hypothesis'),
                      "COCOLO_TEST_RESULTS": str(folder.with_suffix('.results.json'))},
-                stdout=handle, stderr=subprocess.STDOUT)
+                stdout=handle, stderr=subprocess.STDOUT, start_new_session=True)
             running[process] = (suite, name, names, log, handle, time.monotonic(), folder)
         time.sleep(0.05)
         if time.monotonic() - reported >= PROGRESS_SECONDS:
@@ -289,9 +413,10 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                   f"{sum(1 for r in results if r['returncode'] != 0)} failed; running: {now}", flush=True)
         for process, entry in running.items():
             if process.poll() is None and time.monotonic() - entry[5] > UNIT_SECONDS + 60:
-                process.kill()  # It did not stop itself.
+                reap_worker_group(process)  # Includes owned children if the worker could not stop itself.
         for process in [p for p in running if p.poll() is not None]:
             suite, name, names, log, handle, began, folder = running.pop(process)
+            reap_worker_group(process)
             handle.close()
             output = log.read_text(errors="replace")
             result_file = folder.with_suffix('.results.json')
@@ -320,13 +445,27 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
     elapsed = time.monotonic() - started
     fingerprints = {key: value.get('fingerprint', 'import_error') for cases in discovered.values() for key, value in cases.items()}
     detail = framework.measurements(results, layers, stages, jobs=jobs, elapsed=elapsed, selection=selection, part=part,
-                                    profile=profile, catalogue=catalogue, fingerprints=fingerprints)
+                                    profile=profile, catalogue=catalogue, fingerprints=fingerprints,
+                                    budget_debt=budget_debt, discovery_seconds=DISCOVERY_SECONDS, preflight_seconds=preflight_seconds)
     detail['profile'], detail['metadata_errors'] = profile, metadata_errors
     outcomes = {key: value for row in results for key, value in row['outcomes'].items()}
+    registry_path = ROOT / 'scripts/test-checks.json'
+    if registry_path.exists():
+        registered = framework.registered_outcomes(framework.decode_json(registry_path.read_text()),
+                                                   framework.decode_json((ROOT / 'scripts/test-review-evidence.json').read_text()))
+        outcomes.update(registered)
+        detail['registered_outcomes'] = registered
     detail['requirements'] = framework.coverage(catalogue, outcomes)
     requirement_failures = [key for key, value in detail['requirements'].items() if value == 'failed' and
                             any(name in outcomes for name in catalogue[key]['checks'])]
-    for entry in detail['over_budget']:
+    if modules is None and set(suites) == set(SUITES) and wanted == set(STAGE_NAMES) and part == (1, 1):
+        requirement_failures = sorted(key for key, value in detail['requirements'].items() if value != 'passed')
+    for entry in detail['budget_warnings']:
+        print(f'BUDGET DEBT: {entry["module"]} ceiling={entry["ceiling"]:.3f}s '
+              f'{entry["status"]} seconds={entry["seconds"]}', flush=True)
+    for name in detail['debt_retirement_required']:
+        print(f'RETIRE BUDGET DEBT: {name} is now within its layer budget', flush=True)
+    for entry in detail['budget_failures']:
         print(f'OVER BUDGET: {entry["module"]} {entry["stage"]}/{entry["layer"]} '
               f'{entry["seconds"]:.3f}s > {entry["budget"]:.3f}s ({entry["fragments"]} fragments)', flush=True)
     measured = dict(timings)
@@ -346,6 +485,9 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
     totals = {suite: sum(r["tests"] for r in results if r["suite"] == suite) for suite in suites}
     print(json.dumps({"elapsed_seconds": round(elapsed, 1), "jobs": jobs, "stages": sorted(wanted),
                       "job_seconds": round(detail['job_seconds'], 3), "over_budget": detail['over_budget'],
+                      "budget_failures": detail['budget_failures'], "budget_warnings": detail['budget_warnings'],
+                      "debt_retirement_required": detail['debt_retirement_required'],
+                      "discovery_seconds": DISCOVERY_SECONDS, "preflight_seconds": preflight_seconds,
                       "metadata_errors": metadata_errors, "partial": detail['partial'], "profile": profile,
                       "requirement_failures": requirement_failures,
                       "units": len(results),
@@ -355,7 +497,7 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                       "logs": str(base)}, indent=1))
     if not failed and not keep:
         shutil.rmtree(base, ignore_errors=True)
-    return 1 if failed or metadata_errors or detail['over_budget'] or requirement_failures else 0
+    return 1 if failed or metadata_errors or detail['budget_failures'] or detail['debt_retirement_required'] or requirement_failures else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -366,7 +508,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stage", action="append", choices=STAGE_NAMES, help="run only these stages")
     parser.add_argument("--save-timings", type=Path, help="write this run's measurements here")
     parser.add_argument("--keep", action="store_true", help="keep every unit's folder and log")
-    parser.add_argument('--profile', choices=('dev', 'ci', 'soak'), default='ci')
+    parser.add_argument('--profile', choices=('dev', 'ci', 'soak'), action='append')
     parser.add_argument('--base', help='trusted review-base commit for the shrink-only legacy check')
     parser.add_argument('--combine-timings', nargs='+', type=Path, help='combine complete disjoint shard .run.json files')
     parser.add_argument("--shard", type=parse_shard, default=(1, 1), metavar="K/N",
@@ -375,10 +517,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="run only this test module (repeatable), for example codex:tests.test_bridge")
     args = parser.parse_args(argv)
     REVIEW_BASE = args.base
+    if args.profile and len(args.profile) != 1:
+        parser.error('conflicting profile selectors; choose one explicit profile')
+    args.profile = args.profile[0] if args.profile else 'ci'
     if args.combine_timings:
         report = framework.combine_measurements([framework.decode_json(path.read_text()) for path in args.combine_timings])
         print(json.dumps(report, indent=1))
-        return 1 if report['over_budget'] or report['metadata_errors'] or any(row['returncode'] for row in report['workers']) or 'failed' in report['requirements'].values() else 0
+        return 1 if report['budget_failures'] or report['debt_retirement_required'] or report['metadata_errors'] or any(row['returncode'] for row in report['workers']) or 'failed' in report['requirements'].values() else 0
     if args.jobs < 1:
         parser.error('--jobs must be positive')
     suites = args.suite or sorted(SUITES)

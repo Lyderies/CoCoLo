@@ -270,6 +270,59 @@ class DependencyTests(unittest.TestCase):
             profiles.settings_for('unknown')
 
 
+class BudgetDebtTests(unittest.TestCase):
+    def setUp(self):
+        self.fw = importlib.import_module('test_framework')
+        self.debt = {'baseline': 'baseline', 'modules': {'root:old': 80., 'root:unselected': 90.}}
+        self.layers = {'root:old': 'scenario', 'root:unselected': 'scenario', 'root:new': 'component'}
+        self.stages = {key: 'integration' for key in self.layers}
+
+    def measure(self, seconds, **kw):
+        rows = [dict(suite='root', unit='old', seconds=seconds, names=['test'], returncode=0)]
+        return self.fw.measurements(rows, self.layers, self.stages, jobs=16, elapsed=seconds,
+                                    selection=['root:old'], budget_debt=self.debt, **kw)
+
+    @proves('TF-8')
+    def test_baseline_debt_warns_even_unselected_and_only_regression_fails(self):
+        report = self.measure(80.)
+        self.assertEqual([], report['budget_failures'])
+        self.assertEqual(['root:old', 'root:unselected'], [r['module'] for r in report['budget_warnings']])
+        self.assertIsNone(report['budget_warnings'][1]['seconds'])
+        self.assertEqual('not_measured', report['budget_warnings'][1]['status'])
+        self.assertEqual(['root:old'], [r['module'] for r in self.measure(80.001)['budget_failures']])
+        self.assertEqual(['root:old'], self.measure(60.)['debt_retirement_required'])
+        self.assertEqual([], self.measure(60., part=(1, 2))['debt_retirement_required'])
+
+    @proves('TF-8')
+    def test_debt_can_only_shrink_and_does_not_exempt_new_modules(self):
+        self.assertEqual([], self.fw.validate_budget_debt(self.debt, self.debt, self.debt))
+        for changed in ({'baseline': 'wrong', 'modules': self.debt['modules']},
+                        {'baseline': 'baseline', 'modules': {**self.debt['modules'], 'root:new': 100.}},
+                        {'baseline': 'baseline', 'modules': {**self.debt['modules'], 'root:old': 81.}}):
+            with self.subTest(changed=changed):
+                self.assertTrue(self.fw.validate_budget_debt(changed, self.debt, self.debt))
+        removed = {'baseline': 'baseline', 'modules': {'root:unselected': 90.}}
+        self.assertTrue(self.fw.validate_budget_debt(self.debt, self.debt, removed))
+        rows = [dict(suite='root', unit='new', seconds=30.001, names=['test'], returncode=0)]
+        report = self.fw.measurements(rows, self.layers, self.stages, jobs=16, elapsed=30.001,
+                                      selection=['root:new'], budget_debt=self.debt)
+        self.assertEqual('root:new', report['budget_failures'][0]['module'])
+
+    @proves('TF-8', 'TF-9')
+    def test_shards_use_combined_debt_ceiling_and_preserve_preflight_time(self):
+        options = dict(layers=self.layers, stages=self.stages, jobs=1, elapsed=40., selection=['root:old'],
+                       budget_debt=self.debt, discovery_seconds=2., preflight_seconds=3.)
+        row = dict(suite='root', unit='old#0', seconds=40., names=['a'], returncode=0)
+        a = self.fw.measurements([row], part=(1, 2), **options)
+        b = self.fw.measurements([{**row, 'unit': 'old#1', 'names': ['b']}], part=(2, 2), **options)
+        result = self.fw.combine_measurements([a, b])
+        self.assertEqual([], result['budget_failures'])
+        self.assertEqual(4., result['discovery_seconds'])
+        self.assertEqual(6., result['preflight_seconds'])
+        b['workers'][0]['seconds'] += .001
+        self.assertEqual('root:old', self.fw.combine_measurements([a,b])['budget_failures'][0]['module'])
+
+
 class WorkflowTests(unittest.TestCase):
     @proves('TF-7', 'TF-8', 'TF-16')
     def test_ci_prepares_hashed_dependencies_and_combines_complete_shards(self):

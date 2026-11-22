@@ -42,3 +42,15 @@
 - Budget option A -> 128; discovery/preflight timings (fix 6) -> 147.
 - Commit: this requirements/report commit; no executable or test assertions changed. Existing step-2 implementation now needs reconciliation with these stricter rules.
 - Next review stop: after step 3, per latest owner instruction; steps 4–5 wait for that review.
+
+## Step 2 — step-1 r1 implementation reconciliation
+- Commits: `f9902898` fixes 1–14 plus optional 15; `29ddc549` immutable dependency hashes and budget census; implementation in this report's commit.
+- TF-8 option A: 16 baseline scenario modules exceed 60s; ceilings generated from saved timings, warned every run, shrink-only/history checked (`MEASURE-test-framework.md`, `scripts/test-budget-debt.json`).
+- TF-4/7/14: exact source comparison, registered pending review/future checks, transitive fixture hashes, explicit trusted bases, golden-bypass rejection (`tests/test_test_framework_review.py`).
+- TF-1/9/10/11/18: bounded worker-group teardown, secrets/temp isolation, saved preflight failure timing, discovery-time guards, inherited sockets, explicit/conflicting soak/profile refusal (`tests/test_test_framework_guards.py`).
+- Red/green ledger: `measurements/test-framework/review-evidence.json`; six affected modules passed 62 tests in 10.913 job-seconds before the last two added guard witnesses.
+- Latest affected guard/review/stage run: 32 tests, no failed workers or budget failures, 16.771 job-seconds; `measurements/test-framework/review-framework-run.json`.
+- TF-13/16 entry inventory names real checks for 13 entry points. Owner-approved replacement host modules passed 46 tests in 37.096 job-seconds (`review-replacement-run.json`).
+- Assertion replacements: `ASSERTIONS-test-framework.md:10` lists the two removed host help-probe cases and their unchanged start-to-finish replacements; no test function deleted and no existing assertion weakened.
+- Global exit still 1 for the 80 missing lifecycle checks; future ML/scenario/review records remain not_run, not passing. Linux/Python 3.11 execution still awaits CI; source grammar checked for 3.11.
+- Next: carry reconciliation to merge branch and finish step 3; stop for review after step 3, as owner requested. No push or product install performed.

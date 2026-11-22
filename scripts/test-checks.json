@@ -1,0 +1,56 @@
+{
+  "planned:TF-19": {
+    "kind": "executable",
+    "requirements": [
+      "TF-19"
+    ],
+    "step": 3
+  },
+  "planned:TF-20": {
+    "kind": "executable",
+    "requirements": [
+      "TF-20"
+    ],
+    "step": 4
+  },
+  "review:TF-19": {
+    "evidence": null,
+    "kind": "review",
+    "requirements": [
+      "TF-19"
+    ],
+    "revision": "76895837c19d91dabc09a913246b0e105f0c67b0e96ed6c19693125f56c8f61d"
+  },
+  "review:TF-21": {
+    "evidence": null,
+    "kind": "review",
+    "requirements": [
+      "TF-21"
+    ],
+    "revision": "e9e191986b75f704ab0d83170532ddb272f8aeda7382d8a48ea9db2bdb04d189"
+  },
+  "review:TF-22": {
+    "evidence": null,
+    "kind": "review",
+    "requirements": [
+      "TF-22"
+    ],
+    "revision": "b88f205235aed797581cbc278bd163afe57349ea9a2ede0a1b32f1c3aec52e7f"
+  },
+  "review:TF-5": {
+    "evidence": null,
+    "kind": "review",
+    "requirements": [
+      "TF-5"
+    ],
+    "revision": "8f96005dc1d600d23b58932e9e1d80df4f47014cb1979ec00e58f782645a1c96"
+  },
+  "review:TF-6": {
+    "evidence": null,
+    "kind": "review",
+    "requirements": [
+      "TF-6"
+    ],
+    "revision": "7bcf5e27da3b0fc9afa3889e791341bca8f061d184beeb0bdbfafe1bfde8e874"
+  }
+}

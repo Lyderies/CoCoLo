@@ -1,0 +1,144 @@
+[
+  {
+    "run": "review-budget-red",
+    "job_seconds": 0.6952535830205306,
+    "tests": 22,
+    "failed_workers": [
+      "test_test_framework"
+    ],
+    "metadata_error_count": 88,
+    "failure_summary": [
+      "ERROR: test_debt_can_only_shrink_and_does_not_exempt_new_modules (test_test_framework.BudgetDebtTests.test_debt_can_only_shrink_and_does_not_exempt_new_modules)",
+      "ERROR: test_shards_use_combined_debt_ceiling_and_preserve_preflight_time (test_test_framework.BudgetDebtTests.test_shards_use_combined_debt_ceiling_and_preserve_preflight_time)",
+      "FAILED (errors=3)"
+    ]
+  },
+  {
+    "run": "review-rules-red",
+    "job_seconds": 0.16730095801176503,
+    "tests": 5,
+    "failed_workers": [
+      "test_test_framework_review"
+    ],
+    "metadata_error_count": 99,
+    "failure_summary": [
+      "ERROR: test_fixture_and_transitive_helper_changes_change_dependency_fingerprint (test_test_framework_review.ReviewTests.test_fixture_and_transitive_helper_changes_change_dependency_fingerprint)",
+      "ERROR: test_registered_future_check_and_review_record_are_not_passing_evidence (test_test_framework_review.ReviewTests.test_registered_future_check_and_review_record_are_not_passing_evidence)",
+      "FAILED (errors=4)"
+    ]
+  },
+  {
+    "run": "review-preflight-red",
+    "job_seconds": 5.842682707996573,
+    "tests": 15,
+    "failed_workers": [
+      "test_test_framework_guards"
+    ],
+    "metadata_error_count": 1256,
+    "failure_summary": [
+      "FAIL: test_preflight_failure_writes_zero_job_seconds_and_discovery_time (test_test_framework_guards.RunnerIntegrationTests.test_preflight_failure_writes_zero_job_seconds_and_discovery_time)",
+      "FAILED (failures=2)"
+    ]
+  },
+  {
+    "run": "review-network-red",
+    "job_seconds": 6.118015583022498,
+    "tests": 16,
+    "failed_workers": [
+      "test_test_framework_guards"
+    ],
+    "metadata_error_count": 92,
+    "failure_summary": [
+      "FAIL: test_inherited_socket_methods_and_asyncio_have_no_guard_exemption (test_test_framework_guards.WorkerTests.test_inherited_socket_methods_and_asyncio_have_no_guard_exemption)",
+      "FAILED (failures=1)"
+    ]
+  },
+  {
+    "run": "review-teardown-red",
+    "job_seconds": 11.025426624983083,
+    "tests": 18,
+    "failed_workers": [
+      "test_test_framework_guards"
+    ],
+    "metadata_error_count": 87,
+    "failure_summary": [
+      "FAIL: test_owned_descendants_are_reaped_when_a_worker_finishes (test_test_framework_guards.RunnerIntegrationTests.test_owned_descendants_are_reaped_when_a_worker_finishes)",
+      "FAILED (failures=1)"
+    ]
+  },
+  {
+    "run": "golden-fixture-red",
+    "job_seconds": 0.10795000003417954,
+    "tests": 6,
+    "failed_workers": [
+      "test_test_framework_review"
+    ],
+    "metadata_error_count": 85,
+    "failure_summary": [
+      "FAIL: test_temporary_helper_output_and_unrelated_owner_files_are_not_repository_goldens (test_test_framework_review.ReviewTests.test_temporary_helper_output_and_unrelated_owner_files_are_not_repository_goldens)",
+      "FAILED (failures=1)"
+    ]
+  },
+  {
+    "run": "entrypoints-red",
+    "job_seconds": 0.1561416249605827,
+    "tests": 3,
+    "failed_workers": [
+      "test_entrypoint_inventory"
+    ],
+    "metadata_error_count": 87,
+    "failure_summary": [
+      "ERROR: test_inventory_rejects_missing_entry_points_and_missing_real_checks (test_entrypoint_inventory.EntryPointTests.test_inventory_rejects_missing_entry_points_and_missing_real_checks)",
+      "FAILED (errors=2)"
+    ]
+  },
+  {
+    "run": "profile-conflict-red",
+    "job_seconds": 7.0963379589957185,
+    "tests": 19,
+    "failed_workers": [
+      "test_test_framework_guards"
+    ],
+    "metadata_error_count": 81,
+    "failure_summary": [
+      "FAILED (failures=1)"
+    ]
+  },
+  {
+    "run": "discovery-guard-red",
+    "job_seconds": 7.182746125035919,
+    "tests": 20,
+    "failed_workers": [
+      "test_test_framework_guards"
+    ],
+    "metadata_error_count": 81,
+    "failure_summary": [
+      "FAIL: test_discovery_cannot_run_a_restricted_module_import_side_effect (test_test_framework_guards.RunnerIntegrationTests.test_discovery_cannot_run_a_restricted_module_import_side_effect)",
+      "FAILED (failures=1)"
+    ]
+  },
+  {
+    "run": "review-accepted",
+    "job_seconds": 10.91317520692246,
+    "tests": 62,
+    "failed_workers": [],
+    "metadata_error_count": 80,
+    "failure_summary": []
+  },
+  {
+    "run": "review-last",
+    "job_seconds": 7.046753458038438,
+    "tests": 25,
+    "failed_workers": [],
+    "metadata_error_count": 80,
+    "failure_summary": []
+  },
+  {
+    "run": "discovery-guard-green",
+    "job_seconds": 16.771323709050193,
+    "tests": 32,
+    "failed_workers": [],
+    "metadata_error_count": 80,
+    "failure_summary": []
+  }
+]

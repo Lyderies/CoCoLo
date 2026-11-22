@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import select
+import socket
 import sys
 import threading
 import time
@@ -21,7 +22,7 @@ class Guard:
 
     def deny(self, operation):
         message = f'{self.layer} test {self.module} {self.test or "import"} must not {operation}'
-        self.violations.append({'test': self.test, 'operation': operation})
+        self.violations.append({'test': self.test, 'operation': operation, 'module': self.module, 'layer': self.layer})
         raise RuntimeError(message)
 
     def install(self):
@@ -31,26 +32,51 @@ class Guard:
         sockets = {'socket.__new__', 'socket.connect', 'socket.bind', 'socket.getaddrinfo',
                    'socket.gethostbyname', 'socket.gethostbyaddr', 'socket.getnameinfo', 'socket.sendto'}
         def audit(event, args):
+            if self.layer not in ('unit', 'component'):
+                return
             if event in processes:
                 self.deny('start a process (' + event + ')')
             if event in sockets:
                 self.deny('use a socket (' + event + ')')
         sys.addaudithook(audit)
+        # Existing/inherited sockets must obey the same policy as newly constructed ones.
+        def refused(name, original):
+            def call(*args, **kwargs):
+                if self.layer not in ('unit', 'component'):
+                    return original(*args, **kwargs)
+                self.deny('use a socket (' + name + ')')
+            return call
+        for name in ('connect', 'connect_ex', 'bind', 'listen', 'accept', 'sendto', 'sendmsg'):
+            if hasattr(socket.socket, name):
+                setattr(socket.socket, name, refused('socket.' + name, getattr(socket.socket, name)))
+        for name in ('socketpair', 'create_connection', 'create_server', 'fromfd', 'fromshare',
+                     'getaddrinfo', 'gethostbyname', 'gethostbyname_ex', 'gethostbyaddr', 'getnameinfo'):
+            if hasattr(socket, name):
+                setattr(socket, name, refused('socket.' + name, getattr(socket, name)))
         if self.layer != 'unit':
             return
+        real_sleep = time.sleep
         def no_sleep(seconds):
+            if self.layer != 'unit':
+                return real_sleep(seconds)
             self.deny('sleep')
         time.sleep = no_sleep
         real_wait, real_join, real_select = threading.Condition.wait, threading.Thread.join, select.select
         def wait(condition, timeout=None):
+            if self.layer != 'unit':
+                return real_wait(condition, timeout)
             if timeout is None or timeout > 0:
                 self.deny('block on a condition/event wait')
             return real_wait(condition, timeout)
         def join(thread, timeout=None):
+            if self.layer != 'unit':
+                return real_join(thread, timeout)
             if thread.is_alive() and (timeout is None or timeout > 0):
                 self.deny('block on thread join')
             return real_join(thread, timeout)
         def poll_select(read, write, error, timeout=None):
+            if self.layer != 'unit':
+                return real_select(read, write, error, timeout)
             ready = real_select(read, write, error, 0)
             if timeout != 0 and not any(ready):
                 self.deny('block on select')
@@ -67,6 +93,8 @@ class Guard:
                 def __getattr__(self, name):
                     return getattr(self.inner, name)
                 def poll(self, timeout=None, *args, **kwargs):
+                    if guard.layer != 'unit':
+                        return self.inner.poll(timeout, *args, **kwargs)
                     ready = self.inner.poll(0, *args, **kwargs)
                     if timeout != 0 and not ready:
                         guard.deny('block on poll')
@@ -85,6 +113,8 @@ class Guard:
                 def __getattr__(self, name):
                     return getattr(self.inner, name)
                 def control(self, changelist, max_events, timeout=None):
+                    if guard.layer != 'unit':
+                        return self.inner.control(changelist, max_events, timeout)
                     ready = self.inner.control(changelist, max_events, 0)
                     if max_events and timeout != 0 and not ready:
                         guard.deny('block on kqueue')
