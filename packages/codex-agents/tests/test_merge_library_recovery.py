@@ -72,6 +72,61 @@ class RecoveryPolicies(unittest.TestCase):
         self.assertEqual(before, tree(f.project))
         self.assertEqual('landed', ml.history(f.project, f.private)[-1].state)
 
+    def test_review_C1_parent_descriptors_close_on_second_open_and_first_close_failure(self):
+        import os
+        for fail_operation, occurrence in (('open', 2), ('close', 1)):
+            with self.subTest(operation=fail_operation):
+                opened, seen = [], []
+                def inject(call):
+                    if call.operation == 'open' and call.when == 'after':
+                        opened.append(call.result)
+                    if call.operation == fail_operation and call.when == 'before':
+                        seen.append(call)
+                        if len(seen) == occurrence:
+                            raise OSError(errno.EIO, 'descriptor witness')
+                store = ml._Store(self.f.project, self.f.private, inject)
+                source, target = self.f.project / 'a.txt', self.f.project / 'temporary'
+                with self.assertRaises(OSError):
+                    store.rename(source, target)
+                for fd in opened:
+                    with self.assertRaises(OSError, msg='leaked parent descriptor'):
+                        os.fstat(fd)
+                if target.exists():
+                    target.rename(source)
+
+    def test_review_C2_cancel_new_ticket_leaves_earlier_landed_row(self):
+        f = self.f
+        first = f.batch({'a.txt': b'first'})
+        f.land(first)
+        before = ml.history(f.project, f.private)
+        second = f.batch({'a.txt': b'second'})
+        ticket = ml.enqueue(f.project, f.private, second, policy=f.policy)
+        self.assertNotEqual(ml.queue(f.project, f.private)[0].ticket, ticket.ticket)
+        ml.cancel(f.project, f.private, ticket.ticket)
+        self.assertEqual('cancelled', ml.queue(f.project, f.private)[-1].state)
+        self.assertEqual(before, ml.history(f.project, f.private))
+
+    def test_review_C3_populated_ancestor_is_not_an_emptied_folder(self):
+        f = self.f
+        put(f.project / 'docs/keep.md', b'owner')
+        put(f.project / 'docs/sub/x.txt', b'old')
+        f.before = f.operation_before = tree(f.project)
+        report = f.land(f.batch({'docs/sub/x.txt': None}))
+        self.assertEqual('landed', report.state)
+        self.assertEqual({'docs/sub'}, set(ml.history(f.project, f.private)[-1].emptied_folders))
+        self.assertEqual(b'owner', (f.project / 'docs/keep.md').read_bytes())
+
+    def test_review_C5_report_restores_phase_after_failure(self):
+        from unittest import mock
+        store = ml._Store(self.f.project, self.f.private)
+        self.addCleanup(store.close)
+        store.phase = 'cleanup'
+        with mock.patch.object(ml, '_unpack', side_effect=ValueError('report witness')):
+            with self.assertRaises(ValueError):
+                ml._report(store, {'batch': None, 'moved': ()})
+        self.assertEqual('cleanup', store.phase)
+        self.assertFalse(getattr(store, 'reporting', False))
+
 
 if __name__ == '__main__':
     unittest.main()

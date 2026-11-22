@@ -118,6 +118,48 @@ class EndStates(unittest.TestCase):
         with self.assertRaises(AssertionError):
             check_end_state(self, self.f, self.batch, replace(self.report, state='landed'), kind='forward')
 
+    def test_review_A1_cleanup_cannot_rewrite_terminal_direction(self):
+        with self.assertRaisesRegex(AssertionError, 'terminal|landed'):
+            self.check(call=ml.IOCall('unlink', 'before', 'cleanup'), fault=errno.EIO,
+                       terminal_before='landed')
+        with self.assertRaisesRegex(AssertionError, 'pre-fault durable'):
+            self.check(call=ml.IOCall('unlink', 'before', 'cleanup'), fault=errno.EIO)
+
+    def test_review_A2_unknown_needs_independent_history_failure(self):
+        report = ml.Report('unknown', reason='io', recorded=False)
+        with self.assertRaisesRegex(AssertionError, 'history failure'):
+            self.check(report=report)
+        self.check(report=report, call=ml.IOCall('sqlite_read', 'before', 'recovery'), fault=errno.EIO)
+
+    def test_review_A5_admission_cannot_hide_applying_row(self):
+        with self.assertRaisesRegex(AssertionError, 'applying|authority'):
+            self.check(row=replace(self.row, state='applying'), report=ml.Report('refused'))
+
+    def test_review_A6_terminal_rows_pin_contents_until_release(self):
+        with self.assertRaisesRegex(AssertionError, 'pin'):
+            self.check(row=replace(self.row, contents_kept=False))
+        put(self.f.project / 'a.txt', b'child')
+        with self.assertRaisesRegex(AssertionError, 'pin'):
+            self.check(row=replace(self.row, state='landed', contents_kept=False),
+                       report=replace(self.report, state='landed', paths=(ml.PathReport('a.txt', 'new'),)))
+
+    def test_review_A8_unknown_cannot_authorize_protected_directory_deletion(self):
+        (self.f.project / 'protected').mkdir()
+        self.f.before = self.f.operation_before = tree(self.f.project)
+        (self.f.project / 'protected').rmdir()
+        report = replace(self.report, state='needs_owner', reason='io',
+                         paths=self.report.paths + (ml.PathReport('protected', 'unknown'),))
+        with self.assertRaises(AssertionError):
+            self.check(row=replace(self.row, state='needs_owner'), report=report)
+
+    def test_review_A10_early_return_cannot_mutate_start_evidence(self):
+        from tests.merge_library_support import check_end_state
+        def history():
+            self.f.before['corruption'] = (stat.S_IFREG, 0o644, b'bad')
+            return ()
+        with self.assertRaisesRegex(AssertionError, 'start evidence'):
+            check_end_state(self, self.f, self.batch, ml.Report('refused'), read_history=history)
+
 
 if __name__ == '__main__':
     unittest.main()

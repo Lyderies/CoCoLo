@@ -134,6 +134,74 @@ class DurableDiskTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 committed_staging_survives()
 
+    def call(self, operation, path, **detail):
+        return self.disk(ml.IOCall(operation, 'before', 'test', str(path), detail=detail)).value
+
+    def test_review_B1_flush_open_inode_after_rename(self):
+        import os
+        d = self.disk
+        d.write('/model/a', b'old'); d.flush('/model/a'); d.flush('/model')
+        fd = self.call('open', '/model/a', flags=os.O_RDWR)
+        self.call('write', '/model/a', fd=fd, data=b'new')
+        d.rename('/model/a', '/model/b'); d.flush('/model')
+        self.call('fsync', '/model/a', fd=fd)
+        d.crash()
+        self.assertEqual(b'new', d.read('/model/b'))
+
+    def test_review_B2_missing_read_is_ENOENT(self):
+        with self.assertRaises(FileNotFoundError):
+            self.call('read', '/model/missing')
+
+    def test_review_B5_database_identity_survives_rename_not_unlink(self):
+        from tests.merge_library_disk import _Connection
+        d = self.disk
+        db = _Connection(d, '/model/db')
+        db.execute('INSERT OR REPLACE INTO rows VALUES (?,?)', (1, b'row'))
+        db.commit(); d.flush('/model')
+        d.rename('/model/db', '/model/moved'); d.flush('/model'); d.crash()
+        moved = _Connection(d, '/model/moved')
+        self.assertEqual([(b'row',)], moved.execute('SELECT value FROM rows ORDER BY id').fetchall())
+        d.unlink('/model/moved'); d.flush('/model'); d.crash()
+        new = _Connection(d, '/model/moved')
+        self.assertEqual([], new.execute('SELECT value FROM rows ORDER BY id').fetchall())
+
+    def test_review_B7_open_flags_and_B8_directory_errors(self):
+        import os
+        d = self.disk
+        d.write('/model/file', b'data'); d.mkdir('/model/dir')
+        with self.assertRaises(NotADirectoryError):
+            self.call('open', '/model/file', flags=os.O_RDONLY | os.O_DIRECTORY)
+        with self.assertRaises(IsADirectoryError):
+            d.unlink('/model/dir')
+        with self.assertRaises(NotADirectoryError):
+            d.rmdir('/model/file')
+        self.call('open', '/model/file', flags=os.O_WRONLY | os.O_TRUNC)
+        self.assertEqual(b'', d.read('/model/file'))
+        parent, name = d._parent('/model/link')
+        d.links[parent][name] = d._new(stat.S_IFLNK, 0o777, 'file')
+        with self.assertRaises(OSError) as error:
+            self.call('open', '/model/link', flags=os.O_RDONLY | os.O_NOFOLLOW)
+        self.assertEqual(__import__('errno').ELOOP, error.exception.errno)
+
+    def test_review_B11_left_parent_exchange_and_unflushed_unlink(self):
+        d = self.disk
+        for name in ('left', 'right'):
+            d.mkdir('/model/' + name); d.flush('/model/' + name)
+        d.flush('/model')
+        for name, data in (('left/a', b'a'), ('right/b', b'b')):
+            d.write('/model/' + name, data); d.flush('/model/' + name)
+        d.flush('/model/left'); d.flush('/model/right')
+        d.rename('/model/left/a', '/model/right/a'); d.flush('/model/left'); d.crash()
+        self.assertFalse(d.exists('/model/left/a'))
+        self.assertFalse(d.exists('/model/right/a'))
+        d.write('/model/left/a', b'a'); d.flush('/model/left/a'); d.flush('/model/left')
+        d.rename('/model/left/a', '/model/right/b', exchange=True)
+        d.flush('/model/left'); d.flush('/model/right'); d.crash()
+        self.assertEqual(b'b', d.read('/model/left/a'))
+        self.assertEqual(b'a', d.read('/model/right/b'))
+        d.unlink('/model/left/a'); d.crash()
+        self.assertEqual(b'b', d.read('/model/left/a'))
+
 
 if __name__ == '__main__':
     unittest.main()
