@@ -374,6 +374,401 @@
   "source": "PLAN-0.4.0.md T7",
   "statement": "Two projects share one collector, each with its own runs and capacity."
  },
+ "ML-1": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_binding_approval",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_binding_base_commit",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_binding_batch_digest",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_binding_candidate_digest",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_binding_git_link",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_binding_manifest",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_history_tampered_row",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_refusing_check"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "a tampered base, manifest, digest, git link, history row or a refusing check is refused. Test: tamper each binding separately and force a refusing check."
+ },
+ "ML-10": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_cleanup_chmod",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_cleanup_delete",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_cleanup_in_place",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_cleanup_safe_save",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_compensation_chmod",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_compensation_delete",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_compensation_in_place",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_compensation_safe_save",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_forward_chmod",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_forward_delete",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_forward_in_place",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_forward_safe_save",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_recovery_chmod",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_recovery_delete",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_recovery_in_place",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_recovery_safe_save",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_reverse_chmod",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_reverse_delete",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_reverse_in_place",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_edit_reverse_safe_save",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_old_open_handle_write_during_cleanup",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_overlap_keeps_both_and_states_open_handle_limit",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_H3_rejects_owner_somewhere_with_unrelated_damage_or_missing_child"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "an owner edit, or overlapping edits, stop the landing; both versions are kept and named. The open-handle limit is stated in the report. Test: in-place, safe-save, delete and chmod injected through forward, compensation, reverse and cleanup; an overlapping hunk; an old handle writing during cleanup."
+ },
+ "ML-11": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_11_applying_all_new_reverses_from_history",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_11_kill_cleanup",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_11_kill_every_compensation_call",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_11_kill_forward",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_11_kill_recovery",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_11_kill_reverse",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_11_kill_undo",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_H2_rejects_reverted_new_tree_and_landed_base_tree",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_H2_reverse_and_undo_use_operation_specific_durable_direction"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "recovery direction comes from the history only and is idempotent; staging is never read for direction. Test: kill oracle with recover twice; tree all-new while state is `applying` is still put back."
+ },
+ "ML-12": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_failed_terminal_commit_not_claimed_recorded",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_fault_every_compensation_call",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_fault_sweep_cleanup",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_fault_sweep_forward",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_fault_sweep_recovery",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_fault_sweep_reverse",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_fault_sweep_undo",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_missing_staging_failed_restore_then_retry",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_uncertain_A",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_uncertain_B",
+   "codex:tests.test_merge_library_adversarial.RealImages.test_ml_12_really_full_image",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_ML12_rejects_swallowed_IO_failures_even_with_landed_tree_and_row"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "I/O failure ends reverted or needs_owner(io), with history contents pinned; no claim of allocation-free restore. Test: fault sweep, a really full image, missing staging file, failed terminal commit, retry."
+ },
+ "ML-13": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_13_undo_kill_around_combined_commit",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_13_ancestor_overlap_refused",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_13_deleted_empty_folders_not_recreated",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_13_exact_map_and_order",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_13_internal_mode_fixture",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_13_owner_change_refuses_undo"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "undo restores bytes, mode, absence and recorded created folders in order, and refuses on owner change; empty folders left by deletes are not recreated. Test: map equality; L1/L2/undo-L2/undo-L1; ancestor overlap refused; crash around the combined commit; mode via an internal fixture."
+ },
+ "ML-14": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_14_move_inside",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_14_move_outside",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_14_unknown_contents_reported",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_14_report_independent_oracle",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_M2_rejects_retained_wrong_bytes_mode_and_false_moved_identity"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "the report class per path matches the tree. It lists merged files, conflicts, leftover staging objects and \"unknown\" for inaccessible contents, and I/O is distinct from owner. Test: independent report oracle after each kill, fault and move."
+ },
+ "ML-15": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_15_walk_child_staging_symlink",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_15_walk_cocolo_symlink",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_15_walk_history_symlink",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_15_walk_mount_swap",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_15_walk_parent_symlink",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_15_walk_staging_symlink"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "walks are anchored and same-device, including the staging folder and the history. Test: symlink or mount swap after intake, and a swapped `.cocolo` or staging folder, with outside canaries."
+ },
+ "ML-16": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_16_git_never_written",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_16_head_change_final_validation",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_M6_rejects_git_directory_destination_and_relative_write"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "`.git` is never written, and a HEAD change before commit B puts the landing back. Test: write trace across merge, staging and cleanup; change HEAD at final validation."
+ },
+ "ML-17": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_17_cancel_forward",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_17_cancel_history",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_17_cancel_intake",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_17_cancel_staging",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_17_cancel_validation",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_17_concurrent_sealers_fifo_restart",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_17_stale_default_waits_without_builder",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_17_unresolved_blocks_until_accept"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "the \"busy\" answer is replaced by a durable per-project FIFO. Cancel and unresolved landings (d) block the queue until retried or accepted. Test: concurrent sealers land in order; cancel at each phase; an unresolved landing blocks admission; a restart keeps the queue."
+ },
+ "ML-18": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_18_kill_during_retirement",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_18_retention_10_vs_11"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "history contents are kept until undone or 10 newer landings, and retired only after cleanup or handoff (no blob refcount). Test: 10 vs 11 landings, a kill during retirement."
+ },
+ "ML-19": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_19_full_flush_order",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_H1_rejects_missing_either_parent_and_stale_history_flush",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_H1_write_opens_require_staged_file_and_parent_flushes",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_ML19_all_commit_labels_require_fresh_flush_and_own_history_write"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "full flush before each commit. Test: order trace; power loss is separate APFS/ext4 evidence."
+ },
+ "ML-2": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_base_limit_file",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_base_limit_total",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_candidate_block_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_candidate_char_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_candidate_directory",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_candidate_fifo",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_candidate_hardlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_candidate_socket",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_candidate_symlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_dot_git",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_target_block_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_target_char_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_target_directory",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_target_fifo",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_target_hardlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_target_socket",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_target_symlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_limit_file_at",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_limit_file_over",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_limit_total_at",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_limit_total_over",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_candidate_block_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_candidate_char_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_candidate_fifo",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_candidate_hardlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_candidate_regular",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_candidate_socket",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_candidate_symlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_target_block_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_target_char_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_target_fifo",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_target_hardlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_target_regular",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_target_socket",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_target_symlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_path_count_boundary"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "safe intake with no blocking, and more than 2000 paths is refused with a reason and nothing split. Test: one valid-but-forbidden case per type or limit; 2000 vs 2001 paths; a FIFO under a timeout."
+ },
+ "ML-20": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_20_created_nonempty",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_20_created_substituted",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_20_created_unrecorded"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "a created folder is removed on reverse only if empty and matching its recorded identity. Test: substituted, unrecorded and non-empty folders are kept."
+ },
+ "ML-21": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_21_owner_delete_after_A_not_recreated",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_21_owner_empty_folder_after_A_kept"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "reverse acts only on positive evidence. Test: owner deletes a target or creates an empty folder, then a crash right after commit A; recovery changes neither."
+ },
+ "ML-22": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_22_reinspect_every_path"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "before commit B every path is re-inspected. Test: inject an owner edit just before final validation; the landing is put back, the edit kept."
+ },
+ "ML-23": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_23_cleanup_owner_empty",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_23_cleanup_owner_file",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_23_cleanup_owner_nonempty_directory",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_23_cleanup_swapped",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_23_cleanup_unlisted_ancestor"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "the cleanup job removes an emptied folder only if it is on the commit-A list, still empty, identity-matching and not owner-created after the landing; it walks upward only through listed folders. Test: owner adds a file, creates an empty folder, or swaps the folder; each is kept."
+ },
+ "ML-24": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_24_killed_staging_listed_then_removed_on_start",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_24_ignored_staging_and_negative_control"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "staging lives at `.cocolo/staging/<child id>/` and holds a `.gitignore` containing `*`. It is removed after the landing, and a leftover is listed and removed on next start. Test: `git status` stays clean; a kill leaves one listed folder; restart removes it; remove the `.gitignore` and expect git to show it."
+ },
+ "ML-25": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_25_merge_child_only",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_25_merge_disjoint",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_25_merge_overlap",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_25_merge_owner_only"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "at landing, each file is merged three-way from the history's base; an owner-only change stands, a child-only change applies, and overlapping edits are a conflict that keeps both. Test: the three cases on plain files, with a merge-file trace showing no `.git` write."
+ },
+ "ML-26": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_26_whole_fail_file_1",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_26_whole_fail_file_2",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_26_whole_fail_file_3"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "a change lands whole or not at all. Any failed file puts the change back, and none lands file by file. Test: fail the Nth file for each N; the tree equals the base."
+ },
+ "ML-27": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_27_merged_report_checks_before_B"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "merged results are listed and the project's checks run before commit B. Test: a merged file appears in the report; a failing check puts the landing back."
+ },
+ "ML-28": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_28_owner_first_clean_reapply",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_28_owner_first_unclean_stops"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "a version CoCoLo did not make always stands. It goes to the front of the queue and a builder only re-applies the child's change on top; not clean means stop and ask. Test: an owner commit between seal and turn; a clean re-apply; an unclean one stops. The builder is faked until write children exist."
+ },
+ "ML-29": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_29_conflict_waits_no_builder"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "until write-capable children exist, a conflict waits for the owner, with no builder started. Test: force a conflict and assert no spawn and a visible waiting state."
+ },
+ "ML-3": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_base_0",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_base_1",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_base_2",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_base_3",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_base_4",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_candidate_0",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_candidate_1",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_candidate_2",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_candidate_3",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_candidate_4",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_BISECT_LOG",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_CHERRY_PICK_HEAD",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_MERGE_HEAD",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_REVERT_HEAD",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_absolute",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_add_existing",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_attribute_eol_crlf",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_attribute_filter_custom",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_attribute_ident",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_attribute_text",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_attribute_working_tree_encoding_UTF_16",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_autocrlf",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_aux_alias",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_base_bytes",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_base_mode",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_case_alias",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_chmod",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_dotdot",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_duplicate",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_exec_change",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_head",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_nested_repository",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_rebase_apply",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_rebase_merge",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_rename",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_skip_worktree",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_sparse",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_submodule",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_unicode_alias"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "each precondition and conflict is refused, including aliases and any permission-bit change in a candidate (git class 644/755 is only a header). Test: one case per predicate with the others satisfied; a candidate chmod."
+ },
+ "ML-30": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_30_forgery_approvals.json",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_30_forgery_history.sqlite",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_30_forgery_ledger.json",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_30_forgery_private_location",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_30_forgery_signatures.json",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_ML30_location_oracle_rejects_otherwise_valid_forgery_landing"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "the history, ledger, signatures and approvals live outside the project, and nothing under `.cocolo/` is trusted for them. Test: a child with write access to `.cocolo/` forges history or approvals and is ignored; removing the location check lets the forgery land."
+ },
+ "ML-4": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.RealImages.test_ml_4_FAT_HFS_images",
+   "codex:tests.test_merge_library_adversarial.RealImages.test_ml_4_actual_mounted_target_and_staging",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_4_filesystem_cross_drive_history",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_4_filesystem_cross_drive_staging",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_4_filesystem_fat_no_exchange",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_4_filesystem_hfs_no_noreplace",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_4_filesystem_mounted_target"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "refuse a drive lacking exchange and no-replace, or a staging folder or CoCoLo storage on another st_dev than any target. Test: FAT/HFS+ images, a mounted subfolder target, a cross-drive staging case."
+ },
+ "ML-5": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_5_kill_every_pre_A_history_write",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_5_history_batch_digest",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_5_history_events",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_5_history_new_contents",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_5_history_old_contents"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "events and old/new contents in the history verify before commit A. Test: corrupt each separately; a kill at each history write leaves no `applying` row and the tree unchanged."
+ },
+ "ML-6": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_6_emptied_identities_are_durable_immediately_after_A",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_6_kill_at_mkdir_inspects_durable_folder_identities",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_6_kill_both_sides_A_B",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_6_failing_check_blocks_B",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_6_normal_two_commit_order"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "a normal landing has exactly two commits, A before the first tree change and B after all parent flushes and after the project checks pass. Test: syscall-trace checker; a kill each side of each commit; a failing check blocks B."
+ },
+ "ML-7": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_7_safe_save_captured_then_kill",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_7_staging_complete",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_7_staging_missing",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_7_staging_partial"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "the staging folder holds only complete staged bytes; an unknown object there is kept and reported, never unlinked. Test: foreign complete file, foreign partial file, missing file, safe-save B captured then a kill (B survives)."
+ },
+ "ML-8": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_8_synchronized_reader_partial_write_and_boundaries"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "a path always holds a complete version or legitimate absence. Test: synchronized readers during injected partial writes and at each mutation boundary."
+ },
+ "ML-9": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_9_foreign_staging_file_is_unlink_guard_witness",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_9_syscall_allowlist_and_cross_folder_exchange"
+  ],
+  "source": "ANALYSIS-0.4.0-merge-library.md \u00a711.2",
+  "statement": "only cross-folder exchange, no-replace rename, mkdir, rmdir, one compensation and the content-checked unlink are used. Test: syscall-trace allowlist; remove the unlink authorization and expect a foreign file in staging to be deleted."
+ },
  "TERM-13": {
   "checks": [],
   "source": "PLAN-0.4.0-terminal.md section 4",

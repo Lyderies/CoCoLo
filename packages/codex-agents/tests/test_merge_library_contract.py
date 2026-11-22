@@ -22,6 +22,7 @@ from unittest import mock
 from tests.support import TEMP_ROOT  # noqa: F401 -- native package bootstrap
 from codex_agents import merge_library as ml
 from tests.merge_library_support import (
+    declare_ml_tests,
     Fixture, Trace, assert_trace, checkpoint, child_run, content, fresh_queue, git, put,
     report_oracle, tree, assert_no_git_writes, location_refusal_oracle,
 )
@@ -840,6 +841,8 @@ def forgery(test, kind):
 cases("ml_30_forgery", "ML-30", [(n, n) for n in
       ("history.sqlite", "ledger.json", "signatures.json", "approvals.json", "private_location")], forgery)
 
+
+declare_ml_tests(globals())
 
 if __name__ == "__main__":
     unittest.main()

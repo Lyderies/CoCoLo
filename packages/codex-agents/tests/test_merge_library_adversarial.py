@@ -25,6 +25,7 @@ from pathlib import Path
 from tests.support import TEMP_ROOT  # noqa: F401 -- native package bootstrap
 from codex_agents import merge_library as ml
 from tests.merge_library_support import (
+    declare_ml_tests,
     FAULTABLE, Fixture, Trace, checkpoint, child_run, fault_sweep,
     kill_oracle, put, report_oracle, seed_applied, tree, ReplayPoint, replay_key,
     owner_preservation_oracle, version_at,
@@ -822,6 +823,8 @@ class RealImages(unittest.TestCase):
             finally:
                 f.close()
 
+
+declare_ml_tests(globals())
 
 if __name__ == "__main__":
     unittest.main()

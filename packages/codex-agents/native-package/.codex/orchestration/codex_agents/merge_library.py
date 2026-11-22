@@ -728,6 +728,10 @@ def _report(s, r, state=None, reason='', merged=(), conflicts=(), recorded=True,
         if e.path in s.moved:
             classification = 'moved'
         rows.append(PathReport(e.path, classification, retained))
+    listed = {path.path for path in rows}
+    for name in r.get('unrecorded_folders', ()):
+        if name not in listed:
+            rows.append(PathReport(name, 'owner'))
     notes = _NOTES + (('Moved parent locations are unverified.',) if s.moved else ())
     if pending:
         notes += ('Unresolved record pending; backups remain pinned.',)
@@ -1406,10 +1410,12 @@ def cleanup(project, private_root, *, hook=None):
                 s.save([r], label='retire')
                 reports.append(_report(s, r))
             except OSError:
-                if r['state'] == 'landed' and s.phase == 'cleanup':
-                    reports.append(_report(s, r, reason='io'))
-                else:
-                    reports.append(_report(s, r, 'needs_owner', 'io', recorded=False))
+                # E1/E2/F1: cleanup and retirement cannot change durable direction.
+                # The local row may already have clean/kept edits from a failed commit.
+                s.close()
+                durable = next(x for x in s.rows() if x['id'] == r['id'])
+                pending = _report(s, durable, reason='io', recorded=durable['state'] != 'applying')
+                reports.append(replace(pending, notes=pending.notes + ('Cleanup or retirement pending.',)))
         return tuple(reports)
     finally:
         s.close()

@@ -10,10 +10,19 @@ from dataclasses import replace
 from tests.support import TEMP_ROOT  # noqa: F401 -- native package bootstrap
 from codex_agents import merge_library as ml
 from tests.merge_library_support import (
+    declare_ml_tests,
     Fixture, ReplayPoint, assert_no_git_writes, assert_trace, assert_commit_flushes, durable_endpoint,
-    outcome_oracle, owner_preservation_oracle, put, replay_key, report_oracle, tree,
-    FAULTABLE, fault_outcome_oracle, location_refusal_oracle,
+    outcome_oracle as _outcome, owner_preservation_oracle, put, replay_key, report_oracle, tree,
+    FAULTABLE, fault_outcome_oracle as _fault_outcome, location_refusal_oracle,
 )
+
+
+def outcome_oracle(test, f, batch, report, rows, kind):
+    return _outcome(test, f, batch, report, rows, kind, read_history=lambda: rows)
+
+
+def fault_outcome_oracle(test, f, batch, report, rows, kind, call, fault):
+    return _fault_outcome(test, f, batch, report, rows, kind, call, fault, read_history=lambda: rows)
 
 
 class HarnessOracles(unittest.TestCase):
@@ -236,6 +245,8 @@ class HarnessOracles(unittest.TestCase):
         with self.assertRaises(AssertionError):
             location_refusal_oracle(self, landed, before, before)
 
+
+declare_ml_tests(globals())
 
 if __name__ == "__main__":
     unittest.main()
