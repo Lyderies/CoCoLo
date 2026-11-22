@@ -362,8 +362,9 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         reused = self.owner.admit(original)
         self.assertEqual('reused', reused['probe'])
         self.assertEqual([self.identity, *records], reused['records'])
-        with mock.patch.object(self.intake, 'capture_admission', side_effect=AssertionError('known signature work')):
-            self.assertEqual({**reused, 'known': True}, self.reserve())
+        again = self.reserve()  # decision 44 (BR-1): a repeat of a stored yes is judged again, never read back
+        self.prepared(again)
+        self.assertEqual({**reused, 'known': True}, self.owner.admit(again))
         self.assertEqual(0, self.ledger._connection.execute(
             "SELECT COUNT(*) FROM records WHERE record_type='probe_admission'").fetchone()[0])
 
@@ -550,14 +551,16 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         later = claude_rate_limit_records({'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'},
             account_fingerprint=self.identity['account_fingerprint'], observed_at_ms=self.clock)
         self.ledger._store_provider_observations(self.fixture.project_id, later, timestamp=self.clock)
-        with self.assertRaisesRegex(ProbeAdmissionError, 'probe_conflict'):  # round 2: refused inside the window too
-            self.reserve('probe-replay')
-        self.clock += self.owner._timeout+1
-        with self.assertRaisesRegex(ProbeAdmissionError, 'probe_conflict'):
-            self.reserve('probe-replay')
-        with self.assertRaisesRegex(ProbeAdmissionError, 'probe_conflict'):
-            self.owner.known_reply(self.fixture.project_id, 'a'*64, 'b'*64, 'probe-replay', self.context,
-                                   before_commit=lambda: True)
+        # Decision 44 (BR-1, BR-2, BR-4): a repeat is judged again on the records at hand, inside the window and
+        # after it; the paid usage stored later is the newest billing record, so both judgments name it.
+        for _ in range(2):
+            again = self.reserve('probe-replay')
+            self.prepared(again)
+            result = self.owner.admit(again)
+            self.assertEqual(('denied', 'paid_usage_usable'), (result['probe'], result['reason_code']), result)
+            self.clock += self.owner._timeout+1
+        self.assertIsNone(self.owner.known_reply(self.fixture.project_id, 'a'*64, 'b'*64, 'probe-replay',
+                                                 self.context, before_commit=lambda: True))
 
     def test_H1_r2_paid_usage_after_a_reused_answer_is_never_replayed_as_reused_on_either_entry_point(self):
         self.store_probe_only(self.FAVOURABLE)
@@ -567,11 +570,12 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         later = claude_rate_limit_records({'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'},
             account_fingerprint=self.identity['account_fingerprint'], observed_at_ms=self.clock)
         self.ledger._store_provider_observations(self.fixture.project_id, later, timestamp=self.clock)
-        with self.assertRaisesRegex(ProbeAdmissionError, 'probe_conflict'):
-            self.reserve('probe-replay-paid')
-        with self.assertRaisesRegex(ProbeAdmissionError, 'probe_conflict'):
-            self.owner.known_reply(self.fixture.project_id, 'a'*64, 'b'*64, 'probe-replay-paid', self.context,
-                                   before_commit=lambda: True)
+        again = self.reserve('probe-replay-paid')  # decision 44 (BR-1, BR-4): judged again, never replayed as reused
+        self.prepared(again)
+        result = self.owner.admit(again)
+        self.assertEqual(('denied', 'paid_usage_usable'), (result['probe'], result['reason_code']), result)
+        self.assertIsNone(self.owner.known_reply(self.fixture.project_id, 'a'*64, 'b'*64, 'probe-replay-paid',
+                                                 self.context, before_commit=lambda: True))
 
     def test_M1a_paid_usage_appearing_during_a_cooldown_is_refused_paid_usage_usable(self):
         original = self.reserve()

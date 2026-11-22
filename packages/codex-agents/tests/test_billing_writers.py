@@ -13,6 +13,7 @@ import tests.support  # noqa: F401
 from tests.learning_support import generate_test_owner_key
 from tests.test_billing_rejudge import FAVOURABLE, PLATFORM, RejudgeOwnerBase
 
+from codex_agents.account_billing_admission import ProbeAdmissionError
 from codex_agents.admission_inputs import AdmissionInputPolicy
 from codex_agents.providers import claude_rate_limit_records
 
