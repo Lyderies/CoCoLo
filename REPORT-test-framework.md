@@ -32,3 +32,13 @@
 - Hypothesis 6.170.17 and sortedcontainers 2.4.0 installed only in the owner-authorized temporary test environment; hashes and primary-source provenance committed.
 - Removed/changed assertions: none; deleted tests: none. New negative tests were run red before corresponding code changes.
 - Review checkpoints moved to completion by owner; continuing to step 3. Linux execution remains an outstanding CI gate; local evidence is macOS.
+
+## Step 1 review r1 — applied before implementation reconciliation
+- Review source: `REVIEW-testfw-step1-r1.md`; fixes 1–14 and optional 15 applied; TF-8 option A selected by owner.
+- Fix -> `REQUIREMENTS-test-framework.md` line: 1 -> 266, 2 -> 257, 3 -> 191, 4 -> 77, 5 -> 225.
+- Fix -> `REQUIREMENTS-test-framework.md` line: 6 -> 23, 7 -> 63, 8 -> 87, 9 -> 103, 10 -> 165.
+- Fix -> `REQUIREMENTS-test-framework.md` line: 11 -> 219, 12 -> 260, 13 -> 110, 14 -> 58, 15 -> 44.
+- Additional fix-14 witnesses: TF-5 -> 97, TF-13 -> 183, TF-15 -> 202, TF-19 -> 250.
+- Budget option A -> 128; discovery/preflight timings (fix 6) -> 147.
+- Commit: this requirements/report commit; no executable or test assertions changed. Existing step-2 implementation now needs reconciliation with these stricter rules.
+- Next review stop: after step 3, per latest owner instruction; steps 4–5 wait for that review.
