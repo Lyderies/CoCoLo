@@ -111,21 +111,30 @@
    "flow": "L5",
    "source": "PLAN-0.4.0.md T7",
    "statement": "For each primary, readiness, assignment and result preflight and export preflight pass.",
-   "checks": []
+   "checks": [
+    "l5_1_claude_primary_preflights_pass",
+    "l5_1_codex_primary_preflights_pass"
+   ]
   },
   {
    "id": "L5.2",
    "flow": "L5",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Open, dispatch, validate (with one structural repair on a native path where one applies) and record the result succeed; the worker's answer values match the oracle and each required evidence outcome is pass or observed.",
-   "checks": []
+   "checks": [
+    "l5_2_claude_primary_open_dispatch_validate_record",
+    "l5_2_codex_primary_open_dispatch_validate_record"
+   ]
   },
   {
    "id": "L5.3",
    "flow": "L5",
    "source": "PLAN-0.4.0.md T7",
    "statement": "The verifier opened for the worker's outcome digest passes every required evidence item with no discrepancy and verdict pass or ready; operational checks pass and QA records accepted: true; the orchestration closes and its report is right.",
-   "checks": []
+   "checks": [
+    "l5_3_claude_primary_verifier_qa_accepted_and_close",
+    "l5_3_codex_primary_verifier_qa_accepted_and_close"
+   ]
   },
   {
    "id": "L6.1",

@@ -408,6 +408,23 @@ class World:
         return self.cli(*args, refuses=refuses, program=self.project / ".codex" / "orchestration" / "cli.py",
                         environment={**self.CODEX_HOST, **(environment or {})}, cwd=self.project, timeout=timeout)
 
+    def validate_package(self, primary: str) -> tuple[int, dict | None, str]:
+        """`validate --root PROJECT` as a primary session runs it (this command takes `--root`, not
+        `--project-root`, so it cannot go through `cli`); (exit, JSON reply, text)."""
+        marker = self.CLAUDE_HOST if primary == "claude" else self.CODEX_HOST
+        done = subprocess.run([str(self.shim), "-I", "-B", "-S", str(self.project / ".codex" / "orchestration" / "cli.py"),
+                               "validate", "--root", str(self.project)],
+                              capture_output=True, text=True, env={**self.env, **marker},
+                              stdin=subprocess.DEVNULL, timeout=90, cwd=str(self.project))
+        text = done.stdout + done.stderr
+        self.outputs.append(text)
+        self.steps.append({"step": "validate", "code": done.returncode, "refuses": False, "timed_out": False})
+        try:
+            reply = json.loads(done.stdout)
+        except ValueError:
+            reply = None
+        return done.returncode, reply if isinstance(reply, dict) else None, text
+
     @property
     def tools(self) -> Path:
         return self.home / ".local" / "bin"
