@@ -88,6 +88,7 @@ import hashlib
 import json
 import os
 import re
+import select
 import shlex
 import signal
 import subprocess
@@ -311,23 +312,34 @@ class _Budget:
 # Running podman and reading the podman host's files
 # ------------------------------------------------------------------------------------------------
 
-# Runs one podman command (argv follows the lifeline's descriptor number) as the leader of a process group of its
-# own, and keeps it there: when the stop tool's process dies, the pipe it holds the write end of closes, the
-# guard reads the end of file and kills the whole group (itself, podman and everything podman started), so a
-# SIGKILLed watchdog or service leaves nothing running (decision 49, CS-1). While the stop tool lives it ends the
-# group itself, once the command is over (`_end_group`).
+# Runs one podman command (argv follows the lifeline's and the status pipe's descriptor numbers) as the leader of
+# a process group of its own, and keeps it there: when the stop tool's process dies, the pipe it holds the write
+# end of closes, the guard reads the end of file and kills the whole group (itself, podman and everything podman
+# started), so a SIGKILLed watchdog or service leaves nothing running (decision 49, CS-1). The guard does not
+# leave when podman does: it reports podman's exit status on the status pipe and keeps watching the lifeline, so
+# what podman left behind is covered until the stop tool ends the group itself (`_end_group`), with the leader
+# still unreaped, so the group id is still its own (r4 G1, G2).
 _GUARD = (
     "import os, select, signal, subprocess, sys\n"
-    "fd = int(sys.argv[1])\n"
+    "fd, status = int(sys.argv[1]), int(sys.argv[2])\n"
     "try:\n"
-    "    child = subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL)\n"
+    "    child = subprocess.Popen(sys.argv[3:], stdin=subprocess.DEVNULL)\n"
     "except OSError as error:\n"
     "    sys.stderr.write(str(error) + chr(10))\n"
     "    sys.exit(126 if isinstance(error, PermissionError) else 127)\n"
+    "def end():\n"
+    "    os.killpg(os.getpgrp(), signal.SIGKILL)\n"
     "while child.poll() is None:\n"
     "    if select.select([fd], [], [], 0.02)[0] and not os.read(fd, 1):\n"
-    "        os.killpg(os.getpgrp(), signal.SIGKILL)\n"
-    "sys.exit(child.returncode if child.returncode >= 0 else 128 - child.returncode)\n")
+    "        end()\n"
+    "try:\n"
+    "    os.write(status, b'%d\\n' % (child.returncode if child.returncode >= 0 else 128 - child.returncode))\n"
+    "    os.close(status)\n"
+    "except OSError:\n"
+    "    pass\n"
+    "while os.read(fd, 1):\n"
+    "    pass\n"
+    "end()\n")
 
 
 def _reap(process: subprocess.Popen, seconds: float) -> bool:
@@ -342,13 +354,15 @@ def _reap(process: subprocess.Popen, seconds: float) -> bool:
 def _end_group(process: subprocess.Popen) -> None:
     """Kill every process left in the command's group and reap the leader, or raise ProcessCleanupError.
 
-    The group id is the leader's pid: while any member lives the id cannot be given to another group, and a
-    group already empty (ESRCH) is the usual, good answer. Anything else is reported (CS-5)."""
+    The group id is the leader's pid, and the leader is still unreaped here (a zombie keeps the id), so the id
+    cannot belong to another group (r4 G2); a group already empty (ESRCH) is the usual, good answer. Anything
+    else is reported (CS-5)."""
     problem = None
     try:
         os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    except ProcessLookupError:  # an empty group: nothing left but, at most, the leader itself
+        with contextlib.suppress(OSError):
+            process.kill()
     except OSError as error:
         problem = f"its process group could not be killed ({error.strerror or type(error).__name__})"
         with contextlib.suppress(OSError):
@@ -359,22 +373,55 @@ def _end_group(process: subprocess.Popen) -> None:
         raise ProcessCleanupError(f"a podman command's processes may still be running: {problem}")
 
 
-def run_guarded(argv: Sequence[str], timeout: float) -> "PodmanResult":
-    """Run one command to the end under the guard: its result, subprocess.TimeoutExpired once `timeout` passed,
-    or ProcessCleanupError. When this returns or raises, nothing the command started is left running, and the
-    kill and the reap are inside `timeout` plus at most REAP_SECONDS."""
-    read_end, write_end = os.pipe()
+def _await_status(status_read: int, end: float) -> int | None:
+    """The command's exit status from the guard; None when the guard ended without one (it could not start the
+    command); subprocess.TimeoutExpired once `end` (monotonic) passed."""
+    data = b""
+    while b"\n" not in data:
+        left = end - time.monotonic()
+        if left <= 0:
+            raise subprocess.TimeoutExpired("podman", 0)
+        if select.select([status_read], [], [], left)[0]:
+            chunk = os.read(status_read, 64)
+            if not chunk:
+                break
+            data += chunk
     try:
+        return int(data.strip())
+    except ValueError:
+        return None
+
+
+def run_guarded(argv: Sequence[str], timeout: float) -> "PodmanResult":
+    """Run one command to the end under the guard: its result, subprocess.TimeoutExpired once `timeout` passed
+    (counted from this call, setting up and starting included), or ProcessCleanupError. When this returns or
+    raises, nothing the command started is left running, and the kill and the reap are inside `timeout` plus
+    at most REAP_SECONDS."""
+    end = time.monotonic() + timeout
+    open_fds: set[int] = set()
+
+    def close(descriptor: int) -> None:
+        if descriptor in open_fds:
+            open_fds.discard(descriptor)
+            os.close(descriptor)
+
+    try:
+        read_end, write_end = os.pipe()
+        open_fds.update((read_end, write_end))
+        status_read, status_write = os.pipe()
+        open_fds.update((status_read, status_write))
         with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
             try:
-                process = subprocess.Popen([sys.executable, *GUARD_FLAGS, "-c", _GUARD, str(read_end), *argv],
-                                           stdin=subprocess.DEVNULL, stdout=out, stderr=err, pass_fds=(read_end,),
-                                           start_new_session=True)
+                process = subprocess.Popen([sys.executable, *GUARD_FLAGS, "-c", _GUARD, str(read_end),
+                                            str(status_write), *argv],
+                                           stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                                           pass_fds=(read_end, status_write), start_new_session=True)
             finally:
-                os.close(read_end)
-            timed_out = False
+                close(read_end)
+                close(status_write)
+            timed_out, code = False, None
             try:
-                process.wait(timeout=timeout)
+                code = _await_status(status_read, end)
             except subprocess.TimeoutExpired:
                 timed_out = True
             finally:
@@ -383,10 +430,11 @@ def run_guarded(argv: Sequence[str], timeout: float) -> "PodmanResult":
                 raise subprocess.TimeoutExpired(list(argv), timeout)
             out.seek(0)
             err.seek(0)
-            return PodmanResult(process.returncode, out.read().decode("utf-8", "replace"),
+            return PodmanResult(process.returncode if code is None else code, out.read().decode("utf-8", "replace"),
                                 err.read().decode("utf-8", "replace"))
     finally:
-        os.close(write_end)
+        for descriptor in tuple(open_fds):
+            close(descriptor)
 
 
 class SubprocessPodman:
@@ -547,6 +595,15 @@ def _tightest(values: Sequence[str | None], *, cpu: bool = False) -> str | None:
         if best is None or key < best[0]:
             best = (key, text)
     return None if best is None else best[1]
+
+
+def _stable_version(text: str) -> tuple[int, int, int, int]:
+    """A podman version as a sortable key: (major, minor, patch, 0 for a pre-release or 1 for a release);
+    ValueError for anything that is not exactly `[v]X.Y.Z[-pre-release]` (r4 V1)."""
+    found = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?", text)
+    if found is None:
+        raise ValueError(f"not a version: {text!r}")
+    return int(found[1]), int(found[2]), int(found[3]), 0 if found[4] else 1
 
 
 def _call_podman(runner: PodmanRunner, args: Sequence[str], timeout: float) -> PodmanResult:
@@ -772,20 +829,23 @@ class ContainerRuntime:
         talks to must be at least MIN_TIMEOUT_PODMAN_VERSION; a version that cannot be read is not supported."""
         if spec.timeout_seconds is None:
             return False, ""
-        result = self._podman(["version", "--format=json"])
+        try:
+            result = self._podman(["version", "--format=json"])
+        except _Refused as refused:
+            if refused.refusal.reason == "podman_cleanup_failed":  # something it started may still run: a failure
+                raise
+            return False, ("skipped: podman's version could not be asked, so its --timeout cannot be relied on ("
+                           + refused.refusal.reason + ")")
         try:
             document = json.loads(result.stdout) if result.returncode == 0 else None
-            found = {side: str(document[side]["Version"]) for side in ("Client", "Server")
-                     if isinstance(document.get(side), dict)}
-            numbers = {side: tuple(int(part) for part in re.fullmatch(r"v?(\d+)\.(\d+)(?:\.\d+)?.*", text).groups())
-                       for side, text in found.items()}
-            if "Client" not in numbers:
-                raise ValueError("no client version")
+            found = {side: str(document[side]["Version"]) for side in ("Client", "Server")}
+            numbers = {side: _stable_version(text) for side, text in found.items()}
         except (ValueError, TypeError, KeyError, AttributeError):
-            return False, ("skipped: podman's version could not be read, so its --timeout cannot be relied on ("
+            return False, ("skipped: podman's client and server versions could not both be read, so its --timeout "
+                           "cannot be relied on ("
                            + _first_line(result.stderr if result.returncode else "unreadable answer") + ")")
         old = [f"{side.lower()} {found[side]}" for side, number in numbers.items()
-               if number < MIN_TIMEOUT_PODMAN_VERSION]
+               if number < (*MIN_TIMEOUT_PODMAN_VERSION, 0, 1)]
         if old:
             return False, (f"skipped: podman {', '.join(old)} is older than "
                            f"{'.'.join(map(str, MIN_TIMEOUT_PODMAN_VERSION))}, so --timeout is not relied on")

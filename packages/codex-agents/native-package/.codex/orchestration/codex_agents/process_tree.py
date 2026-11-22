@@ -71,6 +71,7 @@ WATCHDOG_TERMINATE_RESERVE_SECONDS = 2.0
 # Exit statuses of a watchdog that found its service dead (1 stays "could not take the container on": an
 # exception before it watched anything). 0: the container proven gone and the tree ended.
 WATCHDOG_EXIT_GONE = 0
+WATCHDOG_EXIT_NOT_TAKEN = 1  # container mode: the child could not be identified, so the container is not taken on
 WATCHDOG_EXIT_NOT_GONE = 2  # the stop answered but the container is not proven gone (or its call failed)
 WATCHDOG_EXIT_TREE_UNCONFIRMED = 3  # the container is gone but the tree's end is not confirmed
 WATCHDOG_EXIT_DEADLINE = 4  # the total ran out first
@@ -922,10 +923,13 @@ class ProcessTree:
         if not self.identified:
             return False
         for round_number in range(MAX_KILL_ROUNDS):
-            if round_number:
-                time.sleep(KILL_ROUND_PAUSE_SECONDS)
             if deadline is not None and time.monotonic() >= deadline:
                 return False
+            if round_number:
+                time.sleep(KILL_ROUND_PAUSE_SECONDS if deadline is None
+                           else max(0.0, min(KILL_ROUND_PAUSE_SECONDS, deadline - time.monotonic())))
+                if deadline is not None and time.monotonic() >= deadline:
+                    return False
             table = self._listing(deadline)
             if table is not None:
                 self.update(table)
@@ -1083,10 +1087,10 @@ def _stop_and_end(container, tree) -> int:
     except Exception as error:  # noqa: BLE001 - reported, never swallowed
         outcome, detail, gone = "error", f"{type(error).__name__}: {error}", False
     ended = tree.terminate(end)  # Nothing records the stop here: the restarted service asks the OS again.
-    if gone and ended:
-        status = WATCHDOG_EXIT_GONE
-    elif outcome == "deadline" or (gone and time.monotonic() >= end):
+    if outcome == "deadline" or time.monotonic() >= end:  # the one deadline decides first, whatever else is true
         status = WATCHDOG_EXIT_DEADLINE
+    elif gone and ended:
+        status = WATCHDOG_EXIT_GONE
     elif gone:
         status = WATCHDOG_EXIT_TREE_UNCONFIRMED
     else:
@@ -1124,7 +1128,7 @@ def watch(root: int, birth: str, deadline: float, announce, marker: str | None =
     give_up = time.monotonic() + WATCHDOG_IDENTIFY_SECONDS
     while not tree.identify(process_table(), birth):
         if time.monotonic() >= give_up:
-            return WATCHDOG_EXIT_GONE
+            return WATCHDOG_EXIT_GONE if container is None else WATCHDOG_EXIT_NOT_TAKEN
         time.sleep(0.1)
     announce()
     while True:
