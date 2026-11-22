@@ -34,6 +34,34 @@ class SetupStraightTests(SetupUpdateTests):
         self.finish(timeout=30)
         self.assertFalse((project / ".codex" / "orchestration").exists())
 
+    def straight_set_up(self, **env):
+        project = self.to_fresh_choice(**env)
+        self.send("\r")  # Set up
+        self.expect("Codex children")
+        self.send(" \r")  # Codex children off (a provider choice stays asked)
+        self.expect("Looks right")
+        self.send("\r")
+        self.expect("Commit now")
+        self.send("\r")
+        code = self.finish(timeout=90)
+        return project, code, self.plain(self.transcript)
+
+    def test_S4_3_straight_set_up_keeps_a_current_signature_without_signing(self):
+        # Review 040-screens-r2 MED-1 (owner decision 37): a current signature is kept by default, never silently
+        # re-signed, on the straight Set up path too (there is no menu there, so the default must be Keep).
+        env = {"FAKE_STATUS_REPLY": self.ATTESTED, "FAKE_OBSERVE": self.OBSERVED}
+        project, code, screen = self.straight_set_up(**env)
+        self.assertEqual(0, code, screen[-1500:])
+        self.assertEqual(0, self.attested())
+        self.assertNotIn("attest stub run", screen)
+        self.assertIn("already attested", screen)
+
+    def test_S4_3_straight_set_up_still_signs_when_the_signature_is_not_current(self):
+        env = {"FAKE_STATUS_REPLY": self.MISSING, "FAKE_OBSERVE": self.OBSERVED}
+        project, code, screen = self.straight_set_up(**env)
+        self.assertEqual(0, code, screen[-1500:])
+        self.assertEqual(1, self.attested())
+
     def test_S4_2_set_up_asks_only_the_owners_choices_and_installs_everything(self):
         project = self.to_fresh_choice()
         self.send("\r")  # Set up

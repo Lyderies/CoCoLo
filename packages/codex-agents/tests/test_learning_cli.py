@@ -527,6 +527,76 @@ class LearningCliTests(unittest.TestCase):
         finally:
             self._stop_collector()
 
+    def _replace_key_report(self, backend_report: dict) -> tuple[int, str]:
+        """learning-replace-owner-key in this process against a backend that answers with backend_report."""
+
+        class Backend:
+            def replace_owner_key(self, public_key, **_ignored):
+                return dict(backend_report)
+
+            def close(self, *_ignored, **_also_ignored):
+                pass
+
+        public = Path(self.temporary.name) / "replacement-key.pub"
+        public.write_text("ssh-ed25519 AAAAREPLACEMENTKEY test-only\n")
+        stdout = io.StringIO()
+        arguments = ["cli.py", "learning-replace-owner-key", "--state-root", str(self.state_root),
+                     "--project-root", str(self.project), "--public-key", str(public)]
+        with mock.patch.object(sys, "argv", arguments), contextlib.redirect_stdout(stdout), \
+                mock.patch("cli._learning_ledger", return_value=(Backend(), "project")):
+            code = cli_main()
+        return code, stdout.getvalue()
+
+    def test_replace_key_report_has_exactly_the_three_allowed_fields(self) -> None:
+        # Review 040-screens-r2 MED-2 (owner decision 36): the report is a whitelist, so a backend that grows or
+        # leaks a field (a fingerprint, key text, a path, a passphrase) never reaches the owner's terminal.
+        sentinels = ("SHA256:SENTINELFINGERPRINT0123", "AAAASENTINELKEYTEXT", "sentinel-passphrase-value",
+                     "/srv/sentinel/owner-key", "-----BEGIN OPENSSH PRIVATE KEY-----SENTINEL")
+        extra = {"fingerprint": sentinels[0], "public_key": sentinels[1], "passphrase": sentinels[2],
+                 "path": sentinels[3], "private_key": sentinels[4], "signer_line": sentinels[1]}
+        code, text = self._replace_key_report(
+            {"state": "ok", "replacements": 2, "last_replaced_at_ms": 1234, **extra})
+        self.assertEqual(0, code, text)
+        report = json.loads(text)
+        self.assertEqual({"ready", "owner_key"}, set(report))
+        self.assertEqual({"state", "replacements", "last_replaced_at_ms"}, set(report["owner_key"]))
+        self.assertEqual({"state": "ok", "replacements": 2, "last_replaced_at_ms": 1234}, report["owner_key"])
+        for value in sentinels:
+            self.assertNotIn(value, text)
+
+    def test_replace_key_report_missing_a_field_is_a_clean_error_not_a_traceback(self) -> None:
+        # Review 040-screens-r2 LOW: a backend that omits a whitelisted field gives the CLI's error report.
+        code, text = self._replace_key_report({"state": "ok", "replacements": 1})
+        self.assertEqual(2, code, text)
+        report = json.loads(text)
+        self.assertIs(False, report["ready"])
+        self.assertIn("error", report)
+        self.assertNotIn("Traceback", text)
+
+    def test_key_replacement_output_carries_no_private_key_text_or_passphrase(self) -> None:
+        # Review 040-screens-r2 LOW: the whole-output scan also seeds the private key's text and a passphrase
+        # (in the environment the CLI runs in); neither may appear in the replacement's stdout or stderr.
+        try:
+            directory = Path(self.temporary.name) / "private-scan"
+            directory.mkdir()
+            key, _public = generate_test_owner_key(directory)
+            private_body = "".join(key.read_text().splitlines()[1:-1])
+            self.assertGreater(len(private_body), 40)
+            passphrase = "sentinel-passphrase-value-r2"
+            completed = subprocess.run(
+                [sys.executable, str(ORCHESTRATION_ROOT / "cli.py"), "learning-replace-owner-key",
+                 "--state-root", str(self.state_root), "--project-root", str(self.project),
+                 "--public-key", f"{key}.pub"],
+                text=True, capture_output=True,
+                env=self._environment(SSH_KEY_PASSPHRASE=passphrase, ORCH_OWNER_PASSPHRASE=passphrase),
+                check=False)
+            self.assertEqual(0, completed.returncode, completed.stderr or completed.stdout)
+            output = completed.stdout + completed.stderr
+            for value in (private_body, passphrase, str(key)):
+                self.assertNotIn(value, output)
+        finally:
+            self._stop_collector()
+
     def test_missing_billing_attestation_names_the_wizard_option(self) -> None:
         for failure, field, reason in (
             (AdmissionDenied("billing_attestation_missing"),
