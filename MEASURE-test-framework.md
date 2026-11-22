@@ -239,3 +239,19 @@ Cross-worktree integration exposed 522 root-dependent value hashes. The portable
 | After resolving root once per fingerprint, affected core module | 44 | 0.7585082500008866 | 15.707939458952751 | 0.5907899580779485 |
 
 Both runs have no worker/budget failures and exactly 80 missing step-4 requirements. The latter validates every immutable legacy fingerprint during discovery, then executes only the affected core module. History validation is 0.2059470409876667s in the latter run. Neither original nor portable baseline was regenerated.
+
+## Step-3 r1 final affected-module measurements
+
+All commands used scripts/parallel_tests.py at its default 16 jobs. The ten small merge modules passed 242 tests in **76.9704737511347 job-seconds**. The final checker/model/mutation follow-up passed 75 tests in **34.64630295801908 job-seconds**. No full suite was rerun.
+
+| Real campaign, separately invoked | Checks | Job-seconds | 60s module budget |
+|---|---:|---:|---|
+| adversarial, including original image opt-ins | 49 (3 skipped) | 45.18175304098986 | pass |
+| owners | 20 | 21.68256016698433 | pass |
+| kills | 5 | 31.07644525001524 | pass |
+| forward_faults | 1 | 30.46376620803494 | pass |
+| recovery_faults | 3 | 18.176061125006527 | pass |
+
+Separate runs total **146.5805857910309 job-seconds**. The complete 78-check census is asserted (75 adversarial methods plus three image methods); the split changes scheduling only, preserving every method and assertion. Normal fault inventories now cover every observed persistence operation/phase/side/commit signature on both real and model lanes. Full inventories remain explicit soak; no normal result certifies soak.
+
+The earlier five-campaign concurrent measurement was **475.9808796250145 job-seconds**, with all test bodies passing but all five module budgets failing under filesystem contention. This is an outstanding performance gate, not cleared by the separate measurements. No ceiling was increased and no fault kind removed. The original unsplit expanded campaign was **139.0616121669882 job-seconds** and over its 60s module budget. The final results therefore establish functional coverage and isolated module budgets, not a concurrent full-suite budget pass. Raw evidence and digests are in the merge branch's measurements/test-framework/review-r1-merge-evidence.json.
