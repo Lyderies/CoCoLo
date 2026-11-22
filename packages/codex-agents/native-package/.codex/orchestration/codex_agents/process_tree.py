@@ -903,6 +903,9 @@ class ProcessTree:
                 return None
             if attempt:
                 time.sleep(min(SNAPSHOT_RETRY_PAUSE_SECONDS, left))
+                left = deadline - time.monotonic()  # the pause used some of it
+                if left <= 0:
+                    return None
             table = process_table(min(SNAPSHOT_TIMEOUT_SECONDS, left))
             if table is not None:
                 return table
