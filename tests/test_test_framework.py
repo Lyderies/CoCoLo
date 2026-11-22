@@ -631,5 +631,27 @@ class ReviewLifecycleTests(unittest.TestCase):
                     generator.main()
 
 
+    def test_A1_relocated_worktrees_keep_equal_fixture_hashes_without_hiding_constant_edits(self):
+        import types
+        import test_framework as fw
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as folder:
+            def fingerprint(label, expected):
+                root = Path(folder) / label
+                (root / 'tests').mkdir(parents=True, exist_ok=True)
+                path = root / 'tests/test_relocation.py'
+                source = 'import unittest\nfrom pathlib import Path\nFILE = __file__\nROOT = Path(__file__).parent\nEXPECTED = ' + repr(expected) + '\nclass Case(unittest.TestCase):\n    def test_value(self):\n        self.assertTrue(FILE.endswith("test_relocation.py"))\n        self.assertTrue(ROOT.is_dir())\n        self.assertEqual(EXPECTED, 1)\n'
+                path.write_text(source)
+                module = types.ModuleType('test_relocation'); module.__file__ = str(path)
+                sys.modules[module.__name__] = module
+                self.addCleanup(sys.modules.pop, module.__name__, None)
+                exec(compile(source, str(path), 'exec'), module.__dict__)
+                with patch.object(fw, '__file__', str(root / 'scripts/test_framework.py')):
+                    return fw.dependency_fingerprint(module.Case('test_value'))
+            first = fingerprint('first', 1)
+            self.assertEqual(first, fingerprint('second', 1))
+            self.assertNotEqual(first, fingerprint('second', 2))
+
+
 if __name__ == '__main__':
     unittest.main()
