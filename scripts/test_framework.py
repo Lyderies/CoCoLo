@@ -367,6 +367,8 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
     module = sys.modules[cls.__module__]
     explicit = tuple(getattr(cls, '__fixture_dependencies__', ())) + tuple(source_dependencies)
     source_backed = any(isinstance(value, (str, Path)) for value in explicit)
+    worktree_root = Path(__file__).resolve().parents[1]
+    worktree_prefix = str(worktree_root)
     def stable(value):
         if isinstance(value, types.CodeType):
             return code_value(value)
@@ -378,16 +380,14 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
             return ('dict', sorted(((stable(k), stable(v)) for k, v in value.items()), key=repr))
         if isinstance(value, (str, bytes, int, float, bool, type(None))):
             if include_values and isinstance(value, str):
-                root = str(Path(__file__).resolve().parents[1])
-                if value == root or value.startswith(root + '/'):
-                    return repr('<worktree>' + value[len(root):])
+                if value == worktree_prefix or value.startswith(worktree_prefix + '/'):
+                    return repr('<worktree>' + value[len(worktree_prefix):])
             return repr(value)
         if inspect.isfunction(value) or inspect.isclass(value):
             return (value.__module__, value.__qualname__)
         if include_values:
             if isinstance(value, Path):
-                root = Path(__file__).resolve().parents[1]
-                return ('path', value.relative_to(root).as_posix() if value.is_relative_to(root) else value.as_posix())
+                return ('path', value.relative_to(worktree_root).as_posix() if value.is_relative_to(worktree_root) else value.as_posix())
             if not source_backed:
                 unresolved.append(type(value).__module__ + ':' + type(value).__qualname__)
         return type(value).__module__ + ':' + type(value).__qualname__
