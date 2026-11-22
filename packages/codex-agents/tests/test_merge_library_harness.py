@@ -57,6 +57,15 @@ class HarnessOracles(unittest.TestCase):
         pair("sqlite_commit", commit="B", parents=(), full_flush=True)
         return calls
 
+    def test_ML19_full_flush_replay_identity_is_portable_without_changing_trace_operations(self):
+        """ML-19/TF-18: platform full-flush spellings identify the same persistence boundary."""
+        from tests.merge_library_support import call_identity
+        path = str(self.f.private / 'history.sqlite')
+        mac = ml.IOCall('fullfsync', 'before', 'history', path)
+        linux = replace(mac, operation='fsync')
+        self.assertEqual(call_identity(mac, self.f), call_identity(linux, self.f))
+        self.assertEqual(('fullfsync', 'fsync'), (mac.operation, linux.operation))
+
     def test_H1_rejects_missing_either_parent_and_stale_history_flush(self):
         valid = self.trace()
         assert_trace(self, valid)
