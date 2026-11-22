@@ -264,6 +264,7 @@ class RunHoldTests(ActiveRunCapacityTests):
             columns = {row[1] for row in self.ledger._connection.execute("PRAGMA table_info(active_run_capacity)")}
             if "release_kind" in columns:
                 self.ledger._connection.execute("ALTER TABLE active_run_capacity DROP COLUMN release_kind")
+            self.ledger._connection.execute("ALTER TABLE records DROP COLUMN probe_id")  # schema 16 added it
             self.ledger._connection.execute("PRAGMA user_version=14")
         if backup:
             body = learning_store._snapshot_project_partition(self.ledger._connection, self.project,

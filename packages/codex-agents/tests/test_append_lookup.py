@@ -63,7 +63,8 @@ class AppendLookupTests(unittest.TestCase):
                 'SELECT COUNT(*), MAX(source_sequence) FROM records WHERE project_id=?', (self.project,)).fetchone()
             connection.execute(
                 'WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<?) '
-                'INSERT INTO records SELECT project_id, ?||(?+x), record_type, source, ?+x, observed_at_ms+x, '
+                'INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,'
+                'ingested_at_ms,expires_at_ms,content,content_digest,late) SELECT project_id, ?||(?+x), record_type, source, ?+x, observed_at_ms+x, '
                 'ingested_at_ms, expires_at_ms, content, content_digest, late FROM records, n '
                 'WHERE project_id=? AND record_id=?', (total - have, 'fill_', have, top, self.project, 'seed'))
 
