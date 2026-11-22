@@ -39,6 +39,8 @@ EXACT = {
     'preparation_managed_configuration': "A managed Codex configuration applies here and this child cannot run under "
                                          "it: ask the configuration's owner for an approved setting.",
     'claim_busy': "Every run slot is in use: wait for a running child to finish, then try again.",
+    'probe_cooldown': "A billing probe passed less than five minutes ago and only one is allowed in that time: wait "
+                      "until five minutes after it, then run provider-observe again.",
     'probe_busy': "The billing probe is busy: wait a moment, then try again.",
     'review_invalid_spec': "Fix the review spec: it needs exactly id, summary, packet (a folder inside the "
                            "project), context, objective, verify_objective, expected_output and evidence.",

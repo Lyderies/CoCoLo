@@ -509,6 +509,9 @@ def probe_head(headroom: list[tuple[dict[str, Any], str]], fingerprint: str) -> 
     )
 
 
+PROBE_OWN_NEAR_MS = 60_000  # PC-1: a probe's headroom reading counts as its own within this of its billing reading
+
+
 def newer_run_restricts(
     latest: dict[str, Any],
     billing: list[tuple[dict[str, Any], str]],
@@ -518,7 +521,7 @@ def newer_run_restricts(
     order: dict[str, int],
 ) -> bool:
     """R2: a run record newer than the probe's latest billing that is more restrictive (paid usage usable,
-    overage in use, or headroom that is not ample) means the probe's favourable reading is not enough.
+    overage in use, or headroom more restrictive than the probe's own) means the probe's reading is not enough.
 
     BR-2 (decision 44): "newer" is serialized insertion order (`order`: record id to its row's insertion
     number) OR a later-or-equal observation time, so a restriction stored late with an earlier stamp still
@@ -541,7 +544,20 @@ def newer_run_restricts(
         if record["account_fingerprint"] == fingerprint
         and record.get("run_id") is not None and newer_than(record)
     ]
-    return bool(newer) and headroom_state("claude", fingerprint, newer, [], now_ms)[0] != "ample"
+    if not newer:
+        return False
+    # PC-1: a newer run record blocks the reuse only when it is MORE restrictive than the reused probe's own
+    # reading; one as constrained as the probe's own changes nothing the probe did not already show (the
+    # re-evaluation and the final gate still judge it). The probe's own state is rated from its own untagged
+    # headroom taken with its newest reading (none: ample, so any restriction blocks, as before).
+    rank = {"ample": 0, "constrained": 1, "exhausted": 2}
+    head = probe_head(headroom, fingerprint)
+    own = [] if head is None or abs(head["observed_at_ms"] - since) > PROBE_OWN_NEAR_MS else [
+        (record, digest) for record, digest in headroom
+        if record["account_fingerprint"] == fingerprint and record.get("run_id") is None
+        and record.get("phase") is None and record["observed_at_ms"] == head["observed_at_ms"]]
+    return (rank[headroom_state("claude", fingerprint, newer, [], now_ms)[0]]
+            > rank[headroom_state("claude", fingerprint, own, [], now_ms)[0]])
 
 
 def reuse_gate(
