@@ -314,6 +314,61 @@ class RunnerIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(report)
         self.assertFalse(report['fixture_import_child'], 'preflight import must not start the prohibited child')
 
+    @proves('TF-10')
+    def test_review_B7_discovery_filters_secrets(self):
+        code, output, report = self.run_fixture(module_import="import os; assert 'TF_FIXTURE_SECRET' not in os.environ")
+        self.assertEqual(0, code, output)
+
+    @proves('TF-9')
+    def test_review_B8_preflight_preserves_estimates(self):
+        from unittest.mock import patch
+        import contextlib, io
+        with tempfile.TemporaryDirectory() as folder:
+            estimates = Path(folder) / 'estimates.json'
+            estimates.write_text('{"retained": 2}')
+            with contextlib.redirect_stdout(io.StringIO()):
+                parallel_tests.preflight_failure('fixture rejection', 1, estimates, __import__('time').monotonic())
+            self.assertEqual('{"retained": 2}', estimates.read_text())
+            self.assertTrue(Path(str(estimates) + '.run.json').exists())
+
+    @proves('TF-9')
+    def test_review_B4_preflight_retains_default_run_record(self):
+        from unittest.mock import patch
+        import contextlib, io
+        with tempfile.TemporaryDirectory() as folder:
+            record = Path(folder) / 'retained.run.json'
+            with patch.dict(os.environ, {'COCOLO_TEST_RUN_RECORD': str(record)}), contextlib.redirect_stdout(io.StringIO()):
+                parallel_tests.preflight_failure('fixture rejection', 1, None, __import__('time').monotonic())
+            self.assertTrue(record.exists())
+            self.assertIn('fixture rejection', record.read_text())
+
+    @proves('TF-9', 'TF-13')
+    def test_review_B3_runner_reaps_disabled_watchdog_with_diagnostics(self):
+        import time
+        started = time.monotonic()
+        code, output, report = self.run_fixture('import faulthandler,time\nfaulthandler.cancel_dump_traceback_later()\nprint("stuck witness", flush=True)\ntime.sleep(10)', timeout='0.3')
+        self.assertLess(time.monotonic() - started, 5.)
+        self.assertNotEqual(0, code, output)
+        self.assertTrue(report['workers'][0]['timed_out'])
+        self.assertIn('stuck witness', report['workers'][0]['log_tail'])
+        self.assertTrue(Path(report['workers'][0]['log']).is_file())
+
+    @proves('TF-5')
+    def test_review_C9_executed_expected_failure_and_unexpected_success_do_not_pass_gate(self):
+        for assertion in ('self.assertEqual(1, 2)', 'self.assertEqual(1, 1)'):
+            before = 'import unittest\nclass Expected(unittest.TestCase):\n    @unittest.expectedFailure\n    def test_expected(self):\n        ' + assertion
+            code, output, result = WorkerTests().probe('pass', 'component', before)
+            from test_framework import coverage
+            statuses = result['outcomes']
+            self.assertNotEqual('passed', coverage({'TF-5': {'checks': ['test_probe.Expected.test_expected']}}, statuses)['TF-5'])
+
+    @proves('TF-1')
+    def test_review_C13_unpatched_runner_fails_closed_without_trusted_base(self):
+        code = 'import sys; sys.path.insert(0,' + repr(str(ROOT / 'scripts')) + '); import parallel_tests as p; raise SystemExit(p.main(["--module", "root:test_test_framework_entrypoints"]))'
+        result = subprocess.run([sys.executable, '-B', '-c', code], cwd=ROOT, capture_output=True, text=True, timeout=25)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn('trusted --base', result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

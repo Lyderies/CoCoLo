@@ -457,5 +457,28 @@ class ReviewCoreTests(unittest.TestCase):
             self.assertTrue(self.fw.validate_dependencies(self.root))
 
 
+class ReviewRunnerPolicyTests(unittest.TestCase):
+    __requirements__ = ('TF-1', 'TF-5', 'TF-9')
+    __why_not_scenario__ = 'The aggregation gate must reject fabricated partial evidence independently of product checks.'
+
+    def test_review_B6_full_gate_rejects_not_run_and_incomplete_stage_evidence(self):
+        import test_framework as fw
+        catalogue = {'TF-5': {'checks': ['root:m.a', 'root:n.b']}}
+        row = {'suite': 'root', 'unit': 'm', 'seconds': 1., 'names': ['m.a'], 'returncode': 0, 'outcomes': {'root:m.a': 'passed'}}
+        report = fw.measurements([row], {'root:m': 'unit', 'root:n': 'scenario'}, {'root:m': 'unit', 'root:n': 'e2e'},
+                                 jobs=1, elapsed=1., selection=['root:m'], catalogue=catalogue)
+        report['metadata_errors'] = []
+        with self.assertRaisesRegex(ValueError, 'not_run|missing|incomplete'):
+            fw.combine_run_records([report])
+
+    def test_review_B5_workflow_has_validated_merge_base_and_no_parent_fallback(self):
+        text = (ROOT / '.github/workflows/ci.yml').read_text()
+        self.assertNotIn('git rev-parse HEAD^', text)
+        self.assertIn('git merge-base "$PR_BASE" HEAD', text)
+        self.assertIn('exit 1', text)
+        self.assertIn('--requirement-gate', text)
+        self.assertIn('needs: [unit, integration, full, pr-e2e]', text)
+
+
 if __name__ == '__main__':
     unittest.main()
