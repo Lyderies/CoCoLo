@@ -466,6 +466,8 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                 if process.poll() is None and time.monotonic() - entry[5] > worker_timeout + .1:
                     timed_out_workers.add(process.pid)
                     reap_worker_group(process)  # Includes owned children if the worker could not stop itself.
+                    entry[4].write(f"\nTIMED OUT {entry[0]}:{entry[1]} after {worker_timeout:g}s; owned process group reaped\n".encode())
+                    entry[4].flush()
             for process in [p for p in running if p.poll() is not None]:
                 suite, name, names, log, handle, began, folder = running.pop(process)
                 reap_worker_group(process)
