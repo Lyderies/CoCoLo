@@ -361,6 +361,26 @@ class BR5OnceAndOnlyOnce(RejudgeOwnerBase):
         self.assertEqual(1, self.passes())
         self.assertEqual(['admitted'], [r['state'] for r in self.rows()])
 
+    def test_BR5_a_repeat_admit_and_a_restart_after_a_bootstrap_probe_never_spend_the_allowance_again(self):
+        """Meaningful under a mutation that spends the allowance a second time: the repeat goes through
+        reserve AND admit, and the owner's memory is then lost (a restart); a stated end: two repeats."""
+        original = self.reserve('bootstrap')
+        self.prepared(original)
+        permit = self.owner.admit(original)
+        self.assertIs(type(permit), ProbeAdmission)
+        before = self.effects()
+        self.assertEqual(1, before['pass_admissions'])
+        for _ in range(2):
+            again = self.reserve('bootstrap')
+            self.assertIs(again, original)
+            self.assertIs(self.owner.admit(again), permit)
+            self.assertEqual(before, self.effects())
+        self.owner._pending.clear()  # the restart: no original can be recreated
+        with self.assertRaises(ProbeAdmissionError):
+            self.reserve('bootstrap')
+        self.assertEqual(before, self.effects())
+        self.assertEqual(['admitted'], [r['state'] for r in self.rows()])
+
     def test_BR5_a_stale_repeat_spends_no_admission_and_opens_no_hold(self):
         self.saved_reused()
         self.clock += PROBE_REUSE_MS + 10_000
