@@ -72,3 +72,6 @@ The minimized failure and before/after evidence are retained; this correction ch
 The cited document says 41 cells, but §3 enumerates 40 labels (A1–A7, B1–B7, C1–C3, D1–D8,
 E1–E4, F1–F2, G1–G6, H1–H2, I1). The new table test covers every explicit label and 63 permitted
 variants, each paired with a rejected corrupt outcome. No fictitious 41st label was invented.
+
+## R1-B6 fixture correction (inspection before conditional repair)
+`DurableDiskTests.test_review_B6_power_loss_latches_finally_IO_until_recovery` initially assumed the commit-A unwind emits hooked `sqlite_close`. Review B6 requires first collecting actual production finally I/O; `_Store.close` directly closes its connection, so that assumption contradicts the inspected seam. The witness is stopped at that assumption. Its requirement-based replacement injects power loss after a write, where `_Store.write` unconditionally invokes hooked `close` in finally, and retains the latch/no-write/recovery assertions. No claim that SQLite close is hooked is made.

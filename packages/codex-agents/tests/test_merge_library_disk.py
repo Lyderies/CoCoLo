@@ -211,19 +211,20 @@ class DurableDiskTests(unittest.TestCase):
         from tests.merge_library_disk import ModelCrash
         f = Fixture()
         self.addCleanup(f.close)
+        batch = f.batch({'a.txt': b'child'})
         disk = self.disk_type(f.root)
         unwinding = []
         def hook(call):
             if getattr(disk, 'powered_off', False):
                 unwinding.append(call.operation)
             answer = disk(call)
-            if call.operation == 'sqlite_commit' and call.when == 'after' and call.detail.get('commit') == 'A':
+            if call.operation == 'write' and call.when == 'after':
                 disk.crash(power_loss=True)
                 raise ModelCrash()
             return answer
         with self.assertRaises(ModelCrash):
-            f.land(f.batch({'a.txt': b'child'}), hook=hook)
-        self.assertIn('sqlite_close', unwinding, 'production finally I/O evidence')
+            f.land(batch, hook=hook)
+        self.assertIn('close', unwinding, 'production finally I/O evidence')
         with self.assertRaises(ModelCrash):
             disk(ml.IOCall('mkdir', 'before', 'test', str(f.project / 'after-power-loss')))
         self.assertFalse(disk.exists(f.project / 'after-power-loss'))

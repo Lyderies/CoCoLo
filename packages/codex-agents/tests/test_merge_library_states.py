@@ -214,6 +214,7 @@ class EndStates(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'mode'):
             self.check(row=row, report=report)
 
+    @__import__('test_framework').requirements('ML-R91', 'TF-19', why_not_scenario='Direct identity and foreign-content controls certify the decision 91 checker.')
     def test_decision_91_only_recorded_empty_descendants_qualify(self):
         from tests.merge_library_support import check_empty_recorded_tree
         root = self.f.project / 'removed'
@@ -289,6 +290,14 @@ class EndStates(unittest.TestCase):
         self.check(row=row, report=report)
         with patch.dict(POLICY, {'Q5': 'direct_parents_only'}), self.assertRaisesRegex(AssertionError, 'Q5'):
             self.check(row=row, report=report)
+
+    def test_review_L13_reporting_flag_cannot_authorize_a_mutating_EIO(self):
+        put(self.f.project / 'a.txt', b'child')
+        row = replace(self.row, state='landed')
+        report = replace(self.report, state='landed', paths=(ml.PathReport('a.txt', 'new'),))
+        call = ml.IOCall('exchange', 'after', 'forward', detail={'reporting': True})
+        with self.assertRaisesRegex(AssertionError, 'ordinary I/O failure'):
+            self.check(row=row, report=report, call=call, fault=errno.EIO, terminal_before='landed')
 
 
 if __name__ == '__main__':
