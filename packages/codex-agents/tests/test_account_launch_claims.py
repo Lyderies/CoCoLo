@@ -18,6 +18,10 @@ from tests.learning_support import backup_body
 
 def drop_admission_evidence_for_legacy_fixture(connection):
     """Leave a ledger as schema 13 wrote it: without the admission evidence index (derived data)."""
+    if "probe_id" in {row[1] for row in connection.execute("PRAGMA table_info(records)")}:
+        if connection.execute("SELECT 1 FROM records WHERE probe_id IS NOT NULL").fetchone():
+            raise AssertionError("cannot discard probe provenance in a legacy fixture")
+        connection.execute("ALTER TABLE records DROP COLUMN probe_id")
     connection.execute("DROP TRIGGER IF EXISTS admission_evidence_insert")
     connection.execute("DROP TABLE IF EXISTS admission_evidence")
 
@@ -277,7 +281,9 @@ class AccountLaunchClaimsTests(unittest.TestCase):
         self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
         self.assertEqual("legacy_fenced", self.markers()[0][2])
         self.assertEqual(signed_before, [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM owner_attestations").fetchall()])
-        self.assertEqual(records_before, [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid").fetchall()])
+        columns = ",".join(r[1] for r in self.ledger._connection.execute("PRAGMA table_info(records)") if r[1] != "probe_id")
+        self.assertEqual(records_before, [tuple(row) for row in self.ledger._connection.execute("SELECT " + columns + " FROM records ORDER BY rowid").fetchall()])
+        self.assertIsNone(self.ledger._connection.execute("SELECT 1 FROM records WHERE probe_id IS NOT NULL").fetchone())
         with self.assertRaisesRegex(LedgerError, "already dispatched"):
             self.claim()
 
@@ -332,7 +338,9 @@ class AccountLaunchClaimsTests(unittest.TestCase):
         self.addCleanup(self.ledger.close)
         self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
         self.assertIsNone(learning_store.ledger_schema_behind(state))
-        self.assertEqual(records_before, [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid").fetchall()])
+        columns = ",".join(r[1] for r in self.ledger._connection.execute("PRAGMA table_info(records)") if r[1] != "probe_id")
+        self.assertEqual(records_before, [tuple(row) for row in self.ledger._connection.execute("SELECT " + columns + " FROM records ORDER BY rowid").fetchall()])
+        self.assertIsNone(self.ledger._connection.execute("SELECT 1 FROM records WHERE probe_id IS NOT NULL").fetchone())
         kept = self.ledger._connection.execute(
             "SELECT project_id,file_id,expires_at_ms FROM stored_files WHERE kind='backup' AND file_id LIKE 'upgrade_schema6_%'").fetchall()
         self.assertEqual({self.project}, {row["project_id"] for row in kept} & {self.project})

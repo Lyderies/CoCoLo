@@ -1,5 +1,6 @@
 """Real registered signature returns; model launch/native enrollment remain gated."""
 import json
+import secrets
 from copy import copy
 from pathlib import Path
 import sys
@@ -355,7 +356,8 @@ class AccountBillingAdmissionTests(unittest.TestCase):
     def test_recent_billing_reuses_original_records_without_probe_admission_and_known_retry_needs_no_worker(self):
         records = claude_rate_limit_records({'status': 'allowed', 'isUsingOverage': False,
             'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'},
-            account_fingerprint=self.identity['account_fingerprint'], observed_at_ms=self.clock)
+            account_fingerprint=self.identity['account_fingerprint'], observed_at_ms=self.clock,
+            probe_id=secrets.token_hex(32))
         self.ledger._store_provider_observations(self.fixture.project_id, records, timestamp=self.clock)
         original = self.reserve()
         self.prepared(original)
@@ -373,7 +375,8 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         fingerprint = self.identity['account_fingerprint']
         favourable = {'status': 'allowed', 'isUsingOverage': False,
             'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'}
-        probe = claude_rate_limit_records(favourable, account_fingerprint=fingerprint, observed_at_ms=self.clock-probe_age)
+        probe = claude_rate_limit_records(favourable, account_fingerprint=fingerprint,
+                                         observed_at_ms=self.clock-probe_age, probe_id=secrets.token_hex(32))
         run = claude_rate_limit_records(run_info, account_fingerprint=fingerprint, observed_at_ms=self.clock-run_age,
                                         run_id='run-finished-1')
         self.ledger._store_provider_observations(self.fixture.project_id, probe, timestamp=self.clock-probe_age)
@@ -472,7 +475,7 @@ class AccountBillingAdmissionTests(unittest.TestCase):
     def store_probe_only(self, info, *, age=2000):
         """A probe's own records (no run), inside the reuse window."""
         records = claude_rate_limit_records(info, account_fingerprint=self.identity['account_fingerprint'],
-                                            observed_at_ms=self.clock-age)
+                                            observed_at_ms=self.clock-age, probe_id=secrets.token_hex(32))
         self.ledger._store_provider_observations(self.fixture.project_id, records, timestamp=self.clock-age)
         return records
 
@@ -612,6 +615,22 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertEqual('denied', denied['probe'], denied)
         self.assertEqual({**denied, 'known': True}, self.reserve('probe-replay-deny'))
 
+    def test_PC6_cooldown_reply_names_latest_pass_retry_and_replays_it(self):
+        from datetime import datetime, timezone
+        first = self.reserve('pc6-first')
+        self.prepared(first)
+        self.assertIs(type(self.owner.admit(first)), ProbeAdmission)
+        passed_at = self.clock
+        self.clock += 10_000
+        self.fixture.observe('claude', now_ms=self.clock)
+        second = self.reserve('pc6-second')
+        self.prepared(second)
+        reply = self.owner.admit(second)
+        self.assertEqual('probe_cooldown', reply['reason_code'])
+        expected = datetime.fromtimestamp((passed_at + 300_000)/1000, timezone.utc).isoformat().replace('+00:00', 'Z')
+        self.assertEqual(expected, reply['retry_at'])
+        self.assertEqual({**reply, 'known': True}, self.reserve('pc6-second'))
+
     # ---- PC-1..PC-2 (2026-11-22 probe reuse): a run record as constrained as the probe's own reading ----------
     CONSTRAINED = {'status': 'allowed_warning', 'isUsingOverage': False, 'overageStatus': 'rejected',
                    'overageDisabledReason': 'org_level_disabled',
@@ -621,7 +640,7 @@ class AccountBillingAdmissionTests(unittest.TestCase):
     def store_probe_info_then_run(self, probe_info, run_info, *, probe_age, run_age):
         fingerprint = self.identity['account_fingerprint']
         probe = claude_rate_limit_records(probe_info, account_fingerprint=fingerprint,
-                                          observed_at_ms=self.clock-probe_age)
+                                          observed_at_ms=self.clock-probe_age, probe_id='a'*64)
         self.ledger._store_provider_observations(self.fixture.project_id, probe, timestamp=self.clock-probe_age)
         if run_info is not None:
             run = claude_rate_limit_records(run_info, account_fingerprint=fingerprint,
@@ -761,7 +780,7 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         path = self.ledger.create_sanitized_backup(self.fixture.project_id, file_id='original_probe',
             expires_at_ms=time.time_ns()//1_000_000+60_000)
         body = backup_body(path, self.fixture.project_id)
-        self.assertEqual(15, body['ledger_schema_version'])  # O0b RS-A (requirement)
+        self.assertEqual(16, body['ledger_schema_version'])  # O0b RS-A (requirement)
         self.assertTrue(self.ledger.verify_sanitized_backup(self.fixture.project_id, file_id='original_probe')['verified'])
         broken = deepcopy(body)
         broken['tables']['account_billing_probe_requests'] = []

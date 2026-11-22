@@ -46,6 +46,23 @@ class RefusalStepTests(unittest.TestCase):
             cli._print({'ready': True, 'reason_code': None})  # not a refusal: unchanged
         self.assertNotIn('next_step', json.loads(out.getvalue()))
 
+    def test_PC6_printed_cooldown_renders_retry_in_local_time(self):
+        import contextlib
+        import io
+        import json
+        from datetime import datetime
+        from tests.test_bridge import cli
+        retry = '2026-11-23T12:34:00Z'
+        local = datetime.fromisoformat(retry.replace('Z', '+00:00')).astimezone().strftime('%H:%M')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli._print({'ready': False, 'reason_code': 'probe_cooldown', 'retry_at': retry})
+        step = json.loads(out.getvalue())['next_step']
+        self.assertIn('wait until ' + local, step)
+        self.assertNotIn('did not complete', step)
+        self.assertEqual('The billing probe did not complete: wait a moment and run provider-observe again.',
+                         refusal_steps.next_step('probe_unavailable'))
+
     def test_PC3_the_probe_cooldown_names_its_wait_and_other_probe_failures_keep_the_generic_text(self):
         step = refusal_steps.next_step('probe_cooldown')
         self.assertNotIn('did not complete', step)

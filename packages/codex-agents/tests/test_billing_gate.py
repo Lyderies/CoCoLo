@@ -1061,6 +1061,58 @@ class BR21LedgerReuse(LedgerReuseBase):
         self.store(warning, run_id='run-z', phase='during')
         self.assertNotEqual('reused', self.probe()['probe'])
 
+    def test_PC4_launched_ledger_probe_persists_common_id(self):
+        self.ready_account(probe_records=False)
+        reply = self.probe()
+        records = [r for r in reply['records'] if r['record_type'] != 'provider_identity']
+        self.assertEqual(2, len(records))
+        ids = {r['probe_id'] for r in records}
+        self.assertEqual(1, len(ids))
+        for record in records:
+            stored = self.ledger._connection.execute('SELECT probe_id FROM records WHERE record_id=?',
+                                                     (record['record_id'],)).fetchone()[0]
+            self.assertEqual(record['probe_id'], stored)
+        from tests.learning_support import backup_body
+        path = self.ledger.create_sanitized_backup(self.project_id, file_id='pc4_provenance',
+            expires_at_ms=time.time_ns()//1_000_000+600_000)
+        body = backup_body(path, self.project_id)
+        for record in records:
+            row = next(r for r in body['tables']['records'] if r['record_id'] == record['record_id'])
+            self.assertEqual(record['probe_id'], row['probe_id'])
+
+    def test_PC5_ledger_complementary_half_failed_probes_with_equal_stamps_are_not_reused(self):
+        self.ready_account(probe_records=False)
+        p = claude_rate_limit_records(self.CONSTRAINED, account_fingerprint=self.fingerprint,
+                                     observed_at_ms=self.clock, probe_id='a'*64)[1]
+        q = claude_rate_limit_records(self.CONSTRAINED, account_fingerprint=self.fingerprint,
+                                     observed_at_ms=self.clock, probe_id='b'*64)[0]
+        self.ledger._store_provider_observations(self.project_id, [p, q], timestamp=self.clock)
+        self.clock += 30_000
+        self.store(self.CONSTRAINED, run_id='run-half', phase='during')
+        self.assertNotEqual('reused', self.probe(plus=48_000)['probe'])
+
+    def test_PC5_ledger_legacy_null_id_rows_remain_strict(self):
+        self.ready_account(probe_records=False)
+        self.store(self.CONSTRAINED)
+        self.clock += 30_000
+        self.store(self.CONSTRAINED, run_id='run-legacy', phase='during')
+        self.assertNotEqual('reused', self.probe(plus=48_000)['probe'])
+
+    def test_PC6_ledger_cooldown_retry_uses_latest_qualifying_pass(self):
+        from datetime import datetime, timezone
+        self.ready_account(probe_records=False)
+        for offset in (-10_000, 20_000):
+            decision = {'provider': 'claude', 'decision': 'pass', 'reason_code': 'admitted',
+                        'admission_basis': 'bootstrap', 'account_fingerprint': self.fingerprint,
+                        'evidence_digests': ['a'*64], 'observed_at_ms': self.clock + offset}
+            with self.ledger._connection:
+                self.ledger._store_probe_admission_locked(self.project_id, decision, timestamp=self.clock + offset)
+        with self.assertRaises(AdmissionDenied) as raised:
+            self.probe()
+        self.assertEqual('probe_cooldown', raised.exception.reason_code)
+        expected = datetime.fromtimestamp((self.clock+320_000)/1000, timezone.utc).isoformat().replace('+00:00', 'Z')
+        self.assertEqual(expected, raised.exception.retry_at)
+
     # ---- PC-1..PC-2 (2026-11-22 probe reuse): the same rule on the ledger path -----------------------------
     CONSTRAINED = {**FAVOURABLE, 'status': 'allowed_warning',
                    'unifiedWindows': {'five_hour': {'utilization': 0.38, 'status': 'allowed'},
@@ -1068,7 +1120,7 @@ class BR21LedgerReuse(LedgerReuseBase):
 
     def probe_then_run(self, probe_info, run_info, *, between=30_000):
         self.ready_account(probe_records=False)
-        self.store(probe_info)
+        self.store(probe_info, probe_id='a'*64)
         self.clock += between
         self.store(run_info, run_id='run-pc', phase='during')
 

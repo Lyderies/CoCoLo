@@ -258,3 +258,29 @@ class CliBillingRuntimeTests(unittest.TestCase):
         self.assertLess(time.monotonic()-start, 6)
         self.assertIsNone(first.poll())  # Answered while the first probe was still held.
         self.assertEqual(0, self.take(first)[0])
+
+
+class ProbeCooldownRetryTests(unittest.TestCase):
+    def test_PC6_client_preserves_reply_retry_time(self):
+        from codex_agents import client_runtime as runtime
+        retry = '2026-11-23T12:34:00Z'
+        reply = {'probe': 'denied', 'reason_code': 'probe_cooldown', 'records': [],
+                 'known': False, 'observed_at_ms': 5, 'retry_at': retry}
+        with mock.patch.object(runtime, 'CollectorPaths'), mock.patch.object(runtime, 'CollectorClient') as collector, \
+                mock.patch.object(runtime, '_account_target', return_value=('p', Path('/tmp/account'))), \
+                mock.patch.object(runtime, 'enroll_clients'), mock.patch.object(runtime, 'api_keys_present', return_value=False), \
+                mock.patch.object(runtime, 'AccountClient') as account:
+            collector.return_value.health.return_value = {}
+            account.return_value.billing_probe.return_value = reply
+            with self.assertRaises(runtime.RuntimeBillingProbeError) as raised:
+                runtime.billing_probe_client('/tmp/state', '/tmp/project', request_id='pc6')
+        self.assertEqual(retry, raised.exception.retry_at)
+
+    def test_PC6_reply_contract_accepts_utc_retry_only_for_cooldown(self):
+        from codex_agents.billing_probe_contracts import checked_billing_probe_reply, BillingProbeError
+        reply = {'probe': 'denied', 'reason_code': 'probe_cooldown', 'records': [],
+                 'known': False, 'observed_at_ms': 5, 'retry_at': '2026-11-23T12:34:00Z'}
+        self.assertEqual(reply, checked_billing_probe_reply(reply))
+        for changes in ({'retry_at': 'bad'}, {'reason_code': 'probe_busy'}, {'retry_at': '2026-11-23T12:34:00+13:00'}):
+            with self.assertRaises(BillingProbeError):
+                checked_billing_probe_reply({**reply, **changes})

@@ -193,11 +193,11 @@ class NewerRunRestrictsTests(unittest.TestCase):
 
     def restricts(self, own, newer, *, own_at=None, extra_headroom=()):
         """`own`: the probe's reading (a rate-limit info); `newer`: the child's, 30 s later."""
-        own_head, own_bill = self.records(own, self.START)
+        own_head, own_bill = self.records(own, self.START, probe_id='a' * 64)
         run_head, run_bill = self.records(newer, self.START + 30_000, run_id='run-1')
         heads = [own_head, run_head, *extra_headroom]
         if own_at is not None:  # the probe's headroom stamped otherwise than its billing
-            heads[0] = self.records(own, own_at)[0]
+            heads[0] = self.records(own, own_at, probe_id='b' * 64)[0]
         headroom = [(record, f'{number:064x}') for number, record in enumerate(heads)]
         billing = [(own_bill, '1' * 64), (run_bill, '2' * 64)]
         return admission_metadata.newer_run_restricts(
@@ -215,9 +215,35 @@ class NewerRunRestrictsTests(unittest.TestCase):
         self.assertFalse(self.restricts(self.CONSTRAINED, self.CONSTRAINED))
 
     def test_a_probe_with_no_associated_headroom_restricts_on_any_constrained_run(self):
-        # Its headroom is stamped 30 s from its billing: nothing shows it came from the same probe.
+        # Another probe owns the headroom, regardless of its timestamp.
         self.assertTrue(self.restricts(self.CONSTRAINED, self.CONSTRAINED, own_at=self.START + 30_000))
 
-    def test_another_probe_s_headroom_with_the_probe_s_own_stamp_makes_the_baseline_ambiguous(self):
+    def test_another_probe_s_equal_stamp_headroom_does_not_raise_an_ample_baseline(self):
         other = self.records(self.CONSTRAINED, self.START)[0]  # same stamp, other content than the ample own
         self.assertTrue(self.restricts(self.AMPLE, self.CONSTRAINED, extra_headroom=(other,)))
+
+    def test_PC5_complementary_half_failed_probes_at_equal_stamps_restrict(self):
+        p_bill = {**self.records(self.CONSTRAINED, self.START)[1], 'probe_id': 'a' * 64}
+        q_head = {**self.records(self.CONSTRAINED, self.START)[0], 'probe_id': 'b' * 64}
+        run = self.records(self.CONSTRAINED, self.START + 30_000, run_id='run-1')[0]
+        self.assertTrue(admission_metadata.newer_run_restricts(
+            p_bill, [(p_bill, '1'*64)], [(q_head, '2'*64), (run, '3'*64)], self.FINGERPRINT, self.NOW, {}))
+
+    def test_PC5_legacy_null_id_is_strict(self):
+        for explicit_null in (False, True):
+            head, bill = self.records(self.CONSTRAINED, self.START)
+            if explicit_null:
+                head, bill = {**head, 'probe_id': None}, {**bill, 'probe_id': None}
+            run = self.records(self.CONSTRAINED, self.START + 30_000, run_id='run-1')[0]
+            self.assertTrue(admission_metadata.newer_run_restricts(
+                bill, [(bill, '1'*64)], [(head, '2'*64), (run, '3'*64)], self.FINGERPRINT, self.NOW, {}))
+
+    def test_PC5_probe_head_requires_one_id_match_and_ignores_stamps(self):
+        head, bill = self.records(self.CONSTRAINED, self.START)
+        head, bill = {**head, 'probe_id': 'a'*64}, {**bill, 'probe_id': 'a'*64}
+        other = {**head, 'record_id': 'other', 'probe_id': 'b'*64, 'observed_at_ms': self.NOW}
+        self.assertEqual(head, admission_metadata.probe_head([(head, ''), (other, '')], self.FINGERPRINT, bill))
+        for heads in ([], [(other, '')], [(head, ''), ({**head, 'record_id': 'duplicate'}, '')]):
+            self.assertIsNone(admission_metadata.probe_head(heads, self.FINGERPRINT, bill))
+        shifted = {**head, 'observed_at_ms': self.START + 100}
+        self.assertEqual(shifted, admission_metadata.probe_head([(shifted, '')], self.FINGERPRINT, bill))

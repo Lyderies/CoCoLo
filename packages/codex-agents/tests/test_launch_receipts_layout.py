@@ -25,7 +25,7 @@ def stored_layout():
 
 class LaunchReceiptsLayoutTests(unittest.TestCase):
     def test_receipts_ddl_changes_only_with_a_schema_bump(self):
-        self.assertEqual(15, LEDGER_SCHEMA_VERSION,
+        self.assertEqual(16, LEDGER_SCHEMA_VERSION,
                          'the ledger schema changed: add the new layout hash and its upgrade, then update this test')
         self.assertEqual(FROZEN_FOR_SCHEMA_15, stored_layout())
 
