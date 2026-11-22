@@ -47,6 +47,7 @@
  "codex:tests.test_append_lookup": "integration",
  "codex:tests.test_atomic_rename": "integration",
  "codex:tests.test_backup_installed_project": "integration",
+ "codex:tests.test_billing_gate": "integration",
  "codex:tests.test_billing_probe_api": "unit",
  "codex:tests.test_billing_rejudge": "integration",
  "codex:tests.test_billing_writers": "integration",

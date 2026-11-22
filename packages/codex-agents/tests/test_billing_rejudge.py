@@ -943,6 +943,7 @@ class H3NoUncheckedCallbackAfterTheFinalComparison(RejudgeOwnerBase):
         self.prepared(out)
         reply = self.owner.admit(out)
         self.assertEqual('reused', reply['probe'], reply)
+        judgment = self.owner.judgment_of(out)  # decision 50 (BR-19): a yes is gated against its own judgment
         state = {'n': 0, 'fire_at': None, 'fired': False}
 
         def callback():
@@ -955,9 +956,10 @@ class H3NoUncheckedCallbackAfterTheFinalComparison(RejudgeOwnerBase):
         def verify():
             state['n'] = 0
             return self.owner.verify_committed(self.fixture.project_id, 'a'*64, 'b'*64, 'saved', self.context,
-                                               before_commit=callback, reply=reply, history=out.history)
+                                               before_commit=callback, reply=reply, history=out.history,
+                                               judgment=judgment)
 
-        self.assertIs(True, verify())
+        self.assertTrue(verify())  # decision 50 (BR-19): was assertIs(True, ...); a yes now returns a sealed Yes
         state['fire_at'] = state['n']
         try:
             verify()
