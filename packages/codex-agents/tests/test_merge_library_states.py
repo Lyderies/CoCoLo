@@ -231,6 +231,65 @@ class EndStates(unittest.TestCase):
         with self.assertRaises(AssertionError):
             check_empty_recorded_tree(self, self.f, 'removed', {'removed/child': (0, 0)})
 
+    def test_review_A4_each_policy_changes_its_end_state_check(self):
+        from unittest.mock import patch
+        from tests.merge_library_support import POLICY
+        # Q1: only the explicit alternative permits a reverted CU outcome.
+        self.batch = self.f.batch({'created/add': b'child'})
+        (self.f.project / 'created').mkdir()
+        row = replace(self.row, batch=self.batch)
+        report = replace(self.report, paths=(ml.PathReport('created', 'absent'), ml.PathReport('created/add', 'absent')))
+        with self.assertRaises(AssertionError):
+            self.check(row=row, report=report)
+        with patch.dict(POLICY, {'Q1': 'reverted_with_leftover'}):
+            self.check(row=row, report=report)
+        (self.f.project / 'created').rmdir()
+        self.batch = self.row.batch
+        # Q3: pending is a distinct diagnostic; durable direction remains landed.
+        put(self.f.project / 'a.txt', b'child')
+        row = replace(self.row, state='landed')
+        report = replace(self.report, state='record_pending', recorded=False, paths=(ml.PathReport('a.txt', 'new'),))
+        extra = dict(call=ml.IOCall('sqlite_commit', 'before', 'retirement'), fault=errno.EIO, terminal_before='landed')
+        with self.assertRaises(AssertionError):
+            self.check(row=row, report=report, **extra)
+        with patch.dict(POLICY, {'Q3': 'record_pending'}):
+            self.check(row=row, report=report, **extra)
+        # Q4: alternate reverted state still preserves the independently known owner version.
+        put(self.f.project / 'a.txt', b'owner')
+        self.f.owner_versions['a.txt'] = {(stat.S_IFREG, 0o644, b'owner')}
+        report = replace(self.report, reason='owner', paths=(ml.PathReport('a.txt', 'owner'),))
+        with self.assertRaises(AssertionError):
+            self.check(report=report)
+        with patch.dict(POLICY, {'Q4': 'reverted_with_owner'}):
+            self.check(report=report)
+        self.f.owner_versions.clear()
+        put(self.f.project / 'a.txt', self.start['a.txt'][2])
+        # Q6: the alternate leaves applying direction for requested recovery.
+        self.f.terminal_states = {1: 'applying'}
+        row = replace(self.row, state='applying')
+        report = replace(self.report, state='applying')
+        with self.assertRaises(AssertionError):
+            self.check(row=row, report=report, action='cancel')
+        with patch.dict(POLICY, {'Q6': 'wait_for_recovery'}):
+            self.check(row=row, report=report, action='cancel')
+
+    def test_review_A4_Q5_ancestor_policy_is_checked_on_the_record(self):
+        from unittest.mock import patch
+        from tests.merge_library_support import POLICY
+        put(self.f.project / 'outer/inner/file', b'old')
+        self.f.before = self.f.operation_before = tree(self.f.project)
+        self.batch = self.f.batch({'outer/inner/file': None})
+        identities = {name: ((self.f.project / name).stat().st_dev, (self.f.project / name).stat().st_ino)
+                      for name in ('outer', 'outer/inner')}
+        (self.f.project / 'outer/inner/file').unlink()
+        (self.f.project / 'outer/inner').rmdir()
+        (self.f.project / 'outer').rmdir()
+        row = replace(self.row, state='landed', batch=self.batch, emptied_folders=identities)
+        report = replace(self.report, state='landed', paths=(ml.PathReport('outer/inner/file', 'absent'),))
+        self.check(row=row, report=report)
+        with patch.dict(POLICY, {'Q5': 'direct_parents_only'}), self.assertRaisesRegex(AssertionError, 'Q5'):
+            self.check(row=row, report=report)
+
 
 if __name__ == '__main__':
     unittest.main()
