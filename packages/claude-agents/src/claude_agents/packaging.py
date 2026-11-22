@@ -364,7 +364,7 @@ def compile_bundle(source_root: Path) -> Bundle:
 # same change as its record; never copy it from an installed project, which may be tampered.
 PINNED_RELEASE_DIGESTS = frozenset({
     "c3e80b3f92cc5e5728b848e384d820265f70b32031ed931b723f201c1b0309ae",  # 0.8.40
-    "eb34209dacdac6d3fe00fcd8a3f4c055bb3cdf661683ea270abc527f95ff62d3",  # 0.8.41 (source 1e3f43ba); 0.8.42 (source 9f229d0c), 0.8.43 (source d2bb82a3), 0.8.44 (source 87005877), 0.8.45 (source 1b3e665a) and 0.8.46 (source eb54e847) compile to the same bundle
+    "eb34209dacdac6d3fe00fcd8a3f4c055bb3cdf661683ea270abc527f95ff62d3",  # 0.8.41 (source 1e3f43ba); 0.8.42 (source 9f229d0c), 0.8.43 (source d2bb82a3), 0.8.44 (source 87005877), 0.8.45 (source 1b3e665a), 0.8.46 (source eb54e847) and 0.8.47 (source a1d25560) compile to the same bundle
 })
 
 
