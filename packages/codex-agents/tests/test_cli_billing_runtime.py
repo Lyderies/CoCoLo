@@ -129,8 +129,11 @@ class CliBillingRuntimeTests(unittest.TestCase):
     def test_explicit_known_request_returns_original_records_without_another_observation_or_model(self):
         code, first = self.take(self.start(identity='original-cli-probe'))
         self.assertEqual(0, code, first)
-        with mock.patch.object(self.billing._observations, 'submit', side_effect=AssertionError('known identity reprobe')):
+        # Decision 47 (M-identity): a repeat is judged again on a new identity observation of its own (the local
+        # client's login: no model call, nothing spent), never on a reprobe: exactly one observation, one launch.
+        with mock.patch.object(self.billing._observations, 'submit', wraps=self.billing._observations.submit) as observed:
             code, known = self.take(self.start(identity='original-cli-probe'))
+        self.assertEqual(1, observed.call_count)
         self.assertEqual((0, {**first, 'known': True}), (code, known))
         self.assertEqual(1, len(self.launches()))
 

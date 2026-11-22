@@ -4,7 +4,7 @@ Only the actual registered signature return is consumed. An admitted request
 survives crashes as active/unknown custody; this component cannot release it.
 Native authentication, launch containment and confirmed return are separate gates.
 """
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 import hmac
 import os
@@ -56,6 +56,9 @@ class _Reservation:
     # judgment generation of the same request key (its own capture time and deadline); the row (history) is
     # never overwritten by it.
     history: object = None
+    # Decision 47: False when this generation re-judges the request's own commit for the job that made it (its
+    # reply is that job's own answer, as the first one was); True for a repeat of a request made earlier.
+    known: bool = True
 
 
 @dataclass(frozen=True, repr=False, eq=False)
@@ -66,6 +69,20 @@ class ProbeAdmission:
     admission_record_id: str
     admission_digest: str
     admitted_at_ms: int
+
+
+@dataclass(frozen=True, repr=False, eq=False)
+class _Judgment:
+    """Decision 47 (H1, M1): what one judgment generation answered, kept so that delivery can be checked against
+    it. `row` is the committed row the answer is about (a repeat's unchanged history); `digest` is the digest
+    of the reply exactly as it was built; `snapshot` and `guard` are the inputs it judged (None for an answer
+    that was only bound afterwards: it cannot show that its inputs are unchanged, so a yes of that kind is
+    judged again before it is delivered)."""
+    reservation: object
+    row: dict
+    digest: str
+    snapshot: object = None
+    guard: object = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -97,6 +114,8 @@ class AccountBillingAdmission:
         self._pid, self._key, self._timeout = os.getpid(), ledger.state.digest_key(), timeout_ms
         self._limits = SQLReadLimits(work_limits.max_callbacks, work_limits.max_duration_ms, work_limits.max_value_bytes)
         self._pending, self._signatures, self._permits, self._execution_inputs, self._reserved_inputs = {}, {}, {}, {}, {}
+        # Decision 47: the judgment of a finished generation, until the job that owns it takes it (judgment_of).
+        self._judged = {}
         # O0b RS-A round 2 G3: set (from any thread) once a sweep has committed expired probes; read on the owner.
         self._closed_notice = threading.Event()
         # O0b RS-A round 2 G9: closed originals a live billing job still holds; that job ends them.
@@ -167,7 +186,7 @@ class AccountBillingAdmission:
             raise ProbeAdmissionError()
         return now
 
-    def reserve(self, project, runtime, caller, identity, context, *, before_commit=None):
+    def reserve(self, project, runtime, caller, identity, context, *, before_commit=None, known=True):
         self._guard()
         if (not matches(project, _PROJECT) or not matches(runtime, _DIGEST) or not matches(caller, _DIGEST)
                 or not matches(identity, _ID) or type(context) is not ObservationContext):
@@ -194,7 +213,7 @@ class AccountBillingAdmission:
                 if row['state'] == 'committed':
                     if self._rejudges(self._value(row)):
                         return self._reserve_repeat(project, key, parameters, root, row, context, snapshot,
-                                                    before_commit)
+                                                    before_commit, known)
                     reply = self._reply(row, known=True)  # a refusal stays a refusal (BR-6)
                     self._authorize(context, snapshot, before_commit)
                     if self._project(project, context) != root or self._row(project, key) != row:
@@ -255,7 +274,7 @@ class AccountBillingAdmission:
         self._signatures.pop(reservation, None)
         self._pending.pop((reservation.project, reservation.key), None)
         self._reserved_inputs.pop(reservation, None)
-        return {'probe': 'denied', 'reason_code': 'probe_replay_stale', 'records': [], 'known': True,
+        return {'probe': 'denied', 'reason_code': 'probe_replay_stale', 'records': [], 'known': reservation.known,
                 'observed_at_ms': now}
 
     def _refuse_repeat_key(self, project, key, root, row, context, snapshot, before_commit):
@@ -279,7 +298,7 @@ class AccountBillingAdmission:
         failure reason stay as stored."""
         return value['probe'] == 'reused' or (value['probe'] == 'completed' and value['reason_code'] is None)
 
-    def _reserve_repeat(self, project, key, parameters, root, row, context, snapshot, before_commit):
+    def _reserve_repeat(self, project, key, parameters, root, row, context, snapshot, before_commit, known=True):
         """A new judgment generation for a request whose row is committed. Runs in reserve's transaction and
         writes nothing: the row is history. At most one live generation per request key; the count is bounded
         by the same pending limits as a new request."""
@@ -299,7 +318,7 @@ class AccountBillingAdmission:
         created_ns = time.monotonic_ns()
         now = self._now()
         original = _Reservation(project, key, parameters, context, snapshot, before_commit,
-                                now, now+self._timeout, created_ns+self._timeout*1_000_000, row)
+                                now, now+self._timeout, created_ns+self._timeout*1_000_000, row, known)
         self._authorize(context, snapshot, before_commit)
         if self._project(project, context) != root or self._row(project, key) != row:
             raise ProbeAdmissionError('probe_conflict')
@@ -361,13 +380,16 @@ class AccountBillingAdmission:
         self._pending.pop((reservation.project, reservation.key))
         self._reserved_inputs.pop(reservation)
 
-    def _fresh(self, reservation, snapshot, *, appended=None):
+    def _capture(self, project, anchor_ms=None):
+        """The admission inputs at the ledger clock (or, with `anchor_ms`, over that capture's own scope)."""
         limits = self._intake._limits
         signer = self._ledger._current_signer_bytes()
         policy = self._intake._views._claim_policy('claude')
-        current = self._read(lambda: self._intake._views._capture_admission_rows_locked(reservation.project,
-            'claude', policy, AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer,
-            snapshot.anchor_ms))
+        return self._read(lambda: self._intake._views._capture_admission_rows_locked(project,
+            'claude', policy, AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer, anchor_ms))
+
+    def _fresh(self, reservation, snapshot, *, appended=None):
+        current = self._capture(reservation.project, snapshot.anchor_ms)
         expected = snapshot
         if appended is not None:
             rows = [r for r in current.rows if r[1] == reservation.project and r[2] == appended['record_id']]
@@ -457,7 +479,9 @@ class AccountBillingAdmission:
         prepared = open_admission_inputs(result.prepared, verified)
         guard = {n: 'present' for n in API_KEY_VARIABLES if os.environ.get(n)}
         repeat_reply = None
-        with self._ledger._account_transaction():
+        # Decision 47 (M3): the signer turn is taken last inside the transaction (ledger lock, then turn) and held
+        # until the transaction has committed.
+        with ExitStack() as signer_turn, self._ledger._account_transaction():
             row = self._original(reservation, False)
             if row['state'] != ('committed' if repeat else 'reserved'):
                 raise ProbeAdmissionError('probe_conflict')
@@ -465,9 +489,12 @@ class AccountBillingAdmission:
             identities = prepared['identities']
             # BR-3: an identity stamped after now (a clock stepped back) is no evidence of now: only this
             # judgment's own window counts.
-            # A repeat makes no observation of its own (BR-5, BR-13): it judges the identity at hand, which must be
-            # as fresh as a reusable probe record; with none, it is refused below as probe_replay_stale.
-            since = reservation.created-PROBE_REUSE_MS if repeat else reservation.created
+            # Decision 47 (M-identity): the job takes an identity observation for every generation, a repeat's too
+            # (the local client's login read: no model call, nothing spent), so the reading judged is this
+            # generation's own. Its age is measured against this judgment's time, not the reservation's: a reading
+            # older than the reuse age at judgment time is no evidence; with none, the repeat is refused below as
+            # probe_replay_stale.
+            since = now-PROBE_REUSE_MS if repeat else reservation.created
             identity = max((r for r, _ in identities if since <= r['observed_at_ms'] <= now),
                            key=lambda r: r['observed_at_ms'], default=None)
             if identity is None and not repeat:
@@ -523,9 +550,9 @@ class AccountBillingAdmission:
                 if history.get('client_version') is not None:
                     value['client_version'] = history['client_version']
                 try:
-                    # The answer keeps the request's own time (as every reply of a request does); the judgment time is
-                    # `now` and is what freshness above used.
-                    repeat_reply = self._build_reply(value, known=True, observed_at=row['created_at_ms'],
+                    # L1: `observed_at_ms` of every reply is the time of the request's origin (its row's created_at_ms),
+                    # also on a repeat's fresh yes; the time of the judgment is `now`, which freshness above used.
+                    repeat_reply = self._build_reply(value, known=reservation.known, observed_at=row['created_at_ms'],
                                                      gone='probe_replay_stale')
                     final, appended = row, None
                 except ProbeAdmissionError as error:
@@ -578,7 +605,7 @@ class AccountBillingAdmission:
                 if repeat:
                     # Recorded as a denial (owner decision 44); the history row stays as it is.
                     repeat_reply = {'probe': 'denied', 'reason_code': decision['reason_code'], 'records': [],
-                                    'known': True, 'observed_at_ms': now}
+                                    'known': reservation.known, 'observed_at_ms': now}
                     final = row
                 else:
                     row = {**row, 'account_fingerprint': fingerprint,
@@ -595,9 +622,9 @@ class AccountBillingAdmission:
             if ({n: 'present' for n in API_KEY_VARIABLES if os.environ.get(n)} != guard
                     or self._row(reservation.project, reservation.key) != final):
                 raise ProbeAdmissionError('probe_conflict')
-            # BR-15: the last thing before the commit; the signer cannot change while this runs.
-            with self._signer_stable():
-                self._inputs_unchanged(snapshot)
+            # BR-15: the last thing before the commit; the signer cannot change until the commit is done.
+            signer_turn.enter_context(self._signer_stable())
+            self._inputs_unchanged(snapshot)
         self._pool.discard(handle)
         self._signatures.pop(reservation)
         if final['state'] == 'admitted':
@@ -614,10 +641,46 @@ class AccountBillingAdmission:
         self._pending.pop((reservation.project, reservation.key))
         self._reserved_inputs.pop(reservation)
         reply = repeat_reply if repeat else self._reply(final, known=False)
-        self._authorize(reservation.context, reservation.snapshot, reservation.authorize, False)
+        # Decision 47 (H3): no authorization callback after the final input comparison (the last one ran above,
+        # inside the transaction, before it); delivery asks the caller again and checks what that changed.
         if self._row(reservation.project, reservation.key) != final:
             raise ProbeAdmissionError('probe_conflict')
+        self._judged[reservation] = _Judgment(reservation, final, content_digest(reply), snapshot, guard)
         return reply
+
+    def judgment_of(self, reservation):
+        """The judgment of a finished generation (None when there is none); handed over once (decision 47)."""
+        self._guard()
+        return self._judged.pop(reservation, None)
+
+    def bind(self, project, runtime, caller, identity, reply):
+        """Decision 47 (M1): the exact committed row and reply digest of an answer a judgment did not make (a
+        completed run's commit, a stored refusal). It binds delivery to that row and reply, but names no inputs."""
+        self._guard()
+        key = keyed(self._key, b'billing-probe-request-v1\0', [project, runtime, caller, identity])
+        row = self._row(project, key)
+        if row is None or row['state'] != 'committed':
+            raise ProbeAdmissionError('probe_conflict')
+        return _Judgment(None, row, content_digest(reply))
+
+    def judgment_current(self, judgment):
+        """Decision 47 (H1): whether every input a judgment used is still exactly as it was (rows, policy, signer,
+        attestations, the API-key environment) and its generation is still within its deadline. Runs no callback
+        and never raises for a changed input; a judgment that named no inputs is never current."""
+        self._guard()
+        reservation = judgment.reservation
+        if reservation is None or judgment.snapshot is None:
+            return False
+        try:
+            with self._ledger._account_transaction():
+                self._project(reservation.project, reservation.context)
+                if self._row(reservation.project, reservation.key) != judgment.row:
+                    return False
+                self._fresh(reservation, judgment.snapshot)
+                self._inputs_unchanged(judgment.snapshot)
+                return {n: 'present' for n in API_KEY_VARIABLES if os.environ.get(n)} == judgment.guard
+        except ProbeAdmissionError:
+            return False
 
     def settle_unlaunched(self, reservation, reason):
         """Settle an admitted probe that was never offered for execution (0.3.3, C9).
@@ -908,11 +971,16 @@ class AccountBillingAdmission:
             raise ProbeAdmissionError()
         return reply
 
-    def verify_committed(self, project, runtime, caller, identity, context, *, before_commit, reply, history=None):
+    def verify_committed(self, project, runtime, caller, identity, context, *, before_commit, reply, history=None,
+                         judgment=None):
         """BR-8 (decision 44): publication checks the exact row the job committed, for integrity only: its seal,
         its request binding and the caller's authorization. A repeat's judgment committed nothing: its row must
         be the unchanged history it was judged against. Never a judgment, never a reason for a false conflict
-        when unrelated evidence arrived. Raises probe_conflict on any difference."""
+        when unrelated evidence arrived. Raises probe_conflict on any difference.
+
+        Decision 47: with the job's `judgment`, the committed row must be exactly the one that generation answered
+        about and the reply exactly the one it built (M1). A yes is also checked across the last callback: the
+        inputs are captured just before it and just after it, in one transaction, and a difference refuses (H3)."""
         self._guard()
         if (not matches(project, _PROJECT) or not matches(runtime, _DIGEST) or not matches(caller, _DIGEST)
                 or not matches(identity, _ID) or type(context) is not ObservationContext or type(reply) is not dict):
@@ -926,16 +994,24 @@ class AccountBillingAdmission:
             if (row is None or row['state'] != 'committed'
                     or row['parameters_digest'] != keyed(self._key, b'billing-probe-parameters-v1\0', [runtime, caller, root])):
                 raise ProbeAdmissionError('probe_conflict')
-            if history is not None:
-                if row != history:
+            if history is not None and row != history:
+                raise ProbeAdmissionError('probe_conflict')
+            if judgment is not None:
+                if row != judgment.row or content_digest(reply) != judgment.digest:
                     raise ProbeAdmissionError('probe_conflict')
-            elif self._reply(row, known=True) != {**reply, 'known': True}:
+            elif history is None and self._reply(row, known=True) != {**reply, 'known': True}:
                 # A refusal answered over a stored success is a repeat's own (it grants nothing, so it is
                 # safe to publish whatever the stored success cites).
                 if not (reply['probe'] == 'denied' and reply.get('records') == [] and reply.get('known') is True
                         and self._rejudges(self._value(row))):
                     raise ProbeAdmissionError('probe_conflict')
-            self._authorize(context, snapshot, before_commit)
+            if self._rejudges(reply):
+                before = self._capture(project)
+                self._authorize(context, snapshot, before_commit)  # the last callback
+                if not same_admission_inputs(before, self._capture(project, before.anchor_ms)):
+                    raise ProbeAdmissionError('probe_conflict')
+            else:
+                self._authorize(context, snapshot, before_commit)
             if self._project(project, context) != root or self._row(project, key) != row:
                 raise ProbeAdmissionError('probe_conflict')
         return True

@@ -785,7 +785,7 @@ class AccountService:
         if self._observation_jobs is not None:
             self._observation_jobs.drive()
 
-    def _billing_reply(self, key, result, context, before_publish, history=None):
+    def _billing_reply(self, key, result, context, before_publish, history=None, judgment=None):
         project, runtime, caller, identity = key
         request = AccountRequest(1, 'account.billing_probe', identity, project, runtime, {})
         labels = {'request_id': identity, 'project_id': project, 'runtime_digest': runtime,
@@ -803,10 +803,11 @@ class AccountService:
                 raise ProbeAdmissionError('probe_reply_invalid') from None
             if before_publish() is not True:
                 raise ProbeAdmissionError('probe_not_authorized')
-            current = self._observation_jobs._owner.billing_waivers(project, records) if records else {}
-            # BR-8 (decision 44): the exact committed row, integrity only; a stored success is never re-served.
+            # BR-8 (decision 44, 47): the exact committed row and reply of the judgment, integrity only; a stored
+            # success is never re-served. Its last callback has run when it returns, so the waivers are read after.
             self._billing_jobs._owner.verify_committed(*key, context, before_commit=before_publish,
-                                                       reply=result, history=history)
+                                                       reply=result, history=history, judgment=judgment)
+            current = self._observation_jobs._owner.billing_waivers(project, records) if records else {}
             if waivers != current:
                 raise ProbeAdmissionError('probe_not_authorized')
             self._provenance_live()
@@ -854,7 +855,8 @@ class AccountService:
                 if reply.reason not in allowed:
                     self._name_probe_failure('probe_reason_unrecognised')
                 return self._reply(labels, reason=reply.reason if reply.reason in allowed else 'probe_unavailable')
-            return self._billing_reply(reply.key, reply.result, reply.context, reply.before_publish, reply.history)
+            return self._billing_reply(reply.key, reply.result, reply.context, reply.before_publish, reply.history,
+                                       reply.judgment)
         if (self._observation_jobs is not None and type(ticket) is object
                 and ticket in self._observation_jobs._jobs):
             reply = self._observation_jobs.take(ticket, _ingress=_ingress)

@@ -142,11 +142,10 @@ class RejudgeOwnerBase(unittest.TestCase):
         self.commit_completed(identity, None, [self.identity, *records])
 
     # ---- the repeat: the smallest interface the design implies (I1, I2) ----------------------------
-    def repeat(self, identity='saved', *, identity_changes=None, observe=True):
+    def repeat(self, identity='saved', *, identity_changes=None):
         """reserve (again) -> the job's identity observation -> prepare -> admit. A refusal that
         raises is reported as {'probe': 'error', 'reason_code': ...}; a pass that would launch a new
-        provider call as {'probe': 'would_launch'}. `observe=False` is a repeat that took no identity
-        observation of its own (decision 47, M-identity)."""
+        provider call as {'probe': 'would_launch'}."""
         try:
             out = self.reserve(identity)
         except ProbeAdmissionError as error:
@@ -154,8 +153,7 @@ class RejudgeOwnerBase(unittest.TestCase):
         if type(out) is dict:
             return out
         try:
-            if observe:
-                self.observe_identity(**(identity_changes or {}))
+            self.observe_identity(**(identity_changes or {}))
             self.prepared(out)
             result = self.owner.admit(out)
         except ProbeAdmissionError as error:
@@ -977,26 +975,23 @@ class H3NoUncheckedCallbackAfterTheFinalComparison(RejudgeOwnerBase):
             lambda: self.ledger._connection.execute('DELETE FROM owner_attestations')))
 
 
-class IdentityObservationOnARepeat(RejudgeOwnerBase):
-    """M-identity (BR-1): an identity observation is a local, non-spending reading (`claude auth status --json`
-    and `--version`, no model call); a repeat takes a new one. With none of its own, it is refused as stale: an
-    older reading inside the reuse age cannot show that the login or subscription changed since."""
+class IdentityAgeOnARepeat(RejudgeOwnerBase):
+    """M-identity (BR-1): the job takes an identity observation for every generation, a repeat's too (the
+    local client's `auth status --json` and `--version`: no model call, nothing spent; proved end to end in
+    RejudgeDeliveryTests). The owner measures a reading's age against the judgment's time, not the
+    reservation's: a reading that was inside the reuse age when the repeat began, but is not when it is
+    judged, is no evidence of the login at that time."""
 
-    def test_identity_a_repeat_with_no_observation_of_its_own_is_refused_as_stale_with_zero_effects(self):
+    def test_identity_age_is_measured_at_judgment_time_not_at_reservation_time(self):
         self.saved_reused()
-        self.clock += 1000
+        self.clock += PROBE_REUSE_MS - 10_000
+        self.store(FAVOURABLE)  # fresh billing; the identity is the old one, 10 s inside the reuse age
+        out = self.reserve('saved')
+        self.clock += 20_000  # judged later than reserved: the reading is now 10 s past the reuse age
+        self.prepared(out)
         before = self.effects()
-        self.assertDenied('probe_replay_stale', self.repeat(observe=False))
+        self.assertDenied('probe_replay_stale', self.owner.admit(out))
         self.assertEqual(before, self.effects())
-
-    def test_identity_a_reading_taken_before_the_repeat_began_is_not_used_though_inside_the_reuse_age(self):
-        self.saved_reused()
-        self.clock += 1000
-        self.observe_identity()  # a favourable reading, taken before the repeat began (the account may change after it)
-        self.clock += 1000
-        answer = self.repeat(observe=False)
-        self.assertNotIn(answer['probe'], self.YES, answer)
-        self.assertDenied('probe_replay_stale', answer)
 
 
 class BR2LateRunRecords(RejudgeOwnerBase):
@@ -1100,6 +1095,21 @@ class RejudgeDeliveryTests(unittest.TestCase):
         answer = self.take(ticket, request)
         self.assertEqual(('reused', False), (answer['probe'], answer['known']), answer)
         self.assertEqual(0, capture.call_count)
+
+    def test_H1_a_yes_whose_inputs_keep_changing_ends_in_a_named_refusal_not_a_loop(self):
+        ticket, request = self.ready_reused()
+        real, stored = self.billing.take, []
+
+        def take(t, **options):
+            if self.billing._jobs[t].state == 'ready':  # evidence arrives before every delivery
+                stored.append(self.store({**FAVOURABLE, 'utilization': .3 + len(stored)/100}, age=0))
+            return real(t, **options)
+
+        with mock.patch.object(self.billing, 'take', side_effect=take):
+            answer = self.outcome(ticket, request)
+        self.assertEqual({'probe': 'error', 'reason_code': 'probe_replay_stale'}, answer)
+        self.assertEqual(3, len(stored), 'two new judgments, then the named refusal')
+        self.assertEqual([], self.launches())
 
     # ---- M-identity through the service --------------------------------------------------------------
     def test_identity_a_repeat_observes_the_identity_again_and_sees_a_subscription_that_is_gone(self):
