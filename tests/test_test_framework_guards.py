@@ -134,6 +134,30 @@ class WorkerTests(unittest.TestCase):
         self.assertIn('state.advance()', output)
         self.assertIn('failed', result['outcomes'].values())
 
+    @proves('TF-12')
+    def test_review_B1_thread_start_handshake_and_B2_cached_selectors(self):
+        code, output, result = self.probe('import threading\nt = threading.Thread(target=lambda: None)\nt.start()\nt.join(0)\nself.assertFalse(t.is_alive())', 'unit')
+        self.assertEqual(0, code, output)
+        for selector in ('DefaultSelector', 'SelectSelector', 'PollSelector', 'EpollSelector'):
+            if not hasattr(__import__('selectors'), selector):
+                continue
+            code, output, result = self.probe('import selectors\nwith selectors.' + selector + '() as selector:\n    selector.select(1)', 'unit')
+            self.assertNotEqual(0, code, output)
+            self.assertTrue(result['violations'])
+
+    @proves('TF-10', 'TF-11')
+    def test_review_A9_discovery_hooks_keep_the_declared_guard(self):
+        for layer in ('unit', 'component'):
+            for action in ('socket.socket()', "subprocess.run(['true'])"):
+                with self.subTest(layer=layer, action=action), tempfile.TemporaryDirectory() as folder:
+                    root = Path(folder)
+                    (root / 'tests').mkdir()
+                    (root / 'tests/test_hook.py').write_text('import unittest, socket, subprocess\ndef load_tests(loader, tests, pattern):\n    try:\n        ' + action + '\n    except Exception:\n        pass\n    return tests\n')
+                    code = 'import sys,json; sys.path.insert(0,' + repr(str(ROOT / 'scripts')) + '); from test_framework import inventory_suite; print(json.dumps(inventory_suite("root", {"root:test_hook": ' + repr(layer) + '})))'
+                    result = subprocess.run([sys.executable, '-B', '-c', code], cwd=root, capture_output=True, text=True, timeout=10)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertIn('__import_guard__', result.stdout)
+
 
 class RunnerIntegrationTests(unittest.TestCase):
     def run_fixture(self, body='self.assertEqual(2, 1 + 1)', tagged=True, timeout='600', extra_module=False, malformed=False, layer='scenario', extra_args=(), siblings=False, module_import=''):

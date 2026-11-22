@@ -340,5 +340,122 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('needs: integration', sections['integration-budget'])
 
 
+class ReviewCoreTests(unittest.TestCase):
+    __requirements__ = ('TF-4', 'TF-5', 'TF-7', 'TF-8', 'TF-9', 'TF-14', 'TF-16')
+    __why_not_scenario__ = 'Negative framework fixtures verify metadata and evidence rejection without a product lifecycle.'
+
+    def setUp(self):
+        self.fw = importlib.import_module('test_framework')
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+
+    def module(self, source):
+        import types
+        path = self.root / 'test_values.py'
+        path.write_text(source)
+        module = types.ModuleType('test_values')
+        module.__file__ = str(path)
+        sys.modules[module.__name__] = module
+        self.addCleanup(sys.modules.pop, module.__name__, None)
+        exec(compile(source, str(path), 'exec'), module.__dict__)
+        return module
+
+    def test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls(self):
+        source = "import unittest\nVALUE = 3\nclass Case(unittest.TestCase):\n    EXPECTED = 3\n    def helper(self):\n        return VALUE\n    def setUp(self):\n        self.actual = self.helper()\n    def test_value(self):\n        self.assertEqual(self.EXPECTED, self.actual)\n"
+        def fingerprint(text):
+            return self.fw.dependency_fingerprint(self.module(text).Case('test_value'))
+        baseline = fingerprint(source)
+        self.assertEqual(baseline, fingerprint(source))
+        for changed in (source.replace('VALUE = 3', 'VALUE = 4'), source.replace('EXPECTED = 3', 'EXPECTED = 4'),
+                        source.replace('return VALUE', 'return VALUE + 1'), source.replace('self.actual = self.helper()', 'self.actual = 4')):
+            with self.subTest(source=changed):
+                self.assertNotEqual(baseline, fingerprint(changed))
+
+    def test_A3_dynamic_helpers_need_explicit_source_dependencies(self):
+        source = "import unittest\nclass Case(unittest.TestCase):\n    def helper(self):\n        return 1\n    def test_value(self):\n        self.assertEqual(1, getattr(self, 'helper')())\n"
+        module = self.module(source)
+        self.assertIsNone(self.fw.dependency_fingerprint(module.Case('test_value')))
+        module.Case.__fixture_dependencies__ = (self.root / 'test_values.py',)
+        self.assertIsNotNone(self.fw.dependency_fingerprint(module.Case('test_value')))
+
+    def test_A4_review_records_bind_digest_and_nonempty_revision(self):
+        import hashlib, json
+        record = self.root / 'review.json'
+        record.write_text(json.dumps({'revision': 'reviewed', 'outcome': 'passed'}))
+        checks = {'review:x': {'kind': 'review', 'revision': 'reviewed'}}
+        valid = {'revision': 'reviewed', 'record': str(record), 'sha256': hashlib.sha256(record.read_bytes()).hexdigest(), 'outcome': 'passed'}
+        self.assertEqual({'review:x': 'passed'}, self.fw.registered_outcomes(checks, {'review:x': valid}))
+        for changed in ({**valid, 'record': str(self.root / 'absent')}, {**valid, 'sha256': '0' * 64},
+                        {**valid, 'revision': None}, {**valid, 'outcome': 'failed'}):
+            with self.subTest(record=changed):
+                self.assertEqual('failed', self.fw.registered_outcomes(checks, {'review:x': changed})['review:x'])
+        self.assertEqual('failed', self.fw.registered_outcomes({'review:x': {'kind': 'review'}}, {'review:x': {**valid, 'revision': None}})['review:x'])
+
+    def test_A5_A12_authority_ids_and_EOF_splitter(self):
+        text = '**TF-1 — First.** first statement.\n\n**TF-2 — Second.** final statement.'
+        (self.root / 'REQUIREMENTS-test-framework.md').write_text(text)
+        parsed = self.fw.requirement_statements(text)
+        self.assertEqual({'TF-1', 'TF-2'}, set(parsed))
+        catalogue = {key: {'statement': value, 'source': 'REQUIREMENTS-test-framework.md#' + key} for key, value in parsed.items()}
+        self.assertEqual([], self.fw.validate_sources(self.root, catalogue))
+        self.assertTrue(self.fw.validate_sources(self.root, {}))
+        del catalogue['TF-2']
+        self.assertTrue(any('TF-2' in e for e in self.fw.validate_sources(self.root, catalogue)))
+
+    def test_A6_imported_golden_path_cannot_bypass_helper(self):
+        source = 'from fixtures import GOLDEN_PATH\nself.assertEqual(actual, GOLDEN_PATH.read_text())'
+        self.assertTrue(self.fw.golden_bypasses(source))
+
+    def test_A7_mixed_invocations_cannot_combine(self):
+        row = dict(suite='root', unit='m#0', seconds=1., names=['m.a'], returncode=0)
+        options = dict(layers={'root:m': 'unit'}, stages={'root:m': 'unit'}, jobs=1, elapsed=1., selection=['root:m'])
+        a = self.fw.measurements([row], part=(1, 2), **options)
+        b = self.fw.measurements([{**row, 'unit': 'm#1', 'names': ['m.b']}], part=(2, 2), **options)
+        a['invocation_id'], b['invocation_id'] = 'one', 'two'
+        with self.assertRaisesRegex(ValueError, 'invocation'):
+            self.fw.combine_measurements([a, b])
+
+    def test_A8_incomplete_and_timed_out_modules_do_not_retire_debt(self):
+        row = dict(suite='root', unit='m#0', seconds=1., names=['m.a'], returncode=0, timed_out=True)
+        options = dict(layers={'root:m': 'unit'}, stages={'root:m': 'unit'}, jobs=1, elapsed=1., selection=['root:m'],
+                       budget_debt={'modules': {'root:m': 10.}})
+        self.assertEqual([], self.fw.measurements([row], **options)['debt_retirement_required'])
+        row.update(timed_out=False, returncode=1)
+        self.assertEqual([], self.fw.measurements([row], **options)['debt_retirement_required'])
+
+    def test_A11_empty_method_rationale_falls_back_to_class(self):
+        fw = self.fw
+        class Case(unittest.TestCase):
+            __why_not_scenario__ = 'class fixture rationale'
+            @fw.requirements('TF-1')
+            def test_value(self):
+                pass
+        self.assertEqual(Case.__why_not_scenario__, fw.describe_test(Case('test_value'))['rationale'])
+        Case.test_value.__why_not_scenario__ = None
+        self.assertEqual(Case.__why_not_scenario__, fw.describe_test(Case('test_value'))['rationale'])
+
+    def test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins(self):
+        for folder in ('packages/codex-agents/native-package', 'packages/claude-agents/src', 'scripts', 'packages/codex-agents/scripts'):
+            (self.root / folder).mkdir(parents=True, exist_ok=True)
+        for file in ('setup.sh', 'scripts/install.py', 'scripts/setup-wizard.py', 'packages/codex-agents/scripts/install.py'):
+            (self.root / file).write_text('')
+        requirements = self.root / 'requirements-test.txt'
+        valid = 'hypothesis==6.170.17 --hash=sha256:' + 'a' * 64 + '\nsortedcontainers==2.4.0 --hash=sha256:' + 'b' * 64 + '\n'
+        requirements.write_text(valid)
+        self.assertEqual([], self.fw.validate_dependencies(self.root))
+        for file in ('packages/claude-agents/src/planted.py', 'scripts/install.py'):
+            path = self.root / file
+            path.write_text('import hypothesis\n')
+            self.assertTrue(any(file in e for e in self.fw.validate_dependencies(self.root)))
+            path.write_text('')
+        (self.root / 'packages/claude-agents/src/planted.py').unlink()
+        (self.root / 'packages/claude-agents/src').rmdir()
+        self.assertTrue(self.fw.validate_dependencies(self.root))
+        for invalid in ('hypothesis==6.170.17', 'hypothesis>=6', valid.replace(' --hash=sha256:' + 'b' * 64, '')):
+            requirements.write_text(invalid)
+            self.assertTrue(self.fw.validate_dependencies(self.root))
+
+
 if __name__ == '__main__':
     unittest.main()
