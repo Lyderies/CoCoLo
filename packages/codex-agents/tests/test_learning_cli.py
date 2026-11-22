@@ -53,6 +53,7 @@ from tests.learning_support import (
     admit_provider,
     fake_provider_tools,
     generate_test_owner_key,
+    OWNER_SIGNATURE_NAMESPACE,
     trusted_tools,
     sign_owner_payload,
     result,
@@ -440,12 +441,31 @@ class LearningCliTests(unittest.TestCase):
             directory = Path(self.temporary.name) / "replacement"
             directory.mkdir()
             key, public = generate_test_owner_key(directory)
-            self.assertNotEqual(before["fingerprint"], None)
+            self.assertNotIn("fingerprint", before)  # D36: status shows no key fingerprint
+            self.assertIsNone(before["last_replaced_at_ms"])
+            statement = b"owner statement"
+            allowed = self.state_root / "owner-allowed-signers"
+
+            def accepted(private: Path, name: str) -> bool:
+                signature = sign_owner_payload(private, statement, name)
+                try:
+                    return subprocess.run(
+                        ["ssh-keygen", "-Y", "verify", "-f", str(allowed), "-I", "codex-agents-owner",
+                         "-n", OWNER_SIGNATURE_NAMESPACE, "-s", str(signature)],
+                        input=statement, capture_output=True, check=False).returncode == 0
+                finally:
+                    signature.unlink(missing_ok=True)
+
+            self.assertTrue(accepted(self.owner_private_key, "old-before"))
             replaced = self._run(
                 "learning-replace-owner-key", "--public-key", f"{key}.pub"
             )["owner_key"]
             self.assertEqual((replaced["state"], replaced["replacements"]), ("ok", 1))
-            self.assertNotEqual(replaced["fingerprint"], before["fingerprint"])
+            self.assertNotIn("fingerprint", replaced)
+            # L2.2: the replacement really changed the key: the old key's signature is refused, the new one's accepted.
+            self.assertIsInstance(replaced["last_replaced_at_ms"], int)
+            self.assertTrue(accepted(key, "new-after"))
+            self.assertFalse(accepted(self.owner_private_key, "old-after"))
             after = self._run("learning-status")["owner_key"]
             self.assertEqual(after, replaced)
             fields = public.split()
@@ -453,6 +473,127 @@ class LearningCliTests(unittest.TestCase):
                 (self.state_root / "owner-allowed-signers").read_text(),
                 f"codex-agents-owner {fields[0]} {fields[1]}\n",
             )
+        finally:
+            self._stop_collector()
+
+    def test_status_and_key_replacement_carry_no_private_value_anywhere(self) -> None:
+        # Review 040-screens-r1 MED-1 (owner decision 36): a sentinel scan over the whole output (stdout and
+        # stderr, not one field) of status and the replacement, and over every saved file that is not the
+        # ledger or the signer file (which hold the public key by design): no fingerprint, key text or home path.
+        try:
+            directory = Path(self.temporary.name) / "replacement"
+            directory.mkdir()
+            key, public = generate_test_owner_key(directory)
+            sentinels = {"home path": str(Path.home())}
+            for name, pub in (("old", self.owner_private_key.with_suffix(".pub")), ("new", Path(f"{key}.pub"))):
+                listed = subprocess.run(["ssh-keygen", "-lf", str(pub)], capture_output=True, text=True, check=True).stdout
+                fingerprint = listed.split()[1]
+                self.assertTrue(fingerprint.startswith("SHA256:"), listed)
+                sentinels[f"{name} fingerprint"] = fingerprint
+                sentinels[f"{name} fingerprint body"] = fingerprint.split(":", 1)[1]
+                sentinels[f"{name} key text"] = pub.read_text().split()[1]
+
+            def output(*command: str) -> str:
+                completed = subprocess.run(
+                    [sys.executable, str(ORCHESTRATION_ROOT / "cli.py"), command[0], "--state-root", str(self.state_root),
+                     "--project-root", str(self.project), *command[1:]],
+                    text=True, capture_output=True, env=self._environment(), check=False)
+                self.assertEqual(0, completed.returncode, completed.stderr or completed.stdout)
+                return completed.stdout + "\n--stderr--\n" + completed.stderr
+
+            reports = {"status before": output("learning-status"),
+                       "replacement": output("learning-replace-owner-key", "--public-key", f"{key}.pub"),
+                       "status after": output("learning-status")}
+            for report, text in reports.items():
+                for name, value in sentinels.items():
+                    with self.subTest(report=report, sentinel=name):
+                        self.assertNotIn(value, text)
+                        self.assertNotIn("fingerprint", json.loads(text.split("\n--stderr--\n")[0]).get("owner_key", {}))
+            saved = [path for path in self.state_root.rglob("*")
+                     if path.is_file() and path.name != "owner-allowed-signers"
+                     and not path.name.endswith((".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3"))
+                     and "sqlite" not in path.name]
+            self.assertTrue(saved)
+            for path in saved:
+                data = path.read_bytes()
+                for name, value in sentinels.items():
+                    with self.subTest(saved=path.name, sentinel=name):
+                        self.assertNotIn(value.encode(), data)
+            # The owner's own terminal output still names the key where it matters: status says whether a key is
+            # set and how often it was replaced, which is what the owner needs to proceed or troubleshoot.
+            owner_key = json.loads(reports["status after"].split("\n--stderr--\n")[0])["owner_key"]
+            self.assertEqual(("ok", 1), (owner_key["state"], owner_key["replacements"]))
+            self.assertIsInstance(owner_key["last_replaced_at_ms"], int)
+        finally:
+            self._stop_collector()
+
+    def _replace_key_report(self, backend_report: dict) -> tuple[int, str]:
+        """learning-replace-owner-key in this process against a backend that answers with backend_report."""
+
+        class Backend:
+            def replace_owner_key(self, public_key, **_ignored):
+                return dict(backend_report)
+
+            def close(self, *_ignored, **_also_ignored):
+                pass
+
+        public = Path(self.temporary.name) / "replacement-key.pub"
+        public.write_text("ssh-ed25519 AAAAREPLACEMENTKEY test-only\n")
+        stdout = io.StringIO()
+        arguments = ["cli.py", "learning-replace-owner-key", "--state-root", str(self.state_root),
+                     "--project-root", str(self.project), "--public-key", str(public)]
+        with mock.patch.object(sys, "argv", arguments), contextlib.redirect_stdout(stdout), \
+                mock.patch("cli._learning_ledger", return_value=(Backend(), "project")):
+            code = cli_main()
+        return code, stdout.getvalue()
+
+    def test_replace_key_report_has_exactly_the_three_allowed_fields(self) -> None:
+        # Review 040-screens-r2 MED-2 (owner decision 36): the report is a whitelist, so a backend that grows or
+        # leaks a field (a fingerprint, key text, a path, a passphrase) never reaches the owner's terminal.
+        sentinels = ("SHA256:SENTINELFINGERPRINT0123", "AAAASENTINELKEYTEXT", "sentinel-passphrase-value",
+                     "/srv/sentinel/owner-key", "-----BEGIN OPENSSH PRIVATE KEY-----SENTINEL")
+        extra = {"fingerprint": sentinels[0], "public_key": sentinels[1], "passphrase": sentinels[2],
+                 "path": sentinels[3], "private_key": sentinels[4], "signer_line": sentinels[1]}
+        code, text = self._replace_key_report(
+            {"state": "ok", "replacements": 2, "last_replaced_at_ms": 1234, **extra})
+        self.assertEqual(0, code, text)
+        report = json.loads(text)
+        self.assertEqual({"ready", "owner_key"}, set(report))
+        self.assertEqual({"state", "replacements", "last_replaced_at_ms"}, set(report["owner_key"]))
+        self.assertEqual({"state": "ok", "replacements": 2, "last_replaced_at_ms": 1234}, report["owner_key"])
+        for value in sentinels:
+            self.assertNotIn(value, text)
+
+    def test_replace_key_report_missing_a_field_is_a_clean_error_not_a_traceback(self) -> None:
+        # Review 040-screens-r2 LOW: a backend that omits a whitelisted field gives the CLI's error report.
+        code, text = self._replace_key_report({"state": "ok", "replacements": 1})
+        self.assertEqual(2, code, text)
+        report = json.loads(text)
+        self.assertIs(False, report["ready"])
+        self.assertIn("error", report)
+        self.assertNotIn("Traceback", text)
+
+    def test_key_replacement_output_carries_no_private_key_text_or_passphrase(self) -> None:
+        # Review 040-screens-r2 LOW: the whole-output scan also seeds the private key's text and a passphrase
+        # (in the environment the CLI runs in); neither may appear in the replacement's stdout or stderr.
+        try:
+            directory = Path(self.temporary.name) / "private-scan"
+            directory.mkdir()
+            key, _public = generate_test_owner_key(directory)
+            private_body = "".join(key.read_text().splitlines()[1:-1])
+            self.assertGreater(len(private_body), 40)
+            passphrase = "sentinel-passphrase-value-r2"
+            completed = subprocess.run(
+                [sys.executable, str(ORCHESTRATION_ROOT / "cli.py"), "learning-replace-owner-key",
+                 "--state-root", str(self.state_root), "--project-root", str(self.project),
+                 "--public-key", f"{key}.pub"],
+                text=True, capture_output=True,
+                env=self._environment(SSH_KEY_PASSPHRASE=passphrase, ORCH_OWNER_PASSPHRASE=passphrase),
+                check=False)
+            self.assertEqual(0, completed.returncode, completed.stderr or completed.stdout)
+            output = completed.stdout + completed.stderr
+            for value in (private_body, passphrase, str(key)):
+                self.assertNotIn(value, output)
         finally:
             self._stop_collector()
 

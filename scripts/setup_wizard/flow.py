@@ -1283,7 +1283,7 @@ class Wizard:
         return True
 
     def already_attested(self) -> bool:
-        """S4-3: an update (not an answers file) skips attest.py only when every enabled provider is
+        """S4-3 (owner decision 37): an update or an answers-file re-run skips attest.py only when every enabled provider is
         observed now and the status says its current account is attested (steps.billing_current)."""
         try:
             path = Path(self.project) / ".codex" / "orchestration" / "provider-routing.json"
@@ -1310,8 +1310,18 @@ class Wizard:
         self.begin_step(6)
         if self.no_cli(6, "The project CLI is not installed, so attestation is not possible yet."):
             return
-        if self.update and self.answers is None and self.already_attested():
+        # Owner decision 37: an update and an answers-file re-run skip a signature that is still current;
+        # the answers file's billing_sign_again asks for a new one, and the step-by-step menu offers it.
+        again = self.answers is not None and self.answers.get("billing_sign_again") is True
+        signed = False
+        if (self.update and not again) or (self.mode == "full" and not self.update):
+            signed = self.already_attested()
+        if self.update and not again and signed:
             t.list_add("ok", "Every enabled provider's current account is already attested; no passphrase needed")
+            if self.answers is not None:
+                t.list_sub('To sign again, set "billing_sign_again": true in the answers file.')
+            else:
+                t.list_sub('To sign again, run ./setup.sh, choose Configure, then "Re-run the billing attestation only".')
             self.mark_step(6, "ok", "already attested")
             return
         t.body("No child agent runs until you confirm that each account cannot be charged beyond its subscription. "
@@ -1320,10 +1330,20 @@ class Wizard:
                "program, including an AI agent, from signing in your name. The next screens belong to attest.py; this "
                "wizard will not touch them.")
         if self.mode == "full":
-            choice = self.ask(["Start the attestation", "Skip for now", "Quit"], implied=True)
-            if choice == 1:
-                self.mark_step(6, "skip", "not attested yet")
-                return
+            if signed:
+                t.body("This project's billing statements are signed and current for every enabled provider.")
+                # Owner decision 37 (review 040-screens-r1 MED-2): signing again is opt-in, so Keep is the first
+                # entry, the one a bare Enter and every no-menu answer (ask's index 0) takes.
+                choice = self.ask(["Keep the current signature", "Sign again", "Quit"], implied=True)
+                if choice == 0:
+                    self.mark_step(6, "ok", "already attested")
+                    return
+                choice = 0 if choice == 1 else choice  # Sign again goes on to attest.py like Start the attestation
+            else:
+                choice = self.ask(["Start the attestation", "Skip for now", "Quit"], implied=True)
+                if choice == 1:
+                    self.mark_step(6, "skip", "not attested yet")
+                    return
         else:
             choice = t.menu(0, ["Start the attestation", "Back to the main menu", "Quit"])
             if choice == 1:

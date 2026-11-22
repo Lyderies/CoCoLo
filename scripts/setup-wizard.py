@@ -38,7 +38,7 @@ class AnswersRefused(Exception):
 
 
 _ANSWER_KEYS = ("project", "operational_checks", "providers", "commit", "commands_rule", "codex_profile",
-                "move_records", "upgrade_records")
+                "move_records", "upgrade_records", "billing_sign_again")
 _PROVIDER_KEYS = ("codex", "claude", "claude_models", "bridge")
 
 
@@ -47,7 +47,8 @@ def read_answers(path: str) -> dict:
 
     Required: project, providers (codex, claude, claude_models, bridge), commit, commands_rule,
     move_records and upgrade_records; operational_checks (a non-empty path) unless the project already
-    has one; codex_profile when bridging is on.
+    has one; codex_profile when bridging is on. Optional: billing_sign_again (true signs the billing
+    statements again even when this project's attestation is already signed and current).
     """
     def refuse(key: str, why: str) -> AnswersRefused:
         return AnswersRefused(f"answers file: {key}: {why}. Nothing was changed.")
@@ -95,7 +96,7 @@ def read_answers(path: str) -> dict:
         steps.provider_routing(providers["codex"], providers["claude"], models, providers["bridge"])
     except steps.ChoiceError as exc:
         raise refuse("providers", str(exc)) from None
-    for key in ("commit", "commands_rule", "move_records", "upgrade_records"):
+    for key in ("commit", "commands_rule", "move_records", "upgrade_records", "billing_sign_again"):
         if key in answers and type(answers[key]) is not bool:
             raise refuse(key, "must be true or false")
     if providers["bridge"] == "on" and answers.get("codex_profile") not in ("create", "skip"):

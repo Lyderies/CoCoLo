@@ -468,7 +468,7 @@ def status_client(state_root, project_root):
     report = {'ready': False, 'active': False, 'client_failures': {},
               'ingestion': _status_ingestion_unavailable(),
               'provider_attestations': {p: {'state': 'unavailable'} for p in ('codex', 'claude')},
-              'owner_key': {'state': 'unavailable', 'fingerprint': None,
+              'owner_key': {'state': 'unavailable',
                             'replacements': None, 'last_replaced_at_ms': None},
               # Whether this project's learning history still has to move to its own store.
               'learning_migration': 'unavailable',
@@ -543,7 +543,8 @@ def status_client(state_root, project_root):
             report['container_holds'] = container_holds(Path(state.root) / 'projects' / project_id / 'launches')
         enroll_clients(state, project_root, None, account=endpoint)
         owner = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=1).owner_key()
-        report['owner_key'] = {name: owner[name] for name in ('state', 'fingerprint', 'replacements', 'last_replaced_at_ms')}
+        # D36: status is read by AI helpers, so it says whether a key is configured, never which one.
+        report['owner_key'] = {name: owner[name] for name in ('state', 'replacements', 'last_replaced_at_ms')}
         owner_ready = True
         if report.get('account_services') == 'starting':
             # O10 ST2: health was read before the account came up; read it once more so a ready

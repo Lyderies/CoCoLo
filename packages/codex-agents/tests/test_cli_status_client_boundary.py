@@ -122,7 +122,8 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         report = json.loads(stdout)
         self.assertTrue(report['ready'])
         self.assertTrue(report['active'])
-        self.assertEqual(original_key, report['owner_key'])
+        self.assertEqual({k: v for k, v in original_key.items() if k != 'fingerprint'}, report['owner_key'])
+        self.assertNotIn('fingerprint', report['owner_key'])  # D36
         self.assertEqual(self.started, report['started_at_ms'])
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, report['collector_runtime_digest'])
         self.assertEqual('active', report['ingestion']['registered_project_state'])
@@ -287,7 +288,8 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         self.assertFalse(report['ready'])
         self.assertFalse(report['active'])
         self.assertEqual('status_collector_transport_unavailable', report['reason_code'])
-        self.assertEqual(original_key, report['owner_key'])
+        self.assertEqual({k: v for k, v in original_key.items() if k != 'fingerprint'}, report['owner_key'])
+        self.assertNotIn('fingerprint', report['owner_key'])  # D36
         self.assertEqual('unavailable', report['ingestion']['freshness']['state'])
         self.assertEqual(['account.owner_key'], [r['operation'] for r in self.requests])
         self.assertNotIn('inspected a database', stdout + stderr)
@@ -304,7 +306,7 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         report = json.loads(stdout)
         self.assertFalse(report['ready'])
         self.assertEqual('unavailable', report['owner_key']['state'])
-        self.assertIsNone(report['owner_key']['fingerprint'])
+        self.assertNotIn('fingerprint', report['owner_key'])
         self.assertEqual('status_account_unavailable', report['reason_code'])
         self.assertEqual([identity], [r['project_id'] for r in self.requests])
 

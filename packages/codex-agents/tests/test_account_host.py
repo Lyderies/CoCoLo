@@ -158,7 +158,7 @@ class AccountHostTests(unittest.TestCase):
         status = self.cli('learning-status')
         self.assertTrue(status['ready'], status)
         self.assertEqual('ok', status['owner_key']['state'])
-        self.assertTrue(status['owner_key']['fingerprint'].startswith('SHA256:'))
+        self.assertNotIn('fingerprint', status['owner_key'])  # D36: status carries no key fingerprint
         self.assertTrue(CollectorClient(self.paths.socket, timeout=2).health(root)['ingestion'])
 
         endpoint = self.account_endpoint(root)
@@ -242,7 +242,10 @@ class AccountHostTests(unittest.TestCase):
         self.cli(*base, '--signature', str(signature), project=root, terminal=True)
         after = self.cli('learning-status', project=root, terminal=True)
         self.assertEqual('ok', after['owner_key']['state'], after)
-        self.assertIsNotNone(after['owner_key']['fingerprint'])
+        self.assertNotIn('fingerprint', after['owner_key'])
+        self.assertEqual({'state', 'replacements', 'last_replaced_at_ms'}, set(after['owner_key']))  # whitelist, D36
+        self.assertEqual(0, after['owner_key']['replacements'])  # a first key: never replaced
+        self.assertIsNone(after['owner_key']['last_replaced_at_ms'])
 
     def test_a_key_reader_without_write_access_and_a_stopped_collector_get_nothing(self):
         root, project_id = self.projects[0]

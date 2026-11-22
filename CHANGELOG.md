@@ -22,6 +22,18 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   when `podman version` shows a client and server of at least 4.0 (an unverified minimum); otherwise the launch
   goes without it and its checks say why (`StartedContainer.timeout_backstop`). Containers stay off as shipped.
   Hung-stop worst case measured with the real watchdog over a podman-shaped script: exit 4 after 14.3 s.
+- Package 0.8.47 (screens and re-sign): Owner decisions 36 and 37 (screens and billing re-runs). Screens show the owner what is needed to proceed or
+  troubleshoot (the owner key shown while signing, the rule file path and the remove command), but nothing saved,
+  logged, reported or read by an AI helper carries a private value: `learning-status` and the owner-key
+  replacement report no longer include the owner key fingerprint (they say whether a key is configured and how
+  often it was replaced). An answers-file re-run (`./setup.sh --answers`) now skips signing the billing
+  statements when this project's attestation is already signed and current, as an update does; the new answer
+  `"billing_sign_again": true` signs again, and the step-by-step menu offers "Keep the current signature" (the
+  default, so a bare Enter never signs) or "Sign again" when the signature is current, and an update without an answers file says how to sign again.
+  Also in 0.8.47 (screens and re-sign): Keep is the default when a signature is current; a straight Set up keeps a current
+  signature; the replace-key report has exact fields. Known LOWs (screens r3): the multiline private-key scan in
+  test_learning_cli (lines 583-596) can miss a leak; already_attested fails open to signing on transient errors
+  (flow.py 1293-1305); billing_sign_again on fresh full runs is unverified; the register.log test is vacuous if the log is absent.
 - Package 0.8.46 (billing admission safety fix): a billing probe that is answered from a recent probe record
   ("probe: reused") is now judged again before it is answered. Before, any recent probe record skipped the
   judgment, so a probe that had seen paid usage (overage in use) was answered "reused" instead of being refused
