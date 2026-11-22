@@ -27,6 +27,7 @@ LOCK = ".claude/claude-agents/install.lock"
 _MODULES = ("__init__.py", "contracts.py", "validation.py")
 _FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _LIMIT = 262144
+_CATALOGUE_LIMIT = 2_097_152  # previous-releases.json only; it grows with every release
 _CONTRACTS = {
     "researcher": "Cite current primary evidence and preserve uncertainty.",
     "planner": "Trace each step to accepted requirements and observable exits.",
@@ -137,7 +138,7 @@ def _parent(root: int, relative: str, create: bool = False) -> tuple[int, str]:
         raise
 
 
-def _read(root: int, relative: str, *, with_mode: bool = False):
+def _read(root: int, relative: str, *, with_mode: bool = False, limit: int = _LIMIT):
     try:
         parent, name = _parent(root, relative)
     except FileNotFoundError:
@@ -150,11 +151,11 @@ def _read(root: int, relative: str, *, with_mode: bool = False):
             return None
         try:
             info = os.fstat(descriptor)
-            if not stat.S_ISREG(info.st_mode) or info.st_size > _LIMIT:
+            if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
                 _fail("unsafe_file")
             result = b""
-            while len(result) <= _LIMIT:
-                chunk = os.read(descriptor, min(65536, _LIMIT + 1 - len(result)))
+            while len(result) <= limit:
+                chunk = os.read(descriptor, min(65536, limit + 1 - len(result)))
                 if not chunk:
                     return (result, stat.S_IMODE(info.st_mode)) if with_mode else result
                 result += chunk
@@ -385,7 +386,7 @@ def released_bundles(source_root: Path) -> tuple[Bundle, ...]:
     root = None
     try:
         root = _root(source_root)
-        raw = _read(root, "previous-releases.json")
+        raw = _read(root, "previous-releases.json", limit=_CATALOGUE_LIMIT)
         if raw is None:
             return ()
         records = json.loads(raw.decode())["releases"]
