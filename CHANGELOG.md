@@ -4,18 +4,24 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
-- Package 0.8.47 (container_stop watchdog): the detached watchdog now checks the answer of its container stop.
-  A refused or failed stop, or an exception, is retried (at most 4 tries, pauses of 1, 2 and 4 s) and the tree
-  is ended only once the container is gone or the tries are used up; before, one failed try abandoned the
-  container. The real-watchdog test now waits until the watchdog process exists instead of sleeping 1 s (the
-  watchdog starts after the container runs; the sleep raced it under load). The whole stop phase has one time budget
-  and a stop not proven gone gets one last try after the tree is ended and a nonzero exit. Round 3 (owner decision
-  46): each try runs as a process of its own (`process_tree.py --stop-container`) that is killed with its whole
-  process group at its timeout, so no thread is abandoned and two stops never overlap; one monotonic clock covers
-  the failure path, fixed whatever the container's grace (11 s for the tries, each told a grace of at most 7 s,
-  1 s reserved for ending the tree, a last try of up to 5 s with no grace: 17 s at most, measured 16.3 s with
-  grace 1, 10 and 60). Tests include the real watchdog script over a podman-shaped client, with
-  its exit status and the processes left.
+- Package 0.8.47 (container_stop, owner decision 49): the container stop tool owns all cleanup and the detached
+  watchdog is a thin dead man's switch. The stop tool (`container_runtime`, used by the supervisor's stop action,
+  C4's recovery, the HM-1 health check and the watchdog) now guarantees: every podman command runs in a process
+  group of its own under a small guard that kills the group when the stop tool's process dies (SIGKILL
+  included), and the stop tool kills and reaps the group when the command ends, so a podman child that outlives
+  its leader no longer survives; one absolute deadline covers every command, wait and reap of a stop and a stop
+  that runs out of time answers `deadline` (a gone container is still only the OS's word); the grace is capped by
+  the time left (less a 4 s margin for the kill, the removal and asking the OS); a group that cannot be killed or
+  reaped (`podman_cleanup_failed`) or a removal podman refuses is reported, never swallowed. The watchdog
+  (`process_tree.py --container`), only when its service has died, makes ONE call of the stop tool (the run's
+  labels checked first) inside one fixed total of 17 s (2 s of it kept for ending the tree), writes its result
+  (`<token>.watchdog` beside the run's journal entry: owner-only, flushed, removed with the entry) and exits 0
+  (gone, tree ended), 2 (not gone), 3 (tree end not confirmed: a failed `ps` is retried, then reported, never
+  "empty") or 4 (the total ran out). The round-3 machinery is gone (per-try processes, retries, back-offs, the
+  last try, `--stop-container`). Backstop: the run's deadline is also podman's own `create --timeout`, set only
+  when `podman version` shows a client and server of at least 4.0 (an unverified minimum); otherwise the launch
+  goes without it and its checks say why (`StartedContainer.timeout_backstop`). Containers stay off as shipped.
+  Hung-stop worst case measured with the real watchdog over a podman-shaped script: exit 4 after 14.3 s.
 
 - Package 0.8.45 (Phase 1.2, core API round 6): the owner-facing core API (TM0) joins the 0.8.44 base after six
   review rounds (owner decision 34, no seventh). Fixed with tests that failed first: a single-digit price ("$5")

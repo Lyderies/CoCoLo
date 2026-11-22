@@ -1000,7 +1000,7 @@ class StopToolProcessTests(unittest.TestCase):
         self.assertEqual("deadline", result.outcome, result)
         self.assertLess(seconds, 3.5)  # the reap is inside the deadline, not after it
         self.assertGreater(seconds, 1.0)
-        self.assertEqual(1, len(self.pids("call")), "a second command started")
+        self.assertEqual(2, len(self.pids("call")), "a command started after the stop's")  # inspect, then stop
         for pid in self.pids("call") + self.pids("child"):
             self.assertTrue(wait_for(lambda: not pid_alive(pid), 3), f"process {pid} outlived the stop")
 

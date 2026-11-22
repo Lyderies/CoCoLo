@@ -23,7 +23,10 @@ mode only (behind C2's switch; the process mode is unchanged):
   (`service_close`) and those gone settled; another instance's entries are left to recovery (C4).
 - C3-6 The detached watchdog, retargeted: in container mode it stops the container through
   `container_runtime.stop` when the service that launched it has died, and leaves it to the live
-  service otherwise.
+  service otherwise. Decision 49 (ANALYSIS-0.4.0-container-stop.md): the watchdog is a thin dead man's switch
+  (ONE call of the stop tool inside a 17 s total, a written result, the run label checked first, distinct exit
+  codes, nothing retried, no helper process or thread) and the stop tool owns every cleanup (CS-1..CS-6, tested in
+  test_container_runtime.py and, for a watchdog killed mid-stop, here).
 
 The real-podman tests run only with podman, its machine and python:3.12-slim present (never pulled);
 they create containers named `cocolo-test-*` with a per-test project label and remove exactly those.

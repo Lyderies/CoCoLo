@@ -58,30 +58,22 @@ WATCHDOG_INTERVAL_SECONDS = 0.5
 WATCHDOG_IDENTIFY_SECONDS = 5
 WATCHDOG_READY_SECONDS = 10
 WATCHDOG_READY = b"ready\n"
-# C3 (decision 46): an orphaned watchdog stops the container through the container primitive, each try as
-# a PROCESS OF ITS OWN (`process_tree.py --stop-container`, which runs container_runtime's stop) with its
-# own kill-on-timeout of the whole process group; no thread is ever abandoned, so two tries never overlap
-# and nothing outlives the watchdog. One FIXED monotonic clock covers the whole failure path, from the moment
-# the service is found dead, whatever the container's grace: WATCHDOG_STOP_BUDGET_SECONDS for the tries (at most
-# WATCHDOG_STOP_ATTEMPTS, with the pauses below; a try still running at the end is killed), then the tree is
-# ended (WATCHDOG_TERMINATE_RESERVE_SECONDS reserved for it, its own bound MAX_KILL_ROUNDS rounds), then one
-# last try of up to WATCHDOG_LAST_STOP_SECONDS (never past the end of the clock). Total at most
-# 11 + 1 + 5 = 17 s, under the 20 s allowance, for ANY grace (see `watchdog_stop_plan`).
-# The grace a try may use is capped to what the budget leaves it: its grace is the smaller of the container's
-# and WATCHDOG_STOP_BUDGET_SECONDS - WATCHDOG_STOP_GRACE_MARGIN_SECONDS (7 s: the margin is what the kill, the
-# removal and asking the OS "gone" need after the grace), and the last try is a kill with no grace at all, so
-# a default grace of 10 s is cut to 7 s here rather than the stop being killed in its grace.
-WATCHDOG_STOP_BUDGET_SECONDS = 11.0
-WATCHDOG_STOP_GRACE_MARGIN_SECONDS = 4.0
-WATCHDOG_TERMINATE_RESERVE_SECONDS = 1.0
-WATCHDOG_LAST_STOP_SECONDS = 5.0
-WATCHDOG_STOP_ATTEMPTS = 4
-WATCHDOG_STOP_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
-# After a stop process is killed, reaping it waits at most this long.
-STOP_PROCESS_REAP_SECONDS = 2.0
-# The stop process is started like the watchdog itself (host_paths.PYTHON_ISOLATION_FLAGS, repeated here: this file
-# runs as a standalone standard-library script).
-STOP_PROCESS_FLAGS = ("-I", "-B", "-S", "-X", "pycache_prefix=/dev/null")
+# C3 (decision 49): the detached watchdog is a thin dead man's switch. Only when the service that started it has
+# died, it calls the container stop tool (`container_runtime.ContainerRuntime.stop`, which owns every cleanup of
+# the processes it starts) ONCE, in this process and thread, under one fixed monotonic clock for the whole
+# failure path: WATCHDOG_STOP_TOTAL_SECONDS from the moment the service is found dead. The stop gets the time up
+# to that clock less WATCHDOG_TERMINATE_RESERVE_SECONDS (it caps its own grace by the time it has, see the stop
+# tool); the tree is then ended inside what is left. There is no retry loop, no helper process and no thread: what
+# is not gone afterwards is finished by the restarted service's recovery, which asks the OS again. The result is
+# written (`write_json_record`) and the exit status tells what happened.
+WATCHDOG_STOP_TOTAL_SECONDS = 17.0
+WATCHDOG_TERMINATE_RESERVE_SECONDS = 2.0
+# Exit statuses of a watchdog that found its service dead (1 stays "could not take the container on": an
+# exception before it watched anything). 0: the container proven gone and the tree ended.
+WATCHDOG_EXIT_GONE = 0
+WATCHDOG_EXIT_NOT_GONE = 2  # the stop answered but the container is not proven gone (or its call failed)
+WATCHDOG_EXIT_TREE_UNCONFIRMED = 3  # the container is gone but the tree's end is not confirmed
+WATCHDOG_EXIT_DEADLINE = 4  # the total ran out first
 # Kill rounds: each takes a fresh snapshot, adopts what the tree started since and
 # kills every live tracked process, until a round finds none left alive.
 MAX_KILL_ROUNDS = 5
@@ -131,8 +123,9 @@ Table = dict[int, int]
 Record = tuple[int, int, str, bool]
 
 
-def process_table() -> Table | None:
-    """This user's pids and their listed parents from a fixed-path `ps`; None when unavailable."""
+def process_table(timeout: float | None = None) -> Table | None:
+    """This user's pids and their listed parents from a fixed-path `ps`; None when unavailable.
+    `timeout` (default SNAPSHOT_TIMEOUT_SECONDS) is how long the listing may take."""
 
     path = next((candidate for candidate in PS_PATHS if os.path.isfile(candidate)), None)
     if path is None:
@@ -147,7 +140,7 @@ def process_table() -> Table | None:
             env=PS_ENVIRONMENT,
         ) as lister:
             try:
-                output, _ = lister.communicate(timeout=SNAPSHOT_TIMEOUT_SECONDS)
+                output, _ = lister.communicate(timeout=SNAPSHOT_TIMEOUT_SECONDS if timeout is None else timeout)
             except subprocess.TimeoutExpired:
                 lister.kill()
                 lister.communicate()
@@ -898,20 +891,42 @@ class ProcessTree:
         record = self._record(self.root)
         return record is None or record[3]
 
-    def terminate(self) -> None:
+    def _listing(self, deadline: float | None) -> Table | None:
+        """A process listing. With a deadline (the container watchdog's) a failed one is asked again, within it:
+        the answer is None only when it could not be had in time (CS-6)."""
+        if deadline is None:
+            return process_table()
+        for attempt in range(SNAPSHOT_RETRY_ATTEMPTS):
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return None
+            if attempt:
+                time.sleep(min(SNAPSHOT_RETRY_PAUSE_SECONDS, left))
+            table = process_table(min(SNAPSHOT_TIMEOUT_SECONDS, left))
+            if table is not None:
+                return table
+        return None
+
+    def terminate(self, deadline: float | None = None) -> bool:
         """Kill every tracked process in rounds, each verified just before its signal.
 
         A group is killed only through a verified leader whose record shows it
         leads that group: the root, whose group is its own for life, or another
         tracked process. Nothing is stopped, so nothing is ever left stopped.
+
+        True only when a round after the first signals found nothing alive from a listing that
+        succeeded; a failed listing, rounds used up, or a `deadline` (monotonic) reached first
+        is False, never "tree empty".
         """
 
         if not self.identified:
-            return
+            return False
         for round_number in range(MAX_KILL_ROUNDS):
             if round_number:
                 time.sleep(KILL_ROUND_PAUSE_SECONDS)
-            table = process_table()
+            if deadline is not None and time.monotonic() >= deadline:
+                return False
+            table = self._listing(deadline)
             if table is not None:
                 self.update(table)
             else:
@@ -919,7 +934,7 @@ class ProcessTree:
             records = {pid: self._record(pid) for pid in sorted(self.tracked)}
             running = [pid for pid, record in records.items() if record and not record[3]]
             if round_number and not running:
-                return
+                return table is not None
             for group, record in records.items():
                 if record is None or record[1] != group or _excluded_group(group):
                     continue
@@ -933,7 +948,8 @@ class ProcessTree:
                         os.kill(pid, signal.SIGKILL)
             # Without a snapshot nothing new can be adopted.
             if table is None:
-                return
+                return False
+        return False
 
 
 def await_ready(stream, seconds: float) -> bool:
@@ -954,20 +970,17 @@ def await_ready(stream, seconds: float) -> bool:
     return received == WATCHDOG_READY
 
 
-def write_cleanup_marker(path: str, bridge_run_id: str, pid: int, birth: str) -> bool:
-    """Record, owner-only and atomically, that the watched tree of this child is confirmed empty.
+def write_json_record(path: str, body: dict) -> bool:
+    """Write `body` as one owner-only JSON file, atomically and flushed (the file, then its folder).
 
-    A project service's launch journal reads it before it settles a run whose
-    service was lost. Any failure leaves no marker, which is never evidence.
-    """
+    False on any failure, leaving no file (and no temporary one)."""
     directory, name = os.path.split(path)
-    body = json.dumps({"version": 1, "bridge_run_id": bridge_run_id, "pid": pid, "birth": birth,
-                       "confirmed": True}, sort_keys=True, separators=(",", ":")).encode("ascii")
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("ascii")
     temporary = os.path.join(directory, ".%s.%d.tmp" % (name, os.getpid()))
     try:
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
         try:
-            os.write(descriptor, body)
+            os.write(descriptor, encoded)
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
@@ -984,35 +997,40 @@ def write_cleanup_marker(path: str, bridge_run_id: str, pid: int, birth: str) ->
     return True
 
 
+def write_cleanup_marker(path: str, bridge_run_id: str, pid: int, birth: str) -> bool:
+    """Record, owner-only and atomically, that the watched tree of this child is confirmed empty.
+
+    A project service's launch journal reads it before it settles a run whose
+    service was lost. Any failure leaves no marker, which is never evidence.
+    """
+    return write_json_record(path, {"version": 1, "bridge_run_id": bridge_run_id, "pid": pid, "birth": birth,
+                                    "confirmed": True})
+
+
 class _ContainerWatch:
     """C3: the run's container, as the detached watchdog sees it (container mode)."""
 
-    def __init__(self, runtime, name: str, grace: int, cgroup: str | None, parent: int,
-                 argument: str | None = None) -> None:
+    def __init__(self, runtime, name: str, grace: int, cgroup: str | None, parent: int, labels: dict,
+                 record: str | None) -> None:
         self.runtime, self.name, self.grace, self.cgroup, self.parent = runtime, name, grace, cgroup, parent
-        self.argument = argument  # the bridge's JSON, handed on to each stop process
-
-    def stop_try(self, seconds: float, grace: float | None = None) -> bool:
-        """One bounded stop try as a process of its own, killed when `seconds` pass; True only when gone.
-        It uses the smaller of the container's grace and `grace` (the cap the time left allows), whole seconds."""
-        if self.argument is None:
-            return False
-        argument = self.argument
-        if grace is not None and grace < self.grace:
-            argument = json.dumps({**json.loads(self.argument), "grace": max(int(grace), 0)})
-        return run_stop_process([sys.executable, *STOP_PROCESS_FLAGS, os.path.abspath(__file__),
-                                 "--stop-container", argument], seconds)
+        self.labels = labels  # the run's own: the stop leaves a container under this name that lacks them
+        self.record = record  # where the result is written, or None
 
     def parent_alive(self) -> bool:
         # The service that started this watchdog is its parent; once it dies the watchdog is
         # reparented, so its parent pid changes and can never be the service's again.
         return os.getppid() == self.parent
 
-    def stop(self):
-        return self.runtime.stop(self.name, grace_seconds=self.grace, cgroup_path=self.cgroup)
+    def stop(self, deadline: float):
+        """The ONE call of the stop tool: stop and remove the container, its run's labels checked first, with the
+        configured grace (the tool cuts it to the time `deadline` leaves) and `deadline` (monotonic) as its
+        absolute time limit."""
+        return self.runtime.stop(self.name, grace_seconds=self.grace, cgroup_path=self.cgroup, labels=self.labels,
+                                 deadline=deadline)
 
 
 _CONTAINER_NAME = re.compile(r"[a-z][a-z0-9-]{0,30}-[0-9a-f]{32}")
+_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 
 
 def container_watcher(argument: str) -> _ContainerWatch:
@@ -1023,7 +1041,7 @@ def container_watcher(argument: str) -> _ContainerWatch:
         config = json.loads(argument)
     except (TypeError, ValueError, RecursionError):
         raise ValueError("the container argument is not JSON") from None
-    keys = {"project", "prefix", "podman", "global", "name", "grace", "cgroup", "parent"}
+    keys = {"project", "prefix", "podman", "global", "name", "grace", "cgroup", "parent", "run", "record"}
     if (type(config) is not dict or config.keys() != keys or type(config["podman"]) is not str
             or not os.path.isabs(config["podman"]) or type(config["global"]) is not list
             or not all(type(item) is str for item in config["global"])
@@ -1031,6 +1049,9 @@ def container_watcher(argument: str) -> _ContainerWatch:
             or type(config["grace"]) is not int or not 0 <= config["grace"] <= 3600
             or (config["cgroup"] is not None and type(config["cgroup"]) is not str)
             or type(config["parent"]) is not int or config["parent"] <= 1
+            or type(config["run"]) is not str or _RUN_ID.fullmatch(config["run"]) is None
+            or (config["record"] is not None
+                and (type(config["record"]) is not str or not os.path.isabs(config["record"])))
             or type(config["project"]) is not str or type(config["prefix"]) is not str):
         raise ValueError("the container argument is invalid")
     import importlib.util
@@ -1045,76 +1066,41 @@ def container_watcher(argument: str) -> _ContainerWatch:
         spec.loader.exec_module(module)
     runner = module.SubprocessPodman(config["podman"], global_args=config["global"])
     runtime = module.ContainerRuntime(config["project"], name_prefix=config["prefix"], runner=runner)
-    return _ContainerWatch(runtime, config["name"], config["grace"], config["cgroup"], config["parent"],
-                           argument)
+    labels = {module.PROJECT_LABEL: config["project"], module.RUN_LABEL: config["run"]}
+    return _ContainerWatch(runtime, config["name"], config["grace"], config["cgroup"], config["parent"], labels,
+                           config["record"])
 
 
-def run_stop_process(argv: list[str], seconds: float) -> bool:
-    """Run one stop process in its own session, wait at most `seconds` and kill its whole process group when
-    that passes; True only when it exited 0. The process, and anything it started, is dead before this
-    returns on a timeout (the leader is reaped only after the group is killed, so its group id cannot pass
-    to another process meanwhile), so a later try never overlaps it."""
-    if seconds <= 0:
-        return False
+def _stop_and_end(container, tree) -> int:
+    """The failure path of a watchdog whose service died: the stop tool once, then the tree, both inside
+    WATCHDOG_STOP_TOTAL_SECONDS; the result written; the exit status. Nothing is retried and nothing is
+    swallowed: an exception from the stop is an "error" outcome, in the record and in the status."""
+    begun = time.monotonic()
+    end = begun + WATCHDOG_STOP_TOTAL_SECONDS
     try:
-        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
-    except OSError:
-        return False
-    try:
-        return process.wait(timeout=seconds) == 0
-    except subprocess.TimeoutExpired:
-        return False
-    finally:
-        if process.poll() is None:
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(process.pid, signal.SIGKILL)
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=STOP_PROCESS_REAP_SECONDS)
-
-
-def watchdog_stop_plan(grace: float = 0) -> tuple[float, float]:
-    """(seconds the tries may take, seconds the whole failure path may take) for a container with this grace.
-    Both are fixed: the grace never lengthens them, it is capped per try instead (`_try_grace`)."""
-    return (WATCHDOG_STOP_BUDGET_SECONDS,
-            WATCHDOG_STOP_BUDGET_SECONDS + WATCHDOG_TERMINATE_RESERVE_SECONDS + WATCHDOG_LAST_STOP_SECONDS)
-
-
-def _try_grace(budget: float) -> float:
-    """The most grace a try may use inside `budget` seconds: what is left after the kill's own time."""
-    return max(budget - WATCHDOG_STOP_GRACE_MARGIN_SECONDS, 0.0)
-
-
-def _stop_once(container, seconds: float, grace: float = 0.0) -> bool:
-    """One stop try (its own process, killed at `seconds`, told it may use `grace`); True only when gone."""
-    try:
-        return bool(container.stop_try(max(seconds, 0.0), grace))
-    except Exception:
-        return False
-
-
-def _stop_container(container, budget: float | None = None) -> bool:
-    """Stop the container until it is gone: a refused or stop_failed answer, an exception or a try that
-    hangs (its process is killed at the end of the time left) is retried after a back-off, at most
-    WATCHDOG_STOP_ATTEMPTS times and never past the budget (default WATCHDOG_STOP_BUDGET_SECONDS, grace
-    included: each try's grace is capped, see `_try_grace`). True once gone; False when the bound ends it."""
-    if budget is None:
-        budget = watchdog_stop_plan()[0]
-    end = time.monotonic() + budget
-    for attempt in range(WATCHDOG_STOP_ATTEMPTS):
-        if attempt:
-            pause = WATCHDOG_STOP_BACKOFF_SECONDS[min(attempt, len(WATCHDOG_STOP_BACKOFF_SECONDS)) - 1]
-            time.sleep(max(min(pause, end - time.monotonic()), 0.0))
-        left = end - time.monotonic()
-        if left <= 0:
-            break
-        if _stop_once(container, left, _try_grace(budget)):
-            return True
-    return False
+        answer = container.stop(end - WATCHDOG_TERMINATE_RESERVE_SECONDS)
+        outcome, detail, gone = str(answer.outcome), str(answer.detail), bool(answer.gone)
+    except Exception as error:  # noqa: BLE001 - reported, never swallowed
+        outcome, detail, gone = "error", f"{type(error).__name__}: {error}", False
+    ended = tree.terminate(end)  # Nothing records the stop here: the restarted service asks the OS again.
+    if gone and ended:
+        status = WATCHDOG_EXIT_GONE
+    elif outcome == "deadline" or (gone and time.monotonic() >= end):
+        status = WATCHDOG_EXIT_DEADLINE
+    elif gone:
+        status = WATCHDOG_EXIT_TREE_UNCONFIRMED
+    else:
+        status = WATCHDOG_EXIT_NOT_GONE
+    if container.record is not None:
+        write_json_record(container.record, {"version": 1, "name": container.name, "outcome": outcome,
+                                             "detail": detail[:300], "tree_ended": ended, "exit": status,
+                                             "seconds": round(time.monotonic() - begun, 1),
+                                             "at": int(time.time())})
+    return status
 
 
 def watch(root: int, birth: str, deadline: float, announce, marker: str | None = None,
-          bridge_run_id: str | None = None, run_tag: str | None = None, *, container=None) -> bool:
+          bridge_run_id: str | None = None, run_tag: str | None = None, *, container=None) -> int:
     """The detached deadline watchdog for one bridged child.
 
     It verifies the child's identity from the bridge, which keeps the child
@@ -1127,18 +1113,18 @@ def watch(root: int, birth: str, deadline: float, announce, marker: str | None =
     `run_tag`, no process still carries the run's marker) it records that there
     before exiting (`write_cleanup_marker`).
 
-    C3, with `container` (container mode: the child streams a container's output): once the
-    service that started it has died, the container is stopped through the container primitive
-    (SIGTERM, the grace, the kill, removal, gone asked of the OS) before the tree is killed. While
-    the service lives it stops its own runs' containers, so the watchdog leaves them to it. Returns
-    False only when the container was not proven gone (see WATCHDOG_STOP_BUDGET_SECONDS).
+    C3 (decision 49), with `container` (container mode: the child streams a container's output):
+    once the service that started it has died, the container is stopped by ONE call of the stop
+    tool and the tree is ended, inside WATCHDOG_STOP_TOTAL_SECONDS (see `_stop_and_end`). While the
+    service lives it stops its own runs' containers, so the watchdog leaves them to it. Returns
+    the exit status: WATCHDOG_EXIT_GONE (0) unless that failure path ended otherwise.
     """
 
     tree = ProcessTree(root, run_tag)
     give_up = time.monotonic() + WATCHDOG_IDENTIFY_SECONDS
     while not tree.identify(process_table(), birth):
         if time.monotonic() >= give_up:
-            return True
+            return WATCHDOG_EXIT_GONE
         time.sleep(0.1)
     announce()
     while True:
@@ -1147,22 +1133,14 @@ def watch(root: int, birth: str, deadline: float, announce, marker: str | None =
             tree.update(table)
         orphaned = container is not None and not container.parent_alive()
         if orphaned or tree.root_exited() or time.monotonic() >= deadline:
-            stopped = True
+            status = WATCHDOG_EXIT_GONE
             if orphaned:
-                # One monotonic clock for the whole failure path (see WATCHDOG_STOP_BUDGET_SECONDS).
-                begun = time.monotonic()
-                initial, total = watchdog_stop_plan(getattr(container, "grace", 0) or 0)
-                end = begun + total
-                stopped = _stop_container(container, initial)  # Nothing records it here: recovery asks the OS again.
-            tree.terminate()
-            if not stopped:
-                # Hand-off: one last bounded try after the tree is gone (never past the end of the clock),
-                # and a nonzero exit (the bridge's reap() reads it as a backstop that did not finish) for
-                # whatever next asks the OS.
-                stopped = _stop_once(container, min(WATCHDOG_LAST_STOP_SECONDS, end - time.monotonic()), 0)
+                status = _stop_and_end(container, tree)
+            else:
+                tree.terminate()
             if marker is not None and bridge_run_id is not None and tree.cleanup_confirmed():
                 write_cleanup_marker(marker, bridge_run_id, root, tree.root_birth)
-            return stopped
+            return status
         time.sleep(WATCHDOG_INTERVAL_SECONDS)
 
 
@@ -1176,25 +1154,13 @@ def _announce() -> None:
     os.close(null)
 
 
-def _stop_container_process(argument: str) -> int:
-    """`--stop-container <json>`: one stop try, run by the watchdog as a process of its own. Exit 0 only
-    when the container primitive says the container is gone; 1 for anything else."""
-    try:
-        return 0 if container_watcher(argument).stop().gone else 1
-    except Exception:
-        return 1
-
-
 if __name__ == "__main__":
     # root birth deadline [marker bridge_run_id [run_tag]] | root birth deadline --container <json>
-    # | --stop-container <json> (one stop try, started by the watchdog)
-    if len(sys.argv) == 3 and sys.argv[1] == "--stop-container":
-        sys.exit(_stop_container_process(sys.argv[2]))
     if len(sys.argv) == 6 and sys.argv[4] == "--container":
         # A container it cannot take on is never left unguarded quietly: it exits without
-        # acknowledging, so the bridge refuses the run.
-        sys.exit(0 if watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce,
-                            container=container_watcher(sys.argv[5])) else 1)
+        # acknowledging, so the bridge refuses the run. Otherwise the exit status is `watch`'s.
+        sys.exit(watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce,
+                       container=container_watcher(sys.argv[5])))
     else:
         watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce,
               *(sys.argv[4:7] if len(sys.argv) in (6, 7) else ()))

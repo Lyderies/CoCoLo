@@ -27,7 +27,11 @@ stopped again. A stop whose answer is not "gone" is `stop_failed`: the run is no
 (its slot stays held, status names it and alerts the owner) and the stop is tried again by
 `retry_stops`, STOP_RETRY_SECONDS doubling to STOP_RETRY_MAX_SECONDS, while the service runs; the
 proof of "gone" is handed to whoever asked (`on_gone`). The detached watchdog is given the
-container (`watchdog_config`) and stops it through the same primitive once its service has died.
+container (`watchdog_config`) and, once its service has died, calls the same stop ONCE under one hard time limit
+(decision 49: a thin dead man's switch; it writes its result and exits with a status that says what happened,
+and the restarted service finishes whatever is left). Every podman command of the stop tool runs under a guard
+that dies with its caller, and the run's own deadline is also podman's `--timeout` when its version supports it
+(`StartedContainer.timeout_backstop` says which).
 
 THE SWITCH: `SETTINGS` below. While it is None (as shipped) nothing here is used and every child is
 launched as a process, exactly as before. It is flipped by setting it to a `ContainerLaunchConfig`
@@ -107,6 +111,9 @@ class StartedContainer:
     name: str
     container_id: str
     cgroup_path: str
+    # Decision 49: whether podman's own run time limit backs the deadline up ("applied (...)"), or why it was
+    # skipped ("skipped: ..."); "" when the run had no deadline.
+    timeout_backstop: str = ''
 
 
 @dataclass
@@ -175,7 +182,8 @@ class ContainerLauncher:
             if result.cleanup is not None:
                 self._record_stop(token, 'launch_refused', result.cleanup.gone, result.cleanup.detail)
             raise ContainerLaunchRefused(result.reason, result.message, result)
-        started = StartedContainer(token, result.identity.name, result.container_id, result.cgroup_path)
+        started = StartedContainer(token, result.identity.name, result.container_id, result.cgroup_path,
+                                   dict(result.checks).get('timeout backstop', ''))
         try:
             self.journal.started(token, result.container_id, result.cgroup_path)
         except JournalError as error:
@@ -192,7 +200,11 @@ class ContainerLauncher:
     def watchdog_config(self, started):
         """C3: what the detached watchdog needs to stop this container through `ContainerRuntime.stop`
         once the service that launched it has died: {'argument': JSON, 'environment': the podman client's
-        variables}. None when the runtime has no podman client at a fixed path to hand over."""
+        variables}. None when the runtime has no podman client at a fixed path to hand over.
+
+        Decision 49: the argument also names the run (`run`: the token, whose labels the stop checks before
+        it stops anything) and where the watchdog writes its result (`record`: beside the run's journal entry,
+        owner-only, removed with the entry; None when the journal has no such place)."""
         runner = self.runtime.runner
         if not isinstance(runner, SubprocessPodman):
             return None
@@ -200,9 +212,11 @@ class ContainerLauncher:
             podman = runner.path()
         except OSError:
             return None
+        record = getattr(self.journal, 'watchdog_result_path', None)
         argument = {'project': self.runtime.project_id, 'prefix': self.runtime.name_prefix, 'podman': podman,
                     'global': list(runner.global_args), 'name': started.name, 'grace': self.config.grace_seconds,
-                    'cgroup': started.cgroup_path or None, 'parent': os.getpid()}
+                    'cgroup': started.cgroup_path or None, 'parent': os.getpid(), 'run': started.token,
+                    'record': str(record(started.token)) if record is not None else None}
         environment = {name: os.environ[name] for name in PODMAN_ENVIRONMENT if name in os.environ}
         return {'argument': json.dumps(argument, sort_keys=True, separators=(',', ':')), 'environment': environment}
 

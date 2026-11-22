@@ -58,6 +58,20 @@ Requirements:
   (`cocolo.kind=run`), whatever its project, for the collector's health check (`health_containers`),
   which then stops each project's orphans through `stop_orphans` with that project's own live set.
 
+- Decision 49 (ANALYSIS-0.4.0-container-stop.md, CS-1..CS-6 of that analysis): `stop` is the ONE stop tool, used
+  by the supervisor (C3's stop action, C4's recovery, HM-1's health check) and by the detached watchdog. Nothing
+  it starts survives it: every podman command runs in a process group of its own, under a small guard that kills
+  the group when the stop tool's process dies (a pipe that closes with it: SIGKILL included) and the stop tool
+  kills the group when the command ends, even a command that exited and left a child, and reaps it (CS-1, CS-2).
+  One absolute deadline (`deadline`, on the runtime's clock; one is made when none is given) bounds every command,
+  wait and reap of the stop: a command is given only the time left less the reap's, and a stop that runs out of
+  time answers "deadline" (CS-3). The grace is the smaller of the configured one and the time left at the moment
+  of the stop, less STOP_GRACE_MARGIN_SECONDS (CS-4). A group that cannot be killed or reaped, or a removal that
+  fails, is reported in the answer and ends the stop, never swallowed (CS-5). Gone is only the OS's word: an
+  unreadable state is never gone (CS-6). The run's own time limit (`podman create --timeout`) is a backstop that
+  fires with the service gone; it is set only when `podman version` shows a client and server of at least
+  MIN_TIMEOUT_PODMAN_VERSION, and a launch that skips it says why in its checks ("timeout backstop").
+
 The caller's duties (not done here): include every run whose identity it recorded in the live set
 it gives the sweep (a launch between its snapshot and the listing would otherwise be swept), keep
 the slot of any run whose stop is not "gone", and keep the seccomp profile file owner-only.
@@ -67,6 +81,7 @@ Standard library only.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 from dataclasses import dataclass, field
 import hashlib
@@ -74,8 +89,10 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Callable, Iterable, Mapping, Protocol, Sequence
 
@@ -93,6 +110,16 @@ GATE_FILE = "/tmp/.cocolo-start"
 DEFAULT_GRACE_SECONDS = 10
 DEFAULT_GONE_TIMEOUT_SECONDS = 10.0
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 30.0
+# Decision 49: what a stop keeps back from the time it has left for the kill, the removal and asking the OS "gone"
+# (the grace is cut to what remains after it), and the longest the end of a command's process group may take.
+STOP_GRACE_MARGIN_SECONDS = 4.0
+REAP_SECONDS = 1.0
+# The oldest podman (client and server) whose `create --timeout` the backstop relies on. Not verified against a
+# release list: a podman older than this runs without the backstop, and says so (see the module notes).
+MIN_TIMEOUT_PODMAN_VERSION = (4, 0)
+# The command guard is started like the watchdog itself (host_paths.PYTHON_ISOLATION_FLAGS, repeated here: the
+# watchdog loads this file from its own folder).
+GUARD_FLAGS = ("-I", "-S", "-B")
 CPU_PERIOD_US = 100_000
 CLONE_NEWUSER = 0x10000000
 DEFAULT_SECCOMP_PATH = "/usr/share/containers/seccomp.json"
@@ -171,7 +198,9 @@ class ContainerIdentity:
 
 @dataclass(frozen=True)
 class StopResult:
-    """outcome: "gone"; "stop_failed" (not proven gone: hold the slot); "refused" (podman unusable)."""
+    """outcome: "gone"; "stop_failed" (not proven gone: hold the slot); "refused" (podman unusable, or a podman
+    command's process group could not be ended); "deadline" (the stop's time ran out before the container was
+    proven gone: hold the slot)."""
 
     outcome: str
     detail: str
@@ -260,12 +289,109 @@ class _Refused(Exception):
         self.refusal = refusal
 
 
+class ProcessCleanupError(Exception):
+    """A podman command's process group could not be killed or reaped: something it started may still run."""
+
+
+class _DeadlineHit(Exception):
+    """The stop's one deadline ran out (the answer is "deadline")."""
+
+
+class _Budget:
+    """One absolute deadline on the runtime's clock, charged by every command of one stop."""
+
+    def __init__(self, deadline: float, monotonic: Callable[[], float]):
+        self.deadline, self._monotonic = deadline, monotonic
+
+    def left(self) -> float:
+        return self.deadline - self._monotonic()
+
+
 # ------------------------------------------------------------------------------------------------
 # Running podman and reading the podman host's files
 # ------------------------------------------------------------------------------------------------
 
+# Runs one podman command (argv follows the lifeline's descriptor number) as the leader of a process group of its
+# own, and keeps it there: when the stop tool's process dies, the pipe it holds the write end of closes, the
+# guard reads the end of file and kills the whole group (itself, podman and everything podman started), so a
+# SIGKILLed watchdog or service leaves nothing running (decision 49, CS-1). While the stop tool lives it ends the
+# group itself, once the command is over (`_end_group`).
+_GUARD = (
+    "import os, select, signal, subprocess, sys\n"
+    "fd = int(sys.argv[1])\n"
+    "try:\n"
+    "    child = subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL)\n"
+    "except OSError as error:\n"
+    "    sys.stderr.write(str(error) + chr(10))\n"
+    "    sys.exit(126 if isinstance(error, PermissionError) else 127)\n"
+    "while child.poll() is None:\n"
+    "    if select.select([fd], [], [], 0.02)[0] and not os.read(fd, 1):\n"
+    "        os.killpg(os.getpgrp(), signal.SIGKILL)\n"
+    "sys.exit(child.returncode if child.returncode >= 0 else 128 - child.returncode)\n")
+
+
+def _reap(process: subprocess.Popen, seconds: float) -> bool:
+    """Wait for the (killed) leader; False when it is still not reapable after `seconds`."""
+    try:
+        process.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        return False
+    return True
+
+
+def _end_group(process: subprocess.Popen) -> None:
+    """Kill every process left in the command's group and reap the leader, or raise ProcessCleanupError.
+
+    The group id is the leader's pid: while any member lives the id cannot be given to another group, and a
+    group already empty (ESRCH) is the usual, good answer. Anything else is reported (CS-5)."""
+    problem = None
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        problem = f"its process group could not be killed ({error.strerror or type(error).__name__})"
+        with contextlib.suppress(OSError):
+            process.kill()
+    if process.returncode is None and not _reap(process, REAP_SECONDS):
+        problem = (problem + "; " if problem else "") + f"its leader was not reaped within {REAP_SECONDS:g} s"
+    if problem is not None:
+        raise ProcessCleanupError(f"a podman command's processes may still be running: {problem}")
+
+
+def run_guarded(argv: Sequence[str], timeout: float) -> "PodmanResult":
+    """Run one command to the end under the guard: its result, subprocess.TimeoutExpired once `timeout` passed,
+    or ProcessCleanupError. When this returns or raises, nothing the command started is left running, and the
+    kill and the reap are inside `timeout` plus at most REAP_SECONDS."""
+    read_end, write_end = os.pipe()
+    try:
+        with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+            try:
+                process = subprocess.Popen([sys.executable, *GUARD_FLAGS, "-c", _GUARD, str(read_end), *argv],
+                                           stdin=subprocess.DEVNULL, stdout=out, stderr=err, pass_fds=(read_end,),
+                                           start_new_session=True)
+            finally:
+                os.close(read_end)
+            timed_out = False
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+            finally:
+                _end_group(process)
+            if timed_out:
+                raise subprocess.TimeoutExpired(list(argv), timeout)
+            out.seek(0)
+            err.seek(0)
+            return PodmanResult(process.returncode, out.read().decode("utf-8", "replace"),
+                                err.read().decode("utf-8", "replace"))
+    finally:
+        os.close(write_end)
+
+
 class SubprocessPodman:
-    """Runs the podman client at a fixed path; FileNotFoundError when there is none."""
+    """Runs the podman client at a fixed path, each command under `run_guarded` (nothing it starts outlives
+    the call); FileNotFoundError when there is none."""
 
     def __init__(self, podman_path: str | None = None, *, global_args: Sequence[str] = ()):
         self.podman_path = podman_path
@@ -280,9 +406,10 @@ class SubprocessPodman:
         raise FileNotFoundError("podman")
 
     def __call__(self, args: Sequence[str], timeout: float) -> PodmanResult:
-        completed = subprocess.run([self.path(), *self.global_args, *args], capture_output=True, text=True,
-                                   timeout=timeout, stdin=subprocess.DEVNULL, check=False)
-        return PodmanResult(completed.returncode, completed.stdout, completed.stderr)
+        path = self.path()
+        if not os.path.isfile(path) or not os.access(path, os.X_OK):
+            raise FileNotFoundError(path)
+        return run_guarded([path, *self.global_args, *args], timeout)
 
 
 def _check_host_paths(paths: Sequence[str]) -> None:
@@ -324,7 +451,7 @@ class MachineHostFiles:
         self.machine = machine
         self.timeout = timeout
 
-    def read(self, paths: Sequence[str]) -> dict[str, str | None]:
+    def read(self, paths: Sequence[str], timeout: float | None = None) -> dict[str, str | None]:
         _check_host_paths(paths)
         if not paths:
             return {}
@@ -332,7 +459,7 @@ class MachineHostFiles:
                   "if [ -e \"$p\" ]; then cat \"$p\" || printf '\\025'; else printf '\\030'; fi; done")
         args = ["machine", "ssh", *([self.machine] if self.machine else []), script]
         try:
-            result = self.runner(args, self.timeout)
+            result = self.runner(args, self.timeout if timeout is None else min(self.timeout, timeout))
         except (OSError, subprocess.TimeoutExpired) as error:
             raise HostUnreadable(f"podman machine ssh failed: {type(error).__name__}") from None
         if result.returncode != 0:
@@ -432,6 +559,8 @@ def _call_podman(runner: PodmanRunner, args: Sequence[str], timeout: float) -> P
     except subprocess.TimeoutExpired:
         raise _Refused(Refusal("podman_timeout", f"podman did not answer `{args[0]}` within "
                                f"{timeout:g} s; its machine may be stuck")) from None
+    except ProcessCleanupError as error:
+        raise _Refused(Refusal("podman_cleanup_failed", str(error))) from None
     except OSError as error:
         raise _Refused(Refusal("podman_unavailable", f"podman could not be run: {error.strerror}")) from None
     if result.returncode == 125 and any(mark in result.stderr.lower() for mark in _UNREACHABLE_MARKS):
@@ -502,11 +631,28 @@ class ContainerRuntime:
         return ContainerIdentity(self.name_prefix + digest, run_id, self.project_id)
 
     # -- podman
-    def _podman(self, args: Sequence[str], timeout: float | None = None) -> PodmanResult:
-        return _call_podman(self.runner, args, timeout or self.command_timeout)
+    def _podman(self, args: Sequence[str], timeout: float | None = None, *, budget: _Budget | None = None
+                ) -> PodmanResult:
+        """One podman command. With a `budget` (a stop's one deadline) it is given only the time left, less
+        REAP_SECONDS for ending its process group; no time left, or a command the deadline cut short, is the
+        stop's `_DeadlineHit`, not a hung podman."""
+        limit = timeout or self.command_timeout
+        cut = False
+        if budget is not None:
+            room = budget.left() - REAP_SECONDS
+            if room <= 0:
+                raise _DeadlineHit(f"no time was left to run `podman {args[0]}`")
+            if room < limit:
+                limit, cut = room, True
+        try:
+            return _call_podman(self.runner, args, limit)
+        except _Refused as refused:
+            if cut and refused.refusal.reason == "podman_timeout":
+                raise _DeadlineHit(f"`podman {args[0]}` was cut short by the deadline") from None
+            raise
 
-    def _inspect(self, ref: str) -> dict | None:
-        result = self._podman(["container", "inspect", ref])
+    def _inspect(self, ref: str, budget: _Budget | None = None) -> dict | None:
+        result = self._podman(["container", "inspect", ref], budget=budget)
         if result.returncode != 0:
             if any(mark in result.stderr.lower() for mark in _NO_SUCH_CONTAINER):
                 return None
@@ -596,7 +742,11 @@ class ContainerRuntime:
             except Exception as error:  # the caller's store: refuse rather than run unrecorded
                 return Refusal("record_failed", "the container's identity could not be recorded, so it was not "
                                f"created: {type(error).__name__}: {_first_line(str(error))}")
-            created = self._podman(self.create_arguments(spec, identity))
+            backstop, note = self._timeout_backstop(spec)
+            arguments = self.create_arguments(spec, identity)
+            if not backstop:  # a podman that does not take `--timeout`: the run goes without it (and says so)
+                arguments = [argument for argument in arguments if not argument.startswith("--timeout=")]
+            created = self._podman(arguments)
             if created.returncode != 0:
                 text = created.stderr.lower()
                 if "already in use" in text:
@@ -612,9 +762,34 @@ class ContainerRuntime:
             if started.returncode != 0:
                 return Refusal("start_failed", "podman could not start the container: " + _first_line(started.stderr),
                                self.stop(identity.name, grace_seconds=0))
-            return self._check_and_open(spec, identity)
+            return self._check_and_open(spec, identity, backstop, note)
         except _Refused as refused:
             return refused.refusal
+
+    def _timeout_backstop(self, spec: ContainerSpec) -> tuple[bool, str]:
+        """Decision 49: whether the run's deadline can also be podman's own (`create --timeout`), and the plain
+        line that says so, or why not ("" when the spec has no deadline). Both the client and the server it
+        talks to must be at least MIN_TIMEOUT_PODMAN_VERSION; a version that cannot be read is not supported."""
+        if spec.timeout_seconds is None:
+            return False, ""
+        result = self._podman(["version", "--format=json"])
+        try:
+            document = json.loads(result.stdout) if result.returncode == 0 else None
+            found = {side: str(document[side]["Version"]) for side in ("Client", "Server")
+                     if isinstance(document.get(side), dict)}
+            numbers = {side: tuple(int(part) for part in re.fullmatch(r"v?(\d+)\.(\d+)(?:\.\d+)?.*", text).groups())
+                       for side, text in found.items()}
+            if "Client" not in numbers:
+                raise ValueError("no client version")
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return False, ("skipped: podman's version could not be read, so its --timeout cannot be relied on ("
+                           + _first_line(result.stderr if result.returncode else "unreadable answer") + ")")
+        old = [f"{side.lower()} {found[side]}" for side, number in numbers.items()
+               if number < MIN_TIMEOUT_PODMAN_VERSION]
+        if old:
+            return False, (f"skipped: podman {', '.join(old)} is older than "
+                           f"{'.'.join(map(str, MIN_TIMEOUT_PODMAN_VERSION))}, so --timeout is not relied on")
+        return True, "applied (podman " + ", ".join(f"{side.lower()} {text}" for side, text in found.items()) + ")"
 
     def _network_refusal(self, network: str, identity: ContainerIdentity) -> Refusal | None:
         result = self._podman(["network", "inspect", "--format=json", network])
@@ -636,7 +811,8 @@ class ContainerRuntime:
                            f"{RUN_LABEL} and {PROJECT_LABEL} labels do not name this run); it was not used")
         return None
 
-    def _check_and_open(self, spec: ContainerSpec, identity: ContainerIdentity) -> Launched | Refusal:
+    def _check_and_open(self, spec: ContainerSpec, identity: ContainerIdentity, backstop: bool = True,
+                        note: str = "") -> Launched | Refusal:
         cgroup_path, container_id, checks = "", "", []
         try:
             info = self._inspect(identity.name)
@@ -645,7 +821,7 @@ class ContainerRuntime:
             else:
                 cgroup_path = (info.get("State") or {}).get("CgroupPath") or ""
                 container_id = str(info.get("Id") or "")
-                checks, problems = self._start_checks(spec, identity, info)
+                checks, problems = self._start_checks(spec, identity, info, backstop)
             if not problems:
                 # Every check passed: let the command run.
                 opened = self._podman(["exec", identity.name, "touch", GATE_FILE])
@@ -657,10 +833,11 @@ class ContainerRuntime:
             cleanup = self.stop(identity.name, grace_seconds=0, cgroup_path=cgroup_path or None)
             return Refusal("start_check_failed", "the container was refused and removed because its start check "
                            "failed: " + "; ".join(problems), cleanup)
-        return Launched(identity, container_id, cgroup_path, tuple(checks))
+        return Launched(identity, container_id, cgroup_path,
+                        tuple(checks) + (("timeout backstop", note),) if note else tuple(checks))
 
     def _start_checks(self, spec: ContainerSpec, identity: ContainerIdentity,
-                      info: Mapping) -> tuple[list[tuple[str, str]], list[str]]:
+                      info: Mapping, backstop: bool = True) -> tuple[list[tuple[str, str]], list[str]]:
         checks: list[tuple[str, str]] = []
         problems: list[str] = []
 
@@ -676,7 +853,7 @@ class ContainerRuntime:
             return checks, problems
         cgroup_path, pid = state.get("CgroupPath") or "", state.get("Pid")
         # Configured values (from podman): read-only root, the one mount, the network, the deadline.
-        if spec.timeout_seconds is not None:
+        if spec.timeout_seconds is not None and backstop:
             reported = (info.get("Config") or {}).get("Timeout")
             expect("timeout", str(reported) if type(reported) is int else None, str(spec.timeout_seconds))
         if host.get("ReadonlyRootfs") is not True:
@@ -746,9 +923,21 @@ class ContainerRuntime:
             return self._gone_state(ref, cgroup_path)
         except _Refused as refused:
             return GoneState("unknown", refused.refusal.message, refused.refusal)
+        except ProcessCleanupError as error:
+            refusal = Refusal("podman_cleanup_failed", str(error))
+            return GoneState("unknown", refusal.message, refusal)
 
-    def _gone_state(self, ref: str, cgroup_path: str | None) -> GoneState:
-        info = self._inspect(ref)
+    def _read_host(self, paths: Sequence[str], budget: _Budget | None) -> dict[str, str | None]:
+        """The podman host's files; on a podman machine (a command of its own) within a stop's deadline."""
+        if budget is None or not isinstance(self.host_files, MachineHostFiles):
+            return self.host_files.read(paths)
+        room = budget.left() - REAP_SECONDS
+        if room <= 0:
+            raise _DeadlineHit("no time was left to read the podman host's files")
+        return self.host_files.read(paths, timeout=room)
+
+    def _gone_state(self, ref: str, cgroup_path: str | None, budget: _Budget | None = None) -> GoneState:
+        info = self._inspect(ref, budget)
         if info is not None:
             status = str((info.get("State") or {}).get("Status") or "unknown")
             if status in _RUNNING_STATES or status not in ("exited", "stopped", "created", "configured"):
@@ -759,7 +948,7 @@ class ContainerRuntime:
             return GoneState("gone", "the container no longer exists")
         events_path = f"/sys/fs/cgroup{cgroup_path}/cgroup.events"
         try:
-            events = self.host_files.read([events_path])[events_path]
+            events = self._read_host([events_path], budget)[events_path]
         except HostUnreadable as error:
             return GoneState("unknown", f"its cgroup could not be read: {error}")
         where = "the container no longer exists" if info is None else "the container has exited"
@@ -775,22 +964,38 @@ class ContainerRuntime:
     # -- stop (CS-3, CS-4)
     def stop(self, ref: str, *, grace_seconds: int = DEFAULT_GRACE_SECONDS,
              gone_timeout: float = DEFAULT_GONE_TIMEOUT_SECONDS, cgroup_path: str | None = None,
-             labels: Mapping[str, str] | None = None) -> StopResult:
-        """Stop and remove the container; with `labels`, only one that carries every one of them (C4)."""
+             labels: Mapping[str, str] | None = None, deadline: float | None = None) -> StopResult:
+        """Stop and remove the container; with `labels`, only one that carries every one of them (C4).
+
+        Decision 49: `deadline` is the stop's ONE absolute deadline, on this runtime's clock (`monotonic`): every
+        command, wait and reap of the stop is charged to it, and a stop that runs out of it answers "deadline".
+        None: the stop gives itself the grace, the gone timeout and four commands' worth of time."""
+        if deadline is None:
+            deadline = self.monotonic() + (grace_seconds if type(grace_seconds) is int else 0) + gone_timeout \
+                + 4 * self.command_timeout
+        budget = _Budget(deadline, self.monotonic)
         try:
-            return self._stop(ref, grace_seconds, gone_timeout, cgroup_path, labels)
+            return self._stop(ref, grace_seconds, gone_timeout, cgroup_path, labels, budget)
         except _Refused as refused:
             return StopResult("refused", refused.refusal.message + "; the container is not known to be gone",
                               refusal=refused.refusal)
+        except ProcessCleanupError as error:
+            refusal = Refusal("podman_cleanup_failed", str(error))
+            return StopResult("refused", refusal.message + "; the container is not known to be gone",
+                              refusal=refusal)
+        except _DeadlineHit as hit:
+            return StopResult("deadline", f"the stop's time ran out before the container was proven gone ({hit}); "
+                              "hold its slot and tell the owner")
 
     def _stop(self, ref: str, grace_seconds: int, gone_timeout: float, cgroup_path: str | None,
-              labels: Mapping[str, str] | None = None) -> StopResult:
+              labels: Mapping[str, str] | None, budget: _Budget) -> StopResult:
         if type(grace_seconds) is not int or grace_seconds < 0:
             raise ValueError("grace_seconds must be a whole number of seconds, 0 or more")
         if cgroup_path is not None and not _HOST_PATH.fullmatch(cgroup_path):
             raise ValueError("cgroup_path is not a cgroup path")
-        info = self._inspect(ref)
+        info = self._inspect(ref, budget)
         exit_code = None
+        removal_error = None
         if info is not None and labels is not None and not self._carries(info, labels):
             return StopResult("stop_failed", f"a container named {ref} exists but its labels are not this run's; it "
                               "was left alone. Hold its slot and tell the owner")
@@ -798,28 +1003,34 @@ class ContainerRuntime:
             state = info.get("State") or {}
             cgroup_path = cgroup_path or state.get("CgroupPath") or None
             if state.get("Status") in _RUNNING_STATES:
-                # SIGTERM to the first process, the grace, then SIGKILL to every process in the container.
-                self._podman(["stop", f"--time={grace_seconds}", ref], timeout=grace_seconds + self.command_timeout)
-            after = self._inspect(ref)
+                # SIGTERM to the first process, the grace, then SIGKILL to every process in the container. The
+                # grace is what the time left allows once the margin for the kill, the removal and asking the
+                # OS is kept back (CS-4), whole seconds.
+                grace = min(grace_seconds, max(0, int(budget.left() - STOP_GRACE_MARGIN_SECONDS)))
+                self._podman(["stop", f"--time={grace}", ref], timeout=grace + self.command_timeout, budget=budget)
+            after = self._inspect(ref, budget)
             if after is not None:
                 code = (after.get("State") or {}).get("ExitCode")
                 exit_code = code if type(code) is int else None
-                self._remove(ref)
-        deadline = self.monotonic() + gone_timeout
+                removal_error = self._remove(ref, budget) or removal_error
+        end = min(self.monotonic() + gone_timeout, budget.deadline)
         while True:
-            state = self._gone_state(ref, cgroup_path)
+            state = self._gone_state(ref, cgroup_path, budget)
             if state.gone:
                 return StopResult("gone", state.detail, exit_code)
-            if self.monotonic() >= deadline:
-                return StopResult("stop_failed", f"not gone {gone_timeout:g} s after the kill: {state.detail}; "
-                                  "hold its slot and tell the owner", exit_code)
-            self.sleep(self.poll_seconds)
-            again = self._inspect(ref)
+            if self.monotonic() >= end:
+                if budget.left() <= 0:
+                    raise _DeadlineHit(state.detail)
+                return StopResult("stop_failed", f"not gone {gone_timeout:g} s after the kill: {state.detail}"
+                                  + (f"; podman rm said: {removal_error}" if removal_error else "")
+                                  + "; hold its slot and tell the owner", exit_code)
+            self.sleep(max(0.0, min(self.poll_seconds, budget.left())))
+            again = self._inspect(ref, budget)
             if again is not None:
                 if labels is not None and not self._carries(again, labels):
                     return StopResult("stop_failed", f"a container named {ref} that is not this run's appeared; it "
                                       "was left alone. Hold its slot and tell the owner", exit_code)
-                self._remove(ref)
+                removal_error = self._remove(ref, budget) or removal_error
 
     @staticmethod
     def _carries(info: Mapping, labels: Mapping[str, str]) -> bool:
@@ -836,9 +1047,12 @@ class ContainerRuntime:
             raise ValueError("the container reference is not a plain name")
         return ["/bin/sh", "-c", _ATTACH_SCRIPT, "cocolo-attach", self.runner.path(), ref, *self.runner.global_args]
 
-    def _remove(self, ref: str) -> None:
-        """Kill whatever is left in the container and remove it."""
-        self._podman(["rm", "--force", "--time=0", ref])
+    def _remove(self, ref: str, budget: _Budget | None = None) -> str | None:
+        """Kill whatever is left in the container and remove it; podman's own words when it said it could not."""
+        result = self._podman(["rm", "--force", "--time=0", ref], budget=budget)
+        if result.returncode != 0 and not any(mark in result.stderr.lower() for mark in _NO_SUCH_CONTAINER):
+            return _first_line(result.stderr)
+        return None
 
     # -- health monitor check 1 (CS-5), and C4's recovery listing
     def list_project(self) -> list[dict] | Refusal:

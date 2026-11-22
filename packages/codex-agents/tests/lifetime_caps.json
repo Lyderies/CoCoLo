@@ -400,6 +400,11 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "container_runtime.py::_timeout_backstop": {
+   "checks": 1,
+   "ends": "not a count of anything kept: one comparison of podman's reported version with MIN_TIMEOUT_PODMAN_VERSION at each launch with a deadline (decision 49); nothing accumulates",
+   "test": "test_an_old_client_gets_no_timeout_and_the_reason_is_recorded"
+  },
   "control_api.py::__init__": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
@@ -1128,11 +1133,6 @@
   "process_tree.py::_remember_cleanup": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
-  },
-  "process_tree.py::_stop_container": {
-   "checks": 1,
-   "ends": "C3 watchdog stop: at most WATCHDOG_STOP_ATTEMPTS (4) tries, each its own process killed on timeout (run_stop_process, no abandoned thread), pauses of 1, 2 and 4 s between them, all inside one fixed monotonic budget (WATCHDOG_STOP_BUDGET_SECONDS 11 s, the container's grace capped per try to 7 s); then the tree is ended (WATCHDOG_TERMINATE_RESERVE_SECONDS 1 s) and one last try with no grace gets WATCHDOG_LAST_STOP_SECONDS (5 s) but never past the end of the clock: 17 s in all, for any grace",
-   "test": "test_cs2_the_watchdog_stops_trying_after_its_stated_bound_and_still_ends_the_tree"
   },
   "project_backup.py::estimate_bytes": {
    "checks": 1,
