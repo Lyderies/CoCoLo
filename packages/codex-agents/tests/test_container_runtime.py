@@ -924,6 +924,20 @@ KILLABLE_STOP_TOOL = textwrap.dedent('''
 ''')
 
 
+HOLDING_CALLER = textwrap.dedent('''
+    import sys, time
+    sys.path.insert(0, sys.argv[1])
+    from codex_agents import container_runtime as cr
+
+    def hold(process):  # podman has ended; the caller is about to end the group, and is killed here instead
+        open(sys.argv[3], "w").close()
+        time.sleep(600)
+
+    cr._end_group = hold
+    cr.SubprocessPodman(sys.argv[2])(["stop", "x"], 120)
+''')
+
+
 def pid_alive(pid):
     try:
         os.kill(pid, 0)
@@ -1030,6 +1044,77 @@ class StopToolProcessTests(unittest.TestCase):
         self.assertEqual(2, len(self.pids("call")), "a command started after the failure")
 
 
+    # -- r4 findings G1, G2, G3, D1 (the guard and its call)
+    def test_r4_g1_descendants_of_a_podman_that_exited_die_when_the_caller_dies_before_it_ends_the_group(self):
+        self.mode("leave-child")
+        marker = os.path.join(self.folder, "podman-over")
+        caller = subprocess.Popen([sys.executable, "-B", "-c", HOLDING_CALLER, str(ORCHESTRATION_ROOT), self.podman,
+                                   marker], stdin=subprocess.DEVNULL, start_new_session=True)
+        self.addCleanup(caller.wait)
+        self.addCleanup(lambda: caller.poll() is None and caller.kill())
+        self.assertTrue(wait_for(lambda: os.path.exists(marker) and self.pids("child"), 15),
+                        "podman never ran to its end")
+        (child,) = self.pids("child")
+        self.assertTrue(pid_alive(child))  # the command is over; its descendant lives and its group is not ended
+        os.kill(caller.pid, signal.SIGKILL)  # the caller dies between podman's end and its own end of the group
+        caller.wait(10)
+        self.assertTrue(wait_for(lambda: not pid_alive(child), 5),
+                        "a descendant of an exited podman outlived the dead caller")
+
+    def test_r4_g2_the_group_is_signalled_before_its_leader_is_reaped(self):
+        self.mode("ok")
+        seen = []
+        real = cr._end_group
+
+        def watching(process):
+            seen.append(process.returncode)  # None: the leader still holds the group id
+            real(process)
+
+        with mock.patch.object(cr, "_end_group", watching):
+            result = cr.SubprocessPodman(self.podman)(["stop", "x"], 20)
+        self.assertEqual(0, result.returncode)
+        self.assertEqual([None], seen)
+
+    def test_r4_g3_a_failed_temporary_file_leaks_no_descriptor(self):
+        def descriptors():
+            return len(os.listdir("/dev/fd"))
+
+        for failing_call in (1, 2):
+            with self.subTest(failing_call=failing_call):
+                calls = []
+                real = tempfile.TemporaryFile
+
+                def temporary(*args, **kwargs):
+                    calls.append(1)
+                    if len(calls) == failing_call:
+                        raise OSError(24, "Too many open files")
+                    return real(*args, **kwargs)
+
+                before = descriptors()
+                with mock.patch.object(cr.tempfile, "TemporaryFile", temporary):
+                    for _ in range(3):
+                        calls.clear()
+                        with self.assertRaises(OSError):
+                            cr.run_guarded([self.podman, "stop", "x"], 5)
+                self.assertEqual(before, descriptors())
+
+    def test_r4_d1_the_time_spent_starting_the_command_is_inside_the_timeout(self):
+        self.mode("hang")
+        real = subprocess.Popen
+
+        def slow_start(*args, **kwargs):
+            time.sleep(1.0)
+            return real(*args, **kwargs)
+
+        started = time.monotonic()
+        with mock.patch.object(cr.subprocess, "Popen", slow_start):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                cr.run_guarded([self.podman, "stop", "x"], 1.5)
+        self.assertLess(time.monotonic() - started, 2.0)  # not 1.0 s of setup plus the 1.5 s given
+        for pid in self.pids("call") + self.pids("child"):
+            self.assertTrue(wait_for(lambda: not pid_alive(pid), 3), f"process {pid} outlived the call")
+
+
 # --------------------------------------------------------------------------------------------
 # Decision 49: podman's own run time limit (`--timeout`) as the backstop, after a version check
 # --------------------------------------------------------------------------------------------
@@ -1090,6 +1175,36 @@ class TimeoutBackstopTests(RuntimeCase):
                 result, create = self.launched(timeout_seconds=90)
                 self.assertFalse([arg for arg in create if arg.startswith("--timeout")], create)
                 self.assertTrue((self.backstop(result) or "").startswith("skipped"), result.checks)
+
+    def test_r4_v1_a_missing_server_or_an_unstable_version_is_not_applied(self):
+        for label, versions in (("no server", ("6.1.0", None)), ("rc at the boundary", ("4.0.0-rc1", "6.1.4")),
+                                ("rc server", ("6.1.0", "4.0.0-rc2")), ("garbage suffix", ("4.0garbage", "6.1.4"))):
+            with self.subTest(label):
+                self.podman.versions = versions
+                self.podman.calls.clear()
+                self.podman.containers.clear()
+                result, create = self.launched(timeout_seconds=90)
+                self.assertFalse([arg for arg in create if arg.startswith("--timeout")], create)
+                self.assertTrue((self.backstop(result) or "").startswith("skipped"), result.checks)
+
+    def test_r4_v1_a_stable_boundary_version_is_applied(self):
+        self.podman.versions = ("4.0.0", "4.0.1-rc1")
+        result, create = self.launched(timeout_seconds=90)
+        self.assertIn("--timeout=90", create)
+        self.assertTrue((self.backstop(result) or "").startswith("applied"), result.checks)
+
+    def test_r4_v2_a_version_probe_that_hangs_skips_the_backstop_and_the_run_launches(self):
+        class HangingVersion(ReportingPodman):
+            def __call__(self, args, timeout):
+                if args[0] == "version":
+                    raise subprocess.TimeoutExpired(["podman", *args], timeout)
+                return super().__call__(args, timeout)
+
+        self.podman = HangingVersion(self.host)
+        self.runtime = self.make_runtime()
+        result, create = self.launched(timeout_seconds=90)
+        self.assertFalse([arg for arg in create if arg.startswith("--timeout")], create)
+        self.assertTrue((self.backstop(result) or "").startswith("skipped"), result.checks)
 
     def test_a_run_with_no_deadline_asks_nothing_and_records_nothing(self):
         result, create = self.launched()

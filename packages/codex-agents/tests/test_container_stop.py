@@ -830,6 +830,52 @@ class WatchdogTests(unittest.TestCase):
         self.assertLess(container.seconds, process_tree.WATCHDOG_STOP_TOTAL_SECONDS)
         self.assertIsNotNone(process.wait(5))  # what it had tracked is still killed
 
+    def test_r4_d2_the_deadline_is_checked_before_success_and_for_every_outcome(self):
+        class Tree:
+            def __init__(self, ended, past):
+                self.ended, self.past = ended, past
+
+            def terminate(self, deadline):
+                time.sleep(max(deadline + 0.1 - time.monotonic(), 0) if self.past else 0)
+                return self.ended
+
+        gone = cr.StopResult('gone', 'gone')
+        for label, answer, tree, status in (
+                ('gone and ended, but past the deadline', gone, Tree(True, True), process_tree.WATCHDOG_EXIT_DEADLINE),
+                ('refused, the tree ran out the deadline', cr.StopResult('refused', 'no'), Tree(False, True),
+                 process_tree.WATCHDOG_EXIT_DEADLINE),
+                ('gone and ended in time', gone, Tree(True, False), process_tree.WATCHDOG_EXIT_GONE),
+                ('refused, in time', cr.StopResult('refused', 'no'), Tree(False, False),
+                 process_tree.WATCHDOG_EXIT_NOT_GONE)):
+            with self.subTest(label):
+                container = FakeContainerWatch()
+                container.result = answer
+                with mock.patch.object(process_tree, 'WATCHDOG_STOP_TOTAL_SECONDS', 1.0), \
+                        mock.patch.object(process_tree, 'WATCHDOG_TERMINATE_RESERVE_SECONDS', 0.5):
+                    self.assertEqual(status, process_tree._stop_and_end(container, tree))
+
+    def test_r4_d1_a_round_pause_never_runs_past_the_deadline(self):
+        tree = process_tree.ProcessTree(os.getpid(), None)
+        tree.identified, tree.tracked = True, {999_999: 'birth'}
+        record = (999_999, 999_999, 'birth', False)
+        with mock.patch.object(process_tree, 'KILL_ROUND_PAUSE_SECONDS', 3.0), \
+                mock.patch.object(tree, '_listing', lambda deadline: {}), mock.patch.object(tree, 'update'), \
+                mock.patch.object(tree, '_record', lambda pid: record), \
+                mock.patch.object(process_tree.os, 'kill'), mock.patch.object(process_tree.os, 'killpg'):
+            started = time.monotonic()
+            self.assertFalse(tree.terminate(started + 0.3))
+        self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_r4_s2_a_container_that_cannot_be_identified_exits_one_not_zero(self):
+        process, _ = self.child()
+        announced = []
+        for container, status in ((FakeContainerWatch(), 1), (None, process_tree.WATCHDOG_EXIT_GONE)):
+            with self.subTest(container=container is not None), \
+                    mock.patch.object(process_tree, 'WATCHDOG_IDENTIFY_SECONDS', 0.3):
+                self.assertEqual(status, process_tree.watch(process.pid, 'not-its-birth', time.monotonic() + 60,
+                                                            lambda: announced.append(1), container=container))
+        self.assertEqual([], announced)
+
     def record_of(self, path):
         self.assertEqual(0o600, os.stat(path).st_mode & 0o777)
         return json.loads(Path(path).read_text())
