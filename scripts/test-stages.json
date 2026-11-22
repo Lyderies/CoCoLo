@@ -49,6 +49,7 @@
  "codex:tests.test_backup_installed_project": "integration",
  "codex:tests.test_billing_probe_api": "unit",
  "codex:tests.test_billing_rejudge": "integration",
+ "codex:tests.test_billing_writers": "integration",
  "codex:tests.test_billing_probe_worker": "integration",
  "codex:tests.test_binding_lookup": "integration",
  "codex:tests.test_bridge": "integration",
