@@ -36,6 +36,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import signal
 import subprocess
 import sys
@@ -643,6 +644,46 @@ class FakeContainerWatch:
         self.stops += 1
         return cr.StopResult('gone', 'the container no longer exists')
 
+    def stop_try(self, seconds):
+        """The watchdog's one bounded try (decision 46: a real container runs it as its own process). This
+        in-process double answers inline, so it can only script answers; hangs use HangingProcessWatch."""
+        try:
+            return bool(self.stop().gone)
+        except Exception:
+            return False
+
+
+# A stand-in for one stop process that never answers: it records its pid, then sleeps.
+HANG_STOP = ('import os, sys, time\n'
+             'fd = os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)\n'
+             'os.write(fd, (str(os.getpid()) + "\\n").encode())\nos.close(fd)\ntime.sleep(3600)\n')
+
+
+class HangingProcessWatch(FakeContainerWatch):
+    """A container whose every stop try is a real process that hangs; the watchdog's own bounded runner
+    (process_tree.run_stop_process) must end it. Records each pid, so the test can see none survives."""
+
+    def __init__(self, folder):
+        super().__init__()
+        self.log = os.path.join(folder, 'pids')
+
+    def stop_try(self, seconds):
+        self.stops += 1
+        return process_tree.run_stop_process([sys.executable, '-I', '-B', '-c', HANG_STOP, self.log], seconds)
+
+    def pids(self):
+        with contextlib.suppress(FileNotFoundError):
+            return [int(line) for line in Path(self.log).read_text().split()]
+        return []
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
 
 def watchdog_armed(name, service_pid):
     """True once the watchdog guarding container `name` is armed: a process_tree.py --container process
@@ -770,29 +811,55 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(5, container.stops)
         self.assertIs(True, container.returned)
 
+    def hanging_process_watch(self):
+        folder = tempfile.mkdtemp(prefix='cocolo-test-', dir=SHORT_TMP)
+        container = HangingProcessWatch(folder)
+        container.parent = False
+
+        def clean():
+            for pid in container.pids():
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(pid, signal.SIGKILL)
+            shutil.rmtree(folder, ignore_errors=True)
+
+        self.addCleanup(clean)
+        return container
+
     def test_cs2_a_hanging_stop_cannot_hold_the_tree_past_the_budget(self):
-        hang = threading.Event()
-        self.addCleanup(hang.set)
-        process, _ = self.child()
+        # Was: the hung try ran in a thread that was abandoned at the budget, and the test expected the
+        # last try to start while it still ran (r2 M4). Now: each try is its own process, killed on its
+        # timeout, so the first is dead before the last begins.
+        process, tree = self.child()
+        container = self.hanging_process_watch()
         started = time.monotonic()
-        container = self.scripted_watch([hang], process, fast=False, WATCHDOG_STOP_BUDGET_SECONDS=1.0,
-                                        WATCHDOG_LAST_STOP_SECONDS=0.5)
+        with mock.patch.object(process_tree, 'WATCHDOG_STOP_BUDGET_SECONDS', 1.0), \
+                mock.patch.object(process_tree, 'WATCHDOG_LAST_STOP_SECONDS', 0.5):
+            returned = process_tree.watch(process.pid, tree, time.monotonic() + 60, lambda: None,
+                                          container=container)
         seconds = time.monotonic() - started
-        self.assertEqual(2, container.stops)  # the hung try, abandoned at the budget; then the last try
+        self.assertEqual(2, container.stops)  # the hung try, ended at the budget; then the last try
+        self.assertEqual(2, len(container.pids()))
+        self.assertEqual([], [pid for pid in container.pids() if alive(pid)], 'a stop process outlived watch()')
         self.assertLess(seconds, 4.0)
-        self.assertIs(False, container.returned)
+        self.assertIs(False, returned)
         self.assertIsNotNone(process.wait(5))
 
     def test_cs2_each_try_is_capped_to_the_time_left(self):
-        slow = threading.Event()
-        self.addCleanup(slow.set)
-        process, _ = self.child()
-        container = FakeContainerWatch()
-        container.stop = lambda: (slow.wait(60), cr.StopResult('stop_failed', 'hung'))[1]
+        # Was: a thread blocked on an Event, abandoned at the budget. Now: a real hanging process, killed.
+        container = self.hanging_process_watch()
         started = time.monotonic()
         with mock.patch.object(process_tree, 'WATCHDOG_STOP_BUDGET_SECONDS', 1.5):
             self.assertFalse(process_tree._stop_container(container))
         self.assertLess(time.monotonic() - started, 2.5)
+        self.assertEqual(1, container.stops)
+        self.assertEqual([], [pid for pid in container.pids() if alive(pid)])
+
+    def test_cs2_the_whole_failure_path_fits_the_20_second_allowance(self):
+        # r2 M2: 15 s + grace, the tree's end and a 5 s last try summed to over 20 s. The production
+        # constants (nothing patched), at the real tests' grace of 1 s, must leave a margin.
+        total = (process_tree.WATCHDOG_STOP_BUDGET_SECONDS + 1 + getattr(process_tree,
+                 'WATCHDOG_TERMINATE_RESERVE_SECONDS', 1.0) + process_tree.WATCHDOG_LAST_STOP_SECONDS)
+        self.assertLessEqual(total, 18.0)
 
     def test_the_launcher_gives_the_watchdog_the_container_and_podman_environment(self):
         launcher = stop_launcher(self, grace_seconds=3)
@@ -832,6 +899,144 @@ class WatchdogTests(unittest.TestCase):
                     {k: v for k, v in config.items() if k != 'parent'}):
             with self.assertRaises(ValueError):
                 process_tree.container_watcher(json.dumps(bad))
+
+
+class WatchdogArmedProbeTests(unittest.TestCase):
+    def probe(self, lsof_code, lsof_out=''):
+        listing = '4242 777 /usr/bin/python3 process_tree.py 4000 b 1.0 --container {"name": "cocolo-run-abc"}\n'
+
+        def run(command, **kwargs):
+            if command[0] == '/bin/ps':
+                return subprocess.CompletedProcess(command, 0, listing, '')
+            return subprocess.CompletedProcess(command, lsof_code, lsof_out, 'lsof: no')
+
+        with mock.patch.object(subprocess, 'run', run):
+            return watchdog_armed('cocolo-run-abc', 777)
+
+    def test_lsof_answers_zero_and_one_are_armed_and_not_armed(self):
+        self.assertIs(True, self.probe(0, 'p4242\nn/dev/null\n'))
+        self.assertIs(False, self.probe(1, ''))
+
+    def test_any_other_lsof_exit_status_is_a_failing_probe_not_not_yet(self):
+        # r2 M3: the exit status was never read, so a permission or tool failure looked like "not armed yet".
+        for code in (2, 126, 127, -9):
+            with self.subTest(code=code), self.assertRaises(Exception):
+                self.probe(code, '')
+
+
+# The container stand-in for the production path: a podman client that is a real script (the watchdog runs
+# it through container_runtime.SubprocessPodman, in a process of its own). Each `stop` logs its pid, its
+# parent and how many earlier stops were still alive. Modes: hang (a stop never answers), ok (gone after one
+# stop), refuse-once (the first inspect says podman is unreachable, then ok).
+FAKE_PODMAN = r"""#!@PYTHON@
+import json, os, sys, time
+folder, mode = @FOLDER@, @MODE@
+args = sys.argv[1:]
+log, gone = os.path.join(folder, 'log'), os.path.join(folder, 'gone')
+
+def note(text):
+    fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    os.write(fd, (text + chr(10)).encode())
+    os.close(fd)
+
+if args[:2] == ['container', 'inspect']:
+    refused = os.path.join(folder, 'refused')
+    if mode == 'refuse-once' and not os.path.exists(refused):
+        open(refused, 'w').close()
+        sys.stderr.write('Error: cannot connect to Podman')
+        sys.exit(125)
+    if os.path.exists(gone):
+        sys.stderr.write('Error: no such container')
+        sys.exit(1)
+    print(json.dumps([{'State': {'Status': 'running'}, 'Config': {'Labels': {}}}]))
+elif args[:1] == ['stop']:
+    earlier = []
+    if os.path.exists(log):
+        earlier = [int(line.split()[1]) for line in open(log) if line.startswith('start')]
+    overlap = 0
+    for pid in earlier:
+        try:
+            os.kill(pid, 0)
+            overlap += 1
+        except ProcessLookupError:
+            pass
+    note('start %d %d overlap=%d' % (os.getpid(), os.getppid(), overlap))
+    if mode == 'hang':
+        time.sleep(3600)
+    open(gone, 'w').close()
+    note('end %d' % os.getpid())
+"""
+
+
+class WatchdogProductionPathTests(unittest.TestCase):
+    """Decision 46: the real watchdog process (process_tree.py as a script, as the bridge starts it), the
+    service dead, over a real podman-shaped client. Checks the exit status, the processes and the time."""
+
+    def setUp(self):
+        self.folder = tempfile.mkdtemp(prefix='cocolo-test-', dir=SHORT_TMP)
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+        self.addCleanup(self.kill_logged)
+
+    def logged(self):
+        path = os.path.join(self.folder, 'log')
+        rows = [line.split() for line in Path(path).read_text().splitlines()] if os.path.exists(path) else []
+        return [row for row in rows if row[0] == 'start']
+
+    def kill_logged(self):
+        for row in self.logged():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(row[1]), signal.SIGKILL)
+
+    def run_watchdog(self, mode, limit=40):
+        podman = os.path.join(self.folder, 'podman')
+        Path(podman).write_text(FAKE_PODMAN.replace('@PYTHON@', sys.executable)
+                                .replace('@FOLDER@', repr(self.folder)).replace('@MODE@', repr(mode)))
+        os.chmod(podman, 0o700)
+        child = subprocess.Popen(['/bin/sleep', '600'], start_new_session=True)
+        self.addCleanup(child.wait)
+        self.addCleanup(lambda: child.poll() is None and child.kill())
+        tree = process_tree.ProcessTree(child.pid, None)
+        self.assertTrue(wait_until(lambda: tree.identify(process_tree.process_table()), 5))
+        config = {'project': 'cocolo-test-x', 'prefix': cr.DEFAULT_NAME_PREFIX, 'podman': podman, 'global': [],
+                  'name': 'cocolo-run-' + '2' * 32, 'grace': 1, 'cgroup': None,
+                  'parent': 99_999_999}  # not this test: the service is dead
+        started = time.monotonic()
+        watchdog = subprocess.Popen(
+            [sys.executable, '-I', '-B', '-S', '-X', 'pycache_prefix=/dev/null', process_tree.__file__,
+             str(child.pid), tree.root_birth, repr(time.monotonic() + 600), '--container', json.dumps(config)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True, env={'PATH': os.defpath})
+        self.addCleanup(lambda: watchdog.poll() is None and watchdog.kill())
+        status = watchdog.wait(limit)
+        return status, time.monotonic() - started, child, watchdog
+
+    def test_a_stop_that_never_answers_ends_nonzero_in_under_20_seconds_with_no_process_left(self):
+        status, seconds, child, _ = self.run_watchdog('hang')
+        self.assertEqual(1, status)  # not proven gone: the exit status the bridge's reap() reads
+        self.assertLess(seconds, 18.0)  # the whole failure path, with a 2 s margin under the 20 s allowance
+        self.assertGreater(seconds, 8.0)  # it did try for its budget
+        rows = self.logged()
+        self.assertEqual(2, len(rows), rows)  # the budget's try and the last try
+        self.assertEqual(['overlap=0'] * 2, [row[3] for row in rows], 'two stops ran at once')
+        for row in rows:
+            self.assertTrue(wait_until(lambda: not alive(int(row[1])), 3), f'stop process {row[1]} outlived the watchdog')
+        self.assertIsNotNone(child.wait(5))  # the tree is ended
+
+    def test_each_stop_try_runs_in_its_own_process_and_a_retry_can_still_succeed(self):
+        status, seconds, child, watchdog = self.run_watchdog('refuse-once')
+        self.assertEqual(0, status)
+        self.assertLess(seconds, 10.0)
+        rows = self.logged()
+        self.assertEqual(1, len(rows), rows)  # the first try was refused before any stop; the second stopped it
+        self.assertNotEqual(str(watchdog.pid), rows[0][2], 'podman ran as a child of the watchdog, not of a try process')
+        self.assertIsNotNone(child.wait(5))
+
+    def test_a_stop_that_succeeds_exits_zero(self):
+        status, seconds, child, watchdog = self.run_watchdog('ok')
+        self.assertEqual(0, status)
+        self.assertEqual(1, len(self.logged()))
+        self.assertNotEqual(str(watchdog.pid), self.logged()[0][2])
+        self.assertIsNotNone(child.wait(5))
 
 
 # --------------------------------------------------------------------------------------------
