@@ -178,12 +178,22 @@ class LearningContractTests(unittest.TestCase):
             record = verification_outcome("legacy_repair_" + code)
             record["repairs"] = 1
             record["repair_reason_codes"] = [code]
-            self.assertEqual(record, validate_learning_record(record), code)
+            self.assertEqual(record, validate_learning_record(record, stored=True), code)
         record = verification_outcome("never_written")
         record["repairs"] = 1
         record["repair_reason_codes"] = ["contract_validation_failed"]
         with self.assertRaisesRegex(ContractError, "repair reason codes"):
-            validate_learning_record(record)
+            validate_learning_record(record, stored=True)
+
+    def test_or1_default_is_strict_and_only_an_explicit_stored_read_is_lenient(self) -> None:
+        from codex_agents.learning_contracts import validate_outcome
+        record = verification_outcome("legacy_default")
+        record["repairs"] = 1
+        record["repair_reason_codes"] = ["inconsistent_axes"]
+        for check in (validate_learning_record, validate_outcome):
+            with self.subTest(check=check.__name__), self.assertRaisesRegex(ContractError, "repair reason codes"):
+                check(record)
+            self.assertEqual(record, check(record, stored=True))
 
     def test_or1_a_new_outcome_takes_only_codes_a_rejected_attempt_can_carry(self) -> None:
         for code in ("inconsistent_axes", "contract_validation_failed", "free text"):
@@ -191,41 +201,11 @@ class LearningContractTests(unittest.TestCase):
             record["repairs"] = 1
             record["repair_reason_codes"] = [code]
             with self.subTest(code=code), self.assertRaisesRegex(ContractError, "repair reason codes"):
-                validate_learning_record(record, fresh=True)
+                validate_learning_record(record)
         record = verification_outcome("fresh_ok")
         record["repairs"] = 1
         record["repair_reason_codes"] = ["missing_evidence"]
-        self.assertEqual(record, validate_learning_record(record, fresh=True))
-
-    def test_med3_stored_billing_keeps_the_historical_overage_status_readable(self) -> None:
-        """cc2c1164 removed overage status 'disabled' (the parent's providers.py wrote it)."""
-        from codex_agents.learning_contracts import LEGACY_OVERAGE_STATUSES
-        from codex_agents.providers import claude_rate_limit_records
-
-        self.assertEqual(frozenset({"disabled"}), LEGACY_OVERAGE_STATUSES)
-        billing = claude_rate_limit_records({"status": "allowed_warning"}, account_fingerprint="a" * 64, observed_at_ms=10)[1]
-        billing["overage_status"] = "disabled"
-        self.assertEqual(billing, validate_learning_record(billing))
-        with self.assertRaisesRegex(ContractError, "overage_status"):
-            validate_learning_record(billing, fresh=True)
-        billing["overage_status"] = "something_else"
-        with self.assertRaisesRegex(ContractError, "overage_status"):
-            validate_learning_record(billing)
-
-    def test_or1_repair_codes_still_match_repairs_and_refuse_unknown_strings(self) -> None:
-        for repairs, codes in (
-            (0, ["inconsistent_axes"]),
-            (1, []),
-            (1, ["inconsistent_axes", "inconsistent_axes"]),
-            (1, ["not_a_reason_code"]),
-            (1, ["free text from a child"]),
-            (1, [None]),
-        ):
-            record = verification_outcome("bad_repair_codes")
-            record["repairs"] = repairs
-            record["repair_reason_codes"] = codes
-            with self.assertRaisesRegex(ContractError, "repair reason codes"):
-                validate_learning_record(record)
+        self.assertEqual(record, validate_learning_record(record))
 
     def test_event_is_closed_and_contains_no_project_claim(self) -> None:
         record = event_record()

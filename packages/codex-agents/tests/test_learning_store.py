@@ -20,7 +20,7 @@ from unittest import mock
 
 from tests.support import ORCHESTRATION_ROOT, REPOSITORY_ROOT, TEMP_ROOT
 
-from codex_agents.contracts import routing_task_slice
+from codex_agents.contracts import ContractError, routing_task_slice
 
 from codex_agents.learning_store import (
     CollectorClient,
@@ -656,17 +656,20 @@ class LearningStoreTests(unittest.TestCase):
             with self.subTest(code=code), self.assertRaisesRegex(LedgerError, 'record admission rejected'):
                 self.ledger.append(self.project_a_id, record, producer='evaluator', now_ms=10)
 
+    def test_or1_ledger_insertion_helper_validates_strictly(self):
+        record = verification_outcome('helper_legacy')
+        record.update(repairs=1, repair_reason_codes=['inconsistent_axes'])
+        with self.assertRaises(ContractError), self.ledger._lock, self.ledger._connection:
+            self.ledger._append_checked_locked(self.project_a_id, record, producer='evaluator', timestamp=10)
+
     def _store_legacy_rows(self):
         """Rows an older build left: stored cells, written as they were, not through today's writers."""
-        from codex_agents.providers import claude_rate_limit_records
         legacy_outcome = verification_outcome('legacy_outcome')
         legacy_outcome.update(repairs=1, repair_reason_codes=['inconsistent_axes'])
-        billing = claude_rate_limit_records({'status': 'allowed_warning'}, account_fingerprint='a' * 64, observed_at_ms=10)[1]
-        billing['overage_status'] = 'disabled'
         connection = self.ledger._connection
         sequence = connection.execute('SELECT MAX(source_sequence) FROM records WHERE project_id=?',
                                       (self.project_a_id,)).fetchone()[0] or 0
-        for number, (record, source) in enumerate(((legacy_outcome, 'host'), (billing, 'host')), 1):
+        for number, (record, source) in enumerate(((legacy_outcome, 'host'),), 1):
             content = canonical_json(record)
             connection.execute(
                 'INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,'
@@ -675,11 +678,10 @@ class LearningStoreTests(unittest.TestCase):
                  10, 10, None, content, content_digest(record), 0))
         connection.commit()
         return [tuple(row) for row in connection.execute(
-            'SELECT record_id,content,content_digest FROM records WHERE record_id IN (?,?) ORDER BY record_id',
-            ('legacy_outcome', billing['record_id']))]
+            'SELECT record_id,content,content_digest FROM records WHERE record_id=?', ('legacy_outcome',))]
 
     def test_or3_installer_path_schema15_ledger_with_legacy_stored_records_upgrades_unchanged(self):
-        """OR-3/MED-3: the installer opens with allow_schema_upgrade and backup_before_upgrade, then registers.
+        """OR-3: the installer opens with allow_schema_upgrade and backup_before_upgrade, then registers.
         The owner's upgrade refused with 'project backup contains a corrupt learning record'."""
         stored = self._store_legacy_rows()
         connection = self.ledger._connection
@@ -692,8 +694,7 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual(16, self.ledger._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assertEqual(self.project_a_id, self.ledger.register_project(self.project_a, now_ms=2))
         after = [tuple(row) for row in self.ledger._connection.execute(
-            'SELECT record_id,content,content_digest FROM records WHERE record_id IN (?,?) ORDER BY record_id',
-            tuple(row[0] for row in stored))]
+            'SELECT record_id,content,content_digest FROM records WHERE record_id=?', ('legacy_outcome',))]
         self.assertEqual(stored, after)
         backups = self.ledger._connection.execute(
             "SELECT file_id FROM stored_files WHERE project_id=? AND kind='backup' AND file_id LIKE 'upgrade_schema15_%'",

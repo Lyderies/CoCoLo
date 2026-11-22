@@ -1637,6 +1637,31 @@ class VerifiedQaTests(unittest.TestCase):
         self.assertTrue(record["accepted"])
         self.assertEqual("not-ready", record["semantic_verdict"])
 
+    def test_or1_qa_refuses_to_copy_a_stored_inconsistent_axes_into_a_new_outcome(self) -> None:
+        """A stored host outcome may hold the old `inconsistent_axes` code and is still read; the NEW
+        verified or operational outcome would copy it, which no new outcome may carry, so QA refuses."""
+        for builder, operational in ((build_verified_qa_records, False), (build_operational_qa_records, True)):
+            inputs = verified_qa_inputs()
+            if operational:
+                inputs.pop("evaluation_assignment")
+                inputs.pop("evaluation_case")
+                inputs["host_outcome"]["evaluation_candidate_digest"] = None
+                inputs["host_outcome"]["evaluation_case_digest"] = None
+            inputs["host_outcome"].update(repairs=1, repair_reason_codes=["inconsistent_axes"])
+            inputs["verifier_assignment"]["context"] = [content_digest(inputs["host_outcome"])]
+            inputs["verifier_host_outcome"]["evidence_digests"] = sorted({
+                keyed_digest(DIGEST_KEY, canonical_json(inputs["verifier_assignment"])),
+                keyed_digest(DIGEST_KEY, canonical_json(inputs["verifier_result"])),
+            })
+            with self.subTest(operational=operational), self.assertRaisesRegex(ContractError, "repair reason codes"):
+                builder(**inputs)
+
+    def test_or1_analysis_and_case_readers_still_read_a_stored_legacy_outcome(self) -> None:
+        from codex_agents.learning_analysis import analyze_outcomes
+        record = outcome()
+        record.update(repairs=1, repair_reason_codes=["inconsistent_axes"])
+        analyze_outcomes([record], as_of_ms=2000, max_age_ms=10**9)
+
     def test_legacy_qa_evidence_without_separated_axes_remains_valid(self) -> None:
         qa, _ = build_verified_qa_records(**verified_qa_inputs())
         legacy = {
