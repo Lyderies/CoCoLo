@@ -2478,6 +2478,12 @@ def run_operational_check_suite(
     return report
 
 
+def _verdict_class(verdict: str) -> str:
+    """Verdict agreement compares classes: pass and ready are one positive class;
+    every other verdict (ready-with-corrections, not-ready, blocked, ...) is its own."""
+    return "positive" if verdict in {"pass", "ready"} else verdict
+
+
 def build_verified_qa_records(
     *,
     digest_key: bytes,
@@ -2611,7 +2617,7 @@ def build_verified_qa_records(
     )
     verifier_disagreement = (
         evaluator_complete != verifier_complete
-        or evaluator_verdict != verifier_verdict
+        or _verdict_class(evaluator_verdict) != _verdict_class(verifier_verdict)
         or evaluator_outcomes != verifier_outcomes
         or host.get("semantic_verdict", "pass") != evaluator_verdict
         or verifier_host.get("semantic_verdict", "pass") != verifier_verdict
@@ -2911,7 +2917,7 @@ def build_operational_qa_records(
     )
     verifier_disagreement = (
         evaluator_complete != verifier_complete
-        or (not review and evaluator_verdict != verifier_verdict)
+        or (not review and _verdict_class(evaluator_verdict) != _verdict_class(verifier_verdict))
         or evaluator_outcomes != verifier_outcomes
         or host.get("semantic_verdict", "pass") != evaluator_verdict
         or verifier_host.get("semantic_verdict", "pass") != verifier_verdict

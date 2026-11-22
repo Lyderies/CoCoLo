@@ -112,6 +112,26 @@ class ReviewQaTests(unittest.TestCase):
         )
         self.assertFalse(qa["accepted"])
 
+    def test_non_review_worker_pass_and_verifier_ready_agree_and_are_accepted(self) -> None:
+        # L5.3: pass and ready are the same positive class.
+        for worker, verifier in (("pass", "ready"), ("ready", "pass")):
+            qa, record = build_operational_qa_records(
+                **qa_inputs(review=False, worker_verdict=worker, verifier_verdict=verifier,
+                            claims=(), worker_risks=(), verifier_risks=())
+            )
+            self.assertFalse(qa["verifier_disagreement"], (worker, verifier))
+            self.assertTrue(qa["accepted"], (worker, verifier))
+            self.assertEqual("accepted", record["status"])
+
+    def test_non_review_positive_against_not_ready_is_still_a_disagreement(self) -> None:
+        for verifier in ("not-ready", "ready-with-corrections"):
+            qa, _ = build_operational_qa_records(
+                **qa_inputs(review=False, worker_verdict="pass", verifier_verdict=verifier,
+                            claims=(), worker_risks=(), verifier_risks=())
+            )
+            self.assertTrue(qa["verifier_disagreement"], verifier)
+            self.assertFalse(qa["accepted"], verifier)
+
 
 if __name__ == "__main__":
     unittest.main()
