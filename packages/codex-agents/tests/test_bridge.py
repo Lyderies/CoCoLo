@@ -3684,6 +3684,24 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
             self.ledger.observe_claude_billing(self.project_id, project_root=self.tools, environ=CLEAN)
         self.assertEqual(before, self.launches())
 
+    def test_BR1_ledger_path_a_saved_reused_then_paid_usage_then_a_repeat_refuses(self) -> None:
+        # BR-1 (decision 44), LearningLedger path: a 'reused' answer is never trusted on its own; paid usage that
+        # arrives after it (stamped now, the same clock as the saved answer) refuses the repeat.
+        self.admit("claude")
+        self.assertEqual("launched", self.probe(FAVOURABLE)["probe"])
+        self.setUp_fresh_project(new_account=False)
+        self.assertEqual("reused", self.probe(FAVOURABLE)["probe"])
+        before = self.launches()
+        fingerprint = self.ledger.observe_provider(
+            self.project_id, "claude", project_root=self.tools, environ=CLEAN)[0]["account_fingerprint"]
+        now = time.time_ns() // 1_000_000
+        records = claude_rate_limit_records(OVERAGE["rate_limit_info"], account_fingerprint=fingerprint,
+                                            observed_at_ms=now)
+        self.ledger._store_provider_observations(self.project_id, records, timestamp=now)
+        with self.assertRaisesRegex(AdmissionDenied, "paid_usage_usable"):
+            self.ledger.observe_claude_billing(self.project_id, project_root=self.tools, environ=CLEAN)
+        self.assertEqual(before, self.launches())
+
     def test_a_second_project_reuses_or_waits_instead_of_probing(self) -> None:
         self.admit("claude")
         self.assertEqual("launched", self.probe(FAVOURABLE)["probe"])
