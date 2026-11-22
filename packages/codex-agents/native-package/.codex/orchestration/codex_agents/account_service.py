@@ -785,7 +785,7 @@ class AccountService:
         if self._observation_jobs is not None:
             self._observation_jobs.drive()
 
-    def _billing_reply(self, key, result, context, before_publish):
+    def _billing_reply(self, key, result, context, before_publish, history=None):
         project, runtime, caller, identity = key
         request = AccountRequest(1, 'account.billing_probe', identity, project, runtime, {})
         labels = {'request_id': identity, 'project_id': project, 'runtime_digest': runtime,
@@ -804,8 +804,10 @@ class AccountService:
             if before_publish() is not True:
                 raise ProbeAdmissionError('probe_not_authorized')
             current = self._observation_jobs._owner.billing_waivers(project, records) if records else {}
-            retained = self._billing_jobs._owner.known_reply(*key, context, before_commit=before_publish)
-            if waivers != current or retained != {**result, 'known': True}:
+            # BR-8 (decision 44): the exact committed row, integrity only; a stored success is never re-served.
+            self._billing_jobs._owner.verify_committed(*key, context, before_commit=before_publish,
+                                                       reply=result, history=history)
+            if waivers != current:
                 raise ProbeAdmissionError('probe_not_authorized')
             self._provenance_live()
             with self._front_lock:
@@ -846,12 +848,13 @@ class AccountService:
             if reply.reason is not None:
                 allowed = {
                     'probe_invalid_request', 'probe_not_authorized', 'probe_unavailable', 'probe_conflict',
-                    'probe_full', 'probe_busy', 'probe_not_ready', 'probe_reply_invalid', 'account_busy', *ADMISSION_CAPTURE_PUBLIC_REASONS,
+                    'probe_full', 'probe_busy', 'probe_not_ready', 'probe_reply_invalid', 'account_busy',
+                    'probe_replay_stale', 'provider_api_key_present', *ADMISSION_CAPTURE_PUBLIC_REASONS,
                     *PROBE_STEP_REASONS, *OBSERVATION_REASONS}
                 if reply.reason not in allowed:
                     self._name_probe_failure('probe_reason_unrecognised')
                 return self._reply(labels, reason=reply.reason if reply.reason in allowed else 'probe_unavailable')
-            return self._billing_reply(reply.key, reply.result, reply.context, reply.before_publish)
+            return self._billing_reply(reply.key, reply.result, reply.context, reply.before_publish, reply.history)
         if (self._observation_jobs is not None and type(ticket) is object
                 and ticket in self._observation_jobs._jobs):
             reply = self._observation_jobs.take(ticket, _ingress=_ingress)

@@ -2333,7 +2333,9 @@ class LearningLedger:
                     "VALUES(?,'replaced',?)",
                     (content, timestamp),
                 )
-        with self.state._owner_key_turn():
+        # BR-15: the signer file is written under the ledger lock (then the state turn, the order a billing
+        # judgment's final check uses), so no judgment commits between the history record and the file.
+        with self._held(), self.state._owner_key_turn():
             self.state._write_owner_signers(content)
         self.state.harden_database_files()
         return self.state.owner_key_report()
@@ -5303,6 +5305,18 @@ class LearningLedger:
         return self._lock_waits.snapshot()
 
     @contextlib.contextmanager
+    def _write_unit(self) -> Iterator[None]:
+        """BR-15: the records of one write are one unit under the ledger lock: all of them or none.
+        Inside an already open transaction the caller's unit is the unit; otherwise one is begun here."""
+
+        with self._held(sys._getframe(2).f_code.co_name):
+            if self._connection.in_transaction:
+                yield
+            else:
+                with self._account_transaction():
+                    yield
+
+    @contextlib.contextmanager
     def _account_transaction(self) -> Iterator[None]:
         """Own one explicit account write unit; never borrow an outer transaction.
 
@@ -5655,7 +5669,7 @@ class LearningLedger:
             raise LedgerError("record admission rejected") from exc
         if any(record["record_type"] not in PROVIDER_OBSERVATION_TYPES for record in checked):
             raise LedgerError("provider observation type is unsupported")
-        with self._held(), self._connection:
+        with self._write_unit():
             project = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
@@ -6192,7 +6206,7 @@ class LearningLedger:
 
         timestamp = self._clock_ms()
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
-        with self._held(), self._connection:
+        with self._write_unit():
             binding = self._connection.execute(
                 "SELECT run_id,binding_state,consumed_at_ms FROM host_run_bindings "
                 "WHERE project_id=? AND handle_digest=?",
@@ -9429,7 +9443,7 @@ class LearningLedger:
         if not authority.verify_owner_record(project_id, checked, signature):
             raise LedgerError("owner record signature is invalid")
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        with self._held(), self._connection:
+        with self._write_unit():
             project = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()

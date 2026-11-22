@@ -75,6 +75,7 @@ class BillingJobReply:
     reason: str | None
     before_publish: object
     context: ObservationContext
+    history: dict | None = None  # a repeat's unchanged committed row (decision 44), checked at publication
 
 
 # S1-H1a: the reasons that are failures (a refusal such as a cooldown is not one).
@@ -177,7 +178,12 @@ class AccountBillingJobs:
             if job.context is not context or job.snapshot != snapshot or job.cancelled:
                 raise ProbeAdmissionError('probe_conflict')
             self._owner._authorize(context, snapshot, before_publish)
-            return ticket
+            if job.state != 'unknown' or job.result is not None or not self._owner.committed(project, runtime, caller,
+                                                                                         identity, context):
+                return ticket
+            # A fault after the commit left this job as local custody only. A repeat is a new judgment of the
+            # committed row (decision 44): the custody job stays where it is, the request key moves to the new job.
+            del self._requests[key]
         if (self._counts.get(project, 0) >= self._limits.jobs_per_project
                 or project not in self._counts and len(self._counts) >= self._limits.max_projects):
             raise ProbeAdmissionError('probe_full')
@@ -195,6 +201,11 @@ class AccountBillingJobs:
             if type(original) is dict:
                 job.result, job.state = original, 'ready'
             else:
+                if original.history is not None:
+                    # A repeat (decision 44) is judged on the records at hand and makes no provider call,
+                    # not even an identity observation (BR-5, BR-13): it goes straight to its judgment.
+                    job.reservation, job.state = original, 'prepare'
+                    return ticket
                 job.reservation, job.state = original, 'identity'
                 job.observation = self._observations.submit(project, runtime, caller,
                     'billing-ident-'+original.key, ObservationInput('claude'), context, before_publish,
@@ -209,7 +220,8 @@ class AccountBillingJobs:
     def _drop(self, ticket):
         job = self._jobs.pop(ticket)
         self._publish_health()
-        self._requests.pop(job.key)
+        if self._requests.get(job.key) == ticket:
+            self._requests.pop(job.key)
         project = job.key[0]
         self._queues[project].remove(ticket)
         if not self._queues[project]:
@@ -364,6 +376,12 @@ class AccountBillingJobs:
             else:
                 job.identity = next(r for r in reply.result['records'] if r['record_type'] == 'provider_identity')
                 job.state = 'prepare'
+        if job.state == 'prepare' and job.reservation.history is not None:
+            # A repeat (decision 44) never launches: no probe worker is prepared for it; it goes straight to
+            # the signature work its fresh judgment needs.
+            job.identity = None
+            if not self._start_signature(ticket, job):
+                return
         if job.state == 'prepare':
             try:
                 job.preparation = self._executions.prepare(job.reservation, job.identity)
@@ -385,21 +403,7 @@ class AccountBillingJobs:
                 self._discard(job, 'probe_unavailable', cause='probe_signature_pool_stuck')
                 return
             if state == 'prepared':
-                try:
-                    job.signature = self._owner.prepare(job.reservation)
-                except AdmissionCaptureError as error:
-                    # Nothing was admitted; the history admission needs did not fit or
-                    # could not be read, and the probe says which.
-                    self._discard(job, public_capture_reason(error))
-                    return
-                except SignatureJobError as error:
-                    if error.reason_code in {'signature_job_project_full', 'signature_job_project_limit'}:
-                        # Intake refused before returning any original handle.
-                        # Keep this unoffered preparation on the same deadline;
-                        # normal cancellation/expiry still retires it locally.
-                        return
-                    raise
-                self._signatures[job.signature], job.state = ticket, 'signature'
+                self._start_signature(ticket, job)
             elif state == 'failed':
                 self._discard(job, 'probe_preparation_failed')
             elif state == 'unknown':
@@ -447,6 +451,25 @@ class AccountBillingJobs:
                 else:
                     self._owner.abort_reserved(job.reservation)
             self._ready(ticket, job, result=job.result, reason=job.reason)
+
+    def _start_signature(self, ticket, job):
+        """Start the signature work of a job's judgment. False when the job was discarded or must wait."""
+        try:
+            job.signature = self._owner.prepare(job.reservation)
+        except AdmissionCaptureError as error:
+            # Nothing was admitted; the history admission needs did not fit or
+            # could not be read, and the probe says which.
+            self._discard(job, public_capture_reason(error))
+            return False
+        except SignatureJobError as error:
+            if error.reason_code in {'signature_job_project_full', 'signature_job_project_limit'}:
+                # Intake refused before returning any original handle.
+                # Keep this unoffered preparation on the same deadline;
+                # normal cancellation/expiry still retires it locally.
+                return False
+            raise
+        self._signatures[job.signature], job.state = ticket, 'signature'
+        return True
 
     def _end_closed(self, ticket, job):
         """O0b RS-A round 2 G9: the sweep closed this job's never-admitted reservation. Its observation,
@@ -533,17 +556,18 @@ class AccountBillingJobs:
         if job.state not in {'ready', 'unknown'}:
             return None
         result, reason = job.result, job.reason
+        history = None if job.reservation is None else job.reservation.history
         if result is not None:
             try:
-                actual = self._owner.reserve(*job.key, job.context, before_commit=job.before_publish)
-                if actual != {**result, 'known': True}:
-                    raise ProbeAdmissionError('probe_conflict')
+                # BR-8: integrity of the exact row this job committed (or, for a repeat, its unchanged history).
+                self._owner.verify_committed(*job.key, job.context, before_commit=job.before_publish,
+                                             reply=result, history=history)
             except ProbeAdmissionError as error:
                 result, reason = None, error.reason_code
             except Exception as error:
                 result, reason = None, 'probe_unavailable'
                 lane_health.safely(lambda: self.health.note_failure(self._note, 'probe_reply_read_failed', error))
-        reply = BillingJobReply(job.key, result, reason, job.before_publish, job.context)
+        reply = BillingJobReply(job.key, result, reason, job.before_publish, job.context, history)
         if job.state == 'ready':
             self._drop(ticket)
         return reply

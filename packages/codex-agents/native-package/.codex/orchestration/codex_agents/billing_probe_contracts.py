@@ -14,7 +14,9 @@ BILLING_PROBE_REASONS = frozenset({'probe_invalid_request', 'probe_invalid_respo
     # No probe worker can free without a restart (0.3.3, C9c).
     'probe_worker_unavailable',
     # The reply failed its own contract (the probe ran or was reused; its answer could not be sent).
-    'probe_reply_invalid'})
+    'probe_reply_invalid',
+    # BR-13 / BR-10 (decision 44): a repeat that would need a new provider call; a provider API key.
+    'probe_replay_stale', 'provider_api_key_present'})
 PROBE_STEP_REASONS = frozenset({'probe_preparation_failed', 'probe_preparation_unknown', 'probe_worker_failed',
     'probe_step_failed', 'probe_worker_unavailable',
     'probe_unlaunched_expired',
