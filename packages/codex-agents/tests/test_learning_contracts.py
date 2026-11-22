@@ -167,6 +167,31 @@ class LearningContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "repair reason codes"):
             validate_learning_record(record)
 
+    def test_or1_legacy_diagnostic_repair_codes_stay_readable(self) -> None:
+        """OR-1: 0.8.43 split `inconsistent_axes`; outcomes that older releases wrote still validate."""
+        from codex_agents.contracts import RESULT_DIAGNOSTIC_REASON_CODES
+
+        for code in sorted(RESULT_DIAGNOSTIC_REASON_CODES):
+            record = verification_outcome("legacy_repair_" + code)
+            record["repairs"] = 1
+            record["repair_reason_codes"] = [code]
+            self.assertEqual(record, validate_learning_record(record), code)
+
+    def test_or1_repair_codes_still_match_repairs_and_refuse_unknown_strings(self) -> None:
+        for repairs, codes in (
+            (0, ["inconsistent_axes"]),
+            (1, []),
+            (1, ["inconsistent_axes", "inconsistent_axes"]),
+            (1, ["not_a_reason_code"]),
+            (1, ["free text from a child"]),
+            (1, [None]),
+        ):
+            record = verification_outcome("bad_repair_codes")
+            record["repairs"] = repairs
+            record["repair_reason_codes"] = codes
+            with self.assertRaisesRegex(ContractError, "repair reason codes"):
+                validate_learning_record(record)
+
     def test_event_is_closed_and_contains_no_project_claim(self) -> None:
         record = event_record()
         self.assertEqual("evt_1", validate_learning_record(record)["record_id"])

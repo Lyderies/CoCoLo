@@ -1721,6 +1721,45 @@ class OutcomeAndCaseTests(unittest.TestCase):
         self.assertNotIn("secret output", encoded)
         self.assertEqual(1, record["required_criteria_passed"])
 
+    def test_or2_host_outcome_passes_the_validator_for_every_code_a_rejected_attempt_can_carry(self) -> None:
+        """OR-2: the host builds an outcome from each rejected attempt's reason code; its own validator
+        must accept every one. A rejected attempt carries a ResultContractError code (receipt issue)."""
+        from codex_agents.contracts import (
+            RESULT_DIAGNOSTIC_REASON_CODES, RESULT_VALIDATION_REASON_CODES, ResultContractError,
+        )
+        from codex_agents.learning_engine import build_host_result_records
+        from tests.learning_support import champion_configuration, routing_fields
+
+        assigned = assignment()
+        task = {
+            "id": "task-1", "objective": "Read one fixture", "family": "research",
+            "complexity": "medium", "risk": "low", "meaningful": True, **routing_fields(),
+            "deterministic_validation": True, "independent_parts": 1,
+            "parallel_safe": False, "failed_attempts": 0, "failure_events": [],
+        }
+        configuration = {
+            **champion_configuration(), "model": assigned["model"], "effort": assigned["effort"],
+            "role": assigned["role"], "client_digest": content_digest(END_TO_END_CAPABILITY),
+        }
+        # The only source of an attempt's code is ResultContractError, which refuses any other.
+        for diagnostic_only in sorted(RESULT_DIAGNOSTIC_REASON_CODES - RESULT_VALIDATION_REASON_CODES):
+            with self.assertRaises(ValueError):
+                ResultContractError(diagnostic_only, "x")
+        for code in sorted(RESULT_VALIDATION_REASON_CODES):
+            with self.subTest(code=code):
+                _, record, _ = build_host_result_records(
+                    assignment=assigned, task=task, result=result(),
+                    observation={"run_id": "run_1", "client_version": "codex-host-v1", "result_attempts": [
+                        {"status": "rejected", "reason_code": code, "receipt_id": "rpr_" + "a" * 48},
+                        {"status": "accepted", "reason_code": None, "receipt_id": None}]},
+                    host_evidence={"run_id": "run_1", "coverage": "lifecycle_partial", "usage": full_usage(),
+                                   "usage_source": "host_observed", "observed_at_ms": 1000, "no_progress_events": 0},
+                    execution_configuration=configuration, digest_key=DIGEST_KEY,
+                    client_capability=END_TO_END_CAPABILITY,
+                )
+                self.assertEqual([code], record["repair_reason_codes"])
+                self.assertEqual(record, validate_learning_record(record))
+
     def test_accepted_outcome_cannot_hide_a_failed_gate(self) -> None:
         with self.assertRaisesRegex(ContractError, "failed hard gate"):
             build_outcome(
