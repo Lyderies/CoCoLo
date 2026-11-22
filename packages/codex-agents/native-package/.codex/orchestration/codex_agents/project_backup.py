@@ -46,7 +46,10 @@ _ADDED_IN = {15: ("run_holds",)}
 def _file_schema(schema_version: int) -> str:
     """The format-3 file schema for one ledger version: the restore schema without later versions' tables."""
     later = [table for version, tables in _ADDED_IN.items() if schema_version < version for table in tables]
-    return (_store()._BACKUP_RESTORE_SCHEMA + ";\n" + _MANIFEST_SCHEMA + ";\n"
+    schema = _store()._BACKUP_RESTORE_SCHEMA
+    if schema_version < 16:
+        schema = schema.replace(",probe_id TEXT", "")
+    return (schema + ";\n" + _MANIFEST_SCHEMA + ";\n"
             + "".join(f"DROP TABLE {table};\n" for table in later))
 
 
@@ -213,7 +216,7 @@ def _objects(connection: sqlite3.Connection) -> set[tuple[str, str, str]]:
 
 
 def store_versions() -> frozenset[int]:
-    return frozenset({5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
+    return frozenset({5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
 
 
 def open_backup(path: Path) -> sqlite3.Connection:
@@ -264,7 +267,7 @@ def verify(path: Path, *, project_id: str, schema_version: int | None = None,
                 raise _error("project backup manifest is invalid")
             kind, version, ledger_version, owner, raw = rows[0]
             if (kind != FORMAT or type(version) is not int or version != FORMAT_VERSION or type(ledger_version) is not int
-                    or ledger_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15} or owner != project_id
+                    or ledger_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16} or owner != project_id
                     or (schema_version is not None and ledger_version != schema_version)
                     or type(raw) is not bytes):
                 raise _error("project backup manifest is invalid")

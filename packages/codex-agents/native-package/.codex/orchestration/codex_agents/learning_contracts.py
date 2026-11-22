@@ -1709,10 +1709,11 @@ PROVIDER_IDENTITY_FIELDS = {
     "logged_in", "auth_method", "subscription_type", "plan_type", "client_path",
     "client_sha256", "client_version", "observed_at_ms",
 }
-PROVIDER_HEADROOM_FIELDS = {
+PROVIDER_HEADROOM_REQUIRED_FIELDS = {
     "schema_version", "record_type", "record_id", "provider", "account_fingerprint",
     "windows", "status", "run_id", "phase", "observed_at_ms",
 }
+PROVIDER_HEADROOM_FIELDS = PROVIDER_HEADROOM_REQUIRED_FIELDS | {"probe_id"}
 # When an observation was taken relative to the run it belongs to.
 OBSERVATION_PHASES = {"before", "during", "after"}
 HEADROOM_WINDOW_FIELDS = {"window_minutes", "scope", "used_percent", "resets_at"}
@@ -1724,7 +1725,7 @@ PROVIDER_BILLING_REQUIRED_FIELDS = {
     "ordinary_usage_allowed", "is_using_overage", "overage_status",
     "overage_disabled_reason", "run_id", "phase", "observed_at_ms",
 }
-PROVIDER_BILLING_FIELDS = PROVIDER_BILLING_REQUIRED_FIELDS | {"spend_control_reached"}
+PROVIDER_BILLING_FIELDS = PROVIDER_BILLING_REQUIRED_FIELDS | {"spend_control_reached", "probe_id"}
 # The owner's optional statement that Codex credit spending is disabled on the
 # account. The observation cannot show it, so only a signed grant carries it.
 CODEX_CREDITS_DISABLED_FIELD = "codex_credits_spending_disabled"
@@ -1815,6 +1816,10 @@ def _observation_base(data: dict[str, Any], record_type: str) -> None:
 
 
 def _run_phase(data: dict[str, Any]) -> None:
+    if "probe_id" in data:
+        _digest(data["probe_id"], "probe_id", nullable=True)
+        if data["probe_id"] is not None and (data["provider"] != "claude" or data["run_id"] is not None):
+            raise ContractError("probe provenance belongs only to a Claude probe")
     _identifier(data["run_id"], "run_id", nullable=True)
     _enum(data["phase"], OBSERVATION_PHASES, "phase", nullable=True)
     if (data["run_id"] is None) != (data["phase"] is None):
@@ -1846,7 +1851,7 @@ def validate_provider_identity(data: Any) -> dict[str, Any]:
 
 
 def validate_provider_headroom(data: Any) -> dict[str, Any]:
-    data = _closed(data, PROVIDER_HEADROOM_FIELDS, "provider_headroom")
+    data = _closed_optional(data, PROVIDER_HEADROOM_REQUIRED_FIELDS, PROVIDER_HEADROOM_FIELDS, "provider_headroom")
     _observation_base(data, "provider_headroom")
     windows = data["windows"]
     if not isinstance(windows, list) or len(windows) > 16:

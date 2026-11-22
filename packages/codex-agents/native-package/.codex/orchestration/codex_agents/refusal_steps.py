@@ -85,11 +85,18 @@ RESULT_STEP = ("The result does not meet its contract: correct it as the reason 
                "repair_receipt only when a structural repair is allowed.")
 
 
-def next_step(reason_code: object) -> str:
+def next_step(reason_code: object, retry_at: object = None) -> str:
     """The plain next step for a refusal's fixed reason code."""
     from .contracts import RESULT_VALIDATION_REASON_CODES
     if type(reason_code) is not str:
         return DEFAULT
+    if reason_code == 'probe_cooldown':
+        from datetime import datetime
+        from .billing_probe_contracts import valid_probe_retry
+        if valid_probe_retry(retry_at):
+            local = datetime.fromisoformat(retry_at).astimezone().strftime('%H:%M')
+            return ("A fresh billing probe is not allowed within five minutes of the last one that passed: "
+                    f"wait until {local}, then run provider-observe again.")
     if reason_code in RESULT_VALIDATION_REASON_CODES:
         return EXACT.get(reason_code) or RESULT_STEP
     return EXACT.get(reason_code) or FAMILY.get(reason_code.split('_', 1)[0], DEFAULT)

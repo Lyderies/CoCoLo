@@ -46,6 +46,7 @@ from .contracts import ContractError
 from .git_plumbing import XCRUN_NO_CACHE
 from .host_paths import executable_location_problem, temp_roots
 from .learning_contracts import (
+    validate_learning_record,
     CLAUDE_AUTH_METHODS,
     CLAUDE_OVERAGE_DISABLED_REASONS,
     CLAUDE_SUBSCRIPTION_TYPES,
@@ -87,9 +88,10 @@ CLIENT_VERSION_PATTERNS = {
 class AdmissionDenied(ContractError):
     """A host run was denied; `reason_code` is stable and safe to print."""
 
-    def __init__(self, reason_code: str) -> None:
+    def __init__(self, reason_code: str, *, retry_at: str | None = None) -> None:
         super().__init__(f"provider admission denied: {reason_code}")
         self.reason_code = reason_code
+        self.retry_at = retry_at
 
 
 class ObservationError(ContractError):
@@ -713,6 +715,7 @@ def claude_rate_limit_records(
     observed_at_ms: int,
     run_id: str | None = None,
     phase: str | None = None,
+    probe_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Turn one stream `rate_limit_info` object into headroom and billing records."""
 
@@ -763,7 +766,8 @@ def claude_rate_limit_records(
         paid_usable = False
     else:
         paid_usable = None
-    common = {"provider": "claude", "account_fingerprint": account_fingerprint}
+    common = {"provider": "claude", "account_fingerprint": account_fingerprint,
+              **({"probe_id": probe_id} if probe_id is not None else {})}
     if run_id is not None and phase is None:
         phase = "during"
     return [
@@ -786,6 +790,17 @@ def claude_rate_limit_records(
             "observed_at_ms": observed_at_ms,
         })),
     ]
+
+
+def probe_records(records: list[dict[str, Any]], probe_id: str) -> list[dict[str, Any]]:
+    """Bind all retained probe observations, including partial failures, before hashing or storing them."""
+    result = []
+    for record in records:
+        material = {k: v for k, v in record.items() if k != 'record_id'}
+        material['probe_id'] = probe_id
+        result.append(validate_learning_record({**material,
+            'record_id': material['record_type'] + ':' + content_digest(material)}))
+    return result
 
 
 def headroom_record(

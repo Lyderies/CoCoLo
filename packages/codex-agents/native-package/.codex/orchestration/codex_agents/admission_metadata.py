@@ -498,15 +498,23 @@ def probe_latest(billing: list[tuple[dict[str, Any], str]], fingerprint: str) ->
     )
 
 
-def probe_head(headroom: list[tuple[dict[str, Any], str]], fingerprint: str) -> dict[str, Any] | None:
-    """The newest observed headroom reading of this account that a probe itself took (not the last one stored)."""
+def probe_retry_at(passed_at_ms: int) -> str:
+    """The account-wide cooldown ends five minutes after the latest qualifying pass."""
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp((passed_at_ms + 300_000) / 1000, timezone.utc).isoformat().replace('+00:00', 'Z')
 
-    return max(
-        (record for record, _ in headroom
-         if record["account_fingerprint"] == fingerprint
-         and record.get("run_id") is None and record.get("phase") is None),
-        key=lambda record: record["observed_at_ms"], default=None,
-    )
+
+def probe_head(
+    headroom: list[tuple[dict[str, Any], str]], fingerprint: str, latest: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Only a unique headroom row with the reused billing row's probe provenance is its own."""
+    probe_id = latest.get("probe_id")
+    if probe_id is None:
+        return None
+    own = [record for record, _ in headroom
+           if record["account_fingerprint"] == fingerprint and record.get("run_id") is None
+           and record.get("phase") is None and record.get("probe_id") == probe_id]
+    return own[0] if len(own) == 1 else None
 
 
 def newer_run_restricts(
@@ -548,25 +556,11 @@ def newer_run_restricts(
     # re-evaluation and the final gate still judge it). Equal rank is left to that re-evaluation even when the
     # restriction sits on another window (LOW-3): it reads every headroom record, the run's included.
     #
-    # MED-1: the probe's own reading is the headroom its own probe wrote with the reused billing record. One
-    # probe stamps every record of its reply with the same `observed_at_ms` (billing_probe_worker._normalized,
-    # learning_store.observe_claude_billing), and the probe's reply carries at most one headroom and one billing
-    # record, so a probe's own headroom is the untagged headroom of this account stamped exactly as `latest`.
-    # Nearness in time proves nothing (another probe's headroom, an earlier, later or future one, is not this
-    # probe's), so the association needs the exact stamp AND to be unambiguous: when the stamp carries more than
-    # one distinct headroom or billing record (two probes at the same instant) nothing shows which one is this
-    # probe's. With no or an ambiguous own reading the baseline is ample, so any restriction blocks, as before.
+    # PC-5: timestamps cannot establish ownership (complementary partial failures can share a stamp).
+    # Missing or ambiguous provenance keeps the legacy ample baseline, so any constrained run blocks.
     rank = {"ample": 0, "constrained": 1, "exhausted": 2}
-    probes_own = [
-        (record, digest) for record, digest in headroom
-        if record["account_fingerprint"] == fingerprint and record.get("run_id") is None
-        and record.get("phase") is None and record["observed_at_ms"] == since]
-    probes_billing = {
-        record["record_id"] for record, _ in billing
-        if record["account_fingerprint"] == fingerprint and record.get("run_id") is None
-        and record.get("phase") is None and record["observed_at_ms"] == since}
-    unambiguous = len({record["record_id"] for record, _ in probes_own}) == 1 and len(probes_billing) == 1
-    own = probes_own if unambiguous else []
+    head = probe_head(headroom, fingerprint, latest)
+    own = [] if head is None else [(head, "")]
     return (rank[headroom_state("claude", fingerprint, newer, [], now_ms)[0]]
             > rank[headroom_state("claude", fingerprint, own, [], now_ms)[0]])
 

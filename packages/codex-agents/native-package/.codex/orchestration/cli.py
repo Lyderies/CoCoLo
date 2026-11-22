@@ -289,9 +289,8 @@ def _bounded_json_input(path: str) -> dict:
 def _print(data: object) -> None:
     if type(data) is dict and data.get("ready") is False and type(data.get("reason_code")) is str:
         from codex_agents.refusal_steps import next_step
-        # S1-H1b: what to do next for every refusal with a reason code, always the table's fixed text
-        # (never a supplied value). A not-ready reply without one is a report, not a refusal.
-        data = {**data, "next_step": next_step(data["reason_code"])}
+        # Fixed refusal text, with a validated cooldown retry time rendered in the caller's timezone.
+        data = {**data, "next_step": next_step(data["reason_code"], data.get("retry_at"))}
     print(json.dumps(data, indent=2, sort_keys=True))
 
 
@@ -3979,7 +3978,7 @@ def main() -> int:
         _print({'ready': False, 'error': 'result recording unavailable', 'reason_code': exc.reason_code})
         return 2
     except RuntimeBillingProbeError as exc:
-        _print({'ready': False, 'error': 'billing probe unavailable', 'reason_code': exc.reason_code,
+        _print({**({'retry_at': exc.retry_at} if exc.retry_at is not None else {}), 'ready': False, 'error': 'billing probe unavailable', 'reason_code': exc.reason_code,
                 **({'request_id': exc.request_id} if exc.request_id is not None else {}),
                 **({'hint': BILLING_ATTESTATION_HINT} if exc.reason_code == 'billing_attestation_missing' else {})})
         return 2
@@ -4000,6 +3999,8 @@ def main() -> int:
             "error": "provider admission denied",
             "reason_code": exc.reason_code,
         }
+        if exc.retry_at is not None:
+            report["retry_at"] = exc.retry_at
         if exc.reason_code == "billing_attestation_missing":
             report["hint"] = BILLING_ATTESTATION_HINT
         _print(report)
