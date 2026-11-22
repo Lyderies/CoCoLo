@@ -160,6 +160,60 @@ class EndStates(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'start evidence'):
             check_end_state(self, self.f, self.batch, ml.Report('refused'), read_history=history)
 
+    def test_review_A3_retry_landed_is_rejected(self):
+        put(self.f.project / 'a.txt', b'child')
+        with self.assertRaisesRegex(AssertionError, 'retry'):
+            self.check(row=replace(self.row, state='landed'), report=replace(self.report, state='landed'), action='retry')
+
+    def test_review_A4_policy_switches_are_live_and_independent(self):
+        from tests.merge_library_support import POLICY, policy_outcomes
+        from unittest.mock import patch
+        defaults = policy_outcomes()
+        alternatives = {'Q1': 'reverted_with_leftover', 'Q2': 'fresh_forward',
+                        'Q3': 'record_pending', 'Q4': 'reverted_with_owner',
+                        'Q5': 'direct_parents_only', 'Q6': 'wait_for_recovery'}
+        for key, value in alternatives.items():
+            with self.subTest(policy=key), patch.dict(POLICY, {key: value}):
+                observed = policy_outcomes()
+                self.assertNotEqual(defaults[key], observed[key])
+                self.assertEqual({k: v for k, v in defaults.items() if k != key},
+                                 {k: v for k, v in observed.items() if k != key})
+        with patch.dict(POLICY, {'Q2': 'fresh_forward'}):
+            put(self.f.project / 'a.txt', b'child')
+            self.check(row=replace(self.row, state='landed'),
+                       report=replace(self.report, state='landed', paths=(ml.PathReport('a.txt', 'new'),)), action='retry')
+
+    def test_review_A7_real_samples_reject_stale_and_uncovered_kinds(self):
+        import json
+        from unittest.mock import patch
+        from tests.merge_library_support import sample_boundaries
+        call = ml.IOCall('write', 'before', 'forward')
+        point = (('key', 1), call)
+        for rows in ([{'key': ['stale', 1]}], [{'key': ['key', 1]}]):
+            points = [point] if rows[0]['key'][0] == 'stale' else [point, (('new', 1), replace(call, operation='unlink'))]
+            with self.subTest(rows=rows), patch('pathlib.Path.read_text', return_value=json.dumps({'samples': {'real': {'forward': rows}}})):
+                with self.assertRaisesRegex(AssertionError, 'stale|boundary'):
+                    sample_boundaries(points)
+
+    def test_review_A9_unmapped_method_is_not_grandfathered(self):
+        from tests.merge_library_support import declare_ml_tests
+        class Unknown(unittest.TestCase):
+            def test_unmapped(self):
+                pass
+        with self.assertRaisesRegex(ValueError, 'unmapped'):
+            declare_ml_tests({'__name__': __name__, 'Unknown': Unknown})
+
+    def test_review_L12_emptied_directory_mode_is_protected(self):
+        self.batch = self.f.batch({'removed/old.txt': None})
+        info = (self.f.project / 'removed').stat()
+        (self.f.project / 'removed/old.txt').unlink()
+        row = replace(self.row, batch=self.batch, state='landed', emptied_folders={'removed': (info.st_dev, info.st_ino)})
+        report = replace(self.report, state='landed', paths=(ml.PathReport('removed/old.txt', 'absent'),))
+        self.check(row=row, report=report)
+        (self.f.project / 'removed').chmod(0o700)
+        with self.assertRaisesRegex(AssertionError, 'mode'):
+            self.check(row=row, report=report)
+
 
 if __name__ == '__main__':
     unittest.main()

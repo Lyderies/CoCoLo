@@ -127,6 +127,23 @@ class RecoveryPolicies(unittest.TestCase):
         self.assertEqual('cleanup', store.phase)
         self.assertFalse(getattr(store, 'reporting', False))
 
+    def test_review_C6_cleanup_reread_failure_reports_unknown_and_continues(self):
+        from unittest.mock import patch
+        f = self.f
+        f.land(f.batch({'a.txt': b'child'}))
+        original = ml._Store.rows
+        failed = []
+        def cleanup_failure(store, row):
+            failed.append(row['id'])
+            raise OSError(errno.EIO, 'cleanup failure')
+        def rows(store):
+            if failed:
+                raise OSError(errno.EIO, 'durable reread failure')
+            return original(store)
+        with patch.object(ml, '_clean_row', cleanup_failure), patch.object(ml._Store, 'rows', rows):
+            reports = ml.cleanup(f.project, f.private)
+        self.assertEqual([('unknown', 'io', False)], [(r.state, r.reason, r.recorded) for r in reports])
+
 
 if __name__ == '__main__':
     unittest.main()
