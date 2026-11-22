@@ -259,7 +259,8 @@ class HarnessOracles(unittest.TestCase):
         """ML-12/TF-18: splitting modules must preserve the complete real campaign."""
         import importlib
         from tests import test_merge_library_adversarial as source
-        expected = set(unittest.defaultTestLoader.getTestCaseNames(source.Adversarial))
+        expected = {name for cls in (source.Adversarial, source.RealImages)
+                    for name in unittest.defaultTestLoader.getTestCaseNames(cls)}
         observed = []
         def walk(suite):
             for test in suite:
