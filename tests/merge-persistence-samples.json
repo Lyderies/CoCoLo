@@ -1,0 +1,4948 @@
+{
+ "profile": "ci/dev",
+ "reproducer": "scripts/parallel_tests.py --base a1d25560 --module codex:tests.test_merge_library_adversarial --module codex:tests.test_merge_library_model_sweep",
+ "samples": {
+  "model": {
+   "cleaning": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "unlink",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "unlink",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "unlink",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "unlink",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rmdir",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rmdir",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rmdir",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rmdir",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "retirement",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "retirement",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "retirement",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "retirement",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "retirement",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "retirement",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "retirement",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "retirement",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "retirement",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "retirement",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "retirement",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "retirement",
+     "side": "after"
+    },
+    {
+     "commit": "retire",
+     "key": [
+      [
+       "sqlite_commit",
+       "retirement",
+       "before",
+       "private/history.sqlite",
+       null,
+       "retire",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "retirement",
+     "side": "before"
+    },
+    {
+     "commit": "retire",
+     "key": [
+      [
+       "sqlite_commit",
+       "retirement",
+       "after",
+       "private/history.sqlite",
+       null,
+       "retire",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "retirement",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "before",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "after",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "after"
+    }
+   ],
+   "forward": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "intake",
+       "before",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "intake",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "intake",
+       "after",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "intake",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "intake",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "intake",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "intake",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "intake",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "intake",
+       "before",
+       "private",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "intake",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "intake",
+       "after",
+       "private",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "intake",
+     "side": "after"
+    },
+    {
+     "commit": "queue",
+     "key": [
+      [
+       "sqlite_commit",
+       "intake",
+       "before",
+       "private/history.sqlite",
+       null,
+       "queue",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "intake",
+     "side": "before"
+    },
+    {
+     "commit": "queue",
+     "key": [
+      [
+       "sqlite_commit",
+       "intake",
+       "after",
+       "private/history.sqlite",
+       null,
+       "queue",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "intake",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "write",
+       "intake",
+       "before",
+       "private/history-probe-a",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "write",
+     "phase": "intake",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "write",
+       "intake",
+       "after",
+       "private/history-probe-a",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "write",
+     "phase": "intake",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "intake",
+       "before",
+       "private/history-probe-a",
+       "private/history-probe-b",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "intake",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "intake",
+       "after",
+       "private/history-probe-a",
+       "private/history-probe-b",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "intake",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "intake",
+       "before",
+       "private/history-probe-a",
+       "private/history-probe-c",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "intake",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "intake",
+       "after",
+       "private/history-probe-a",
+       "private/history-probe-c",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "intake",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "unlink",
+       "intake",
+       "before",
+       "private/history-probe-b",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "unlink",
+     "phase": "intake",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "unlink",
+       "intake",
+       "after",
+       "private/history-probe-b",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "unlink",
+     "phase": "intake",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "mkdir",
+       "staging",
+       "before",
+       "project/.cocolo",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "mkdir",
+     "phase": "staging",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "mkdir",
+       "staging",
+       "after",
+       "project/.cocolo",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "mkdir",
+     "phase": "staging",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "staging",
+       "before",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "staging",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "staging",
+       "after",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "staging",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "write",
+       "staging",
+       "before",
+       "private/history-prepare-b7ed69bdffad051ed56a",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "write",
+     "phase": "staging",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "write",
+       "staging",
+       "after",
+       "private/history-prepare-b7ed69bdffad051ed56a",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "write",
+     "phase": "staging",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "staging",
+       "before",
+       "private/history-prepare-b7ed69bdffad051ed56a",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "staging",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "staging",
+       "after",
+       "private/history-prepare-b7ed69bdffad051ed56a",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "staging",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "staging",
+       "before",
+       "private/history-prepare-b7ed69bdffad051ed56a",
+       "project/.cocolo/staging/child-1/m00002-base",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "staging",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "staging",
+       "after",
+       "private/history-prepare-b7ed69bdffad051ed56a",
+       "project/.cocolo/staging/child-1/m00002-base",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "staging",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "history",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "history",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "history",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "history",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "history",
+       "before",
+       "private",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "history",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "history",
+       "after",
+       "private",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "history",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "history",
+       "before",
+       "private",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "history",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "history",
+       "after",
+       "private",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "history",
+     "side": "after"
+    },
+    {
+     "commit": "A",
+     "key": [
+      [
+       "sqlite_commit",
+       "history",
+       "before",
+       "private/history.sqlite",
+       null,
+       "A",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "history",
+     "side": "before"
+    },
+    {
+     "commit": "A",
+     "key": [
+      [
+       "sqlite_commit",
+       "history",
+       "after",
+       "private/history.sqlite",
+       null,
+       "A",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "history",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "mkdir",
+       "forward",
+       "before",
+       "project/new",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "mkdir",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "mkdir",
+       "forward",
+       "after",
+       "project/new",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "mkdir",
+     "phase": "forward",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "forward",
+       "before",
+       "private/history.directories",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "forward",
+       "after",
+       "private/history.directories",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "forward",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "write",
+       "forward",
+       "before",
+       "private/history.directories",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "write",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "write",
+       "forward",
+       "after",
+       "private/history.directories",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "write",
+     "phase": "forward",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "forward",
+       "before",
+       "private/history.directories",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "forward",
+       "after",
+       "private/history.directories",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "forward",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "forward",
+       "before",
+       "project/.cocolo/staging/child-1/e00002",
+       "project/a.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "forward",
+       "after",
+       "project/.cocolo/staging/child-1/e00002",
+       "project/a.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "forward",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "forward",
+       "before",
+       "project/.cocolo/staging/child-1/e00003",
+       "project/new/deep/add.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "forward",
+       "after",
+       "project/.cocolo/staging/child-1/e00003",
+       "project/new/deep/add.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "forward",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "before",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "after",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "validation",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "validation",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "validation",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "validation",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "validation",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "validation",
+     "side": "after"
+    },
+    {
+     "commit": "B",
+     "key": [
+      [
+       "sqlite_commit",
+       "validation",
+       "before",
+       "private/history.sqlite",
+       null,
+       "B",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": "B",
+     "key": [
+      [
+       "sqlite_commit",
+       "validation",
+       "after",
+       "private/history.sqlite",
+       null,
+       "B",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "validation",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "unlink",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "unlink",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "unlink",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "unlink",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rmdir",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rmdir",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rmdir",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rmdir",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "cleanup",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "cleanup",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": "queue",
+     "key": [
+      [
+       "sqlite_commit",
+       "cleanup",
+       "before",
+       "private/history.sqlite",
+       null,
+       "queue",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": "queue",
+     "key": [
+      [
+       "sqlite_commit",
+       "cleanup",
+       "after",
+       "private/history.sqlite",
+       null,
+       "queue",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "cleanup",
+     "side": "after"
+    }
+   ],
+   "recovering": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "recovery",
+       "before",
+       "project/z.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "recovery",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "recovery",
+       "after",
+       "project/z.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "recovery",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "recovery",
+       "before",
+       "project/.cocolo/staging/child-1/e00005",
+       "project/z.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "recovery",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "recovery",
+       "after",
+       "project/.cocolo/staging/child-1/e00005",
+       "project/z.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "recovery",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "recovery",
+       "before",
+       "project/.cocolo/staging/child-1/e00004",
+       "project/removed/old.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "recovery",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "recovery",
+       "after",
+       "project/.cocolo/staging/child-1/e00004",
+       "project/removed/old.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "recovery",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "recovery",
+       "before",
+       "project/new/deep",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "recovery",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "recovery",
+       "after",
+       "project/new/deep",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "recovery",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rmdir",
+       "recovery",
+       "before",
+       "project/new/deep",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rmdir",
+     "phase": "recovery",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rmdir",
+       "recovery",
+       "after",
+       "project/new/deep",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rmdir",
+     "phase": "recovery",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "recovery",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "recovery",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "recovery",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "recovery",
+     "side": "after"
+    },
+    {
+     "commit": "reverse",
+     "key": [
+      [
+       "sqlite_commit",
+       "recovery",
+       "before",
+       "private/history.sqlite",
+       null,
+       "reverse",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "recovery",
+     "side": "before"
+    },
+    {
+     "commit": "reverse",
+     "key": [
+      [
+       "sqlite_commit",
+       "recovery",
+       "after",
+       "private/history.sqlite",
+       null,
+       "reverse",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "recovery",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "unlink",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "unlink",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "unlink",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "unlink",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rmdir",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rmdir",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rmdir",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rmdir",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "before",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "after",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "after"
+    }
+   ],
+   "reverse": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "reverse",
+       "before",
+       "project/z.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "reverse",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "reverse",
+       "after",
+       "project/z.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "reverse",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "reverse",
+       "before",
+       "project/.cocolo/staging/child-1/e00005",
+       "project/z.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "reverse",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "reverse",
+       "after",
+       "project/.cocolo/staging/child-1/e00005",
+       "project/z.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "reverse",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "reverse",
+       "before",
+       "project/.cocolo/staging/child-1/e00004",
+       "project/removed/old.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "reverse",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "reverse",
+       "after",
+       "project/.cocolo/staging/child-1/e00004",
+       "project/removed/old.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "reverse",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "reverse",
+       "before",
+       "project/new/deep",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "reverse",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "reverse",
+       "after",
+       "project/new/deep",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "reverse",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rmdir",
+       "reverse",
+       "before",
+       "project/new/deep",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rmdir",
+     "phase": "reverse",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rmdir",
+       "reverse",
+       "after",
+       "project/new/deep",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rmdir",
+     "phase": "reverse",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "reverse",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "reverse",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "reverse",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "reverse",
+     "side": "after"
+    },
+    {
+     "commit": "reverse",
+     "key": [
+      [
+       "sqlite_commit",
+       "reverse",
+       "before",
+       "private/history.sqlite",
+       null,
+       "reverse",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "reverse",
+     "side": "before"
+    },
+    {
+     "commit": "reverse",
+     "key": [
+      [
+       "sqlite_commit",
+       "reverse",
+       "after",
+       "private/history.sqlite",
+       null,
+       "reverse",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "reverse",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "unlink",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "unlink",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "unlink",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "unlink",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rmdir",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rmdir",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rmdir",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rmdir",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "before",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "after",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "after"
+    }
+   ],
+   "undoing": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "intake",
+       "before",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "intake",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "intake",
+       "after",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "intake",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "mkdir",
+       "staging",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "mkdir",
+     "phase": "staging",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "mkdir",
+       "staging",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "mkdir",
+     "phase": "staging",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "staging",
+       "before",
+       "private/history-prepare-ecad865fc4b1063397a2",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "staging",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "staging",
+       "after",
+       "private/history-prepare-ecad865fc4b1063397a2",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "staging",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "write",
+       "staging",
+       "before",
+       "private/history-prepare-ecad865fc4b1063397a2",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "write",
+     "phase": "staging",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "write",
+       "staging",
+       "after",
+       "private/history-prepare-ecad865fc4b1063397a2",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "write",
+     "phase": "staging",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "staging",
+       "before",
+       "private/history-prepare-ecad865fc4b1063397a2",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "staging",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "staging",
+       "after",
+       "private/history-prepare-ecad865fc4b1063397a2",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "staging",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "staging",
+       "before",
+       "private/history-prepare-ecad865fc4b1063397a2",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "staging",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "staging",
+       "after",
+       "private/history-prepare-ecad865fc4b1063397a2",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "staging",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "validation",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "validation",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "validation",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "before",
+       "private",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "after",
+       "private",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "validation",
+       "before",
+       "private",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "validation",
+       "after",
+       "private",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "validation",
+     "side": "after"
+    },
+    {
+     "commit": "A",
+     "key": [
+      [
+       "sqlite_commit",
+       "validation",
+       "before",
+       "private/history.sqlite",
+       null,
+       "A",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": "A",
+     "key": [
+      [
+       "sqlite_commit",
+       "validation",
+       "after",
+       "private/history.sqlite",
+       null,
+       "A",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "validation",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "mkdir",
+       "forward",
+       "before",
+       "project/removed",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "mkdir",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "mkdir",
+       "forward",
+       "after",
+       "project/removed",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "mkdir",
+     "phase": "forward",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "forward",
+       "before",
+       "private/history.directories",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "forward",
+       "after",
+       "private/history.directories",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "forward",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "write",
+       "forward",
+       "before",
+       "private/history.directories",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "write",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "write",
+       "forward",
+       "after",
+       "private/history.directories",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "write",
+     "phase": "forward",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "forward",
+       "before",
+       "private/history.directories",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "forward",
+       "after",
+       "private/history.directories",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "forward",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "forward",
+       "before",
+       "project/.cocolo/staging/child-1/u1",
+       "project/z.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "forward",
+       "after",
+       "project/.cocolo/staging/child-1/u1",
+       "project/z.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "forward",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "forward",
+       "before",
+       "project/.cocolo/staging/child-1/u2",
+       "project/removed/old.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "forward",
+       "after",
+       "project/.cocolo/staging/child-1/u2",
+       "project/removed/old.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "forward",
+     "side": "after"
+    },
+    {
+     "commit": "undo",
+     "key": [
+      [
+       "sqlite_commit",
+       "validation",
+       "before",
+       "private/history.sqlite",
+       null,
+       "undo",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": "undo",
+     "key": [
+      [
+       "sqlite_commit",
+       "validation",
+       "after",
+       "private/history.sqlite",
+       null,
+       "undo",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "validation",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "unlink",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "unlink",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "unlink",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "unlink",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rmdir",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rmdir",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rmdir",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rmdir",
+     "phase": "cleanup",
+     "side": "after"
+    }
+   ]
+  },
+  "real": {
+   "cleaning": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_read",
+       "intake",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_read",
+     "phase": "intake",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_read",
+       "intake",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_read",
+     "phase": "intake",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "retirement",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "retirement",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "retirement",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "retirement",
+     "side": "after"
+    },
+    {
+     "commit": "retire",
+     "key": [
+      [
+       "sqlite_commit",
+       "retirement",
+       "before",
+       "private/history.sqlite",
+       null,
+       "retire",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "retirement",
+     "side": "before"
+    },
+    {
+     "commit": "retire",
+     "key": [
+      [
+       "sqlite_commit",
+       "retirement",
+       "after",
+       "private/history.sqlite",
+       null,
+       "retire",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "retirement",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "before",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "after",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "after"
+    }
+   ],
+   "compensation": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "compensation",
+       "before",
+       "project/.cocolo/staging/child-1/e00000",
+       "project/a.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "compensation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "compensation",
+       "after",
+       "project/.cocolo/staging/child-1/e00000",
+       "project/a.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "compensation",
+     "side": "after"
+    }
+   ],
+   "forward": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "intake",
+       "before",
+       "private/history-probe-a",
+       "private/history-probe-b",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "intake",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "intake",
+       "after",
+       "private/history-probe-a",
+       "private/history-probe-b",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "intake",
+     "side": "after"
+    },
+    {
+     "commit": "queue",
+     "key": [
+      [
+       "sqlite_commit",
+       "intake",
+       "before",
+       "private/history.sqlite",
+       null,
+       "queue",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "intake",
+     "side": "before"
+    },
+    {
+     "commit": "queue",
+     "key": [
+      [
+       "sqlite_commit",
+       "intake",
+       "after",
+       "private/history.sqlite",
+       null,
+       "queue",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "intake",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "staging",
+       "before",
+       "private/history-prepare-b7ed69bdffad051ed56a",
+       "project/.cocolo/staging/child-1/m00002-base",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "staging",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "staging",
+       "after",
+       "private/history-prepare-b7ed69bdffad051ed56a",
+       "project/.cocolo/staging/child-1/m00002-base",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "staging",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "history",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "history",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "history",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "history",
+     "side": "after"
+    },
+    {
+     "commit": "A",
+     "key": [
+      [
+       "sqlite_commit",
+       "history",
+       "before",
+       "private/history.sqlite",
+       null,
+       "A",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "history",
+     "side": "before"
+    },
+    {
+     "commit": "A",
+     "key": [
+      [
+       "sqlite_commit",
+       "history",
+       "after",
+       "private/history.sqlite",
+       null,
+       "A",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "history",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "forward",
+       "before",
+       "project/.cocolo/staging/child-1/e00002",
+       "project/a.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "forward",
+       "after",
+       "project/.cocolo/staging/child-1/e00002",
+       "project/a.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "forward",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "validation",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "validation",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "validation",
+     "side": "after"
+    },
+    {
+     "commit": "B",
+     "key": [
+      [
+       "sqlite_commit",
+       "validation",
+       "before",
+       "private/history.sqlite",
+       null,
+       "B",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": "B",
+     "key": [
+      [
+       "sqlite_commit",
+       "validation",
+       "after",
+       "private/history.sqlite",
+       null,
+       "B",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "validation",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "cleanup",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "cleanup",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": "queue",
+     "key": [
+      [
+       "sqlite_commit",
+       "cleanup",
+       "before",
+       "private/history.sqlite",
+       null,
+       "queue",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": "queue",
+     "key": [
+      [
+       "sqlite_commit",
+       "cleanup",
+       "after",
+       "private/history.sqlite",
+       null,
+       "queue",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "cleanup",
+     "side": "after"
+    }
+   ],
+   "owner_cleanup": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "cleanup",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "cleanup",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": "queue",
+     "key": [
+      [
+       "sqlite_commit",
+       "cleanup",
+       "before",
+       "private/history.sqlite",
+       null,
+       "queue",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": "queue",
+     "key": [
+      [
+       "sqlite_commit",
+       "cleanup",
+       "after",
+       "private/history.sqlite",
+       null,
+       "queue",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "cleanup",
+     "side": "after"
+    }
+   ],
+   "owner_compensation": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "compensation",
+       "before",
+       "project/.cocolo/staging/child-1/e00000",
+       "project/a.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "compensation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "compensation",
+       "after",
+       "project/.cocolo/staging/child-1/e00000",
+       "project/a.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "compensation",
+     "side": "after"
+    }
+   ],
+   "owner_forward": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "forward",
+       "before",
+       "project/.cocolo/staging/child-1/e00000",
+       "project/a.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "forward",
+       "after",
+       "project/.cocolo/staging/child-1/e00000",
+       "project/a.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "forward",
+     "side": "after"
+    }
+   ],
+   "owner_recovery": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "recovery",
+       "before",
+       "project/.cocolo/staging/child-1/e00000",
+       "project/a.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "recovery",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "recovery",
+       "after",
+       "project/.cocolo/staging/child-1/e00000",
+       "project/a.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "recovery",
+     "side": "after"
+    },
+    {
+     "commit": "reverse",
+     "key": [
+      [
+       "sqlite_commit",
+       "recovery",
+       "before",
+       "private/history.sqlite",
+       null,
+       "reverse",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "recovery",
+     "side": "before"
+    },
+    {
+     "commit": "reverse",
+     "key": [
+      [
+       "sqlite_commit",
+       "recovery",
+       "after",
+       "private/history.sqlite",
+       null,
+       "reverse",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "recovery",
+     "side": "after"
+    }
+   ],
+   "owner_reverse": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "reverse",
+       "before",
+       "project/.cocolo/staging/child-1/e00000",
+       "project/a.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "reverse",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "reverse",
+       "after",
+       "project/.cocolo/staging/child-1/e00000",
+       "project/a.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "reverse",
+     "side": "after"
+    },
+    {
+     "commit": "reverse",
+     "key": [
+      [
+       "sqlite_commit",
+       "reverse",
+       "before",
+       "private/history.sqlite",
+       null,
+       "reverse",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "reverse",
+     "side": "before"
+    },
+    {
+     "commit": "reverse",
+     "key": [
+      [
+       "sqlite_commit",
+       "reverse",
+       "after",
+       "private/history.sqlite",
+       null,
+       "reverse",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "reverse",
+     "side": "after"
+    }
+   ],
+   "recovering": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "recovery",
+       "before",
+       "project/.cocolo/staging/child-1/e00005",
+       "project/z.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "recovery",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "recovery",
+       "after",
+       "project/.cocolo/staging/child-1/e00005",
+       "project/z.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "recovery",
+     "side": "after"
+    },
+    {
+     "commit": "reverse",
+     "key": [
+      [
+       "sqlite_commit",
+       "recovery",
+       "before",
+       "private/history.sqlite",
+       null,
+       "reverse",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "recovery",
+     "side": "before"
+    },
+    {
+     "commit": "reverse",
+     "key": [
+      [
+       "sqlite_commit",
+       "recovery",
+       "after",
+       "private/history.sqlite",
+       null,
+       "reverse",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "recovery",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "before",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "after",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "after"
+    }
+   ],
+   "retirement": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "retirement",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "retirement",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "retirement",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "retirement",
+     "side": "after"
+    },
+    {
+     "commit": "retire",
+     "key": [
+      [
+       "sqlite_commit",
+       "retirement",
+       "before",
+       "private/history.sqlite",
+       null,
+       "retire",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "retirement",
+     "side": "before"
+    },
+    {
+     "commit": "retire",
+     "key": [
+      [
+       "sqlite_commit",
+       "retirement",
+       "after",
+       "private/history.sqlite",
+       null,
+       "retire",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "retirement",
+     "side": "after"
+    }
+   ],
+   "reverse": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_read",
+       "intake",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_read",
+     "phase": "intake",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_read",
+       "intake",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_read",
+     "phase": "intake",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "reverse",
+       "before",
+       "project/.cocolo/staging/child-1/e00005",
+       "project/z.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "reverse",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "reverse",
+       "after",
+       "project/.cocolo/staging/child-1/e00005",
+       "project/z.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "reverse",
+     "side": "after"
+    },
+    {
+     "commit": "reverse",
+     "key": [
+      [
+       "sqlite_commit",
+       "reverse",
+       "before",
+       "private/history.sqlite",
+       null,
+       "reverse",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "reverse",
+     "side": "before"
+    },
+    {
+     "commit": "reverse",
+     "key": [
+      [
+       "sqlite_commit",
+       "reverse",
+       "after",
+       "private/history.sqlite",
+       null,
+       "reverse",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "reverse",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "before",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "validation",
+       "after",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "validation",
+     "side": "after"
+    }
+   ],
+   "undoing": [
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "intake",
+       "before",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "intake",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "open",
+       "intake",
+       "after",
+       "project/a.txt",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "open",
+     "phase": "intake",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "staging",
+       "before",
+       "private/history-prepare-ecad865fc4b1063397a2",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "staging",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "rename_noreplace",
+       "staging",
+       "after",
+       "private/history-prepare-ecad865fc4b1063397a2",
+       "project/.cocolo/staging/child-1/.gitignore",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "rename_noreplace",
+     "phase": "staging",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "validation",
+       "before",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "sqlite_write",
+       "validation",
+       "after",
+       "private/history.sqlite",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_write",
+     "phase": "validation",
+     "side": "after"
+    },
+    {
+     "commit": "A",
+     "key": [
+      [
+       "sqlite_commit",
+       "validation",
+       "before",
+       "private/history.sqlite",
+       null,
+       "A",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": "A",
+     "key": [
+      [
+       "sqlite_commit",
+       "validation",
+       "after",
+       "private/history.sqlite",
+       null,
+       "A",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "validation",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "forward",
+       "before",
+       "project/.cocolo/staging/child-1/u1",
+       "project/z.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "forward",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "exchange",
+       "forward",
+       "after",
+       "project/.cocolo/staging/child-1/u1",
+       "project/z.txt",
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "exchange",
+     "phase": "forward",
+     "side": "after"
+    },
+    {
+     "commit": "undo",
+     "key": [
+      [
+       "sqlite_commit",
+       "validation",
+       "before",
+       "private/history.sqlite",
+       null,
+       "undo",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "validation",
+     "side": "before"
+    },
+    {
+     "commit": "undo",
+     "key": [
+      [
+       "sqlite_commit",
+       "validation",
+       "after",
+       "private/history.sqlite",
+       null,
+       "undo",
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "sqlite_commit",
+     "phase": "validation",
+     "side": "after"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "before",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "before"
+    },
+    {
+     "commit": null,
+     "key": [
+      [
+       "full_flush",
+       "cleanup",
+       "after",
+       "project/.cocolo/staging/child-1",
+       null,
+       null,
+       null
+      ],
+      1
+     ],
+     "occurrence": 1,
+     "operation": "full_flush",
+     "phase": "cleanup",
+     "side": "after"
+    }
+   ]
+  }
+ },
+ "schema": 1,
+ "soak": "all discovered boundaries including non-persistence calls"
+}

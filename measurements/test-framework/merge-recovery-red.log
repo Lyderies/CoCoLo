@@ -1,0 +1,61 @@
+FEFF
+======================================================================
+ERROR: test_D7_unreadable_history_reports_unknown_and_touches_nothing (tests.test_merge_library_recovery.RecoveryPolicies.test_D7_unreadable_history_reports_unknown_and_touches_nothing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_recovery.py", line 60, in test_D7_unreadable_history_reports_unknown_and_touches_nothing
+    reports = ml.recover(f.project, f.private, hook=unreadable)
+  File "<worktree>/packages/codex-agents/native-package/.codex/orchestration/codex_agents/merge_library.py", line 1254, in recover
+    rows = s.rows()
+  File "<worktree>/packages/codex-agents/native-package/.codex/orchestration/codex_agents/merge_library.py", line 457, in rows
+    rows = self.io('sqlite_read', lambda: db.execute('SELECT value FROM rows ORDER BY id').fetchall(), self.path)
+  File "<worktree>/packages/codex-agents/native-package/.codex/orchestration/codex_agents/merge_library.py", line 267, in io
+    override = self.hook(IOCall(op, 'before', self.phase, path, other, detail)) if self.hook else None
+               ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_recovery.py", line 59, in unreadable
+    raise OSError(errno.EIO, 'unreadable history')
+OSError: [Errno 5] unreadable history
+
+======================================================================
+FAIL: test_D6_retry_and_cancel_cannot_reverse_durable_landed (tests.test_merge_library_recovery.RecoveryPolicies.test_D6_retry_and_cancel_cannot_reverse_durable_landed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_recovery.py", line 71, in test_D6_retry_and_cancel_cannot_reverse_durable_landed
+    self.assertEqual(('refused', 'terminal'), (report.state, report.reason))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Tuples differ: ('refused', 'terminal') != ('needs_owner', 'io')
+
+First differing element 0:
+'refused'
+'needs_owner'
+
+- ('refused', 'terminal')
++ ('needs_owner', 'io')
+
+======================================================================
+FAIL: test_Q5_all_emptied_ancestors_are_recorded_and_unlisted_empty_folder_survives (tests.test_merge_library_recovery.RecoveryPolicies.test_Q5_all_emptied_ancestors_are_recorded_and_unlisted_empty_folder_survives)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_recovery.py", line 29, in test_Q5_all_emptied_ancestors_are_recorded_and_unlisted_empty_folder_survives
+    self.assertEqual(identities, ml.history(f.project, f.private)[-1].emptied_folders)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'outer': (16777233, 241288322), 'outer/inner': (16777233, 241288323)} != {'outer/inner': (16777233, 241288323)}
+- {'outer': (16777233, 241288322), 'outer/inner': (16777233, 241288323)}
++ {'outer/inner': (16777233, 241288323)}
+
+======================================================================
+FAIL: test_Q6_cancel_applying_attempts_putback_and_records_the_outcome (tests.test_merge_library_recovery.RecoveryPolicies.test_Q6_cancel_applying_attempts_putback_and_records_the_outcome)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_recovery.py", line 47, in test_Q6_cancel_applying_attempts_putback_and_records_the_outcome
+    self.assertEqual('reverted', report.state)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'reverted' != 'cancelled'
+- reverted
++ cancelled
+
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.614s
+
+FAILED (failures=3, errors=1)

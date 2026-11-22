@@ -28,7 +28,7 @@ from tests.merge_library_support import (
     declare_ml_tests,
     FAULTABLE, Fixture, Trace, checkpoint, child_run, fault_sweep,
     kill_oracle, put, report_oracle, seed_applied, tree, ReplayPoint, replay_key,
-    owner_preservation_oracle, version_at,
+    owner_preservation_oracle, version_at, sample_boundaries, replay_points,
     outcome_oracle, recover_checked,
 )
 
@@ -324,9 +324,9 @@ class Adversarial(unittest.TestCase):
         prepared(self.f)
         trace = Trace()
         ml.cleanup(self.f.project, self.f.private, hook=trace)
-        points = [replay_key(trace.calls, i, self.f) for i, c in enumerate(trace.calls) if c.phase == "retirement"]
+        points = replay_points(trace.calls, self.f, lambda c: c.phase == "retirement")
         self.assertTrue(points)
-        for point in points:
+        for point, _ in sample_boundaries(points, reproducer="retirement"):
             f = Fixture()
             try:
                 prepared(f)
@@ -488,13 +488,12 @@ def compensation_sweep(test, *, kill):
     discovery = Fixture()
     try:
         trace, _ = run(discovery, discovery.batch({"a.txt": b"child"}))
-        points = [replay_key(trace.calls, i, discovery) for i, c in enumerate(trace.calls)
-                  if c.phase == "compensation" and (kill or c.operation in FAULTABLE)]
+        points = replay_points(trace.calls, discovery, lambda c: c.phase == "compensation" and (kill or c.operation in FAULTABLE))
         test.assertTrue(points)
-        test.assertTrue({"before", "after"}.issubset({key[0][2] for key in points}))
+        test.assertTrue({"before", "after"}.issubset({key[0][2] for key, _ in points}))
     finally:
         discovery.close()
-    for point in points:
+    for point, _ in sample_boundaries(points, reproducer="compensation"):
         for fault in (None,) if kill else (errno.ENOSPC, errno.EIO):
             f = Fixture()
             try:
@@ -545,11 +544,11 @@ def owner_edit(test, value):
                     put(discovery.project / "a.txt", b"FIRST OWNER\n")
             trace.inject = race
         operation(discovery, batch, trace)
-        points = [replay_key(trace.calls, i, discovery) for i, c in enumerate(trace.calls) if c.phase == phase]
+        points = replay_points(trace.calls, discovery, lambda c: c.phase == phase)
         test.assertTrue(points, phase)
     finally:
         discovery.close()
-    for point in points:
+    for point, _ in sample_boundaries(points, reproducer="owner_" + phase):
         f = Fixture()
         try:
             batch = f.batch({"a.txt": b"CHILD\n"})

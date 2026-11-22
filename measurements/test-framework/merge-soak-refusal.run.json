@@ -1,0 +1,39 @@
+{
+ "budget_failures": [],
+ "budget_warnings": [],
+ "debt_retirement_required": [],
+ "discovery_seconds": 7.461309999984223,
+ "elapsed_seconds": 8.012963749992196,
+ "failed_units": [],
+ "job_seconds": 0,
+ "jobs": 16,
+ "metadata_errors": [
+  "explicit soak module requires --profile soak: codex:tests.test_merge_library_soak"
+ ],
+ "modules": {},
+ "over_budget": [],
+ "partial": false,
+ "plan": {
+  "budget_debt": {},
+  "catalogue": {},
+  "fingerprints": {},
+  "layers": {},
+  "profile": "ci",
+  "selection": [],
+  "stages": {}
+ },
+ "plan_digest": "f94d174fc5fdb216cda6529eec9e53a2d46c71e033896c712ee9f121b92b7138",
+ "platform": "Darwin",
+ "preflight_seconds": 0.5516537500079721,
+ "python": "3.14.7",
+ "requirements": {},
+ "run_id": "dc13f0fa836b4e4bb078781e30058a27",
+ "schema": 1,
+ "shard": [
+  1,
+  1
+ ],
+ "tests": {},
+ "units": 0,
+ "workers": []
+}

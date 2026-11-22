@@ -250,7 +250,7 @@ class _Store:
         self.db = None
         self.unknown = set()
         self.moved = set()
-        self.device = self.project.stat().st_dev
+        self.device = self.info(self.project).st_dev
         # ML-30: authority must never be taken from a child-editable location.
         if self.private == self.project or self.project in self.private.parents:
             raise _Refusal('private_location')
@@ -261,7 +261,7 @@ class _Store:
     def io(self, op, fn, path=None, other=None, *, mutating=False, scope=None, **detail):
         path = str(path) if path is not None else None
         other = str(other) if other is not None else None
-        detail = dict(detail, mutating=mutating)
+        detail = dict(detail, mutating=mutating, reporting=getattr(self, 'reporting', False))
         if scope:
             detail['scope'] = scope
         override = self.hook(IOCall(op, 'before', self.phase, path, other, detail)) if self.hook else None
@@ -284,7 +284,7 @@ class _Store:
                 # The caller never receives a resource when its acknowledgement
                 # fails. Close it here; any created pathname remains recorded.
                 if op == 'open':
-                    self.io('close', lambda: os.close(result), path)
+                    self.io('close', lambda: os.close(result), path, fd=result)
                 elif op == 'sqlite_open':
                     self.io('sqlite_close', result.close, path)
                 raise
@@ -303,6 +303,33 @@ class _Store:
         if result is None:
             raise FileNotFoundError(errno.ENOENT, 'absent', str(path))
         return result
+
+    def exists(self, path):
+        try:
+            self.info(path)
+            return True
+        except FileNotFoundError:
+            return False
+
+    def is_dir(self, path):
+        try:
+            return stat.S_ISDIR(self.info(path).st_mode)
+        except FileNotFoundError:
+            return False
+
+    def children(self, path):
+        return tuple(Path(path) / name for name in self.io('listdir', lambda: os.listdir(path), path))
+
+    def walk(self, root, *, control=True):
+        for path in self.children(root):
+            if not control and path.name in ('.git', '.cocolo'):
+                continue
+            info = self.info(path)
+            if info.st_dev != self.device:
+                raise _Refusal('cross_device')
+            yield path, info
+            if stat.S_ISDIR(info.st_mode):
+                yield from self.walk(path)
 
     def check_dir(self, path):
         # Rewalk every ancestor; no-follow opens on mutations additionally anchor
@@ -341,25 +368,25 @@ class _Store:
             raise _Refusal('file exceeds 4 MiB')
         fd = self.io('open', lambda: os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), path, flags=os.O_RDONLY)
         try:
-            actual = self.io('fstat', lambda: os.fstat(fd), path)
+            actual = self.io('fstat', lambda: os.fstat(fd), path, fd=fd)
             if (actual.st_ino, actual.st_dev, actual.st_nlink) != (info.st_ino, info.st_dev, 1):
                 raise _Refusal('unsafe_path')
-            data = self.io('read', lambda: os.read(fd, MAX_FILE_BYTES + 1), path)
+            data = self.io('read', lambda: os.read(fd, MAX_FILE_BYTES + 1), path, fd=fd, size=MAX_FILE_BYTES + 1)
             if len(data) > MAX_FILE_BYTES:
                 raise _Refusal('file exceeds 4 MiB')
             return Content(data, stat.S_IMODE(actual.st_mode))
         finally:
-            self.io('close', lambda: os.close(fd), path)
+            self.io('close', lambda: os.close(fd), path, fd=fd)
 
     def flush(self, path):
         # F_FULLFSYNC is required for macOS; fsync is the full-flush primitive
         # elsewhere. SQLite also uses synchronous=FULL and fullfsync=ON.
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fd = self.io('open', lambda: os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), path, flags=os.O_RDONLY)
         try:
             self.io('fullfsync' if sys.platform == 'darwin' else 'fsync',
-                    lambda: fcntl.fcntl(fd, 51) if sys.platform == 'darwin' else os.fsync(fd), path)
+                    lambda: fcntl.fcntl(fd, 51) if sys.platform == 'darwin' else os.fsync(fd), path, fd=fd)
         finally:
-            os.close(fd)
+            self.io('close', lambda: os.close(fd), path, fd=fd)
         self.dirty.discard(str(path))
 
     def flush_all(self):
@@ -387,7 +414,7 @@ class _Store:
         # Writes prepare private complete files. Only atomic rename publishes
         # them into staging or the owner tree.
         fd = self.io('open', lambda: os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, c.mode_bits),
-                     path, flags=os.O_WRONLY | os.O_CREAT | os.O_EXCL, mutating=True, scope='history')
+                     path, flags=os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode=c.mode_bits, mutating=True, scope='history')
         try:
             offset = 0
             while offset < len(c.data):
@@ -396,29 +423,30 @@ class _Store:
                 if n <= 0:
                     raise OSError(errno.EIO, 'no write progress')
                 offset += n
-            self.io('chmod', lambda: os.fchmod(fd, c.mode_bits), path, mutating=True, scope='history')
+            self.io('chmod', lambda: os.fchmod(fd, c.mode_bits), path, mutating=True, scope='history', fd=fd, mode=c.mode_bits)
             self.flush(path)
         finally:
-            self.io('close', lambda: os.close(fd), path)
+            self.io('close', lambda: os.close(fd), path, fd=fd)
 
     def rename(self, src, dst, exchange=False, scope='tree'):
         self.check_dir(src.parent)
         self.check_dir(dst.parent)
         # Anchor both parents with descriptors. /dev/fd paths bind the kernel
         # operation to those open directories, including a concurrently moved one.
-        a = os.open(src.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        b = os.open(dst.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        a = self.io('open', lambda: os.open(src.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW), src.parent, flags=os.O_RDONLY | os.O_DIRECTORY)
+        b = self.io('open', lambda: os.open(dst.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW), dst.parent, flags=os.O_RDONLY | os.O_DIRECTORY)
         try:
             self.io('exchange' if exchange else 'rename_noreplace', lambda: _atomic(src.name, dst.name, exchange, a, b),
                     src, dst, mutating=True, scope=scope)
         finally:
-            os.close(a)
-            os.close(b)
+            self.io('close', lambda: os.close(a), src.parent, fd=a)
+            self.io('close', lambda: os.close(b), dst.parent, fd=b)
 
     def connect(self):
         if self.db is None:
             self.check_dir(self.private)
             self.db = self.io('sqlite_open', lambda: sqlite3.connect(self.path, timeout=10), self.path)
+            self.dirty.add(str(self.private))
             self.db.execute('PRAGMA synchronous=FULL')
             self.db.execute('PRAGMA fullfsync=ON')
             self.db.execute('CREATE TABLE IF NOT EXISTS rows (id INTEGER PRIMARY KEY, value BLOB NOT NULL)')
@@ -477,7 +505,7 @@ class _Store:
     def identity(self, r, name, identity):
         path = self.private / (self.path.stem + '.directories')
         fd = self.io('open', lambda: os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600),
-                     path, flags=os.O_WRONLY | os.O_CREAT | os.O_APPEND, mutating=True, scope='history')
+                     path, flags=os.O_WRONLY | os.O_CREAT | os.O_APPEND, mode=0o600, mutating=True, scope='history')
         try:
             data = _json([r['id'], name, identity]) + b'\n'
             while data:
@@ -488,7 +516,7 @@ class _Store:
             self.flush(path)
             self.flush(path.parent)
         finally:
-            self.io('close', lambda: os.close(fd), path)
+            self.io('close', lambda: os.close(fd), path, fd=fd)
         r['created'][name] = identity
 
     def close(self):
@@ -542,7 +570,6 @@ def _stage(s, batch, effective):
     for i, e in enumerate(effective):
         if e.kind == 'file' and e.new:
             _publish(s, staging / f'e{i:05d}', e.new)
-    s.flush_all()
     return staging
 
 
@@ -580,12 +607,9 @@ def _validate(s, b, policy):
     totals = [0, 0]
     names = set()
     aliases = {}
-    for directory, dirs, files in os.walk(s.project, followlinks=False):
-        if Path(directory) == s.project:
-            dirs[:] = [d for d in dirs if d not in ('.git', '.cocolo')]
-        for n in dirs + files:
-            rel = (Path(directory) / n).relative_to(s.project).as_posix()
-            aliases[unicodedata.normalize('NFC', rel).casefold()] = rel
+    for path, _ in s.walk(s.project, control=False):
+        rel = path.relative_to(s.project).as_posix()
+        aliases[unicodedata.normalize('NFC', rel).casefold()] = rel
     for e in b.events:
         p = Path(e.path)
         alias = unicodedata.normalize('NFC', e.path).casefold()
@@ -618,7 +642,7 @@ def _validate(s, b, policy):
                     if not candidate and str(error) == 'moved':
                         break
                     raise
-                if not candidate and (cur / '.git').exists():
+                if not candidate and s.exists(cur / '.git'):
                     raise _Refusal('nested_repository')
             else:
                 if e.kind == 'file':
@@ -633,7 +657,7 @@ def _validate(s, b, policy):
     if max(totals, default=0) > MAX_LANDING_BYTES:
         raise _Refusal('landing exceeds 16 MiB')
     for name in ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'):
-        if (s.project / '.git' / name).exists():
+        if s.exists(s.project / '.git' / name):
             raise _Refusal('git_operation')
     config = configparser.ConfigParser(strict=False)
     config.read_string(s.read(s.project / '.git/config').data.decode())
@@ -650,7 +674,8 @@ def _validate(s, b, policy):
     for e in b.events:
         if e.path.endswith('.gitattributes') and e.new and any(x in e.new.data for x in (b'filter', b'text', b'eol', b'encoding', b'ident')):
             raise _Refusal('converted_candidate')
-    if os.statvfs(s.private).f_bavail * os.statvfs(s.private).f_frsize < sum(totals) * 2:
+    space = s.io('statvfs', lambda: os.statvfs(s.private), s.private)
+    if space.f_bavail * space.f_frsize < sum(totals) * 2:
         raise _Refusal('insufficient_space')
 
 
@@ -697,12 +722,16 @@ def _snapshot(s, r):
             parent = parent.parent
         if e.kind == 'file' and e.new is None:
             parent = (s.project / e.path).parent
-            if parent != s.project and parent.exists():
-                r['emptied'][parent.relative_to(s.project).as_posix()] = [parent.stat().st_dev, parent.stat().st_ino]
+            while parent != s.project and s.exists(parent):
+                info = s.info(parent)
+                r['emptied'][parent.relative_to(s.project).as_posix()] = [info.st_dev, info.st_ino]
+                parent = parent.parent
 
 
 def _report(s, r, state=None, reason='', merged=(), conflicts=(), recorded=True, pending=False):
     oldphase = s.phase
+    was_reporting = getattr(s, 'reporting', False)
+    s.reporting = True
     s.phase = 'validation'
     s.moved.update(r.get('moved', ()))
     b = _unpack(r['batch'])
@@ -710,7 +739,7 @@ def _report(s, r, state=None, reason='', merged=(), conflicts=(), recorded=True,
     leftovers = []
     try:
         s.check_dir(staging)
-        leftovers = [str(p) for p in staging.rglob('*') if p.is_file() and p.name != '.gitignore']
+        leftovers = [str(p) for p, info in s.walk(staging) if stat.S_ISREG(info.st_mode) and p.name != '.gitignore']
     except (_Refusal, OSError):
         pass
     rows = []
@@ -736,6 +765,7 @@ def _report(s, r, state=None, reason='', merged=(), conflicts=(), recorded=True,
     if pending:
         notes += ('Unresolved record pending; backups remain pinned.',)
     s.phase = oldphase
+    s.reporting = was_reporting
     return Report(state or r['state'], reason or r.get('reason', ''), r['id'], tuple(rows), tuple(merged), tuple(conflicts),
                   tuple(leftovers), notes, recorded)
 
@@ -745,7 +775,7 @@ def _apply(s, r):
         p = s.project / e.path
         _anchor(s, r, e)
         if e.kind == 'folder':
-            if p.exists():
+            if s.exists(p):
                 raise _Refusal('owner')
             s.mkdir(p, 'tree')
             info = s.info(p)
@@ -923,7 +953,7 @@ def _clean_row(s, r):
     allowed = [c for e in map(_de, r['effective']) for c in (e.base, e.new) if c]
     allowed += [Content(b'*\n')]
     # Every named staging file is inspected. A foreign prefix is never ours.
-    for p in sorted(staging.iterdir()):
+    for p in sorted(s.children(staging)):
         try:
             c = s.read(p)
         except _Refusal:
@@ -974,16 +1004,16 @@ def _clean_empty(s, r):
     s.flush_all()
 
 
-def history(project, private_root):
-    s = _Store(project, private_root)
+def history(project, private_root, *, hook=None):
+    s = _Store(project, private_root, hook)
     try:
         return tuple(_row(r) for r in s.rows())
     finally:
         s.close()
 
 
-def queue(project, private_root):
-    s = _Store(project, private_root)
+def queue(project, private_root, *, hook=None):
+    s = _Store(project, private_root, hook)
     try:
         return tuple(QueueItem(q['id'], q['child'], q['state'], q['base'], q.get('kind', 'child'))
                      for q in sorted(s.qrows(), key=lambda q: (q.get('kind') != 'owner', q['id'])))
@@ -1028,7 +1058,9 @@ def stage(project, private_root, batch, *, policy, hook=None):
         # complete permitted contents for restart cleanup, without tree direction.
         r['state'] = 'staged'
         s.save([r], label='queue')
-        return _stage(s, batch, batch.events)
+        result = _stage(s, batch, batch.events)
+        s.flush_all()
+        return result
     finally:
         s.close()
 
@@ -1146,6 +1178,12 @@ def land(project, private_root, batch, *, policy, hook=None):
             _apply(s, r)
             s.phase = 'validation'
             s.checkpoint('final_validation')
+            if next(x for x in s.qrows() if x['id'] == q['id'])['state'] == 'cancelled':
+                durable = next(x for x in s.rows() if x['id'] == r['id'])
+                if durable['state'] != 'applying':
+                    return _report(s, durable, merged=merged)
+                s.phase = 'reverse'
+                return _putback(s, durable, 'cancelled', merged)
             bad = []
             for e in effective:
                 _anchor(s, r, e)
@@ -1182,7 +1220,7 @@ def land(project, private_root, batch, *, policy, hook=None):
             r = r or _newrow(s, batch)
             if reason == 'moved':
                 for e in batch.events:
-                    if not (s.project / e.path).exists() and e.base:
+                    if not s.exists(s.project / e.path) and e.base:
                         s.moved.add(e.path)
             return _report(s, r, 'refused', reason, merged, recorded=False)
         except OSError:
@@ -1225,11 +1263,15 @@ def recover(project, private_root, *, hook=None):
     s = _Store(project, private_root, hook)
     try:
         s.phase = 'recovery'
-        rows = s.rows()
-        for q in s.qrows():
+        try:
+            rows = s.rows()
+            queued = s.qrows()
+        except (OSError, sqlite3.Error):
+            return (Report('unknown', 'io', recorded=False),)
+        for q in queued:
             if q.get('batch') and not any(r['batch'][0] == q['child'] for r in rows):
                 b = _unpack(q['batch'])
-                if (s.project / '.cocolo/staging' / b.child_id).is_dir():
+                if s.is_dir(s.project / '.cocolo/staging' / b.child_id):
                     r = _newrow(s, b)
                     r['state'] = 'staged'
                     rows.append(r)
@@ -1287,7 +1329,7 @@ def undo(project, private_root, batch_no, *, hook=None):
         for e in reverse_events:
             if e.new:
                 parent = (s.project / e.path).parent
-                while parent != s.project and not parent.exists():
+                while parent != s.project and not s.exists(parent):
                     folders.add(parent.relative_to(s.project).as_posix())
                     parent = parent.parent
         reverse_events = tuple(Event(name, None, None, kind='folder') for name in sorted(folders)) + reverse_events
@@ -1299,7 +1341,7 @@ def undo(project, private_root, batch_no, *, hook=None):
             if e.kind == 'file':
                 if not _equal(s.read(p), e.new):
                     return _report(s, original, 'refused', 'owner', recorded=False)
-            elif not p.is_dir():
+            elif not s.is_dir(p):
                 return _report(s, original, 'refused', 'missing_folder', recorded=False)
         _snapshot(s, r)
         s.phase = 'staging'
@@ -1332,20 +1374,20 @@ def undo(project, private_root, batch_no, *, hook=None):
         s.close()
 
 
-def status(project, private_root):
-    s = _Store(project, private_root)
+def status(project, private_root, *, hook=None):
+    s = _Store(project, private_root, hook)
     try:
         rows = s.rows()
         for q in s.qrows():
             if q.get('batch') and not any(r['batch'][0] == q['child'] for r in rows):
                 b = _unpack(q['batch'])
-                if (s.project / '.cocolo/staging' / b.child_id).is_dir():
+                if s.is_dir(s.project / '.cocolo/staging' / b.child_id):
                     rows.append(_newrow(s, b))
         results = []
         for r in rows:
             report = _report(s, r, recorded=r['state'] != 'applying')
             staging = s.project / '.cocolo/staging' / _unpack(r['batch']).child_id
-            if staging.is_dir():
+            if s.is_dir(staging):
                 report = replace(report, leftovers=tuple(dict.fromkeys(report.leftovers + (str(staging),))))
             results.append(report)
         return tuple(results)
@@ -1357,8 +1399,16 @@ def cancel(project, private_root, ticket, *, hook=None):
     s = _Store(project, private_root, hook)
     try:
         q = next(q for q in s.qrows() if q['id'] == ticket)
+        rows = [r for r in s.rows() if r['batch'][0] == q['child']]
+        latest = max(rows, key=lambda r: r['id']) if rows else None
+        if latest and latest['state'] in ('landed', 'reverted', 'resolved', 'undone'):
+            _clean_row(s, latest)
+            return _report(s, latest)
         q['state'] = 'cancelled'
         s.save(qs=[q], label='queue')
+        if latest and latest['state'] == 'applying':
+            s.phase = 'reverse'
+            return _putback(s, latest, 'cancelled')
         return Report('cancelled', 'cancelled', ticket, recorded=False)
     finally:
         s.close()
@@ -1368,6 +1418,8 @@ def retry(project, private_root, batch_no, *, policy, hook=None):
     s = _Store(project, private_root, hook)
     try:
         r = next(x for x in s.rows() if x['id'] == batch_no)
+        if r['state'] not in ('applying', 'needs_owner'):
+            return _report(s, r, 'refused', 'terminal', recorded=False)
         s.phase = 'reverse'
         return _putback(s, r)
     finally:

@@ -19,6 +19,7 @@ import hmac
 import json
 import os
 import signal
+import shutil
 import stat
 import subprocess
 import sys
@@ -102,6 +103,9 @@ def tree(root, *, metadata=False, control=False):
     return result
 
 
+_BASE_TEMPLATE = None
+
+
 class Fixture:
     def __init__(self, parent=None):
         self.temp = tempfile.TemporaryDirectory(dir=str(parent or TEMP_ROOT))
@@ -116,15 +120,24 @@ class Fixture:
         self.check_calls = []
         self.builder_calls = []
         self.owner_versions = {}
-        git(self.project, "init", "-q")
-        for name, data, mode in (("a.txt", b"one\ntwo\nthree\n", 0o644),
-                                 ("z.txt", b"old z\n", 0o644),
-                                 ("removed/old.txt", b"deleted\n", 0o644),
-                                 ("tool", b"#!/bin/sh\necho old\n", 0o755)):
-            put(self.project / name, data, mode)
-        git(self.project, "add", "-A")
-        git(self.project, "commit", "-qm", "base")
-        self.base = git(self.project, "rev-parse", "HEAD").decode().strip()
+        global _BASE_TEMPLATE
+        if parent is None and _BASE_TEMPLATE is not None:
+            shutil.copytree(Path(_BASE_TEMPLATE.name) / 'project', self.project, dirs_exist_ok=True)
+            self.base = (Path(_BASE_TEMPLATE.name) / 'base').read_text()
+        else:
+            git(self.project, "init", "-q")
+            for name, data, mode in (("a.txt", b"one\ntwo\nthree\n", 0o644),
+                                     ("z.txt", b"old z\n", 0o644),
+                                     ("removed/old.txt", b"deleted\n", 0o644),
+                                     ("tool", b"#!/bin/sh\necho old\n", 0o755)):
+                put(self.project / name, data, mode)
+            git(self.project, "add", "-A")
+            git(self.project, "commit", "-qm", "base")
+            self.base = git(self.project, "rev-parse", "HEAD").decode().strip()
+            if parent is None:
+                _BASE_TEMPLATE = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
+                shutil.copytree(self.project, Path(_BASE_TEMPLATE.name) / 'project')
+                (Path(_BASE_TEMPLATE.name) / 'base').write_text(self.base)
         self.before = tree(self.project)
         self.operation_before = self.before
         self.policy = ml.Policy(self.verify, self.checks)
@@ -220,10 +233,12 @@ class Fixture:
     def operation_start(self, batch, kind):
         if kind == 'undoing':
             return dict(self.expected(batch) if self.operation_before is self.before else self.operation_before)
-        return dict(self.before)
+        return dict(self.operation_before if kind == 'forward' else self.before)
 
     def operation_target(self, batch, kind):
-        return dict(self.before if kind == 'undoing' else self.expected(batch, cleanup=False))
+        target = dict(self.before if kind == 'undoing' else self.expected(batch, cleanup=False))
+        target.update(getattr(self, 'target_overrides', {}))
+        return target
 
     def kept_candidates(self, batch, kind, rows):
         candidates = {e.path for e in batch.events if e.kind == 'folder'}
@@ -289,8 +304,8 @@ def child_run(action, timeout=8):
                 os.kill(pid, signal.SIGKILL)
                 os.waitpid(pid, 0)
                 raise AssertionError("library call exceeded timeout (possible FIFO blocking)")
-            # No socket or sleep: yield the CPU using a zero-time wait on child exit.
-            os.sched_yield()
+            # Crash layer permits bounded waits; avoid a full CPU spinning on waitpid.
+            time.sleep(0.001)
 
 
 def fresh_queue(f):
@@ -312,6 +327,36 @@ def version_at(path):
             Path(path).read_bytes() if stat.S_ISREG(info.st_mode) else None)
 
 
+def observed_tree(f, root=None, *, control=False):
+    root = root or f.project
+    if getattr(f, 'disk', None) is not None:
+        return f.disk.snapshot(root, control=control)
+    return tree(root, control=control)
+
+
+def observed_info(f, path):
+    return f.disk.info(path) if getattr(f, 'disk', None) is not None else Path(path).lstat()
+
+
+def observed_version(f, path):
+    if getattr(f, 'disk', None) is None:
+        return version_at(path)
+    info = f.disk.info(path)
+    return stat.S_IFMT(info.st_mode), stat.S_IMODE(info.st_mode), f.disk.read(path) if stat.S_ISREG(info.st_mode) else None
+
+
+def observed_exists(f, path):
+    return f.disk.exists(path) if getattr(f, 'disk', None) is not None else Path(path).exists()
+
+
+def observed_history(f):
+    return ml.history(f.project, f.private, hook=getattr(f, 'disk', None))
+
+
+def observed_queue(f):
+    return ml.queue(f.project, f.private, hook=getattr(f, 'disk', None))
+
+
 def report_oracle(test, fixture, report, batch, *, retained=None, moved=None, unreadable=()):
     """Independently verify classes, retained bytes/modes and moved identities."""
     retained, moved = retained or {}, moved or {}
@@ -321,8 +366,8 @@ def report_oracle(test, fixture, report, batch, *, retained=None, moved=None, un
     for name, event in events.items():
         path = fixture.project / name
         try:
-            info = path.lstat()
-            observed = (path.read_bytes(), stat.S_IMODE(info.st_mode)) if stat.S_ISREG(info.st_mode) else "owner"
+            info = observed_info(fixture, path)
+            observed = (observed_version(fixture, path)[2], stat.S_IMODE(info.st_mode)) if stat.S_ISREG(info.st_mode) else "owner"
         except FileNotFoundError:
             observed = None
         except (PermissionError, OSError):
@@ -331,9 +376,9 @@ def report_oracle(test, fixture, report, batch, *, retained=None, moved=None, un
         new = None if event.new is None else (event.new.data, event.new.mode_bits)
         if name in moved:
             destination, identity = moved[name]
-            info = Path(destination).lstat()
+            info = observed_info(fixture, destination)
             test.assertEqual(identity, (info.st_dev, info.st_ino))
-            test.assertFalse(path.exists())
+            test.assertFalse(observed_exists(fixture, path))
             kind = "moved"
         else:
             kind = ("unknown" if observed == "unknown" else "absent" if observed is None
@@ -345,17 +390,17 @@ def report_oracle(test, fixture, report, batch, *, retained=None, moved=None, un
         allowed = {(stat.S_IFREG, v.mode_bits, v.data) for v in (event.base, event.new) if v}
         allowed.update(fixture.owner_versions.get(name, ()))
         for saved in listed[name].retained:
-            actual = version_at(saved)
+            actual = observed_version(fixture, saved)
             if saved in retained:
                 test.assertEqual(retained[saved], actual, saved)
             else:
                 test.assertIn(actual, allowed, saved)
     for saved, expected in retained.items():
         test.assertIn(saved, set(report.leftovers) | {p for r in report.paths for p in r.retained})
-        test.assertEqual(expected, version_at(saved), saved)
+        test.assertEqual(expected, observed_version(fixture, saved), saved)
     staging = fixture.project / ".cocolo/staging" / batch.child_id
-    if staging.exists():
-        actual = {str(p) for p in staging.rglob("*") if p.is_file() and p.name != ".gitignore"}
+    if observed_exists(fixture, staging):
+        actual = {str(staging / name) for name, value in observed_tree(fixture, staging, control=True).items() if value[0] == stat.S_IFREG and Path(name).name != ".gitignore"}
         named = set(report.leftovers) | {p for row in report.paths for p in row.retained}
         test.assertTrue(actual.issubset(named), actual - named)
 
@@ -447,7 +492,8 @@ def call_identity(call, fixture):
             return None
         path = Path(os.path.abspath(fixture.project / value))
         return path.relative_to(fixture.root).as_posix() if path.is_relative_to(fixture.root) else str(path)
-    return (call.operation, call.phase, call.when, normalized(call.path), normalized(call.other),
+    operation = 'full_flush' if call.operation in ('fsync', 'fullfsync') else call.operation
+    return (operation, call.phase, call.when, normalized(call.path), normalized(call.other),
             call.detail.get("commit"), call.detail.get("name"))
 
 
@@ -455,6 +501,18 @@ def replay_key(calls, index, fixture):
     identity = call_identity(calls[index], fixture)
     occurrence = sum(call_identity(c, fixture) == identity for c in calls[:index + 1])
     return identity, occurrence
+
+
+def replay_points(calls, fixture, select=lambda call: True):
+    """The same stable occurrence keys as replay_key, computed in a single pass."""
+    counts = {}
+    points = []
+    for call in calls:
+        identity = call_identity(call, fixture)
+        counts[identity] = counts.get(identity, 0) + 1
+        if select(call):
+            points.append(((identity, counts[identity]), call))
+    return points
 
 
 class ReplayPoint:
@@ -521,24 +579,40 @@ def check_end_state(test, f, batch, report, *, kind='forward', read_history=None
     read_history is an independent durable-view seam for checker self-tests only.
     Operation tests leave it unset; the report can never supply durable direction.
     """
-    rows = (read_history or (lambda: ml.history(f.project, f.private)))()
-    actual = tree(f.project)
+    actual = observed_tree(f)
+    try:
+        rows = (read_history or (lambda: observed_history(f)))()
+    except OSError:
+        # D7 grants no authority to change the tree or to claim a durable row.
+        test.assertEqual('unknown', report.state)
+        test.assertFalse(report.recorded)
+        test.assertEqual(f.operation_before, actual)
+        return
     matches = [r for r in rows if r.batch_no == report.batch_no]
     test.assertLessEqual(len(matches), 1, 'duplicate durable operation')
     row = matches[0] if matches else None
     start = f.operation_start(batch, kind)
     target = f.operation_target(batch, kind)
     before = dict(f.before)
-    if report.state == 'unknown':  # D7: unreadable history grants no direction.
+    if report.state == 'unknown':
         test.assertEqual(f.operation_before, actual)
         test.assertFalse(report.recorded)
+        return
+    # A5 representation is deliberately open; G1 may name the original row,
+    # but neither report grants applying authority for the refused operation.
+    admission = report.state in ('waiting_owner', 'refused') and not report.recorded
+    if admission and row is not None and row.state != 'applying':
+        test.assertEqual(f.operation_before, actual)
+        test.assertFalse(any(r.kind == 'undo' and r.batch_no > row.batch_no for r in rows) if kind == 'undoing' else False)
+        if report.paths:
+            report_oracle(test, f, report, batch, moved=getattr(f, 'moved_paths', {}))
         return
     if row is None:  # A1/A2/A3/A5/A6/G1; no applying authority exists.
         test.assertFalse(report.recorded)
         test.assertIn(report.state, ('refused', 'queued', 'waiting_owner', 'cancelled'))
         test.assertEqual(f.operation_before, actual)
         if report.state == 'queued':
-            test.assertTrue(any(q.child_id == batch.child_id for q in ml.queue(f.project, f.private)))
+            test.assertTrue(any(q.child_id == batch.child_id for q in observed_queue(f)))
         if report.paths:
             report_oracle(test, f, report, batch)
         return
@@ -548,22 +622,25 @@ def check_end_state(test, f, batch, report, *, kind='forward', read_history=None
         test.assertEqual('applying', row.state)
     test.assertEqual(batch, row.batch)
     test.assertEqual('undo' if kind == 'undoing' else 'forward', row.kind)
+    if terminal_before is None:
+        terminal_before = getattr(f, 'terminal_states', {}).get(report.batch_no)
     if terminal_before is not None:  # D6/E/F: cleanup has no tree direction.
         test.assertEqual(terminal_before, row.state)
     state = row.state
     test.assertIn(state, ('applying', 'landed', 'reverted', 'needs_owner', 'resolved', 'undone'))
     unreadable = set()
-    if call and fault not in (None, 'short') and call.phase == 'validation' and call.operation in ('open', 'read', 'fstat', 'lstat'):
+    if call and fault not in (None, 'short') and call.detail.get('reporting') and call.operation in ('open', 'read', 'fstat', 'lstat'):
         if call.path and Path(call.path).is_relative_to(f.project):
             unreadable.add(Path(call.path).relative_to(f.project).as_posix())
-    report_oracle(test, f, report, batch, unreadable=unreadable)
+    report_oracle(test, f, report, batch, unreadable=unreadable, moved=getattr(f, 'moved_paths', {}))
+    test.assertTrue(set(getattr(f, 'merged_paths', ())).issubset(report.merged), 'merged paths must be named')
     named = {p.path for p in report.paths} | set(report.leftovers)
     known = {name for name, identity in row.created_folders.items() if identity}
     candidates = set(kept_candidates) | f.kept_candidates(batch, kind, rows)
     kept = set()
     for name in candidates - known:
         if name in actual and name not in start:
-            info = (f.project / name).lstat()
+            info = observed_info(f, f.project / name)
             test.assertTrue(stat.S_ISDIR(info.st_mode), name)
             test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
             test.assertTrue(name in named or str(f.project / name) in named, name)
@@ -582,17 +659,20 @@ def check_end_state(test, f, batch, report, *, kind='forward', read_history=None
                     and call.detail.get('commit') == 'retire'):
                 test.assertFalse(row.cleanup_complete, 'failed cleanup must remain retryable')
         elif state == 'landed':
-            test.assertTrue(fault == 'short' or call.operation == 'sqlite_commit',
+            test.assertTrue(fault == 'short' or call.operation == 'sqlite_commit' or (call.detail.get('reporting') and terminal_before == 'landed'),
                             'ordinary I/O failure cannot end landed')
         else:
             test.assertIn(state, ('applying', 'reverted', 'needs_owner'))
     classes = {p.path: p.classification for p in report.paths}
     # Owner versions are independent fixture evidence, not permissions derived from a report.
     for name, versions in f.owner_versions.items():
-        if name in actual and classes.get(name) == 'owner':
-            test.assertIn(actual[name], versions, name)
+        retained = {saved for path in report.paths if path.path == name for saved in path.retained}
+        surviving = {actual.get(name)} | {observed_version(f, saved) for saved in retained}
+        test.assertTrue(set(versions) & surviving, f'owner version lost: {name}')
     if state in ('landed', 'reverted'):
-        expected = dict(target if state == 'landed' else start)
+        expected = dict(getattr(f, 'terminal_tree', target if state == 'landed' else start))
+        if state == 'landed':
+            expected.update(getattr(f, 'late_owner_versions', {}))
         if state == 'landed' and row.kind == 'undo':
             test.assertTrue(any(r.batch_no == row.undoes and r.state == 'undone' for r in rows))
         # EL deletion is permitted only after landing and only with the commit-A identity.
@@ -602,7 +682,7 @@ def check_end_state(test, f, batch, report, *, kind='forward', read_history=None
             if name in actual:
                 test.assertEqual(stat.S_IFDIR, actual[name][0], name)
                 test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
-                info = (f.project / name).lstat()
+                info = observed_info(f, f.project / name)
                 test.assertEqual(tuple(identity), (info.st_dev, info.st_ino), name)
                 expected[name] = actual[name]
             else:
@@ -615,6 +695,11 @@ def check_end_state(test, f, batch, report, *, kind='forward', read_history=None
             test.assertIn(report.reason, ('io', 'owner', 'moved'))
         for name in set(actual) | set(start) | set(target):
             if name in kept:
+                continue
+            if name in f.owner_versions and actual.get(name) in f.owner_versions[name]:
+                test.assertIn(name, named)
+                continue
+            if actual.get(name) in (start.get(name), target.get(name)):
                 continue
             if classes.get(name) in ('owner', 'moved', 'unknown'):
                 test.assertIn(name, named)
@@ -750,23 +835,32 @@ def recover_checked(test, f, batch, kind):
             reports = tuple(r for r in statuses if r.batch_no == latest.batch_no)
     for report in reports:
         row = next((r for r in rows if r.batch_no == report.batch_no), None)
-        report_kind = "undoing" if row and row.kind == "undo" else kind
+        report_kind = "undoing" if row and row.kind == "undo" else "forward" if row and kind == "undoing" else kind
         outcome_oracle(test, f, batch, report, rows, report_kind)
     return reports
 
 
 
-def sample_boundaries(points):
-    """TF-18: soak retains the full inventory; normal runs cover persistence kinds/sides."""
+def sample_boundaries(points, *, lane='real', reproducer='forward'):
+    """TF-18: exact checked-in normal samples; explicit soak retains every boundary."""
     if os.environ.get('COCOLO_TEST_PROFILE', 'ci') == 'soak':
         return points
-    selected = {}
-    for key, call in points:
-        if call.operation not in FAULTABLE | {'sqlite_read'}:
-            continue
-        signature = (call.operation, call.phase, call.when, call.detail.get('commit'))
-        selected.setdefault(signature, (key, call))
-    return list(selected.values())
+    inventory = json.loads((Path(__file__).resolve().parents[3] / 'tests/merge-persistence-samples.json').read_text())
+    expected = inventory['samples'][lane][reproducer]
+    by_key = {canonical(key): (key, call) for key, call in points}
+    selected = [by_key[canonical(row['key'])] for row in expected if canonical(row['key']) in by_key]
+    if lane == 'model':
+        missing = [row for row in expected if canonical(row['key']) not in by_key]
+        if missing:
+            raise AssertionError('stale persistence sample: ' + repr(missing))
+        observed_kinds = {(c.operation, c.phase, c.when, c.detail.get('commit')) for _, c in points}
+        sampled_kinds = {(c.operation, c.phase, c.when, c.detail.get('commit')) for _, c in selected}
+        if observed_kinds != sampled_kinds:
+            raise AssertionError('new persistence boundary needs a sample: ' + repr(observed_kinds - sampled_kinds))
+    if points and not selected:
+        raise AssertionError('no matching checked-in persistence sample: ' + reproducer)
+    return selected
+
 
 def kill_oracle(test, operation, *, select=lambda c: c.operation != "checkpoint", oracle=None):
     """Discover stable identities, then SIGKILL at every selected before/after call."""
@@ -777,14 +871,14 @@ def kill_oracle(test, operation, *, select=lambda c: c.operation != "checkpoint"
         operation(discovery, batch, trace)
         assert_discovery(test, trace.calls, operation)
         assert_commit_flushes(test, trace.calls)
-        boundaries = [(replay_key(trace.calls, i, discovery), c) for i, c in enumerate(trace.calls) if select(c)]
+        boundaries = replay_points(trace.calls, discovery, select)
         test.assertTrue(boundaries, "a syscall hook must expose at least one boundary")
         if operation.__name__ == "forward" and any(c.operation == "sqlite_commit" for _, c in boundaries):
             test.assertTrue({(label, side) for label in ("A", "B") for side in ("before", "after")}
                             .issubset({(c.detail.get("commit"), c.when) for _, c in boundaries}))
     finally:
         discovery.close()
-    for key, selected in sample_boundaries(boundaries):
+    for key, selected in sample_boundaries(boundaries, reproducer=operation.__name__):
         f = Fixture()
         try:
             batch = f.batch()
@@ -820,8 +914,7 @@ def fault_sweep(test, operation):
         operation(discovery, discovery.batch(), trace)
         assert_discovery(test, trace.calls, operation)
         assert_commit_flushes(test, trace.calls)
-        points = [(replay_key(trace.calls, i, discovery), c) for i, c in enumerate(trace.calls)
-                  if c.operation in FAULTABLE]
+        points = replay_points(trace.calls, discovery, lambda c: c.operation in FAULTABLE)
         test.assertTrue(points)
         # Both failed calls and successful calls with lost acknowledgement, including
         # undo/retire commits and fsync, get injected; short writes apply only before.
@@ -829,13 +922,15 @@ def fault_sweep(test, operation):
             test.assertTrue(any(c.operation == call.operation and c.when != call.when for _, c in points))
     finally:
         discovery.close()
-    for key, call in sample_boundaries(points):
+    for key, call in sample_boundaries(points, reproducer=operation.__name__):
         faults = (errno.ENOSPC, errno.EIO, "short") if call.operation == "write" and call.when == "before" else (errno.ENOSPC, errno.EIO)
         for fault in faults:
             f = Fixture()
             try:
                 batch = f.batch()
                 def inject(current):
+                    if current.detail.get('reporting'):
+                        f.terminal_states = {r.batch_no: r.state for r in observed_history(f)}
                     if fault == "short":
                         data = current.detail["data"]
                         count = os.write(current.detail["fd"], data[:max(1, len(data) // 2)])
@@ -845,7 +940,7 @@ def fault_sweep(test, operation):
                 report = operation(f, batch, Trace(point))
                 point.assert_fired(test)
                 rows = ml.history(f.project, f.private)
-                fault_outcome_oracle(test, f, batch, report, rows, operation.__name__, call, fault)
+                fault_outcome_oracle(test, f, batch, report, rows, operation.__name__, point.fired[0], fault)
                 recover_checked(test, f, batch, operation.__name__)
                 first, records = tree(f.project, control=True), ml.history(f.project, f.private)
                 recover_checked(test, f, batch, operation.__name__)
