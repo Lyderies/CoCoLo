@@ -172,3 +172,52 @@ print(json.dumps({'cases': len(vectors['cases']), 'application_modules': sorted(
         self.assertEqual(35, report['cases'])
         self.assertEqual({'codex_agents', 'codex_agents.contracts', 'codex_agents.learning_contracts',
                           'codex_agents.admission_metadata'}, set(report['application_modules']))
+
+
+class NewerRunRestrictsTests(unittest.TestCase):
+    """LOW-1 and MED-1 (probe reuse fix, round 1): the shared predicate, directly."""
+
+    FINGERPRINT = 'a' * 64
+    START = 10_000_000_000
+    NOW = START + 78_000
+    CONSTRAINED = {'status': 'allowed_warning', 'isUsingOverage': False, 'overageStatus': 'rejected',
+                   'overageDisabledReason': 'org_level_disabled',
+                   'unifiedWindows': {'five_hour': {'utilization': 0.38, 'status': 'allowed'},
+                                      'seven_day': {'utilization': 0.74, 'status': 'allowed_warning'}}}
+    AMPLE = {'status': 'allowed', 'isUsingOverage': False, 'overageStatus': 'rejected',
+             'overageDisabledReason': 'org_level_disabled'}
+
+    def records(self, info, at, **options):
+        return providers.claude_rate_limit_records(
+            info, account_fingerprint=self.FINGERPRINT, observed_at_ms=at, **options)
+
+    def restricts(self, own, newer, *, own_at=None, extra_headroom=()):
+        """`own`: the probe's reading (a rate-limit info); `newer`: the child's, 30 s later."""
+        own_head, own_bill = self.records(own, self.START)
+        run_head, run_bill = self.records(newer, self.START + 30_000, run_id='run-1')
+        heads = [own_head, run_head, *extra_headroom]
+        if own_at is not None:  # the probe's headroom stamped otherwise than its billing
+            heads[0] = self.records(own, own_at)[0]
+        headroom = [(record, f'{number:064x}') for number, record in enumerate(heads)]
+        billing = [(own_bill, '1' * 64), (run_bill, '2' * 64)]
+        return admission_metadata.newer_run_restricts(
+            own_bill, billing, headroom, self.FINGERPRINT, self.NOW, {})
+
+    def test_a_run_more_restrictive_than_the_probe_s_own_reading_restricts(self):
+        self.assertTrue(self.restricts(self.CONSTRAINED, {**self.CONSTRAINED, 'status': 'rejected'}))
+        self.assertTrue(self.restricts(self.AMPLE, self.CONSTRAINED))
+
+    def test_paid_usage_in_a_run_record_restricts_whatever_the_probe_read(self):
+        paid = {**self.CONSTRAINED, 'isUsingOverage': True, 'overageStatus': 'allowed'}
+        self.assertTrue(self.restricts(self.CONSTRAINED, paid))
+
+    def test_a_run_as_constrained_as_the_probe_s_own_reading_does_not_restrict(self):
+        self.assertFalse(self.restricts(self.CONSTRAINED, self.CONSTRAINED))
+
+    def test_a_probe_with_no_associated_headroom_restricts_on_any_constrained_run(self):
+        # Its headroom is stamped 30 s from its billing: nothing shows it came from the same probe.
+        self.assertTrue(self.restricts(self.CONSTRAINED, self.CONSTRAINED, own_at=self.START + 30_000))
+
+    def test_another_probe_s_headroom_with_the_probe_s_own_stamp_makes_the_baseline_ambiguous(self):
+        other = self.records(self.CONSTRAINED, self.START)[0]  # same stamp, other content than the ample own
+        self.assertTrue(self.restricts(self.AMPLE, self.CONSTRAINED, extra_headroom=(other,)))

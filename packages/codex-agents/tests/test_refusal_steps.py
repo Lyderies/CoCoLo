@@ -55,6 +55,11 @@ class RefusalStepTests(unittest.TestCase):
         self.assertEqual("The billing probe did not complete: wait a moment and run provider-observe again.",
                          refusal_steps.next_step('probe_unavailable'))
 
+    def test_LOW4_the_probe_cooldown_text_does_not_say_that_reuse_is_forbidden(self):
+        step = refusal_steps.next_step('probe_cooldown')
+        self.assertNotIn('only one', step)
+        self.assertIn('A fresh billing probe is not allowed within five minutes of the last one that passed', step)
+
     def test_PC3_a_printed_probe_cooldown_refusal_carries_the_cooldown_step(self):
         import contextlib
         import io

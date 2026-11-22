@@ -674,6 +674,32 @@ class AccountBillingAdmissionTests(unittest.TestCase):
                 result = self.owner.admit(original)
                 self.assertNotEqual('reused', result['probe'] if type(result) is dict else None, result)
 
+    # ---- MED-1 (fix round 1): the baseline is the headroom the SAME probe wrote as the reused billing ---------
+    def store_head_only(self, info, *, age):
+        """One headroom record (no billing) of another probe, stamped `age` before the clock (negative: later)."""
+        head = claude_rate_limit_records(info, account_fingerprint=self.identity['account_fingerprint'],
+                                         observed_at_ms=self.clock-age)[0]
+        self.ledger._store_provider_observations(self.fixture.project_id, [head], timestamp=self.clock-age)
+
+    def test_MED1_a_constrained_headroom_of_another_probe_is_not_the_baseline_of_an_ample_probe(self):
+        """An ample probe P at 0, a constrained headroom of another probe Q, a constrained run record at +40 s,
+        the request after: the run is worse than P, so the reuse is stopped whatever Q's stamp is."""
+        cases = (  # name, Q's age, run age, request age (all ages are before the clock; the request is `request`)
+            ('q-at-plus-30', 48_000, 38_000, 78_000),
+            ('q-at-exactly-60-s', 18_000, 8_000, 78_000),
+            ('q-stamped-after-the-request', -5_000, 5_000, 45_000),
+            ('q-with-the-probes-own-stamp', 78_000, 38_000, 78_000),
+        )
+        for name, q_age, run_age, probe_age in cases:
+            with self.subTest(name):
+                self.tearDown_probe_state()
+                self.store_probe_info_then_run(self.FAVOURABLE, self.CONSTRAINED, probe_age=probe_age, run_age=run_age)
+                self.store_head_only(self.CONSTRAINED, age=q_age)
+                original = self.reserve(f'probe-med1-{name}')
+                self.prepared(original)
+                result = self.owner.admit(original)
+                self.assertNotEqual('reused', result['probe'] if type(result) is dict else None, result)
+
     def tearDown_probe_state(self):
         connection = self.ledger._connection
         with self.ledger._lock, connection:

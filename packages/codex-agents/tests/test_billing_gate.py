@@ -1097,6 +1097,33 @@ class BR21LedgerReuse(LedgerReuseBase):
         self.probe_then_run(self.CONSTRAINED, self.CONSTRAINED)
         self.assertNotEqual('reused', self.probe(plus=PROBE_REUSE_MS + 1_000)['probe'])
 
+    # ---- MED-1 (fix round 1): the baseline is the headroom the SAME probe wrote as the reused billing -------
+    def med1_case(self, q_at, run_at, request_at):
+        """Ample probe P at 0; the constrained headroom of another probe Q at `q_at`, a constrained run record at
+        `run_at`, the request at `request_at` (ms after P). Q's billing is not stored: P's stays the reused one."""
+        self.ready_account(probe_records=False)
+        self.store(FAVOURABLE)
+        start = self.clock
+        head = claude_rate_limit_records(self.CONSTRAINED, account_fingerprint=self.fingerprint,
+                                         observed_at_ms=start + q_at)[0]
+        self.ledger._store_provider_observations(self.project_id, [head], timestamp=start + q_at)
+        self.clock = start + run_at
+        self.store(self.CONSTRAINED, run_id='run-med1', phase='during')
+        self.clock = start
+        self.assertNotEqual('reused', self.probe(plus=request_at)['probe'])
+
+    def test_MED1_ledger_another_probe_s_constrained_headroom_at_plus_30_s_is_not_the_baseline(self):
+        self.med1_case(30_000, 40_000, 78_000)
+
+    def test_MED1_ledger_another_probe_s_constrained_headroom_at_exactly_60_s_is_not_the_baseline(self):
+        self.med1_case(60_000, 70_000, 78_000)
+
+    def test_MED1_ledger_another_probe_s_headroom_stamped_after_the_request_is_not_the_baseline(self):
+        self.med1_case(50_000, 40_000, 45_000)
+
+    def test_MED1_ledger_another_probe_s_headroom_with_the_probes_own_stamp_is_not_the_baseline(self):
+        self.med1_case(0, 40_000, 78_000)
+
     # ---- the shared gate function itself (G4): a reason code, or None when the yes may be built ----------
     def gate(self, **changes):
         arguments = dict(environ={}, process_environ={}, identity_at=1_000_000, reuse_at=1_000_000,
