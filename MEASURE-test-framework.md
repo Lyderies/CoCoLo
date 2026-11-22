@@ -66,6 +66,7 @@ F_FULLFSYNC, plus subprocess.run calls whose executable is git. Calls retain the
 unittest's setup, body, teardown and cleanup dispatch are timed; cProfile supplies additional function costs.
 
 Interpretation limits:
+
 - Process counts are launch audit events/attempts in observed workers, including deliberate failing launches;
   they do not certify every launch succeeded. Exec'd children are not instrumented, and their own subprocesses,
   sleeps and flushes are outside these counters. Worker starts and discovery processes are also excluded.
@@ -187,4 +188,3 @@ weaken kill/fault assertions for speed. The new merge-library branch was not reb
   remain explicit gaps. Use appropriate real-OS evidence later; this capture does not prove power-loss safety.
 - There is no before/after optimization comparison yet. Append an entry after EACH step-5 module with
   timing-file job-seconds, named replacement checks, assertion file:line replacements and retained real runs.
-
