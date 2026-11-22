@@ -255,6 +255,25 @@ class HarnessOracles(unittest.TestCase):
             location_refusal_oracle(self, landed, before, before)
 
 
+    def test_ml_12_campaign_partition_preserves_every_discovered_check_once(self):
+        """ML-12/TF-18: splitting modules must preserve the complete real campaign."""
+        import importlib
+        from tests import test_merge_library_adversarial as source
+        expected = set(unittest.defaultTestLoader.getTestCaseNames(source.Adversarial))
+        observed = []
+        def walk(suite):
+            for test in suite:
+                if isinstance(test, unittest.TestSuite):
+                    walk(test)
+                else:
+                    observed.append(test._testMethodName)
+        for suffix in ('adversarial', 'owners', 'kills', 'forward_faults', 'recovery_faults'):
+            module = importlib.import_module('tests.test_merge_library_' + suffix)
+            walk(unittest.defaultTestLoader.loadTestsFromModule(module))
+        self.assertEqual(expected, set(observed))
+        self.assertEqual(len(expected), len(observed), 'duplicate campaign checks')
+
+
 declare_ml_tests(globals())
 
 if __name__ == "__main__":
