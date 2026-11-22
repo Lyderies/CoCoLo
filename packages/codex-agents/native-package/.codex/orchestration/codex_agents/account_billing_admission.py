@@ -98,6 +98,11 @@ class _Judgment:
     # the identity judged and, for a reuse, of the probe billing reading it cited.
     identity_at: object = None
     reuse_at: object = None
+    # 'reply' for a reuse (its billing reading must be inside the reuse age), 'permit' for the completed run of
+    # this very generation (its reading was taken by the run itself, so no reuse age applies).
+    kind: str = 'reply'
+    # What this generation wrote after its snapshot (a completed run's admission and readings); None for a reuse.
+    appended: object = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -404,17 +409,20 @@ class AccountBillingAdmission:
             'claude', policy, AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer, anchor_ms))
 
     def _fresh(self, reservation, snapshot, *, appended=None):
+        """`appended`: the record (or records) this generation itself wrote after its snapshot: its admission record
+        and, for a completed run, the run's own readings. Each must be in the ledger exactly as written."""
         current = self._capture(reservation.project, snapshot.anchor_ms)
         expected = snapshot
-        if appended is not None:
-            rows = [r for r in current.rows if r[1] == reservation.project and r[2] == appended['record_id']]
-            originals = [r for r in snapshot.rows if r[1] == reservation.project and r[2] == appended['record_id']]
-            if (len(rows) != 1 or rows[0][4] != 'probe_admission' or rows[0][5] != canonical_json(appended)
-                    or rows[0][6] != content_digest(appended) or rows[0][7] != 'lifecycle'
+        for record in () if appended is None else (appended if type(appended) is list else [appended]):
+            rows = [r for r in current.rows if r[1] == reservation.project and r[2] == record['record_id']]
+            originals = [r for r in snapshot.rows if r[1] == reservation.project and r[2] == record['record_id']]
+            source = 'lifecycle' if record['record_type'] == 'probe_admission' else 'provider'
+            if (len(rows) != 1 or rows[0][4] != record['record_type'] or rows[0][5] != canonical_json(record)
+                    or rows[0][6] != content_digest(record) or rows[0][7] != source
                     or (originals and originals != rows)):
                 raise ProbeAdmissionError('probe_conflict')
             if not originals:
-                expected = replace(snapshot, rows=tuple(sorted((*snapshot.rows, rows[0]), key=lambda r: r[0])))
+                expected = replace(expected, rows=tuple(sorted((*expected.rows, rows[0]), key=lambda r: r[0])))
         if (not same_admission_inputs(expected, current)
                 or not reservation.created <= current.captured_at_ms < reservation.deadline):
             raise ProbeAdmissionError('probe_conflict')
@@ -726,6 +734,16 @@ class AccountBillingAdmission:
         self._inputs_unchanged(inputs.snapshot)
         return self._seal_yes('permit', now)
 
+    def record_completed(self, inputs, final, reply, identity, records):
+        """The judgment of a run this generation completed (called by the execution commit, inside its ledger
+        transaction): the inputs the run was admitted on, plus what the run itself wrote (its admission record and
+        its readings), so that delivery can show them unchanged instead of judging the fresh run again. A paid
+        reading or any other change after this makes the gate fail and the answer is judged again."""
+        reservation = inputs.reservation
+        self._judged[reservation] = _Judgment(
+            reservation, final, content_digest(reply), inputs.snapshot, {}, identity['observed_at_ms'], None,
+            'permit', [parse_bounded_json_value(inputs.admission, max_bytes=MAX_PROBE_REPLY_BYTES), *records])
+
     def judgment_of(self, reservation):
         """The judgment of a finished generation (None when there is none); handed over once (decision 47)."""
         self._guard()
@@ -752,8 +770,9 @@ class AccountBillingAdmission:
             return False
         try:
             with ExitStack() as turn, self._ledger._account_transaction():
-                self._gate(reservation, judgment.snapshot, judgment.guard, judgment.row, kind='reply',
-                           identity_at=judgment.identity_at, reuse_at=judgment.reuse_at, appended=None, stack=turn)
+                self._gate(reservation, judgment.snapshot, judgment.guard, judgment.row, kind=judgment.kind,
+                           identity_at=judgment.identity_at, reuse_at=judgment.reuse_at,
+                           appended=judgment.appended, stack=turn)
             return True
         except ProbeAdmissionError:
             return False
@@ -1095,8 +1114,9 @@ class AccountBillingAdmission:
                 return True
             if judgment is None or judgment.reservation is None or judgment.snapshot is None:
                 raise ProbeAdmissionError('probe_conflict')  # no judgment to gate the yes against
-            return self._gate(judgment.reservation, judgment.snapshot, judgment.guard, judgment.row, kind='reply',
-                              identity_at=judgment.identity_at, reuse_at=judgment.reuse_at, appended=None, stack=turn)
+            return self._gate(judgment.reservation, judgment.snapshot, judgment.guard, judgment.row, kind=judgment.kind,
+                              identity_at=judgment.identity_at, reuse_at=judgment.reuse_at,
+                              appended=judgment.appended, stack=turn)
 
     @contextmanager
     def _signer_stable(self):

@@ -237,7 +237,9 @@ class AccountBillingJobs:
         if job.result is None or job.judgment is not None:
             return
         try:
-            job.judgment = self._owner.bind(*job.key, job.result)
+            # A run this job completed brings the judgment it was admitted on (the owner's commit made it).
+            job.judgment = (None if job.reservation is None else self._owner.judgment_of(job.reservation)
+                            ) or self._owner.bind(*job.key, job.result)
         except Exception:
             job.judgment = None
 
