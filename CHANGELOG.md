@@ -4,6 +4,43 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.46 (billing admission safety fix): a billing probe that is answered from a recent probe record
+  ("probe: reused") is now judged again before it is answered. Before, any recent probe record skipped the
+  judgment, so a probe that had seen paid usage (overage in use) was answered "reused" instead of being refused
+  with paid_usage_usable, and an unreviewed client version or a missing billing attestation was not noticed
+  either. Now a reuse skips only the provider call: paid usage, the client version and the attestation are
+  checked on every reuse and refused with their own reason. A provider API key in the environment was already
+  stopped before admission; it is now refused with its own reason (provider_api_key_present) and the denial is
+  recorded. A stored "reused" answer is replayed only inside its own request window (the time it was
+  judged in); after that a retry of the same request is refused with probe_conflict, as a replay cannot judge
+  again; stored denials still replay. A clean reuse still answers
+  "reused" and starts no new probe.
+  Owner decision 40 (a): when a probe is refused while the five-minute cooldown also applies, the refusal now
+  names the real problem first (API key, paid usage, client version, attestation); a plain cooldown still says
+  probe_cooldown.
+  Review round 2: a stored "reused" answer is replayed only inside its request window and only while no newer
+  billing or headroom evidence exists for the account; newer evidence (paid usage above all) refuses the replay
+  with probe_conflict so the caller asks again and is judged afresh (stored denials still replay). The ledger's
+  own probe path (LearningLedger.observe_claude_billing) now judges before it answers "reused", so a recent
+  paid-usage record is refused with paid_usage_usable, not reused. A repeat admit() on an admitted request
+  re-checks the API key. Accurate scope of the API-key fix: a key present when admit() judges is refused with
+  provider_api_key_present and recorded; a key already present at reserve or prepare is refused as
+  probe_not_authorized and is not recorded.
+  Decision 47 (billing round 4, tests first): a "yes" that is ready but not yet taken is judged again if the
+  inputs it judged have changed (a new reservation, identity observation and signature work; never a new provider
+  call), and after two such new judgments it is refused as probe_replay_stale; a completed run's answer is judged
+  again before it is first delivered. No authorization callback runs after the last input comparison: in the
+  owner's judgment the post-commit callback is gone, and the publication check captures the inputs just before and
+  just after its last callback and refuses a yes if they differ; the waivers are read after that last callback.
+  Publication is bound to the exact committed row and the reply digest of the judgment generation. Every
+  generation, a repeat's too, takes its own identity observation (the local client's login read, no model call,
+  nothing spent), and a repeat measures that reading's age against the judgment's time. The owner-key turn is held
+  until the transaction has committed. Known and accepted: `observed_at_ms` of every reply, a repeat's fresh yes
+  included, is the time of the request's origin (its row's created_at_ms), not the time of the judgment; and each
+  refused repeat still writes one probe_admission deny record (kept like any record, within the five-hour
+  admission input scope), so a client that repeats a refused request in a loop fills that scope until the records
+  age out; bounding it is an open owner choice.
+
 - Package 0.8.45 (Phase 1.2, core API round 6): the owner-facing core API (TM0) joins the 0.8.44 base after six
   review rounds (owner decision 34, no seventh). Fixed with tests that failed first: a single-digit price ("$5")
   is removed by the money filter; id allocation and refusal-log rotation are locked across processes; a failed

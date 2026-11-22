@@ -22,9 +22,21 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "account_billing_admission.py::_admit": {
+   "checks": 1,
+   "ends": "moved from admit (audited 2026-11-21, ANALYSIS-0.4.0-lifetime-caps.md): a reuse age comparison; BOUNDED"
+  },
+  "account_billing_admission.py::_build_reply": {
+   "checks": 1,
+   "ends": "moved from _reply (audited 2026-11-21, ANALYSIS-0.4.0-lifetime-caps.md): a reply size check; BOUNDED"
+  },
   "account_billing_admission.py::_reply": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_billing_admission.py::_reserve_repeat": {
+   "checks": 2,
+   "ends": "moved from reserve (audited 2026-11-21, ANALYSIS-0.4.0-lifetime-caps.md): the pending-original limits; a repeat's generation ends when taken or at its deadline; BOUNDED"
   },
   "account_billing_admission.py::admit": {
    "checks": 1,
@@ -42,6 +54,11 @@
   "account_billing_admission.py::reserve": {
    "checks": 5,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_billing_jobs.py::_rejudge": {
+   "checks": 1,
+   "ends": "decision 47: a count per job of the new judgments of a ready yes whose inputs changed; it ends with the job (taken), and the job answers probe_replay_stale at the limit",
+   "test": "test_H1_a_yes_whose_inputs_keep_changing_ends_in_a_named_refusal_not_a_loop"
   },
   "account_billing_jobs.py::submit": {
    "checks": 1,

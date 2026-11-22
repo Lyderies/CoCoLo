@@ -280,6 +280,8 @@ class AccountBillingExecutions:
         owner._pending.pop((reservation.project, reservation.key))
         owner._reserved_inputs.pop(reservation)
         reply = owner._reply(final, known=False)
+        if not kept_workspace:  # a lost probe's answer reaches no caller
+            owner.record_completed(job.inputs, final, reply, identity, records)
         owner._authorize(reservation.context, reservation.snapshot, authorize)
         if owner._row(row['project_id'], row['request_key']) != final:
             raise ProbeAdmissionError('probe_conflict')

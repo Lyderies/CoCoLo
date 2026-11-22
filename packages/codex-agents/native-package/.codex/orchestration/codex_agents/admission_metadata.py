@@ -482,3 +482,89 @@ def evaluate_launch(
     if state == "exhausted":
         return "provider_exhausted"
     return None
+
+
+def probe_latest(billing: list[tuple[dict[str, Any], str]], fingerprint: str) -> dict[str, Any] | None:
+    """The newest billing reading of this account that a probe itself took (no run, no phase).
+
+    A finished child's records are not probe evidence: they neither stand in for a probe's reading nor
+    refresh its age (decision 50, BR-21)."""
+
+    return max(
+        (record for record, _ in billing
+         if record["account_fingerprint"] == fingerprint
+         and record.get("run_id") is None and record.get("phase") is None),
+        key=lambda record: record["observed_at_ms"], default=None,
+    )
+
+
+def probe_head(headroom: list[tuple[dict[str, Any], str]], fingerprint: str) -> dict[str, Any] | None:
+    """The newest observed headroom reading of this account that a probe itself took (not the last one stored)."""
+
+    return max(
+        (record for record, _ in headroom
+         if record["account_fingerprint"] == fingerprint
+         and record.get("run_id") is None and record.get("phase") is None),
+        key=lambda record: record["observed_at_ms"], default=None,
+    )
+
+
+def newer_run_restricts(
+    latest: dict[str, Any],
+    billing: list[tuple[dict[str, Any], str]],
+    headroom: list[tuple[dict[str, Any], str]],
+    fingerprint: str,
+    now_ms: int,
+    order: dict[str, int],
+) -> bool:
+    """R2: a run record newer than the probe's latest billing that is more restrictive (paid usage usable,
+    overage in use, or headroom that is not ample) means the probe's favourable reading is not enough.
+
+    BR-2 (decision 44): "newer" is serialized insertion order (`order`: record id to its row's insertion
+    number) OR a later-or-equal observation time, so a restriction stored late with an earlier stamp still
+    counts; freshness itself always uses the real observation time."""
+
+    since, seen = latest["observed_at_ms"], order.get(latest["record_id"])
+
+    def newer_than(record: dict[str, Any]) -> bool:
+        return record["observed_at_ms"] >= since or (
+            seen is not None and order.get(record["record_id"], -1) > seen)
+
+    if any(
+        record.get("run_id") is not None and newer_than(record)
+        and (record.get("paid_usage_usable") is True or record.get("is_using_overage") is True)
+        for record, _ in billing
+    ):
+        return True
+    newer = [
+        (record, digest) for record, digest in headroom
+        if record["account_fingerprint"] == fingerprint
+        and record.get("run_id") is not None and newer_than(record)
+    ]
+    return bool(newer) and headroom_state("claude", fingerprint, newer, [], now_ms)[0] != "ample"
+
+
+def reuse_gate(
+    *,
+    environ: Mapping[str, str],
+    process_environ: Mapping[str, str],
+    identity_at: int | None,
+    reuse_at: int | None,
+    now_ms: int,
+    since_ms: int,
+    reuse_ms: int | None,
+) -> str | None:
+    """The shared last test of a yes (decision 50, BR-18, BR-21): a refusal reason, or None.
+
+    Run after every caller callback, with nothing external after it. Whatever environment the caller passed,
+    the process's own is looked at too: a provider API key in either refuses (subscription-only). The
+    identity reading must lie in its window (since..now: a reading stamped after now is no evidence of now),
+    and, for a reuse, the billing reading must be younger than the reuse age and not stamped after now."""
+
+    if api_keys_present(environ) or api_keys_present(process_environ):
+        return "provider_api_key_present"
+    if identity_at is None or not since_ms <= identity_at <= now_ms:
+        return "provider_identity_missing"
+    if reuse_ms is not None and (reuse_at is None or not 0 <= now_ms - reuse_at < reuse_ms):
+        return "billing_unverified"
+    return None

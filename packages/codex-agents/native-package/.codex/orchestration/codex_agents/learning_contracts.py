@@ -1762,6 +1762,8 @@ ADMISSION_REASON_CODES = {
     "codex_spend_control_reached",
     "window_run_cap_reached",
     "probe_cooldown",
+    # BR-13 (decision 44): a repeat of a finished request that would need a new provider call.
+    "probe_replay_stale",
 }
 CLAUDE_HEADROOM_STATUSES = {"allowed", "allowed_warning", "rejected"}
 CLAUDE_OVERAGE_STATUSES = {"allowed", "allowed_warning", "rejected"}

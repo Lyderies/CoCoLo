@@ -65,13 +65,13 @@ class ProbeFailureCauseTests(unittest.TestCase):
 
     def test_a_reply_read_that_fails_names_its_cause(self):
         # account_billing_jobs.py take() (was :517)
-        real = self.billing._owner.reserve
+        real = self.billing._owner.verify_committed  # decision 44 (BR-8): publication checks the committed row
 
-        def reserve(*args, **kwargs):
+        def verify(*args, **kwargs):
             if any(job.state == 'ready' for job in self.billing._jobs.values()):
                 raise RuntimeError('x')
             return real(*args, **kwargs)
-        with mock.patch.object(self.billing._owner, 'reserve', side_effect=reserve):
+        with mock.patch.object(self.billing._owner, 'verify_committed', side_effect=verify):
             with self.assertRaisesRegex(AccountError, '^probe_unavailable$'):
                 self.take(self.begin())
         self.assertEqual('probe_reply_read_failed', self.cause())

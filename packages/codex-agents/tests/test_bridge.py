@@ -3646,6 +3646,62 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
         self.assertEqual("probe_cooldown", self.probe(FAVOURABLE, expected=2)["reason_code"])
         self.assertEqual(1, self.launches())
 
+    def test_D40_a_real_problem_during_the_cooldown_is_reported_before_probe_cooldown(self) -> None:
+        # Regression guard only: an API key is also stopped by check_backend before the ledger's 40 (a) ordering,
+        # and this CLI path is the account owner's. The ledger ordering is proved by test_M1a_ledger_*.
+        self.admit("claude")
+        self.frames("claude", [PROBE_INIT, result_frame("OK")])
+        self.cli("provider-observe", "--provider", "claude", "--billing-probe", expected=2)
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "key"}):
+            self.assertEqual(
+                "provider_api_key_present", self.probe(FAVOURABLE, expected=2)["reason_code"]
+            )
+        self.assertEqual("probe_cooldown", self.probe(FAVOURABLE, expected=2)["reason_code"])
+
+    def test_H2_a_recent_paid_usage_record_is_refused_by_the_ledger_not_reused(self) -> None:
+        self.admit("claude")
+        with self.stale_evidence():
+            self.assertEqual("probe_incomplete", self.probe(OVERAGE, expected=2)["reason_code"])
+        before = self.launches()
+        with self.assertRaisesRegex(AdmissionDenied, "paid_usage_usable"):
+            self.ledger.observe_claude_billing(self.project_id, project_root=self.tools, environ=CLEAN)
+        self.assertEqual(before, self.launches())
+
+    def test_M1a_ledger_paid_usage_during_a_cooldown_is_refused_paid_usage_usable(self) -> None:
+        self.admit("claude")
+        self.frames("claude", [PROBE_INIT, result_frame("OK")])
+        self.cli("provider-observe", "--provider", "claude", "--billing-probe", expected=2)  # no events: cooldown runs
+        before = self.launches()
+        # paid usage that is older than the reuse window but inside the cooldown (the probe started it)
+        from codex_agents.learning_store import PROBE_REUSE_SECONDS
+        old = time.time_ns() // 1_000_000 - (PROBE_REUSE_SECONDS + 100) * 1000
+        fingerprint = self.ledger.observe_provider(
+            self.project_id, "claude", project_root=self.tools, environ=CLEAN)[0]["account_fingerprint"]
+        records = claude_rate_limit_records(OVERAGE["rate_limit_info"], account_fingerprint=fingerprint,
+                                            observed_at_ms=old)
+        self.ledger._store_provider_observations(self.project_id, records, timestamp=old)
+        with self.assertRaisesRegex(AdmissionDenied, "paid_usage_usable"):
+            self.ledger.observe_claude_billing(self.project_id, project_root=self.tools, environ=CLEAN)
+        self.assertEqual(before, self.launches())
+
+    def test_BR1_ledger_path_a_saved_reused_then_paid_usage_then_a_repeat_refuses(self) -> None:
+        # BR-1 (decision 44), LearningLedger path: a 'reused' answer is never trusted on its own; paid usage that
+        # arrives after it (stamped now, the same clock as the saved answer) refuses the repeat.
+        self.admit("claude")
+        self.assertEqual("launched", self.probe(FAVOURABLE)["probe"])
+        self.setUp_fresh_project(new_account=False)
+        self.assertEqual("reused", self.probe(FAVOURABLE)["probe"])
+        before = self.launches()
+        fingerprint = self.ledger.observe_provider(
+            self.project_id, "claude", project_root=self.tools, environ=CLEAN)[0]["account_fingerprint"]
+        now = time.time_ns() // 1_000_000
+        records = claude_rate_limit_records(OVERAGE["rate_limit_info"], account_fingerprint=fingerprint,
+                                            observed_at_ms=now)
+        self.ledger._store_provider_observations(self.project_id, records, timestamp=now)
+        with self.assertRaisesRegex(AdmissionDenied, "paid_usage_usable"):
+            self.ledger.observe_claude_billing(self.project_id, project_root=self.tools, environ=CLEAN)
+        self.assertEqual(before, self.launches())
+
     def test_a_second_project_reuses_or_waits_instead_of_probing(self) -> None:
         self.admit("claude")
         self.assertEqual("launched", self.probe(FAVOURABLE)["probe"])
