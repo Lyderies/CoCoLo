@@ -2258,7 +2258,6 @@ class ProjectHistory:
         row, value = self._live_result(binding, now)
         if value.assignment_digest != keyed_digest(self._result_key, encoded_assignment):
             raise HistoryError("history_conflict")
-        self._require_publishable(value)  # D4 (S-3): no publication of an attempt the writer has arbitrated away
         usage_record = None
         if client_usage is not None:
             if type(client_usage) is not CodexUsageObservation:
@@ -2284,6 +2283,7 @@ class ProjectHistory:
                 if actual is None or actual.content != canonical_json(usage_record):
                     raise HistoryError("history_conflict")
             return self._delivery(terminal)
+        self._require_publishable(value)  # an authenticated committed retry above creates no new publication
         if row["prepared_digest"] is None:
             with self._transaction():
                 # Retention begins before the first possible private body write,
@@ -2321,9 +2321,10 @@ class ProjectHistory:
                                  "VALUES(?,?,?)", (self.project_id, binding.claim_id, encoded_material))
 
     def _require_publishable(self, value) -> None:
-        """D4 (S-3): a publication of a lease-born attempt needs its obligation row `held` (or, for a defect state
-        D2 keeps, missing). A `releasing` row means the writer arbitrated the attempt away: nothing commits for it."""
-        if self._obligation_state(value) in {"releasing", "released"} or self._connection.execute(
+        """D4 (S-3): a publication of a lease-born attempt needs its obligation row `held`. A missing
+        lease-born hold is a defect kept for repair, never authority to publish. A `releasing` row means the writer
+        arbitrated the attempt away: nothing commits for it."""
+        if self._obligation_state(value) not in {None, "held"} or self._connection.execute(
                 "SELECT 1 FROM project_account_settlements WHERE project_id=? AND run_handle=? AND attempt=?",
                 (self.project_id, value.binding.run_handle, value.binding.attempt)).fetchone() is not None:
             raise HistoryError("history_result_expired")
@@ -2351,14 +2352,18 @@ class ProjectHistory:
 
     # D4: publication replay and settlement arbitration (RS-D draft 3 §2-§3, draft 4 §2-§4, shared rule S-3).
 
-    def _verified_publication(self, binding: AttemptBinding, row, now: int):
+    def _verified_publication(self, binding: AttemptBinding, row, now: int, *, loss_outcome=False):
         """The stored material of a still-eligible `reserved` publication, with its final body, checked (RS-D draft 3
         §3): the digest, the binding, the assignment digest, the terminal record, the usage record and the body's
         keyed digest. Returns (content, checked, usage_record, digest, body size, prepared digest). Refuses with
-        `history_conflict` when anything is altered or missing, and `history_result_not_ready` with no material."""
+        `history_conflict` when anything is altered or missing, and `history_result_not_ready` with no material.
+        Arbitration alone requests an explicit None outcome for absent material or a proven missing/invalid body;
+        envelope, read and commit failures propagate and cannot authorize release."""
         stored = self._connection.execute("SELECT material FROM project_result_publications WHERE project_id=? "
                                           "AND claim_id=?", (self.project_id, binding.claim_id)).fetchone()
         if stored is None:
+            if loss_outcome:
+                return None  # explicit absence, not a read or authentication failure
             raise HistoryError("history_result_not_ready")
         encoded, prepared = bytes(stored[0]), row["prepared_digest"]
         if (not 0 < len(encoded) <= 2 * MAX_RECORD_BYTES + MAX_BINDING_BYTES + 4096 or prepared is None
@@ -2399,11 +2404,15 @@ class ProjectHistory:
             raise HistoryError("history_conflict")
         try:
             body = self._read_result_file(binding, material["result_digest"])
-        except HistoryError:
-            raise HistoryError("history_conflict") from None  # no final body, or one that does not verify
+        except HistoryError as error:
+            if error.reason_code != "history_result_unavailable":
+                raise  # unsafe paths and transient read failures are not proof of loss
+            if loss_outcome:
+                return None  # _read_result_file proved the final body missing or invalid
+            raise HistoryError("history_conflict") from None
         return content, checked, usage_record, material["result_digest"], len(body), prepared
 
-    def _replay_locked(self, binding: AttemptBinding, now: int):
+    def _replay_locked(self, binding: AttemptBinding, now: int, *, loss_outcome=False):
         """Complete one publication from the store (RS-D draft 3 §2, draft 4 §2). Eligible only while the reservation
         is `reserved` with its obligation row `held` and its context `bound`; no deadline is a condition. Anything
         else only finishes cleanup (it is refused here and never deleted here)."""
@@ -2412,13 +2421,16 @@ class ProjectHistory:
             terminal = self._connection.execute("SELECT * FROM terminal_outbox WHERE project_id=? AND claim_id=?",
                                                 (self.project_id, binding.claim_id)).fetchone()
             return self._delivery(terminal)
-        if value.state != "reserved" or self._obligation_state(value) not in {"held", None}:
+        if value.state != "reserved" or self._obligation_state(value) != "held":
             raise HistoryError("history_result_expired")
         self._require_publishable(value)  # also: no settlement row of the attempt
         context = project_result_contexts.stored_state(self, binding)
-        if context not in {None, "bound", "legacy_no_context"}:
+        if context != "bound":
             raise HistoryError("history_conflict")
-        content, checked, usage_record, digest, size, prepared = self._verified_publication(binding, row, now)
+        publication = self._verified_publication(binding, row, now, loss_outcome=loss_outcome)
+        if publication is None:
+            return None
+        content, checked, usage_record, digest, size, prepared = publication
         with self._transaction():
             return self._commit_publication_locked(content, checked, binding, usage_record, digest, size, now, value,
                                                    prepared)
@@ -2450,11 +2462,11 @@ class ProjectHistory:
             rows = replay_candidates(None)
         committed, tried = [], 0
         for position, claim_id in rows:
+            if tried >= limit:
+                break  # do not advance past an untried candidate
             self._replay_cursor = position
             if claim_id in skip:
                 continue
-            if tried >= limit:
-                break
             tried += 1
             try:
                 reservation = self._connection.execute("SELECT * FROM result_reservations WHERE project_id=? "
@@ -2508,16 +2520,21 @@ class ProjectHistory:
         value = self._reservation(row)
         if value.state == "committed":
             return "recovered"
-        try:
-            self._replay_locked(value.binding, now)
+        if obligation is None:
+            raise HistoryError("history_service_unavailable")  # no release fence can be installed
+        if self._replay_locked(value.binding, now, loss_outcome=True) is not None:
             return "recovered"
-        except HistoryError as error:
-            if error.reason_code in {"history_unavailable", "history_result_unavailable", "history_incompatible"}:
-                raise  # a failure to read, not a verdict: the account is not asked yet
         with self._transaction():
             if self._connection.execute(
                     "UPDATE project_holds SET state='releasing',request_id=? WHERE project_id=? AND kind='reservation' "
                     "AND identity=? AND state='held'", (request_id, self.project_id, claim_id)).rowcount != 1:
+                fence = self._connection.execute(
+                    "SELECT 1 FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=? "
+                    "AND state IN ('releasing','released') UNION ALL SELECT 1 FROM project_account_settlements "
+                    "WHERE project_id=? AND run_handle=? AND attempt=?",
+                    (self.project_id, claim_id, self.project_id, run_handle, attempt)).fetchone()
+                if fence is None:
+                    raise HistoryError("history_service_unavailable")
                 return "settling"
         return "unrecoverable"
 

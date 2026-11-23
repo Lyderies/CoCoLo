@@ -11,10 +11,14 @@ file calls the store makes, never the real home. A process stop is a BaseExcepti
 RS-B's `record_account_settlement` is B4's: the tests plant its two writes (the settlement row and the released
 obligation) exactly as D2's X9 does.
 """
+import contextlib
 import dataclasses
 import hashlib
 import json
 import os
+import queue
+import threading
+import types
 import unittest
 from unittest import mock
 
@@ -25,7 +29,7 @@ from tests import test_result_leases as leases
 from tests.learning_support import assignment
 from tests.test_project_history import binding
 
-from codex_agents import project_history, project_holds_schema, project_result_contexts
+from codex_agents import project_history, project_holds_schema, project_result_contexts, project_driver, result_persistence
 from codex_agents.history_contracts import HistoryError
 from codex_agents.learning_contracts import canonical_json, keyed_digest
 from codex_agents.result_contracts import CodexUsageObservation
@@ -232,6 +236,7 @@ class KeptPacketRetryTests(ReplayFixture):
                 self.assertEqual('reserved', first[2])
                 kept = self.material(number)
                 self.assertIsNotNone(kept)  # the material is kept for the retry, and for a successor
+                self.now += 17  # a retry must not restart retention
                 self.commit(number)  # the retry, from the same packet
                 last = self.prepared(number)
                 self.assertEqual(first[:2], last[:2])  # prepared_digest and retained_until_ms unchanged
@@ -241,7 +246,7 @@ class KeptPacketRetryTests(ReplayFixture):
                 self.assertEqual(self.packet(number)[0], self.store.read_result(claim_binding(number)))
         self.consistent()
         # The run then releases normally: retention ends it.
-        self.now = self.reservation(1).retained_until_ms
+        self.now = self.reservation(len(POINTS)).retained_until_ms
         self.assertEqual(len(POINTS), self.store.expire_results(limit=10))
         self.consistent()
 
@@ -254,9 +259,10 @@ class KeptPacketRetryTests(ReplayFixture):
         body, content = self.packet(1)
         other = json.loads(content)
         other['observed_at_ms'] = 5
-        with self.assertRaises(HistoryError):
+        with self.assertRaises(HistoryError) as caught:
             self.store.commit_result(canonical_json(other), claim_binding(1), assignment(), body,
                                      client_usage=self.usage())
+        self.assertEqual('history_conflict', caught.exception.reason_code)
         self.assertEqual(before, self.prepared())
 
 
@@ -407,6 +413,10 @@ class ReplayEligibilityTests(ReplayFixture):
                                           'completed', now_ms=self.now)
         self.assertEqual([], self.store.replay_publications())
         self.refused(1, 'history_result_expired')
+        self.now = self.prepared()[1]
+        self.assertEqual(1, self.store.expire_results(limit=10))
+        self.assertEqual(('expired', None, [], (0, 0, 0)),
+                         (self.row_state(), self.material(), self.files(), self.counts()))
 
     def test_R3prime_a_replay_candidate_past_its_lease_deadline_with_the_obligation_held_is_replayed(self):
         self.strand(1)
@@ -425,11 +435,15 @@ class ReplayEligibilityTests(ReplayFixture):
         self.assertEqual([], self.store.replay_publications())
         self.refused()
         self.assertIsNotNone(self.material())
+        self.settle_lost()  # the account release is the legitimate cleanup prerequisite
+        self.assertEqual(1, self.store.expire_results(limit=10))
+        self.assertEqual(('expired', None, [], (0, 0, 0)),
+                         (self.row_state(), self.material(), self.files(), self.counts()))
 
     def test_R6_an_envelope_that_does_not_hash_to_the_prepared_digest_is_refused(self):
         self.strand(1)
         self.store._connection.execute("UPDATE project_result_publications SET material=? WHERE claim_id=?",
-                                       (self.material() + b' ', self.claim()))
+                                       (canonical_json({**json.loads(self.material()), 'result_digest': '0' * 64}), self.claim()))
         self.refused()
         self.assertEqual([], self.store.replay_publications())
 
@@ -472,6 +486,13 @@ class ReplayEligibilityTests(ReplayFixture):
         self.assertEqual(len(cases), len(self.files()))  # kept, charged, for retirement
         self.assertEqual(len(cases), self.store._result_counts()[0])
 
+    def test_R6_usage_phase_provider_and_time_each_refuse(self):
+        for number, (field, value) in enumerate((('phase', 'before'), ('provider', 'other'), ('observed_at_ms', 1001)), 1):
+            with self.subTest(field=field):
+                self.strand(number)
+                self.plant(number, lambda data: data['client_usage_record'].__setitem__(field, value))
+                self.refused(number)
+
     def test_R6_an_altered_body_is_refused_and_an_absent_usage_record_is_a_replay_without_one(self):
         self.strand(1)
         path = self.fixture.directory / self.store._result_names(claim_binding(1))[1]
@@ -479,18 +500,26 @@ class ReplayEligibilityTests(ReplayFixture):
         path.write_bytes(body[:-1] + (b'X' if body[-1:] != b'X' else b'Y'))
         self.refused()
         self.strand(2)
-        self.plant(2, lambda data: data.pop('client_usage_record'))
-        self.assertEqual([self.claim(2)], self.store.replay_publications())
+        self.strand(3, usage=False)
+        data = json.loads(self.material(2))
+        data.pop('client_usage_record')
+        self.store._connection.execute('UPDATE project_result_publications SET material=? WHERE claim_id=?',
+                                       (canonical_json(data), self.claim(2)))
+        self.refused(2)
+        self.assertEqual([self.claim(3)], self.store.replay_publications())
         self.assertEqual((1, 1, 0), self.counts())  # `no observation was supplied`, never `unavailable`
 
     def test_R4prime_a_live_publication_racing_a_settlement_loses_in_both_commit_orders(self):
-        # (i) the settlement's arbitration is first: the live publication is then refused.
+        # (i) arbitration commits first; the authenticated live retry returns that delivery.
         self.bound(1)
         with self.fail_at('fsync_directory', OSError('transient')):
             with self.assertRaises(HistoryError):
                 self.commit(1)
         self.assertEqual('recovered', self.store.arbitrate_publication(*self.attempt(1), 'lost-1'))
         self.settle_lost(1)
+        before = self.counts()
+        self.commit(1)  # recovery won; authenticated live retry is idempotent even after settlement
+        self.assertEqual(before, self.counts())
         self.assertEqual((1, 1, 1), self.counts())  # the body was committed before the settlement
         # (ii) a settlement that found nothing to recover: no terminal after it.
         self.bound(2)
@@ -498,12 +527,22 @@ class ReplayEligibilityTests(ReplayFixture):
             with self.assertRaises(HistoryError):
                 self.commit(2)
         self.assertEqual('unrecoverable', self.store.arbitrate_publication(*self.attempt(2), 'lost-2'))
-        with self.assertRaises(HistoryError):
+        with self.assertRaises(HistoryError) as caught:
             self.commit(2)
+        self.assertEqual('history_result_expired', caught.exception.reason_code)
         self.assertEqual((1, 1, 1), self.counts())
         self.assertEqual('reserved', self.prepared(2)[2])
         self.assertEqual('releasing', self.obligation(2)[0])
         self.consistent()
+
+    def test_R4prime_live_commit_wins_before_arbitration_and_settlement(self):
+        self.bound()
+        delivery = self.commit()
+        self.assertEqual('recovered', self.store.arbitrate_publication(*self.attempt(), 'live-first'))
+        self.settle_lost()
+        self.assertEqual(delivery, self.commit())
+        self.assertEqual((1, 1, 1), self.counts())
+        self.assertEqual(self.packet()[0], self.store.read_result(claim_binding()))
 
 
 @__import__('test_framework').requirements('RS-D-D4', why_not_scenario=WHY)
@@ -526,6 +565,7 @@ class ArbitrationTests(ReplayFixture):
 
     def test_X2_no_material_or_a_body_that_does_not_verify_is_unrecoverable_and_closes_the_gate(self):
         self.strand(1)
+        material = self.material(1)
         self.store._connection.execute("DELETE FROM project_result_publications WHERE claim_id=?", (self.claim(1),))
         self.strand(2)
         path = self.fixture.directory / self.store._result_names(claim_binding(2))[1]
@@ -535,10 +575,18 @@ class ArbitrationTests(ReplayFixture):
                 self.assertEqual('unrecoverable',
                                  self.store.arbitrate_publication(*self.attempt(number), 'lost-%d' % number))
                 self.assertEqual(('releasing', None, 'lost-%d' % number), self.obligation(number))
-                with self.assertRaises(HistoryError):  # a later live commit
+                # Restore every verification input; only the releasing authorization gate can refuse.
+                if number == 1:
+                    self.store._connection.execute('INSERT INTO project_result_publications VALUES(?,?,?)',
+                                                   (claim_binding(1).project_id, self.claim(1), material))
+                else:
+                    path.write_bytes(self.packet(2)[0])
+                with self.assertRaises(HistoryError) as live:  # a later live commit
                     self.commit(number)
-                with self.assertRaises(HistoryError):  # and a later replay
+                self.assertEqual('history_result_expired', live.exception.reason_code)
+                with self.assertRaises(HistoryError) as replay:  # and a later replay
                     self.store.replay_publication(claim_binding(number))
+                self.assertEqual('history_result_expired', replay.exception.reason_code)
                 self.assertEqual('reserved', self.prepared(number)[2])
         self.assertEqual((0, 0, 0), self.counts())
         self.assertTrue(project_holds_schema.register_consistent(self.store._connection))
@@ -561,9 +609,223 @@ class ArbitrationTests(ReplayFixture):
                                           'lost', now_ms=self.now)
         self.assertEqual(1, self.store.expire_results(limit=10))
         self.assertEqual(('expired', None), (self.row_state(2), self.material(2)))
+        self.settle_lost(1)
+        self.assertEqual(1, self.store.expire_results(limit=10))
+        self.assertEqual(('expired', None, [], (0, 0, 0)),
+                         (self.row_state(1), self.material(1), self.files(), self.counts()))
 
     def test_an_attempt_with_no_reservation_has_nothing_to_arbitrate(self):
         self.assertEqual('none', self.store.arbitrate_publication('hrn_' + 'a' * 48, 1, 'lost-x'))
+
+
+
+@__import__('test_framework').requirements('RS-D-D4', why_not_scenario=WHY)
+class ReviewRegressionTests(ReplayFixture):
+    def test_arbitration_preserves_read_envelope_and_commit_failures_for_retry(self):
+        faults = (('read', 'history_service_unavailable'), ('envelope', 'history_conflict'),
+                  ('commit', 'history_conflict'))
+        for number, (kind, reason) in enumerate(faults, 1):
+            with self.subTest(kind=kind):
+                self.strand(number)
+                if kind == 'envelope':
+                    self.store._connection.execute('UPDATE project_result_publications SET material=? WHERE claim_id=?',
+                                                   (b'{}', self.claim(number)))
+                    patch = contextlib.nullcontext()
+                else:
+                    patch = mock.patch.object(self.store, '_read_result_file' if kind == 'read' else
+                                              '_commit_terminal_locked', side_effect=HistoryError(reason))
+                with patch, self.assertRaises(HistoryError) as caught:
+                    self.store.arbitrate_publication(*self.attempt(number), 'retry')
+                self.assertEqual(reason, caught.exception.reason_code)
+                self.assertEqual(('held', None, None), self.obligation(number))
+                self.assertEqual((0, 0, 0), self.counts())
+
+    def test_missing_body_is_proven_loss_but_missing_hold_never_authorizes_settlement(self):
+        self.strand(1)
+        (self.fixture.directory / self.store._result_names(claim_binding())[1]).unlink()
+        self.assertEqual('unrecoverable', self.store.arbitrate_publication(*self.attempt(), 'missing-body'))
+        self.strand(2)
+        self.store._connection.execute("DELETE FROM project_holds WHERE kind='reservation' AND identity=?", (self.claim(2),))
+        with self.assertRaises(HistoryError) as caught:
+            self.store.arbitrate_publication(*self.attempt(2), 'missing-hold')
+        self.assertEqual('history_service_unavailable', caught.exception.reason_code)
+        self.assertEqual((0, 0, 0), self.counts())
+
+    def test_bound_context_without_hold_or_lease_cannot_replay(self):
+        self.strand()
+        self.store._connection.execute("DELETE FROM project_holds WHERE kind='reservation' AND identity=?", (self.claim(),))
+        # Corrupt recovery fixture: preserve the bound context while removing its source lease.
+        self.store._connection.execute('PRAGMA foreign_keys=OFF')
+        self.store._connection.execute('DELETE FROM result_leases WHERE claim_id=?', (self.claim(),))
+        self.store._connection.execute('PRAGMA foreign_keys=ON')
+        self.now = 10_000_000
+        self.refused(reason='history_result_expired')
+
+    def test_four_refusals_and_a_skipped_claim_do_not_starve_the_next_candidate(self):
+        for number in range(1, 7):
+            self.strand(number)
+        for number in range(1, 5):
+            self.store._connection.execute('UPDATE project_result_publications SET material=? WHERE claim_id=?',
+                                           (b'{}', self.claim(number)))
+        skip = frozenset({self.claim(6)})
+        self.assertEqual([], self.store.replay_publications(skip))
+        self.assertEqual([self.claim(5)], self.store.replay_publications(skip))
+
+    def test_settlement_with_no_persistence_defers_before_account_call(self):
+        driver = types.SimpleNamespace(_runtime=types.SimpleNamespace(persistence=None))
+        with mock.patch.object(project_driver, 'AccountClient') as account:
+            with self.assertRaises(HistoryError) as caught:
+                project_driver.RunDriver._arbitrate_publication(driver, None, {'bridge_run_id': 'durable'})
+            self.assertEqual('history_service_unavailable', caught.exception.reason_code)
+        account.assert_not_called()
+
+    def test_failed_adoption_retries_on_later_expiry_without_material(self):
+        self.strand()
+        pending = types.SimpleNamespace(binding=claim_binding(), state='failed', delivery=None, grant=object(),
+                                        lease_binding=None, adoption_pending=False, selected='kept', reason='history_service_unavailable',
+                                        terminal_evidence=None)
+        lane = object.__new__(result_persistence.ResultPersistenceLane)
+        lane._lock = threading.RLock()
+        lane._jobs = {'live': pending}
+        lane._history = lambda: self.store
+        lane._service_scope = None
+        lane._service_instance = 'test'
+        lane._unanswered = {}
+        lane._earlier_held = 1
+        self.store._orchestration_owner = mock.Mock(return_value=mock.Mock())
+        self.store.settle_earlier_registrations = mock.Mock()
+        with mock.patch.object(self.store, 'attest_terminal_delivery', side_effect=[HistoryError('history_service_unavailable'), b'evidence']) as attest:
+            for _ in range(2):
+                request = types.SimpleNamespace(kind='expire')
+                lane._earlier_held = 1
+                lane._earlier(request)
+                self.assertEqual('done', request.state)
+            self.assertEqual('committed', pending.state)
+            self.assertEqual(2, attest.call_count)
+        self.assertEqual(b'evidence', pending.terminal_evidence)
+        self.assertIsNone(self.material())
+
+    def test_P1_live_lane_file_fault_retries_the_identical_selected_packet(self):
+        self.bound()
+        body, content = self.packet()
+        record = json.loads(content)
+        packet = types.SimpleNamespace(body=body, report=None, fenced=record['fenced'], reviewed=record['reviewed'],
+                                       terminal_state=record['terminal_state'], validation_reason=record.get('validation_reason'))
+        selected = types.SimpleNamespace(packet=packet)
+        observed_at_ms = self.now
+        pending = types.SimpleNamespace(binding=claim_binding(), assignment=canonical_json(assignment()),
+                                        selected=selected, observed_at_ms=observed_at_ms, grant=None,
+                                        state='queued', delivery=None, terminal_evidence=None, reason=None)
+        lane = object.__new__(result_persistence.ResultPersistenceLane)
+        lane._lock = threading.RLock()
+        handle = result_persistence.ResultPersistenceHandle()
+        lane._jobs = {handle: pending}
+        lane._closed, lane._fault = False, None
+        lane._pid, lane._thread = os.getpid(), threading.current_thread()
+        lane._owner = mock.Mock()
+        lane._incoming = queue.Queue()
+        lane._history = lambda: self.store
+        with self.fail_at('fsync_directory', OSError('transient')):
+            with self.assertRaises(HistoryError):
+                lane._publish(pending)
+        pending.state = 'failed'
+        before = self.prepared()[:2]
+        kept = self.material()
+        self.now += 50
+        lane.retry(handle)
+        self.assertEqual(('publish', handle), lane._incoming.get_nowait())
+        self.assertIs(selected, pending.selected)
+        with mock.patch.object(self.store, 'publish_result', wraps=self.store.publish_result) as publish:
+            lane._publish(pending)
+        self.assertIs(body, publish.call_args.args[2])
+        self.assertEqual(observed_at_ms, publish.call_args.args[3].observed_at_ms)
+        self.assertEqual(before, self.prepared()[:2])
+        self.assertEqual(keyed_digest(KEY, kept), self.prepared()[0])
+        self.assertEqual(('committed', None, (1, 1, 1)), (pending.state, pending.selected, self.counts()))
+
+    def test_L3_arbitration_adopts_once_and_an_equal_repeat_preserves_all_evidence(self):
+        self.strand()
+        pending = types.SimpleNamespace(binding=claim_binding(), state='failed', delivery=None, grant=object(),
+                                        adoption_pending=False, selected='kept', reason='history_service_unavailable',
+                                        terminal_evidence=None)
+        lane = object.__new__(result_persistence.ResultPersistenceLane)
+        lane._lock = threading.RLock()
+        lane._jobs = {'live': pending}
+        lane._history = lambda: self.store
+        lane._unanswered = {}
+        effective = []
+        install = lane._install_delivery
+
+        def installed(job, delivery, evidence):
+            before = job.delivery
+            install(job, delivery, evidence)
+            if before is None and job.delivery is not None:
+                effective.append(job.binding.claim_id)
+
+        with mock.patch.object(lane, '_install_delivery', side_effect=installed), \
+                mock.patch.object(self.store, 'attest_terminal_delivery', return_value=b'evidence'):
+            for _ in range(2):
+                lane._earlier_held = 1
+                request = types.SimpleNamespace(kind='arbitrate', arguments=(*self.attempt(), 'arb'))
+                lane._earlier(request)
+                self.assertEqual(('done', 'recovered'), (request.state, request.result))
+            delivery, evidence = pending.delivery, pending.terminal_evidence
+            selected = object()
+            pending.selected = selected
+            equal = dataclasses.replace(delivery)
+            lane._install_delivery(pending, equal, b'different evidence')
+        self.assertEqual([self.claim()], effective)
+        self.assertIs(delivery, pending.delivery)
+        self.assertIs(evidence, pending.terminal_evidence)
+        self.assertIs(selected, pending.selected)
+        self.assertEqual((1, 1, 1), self.counts())
+
+    def test_driver_observer_rejects_a_later_uncommitted_or_incomplete_settlement(self):
+        from tests.test_publication_replay_driver import StoppedInstanceOrderTests
+        observer = StoppedInstanceOrderTests(methodName='runTest')
+        observer.store_rows = lambda: dict(terminals=1, usage=1, material=0, states=['committed'])
+        bad_later = [('settle', ('committed',), 'target'), ('settled', 'target'),
+                     ('settle', ('reserved',), 'target'), ('settled', 'target')]
+        incomplete = [('settle', ('committed',), 'target')]
+        for events in (bad_later, incomplete):
+            with self.subTest(events=events), self.assertRaises(AssertionError):
+                observer.check(events, 'target')
+        observer.check([('settle', ('committed',), 'target'), ('settled', 'target')], 'target')
+
+    def test_driver_post_fsync_fault_signal_is_set_only_when_the_fault_fires(self):
+        from tests.test_publication_replay_driver import HeldLiveCommit
+        self.bound()
+        with HeldLiveCommit() as held:
+            self.assertFalse(held.failed.is_set())
+            with self.assertRaises(HistoryError):
+                self.commit()
+            self.assertTrue(held.failed.is_set())
+            self.assertEqual(1, held.live_attempts)
+        self.assertEqual('reserved', self.prepared()[2])
+        self.assertEqual(self.packet()[0], (self.fixture.directory / self.store._result_names(claim_binding())[1]).read_bytes())
+
+    def test_missing_lease_hold_blocks_live_commit_without_changing_custody(self):
+        self.strand()
+        self.store._connection.execute("DELETE FROM project_holds WHERE kind='reservation' AND identity=?", (self.claim(),))
+        before = (self.prepared(), self.material(), self.files())
+        with self.assertRaises(HistoryError) as caught:
+            self.commit()
+        self.assertEqual('history_result_expired', caught.exception.reason_code)
+        self.assertEqual(before, (self.prepared(), self.material(), self.files()))
+        self.assertEqual((0, 0, 0), self.counts())
+
+    def test_zero_row_release_requires_a_verified_existing_fence(self):
+        self.strand()
+        self.store._connection.execute('DELETE FROM project_result_publications WHERE claim_id=?', (self.claim(),))
+        # A zero-row update alone proves no fence. Simulate that outcome inside the actual transaction.
+        self.store._connection.execute("CREATE TEMP TRIGGER ignore_release BEFORE UPDATE OF state ON project_holds "
+                                       "WHEN NEW.kind='reservation' AND NEW.state='releasing' "
+                                       "BEGIN SELECT RAISE(IGNORE); END")
+        with self.assertRaises(HistoryError) as caught:
+            self.store.arbitrate_publication(*self.attempt(), 'no-fence')
+        self.assertEqual('history_service_unavailable', caught.exception.reason_code)
+        self.assertEqual(('held', None, None), self.obligation())
+        self.assertEqual((0, 0, 0), self.counts())
 
 
 if __name__ == '__main__':

@@ -108,6 +108,7 @@ class _Pending:
     cleanup_custody: object = None
     cleanup_raw: bytes | None = None
     release_acknowledgement: bytes | None = None
+    adoption_pending: bool = False  # D4: retry attestation after replay has removed the material
     release_confirmed: bytes | None = None
     record_inputs: dict | None = None  # D1: the host class and client capability stored with the lease
 
@@ -1008,6 +1009,7 @@ class ResultPersistenceLane:
             pending.delivery, pending.state, pending.reason = delivery, "committed", None
             pending.terminal_evidence = evidence
             pending.selected = None
+            pending.adoption_pending = False
 
     def _acknowledge_terminal(self, pending):
         self._history().acknowledge_account_terminal(pending.binding, pending.acknowledgement)
@@ -1106,6 +1108,7 @@ class ResultPersistenceLane:
             pending.delivery, pending.state, pending.reason = delivery, 'committed', None
             pending.terminal_evidence = evidence
             pending.selected = None
+            pending.adoption_pending = False
 
     def _adopt_committed(self, history, claim_ids=None, *, run=None):
         """Writer step: a job of this service that failed publishing, whose claim was committed from the store (a
@@ -1113,15 +1116,17 @@ class ResultPersistenceLane:
         with self._lock:
             failed = [pending for pending in self._jobs.values()
                       if pending.state == 'failed' and type(pending.binding) is AttemptBinding
-                      and ((claim_ids is not None and pending.binding.claim_id in claim_ids)
+                      and (pending.adoption_pending or (claim_ids is not None and pending.binding.claim_id in claim_ids)
                            or (run is not None and (pending.binding.run_handle, pending.binding.attempt) == run))]
         for pending in failed:
+            with self._lock:
+                pending.adoption_pending = True
             try:
                 delivery = history.committed_delivery(pending.binding)
                 evidence = None if pending.grant is None else history.attest_terminal_delivery(pending.binding)
                 self._install_delivery(pending, delivery, evidence)
             except (HistoryError, sqlite3.Error, OSError):
-                continue  # the driver's own retry takes the committed branch and installs it
+                continue  # retain the trigger on this bounded live job for later expiry passes
 
     def open_binding(self, operation, *arguments, **options):
         """B3: bounded writer requests for the open-binding outbox (polled by the owner)."""

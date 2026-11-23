@@ -1,0 +1,55 @@
+test_L1_L2_proof_rejects_a_lifecycle_without_any_live_retry (tests.test_publication_replay_proofs.PublicationProofSensitivityTests.test_L1_L2_proof_rejects_a_lifecycle_without_any_live_retry) ... FAIL
+test_L3_proof_detects_equal_delivery_replacement_and_evidence_loss (tests.test_publication_replay_proofs.PublicationProofSensitivityTests.test_L3_proof_detects_equal_delivery_replacement_and_evidence_loss) ... FAIL
+test_P1_proof_detects_retention_recomputed_on_retry (tests.test_publication_replay_proofs.PublicationProofSensitivityTests.test_P1_proof_detects_retention_recomputed_on_retry) ... FAIL
+test_R6_proof_detects_acceptance_of_removed_supplied_usage (tests.test_publication_replay_proofs.PublicationProofSensitivityTests.test_R6_proof_detects_acceptance_of_removed_supplied_usage) ... FAIL
+test_X2_proof_detects_direct_replay_ignoring_the_release_gate (tests.test_publication_replay_proofs.PublicationProofSensitivityTests.test_X2_proof_detects_direct_replay_ignoring_the_release_gate) ... FAIL
+
+======================================================================
+FAIL: test_L1_L2_proof_rejects_a_lifecycle_without_any_live_retry (tests.test_publication_replay_proofs.PublicationProofSensitivityTests.test_L1_L2_proof_rejects_a_lifecycle_without_any_live_retry)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<work>/cocolo-d4/packages/codex-agents/tests/test_publication_replay_proofs.py", line 84, in test_L1_L2_proof_rejects_a_lifecycle_without_any_live_retry
+    with self.assertRaises(AssertionError):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+AssertionError: AssertionError not raised
+
+======================================================================
+FAIL: test_L3_proof_detects_equal_delivery_replacement_and_evidence_loss (tests.test_publication_replay_proofs.PublicationProofSensitivityTests.test_L3_proof_detects_equal_delivery_replacement_and_evidence_loss)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<work>/cocolo-d4/packages/codex-agents/tests/test_publication_replay_proofs.py", line 97, in test_L3_proof_detects_equal_delivery_replacement_and_evidence_loss
+    with mock.patch.object(result_persistence.ResultPersistenceLane, '_install_delivery', replace_equal), self.assertRaises(AssertionError):
+                                                                                                          ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+AssertionError: AssertionError not raised
+
+======================================================================
+FAIL: test_P1_proof_detects_retention_recomputed_on_retry (tests.test_publication_replay_proofs.PublicationProofSensitivityTests.test_P1_proof_detects_retention_recomputed_on_retry)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<work>/cocolo-d4/packages/codex-agents/tests/test_publication_replay_proofs.py", line 39, in test_P1_proof_detects_retention_recomputed_on_retry
+    with mock.patch.object(project_history.ProjectHistory, 'commit_result', recompute), self.assertRaises(AssertionError):
+                                                                                        ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+AssertionError: AssertionError not raised
+
+======================================================================
+FAIL: test_R6_proof_detects_acceptance_of_removed_supplied_usage (tests.test_publication_replay_proofs.PublicationProofSensitivityTests.test_R6_proof_detects_acceptance_of_removed_supplied_usage)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<work>/cocolo-d4/packages/codex-agents/tests/test_publication_replay_proofs.py", line 56, in test_R6_proof_detects_acceptance_of_removed_supplied_usage
+    with mock.patch.object(project_history.ProjectHistory, '_verified_publication', accept_removed), self.assertRaises(AssertionError):
+                                                                                                     ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+AssertionError: AssertionError not raised
+
+======================================================================
+FAIL: test_X2_proof_detects_direct_replay_ignoring_the_release_gate (tests.test_publication_replay_proofs.PublicationProofSensitivityTests.test_X2_proof_detects_direct_replay_ignoring_the_release_gate)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<work>/cocolo-d4/packages/codex-agents/tests/test_publication_replay_proofs.py", line 66, in test_X2_proof_detects_direct_replay_ignoring_the_release_gate
+    with mock.patch.object(project_history.ProjectHistory, 'replay_publication', verify_only), self.assertRaises(AssertionError):
+                                                                                               ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+AssertionError: AssertionError not raised
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.068s
+
+FAILED (failures=5)

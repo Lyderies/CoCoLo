@@ -1879,7 +1879,7 @@ class RunDriver:
         nothing commits afterwards (`unrecoverable`). An unanswered request raises: the settlement is asked again on
         the next sweep. At this service's own exit its writer has stopped: the lane arbitrates on a store of its own."""
         if self._runtime.persistence is None:
-            return None
+            raise HistoryError('history_service_unavailable')
         request_id = 'lost-' + hashlib.sha256(entry['bridge_run_id'].encode()).hexdigest()[:32]
         if self._exiting:
             return self._runtime.persistence.arbitrate_after_stop(lease.run_handle, lease.attempt, request_id)
