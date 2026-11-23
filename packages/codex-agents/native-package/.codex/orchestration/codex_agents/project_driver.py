@@ -396,6 +396,7 @@ class RunDriver:
         self._reports = []
         self._earlier_failures, self._earlier_at, self._earlier_listed = 0, 0.0, False
         self._sweeper = ThreadPoolExecutor(max_workers=1, thread_name_prefix='project-driver-sweep')
+        self._exiting = False  # D4: set at this service's own exit, when its result writer has stopped
         self._owner_name = 'project-driver-%d-%d' % (os.getpid(), id(self))
         install_enrollment(self._preamble, owner=self._owner_name)
         self._enrolled = None  # Set by the host: token -> its enrolled facts, for dispatch requests.
@@ -1872,11 +1873,32 @@ class RunDriver:
         except Exception:
             return False
 
+    def _arbitrate_publication(self, lease, entry):
+        """Helper thread, D4 (shared rule S-3): the project writer decides this attempt before the account is asked to
+        settle it. A verifiable body is committed first (`recovered`); with none, the obligation goes `releasing` so
+        nothing commits afterwards (`unrecoverable`). An unanswered request raises: the settlement is asked again on
+        the next sweep. At this service's own exit its writer has stopped: the lane arbitrates on a store of its own."""
+        if self._runtime.persistence is None:
+            return None
+        request_id = 'lost-' + hashlib.sha256(entry['bridge_run_id'].encode()).hexdigest()[:32]
+        if self._exiting:
+            return self._runtime.persistence.arbitrate_after_stop(lease.run_handle, lease.attempt, request_id)
+        request = self._runtime.persistence.arbitrate_publication(lease.run_handle, lease.attempt, request_id)
+        end = time.monotonic() + SETTLE_TIMEOUT_SECONDS
+        while request.state == 'queued':
+            if time.monotonic() >= end:
+                raise HistoryError('history_service_unavailable')
+            time.sleep(0.01)
+        if request.state != 'done':
+            raise HistoryError(request.reason or 'history_service_unavailable')
+        return request.result
+
     def _settle_entry(self, entry):
         """Helper thread: the account's settlement of this run, sent with the run's own custody."""
         lease = ResultLeaseBinding(**entry['lease'])
         if lease.project_id != self._scope.project_id or entry['host_client'] not in HOST_CLIENTS:
             raise HistoryError('history_conflict')
+        self._arbitrate_publication(lease, entry)
         evidence = bytes.fromhex(entry['storage_evidence'])
         settle = SettleLostInput(entry['run_handle'], entry['identity_digest'], entry['claim_request_id'],
                                  entry['bridge_run_id'], parse_bounded_json(evidence)['lease']['lease_digest'])
@@ -1949,6 +1971,7 @@ class RunDriver:
             self._journal.release()
             return
         install_enrollment(self._preamble, owner=self._owner_name)
+        self._exiting = True  # D4: the writer has stopped; each settlement arbitrates on a store opened for it
         try:
             self._settle_lost(True)
         except Exception:

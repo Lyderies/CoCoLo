@@ -340,6 +340,26 @@ class StopBeforeAndAfterTheHandoffTests(ReplayFixture):
                 self.assertEqual(('committed', None), (self.context_state(number), self.release_kind(number)[1]))
         self.consistent()
 
+    def test_the_replay_pass_completes_at_most_four_publications_and_the_next_pass_the_rest(self):
+        for number in range(1, 7):
+            self.strand(number)
+        self.successor()
+        first = self.store.replay_publications()
+        self.assertEqual(4, len(first))  # REPLAY_PASS_LIMIT: each pass reads at most four bodies
+        second = self.store.replay_publications()
+        self.assertEqual(2, len(second))
+        self.assertEqual(sorted(self.claim(n) for n in range(1, 7)), sorted(first + second))
+        self.assertEqual([], self.store.replay_publications())
+        self.assertEqual(6, self.counts()[0])
+        # A claim whose job is publishing in this service is skipped; a limit past the bound is refused.
+        self.strand(7)
+        self.strand(8)
+        self.assertEqual([self.claim(8)], self.store.replay_publications(skip=frozenset({self.claim(7)})))
+        with self.assertRaises(HistoryError):
+            self.store.replay_publications(limit=5)
+        self.assertEqual([self.claim(7)], self.store.replay_publications())
+        self.consistent()
+
     def test_P3prime_an_expiry_pass_alone_neither_deletes_nor_classifies_a_stranded_publication(self):
         self.strand(1)
         self.now = 10_000_000  # far past the lease deadline and the hard deadline

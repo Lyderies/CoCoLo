@@ -124,7 +124,8 @@ class LiveRetryLifecycleTests(Observed, DriverHarness):
             return original(history, *arguments, **options)
 
         def counting_link(*arguments, **options):
-            links.append(arguments[0])
+            if str(arguments[0]).startswith('.result-'):  # a result body's own final link, not other files'
+                links.append(arguments[0])
             return link(*arguments, **options)
 
         def patcher():
@@ -206,7 +207,16 @@ class StoppedInstanceOrderTests(Observed, lost.LostRunHarness):
     stop_host = lost.LostRunAfterStopTests.stop_host
     start_host = lost.LostRunAfterStopTests.start_host
 
-    def stranded_then_successor(self, *, expiry_first):
+    def stop_without_settling(self):
+        """The host stops the way a crash leaves it: its own exit settles nothing, so the next host settles."""
+        original = project_driver.RunDriver.settle_on_exit
+        with mock.patch.object(project_driver.RunDriver, 'settle_on_exit',
+                               lambda driver, settle=True: original(driver, settle=False)):
+            self.stop_host()
+
+    def stranded_then_successor(self, mode):
+        """`exit`: the stopping service settles at its own exit; `sweep_first` and `expiry_first`: the successor's
+        lost sweep and expiry pass, in that order or the reverse."""
         events = []
         settle = AccountClient.settle_lost_run
 
@@ -215,40 +225,40 @@ class StoppedInstanceOrderTests(Observed, lost.LostRunHarness):
             return settle(client, *arguments, **options)
         context, route_path, orchestration, run_handle = self.open_run()
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(
-            json.dumps(lost.null_filled(lost.result())))
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(lost.null_filled(lost.result())))
         with HeldLiveCommit() as held, mock.patch.object(AccountClient, 'settle_lost_run', settling):
             dispatch = self.separate_dispatch(context, route_path, run_handle)
             self.wait_for(lambda: held.live_attempts >= 1 and self.store_rows()['material'] == 1, seconds=30)
             self.assertEqual(['reserved'], self.store_rows()['states'])  # post-handoff, nothing committed
-            if expiry_first:
-                original_sweep, original_expire = project_driver.RunDriver._sweep_lost, project_driver.RunDriver._expire_results
-                expired = threading.Event()
-
-                def expire(driver):
-                    original_expire(driver)
-                    if driver._expiry is not None:
-                        events.append(('expiry',))
-                        expired.set()
-
-                def sweep(driver):
-                    if expired.is_set():
-                        return original_sweep(driver)
-                self.restart_host_with(expire, sweep)
-            else:
+            if mode == 'exit':
                 self.restart_host()
+            else:
+                self.stop_without_settling()
+                self.assertEqual([], events)  # nothing settled yet: the successor will
+                patches = []
+                if mode == 'expiry_first':
+                    original_sweep, original_expire = (project_driver.RunDriver._sweep_lost,
+                                                       project_driver.RunDriver._expire_results)
+                    expired = threading.Event()
+
+                    def expire(driver):
+                        original_expire(driver)
+                        if driver._expiry is not None:
+                            events.append(('expiry',))
+                            expired.set()
+
+                    def sweep(driver):
+                        if expired.is_set():
+                            return original_sweep(driver)
+                    patches = [mock.patch.object(project_driver.RunDriver, '_expire_results', expire),
+                               mock.patch.object(project_driver.RunDriver, '_sweep_lost', sweep)]
+                for patch in patches:
+                    patch.start()
+                    self.addCleanup(patch.stop)
+                self.start_host()
             dispatch.communicate(timeout=30)
             self.wait_for(lambda: any(event[0] == 'settle' for event in events), seconds=45)
         return events, orchestration, run_handle
-
-    def restart_host_with(self, expire, sweep):
-        patches = [mock.patch.object(project_driver.RunDriver, '_expire_results', expire),
-                   mock.patch.object(project_driver.RunDriver, '_sweep_lost', sweep)]
-        self.stop_host()
-        for patch in patches:
-            patch.start()
-            self.addCleanup(patch.stop)
-        self.start_host()
 
     def check(self, events, run_handle):
         settle = [event for event in events if event[0] == 'settle'][0]
@@ -257,12 +267,16 @@ class StoppedInstanceOrderTests(Observed, lost.LostRunHarness):
         self.assertEqual((1, 1, 0), (rows['terminals'], rows['usage'], rows['material']))
         self.assertEqual(['committed'], rows['states'])  # never classified lost
 
+    def test_the_exiting_service_arbitrates_on_a_store_of_its_own_before_it_settles(self):
+        events, _, run_handle = self.stranded_then_successor('exit')
+        self.check(events, run_handle)
+
     def test_R4prime_the_lost_sweep_before_the_expiry_pass_commits_the_body_first(self):
-        events, _, run_handle = self.stranded_then_successor(expiry_first=False)
+        events, _, run_handle = self.stranded_then_successor('sweep_first')
         self.check(events, run_handle)
 
     def test_R4prime_the_expiry_pass_before_the_lost_sweep_commits_the_body_first(self):
-        events, _, run_handle = self.stranded_then_successor(expiry_first=True)
+        events, _, run_handle = self.stranded_then_successor('expiry_first')
         self.assertEqual(('expiry',), events[0])
         self.check(events, run_handle)
 

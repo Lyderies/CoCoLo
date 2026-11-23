@@ -1063,6 +1063,66 @@ class ResultPersistenceLane:
         """Ask the writer to run one bounded result cleanup (0.3.4 R2); poll its `state`."""
         return self._queue_counted(_EarlierLeases('expire'), '_earlier_held', EARLIER_SLOTS)
 
+    def arbitrate_publication(self, run_handle, attempt, request_id):
+        """D4 (shared rule S-3): the writer's decision on one attempt before the account is asked to settle it; poll
+        `state`, then read `result`: `recovered`, `unrecoverable`, `settling` or `none`. `history_writer_busy` when
+        no room is left: ask again later."""
+        if (type(run_handle) is not str or type(attempt) is not int or type(request_id) is not str
+                or not 0 < len(request_id) <= 128):
+            raise HistoryError('history_invalid_input')
+        return self._queue_counted(_EarlierLeases('arbitrate', arguments=(run_handle, attempt, request_id)),
+                                   '_earlier_held', EARLIER_SLOTS)
+
+    def arbitrate_after_stop(self, run_handle, attempt, request_id):
+        """D4 (shared rule S-3): the same decision, for the owner's thread once this lane's writer has stopped (this
+        service's own exit settles what it still holds): on a store opened for this call alone, so the exiting service
+        never asks the account about an attempt whose body the writer could still publish."""
+        if type(run_handle) is not str or type(attempt) is not int or type(request_id) is not str:
+            raise HistoryError('history_invalid_input')
+        with self._lock:
+            if self._fault or not self._closed:
+                raise HistoryError('history_service_unavailable')
+        self._writer.join(10)
+        if self._writer.is_alive():
+            raise HistoryError('history_service_unavailable')
+        store = self._open()
+        try:
+            if type(store) is not ProjectHistory or store.project_id != self._project:
+                raise HistoryError('history_service_unavailable')
+            return store.arbitrate_publication(run_handle, attempt, request_id)
+        finally:
+            if type(store) is ProjectHistory:
+                store.close()
+
+    def _install_delivery(self, pending, delivery, evidence):
+        """D4 (RS-D draft 4 §3, `adopt_delivery`): install a delivery the writer committed for this job's claim, with
+        the three fields `_publish` sets. Idempotent: a job that already has an equal delivery is left alone, an
+        unequal one is `history_conflict`."""
+        with self._lock:
+            if pending.delivery is not None:
+                if pending.delivery != delivery:
+                    raise HistoryError('history_conflict')
+                return
+            pending.delivery, pending.state, pending.reason = delivery, 'committed', None
+            pending.terminal_evidence = evidence
+            pending.selected = None
+
+    def _adopt_committed(self, history, claim_ids=None, *, run=None):
+        """Writer step: a job of this service that failed publishing, whose claim was committed from the store (a
+        replay or the arbitration), takes the stored delivery instead of publishing it again."""
+        with self._lock:
+            failed = [pending for pending in self._jobs.values()
+                      if pending.state == 'failed' and type(pending.binding) is AttemptBinding
+                      and ((claim_ids is not None and pending.binding.claim_id in claim_ids)
+                           or (run is not None and (pending.binding.run_handle, pending.binding.attempt) == run))]
+        for pending in failed:
+            try:
+                delivery = history.committed_delivery(pending.binding)
+                evidence = None if pending.grant is None else history.attest_terminal_delivery(pending.binding)
+                self._install_delivery(pending, delivery, evidence)
+            except (HistoryError, sqlite3.Error, OSError):
+                continue  # the driver's own retry takes the committed branch and installs it
+
     def open_binding(self, operation, *arguments, **options):
         """B3: bounded writer requests for the open-binding outbox (polled by the owner)."""
         if operation not in {'record_open_binding', 'mark_open_withdrawing', 'open_withdrawals',
@@ -1139,7 +1199,19 @@ class ResultPersistenceLane:
                 # with no client action (O10 D1). Armed leases are never expired by time.
                 with contextlib.suppress(HistoryError, sqlite3.Error):
                     history.expire_result_leases(limit=10)
+                # D4 (RS-D draft 3 §6): stored publications whose job is not publishing here are completed, at most
+                # 4 a pass, before the cleanup; a job of this service that failed takes the delivery committed.
+                with self._lock:
+                    publishing = frozenset(pending.binding.claim_id for pending in self._jobs.values()
+                                           if pending.state in {'queued', 'committing'}
+                                           and type(pending.binding) is AttemptBinding)
+                with contextlib.suppress(HistoryError, sqlite3.Error):
+                    self._adopt_committed(history, set(history.replay_publications(publishing)))
                 result = history.expire_results(limit=10)
+            elif request.kind == 'arbitrate':
+                result = history.arbitrate_publication(*request.arguments)
+                if result == 'recovered':
+                    self._adopt_committed(history, run=request.arguments[:2])
             elif request.kind == 'register':
                 handle, run_handle, run_id, attempt, instance = request.arguments
                 result = history.record_registered_run(handle, run_handle, run_id, attempt, instance=instance,
