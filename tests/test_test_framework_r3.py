@@ -145,7 +145,7 @@ class RoundThree(unittest.TestCase):
                     else:self.assertNotEqual(0,result.returncode);self.assertFalse(output.exists())
         self.assertNotEqual(base,tip)
 
-    @requirements('TF-14')
+    @requirements('TF-14','TF-15')
     def test_p06_matching_golden_requires_provenance_and_update_repairs_it(self):
         from test_golden import compare,GoldenUpdated
         args=dict(root=self.root,name='value',actual='same',requirement='TF-14',declared={'TF-14'},known={'TF-14'},environ={})

@@ -504,7 +504,8 @@
    "root:test_test_framework.GoldenTests.test_equal_update_mode_is_not_green_and_newlines_are_not_silently_normalized",
    "root:test_test_framework.GoldenTests.test_provenance_symlink_cannot_write_outside_the_golden_root",
    "root:test_test_framework.GoldenTests.test_update_cannot_escape_through_dotdot_absolute_path_or_symlink",
-   "root:test_test_framework.GoldenTests.test_update_requires_exact_environment_and_a_known_declared_requirement"
+   "root:test_test_framework.GoldenTests.test_update_requires_exact_environment_and_a_known_declared_requirement",
+   "root:test_test_framework_r3.RoundThree.test_p06_matching_golden_requires_provenance_and_update_repairs_it"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-15",
   "statement": "**TF-15 \u2014 Golden updates need explicit intent and requirement provenance.** A golden can be created or changed\nonly with exactly `UPDATE_GOLDEN=1` AND a valid requirement ID supplied to the helper and declared by the\ncalling test. Fail closed for missing/unknown/unrelated IDs and other environment values. Restrict writes to\nthe checked-in test golden root; reject traversal and symlink escapes. Persist/review the requirement ID with\nthe golden change in an adjacent `<golden-name>.requirement` UTF-8 sidecar inside the checked-in golden\nroot, included in review with the golden; report update mode visibly, and do not count an update run as passing evidence. Witness:\nunset/0/true without exact 1 cannot write; invalid ID and escape leave files untouched; authorized update\nrecords its ID, and a subsequent normal run is needed for green evidence. Never update a golden to fit code\nthat contradicts its requirement."

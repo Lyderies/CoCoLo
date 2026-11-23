@@ -1,0 +1,12 @@
+{
+ "status": "green",
+ "base": "9c18c4a3",
+ "witnesses": [
+  "test_TF23_declared_fixes_require_red_green_and_positive_control"
+ ],
+ "source_run": "tf-r3-bootstrap-green.json.run.json",
+ "source_sha256": "2740ac8ba291c62240cd45bfee77bc2f27b28e59ac5b598349d993e97a5dcb68",
+ "job_seconds": 4.897907375008799,
+ "jobs": 16,
+ "positive_control": "Valid complete fixture passes; each missing field, wrong outcome and every declared manifest is checked."
+}
