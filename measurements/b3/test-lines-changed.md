@@ -75,3 +75,49 @@ All in `tests/test_open_withdrawal.py` (plus `_CountedConnection`/`_CountedCurso
 | `OpenBindingStoreTests.test_M2_a_registration_reads_one_row_however_many_are_held_and_still_refuses_a_second_owner` | 30 rows read to register one run |
 | `WithdrawAccountTests.test_L1_the_permanent_withdrawal_evidence_stays_within_its_512_byte_budget_at_its_largest` | stored evidence 668 bytes > 512 |
 | `WithdrawAccountTests.test_L1_a_withdrawal_recorded_in_the_earlier_format_still_replays` | green before and after: guards the v2 record still read |
+
+## 6. Owner-approved, decision 107 (account operation lists)
+
+Three existing assertions, one token each: `"account.withdraw_open"` added right after `"account.billing_probe"` in the
+fixed operation set. Nothing else in these files changed. Red on 84cd8e8e (the operation exists, the set did not list
+it): all three modules fail, `set != frozenset(... + account.withdraw_open)`. Green after.
+
+- `packages/codex-agents/tests/test_signature_inputs.py` (`test_capture_matches_legacy_inputs_without_crypto_connections_or_writes`, the `ACCOUNT_OPERATIONS` assertion, about line 146)
+- `packages/codex-agents/tests/test_admission_inputs.py` (`test_exact_six_family_raw_capture_without_crypto_connections_or_writes`, about line 139)
+- `packages/codex-agents/tests/test_signature_job_intake.py` (`test_capacity_is_reserved_before_capture_without_extra_database_secret_or_crypto`, about line 96)
+
+## 7. Fix round 2 (decision 108 A, branch fix/b3-withdraw-2)
+
+### 7a. Added tests (no existing line changed), red on 84cd8e8e
+
+All in `tests/test_open_withdrawal.py` (helpers `fill`, `steps`, `plans`, `sweep`, `register` inside `OpenBindingStoreTests`):
+
+| test | red evidence on 84cd8e8e |
+|---|---|
+| `OpenBindingStoreTests.test_D108_registration_searches_its_indexes_and_its_work_does_not_grow_with_the_rows_held` | 19971 SQLite steps for one registration over 1500 held and 1500 registered rows vs 917 allowed (about 100 at 30 rows) |
+| `OpenBindingStoreTests.test_D108_the_successor_pass_does_bounded_work_and_advances_across_conflicting_rows` | 31857 steps for one pass over 1800 held rows vs 4202 allowed |
+| `OpenBindingStoreTests.test_D108_a_format_18_project_store_upgrades_to_19_and_keeps_its_rows_and_its_refusals` | schema version is 18, not 19 |
+| `OpenBindingStoreTests.test_D108_the_run_id_of_an_open_or_a_registered_run_cannot_be_taken_twice` | green before and after: guards the complete run-id ownership check |
+| `DriverWithdrawalTests.test_L2_a_failed_deferral_submission_keeps_the_batch_and_the_failed_rows_duty` | the later withdrawal never happened in 15 s (the batch was dropped with the failed deferral) |
+
+`scripts/test-requirements.json`: the five ids added to RS-B-5 by `generate_test_metadata.py --catalogue`.
+
+### 7b. Fixture helper (not an assertion)
+
+`tests/project_schema_fixtures.py`, `legacy_project_holds_layout`: one line added after the table drops,
+`DROP INDEX IF EXISTS project_registered_runs_run`. Without it the "format 17" fixtures keep the new index on a table
+older formats keep, and fail to open as `history_incompatible`.
+
+### 7c. Existing tests that pin the project-history schema version 18: NOT edited, fail on 19 (owner approval needed)
+
+All fail with `18 != 19` unless noted. Each pins `PRAGMA user_version` (or a `before-18` copy name) after an upgrade:
+test_project_host_open (explicit_schema5_upgrade), test_project_qa_check_receipts (schema6), test_project_hold_register
+(`test_the_step_adopts_every_lease_and_reservation_by_class`), test_project_qa_commit (schema7), test_learning_migration
+(schema15), test_project_execution_grant (schema3), test_result_leases (schema2 and schema4, two tests),
+test_project_learning_corpus (v10), test_learning_outcome_pages (v11), test_project_release_ack (old_schema),
+test_history_service_upgrade (`test_HS_1_the_service_upgrades_a_format_16_store...` and
+`test_HS_18_a_copy_made_for_an_upgrade_that_fails_is_removed`: its `copies()` globs `history.sqlite3.before-18.*`),
+test_project_results (schema1 and process_death, two tests), test_learning_qa_upgrade, test_project_holds_schema
+(`test_X5_M2_a_17_binary_refuses_an_18_store...`, `test_X5_M3_one_step_creates_the_four_tables...`),
+test_project_orchestration (R6 schema 16), test_learning_chunk_upgrade. Total 20 tests in 16 modules. Also pinned at
+`PRAGMA user_version` == 18 but not failing in the runs above only because they do not upgrade to current: none found.

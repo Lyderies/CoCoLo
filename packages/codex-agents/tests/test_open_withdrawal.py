@@ -358,6 +358,148 @@ class OpenBindingStoreTests(unittest.TestCase):
             self.assertEqual({first, second}, set(due))
         self.assertEqual('releasing', self.row(1)[0])  # a failure never finalizes a row
 
+    # --- decision 108 A: database work, not returned rows ---
+
+    HELD = "INSERT INTO project_holds(project_id,kind,identity,state,taken_at_ms,evidence) " \
+           "VALUES(?,'open_binding',?,'held',1000,?)"
+
+    def fill(self, earlier, own, start=1000):
+        """Held open-binding rows written straight into the register: `earlier` of a stopped service, `own` of the live one."""
+        from codex_agents import project_holds_schema
+        rows = []
+        for number in range(start, start + earlier + own):
+            handle = 'hrn_' + f'{number:048x}'
+            instance = 'svc-' + ('a' if number < start + earlier else 'b') * 32
+            rows.append((PROJECT_A, f'{handle}:1', project_holds_schema.evidence_json(
+                run_handle=handle, attempt=1, run_id='run:' + f'{number:064x}', inputs_digest=INPUTS,
+                host_client='codex', instance=instance)))
+        with self.store._connection:
+            self.store._connection.executemany(self.HELD, rows)
+
+    def steps(self, action):
+        """The database work of one call: SQLite virtual-machine steps (a returned-row count cannot show it)."""
+        count = [0]
+
+        def tick():
+            count[0] += 1
+            return 0
+        self.store._connection.set_progress_handler(tick, 1)
+        try:
+            action()
+        finally:
+            self.store._connection.set_progress_handler(None, 0)
+        return count[0]
+
+    def plans(self, action):
+        """The query plan of every statement `action` ran against the register or the registered runs."""
+        seen = []
+        self.store._connection.set_trace_callback(seen.append)
+        try:
+            action()
+        finally:
+            self.store._connection.set_trace_callback(None)
+        details = []
+        for sql in seen:
+            if sql.lstrip().upper().startswith('SELECT') and ('project_holds' in sql or 'project_registered_runs' in sql):
+                details += [row[3] for row in self.store._connection.execute('EXPLAIN QUERY PLAN ' + sql)]
+        return details
+
+    def sweep(self, instance='svc-' + 'b' * 32, limit=10):
+        return self.store.withdraw_earlier_open_bindings(instance, project_id=PROJECT,
+                                                         runtime_digest=COLLECTOR_RUNTIME_DIGEST, limit=limit)
+
+    def register(self, number):
+        self.store.record_open_binding('hrn_' + f'{number:048x}', 1, 'run:' + f'{number:064x}', INPUTS, 'codex',
+                                       instance='svc-' + 'a' * 32, now_ms=1000)
+
+    def test_D108_registration_searches_its_indexes_and_its_work_does_not_grow_with_the_rows_held(self):
+        self.fill(30, 0)
+        small = self.steps(lambda: self.register(1))
+        self.fill(1500, 0, start=5000)
+        with self.store._connection:
+            self.store._connection.executemany(
+                'INSERT INTO project_registered_runs VALUES(?,?,?,?,?,?,?,NULL,NULL)',
+                [(PROJECT_A, 'hrn_' + f'{n:048x}', 1, 'orc_' + f'{n:032x}', 'run:' + f'{n:064x}', 'svc-' + 'a' * 32, 1)
+                 for n in range(20_000, 21_500)])
+        large = self.steps(lambda: self.register(2))
+        self.assertLess(large, small * 1.5 + 200)  # the work of one registration, not of the rows held
+        details = self.plans(lambda: self.register(3))
+        self.assertTrue(details)
+        self.assertFalse([d for d in details if d.startswith('SCAN') and 'project_' in d], details)
+        self.assertFalse([d for d in details if 'project_holds_kind_due' in d], details)  # not the whole live partial index
+        self.assertTrue([d for d in details if 'project_registered_runs' in d and 'USING' in d and 'run' in d
+                         and 'orchestration' not in d], details)  # a run-id index
+
+    def test_D108_the_successor_pass_does_bounded_work_and_advances_across_conflicting_rows(self):
+        self.fill(25, 25)
+        baseline = self.steps(self.sweep)
+        details_small = self.plans(self.sweep)
+        self.fill(900, 900, start=9000)
+        first = self.steps(self.sweep)
+        self.assertLess(first, baseline * 1.5 + 200)  # bounded by the limit, not by the rows held
+        details = self.plans(self.sweep)
+        self.assertFalse([d for d in details + details_small if d.startswith('SCAN') and 'project_holds' in d], details)
+        self.assertFalse([d for d in details + details_small if 'TEMP B-TREE' in d], details)  # no unbounded sort
+        # Rows the pass cannot mark (their lease says so) never stop it from reaching the others.
+        rows = [row[0] for row in self.store._connection.execute(
+            "SELECT identity FROM project_holds WHERE kind='open_binding' AND state='held' "
+            "AND json_extract(evidence,'$.instance')=? ORDER BY identity LIMIT 120", ('svc-' + 'a' * 32,))]
+        stuck, original = set(rows), self.store.mark_open_withdrawing
+
+        def conflicting(run_handle, attempt, *args, **kwargs):
+            if f'{run_handle}:{attempt}' in stuck:
+                raise HistoryError('history_conflict')
+            return original(run_handle, attempt, *args, **kwargs)
+        waiting = lambda: self.store._connection.execute(  # noqa: E731
+            "SELECT COUNT(*) FROM project_holds WHERE kind='open_binding' AND state='held' "
+            "AND json_extract(evidence,'$.instance')=?", ('svc-' + 'a' * 32,)).fetchone()[0]
+        worst = 0
+        with mock.patch.object(self.store, 'mark_open_withdrawing', conflicting):
+            for _ in range(200):
+                if waiting() == len(stuck):
+                    break
+                worst = max(worst, self.steps(self.sweep))
+        self.assertEqual(len(stuck), waiting())  # every row that can be marked was, behind the conflicting ones
+        self.assertLess(worst, baseline * 3 + 400)  # and no call did more than a bounded share of the work
+
+    def test_D108_the_run_id_of_an_open_or_a_registered_run_cannot_be_taken_twice(self):
+        self.register(1)
+        with self.store._connection:
+            self.store._connection.execute(
+                'INSERT INTO project_registered_runs VALUES(?,?,?,?,?,?,?,NULL,NULL)',
+                (PROJECT_A, 'hrn_' + f'{7:048x}', 1, 'orc_' + '7' * 32, 'run:' + f'{7:064x}', 'svc-' + 'a' * 32, 1))
+        for number, owner in ((9, 1), (10, 7)):
+            with self.subTest(owner=owner), self.assertRaisesRegex(HistoryError, 'history_conflict'):
+                self.store.record_open_binding('hrn_' + f'{number:048x}', 1, 'run:' + f'{owner:064x}', INPUTS, 'codex',
+                                               instance='svc-' + 'a' * 32, now_ms=1000)
+
+    def test_D108_a_format_18_project_store_upgrades_to_19_and_keeps_its_rows_and_its_refusals(self):
+        from codex_agents import project_history
+        self.assertEqual(19, project_history._SCHEMA_VERSION)
+        self.fill(5, 0)
+        self.register(1)
+        db = self.store._connection
+        indexes = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        added = {name for name in indexes if name in {'project_holds_open_run', 'project_holds_open_held',
+                                                      'project_registered_runs_run'}}
+        self.assertEqual({'project_holds_open_run', 'project_holds_open_held', 'project_registered_runs_run'}, added)
+        before = sorted(tuple(row) for row in db.execute('SELECT * FROM project_holds'))
+        for name in added:  # the format 18 never had these
+            db.execute('DROP INDEX ' + name)
+        db.execute('PRAGMA user_version=18')
+        self.store.close()
+        with self.assertRaisesRegex(HistoryError, 'history_incompatible'):  # an ordinary start never upgrades
+            self.base.fixture.open()
+        self.base.fixture.store = self.base.fixture.open(allow_schema_upgrade=True)
+        db = self.store._connection
+        self.assertEqual(19, db.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(added, {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='index'")} & added)
+        self.assertEqual(before, sorted(tuple(row) for row in db.execute('SELECT * FROM project_holds')))
+        with self.assertRaisesRegex(HistoryError, 'history_conflict'):
+            self.store.record_open_binding('hrn_' + f'{99:048x}', 1, 'run:' + f'{1:064x}', INPUTS, 'codex',
+                                           instance='svc-' + 'a' * 32, now_ms=1000)
+        self.assertEqual(6, self.sweep())  # the rows written before the upgrade are read and handled
+
     def _next_check(self, identity):
         return self.store._connection.execute("SELECT next_check_ms FROM project_holds WHERE kind='open_binding' "
                                               "AND identity=?", (identity,)).fetchone()[0]
@@ -806,6 +948,31 @@ class DriverWithdrawalTests(WithdrawHarness):
         with self.project_db() as db:
             self.assertGreater(db.execute("SELECT next_check_ms FROM project_holds WHERE kind='open_binding' "
                                           "AND identity=?", (f'{stuck}:1',)).fetchone()[0], 0)
+
+    def test_L2_a_failed_deferral_submission_keeps_the_batch_and_the_failed_rows_duty(self):
+        original = AccountClient.withdraw_open
+        lane = __import__('codex_agents.result_persistence', fromlist=['x']).ResultPersistenceLane
+        defer = lane.open_binding
+        *_, first = self.opened()
+        *_, second = self.opened()
+        stuck, free = sorted((first, second))
+
+        def refusing(client, value, **options):
+            if value.run_handle == stuck:
+                raise AccountError('account_not_authorized')
+            return original(client, value, **options)
+
+        def failing(self_, operation, *arguments, **options):
+            if operation == 'defer_open_withdrawal':
+                raise HistoryError('history_writer_busy')  # the deferral cannot even be submitted
+            return defer(self_, operation, *arguments, **options)
+        with mock.patch.object(project_driver, 'WITHDRAW_RETRY_SECONDS', 0.2), \
+                mock.patch.object(AccountClient, 'withdraw_open', refusing), \
+                mock.patch.object(lane, 'open_binding', failing):
+            for handle in (first, second):
+                self.cli('learning-classify-host-run-abandoned', '--run-handle', handle, '--reason', 'owner_cancelled')
+            self.withdrawn(free, seconds=15)  # the rest of the batch is still drained
+        self.assertEqual('releasing', self.project_row(stuck)[0])  # the failed row's duty is kept, not lost
 
     def test_W5_the_entry_is_retired_only_after_its_row_is_releasing(self):
         from codex_agents.project_history import ProjectHistory

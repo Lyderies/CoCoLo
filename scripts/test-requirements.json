@@ -967,6 +967,7 @@
  },
  "RS-B-5": {
   "checks": [
+   "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_L2_a_failed_deferral_submission_keeps_the_batch_and_the_failed_rows_duty",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M1_a_withdrawal_the_account_keeps_refusing_does_not_block_a_later_one",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M7_a_registration_refused_after_the_binding_exists_withdraws_the_open",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M7_a_writer_faulted_at_record_open_binding_gets_one_memory_withdrawal",
@@ -976,6 +977,10 @@
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_a_never_leased_cancel_withdraws_its_open_once",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_an_idle_registered_run_is_retired_and_withdrawn",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_the_entry_is_retired_only_after_its_row_is_releasing",
+   "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_D108_a_format_18_project_store_upgrades_to_19_and_keeps_its_rows_and_its_refusals",
+   "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_D108_registration_searches_its_indexes_and_its_work_does_not_grow_with_the_rows_held",
+   "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_D108_the_run_id_of_an_open_or_a_registered_run_cannot_be_taken_twice",
+   "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_D108_the_successor_pass_does_bounded_work_and_advances_across_conflicting_rows",
    "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_M1_a_withdrawal_is_listed_only_when_due_and_each_failure_waits_twice_as_long",
    "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_M2_a_registration_reads_one_row_however_many_are_held_and_still_refuses_a_second_owner",
    "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_M2_the_successor_pass_reads_at_most_its_limit_of_rows_and_every_row_is_handled",

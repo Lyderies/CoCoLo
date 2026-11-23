@@ -26,10 +26,14 @@ Requirement RS-B-5 (DESIGN-0.4.0-RS-B.md draft 3 §4, §7; rows W1-W5, M7). Stag
   due first; the driver tries each listed row in turn and defers a failing one (`defer_open_withdrawal`) instead of
   stopping on it. Only `withdraw_stale` is final (`account_final`); authorization, unavailable, transport and
   decode/envelope failures are retried, never finalized.
-- Bounded work (MED-2): the successor pass reads at most `limit` rows, leaving out in the query the rows it would skip
-  (own instance, lease armed or ended another way); registration checks run-id ownership with one `json_extract`
-  lookup over the partial index of live rows (`project_holds_kind_due`) and decodes nothing in Python. Residual: the
-  check against `project_registered_runs` has no run-id index (a schema change, so a policy choice: a version bump).
+- Bounded work (MED-2, decision 108 A): project-history schema 19 adds three indexes (the run id and the instance of
+  an `open_binding` row's evidence, over only the live or held rows, and the run id of `project_registered_runs`).
+  Registration checks both run-id owners with one index search each; the successor pass reads one window of at most
+  `limit` held rows in index order (split around the live service's own, so those are never read), moves the window
+  on after every call over unmarkable rows too, and starts again at the end. No scan, no sort; the complete ownership
+  check and the lease check (`mark_open_withdrawing`) are unchanged. Tests measure SQLite steps and query plans.
+- Deferral failure (LOW): a deferral that cannot be submitted keeps the rest of the batch; the failed row stays
+  `releasing` with its old schedule.
 - Evidence (L1): the owner-path withdrawal evidence is `{"d":"w3","q","g","c","r","i","a","w"}` (at most about 400
   bytes); `withdraw_open` reads v1, v2 and v3 records through `_stored_withdrawal`. The receipt is still the digest of
   the stored evidence.
