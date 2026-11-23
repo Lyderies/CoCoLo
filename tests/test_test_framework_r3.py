@@ -154,19 +154,19 @@ class RoundThree(unittest.TestCase):
                 with self.assertRaises(GoldenUpdated):compare(**{**args,'environ':{'UPDATE_GOLDEN':'1'}})
                 self.assertEqual('TF-14\n',sidecar.read_text());compare(**args)
 
-    @requirements('TF-20')
-    def test_TF20_declared_fixes_require_red_green_and_positive_control(self):
+    @requirements('TF-23')
+    def test_TF23_declared_fixes_require_red_green_and_positive_control(self):
         validate=getattr(fw,'validate_witness_evidence',None)
-        self.assertTrue(callable(validate),'TF20 missing evidence enforcement')
+        self.assertTrue(callable(validate),'TF23 missing evidence enforcement')
         (self.root/'red.json').write_text(json.dumps({'base':'9c18c4a3','status':'red','diagnostic':'intended failure'}))
         (self.root/'green.json').write_text(json.dumps({'status':'green'}))
-        good=dict(fix='fixture',requirement='TF-20',witness='root:fixture.test',positive_control='valid fixture',base='9c18c4a3',red='red.json',diagnostic='intended failure',green='green.json')
+        good=dict(fix='fixture',requirement='TF-23',witness='root:fixture.test',positive_control='valid fixture',base='9c18c4a3',red='red.json',diagnostic='intended failure',green='green.json')
         self.assertEqual([],validate(self.root,[good]))
         for field in good:
             bad=dict(good);bad.pop(field)
-            self.assertTrue(validate(self.root,[bad]),'TF20 accepted missing '+field)
+            self.assertTrue(validate(self.root,[bad]),'TF23 accepted missing '+field)
         (self.root/'red.json').write_text(json.dumps({'base':'9c18c4a3','status':'green','diagnostic':'different failure'}))
-        self.assertTrue(validate(self.root,[good]),'TF20 accepted wrong red outcome')
+        self.assertTrue(validate(self.root,[good]),'TF23 accepted wrong red outcome')
         manifests=list((ROOT/'scripts').glob('test-review-witnesses-*.json'))
-        self.assertTrue(manifests,'TF20 no declared review witnesses')
+        self.assertTrue(manifests,'TF23 no declared review witnesses')
         for path in manifests:self.assertEqual([],validate(ROOT,json.loads(path.read_text())),str(path))
