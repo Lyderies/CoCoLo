@@ -1,0 +1,15 @@
+................................................................................................................F.................
+======================================================================
+FAIL: test_the_project_file_list_matches_the_runtime (test_attest.ProjectRuntimeTests.test_the_project_file_list_matches_the_runtime)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_attest.py", line 1965, in test_the_project_file_list_matches_the_runtime
+    self.assertEqual(bundle, {*RUNTIME_FILES, *PACKAGE_DATA_FILES})
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Items in the first set but not the second:
+'codex_agents/merge_library.py'
+
+----------------------------------------------------------------------
+Ran 130 tests in 19.869s
+
+FAILED (failures=1)

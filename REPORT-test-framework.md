@@ -145,3 +145,10 @@
 - All assertion corrections are new-witness requirement contradictions recorded in ASSERTIONS-test-framework.md; no original product/test assertions removed or changed.
 - No push, install, shared/control edits, general cleanup or steps 4–5. Existing hash-pinned environment reused; Python 3.11/Linux remains CI evidence.
 - Final affected bookkeeping verification: 159.420827 job-seconds, 254 tests, all workers pass; exactly 80 deferred metadata errors, no budget failure. Runtime metadata fixes and final binding snapshot are on feat/merge-library.
+
+## Merge runtime bookkeeping follow-up
+- Full-run exact runtime/file guards and O0c bounded-cap guard exposed missing primary 0ca9c36f metadata; requirements notes 4561b23b/b312c401 precede fixes db76fc52/f49092d9 and binding snapshot 11d36a06.
+- TF-24/23 fix → file:line, unchanged red/green witnesses and positive controls: REVIEW-merge-library-fullrun-fixes.md; scripts/test-review-witnesses-runtime-integration.json.
+- Final affected run: 159.420827 job-seconds, 36.655826 s elapsed, default 16 jobs; every worker passes, no budget failure, only 80 deferred lifecycle metadata errors.
+- Four primary runtime metadata files copied exactly; all old tests/assertions and 32 incoming test files preserved. Fourteen active debt entries remain; immutable ceilings/baselines untouched.
+- One full run only; its seven unexpected failures remain in evidence and are resolved by affected reruns. Review/soak/image/future-step obligations remain explicit, as authorized.

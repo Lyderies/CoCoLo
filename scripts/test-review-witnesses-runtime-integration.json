@@ -1,0 +1,32 @@
+[
+ {
+  "fix": "runtime-registration",
+  "requirement": "TF-24",
+  "witness": "root:test_attest.ProjectRuntimeTests.test_the_project_file_list_matches_the_runtime",
+  "positive_control": "root:test_attest.ProjectRuntimeTests.test_an_exact_copy_passes_with_the_projects_own_files",
+  "base": "f69da048",
+  "red": "measurements/test-framework/release-0850/runtime-registration-red.json",
+  "diagnostic": "codex_agents/merge_library.py",
+  "green": "measurements/test-framework/release-0850/runtime-registration-green.json"
+ },
+ {
+  "fix": "runtime-caps",
+  "requirement": "TF-24",
+  "witness": "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end",
+  "positive_control": "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_new_limit_is_caught",
+  "base": "f69da048",
+  "red": "measurements/test-framework/release-0850/runtime-caps-red.json",
+  "diagnostic": "merge_library.py::_validate",
+  "green": "measurements/test-framework/release-0850/runtime-caps-green.json"
+ },
+ {
+  "fix": "runtime-version",
+  "requirement": "TF-24",
+  "witness": "codex:tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version",
+  "positive_control": "codex:tests.test_runtime_release.RuntimeReleaseTests.test_the_runtime_file_set_is_exactly_the_package_orchestration_files",
+  "base": "db76fc52",
+  "red": "measurements/test-framework/release-0850/runtime-version-red.json",
+  "diagnostic": "the collector runtime changed: bump VERSION and record the new digest",
+  "green": "measurements/test-framework/release-0850/runtime-version-green.json"
+ }
+]

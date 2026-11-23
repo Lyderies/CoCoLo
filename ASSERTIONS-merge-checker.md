@@ -102,3 +102,6 @@ The original named method remains at `packages/codex-agents/tests/test_merge_lib
 ## Decision 103 assertion record
 
 No existing assertion was changed, removed or weakened. The new TF-13/ML-17 witness at `packages/codex-agents/tests/test_merge_library_r3.py:148` adds successful-action and writable-diagnostic controls, same-child failure markers, a no-caller-execution assertion at :186, and the parent's nonzero-exit failure assertions at :187–188. The requested support assertion citation above changes :955 (message continuation) to :954 (assertTrue). The corresponding fix table now names :952–955. Red/green evidence is under `measurements/test-framework/review-103` and declared in the TF-23 manifest.
+
+## First integrated full-suite bookkeeping
+No existing test method or assertion changed. The exact primary 0ca9c36f runtime-file entry, two bounded-cap registry entries, VERSION and runtime digest were copied after the unchanged package-parity/cap/version guards were red. Those guards and their rejection controls pass in `runtime-final-green.run.json`. Framework-only new-witness corrections are listed in ASSERTIONS-test-framework.md.

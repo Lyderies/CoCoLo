@@ -1,0 +1,10 @@
+{
+ "status": "red",
+ "base": "f69da048",
+ "diagnostic": "merge_library.py::_validate",
+ "witness": "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end",
+ "source_run": "integrated-full.run.json",
+ "worker_log": "runtime-caps-old-worker.log",
+ "jobs": 16,
+ "job_seconds": 4535.410044784832
+}
