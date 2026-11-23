@@ -967,6 +967,7 @@
  },
  "RS-B-5": {
   "checks": [
+   "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M1_a_withdrawal_the_account_keeps_refusing_does_not_block_a_later_one",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M7_a_registration_refused_after_the_binding_exists_withdraws_the_open",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M7_a_writer_faulted_at_record_open_binding_gets_one_memory_withdrawal",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W3_withdrawal_while_the_provider_observation_is_in_flight_fails_the_run_before_any_claim",
@@ -975,6 +976,9 @@
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_a_never_leased_cancel_withdraws_its_open_once",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_an_idle_registered_run_is_retired_and_withdrawn",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_the_entry_is_retired_only_after_its_row_is_releasing",
+   "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_M1_a_withdrawal_is_listed_only_when_due_and_each_failure_waits_twice_as_long",
+   "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_M2_a_registration_reads_one_row_however_many_are_held_and_still_refuses_a_second_owner",
+   "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_M2_the_successor_pass_reads_at_most_its_limit_of_rows_and_every_row_is_handled",
    "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_a_bound_claim_releases_the_row_claimed_in_its_transaction",
    "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_a_stopped_services_open_is_marked_by_the_successor",
    "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_an_armed_lease_is_never_withdrawn",
@@ -982,6 +986,8 @@
    "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_marking_writes_the_request_before_it_is_sent",
    "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_the_answer_releases_the_row_once",
    "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_the_row_is_taken_held_and_a_replay_is_a_no_op",
+   "codex:tests.test_open_withdrawal.WithdrawAccountTests.test_L1_a_withdrawal_recorded_in_the_earlier_format_still_replays",
+   "codex:tests.test_open_withdrawal.WithdrawAccountTests.test_L1_the_permanent_withdrawal_evidence_stays_within_its_512_byte_budget_at_its_largest",
    "codex:tests.test_open_withdrawal.WithdrawAccountTests.test_W1_the_host_that_opened_it_withdraws_it",
    "codex:tests.test_open_withdrawal.WithdrawAccountTests.test_W1_the_project_service_withdraws_a_never_claimed_open",
    "codex:tests.test_open_withdrawal.WithdrawAccountTests.test_W2_every_other_caller_or_run_is_refused_and_nothing_changes",

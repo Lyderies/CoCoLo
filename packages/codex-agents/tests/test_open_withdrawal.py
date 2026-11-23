@@ -147,6 +147,45 @@ def open_row(db, run_handle, attempt=1, project=PROJECT_A):
     return None if row is None else tuple(row)
 
 
+class _CountedCursor:
+    def __init__(self, cursor, owner):
+        self._cursor, self._owner = cursor, owner
+
+    def __iter__(self):
+        for row in self._cursor:
+            self._owner.rows += 1
+            yield row
+
+    def fetchall(self):
+        rows = self._cursor.fetchall()
+        self._owner.rows += len(rows)
+        return rows
+
+    def fetchone(self):
+        row = self._cursor.fetchone()
+        self._owner.rows += row is not None
+        return row
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
+class _CountedConnection:
+    """Counts the rows read from the open-binding register by anything but a lookup of one identity."""
+
+    def __init__(self, connection):
+        self._connection, self.rows = connection, 0
+
+    def execute(self, sql, *arguments):
+        cursor = self._connection.execute(sql, *arguments)
+        if 'open_binding' in sql and 'identity=?' not in sql.replace(' ', ''):
+            return _CountedCursor(cursor, self)
+        return cursor
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
 @__import__('test_framework').requirements('RS-B-5', why_not_scenario='B3 checks the real codec, store, or enrolled service path; direct fault and custody controls expose the withdrawal boundary.')
 class OpenBindingStoreTests(unittest.TestCase):
     """The project's `open_binding` register row (draft 3 §7): taken before registration, marked `releasing` with its
@@ -254,6 +293,78 @@ class OpenBindingStoreTests(unittest.TestCase):
         self.assertEqual(0, self.store.withdraw_earlier_open_bindings(
             'svc-' + 'b' * 32, project_id=PROJECT, runtime_digest=COLLECTOR_RUNTIME_DIGEST))
         self.assertEqual('held', self.row(3)[0])
+
+
+    def counted(self):
+        counted = _CountedConnection(self.store._connection)
+        patcher = mock.patch.object(self.store, '_connection', counted)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return counted
+
+    def test_M2_the_successor_pass_reads_at_most_its_limit_of_rows_and_every_row_is_handled(self):
+        for number in range(1, 26):
+            self.record(number)  # an earlier service's: all to be withdrawn
+        for number in range(26, 34):  # the live service's own: never touched
+            self.store.record_open_binding(binding(number).run_handle, 1, binding(number).run_id, INPUTS, 'codex',
+                                           instance='svc-' + 'b' * 32, now_ms=1000)
+        for number in (34, 35):  # an earlier service's, but armed: the fence's, never withdrawn
+            self.base.reserve(number)
+            self.record(number)
+            self.store.arm_result_lease(leases.lease_binding(number))
+        counted, handled = self.counted(), 0
+        for _ in range(10):
+            counted.rows = 0
+            marked = self.store.withdraw_earlier_open_bindings(
+                'svc-' + 'b' * 32, project_id=PROJECT, runtime_digest=COLLECTOR_RUNTIME_DIGEST, limit=10)
+            self.assertLessEqual(counted.rows, 10)  # bounded by the limit, not by the rows held
+            self.assertLessEqual(marked, 10)
+            handled += marked
+            if not marked:
+                break
+        self.assertEqual(25, handled)
+        states = {number: self.row(number)[0] for number in range(1, 36)}
+        self.assertEqual({'releasing'}, {states[number] for number in range(1, 26)})
+        self.assertEqual({'held'}, {states[number] for number in range(26, 36)})
+
+    def test_M2_a_registration_reads_one_row_however_many_are_held_and_still_refuses_a_second_owner(self):
+        for number in range(1, 31):
+            self.record(number)
+        counted = self.counted()
+        self.store.record_open_binding(binding(40).run_handle, 1, binding(40).run_id, INPUTS, 'codex',
+                                       instance='svc-' + 'a' * 32, now_ms=1000)
+        self.assertLessEqual(counted.rows, 1)
+        counted.rows = 0
+        with self.assertRaisesRegex(HistoryError, 'history_conflict'):  # the complete run-id check is kept
+            self.store.record_open_binding(binding(41).run_handle, 1, binding(17).run_id, INPUTS, 'codex',
+                                           instance='svc-' + 'a' * 32, now_ms=1000)
+        self.assertLessEqual(counted.rows, 1)
+        self.assertIsNone(self.row(41))
+
+    def test_M1_a_withdrawal_is_listed_only_when_due_and_each_failure_waits_twice_as_long(self):
+        for number in (1, 2):
+            self.record(number)
+            self.store.mark_open_withdrawing(binding(number).run_handle, 1, 'cancelled_before_claim',
+                                             project_id=PROJECT, runtime_digest=COLLECTOR_RUNTIME_DIGEST)
+        first, second = (f'{binding(number).run_handle}:1' for number in (1, 2))
+        self.assertEqual({first, second}, {entry['identity'] for entry in self.store.open_withdrawals(now_ms=5000)})
+        for failures, delay in ((1, 1000), (2, 2000), (3, 4000), (4, 5000), (5, 5000)):  # capped at the maximum
+            self.store.defer_open_withdrawal(first, now_ms=10_000, base_ms=1000, max_ms=5000)
+            self.assertEqual(10_000 + delay, self._next_check(first))
+            self.assertEqual(failures, json.loads(self._evidence(first))['failures'])
+            due = [entry['identity'] for entry in self.store.open_withdrawals(now_ms=10_000 + delay - 1)]
+            self.assertEqual([second], due)  # the failing row waits, the other is still listed
+            due = [entry['identity'] for entry in self.store.open_withdrawals(now_ms=10_000 + delay)]
+            self.assertEqual({first, second}, set(due))
+        self.assertEqual('releasing', self.row(1)[0])  # a failure never finalizes a row
+
+    def _next_check(self, identity):
+        return self.store._connection.execute("SELECT next_check_ms FROM project_holds WHERE kind='open_binding' "
+                                              "AND identity=?", (identity,)).fetchone()[0]
+
+    def _evidence(self, identity):
+        return self.store._connection.execute("SELECT evidence FROM project_holds WHERE kind='open_binding' "
+                                              "AND identity=?", (identity,)).fetchone()[0]
 
 
 class WithdrawReads:
@@ -463,6 +574,55 @@ class WithdrawAccountTests(WithdrawHarness):
         self.assertEqual('withdraw_generation_required', self.refused(self.payload(run_handle, generation=None)))
         self.assertEqual(('pending', None, 'held', None, 1), self.account_binding(run_handle))
 
+    def hold_evidence(self, run_handle):
+        with self.account_db() as db:
+            return tuple(db.execute("SELECT receipt,evidence FROM run_holds WHERE kind='binding' AND identity=?",
+                                    (self.handle_digest(run_handle),)).fetchone())
+
+    def test_L1_the_permanent_withdrawal_evidence_stays_within_its_512_byte_budget_at_its_largest(self):
+        # DESIGN-0.4.0-RS-B.md §4: the evidence of a withdrawn row is kept for good, under 512 bytes per row.
+        *_, run_handle = self.opened()
+        value = self.payload(run_handle, attempt=(1 << 63) - 1, reason=max(WITHDRAW_REASONS, key=len))
+        first = self.withdraw_as(value)
+        receipt, evidence = self.hold_evidence(run_handle)
+        self.assertEqual(first['receipt'], receipt)
+        self.assertLessEqual(len(evidence.encode()), 512)
+        self.assertEqual({**first, 'known': True}, self.withdraw_as(value))  # still replays from the compact form
+        self.assertEqual('withdraw_stale', self.refused(dataclasses.replace(value, reason='failed_before_claim')))
+        self.assertEqual('account_not_authorized', self.refused(value, host_client=CLAUDE_HOST_CLIENT))
+
+    def test_L1_a_withdrawal_recorded_in_the_earlier_format_still_replays(self):
+        from codex_agents.learning_contracts import content_digest
+        *_, run_handle = self.opened()
+        value = self.payload(run_handle)
+        first = self.withdraw_as(value)
+        digest, project = self.handle_digest(run_handle), self.project_id
+        request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.withdraw_open',
+                                 withdrawal_request_id(run_handle, 1), project, COLLECTOR_RUNTIME_DIGEST,
+                                 value.payload())
+        with self.account_db() as db:
+            released = db.execute("SELECT released_at_ms FROM run_holds WHERE kind='binding' AND identity=?",
+                                  (digest,)).fetchone()[0]
+        earlier = {"decision": "binding-withdrawal-v2", "project_id": project, "handle_digest": digest,
+                   "request_digest": account_request_digest(request), "generation": 1, "release_kind": "withdrawn",
+                   "released_at_ms": released, "answer": {"state": "withdrawn"},
+                   "caller_scope": keyed_digest(self.paths.digest_key(),
+                                                'account-caller\0' + CODEX_HOST_CLIENT + '\0' + project),
+                   "run_id": value.run_id, "inputs_digest": value.inputs_digest, "attempt": 1,
+                   "reason": value.reason}
+        receipt = content_digest(earlier)
+        connection = sqlite3.connect(str(self.state.root / 'learning.sqlite3'), timeout=30)
+        connection.create_function('ledger_now_ms', 0, lambda: time.time_ns() // 1_000_000)
+        try:
+            with connection:
+                connection.execute("UPDATE run_holds SET receipt=?,evidence=? WHERE kind='binding' AND identity=?",
+                                   (receipt, canonical_json(earlier).decode(), digest))
+        finally:
+            connection.close()
+        self.assertEqual({**first, 'receipt': receipt, 'known': True}, self.withdraw_as(value))
+        self.assertEqual('account_not_authorized', self.refused(value, host_client=CLAUDE_HOST_CLIENT))
+        self.assertEqual('withdraw_stale', self.refused(dataclasses.replace(value, reason='failed_before_claim')))
+
     def held_at(self, holding):
         """Stop every run's advance where `holding` says, until the returned event is set."""
         release, seen, original = threading.Event(), [], project_driver.RunDriver._advance
@@ -621,6 +781,31 @@ class DriverWithdrawalTests(WithdrawHarness):
         self.assertIsNone(self.project_row(run_handle))
         self.assertEqual([(run_handle, False)], [t for t in self.transitions if t[0] == run_handle and not t[1]])
         self.assertEqual([], self.executions())
+
+    def test_M1_a_withdrawal_the_account_keeps_refusing_does_not_block_a_later_one(self):
+        original, calls = AccountClient.withdraw_open, []
+        *_, first = self.opened()
+        *_, second = self.opened()
+        stuck, free = sorted((first, second))  # the stuck row sorts first: the one an unfair driver stops on
+
+        def refusing(client, value, **options):
+            if value.run_handle == stuck:
+                calls.append(time.monotonic())
+                raise AccountError('account_not_authorized')  # an authorization refusal is never final
+            return original(client, value, **options)
+        with mock.patch.object(project_driver, 'WITHDRAW_RETRY_SECONDS', 0.2), \
+                mock.patch.object(AccountClient, 'withdraw_open', refusing):
+            for handle in (first, second):
+                self.cli('learning-classify-host-run-abandoned', '--run-handle', handle, '--reason', 'owner_cancelled')
+            self.withdrawn(free, seconds=15)  # the later withdrawal is not blocked by the refused one
+            self.wait_for(lambda: len(calls) >= 3, seconds=15)
+        gaps = [later - earlier for earlier, later in zip(calls, calls[1:])]
+        self.assertGreaterEqual(gaps[0], 0.19)  # each retry of the refused row waits (twice as long each time)
+        self.assertGreaterEqual(gaps[1], 0.39)
+        self.assertEqual('releasing', self.project_row(stuck)[0])  # not finalized, not forgotten
+        with self.project_db() as db:
+            self.assertGreater(db.execute("SELECT next_check_ms FROM project_holds WHERE kind='open_binding' "
+                                          "AND identity=?", (f'{stuck}:1',)).fetchone()[0], 0)
 
     def test_W5_the_entry_is_retired_only_after_its_row_is_releasing(self):
         from codex_agents.project_history import ProjectHistory

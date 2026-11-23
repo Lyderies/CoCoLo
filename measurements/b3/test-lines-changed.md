@@ -62,3 +62,16 @@ removed, and `load_tests` no longer lists it. The new module has its own `load_t
 `WithdrawReads` from `tests.test_open_withdrawal`. Registered in `scripts/test-stages.json` (integration),
 `scripts/test-layers.json` (scenario) and `scripts/test-requirements.json` (RS-B-5 check ids renamed to the new module,
 regenerated with `generate_test_metadata.py --catalogue`).
+
+### 5b. Added tests (no existing line changed), red on 0e9dae86 before the fixes
+
+All in `tests/test_open_withdrawal.py` (plus `_CountedConnection`/`_CountedCursor` helpers above `OpenBindingStoreTests`):
+
+| test | red evidence on 0e9dae86 |
+|---|---|
+| `DriverWithdrawalTests.test_M1_a_withdrawal_the_account_keeps_refusing_does_not_block_a_later_one` | the later withdrawal never happened in 15 s (the driver kept retrying the first refused row) |
+| `OpenBindingStoreTests.test_M1_a_withdrawal_is_listed_only_when_due_and_each_failure_waits_twice_as_long` | `open_withdrawals()` takes no `now_ms`; no per-row deferral exists |
+| `OpenBindingStoreTests.test_M2_the_successor_pass_reads_at_most_its_limit_of_rows_and_every_row_is_handled` | 35 rows read with limit 10 |
+| `OpenBindingStoreTests.test_M2_a_registration_reads_one_row_however_many_are_held_and_still_refuses_a_second_owner` | 30 rows read to register one run |
+| `WithdrawAccountTests.test_L1_the_permanent_withdrawal_evidence_stays_within_its_512_byte_budget_at_its_largest` | stored evidence 668 bytes > 512 |
+| `WithdrawAccountTests.test_L1_a_withdrawal_recorded_in_the_earlier_format_still_replays` | green before and after: guards the v2 record still read |
