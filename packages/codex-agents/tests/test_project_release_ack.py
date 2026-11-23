@@ -36,7 +36,7 @@ class ProjectReleaseAckSchemaTests(unittest.TestCase):
         self.assertEqual(digest,hashlib.sha256(path.read_bytes()).hexdigest())
         self.base.fixture.store = self.base.fixture.open(allow_schema_upgrade=True)
         db = self.base.store._connection
-        self.assertEqual(18, db.execute('PRAGMA user_version').fetchone()[0])  # (requirement) SB: schema 18
+        self.assertEqual(19, db.execute('PRAGMA user_version').fetchone()[0])  # (requirement) SB: schema 19
         for name, rows in self.before.items():
             after = [tuple(r) for r in db.execute('SELECT * FROM '+name)]
             self.assertEqual([(*r,None) for r in rows] if name=='project_cleanup_reservations' else rows, after)

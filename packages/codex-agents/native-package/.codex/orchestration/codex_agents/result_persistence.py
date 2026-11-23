@@ -1056,6 +1056,15 @@ class ResultPersistenceLane:
         """Ask the writer to run one bounded result cleanup (0.3.4 R2); poll its `state`."""
         return self._queue_counted(_EarlierLeases('expire'), '_earlier_held', EARLIER_SLOTS)
 
+    def open_binding(self, operation, *arguments, **options):
+        """B3: bounded writer requests for the open-binding outbox (polled by the owner)."""
+        if operation not in {'record_open_binding', 'mark_open_withdrawing', 'open_withdrawals',
+                             'release_open_binding', 'withdraw_earlier_open_bindings',
+                             'defer_open_withdrawal'}:
+            raise HistoryError('history_invalid_input')
+        return self._queue_counted(_EarlierLeases('open_binding', arguments=(operation, arguments, options)),
+                                   '_earlier_held', EARLIER_SLOTS)
+
     def report_registered_run(self, orchestration_handle, run_handle, run_id, attempt):
         """S1-R6: record that the driver registered this run, under this service process's own instance (O10 D2);
         poll its `state`. `history_writer_busy` when every reporting slot is in use: ask again later."""
@@ -1098,7 +1107,10 @@ class ResultPersistenceLane:
         """Writer step: the history's own checked leases, or one settled with its closure."""
         try:
             history = self._history()
-            if request.kind == 'expire':
+            if request.kind == 'open_binding':
+                operation, arguments, options = request.arguments
+                result = getattr(history, operation)(*arguments, **options)
+            elif request.kind == 'expire':
                 # An update leaves the earlier runtime's open orchestrations to this service (0.3.4 R10).
                 # A failure here never stops the result cleanup below (review 034-r10).
                 with contextlib.suppress(HistoryError, sqlite3.Error):

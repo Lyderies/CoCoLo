@@ -128,6 +128,7 @@ RUNTIME_FILES = (
     "codex_agents/merge_library.py",
     "codex_agents/observation_failure_contracts.py",
     "codex_agents/open_scope_contracts.py",
+    "codex_agents/open_withdrawal.py",
     "codex_agents/operational_qa_contracts.py",
     "codex_agents/orchestration_api.py",
     "codex_agents/orchestration_schema.py",

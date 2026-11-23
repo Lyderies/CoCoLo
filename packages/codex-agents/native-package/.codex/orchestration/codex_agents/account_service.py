@@ -46,6 +46,16 @@ from .provider_observation_contracts import OBSERVATION_REASONS, ObservationErro
 from .observation_failure_contracts import decode_observation_failure
 from .account_observation_failure import record_observation_failure, recheck_observation_failure
 from .billing_probe_contracts import PROBE_STEP_REASONS, ProbeAdmissionError
+from .open_withdrawal import WithdrawError
+
+# B3: the ledger's withdrawal refusals, as public reasons. An exact replay presented by another caller scope, and a
+# request whose run id, inputs digest or caller scope is not the open's, are not authorized, whatever they name.
+WITHDRAW_LEDGER_REASONS = {
+    'withdrawal is unavailable': 'withdraw_unavailable',
+    'withdrawal is stale': 'withdraw_stale',
+    'generation_required': 'withdraw_generation_required',
+    'withdrawal is not authorized': 'account_not_authorized',
+}
 
 # Fixed owner query over the history that can still change an admission decision.
 # `:a` is the capture's anchor: the first capture's own clock, kept in its snapshot
@@ -261,6 +271,23 @@ class AccountOwnerViews:
         from .account_lost_run import settle_lost_run
         return settle_lost_run(self._ledger, project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
                                settle=settle, storage_binding=storage_binding, storage_evidence=storage_evidence)
+
+    def withdraw_open(self, project_id, *, caller_scope, withdrawal, request_digest):
+        """B3: the ledger's withdrawal for an authenticated caller, its refusals as public reasons."""
+        self._guard()
+        try:
+            return self._ledger.withdraw_open(project_id, run_handle=withdrawal.run_handle,
+                                              request_digest=request_digest, generation=withdrawal.generation,
+                                              owner={'caller_scope': caller_scope, 'run_id': withdrawal.run_id,
+                                                     'inputs_digest': withdrawal.inputs_digest,
+                                                     'attempt': withdrawal.attempt, 'reason': withdrawal.reason})
+        except LedgerError as error:
+            reason = WITHDRAW_LEDGER_REASONS.get(str(error))
+            if reason is None:
+                raise
+        if reason == 'account_not_authorized':
+            raise AccountError(reason)
+        raise WithdrawError(reason)
 
     def release_capacity(self, project_id, **options):
         self._guard()
@@ -965,6 +992,8 @@ class AccountService:
             fence = decode_fence_claim(request.payload) if operation == 'account.fence_claim' else None
             from .lost_run_contracts import decode_settle_lost
             lost = decode_settle_lost(request.payload) if operation == 'account.settle_lost_run' else None
+            from .open_withdrawal import decode_withdraw_open
+            withdrawal = decode_withdraw_open(request.payload) if operation == 'account.withdraw_open' else None
             provenance = decode_run_provenance_input(request.payload) if operation == 'account.run_provenance' else None
             open_provenance = decode_open_provenance_input(request.payload) if operation == 'account.open_provenance' else None
             opening = decode_account_open_input(request.payload, project, runtime) if operation == 'account.open_host_run' else None
@@ -999,7 +1028,11 @@ class AccountService:
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
                 or (authorization.source == "project" and operation not in {
                     "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable",
-                    "account.record_rate_limit_event"})
+                    "account.record_rate_limit_event", "account.withdraw_open"})
+                # B3: a withdrawal comes from the run's project service or the host that opened it, each with the
+                # caller scope of the run's host class (the ledger matches it to the open's receipt).
+                or (operation == "account.withdraw_open" and (authorization.source not in {"project", "host"}
+                                                              or authorization.caller_scope is None))
                 or (operation in {"account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.run_provenance", "account.open_provenance",
                                   "account.record_rate_limit_event"} and
                     (authorization.source != "project" or authorization.caller_scope is None))
@@ -1247,6 +1280,9 @@ class AccountService:
                 result = self._views.settle_lost_run(project, runtime_digest=runtime, caller_scope=authorization.caller_scope,
                                                      settle=lost, storage_binding=storage_binding,
                                                      storage_evidence=storage_evidence)
+            elif operation == 'account.withdraw_open':
+                result = self._views.withdraw_open(project, caller_scope=authorization.caller_scope,
+                                                   withdrawal=withdrawal, request_digest=digest)
             elif request.operation == "account.health":
                 result = {"transport_alive": True, "database_checked": False}
             elif request.operation == "account.project":
@@ -1288,6 +1324,8 @@ class AccountService:
         except ObservationError as exc:
             reason = exc.reason_code
         except ProbeAdmissionError as exc:
+            reason = exc.reason_code
+        except WithdrawError as exc:
             reason = exc.reason_code
         except AdmissionCaptureError as exc:
             reason = public_capture_reason(exc)

@@ -127,6 +127,10 @@ MAX_PENDING_RATE_LIMITS = 64  # The account keeps at most this many per run.
 MAX_RUN_RATE_LIMIT_EVENTS = 1_000
 # Retired runs whose status this host still answers as not found (newest kept).
 MAX_RETIRED_RUNS = 256
+REGISTERED_IDLE_SECONDS = 3600  # Owner decision 90.7 (2026-11-23).
+WITHDRAW_RETRY_SECONDS = 1.0  # also the first backoff of a withdrawal that failed (doubled each time)
+WITHDRAW_BACKOFF_MAX_SECONDS = 300.0
+FAILED_VIEW_SECONDS = 30.0  # a failed run is kept this long for a dispatch that has not yet asked
 _RETRYING = object()
 
 
@@ -215,6 +219,14 @@ class _Run:
     run_id: str
     inputs_digest: str
     state: str = 'registered'
+    opened_at: float = 0.0
+    open_record: object = None
+    open_mark: object = None
+    withdraw_reason: str | None = None
+    withdrawal_fallback: object = None
+    withdrawal_attempted: bool = False
+    failed_viewed: bool = False  # a dispatch has been told it failed
+    duty_done_at: float | None = None
     reporting: object = None  # S1-R6: its reporting registration on the writer (polled)
     reason: str | None = None
     preparation: object = None
@@ -354,6 +366,8 @@ class RunDriver:
         # Released and retired runs: key -> (host class, orchestration handle); and the
         # bindings whose monitor slots are still to be freed: binding -> (refusals, next try).
         self._retired, self._forgetting = {}, {}
+        self._withdraw_request = self._withdraw_future = self._withdraw_entry = None
+        self._withdraw_phase, self._next_withdraw, self._withdraw_queue = 'start', 0.0, []
         self._call = _Call()
         self._account = account_endpoint_path(state)
         self._preparation = runtime.bind_preparation(
@@ -521,7 +535,8 @@ class RunDriver:
                     self._reply(waiting, {'state': 'failed', 'reason_code': 'run_abandoned'})
                 run.waiters = []
                 self._give_back(run)
-                del self._runs[run.key]
+                run.withdraw_reason = 'cancelled_before_claim'
+                self._fail(run, 'run_abandoned')
                 self._reply(connection, {'state': 'failed', 'reason_code': 'run_abandoned'})
             return
         try:
@@ -587,6 +602,7 @@ class RunDriver:
                                        value['route'], value['parent_grant'], None)
         prospective.snapshot()
         run = self._runs[key] = _Run(key, self._scope, host_client, prospective, value['run_id'], inputs_digest)
+        run.opened_at = self._clock()
         self._submit_registration(run)
 
     def _prepare(self, key, inputs_digest, value, host_client):
@@ -608,8 +624,19 @@ class RunDriver:
 
     def _submit_registration(self, run):
         """Hand the run's registration to the writer; True unless the writer is closed or faulted."""
+        lane = self._runtime.persistence
         try:
-            run.reporting = self._runtime.persistence.report_registered_run(
+            if run.open_record is None:
+                run.open_record = lane.open_binding('record_open_binding', run.key[0], run.key[1], run.run_id,
+                    run.inputs_digest, run.host_client, instance=lane._service_instance, now_ms=_wall_ms())
+            if run.open_record.state == 'queued':
+                return True
+            if run.open_record.state != 'done':
+                if run.open_record.reason == 'history_conflict':
+                    # Tombstone/conflict: the first record owns this duty; never withdraw it from memory.
+                    run.withdrawal_attempted = True
+                return False
+            run.reporting = lane.report_registered_run(
                 run.prospective.orchestration_handle, run.key[0], run.run_id, run.key[1])
         except HistoryError as error:
             run.reporting = None
@@ -624,7 +651,8 @@ class RunDriver:
         if request is None or request.state == 'queued':
             return
         if request.state != 'done':
-            self._fail(run, 'run_failed')  # Not written: refused before preparation, nothing else held.
+            run.withdraw_reason = 'refused_before_claim'
+            self._fail(run, 'run_failed')  # Registration refused; the open's duty already committed.
             return
         self._begin(run)
 
@@ -684,6 +712,7 @@ class RunDriver:
 
     @staticmethod
     def _view(run):
+        run.failed_viewed = run.failed_viewed or run.state == 'failed'
         return {'state': 'failed' if run.state == 'failed' else ('ready' if run.state in _AFTER else 'preparing'),
                 'reason_code': run.reason}
 
@@ -982,9 +1011,11 @@ class RunDriver:
         self._fence_earlier()
         self._expire_results()
         self._send_reports()
+        self._withdraw_opens()
         for run in list(self._runs.values()):
             try:
                 self._advance(run)
+                self._retire_unclaimed(run)
             except Exception:
                 if run.state != 'failed':
                     self._fail(run, 'run_failed')
@@ -999,6 +1030,161 @@ class RunDriver:
                 for connection, deadline in [w for w in run.waiters if now >= w[1]]:
                     self._reply(connection, self._view(run))
                 run.waiters = [w for w in run.waiters if now < w[1]]
+
+    def _withdraw_call(self, value, host_client, request_id):
+        from .open_withdrawal import withdrawal_custody
+        self._call.role, self._call.host_client, self._call.context = 'project', host_client, withdrawal_custody(value)
+        try:
+            return AccountClient(self._account, self._scope.project_id, COLLECTOR_RUNTIME_DIGEST,
+                                 timeout=ACCOUNT_TIMEOUT_SECONDS).withdraw_open(value, request_id=request_id)
+        finally:
+            self._call.role = self._call.host_client = self._call.context = None
+
+    def _retire_unclaimed(self, run):
+        """A failed, never-armed run leaves memory only after its duty is durable."""
+        if (run.state != 'failed' or run.persistence is not None or run.receipt is not None
+                or run.binding is not None or run.claim_sent or run.future is not None
+                or run.waiters):  # a waiting dispatch is answered with the failure first
+            return
+        lane = self._runtime.persistence
+        reason = run.withdraw_reason or 'failed_before_claim'
+        if run.open_record is None or run.open_record.state == 'queued':
+            if run.open_record is None and self._submit_registration(run):
+                return
+            if run.open_record is not None and run.open_record.state == 'queued':
+                return
+        if run.open_record is not None and run.open_record.state == 'done':
+            try:
+                if run.open_mark is None:
+                    run.open_mark = lane.open_binding('mark_open_withdrawing', *run.key, reason,
+                        project_id=self._scope.project_id, runtime_digest=COLLECTOR_RUNTIME_DIGEST)
+                if run.open_mark.state == 'queued':
+                    return
+                if run.open_mark.state == 'done':
+                    self._release_failed(run)
+                    return
+                if run.open_mark.reason == 'history_conflict':
+                    return  # Armed or already ended: do not invent a withdrawal.
+                run.open_mark = None
+            except HistoryError as error:
+                if error.reason_code == 'history_writer_busy':
+                    return
+        # §7 bounded residual: a stopped/faulted writer permits exactly one memory send.
+        if not run.withdrawal_attempted:
+            from .open_withdrawal import WithdrawOpenInput, withdrawal_request_id
+            value = WithdrawOpenInput(run.key[0], run.key[1], run.run_id, run.inputs_digest, 1, reason)
+            run.withdrawal_attempted = True
+            run.withdrawal_fallback = self._executor.submit(self._withdraw_call, value, run.host_client,
+                                                           withdrawal_request_id(*run.key))
+        if run.withdrawal_fallback is not None and not run.withdrawal_fallback.done():
+            return
+        self._release_failed(run)
+
+    def _release_failed(self, run):
+        """The duty is durable (or sent once): give the slot back, and leave the run once it is no longer owed.
+
+        A run nobody can still ask about (idle, or cancelled by its own host) leaves at once; a failed one stays until
+        a dispatch has been told, or for a bounded time, so a late prepare reads its failure."""
+        self._give_back(run)
+        now = self._clock()
+        if run.duty_done_at is None:
+            run.duty_done_at = now
+        if (run.withdraw_reason in {'registered_idle', 'cancelled_before_claim'} or run.failed_viewed
+                or now - run.duty_done_at >= FAILED_VIEW_SECONDS):
+            run.state = 'released'
+
+    def _withdraw_opens(self):
+        """One bounded writer batch and account call at a time; retries use the stored envelope.
+
+        Each due row is tried in turn. A row that fails is deferred with its own backoff (persisted on the row) and
+        the next due row goes on, so one refused row never keeps the others waiting. Only the account's own
+        `withdraw_stale` is final; any other failure leaves the duty for a later try."""
+        from .open_withdrawal import decode_withdraw_open, checked_withdraw_reply
+        lane, now = self._runtime.persistence, self._clock()
+        if now < self._next_withdraw:
+            return
+        try:
+            if self._withdraw_future is not None:
+                if not self._withdraw_future.done():
+                    return
+                future, self._withdraw_future, entry = self._withdraw_future, None, self._withdraw_entry
+                value = decode_withdraw_open(json.loads(entry['evidence'])['payload'])
+                try:
+                    answer = checked_withdraw_reply(future.result(), value)
+                    kind, receipt = 'withdrawn', answer['receipt']
+                except AccountError as error:
+                    if error.reason_code != 'withdraw_stale':
+                        raise  # claim_exists/unavailable/not authorized: held for a later try or the fence path.
+                    kind, receipt = 'account_final', None
+                self._withdraw_phase = 'released'
+                self._withdraw_request = lane.open_binding('release_open_binding', value.run_handle, value.attempt,
+                    kind, receipt=receipt, request_digest=entry['request_digest'])
+            request = self._withdraw_request
+            if request is not None:
+                if request.state == 'queued':
+                    return
+                self._withdraw_request = None
+                phase = self._withdraw_phase
+                if request.state != 'done' and phase != 'deferred':
+                    raise HistoryError(request.reason)
+                if phase == 'start':
+                    self._withdraw_phase = 'list'
+                    self._withdraw_request = lane.open_binding('open_withdrawals', now_ms=_wall_ms())
+                    return
+                if phase == 'list':
+                    self._withdraw_queue = list(request.result or ())
+                if self._withdraw_queue:
+                    self._send_withdrawal(self._withdraw_queue.pop(0))
+                    return
+                self._withdraw_phase = 'start'
+                self._next_withdraw = now + WITHDRAW_RETRY_SECONDS
+                return
+            self._withdraw_request = lane.open_binding('withdraw_earlier_open_bindings', lane._service_instance,
+                project_id=self._scope.project_id, runtime_digest=COLLECTOR_RUNTIME_DIGEST)
+            self._withdraw_phase = 'start'
+        except Exception:
+            failed = self._withdraw_entry if self._withdraw_phase in {'sending', 'released'} else None
+            self._withdraw_request = self._withdraw_future = self._withdraw_entry = None
+            self._withdraw_phase = 'start'
+            if failed is not None:
+                self._defer_withdrawal(failed)
+            else:
+                self._withdraw_queue = []
+                self._next_withdraw = now + WITHDRAW_RETRY_SECONDS
+
+    def _send_withdrawal(self, entry):
+        """Recheck one row's complete persisted envelope, then send it; a row that fails is deferred."""
+        from .open_withdrawal import decode_withdraw_open
+        self._withdraw_entry, self._withdraw_phase = entry, 'sending'
+        try:
+            evidence = json.loads(entry['evidence'])
+            value = decode_withdraw_open(evidence['payload'])
+            envelope = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.withdraw_open', entry['request_id'],
+                                      evidence['project_id'], evidence['runtime_digest'], value.payload())
+            if (envelope.project_id != self._scope.project_id or envelope.runtime_digest != COLLECTOR_RUNTIME_DIGEST
+                    or account_request_digest(envelope) != entry['request_digest']):
+                raise HistoryError('history_conflict')
+            self._withdraw_future = self._executor.submit(self._withdraw_call, value, evidence['host_client'],
+                                                          entry['request_id'])
+        except Exception:
+            self._withdraw_entry = None
+            self._defer_withdrawal(entry)
+
+    def _defer_withdrawal(self, entry):
+        """Persist the row's next try (doubling backoff) and go on with the rest of the batch."""
+        self._withdraw_entry, self._withdraw_phase = None, 'deferred'
+        try:
+            self._withdraw_request = self._runtime.persistence.open_binding(
+                'defer_open_withdrawal', entry['identity'], now_ms=_wall_ms(),
+                base_ms=int(WITHDRAW_RETRY_SECONDS * 1000) or 1, max_ms=int(WITHDRAW_BACKOFF_MAX_SECONDS * 1000))
+        except Exception:
+            # The failed row stays `releasing` with its envelope and its old schedule, so the next list has it again;
+            # the rest of the batch is not dropped with it.
+            self._withdraw_request, self._withdraw_phase = None, 'start'
+            if self._withdraw_queue:
+                self._send_withdrawal(self._withdraw_queue.pop(0))
+                return
+            self._next_withdraw = self._clock() + WITHDRAW_RETRY_SECONDS
 
     def _result(self, run):
         """The finished account call's reply, None while it runs; failures stop the run.
@@ -1036,8 +1222,15 @@ class RunDriver:
                 run.fence_at = None
                 self._fence(run)  # A refused fence, asked again (see `_fence_later`).
         elif run.state == 'registered':
-            if run.reporting is None:
-                self._submit_registration(run)  # R6-15: whether or not a prepare has come
+            if run.reporting is None and not self._submit_registration(run):
+                run.withdraw_reason = 'refused_before_claim'
+                self._fail(run, 'run_failed')
+            elif run.reporting is not None and run.reporting.state == 'failed':
+                run.withdraw_reason = 'refused_before_claim'
+                self._fail(run, 'run_failed')
+            elif self._clock() - run.opened_at >= REGISTERED_IDLE_SECONDS:
+                run.withdraw_reason = 'registered_idle'
+                self._fail(run, 'run_abandoned')
         elif run.state == 'recording_registration':
             self._after_registration(run)
         elif run.state == 'reading':

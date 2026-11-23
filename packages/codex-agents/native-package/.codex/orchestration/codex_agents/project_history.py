@@ -13,6 +13,8 @@ import contextlib
 import fcntl
 import functools
 import hashlib
+import json
+import re
 import os
 import secrets
 import sqlite3
@@ -58,7 +60,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 18
+_SCHEMA_VERSION = 19
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
@@ -184,7 +186,18 @@ REGISTERED_RUN_COLUMNS = {
 }
 _SCHEMA_V17 = _SCHEMA_V16 + REGISTERED_RUN_SCHEMA
 # O0b slice SB (SH-1): RS-B's register and RS-D's custody tables, one step 17 -> 18 (project_holds_schema).
-_SCHEMA = _SCHEMA_V17 + PROJECT_HOLDS_SCHEMA
+_SCHEMA_V18 = _SCHEMA_V17 + PROJECT_HOLDS_SCHEMA
+# B3 (decision 108 A), step 18 -> 19: the indexes that keep the open-binding checks' database work bounded. The run id
+# and the instance live in the row's evidence, so the first two are indexes on that expression, over only the rows
+# the check reads (the live ones, and the held ones); the third is the run-id lookup of the registered runs.
+OPEN_BINDING_INDEX_SCHEMA = """
+CREATE INDEX project_holds_open_run ON project_holds(project_id,json_extract(evidence,'$.run_id'))
+ WHERE kind='open_binding' AND state<>'released';
+CREATE INDEX project_holds_open_held ON project_holds(project_id,json_extract(evidence,'$.instance'),identity)
+ WHERE kind='open_binding' AND state='held';
+CREATE INDEX project_registered_runs_run ON project_registered_runs(project_id,run_id);
+"""
+_SCHEMA = _SCHEMA_V18 + OPEN_BINDING_INDEX_SCHEMA
 _COLUMNS = {
     **PROJECT_HOLDS_COLUMNS,
     **ACTIVATION_COLUMNS,
@@ -264,6 +277,7 @@ class ProjectHistory:
         allow_legacy_orchestration_reference: bool = False,
     ) -> None:
         self._pid = os.getpid()
+        self._successor_position = ('', '')  # where the next successor pass reads from (in memory only)
         self._thread = threading.current_thread()
         self._closed = False
         self._connection = None
@@ -441,19 +455,19 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17} and application == _APPLICATION_ID
+        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18} and application == _APPLICATION_ID
               and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4,
                                                5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7, 8: _SCHEMA_V8,
                                                9: _SCHEMA_V9, 10: _SCHEMA_V10, 11: _SCHEMA_V11,
                                                12: _SCHEMA_V12, 13: _SCHEMA_V13, 14: _SCHEMA_V14,
-                                               15: _SCHEMA_V15, 16: _SCHEMA_V16, 17: _SCHEMA_V17}[version])):
+                                               15: _SCHEMA_V15, 16: _SCHEMA_V16, 17: _SCHEMA_V17, 18: _SCHEMA_V18}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {*PROJECT_HOLDS_COLUMNS, *(REGISTERED_RUN_COLUMNS if version < 17 else set()), *(ACTIVATION_COLUMNS if version < 16 else set()), *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
+            omitted = {*(PROJECT_HOLDS_COLUMNS if version < 18 else set()), *(REGISTERED_RUN_COLUMNS if version < 17 else set()), *(ACTIVATION_COLUMNS if version < 16 else set()), *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
             old_columns = {name: (columns[:-1] if ((name == 'result_leases' and version < 9)
                                                  or (name == 'project_cleanup_reservations' and version == 9)) else columns)
@@ -507,11 +521,14 @@ class ProjectHistory:
                               + (ACTIVATION_SCHEMA if version < 16 else '')
                               + (REGISTERED_RUN_SCHEMA if version < 17 else '')
                               # SH-1: the four tables (each slice adopts its own holds into them).
-                              + PROJECT_HOLDS_SCHEMA).split(';'):
+                              + (PROJECT_HOLDS_SCHEMA if version < 18 else '')
+                              # B3: the open-binding indexes (step 18 -> 19).
+                              + OPEN_BINDING_INDEX_SCHEMA).split(';'):
                 if statement.strip():
                     connection.execute(statement)
             # B1: every lease and reservation gets its register row by class, idempotently, before the validators.
-            project_holds_schema.adopt_project_holds(connection, self._hold_now())
+            if version < 18:
+                project_holds_schema.adopt_project_holds(connection, self._hold_now())
             # SH-1: both validators inside the step, before it commits; a failure rolls everything back to the
             # earlier format (and the copy made for it goes, O10 HS-18).
             self._check_project_holds()
@@ -1258,6 +1275,7 @@ class ProjectHistory:
                 project_holds_schema.release_hold(
                     self._connection, self.project_id, 'lease', attempt_identity(binding.run_handle, binding.attempt),
                     'fenced' if fenced else 'denied', now_ms=self._hold_now(), receipt=closure['receipt_digest'])
+                self._release_claimed_open(binding.run_handle, binding.attempt, 'fenced', closure['receipt_digest'])
                 # D1 (SH-3): the attempt ended unfinished, so its custody goes with the lease (O3).
                 ending = project_result_contexts.release_unfinished(
                     self, binding.run_handle, binding.attempt, 'fenced' if fenced else 'denied', self._hold_now())
@@ -1586,6 +1604,169 @@ class ProjectHistory:
             raise HistoryError('history_incompatible') from None
 
     @_operation
+    def record_open_binding(self, run_handle, attempt, run_id, inputs_digest, host_client, *, instance, now_ms):
+        """B3 §7: the withdrawal duty commits before registration can be refused."""
+        if (not matches(run_handle, re.compile(r'hrn_[0-9a-f]{48}'))
+                or not valid_integer(attempt, minimum=1) or type(run_id) is not str
+                or not matches(inputs_digest, _DIGEST) or not matches(host_client, re.compile(r'[a-z][a-z0-9-]{0,63}'))
+                or type(instance) is not str or not valid_integer(now_ms)):
+            raise HistoryError('history_invalid_input')
+        identity = attempt_identity(run_handle, attempt)
+        evidence = project_holds_schema.evidence_json(run_handle=run_handle, attempt=attempt, run_id=run_id,
+                    inputs_digest=inputs_digest, host_client=host_client, instance=instance)
+        with self._transaction():
+            row = self._open_binding(identity)
+            if row is not None:
+                if row['state'] == 'released' or row['evidence'] != evidence:
+                    raise HistoryError('history_conflict')
+                return
+            # A run id cannot acquire a second registration identity.
+            # Both checks search an index on the run id: the work is one lookup, not the rows held or registered.
+            if self._connection.execute('SELECT 1 FROM project_registered_runs INDEXED BY project_registered_runs_run '
+                    'WHERE project_id=? AND run_id=? AND (run_handle<>? OR attempt<>?) LIMIT 1',
+                    (self.project_id, run_id, run_handle, attempt)).fetchone():
+                raise HistoryError('history_conflict')
+            if self._connection.execute(
+                    "SELECT 1 FROM project_holds INDEXED BY project_holds_open_run WHERE project_id=? "
+                    "AND kind='open_binding' AND state<>'released' AND json_extract(evidence,'$.run_id')=? LIMIT 1",
+                    (self.project_id, run_id)).fetchone() is not None:
+                raise HistoryError('history_conflict')
+            project_holds_schema.take_hold(self._connection, self.project_id, 'open_binding', identity,
+                                           now_ms=now_ms, evidence=evidence)
+
+    def _open_binding(self, identity):
+        return self._connection.execute("SELECT * FROM project_holds WHERE project_id=? AND kind='open_binding' "
+                                        "AND identity=?", (self.project_id, identity)).fetchone()
+
+    @_operation
+    def mark_open_withdrawing(self, run_handle, attempt, reason, *, project_id, runtime_digest):
+        from .account_api import AccountRequest, ACCOUNT_PROTOCOL_VERSION, account_request_digest
+        from .open_withdrawal import WithdrawOpenInput, withdrawal_request_id
+        identity = attempt_identity(run_handle, attempt)
+        with self._transaction():
+            row = self._open_binding(identity)
+            if row is None or row['state'] == 'released':
+                raise HistoryError('history_conflict')
+            if row['state'] == 'releasing':
+                return dict(row)  # Preserve the first complete envelope on every retry.
+            lease = self._connection.execute("SELECT state,release_kind FROM project_holds WHERE project_id=? "
+                    "AND kind='lease' AND identity=?", (self.project_id, identity)).fetchone()
+            if lease is not None and (lease['state'] != 'released' or lease['release_kind'] != 'withdrawn_unsent'):
+                raise HistoryError('history_conflict')
+            evidence = json.loads(row['evidence'])
+            value = WithdrawOpenInput(run_handle, attempt, evidence['run_id'], evidence['inputs_digest'], 1, reason)
+            request_id = withdrawal_request_id(run_handle, attempt)
+            request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.withdraw_open', request_id,
+                                     project_id, runtime_digest, value.payload())
+            evidence.update(reason=reason, payload=value.payload(), project_id=project_id, runtime_digest=runtime_digest)
+            self._connection.execute("UPDATE project_holds SET state='releasing',request_id=?,request_digest=?,"
+                    "evidence=? WHERE project_id=? AND kind='open_binding' AND identity=?",
+                    (request_id, account_request_digest(request), project_holds_schema.evidence_json(**evidence),
+                     self.project_id, identity))
+            return dict(self._open_binding(identity))
+
+    @_operation
+    def open_withdrawals(self, *, now_ms=None, limit=10):
+        """The withdrawals due now (`next_check_ms` <= now), the earliest due first, then by identity."""
+        return [dict(row) for row in self._connection.execute("SELECT * FROM project_holds WHERE project_id=? "
+                "AND kind='open_binding' AND state='releasing' AND next_check_ms<=? ORDER BY next_check_ms,identity "
+                "LIMIT ?", (self.project_id, (1 << 62) if now_ms is None else now_ms, limit))]
+
+    @_operation
+    def defer_open_withdrawal(self, identity, *, now_ms, base_ms, max_ms):
+        """A withdrawal that failed waits before its next try, twice as long each time (up to `max_ms`), so one
+        refused row never keeps the others waiting. The request itself is never changed."""
+        if (type(identity) is not str or not re.fullmatch(r'hrn_[0-9a-f]{48}:[0-9]{1,19}', identity)
+                or not valid_integer(now_ms) or not valid_integer(base_ms, minimum=1)
+                or not valid_integer(max_ms, minimum=1)):
+            raise HistoryError('history_invalid_input')
+        with self._transaction():
+            row = self._open_binding(identity)
+            if row is None or row['state'] != 'releasing':
+                return
+            evidence = json.loads(row['evidence'])
+            failures = int(evidence.get('failures', 0)) + 1
+            evidence['failures'] = failures
+            self._connection.execute(
+                "UPDATE project_holds SET next_check_ms=?,evidence=? WHERE project_id=? AND kind='open_binding' "
+                "AND identity=? AND state='releasing'",
+                (now_ms + min(max_ms, base_ms * 2 ** min(failures - 1, 32)),
+                 project_holds_schema.evidence_json(**evidence), self.project_id, identity))
+
+    @_operation
+    def release_open_binding(self, run_handle, attempt, release_kind, *, receipt=None, request_digest=None):
+        with self._transaction():
+            row = self._open_binding(attempt_identity(run_handle, attempt))
+            if row is None or release_kind not in project_holds_schema.RELEASE_KINDS['open_binding']:
+                raise HistoryError('history_conflict')
+            if request_digest is not None and row['request_digest'] != request_digest:
+                raise HistoryError('history_conflict')
+            if row['state'] == 'released':
+                if row['release_kind'] != release_kind or row['receipt'] != receipt:
+                    raise HistoryError('history_conflict')
+                return
+            if release_kind in {'withdrawn', 'account_final'} and row['state'] != 'releasing':
+                raise HistoryError('history_conflict')
+            project_holds_schema.release_hold(self._connection, self.project_id, 'open_binding', row['identity'],
+                                              release_kind, now_ms=self._hold_now(), receipt=receipt)
+
+    # Each seek is one index range on the owner (one bound, or an equality and then the identity), never a row-value
+    # comparison, which does not bound the seek: so the work is the window, not the rows held or the rows passed.
+    _HELD_WINDOW = ("SELECT identity,evidence,json_extract(evidence,'$.instance') AS owner FROM project_holds "
+                    "INDEXED BY project_holds_open_held WHERE project_id=? AND kind='open_binding' AND state='held' "
+                    "AND {condition} ORDER BY {order} LIMIT ?")
+    _OWNER = "json_extract(evidence,'$.instance')"
+
+    def _held_window(self, instance, after, limit):
+        """At most `limit` held duties of other services, in index order, after the position `after`: the index
+        holds only held rows, and gives the order, so nothing is sorted. The live service's own rows are never
+        read: the order is split around them into the position's own owner after its identity, the owners between
+        it and the live service, and the owners after the live service."""
+        owner, identity = after
+        seeks = []
+        if owner and owner != instance:
+            seeks.append((f"{self._OWNER} = ? AND identity > ?", "identity", (owner, identity)))
+        if owner < instance:
+            seeks.append((f"{self._OWNER} > ? AND {self._OWNER} < ?", f"{self._OWNER},identity", (owner, instance)))
+        seeks.append((f"{self._OWNER} > ?", f"{self._OWNER},identity", (max(owner, instance),)))
+        rows = []
+        for condition, order, binds in seeks:  # (the equality seek is ordered by identity alone: the owner is fixed)
+            if len(rows) < limit:
+                rows += self._connection.execute(self._HELD_WINDOW.format(condition=condition, order=order),
+                    (self.project_id, *binds, limit - len(rows))).fetchall()
+        return rows
+
+    @_operation
+    def withdraw_earlier_open_bindings(self, instance, *, project_id, runtime_digest, limit=10):
+        """Mark an earlier service's held duties for withdrawal, reading one window of at most `limit` rows. The
+        window moves on after every call, over the rows it could not mark (a lease armed or ended another way is the
+        fence's; a row that changed) as over those it did, and starts again from the first row once the end is
+        reached, so every pass is bounded and no row stops the others."""
+        window = self._held_window(instance, self._successor_position, limit)
+        if not window and self._successor_position != ('', ''):
+            window = self._held_window(instance, ('', ''), limit)
+        self._successor_position = (window[-1]['owner'], window[-1]['identity']) if window else ('', '')
+        count = 0
+        for row in window:
+            evidence = json.loads(row['evidence'])
+            try:
+                self.mark_open_withdrawing(evidence['run_handle'], evidence['attempt'], 'service_stopped',
+                                            project_id=project_id, runtime_digest=runtime_digest)
+            except HistoryError as error:
+                if error.reason_code != 'history_conflict':
+                    raise
+                continue  # Not markable now (the lease is the fence's, or the row changed): the window moves on.
+            count += 1
+        return count
+
+    def _release_claimed_open(self, run_handle, attempt, kind, receipt):
+        # Called only inside the verified bind/fence transaction; old runs may predate B3.
+        row = self._open_binding(attempt_identity(run_handle, attempt))
+        if row is not None and row['state'] != 'released':
+            project_holds_schema.release_hold(self._connection, self.project_id, 'open_binding', row['identity'],
+                                              kind, now_ms=self._hold_now(), receipt=receipt)
+
+    @_operation
     def arm_result_lease(self, binding: ResultLeaseBinding) -> ResultLease:
         """Durably mark claim-send uncertainty before sending the account request.
 
@@ -1644,6 +1825,7 @@ class ProjectHistory:
                                          binding.attempt, binding.claim_digest)).fetchone() is not None:
                 raise HistoryError("history_conflict")
             self._insert_result_reservation(actual)
+            self._release_claimed_open(binding.run_handle, binding.attempt, 'claimed', digest)
             project_result_contexts.bind(self, binding)  # D1: the context's claim association
             # B1 (RS-B draft 3 §6): the reservation is the attempt's obligation from here on, taken in this
             # transaction; the lease is released `bound` in it (SH-2).
