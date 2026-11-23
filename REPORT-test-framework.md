@@ -94,3 +94,26 @@
 - Evidence -> `../cocolo-mergelib/measurements/test-framework/review-r1-merge-evidence.json` (35 raw-report digest-bound extracts). Final metadata has exactly 80 missing step-4 lifecycle checks; no legacy fingerprint errors. Global exit remains 1, never presented as a complete green requirement gate.
 - Still open: concurrent five-campaign budgets (475.9808796250145 job-seconds, all five over budget), full soak, mounted-image opt-ins, macOS/Linux Python 3.11 runtime, Ruff, and step-4 lifecycle coverage. Python 3.11 grammar and identifier/whitespace checks pass; no budget raised or fault coverage cut.
 - No owner question remains. This is the requested review stop; steps 4–5 have not started. No push, product install, primary/control-project edits or general cleanup.
+
+## Step 2 — round-2 scoped MED fixes (decisions 99 A / 100 A)
+- Tests first: `4578546a`, `19ad4955`, `17a7d734`, `cc22fc21`; fixes `7c53616c`, `b0e4f432`; specific tags `d1bd5d63`, assertion preservation `e3b35ad5`.
+- All M1–M8/N1–N3 -> `REVIEW-test-framework-r2-fixes.md:7`: complete requirement -> fix/witness file:line table, exact intended red diagnostics and counterfactual controls.
+- Decision 100 -> `REQUIREMENTS-test-framework.md:163`, `scripts/parallel_tests.py:71`, `tests/test_test_framework_guards.py:566`: allowlist covers discovery and workers, local and CI-parent environments; token/password canaries are absent, allowed-variable controls survive.
+- TF-7 bound baseline retains 5,683 IDs; 304 contributing sources verified against pre-pass `8cfab050`, 1,356 specific helper declarations, zero unresolved fingerprints; original immutable baselines untouched (`bound-baseline-provenance.json`).
+- Final four modules: 95 checks, **20.520382499031257 job-seconds**; final guard follow-up: 37 checks, **19.76074541604612 job-seconds**, default 16 jobs, no worker/budget failures.
+- Evidence -> `measurements/test-framework/review-r2-framework/runs.json`, sensitivity JSON and intended-red logs. Timings are saved-run job-seconds, not wall-time claims.
+- Every changed assertion -> `ASSERTIONS-test-framework.md` round-2 table; no test deleted. Budget fixture contradiction reconciled by an explicit plan, unchanged expected assertions (`CONTRADICTIONS-review-r2.md`).
+- All 17 LOWs listed in `REVIEW-test-framework-r2-fixes.md`; only L8 resolved, as explicitly mandated by decision 100. Others deliberately untouched.
+- Global exit remains 1 for exactly 80 missing lifecycle checks. macOS/Linux Python 3.11 runtime, Ruff and the complete requirement gate remain open; Python 3.11 grammar checked only.
+- Ready for the requested whole-worktree review; steps 4–5 remain stopped. No push, product install, primary/control-project edit or general cleanup.
+
+## Step 3 — round-2 scoped MED fixes
+- Tests first on `feat/merge-library`: `a2ab496b`, `3fb8af31`, `83ea6830`; fixes `81cc6fac`; specific tags `16be3593`; framework integration `67f89368` plus final framework hand-off merge.
+- All M1–M6 -> `../cocolo-mergelib/REVIEW-merge-library-r2-fixes.md:7`: requirement -> exact enforcing/witness line and intended failure; earlier A1 HIGH remains fixed.
+- Integrated eleven affected modules: **253 passing checks, 90.15853699890431 job-seconds**, default 16 jobs, no worker/budget failures; all four original mutation proofs pass.
+- Separate real crash campaign: **49 checks (46 pass, three existing mounted-image skips), 45.08007408300182 job-seconds**, default 16 jobs, no worker/budget failure. Decision-91 cases pass unchanged.
+- Evidence -> `../cocolo-mergelib/measurements/test-framework/review-r2-merge/runs.json` and `merge-sensitivity.json`; exact failures checked for both missing machine provenance fields and every named read/cancel/retry boundary.
+- Changed assertions -> `../cocolo-mergelib/ASSERTIONS-merge-checker.md` round-2 appendix; no test deleted, sampling reduced, expected failure introduced or budget raised.
+- All 13 merge LOWs and conditional review items remain listed in `../cocolo-mergelib/REVIEW-merge-library-r2-fixes.md`, deliberately unfixed.
+- Open: full soak, mounted-image opt-ins, macOS/Linux Python 3.11 execution, Ruff, concurrent real-campaign budgets and the 80 lifecycle checks. No complete green gate is claimed.
+- This completes the requested scoped pass and stops for whole-worktree review; steps 4–5 have not begun.

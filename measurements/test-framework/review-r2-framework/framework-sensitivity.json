@@ -1,0 +1,50 @@
+[
+ {
+  "finding": "M5",
+  "test": "test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+  "expected_diagnostic": "M5 invalid pin/hash escaped",
+  "failure": "Traceback (most recent call last):\n  File \"<cocolo-testfw>/tests/test_test_framework.py\", line 467, in test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins\n    self.assertIn('test dependency is not exactly pinned and hashed', errors, 'M5 invalid pin/hash escaped')\n    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 'test dependency is not exactly pinned and hashed' not found in ['unexpected test dependency set'] : M5 invalid pin/hash escaped\n"
+ },
+ {
+  "finding": "N2",
+  "test": "test_test_framework_review.ReviewTests.test_registered_future_check_and_review_record_are_not_passing_evidence",
+  "expected_diagnostic": "N2 wrong revision was accepted",
+  "failure": "Traceback (most recent call last):\n  File \"<cocolo-testfw>/tests/test_test_framework_review.py\", line 74, in test_registered_future_check_and_review_record_are_not_passing_evidence\n    self.assertEqual('failed', self.fw.registered_outcomes(checks, evidence)['review'], 'N2 wrong revision was accepted')\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 'failed' != 'passed'\n- failed\n+ passed\n : N2 wrong revision was accepted\n"
+ },
+ {
+  "finding": "M8 absent",
+  "test": "test_test_framework_guards.RunnerIntegrationTests.test_review_C9_executed_expected_failure_and_unexpected_success_do_not_pass_gate",
+  "expected_diagnostic": "M8 expected case absent",
+  "failure": "Traceback (most recent call last):\n  File \"<cocolo-testfw>/tests/test_test_framework_guards.py\", line 468, in test_review_C9_executed_expected_failure_and_unexpected_success_do_not_pass_gate\n    self.assertIn(name, statuses, 'M8 expected case absent from worker outcomes')\n    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 'test_probe.Expected.test_expected' not found in {'test_probe.Probe.test_value': 'passed'} : M8 expected case absent from worker outcomes\n"
+ },
+ {
+  "finding": "M8 wrong status",
+  "test": "test_test_framework_guards.RunnerIntegrationTests.test_review_C9_executed_expected_failure_and_unexpected_success_do_not_pass_gate",
+  "expected_diagnostic": "M8 wrong executed outcome",
+  "failure": "Traceback (most recent call last):\n  File \"<cocolo-testfw>/tests/test_test_framework_guards.py\", line 470, in test_review_C9_executed_expected_failure_and_unexpected_success_do_not_pass_gate\n    self.assertEqual(expected, statuses[name], 'M8 wrong executed outcome')\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 'expected_failure' != 'failed'\n- expected_failure\n+ failed\n : M8 wrong executed outcome\n"
+ },
+ {
+  "finding": "M6",
+  "test": "test_test_framework_guards.WorkerTests.test_review_C5_inherited_and_convenience_socket_apis_in_both_layers",
+  "expected_diagnostic": "M6 prohibited asyncio API completed",
+  "failure": "Traceback (most recent call last):\n  File \"<cocolo-testfw>/tests/test_test_framework_guards.py\", line 209, in test_review_C5_inherited_and_convenience_socket_apis_in_both_layers\n    self.assertNotEqual(0, code, 'M6 prohibited asyncio API completed: ' + api)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 0 == 0 : M6 prohibited asyncio API completed: asyncio.open_connection('127.0.0.1',9)\n"
+ },
+ {
+  "finding": "N3",
+  "test": "test_test_framework_guards.RunnerIntegrationTests.test_C13_ready_join_fake_clock_poll_and_elapsed_bound",
+  "expected_diagnostic": "N3 join elapsed assertion did not complete",
+  "failure": "Traceback (most recent call last):\n  File \"<cocolo-testfw>/tests/test_test_framework_guards.py\", line 519, in test_C13_ready_join_fake_clock_poll_and_elapsed_bound\n    self.assertTrue(result['markers']['elapsed-ok'], 'N3 join elapsed assertion did not complete')\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: False is not true : N3 join elapsed assertion did not complete\n"
+ },
+ {
+  "finding": "M7 shard",
+  "test": "test_test_framework_guards.RunnerIntegrationTests.test_r2_M7_real_runner_shards_and_import_failure",
+  "expected_diagnostic": "M7 duplicate shard execution",
+  "failure": "Traceback (most recent call last):\n  File \"<cocolo-testfw>/tests/test_test_framework_guards.py\", line 555, in test_r2_M7_real_runner_shards_and_import_failure\n    self.assertEqual(len(expected),len(observed), 'M7 duplicate shard execution')\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 2 != 4 : M7 duplicate shard execution\n"
+ },
+ {
+  "finding": "M7 bound",
+  "test": "test_test_framework_guards.RunnerIntegrationTests.test_owned_descendants_are_reaped_when_a_worker_finishes",
+  "expected_diagnostic": "M7 normal descendant cleanup exceeded bound",
+  "failure": "Traceback (most recent call last):\n  File \"<cocolo-testfw>/tests/test_test_framework_guards.py\", line 396, in test_owned_descendants_are_reaped_when_a_worker_finishes\n    self.assertLess(time.monotonic() - began, 5., 'M7 normal descendant cleanup exceeded bound')\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 6.326154790993314 not less than 5.0 : M7 normal descendant cleanup exceeded bound\n"
+ }
+]

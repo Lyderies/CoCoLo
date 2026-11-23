@@ -255,3 +255,18 @@ All commands used scripts/parallel_tests.py at its default 16 jobs. The ten smal
 Separate runs total **146.5805857910309 job-seconds**. The complete 78-check census is asserted (75 adversarial methods plus three image methods); the split changes scheduling only, preserving every method and assertion. Normal fault inventories now cover every observed persistence operation/phase/side/commit signature on both real and model lanes. Full inventories remain explicit soak; no normal result certifies soak.
 
 The earlier five-campaign concurrent measurement was **475.9808796250145 job-seconds**, with all test bodies passing but all five module budgets failing under filesystem contention. This is an outstanding performance gate, not cleared by the separate measurements. No ceiling was increased and no fault kind removed. The original unsplit expanded campaign was **139.0616121669882 job-seconds** and over its 60s module budget. The final results therefore establish functional coverage and isolated module budgets, not a concurrent full-suite budget pass. Raw evidence and digests are in the merge branch's measurements/test-framework/review-r1-merge-evidence.json.
+
+## Round-2 scoped verification
+
+All rows use the runner's DEFAULT 16 jobs; no full suite was repeated. Job-seconds come from each `--save-timings` `.run.json`, retained as digest-bound extracts in `measurements/test-framework/review-r2-framework/runs.json` (merge evidence in the merge worktree's `review-r2-merge/runs.json`).
+
+| Run | Checks | Job-seconds | Result |
+|---|---:|---:|---|
+| Framework intended red | 93 | 19.983886332949623 | Intended provenance/plan/gate/environment failures; exact logs saved |
+| Framework first six-module green | 103 | 21.244645251019392 | All workers pass |
+| Framework final four-module green | 95 | 20.520382499031257 | All workers pass |
+| Final guard assertion-preservation follow-up | 37 | 19.76074541604612 | All workers pass |
+| Merge integrated eleven-module green | 253 | 90.15853699890431 | All workers pass, including four mutation proofs |
+| Separate real crash campaign | 49 | 45.08007408300182 | 46 pass, three existing mounted-image opt-ins skipped |
+
+No budget failures in these green runs. Overall exit remains 1 for exactly 80 lifecycle metadata failures. This is not a new end-to-end performance claim; concurrent real-campaign budgets remain an open gate. No old timing ceilings were increased or debt retired by this pass.
