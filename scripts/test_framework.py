@@ -405,10 +405,11 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=(),
         return filename
     worktree_root = Path(__file__).resolve().parents[1]
     worktree_prefix = str(worktree_root)
-    test_file = Path(getattr(module, '__file__', '')).resolve()
-    test_root = next((parent for parent in test_file.parents if parent.name == 'tests'), test_file.parent)
-    test_roots = (test_root, worktree_root / 'tests',
-                  worktree_root / 'packages/codex-agents/tests', worktree_root / 'packages/claude-agents/tests')
+    module_file = getattr(module, '__file__', None)
+    test_file = Path(module_file).resolve() if module_file else None
+    test_root = next((parent for parent in test_file.parents if parent.name == 'tests'), test_file.parent) if test_file else None
+    test_roots = tuple(root for root in (test_root, worktree_root / 'tests',
+                  worktree_root / 'packages/codex-agents/tests', worktree_root / 'packages/claude-agents/tests') if root is not None)
     product_roots = (worktree_root / 'packages/codex-agents/native-package',
                      worktree_root / 'packages/claude-agents/src')
     @lru_cache(maxsize=None)
@@ -511,7 +512,19 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=(),
         except TypeError:
             path = None
         if test_owned:
-            return owned_path(path)
+            if path:
+                return owned_path(path)
+            # exec-generated fixtures have no file. Their defining namespace,
+            # not a test-looking name or the current directory, establishes ownership.
+            original = inspect.unwrap(value)
+            if inspect.isfunction(original):
+                return original.__globals__ is vars(module)
+            if isinstance(value, types.ModuleType):
+                return value is module
+            if inspect.isclass(value):
+                return value is cls or any(inspect.isfunction(item) and item.__globals__ is vars(module)
+                                           for item in vars(value).values())
+            return False
         return owner == cls.__module__ or owner.startswith(('tests.', 'test_')) or bool(path and ('/tests/' in path or include_values and Path(path).parent == Path(getattr(module, '__file__', '')).parent))
     def walk(value):
         if id(value) in seen:
