@@ -2187,6 +2187,12 @@ class LearningLedger:
                 "CREATE INDEX IF NOT EXISTS billing_probes_in_progress ON account_billing_probe_requests(project_id) "
                 "WHERE state<>'committed'"
             )
+            # RSA3-4 (F9): each release batch seeks reserved probes, never their committed history.
+            # Index state alone preserves rowid order within reserved rows, including LIMIT selection.
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS billing_probe_reserved ON account_billing_probe_requests(state) "
+                "WHERE state='reserved'"
+            )
             # OP-1: the open-time cap and its status count read only open requests in flight, never the finished
             # ones; OP-2: the retention sweep reads only committed requests old enough (additive, as above).
             self._connection.execute(
