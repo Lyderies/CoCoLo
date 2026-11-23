@@ -4,6 +4,7 @@ Nothing here touches the real home or runs launchctl or systemctl: every path is
 folder and every command goes to an injected runner.
 """
 
+import hashlib
 import os
 import plistlib
 import sys
@@ -29,14 +30,15 @@ ARGV = [PYTHON, "-I", "-B", "-S", "-X", "pycache_prefix=/dev/null", CLI, "learni
 
 
 def tree(root):
-    """Every path under root with its kind, mode and link target: a change anywhere shows."""
-    found = {}
+    """Every path under root with its kind, mode, link target and a hash of its contents, and the root's own
+    mode: a change anywhere shows, a same-size content change too."""
+    found = {".": (os.lstat(root).st_mode,)}
     for folder, names, files in os.walk(root):
         for name in names + files:
             path = Path(folder, name)
             info = os.lstat(path)
-            found[str(path.relative_to(root))] = (info.st_mode, os.readlink(path) if path.is_symlink() else None,
-                                                  info.st_size if path.is_file() and not path.is_symlink() else 0)
+            body = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() and not path.is_symlink() else None
+            found[str(path.relative_to(root))] = (info.st_mode, os.readlink(path) if path.is_symlink() else None, body)
     return found
 
 
@@ -48,6 +50,30 @@ class Runner:
     def __call__(self, argv):
         self.calls.append(list(argv))
         return 1 if any(word in argv for word in self.fail) else 0
+
+
+class FakeSystemd:
+    """A stand-in systemctl --user that tracks whether the unit is running. `fail` names commands that fail;
+    a failed enable or try-restart leaves the unit stopped, as a unit that would not start does."""
+
+    def __init__(self, active=False, fail=(), fail_rollback=()):
+        self.active, self.fail, self.fail_rollback = active, fail, fail_rollback
+        self.calls, self.rollback = [], False
+
+    def __call__(self, argv):
+        self.calls.append(list(argv))
+        verb = argv[2] if len(argv) > 2 and argv[1] == "--user" else argv[1]
+        if verb == "is-active":
+            return 0 if self.active else 3
+        if verb in self.fail and not self.rollback:
+            self.active = False if verb in ("enable", "try-restart") else self.active
+            self.rollback = True  # from here on, the system is being put back
+            return 1
+        if verb in self.fail_rollback and self.rollback:
+            return 1
+        if verb in ("enable", "start", "restart"):
+            self.active = True
+        return 0  # try-restart restarts only a running unit: it never starts a stopped one
 
 
 class TempHome(unittest.TestCase):
@@ -146,12 +172,14 @@ class InstallTests(TempHome):
         argv = ARGV[:-1] + ["/srv/a$b%c"]
         text = login_start.render_unit(argv, "/srv/logs%x$y")
         self.assertIn("/srv/a$$b%%c", text)
-        self.assertIn("append:/srv/logs%%x$$y/", text)
+        self.assertIn("append:/srv/logs%%x$y/", text)  # systemd expands % in a path, not $
         self.assertEqual(1, len([line for line in text.splitlines() if line.startswith("ExecStart=")]))
         for bad in ("/srv/a\nExecStartPre=/bin/x", "/srv/a\rb", "/srv/a\x00b"):
+            before = tree(self.home)
             self.assertFalse(login_start.install(self.home, "systemd", ARGV[:-1] + [bad], self.logs, self.runner,
                                                  uid=1).ok)
             self.assertFalse(login_start.install(self.home, "systemd", ARGV, bad, self.runner, uid=1).ok)
+            self.assertEqual(before, tree(self.home))
         self.assertEqual([], self.runner.calls)
         self.assertFalse(login_start.entry_path(self.home, "systemd").exists())
 
@@ -199,11 +227,88 @@ class InstallTests(TempHome):
         login_start.install(self.home, "systemd", ARGV, self.logs, self.runner, uid=1)
         self.assertFalse([c for c in self.runner.calls if "try-restart" in c or "restart" in c])
         self.runner.calls.clear()
+        self.assertTrue(login_start.install(self.home, "systemd", ARGV, self.logs, self.runner, uid=1).ok)  # unchanged
+        self.assertFalse([c for c in self.runner.calls if "try-restart" in c or "restart" in c])
+        self.runner.calls.clear()
         changed = ARGV[:-1] + ["/srv/example/.local/state/other"]
         self.assertTrue(login_start.install(self.home, "systemd", changed, self.logs, self.runner, uid=1).ok)
         names = [c[2] for c in self.runner.calls]
-        self.assertEqual(["daemon-reload", "enable", "try-restart"], names)
+        self.assertEqual(["is-active", "daemon-reload", "enable", "try-restart"], names)
         self.assertEqual("cocolo-collector.service", self.runner.calls[-1][-1])
+
+    @requirements('E1-1', why_not_scenario='Pure file and command rendering with a stateful stand-in systemctl.')
+    def test_E1_1_a_failed_reinstall_leaves_a_running_service_running(self):
+        changed = ARGV[:-1] + ["/srv/example/.local/state/other"]
+        for failing in ("enable", "try-restart"):
+            with self.subTest(failing=failing):
+                home = Path(tempfile.mkdtemp(dir=self.home))
+                logs = home / "logs"
+                systemd = FakeSystemd(active=False)
+                self.assertTrue(login_start.install(home, "systemd", ARGV, logs, systemd, uid=1).ok)
+                self.assertTrue(systemd.active)
+                path = login_start.entry_path(home, "systemd")
+                old = path.read_bytes()
+                systemd.fail, systemd.rollback = (failing,), False
+                result = login_start.install(home, "systemd", changed, logs, systemd, uid=1)
+                self.assertFalse(result.ok)
+                self.assertEqual(old, path.read_bytes())
+                self.assertTrue(systemd.active, "the service that was running must be running again")
+
+    @requirements('E1-1', why_not_scenario='Pure file and command rendering with a stateful stand-in systemctl.')
+    def test_E1_1_a_failed_reinstall_does_not_start_a_service_that_was_stopped(self):
+        changed = ARGV[:-1] + ["/srv/example/.local/state/other"]
+        systemd = FakeSystemd(active=False)
+        login_start.install(self.home, "systemd", ARGV, self.logs, systemd, uid=1)
+        systemd.active = False  # stopped by the owner
+        systemd.fail, systemd.rollback = ("enable",), False
+        self.assertFalse(login_start.install(self.home, "systemd", changed, self.logs, systemd, uid=1).ok)
+        self.assertFalse(systemd.active)
+        self.assertFalse([c for c in systemd.calls if c[2] in ("start", "restart")])
+
+    @requirements('E1-1', why_not_scenario='Pure file and command rendering with a stateful stand-in systemctl.')
+    def test_E1_1_a_failed_rollback_is_reported(self):
+        changed = ARGV[:-1] + ["/srv/example/.local/state/other"]
+        systemd = FakeSystemd(active=False)
+        login_start.install(self.home, "systemd", ARGV, self.logs, systemd, uid=1)
+        systemd.fail, systemd.fail_rollback, systemd.rollback = ("enable",), ("restart", "start"), False
+        result = login_start.install(self.home, "systemd", changed, self.logs, systemd, uid=1)
+        self.assertFalse(result.ok)
+        self.assertNotIn("earlier one was kept", result.reason)
+        self.assertIn("could not be started again", result.reason)
+
+    @requirements('E1-1', why_not_scenario='Pure file and command rendering with an injected runner.')
+    def test_E1_1_a_failed_reinstall_does_not_load_an_old_entry_that_was_not_loaded(self):
+        self.assertTrue(login_start.install(self.home, "launchd", ARGV, self.logs, self.runner, uid=501).ok)
+        changed = ARGV[:-1] + ["/srv/example/.local/state/other"]
+        calls = []
+
+        def run(argv):
+            calls.append(list(argv))
+            return 1 if "print" in argv or "bootstrap" in argv else 0  # not loaded before; the new one fails
+
+        result = login_start.install(self.home, "launchd", changed, self.logs, run, uid=501)
+        self.assertFalse(result.ok)
+        self.assertEqual(1, len([c for c in calls if "bootstrap" in c]))  # only the new entry's try
+
+    @requirements('E1-6', why_not_scenario='Refusals of pure inputs; nothing runs.')
+    def test_E1_6_an_unreadable_old_entry_is_refused_not_replaced(self):
+        self.assertTrue(login_start.install(self.home, "launchd", ARGV, self.logs, self.runner, uid=501).ok)
+        path = login_start.entry_path(self.home, "launchd")
+        before, calls = tree(self.home), len(self.runner.calls)
+        changed = ARGV[:-1] + ["/srv/example/.local/state/other"]
+        real = Path.read_bytes
+
+        def unreadable(this):
+            if this == path:
+                raise PermissionError(13, "Permission denied")
+            return real(this)
+
+        with mock.patch.object(Path, "read_bytes", unreadable):
+            result = login_start.install(self.home, "launchd", changed, self.logs, self.runner, uid=501)
+        self.assertFalse(result.ok)
+        self.assertIn("could not be read", result.reason)
+        self.assertEqual(before, tree(self.home))
+        self.assertEqual(calls, len(self.runner.calls))
 
 
 class RemoveTests(TempHome):
@@ -338,24 +443,29 @@ class OfferTests(TempHome):
         self.assertTrue(login_start.entry_path(self.home, "launchd").exists())  # the first yes did install
         (self.home / "missing-folder").mkdir()
         self.assertEqual("installed", self.offer([0]))
-        (self.home / "missing-folder" / "answer").chmod(0o600)
-        (self.home / "missing-folder").chmod(0o500)
-        try:
+        with mock.patch.object(login_start, "write_answer", return_value=False):  # injected, so root cannot skip it
             self.assertEqual("not_remembered", self.offer([1], configure=True))
             self.assertFalse(login_start.entry_path(self.home, "launchd").exists())
-        finally:
-            (self.home / "missing-folder").chmod(0o700)
+
+    @requirements('E1-4', why_not_scenario='Consent flow driven by an injected question.')
+    def test_E1_4_a_failed_answer_write_when_keeping_is_reported_and_the_entry_stays(self):
+        self.assertEqual("installed", self.offer([0]))
+        with mock.patch.object(login_start, "write_answer", return_value=False):
+            self.assertEqual("not_remembered", self.offer([0], configure=True))  # Keep
+        self.assertIn("could not keep your answer", " ".join(self.shown).lower())
+        self.assertTrue(login_start.entry_path(self.home, "launchd").exists())
 
     @requirements('E1-4', why_not_scenario='Consent flow driven by an injected question.')
     def test_E1_4_a_cancelled_question_changes_and_remembers_nothing(self):
         before = tree(self.home)
-        self.assertEqual("not_asked", self.offer([None]))
+        self.assertEqual("cancelled", self.offer([None]))
+        self.assertIn("left as it was", " ".join(self.shown))
         self.assertEqual(before, tree(self.home))
         self.assertEqual([], self.runner.calls)
         self.assertEqual("installed", self.offer([0]))
         self.runner.calls.clear()
         before = tree(self.home)
-        self.assertEqual("not_asked", self.offer([None], configure=True))
+        self.assertEqual("cancelled", self.offer([None], configure=True))
         self.assertEqual(before, tree(self.home))
         self.assertEqual([], self.runner.calls)
         self.assertEqual("yes", login_start.read_answer(self.answer))
@@ -363,11 +473,13 @@ class OfferTests(TempHome):
     @requirements('E1-6', why_not_scenario='Consent flow driven by an injected question.')
     def test_E1_6_a_missing_collector_command_is_checked_before_the_owner_is_asked(self):
         self.shown, self.asked = [], []
+        before = tree(self.home)
         outcome = login_start.offer(home=self.home, kind="launchd", answer_file=self.answer, argv=[],
                                     log_dir=self.logs, runner=self.runner, uid=501,
                                     ask=lambda items: self.asked.append(items) or 0, show=self.shown.append,
                                     configure=False)
         self.assertEqual("no_command", outcome)
+        self.assertEqual(before, tree(self.home))
         self.assertEqual([], self.asked)
         self.assertEqual([], self.runner.calls)
         self.assertIsNone(login_start.read_answer(self.answer))
@@ -448,12 +560,75 @@ class WiringTests(TempHome):
         wizard = self.wizard([0])  # Configure again: the answer is no, so Turn it on / Leave it off
         wizard.login_start_step()
         self.assertTrue(self.screen.menus[0][0].lower().startswith("turn it on"))
-        wizard = self.wizard([1])  # Configure again: on, so Keep / Remove
+        wizard = self.wizard([1])  # Configure again: still no; Leave it off
+        wizard.login_start_step()
+        wizard = self.wizard([0])  # and turn it on
+        wizard.login_start_step()
+        self.assertTrue(login_start.entry_path(self.home, "launchd").exists())
+        wizard = self.wizard([0])  # Configure again: on, so Keep / Remove; Keep (index 0)
         wizard.login_start_step()
         self.assertTrue(self.screen.menus[0][0].lower().startswith("keep"))
         self.assertTrue(self.screen.menus[0][1].lower().startswith("remove"))
+        self.assertTrue(login_start.entry_path(self.home, "launchd").exists())
+        self.assertEqual("yes", login_start.read_answer(self.projects.parent / "login-start"))
+        wizard = self.wizard([1])  # Remove (index 1)
+        wizard.login_start_step()
         self.assertFalse(login_start.entry_path(self.home, "launchd").exists())
         self.assertEqual("no", login_start.read_answer(self.projects.parent / "login-start"))
+
+    @requirements('E1-7', why_not_scenario='Runs the wizard step against a stand-in terminal and an injected runner.')
+    def test_E1_7_a_cancelled_question_is_summarised_as_left_as_it_was(self):
+        wizard = self.wizard([None])
+        wizard.login_start_step()
+        summary = " ".join(self.screen.lines)
+        self.assertIn("Login start: left as it was", summary)
+        self.assertNotIn("during an update", summary)
+
+    @requirements('E1-7', why_not_scenario='Runs the wizard project step and the collector step against a stand-in terminal.')
+    def test_E1_7_the_real_set_up_choice_makes_the_first_run_ask_once_and_a_re_run_not_ask(self):
+        from setup_wizard import effects, flow
+        project = self.home / "project"
+        (project / ".codex" / "orchestration").mkdir(parents=True)
+        wizard = self.wizard([0, 0, 0])  # project step: Set up (recommended); then the question: Yes
+        self.assertFalse(wizard.straight)
+        wizard.last_reply = {}  # the installer preview the stubbed run_installer would have left
+        patches = [mock.patch.object(wizard, "pick_project", return_value=str(project)),
+                   mock.patch.object(wizard, "basic_problem", return_value=""),
+                   mock.patch.object(wizard, "managed_problem", return_value=""),
+                   mock.patch.object(wizard, "prepare_project_inputs"),
+                   mock.patch.object(wizard, "run_installer", return_value=0),
+                   mock.patch.object(wizard, "remember_project"),
+                   mock.patch.object(wizard, "owner_key_notice"),
+                   mock.patch.object(effects, "plan_entries", return_value=[]),
+                   mock.patch.object(effects, "plan_paths", return_value=[])]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        wizard.step_project(str(project))
+        self.assertTrue(wizard.straight)  # derived by the wizard's own menu choice, not assigned here
+        wizard.login_start_step()
+        questions = [menu for menu in self.screen.menus if menu[0].lower().startswith("yes")]
+        self.assertEqual(1, len(questions))  # asked once, with the straight (Set up) answer in place
+        self.assertEqual(2, len(self.screen.menus))  # the project's Set up menu, then that one question
+        self.assertEqual("yes", login_start.read_answer(self.projects.parent / "login-start"))
+        # A re-run: the project now has an install; the wizard's own "Update this project" choice, then no question.
+        manifest = project / ".codex" / "orchestration" / "install-manifest.json"
+        manifest.write_text("{}")
+        again = self.wizard([0])
+        again.last_reply = {}
+        for patch in (mock.patch.object(again, "pick_project", return_value=str(project)),
+                      mock.patch.object(again, "basic_problem", return_value=""),
+                      mock.patch.object(again, "managed_problem", return_value=""),
+                      mock.patch.object(again, "prepare_project_inputs"),
+                      mock.patch.object(again, "run_installer", return_value=0),
+                      mock.patch.object(again, "remember_project"),
+                      mock.patch.object(again, "owner_key_notice")):
+            patch.start()
+            self.addCleanup(patch.stop)
+        again.step_project(str(project))
+        self.assertTrue(again.update)  # the real choice "Update this project" on an existing install
+        again.login_start_step()
+        self.assertEqual(1, len(self.screen.menus))  # only the project's own update menu; nothing about login start
 
     @requirements('E1-7', why_not_scenario='Reads the wizard source for where the step sits; behaviour is run above.')
     def test_E1_7_setup_offers_login_start_after_the_collector_is_ready(self):
