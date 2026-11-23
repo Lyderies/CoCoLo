@@ -349,7 +349,7 @@ class SchemaStepTests(unittest.TestCase):
                 (PROJECT_A, run_handle, number_, binding(number).claim_id, release_kind, b'{"closure":1}', 1500))
 
     def publication(self, number, material):
-        return ('INSERT INTO project_result_publications(project_id,claim_id,material) VALUES(?,?,?)',
+        return ('INSERT OR REPLACE INTO project_result_publications(project_id,claim_id,material) VALUES(?,?,?)',
                 (PROJECT_A, binding(number).claim_id, material))
 
     def identity(self, number):

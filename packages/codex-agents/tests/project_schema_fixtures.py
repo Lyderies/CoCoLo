@@ -17,6 +17,8 @@ def legacy_project_holds_layout(store):
     if store._connection.execute(
             "SELECT COUNT(*) FROM project_holds WHERE kind NOT IN ('lease','reservation')").fetchone()[0]:
         raise AssertionError('legacy fixture contains a hold, context, publication or settlement row')
+    # D4 (decision 123 A): the prepare step keeps a reservation's material; an older format never had it.
+    store._connection.execute('DELETE FROM project_result_publications WHERE claim_id IN (SELECT claim_id FROM result_reservations)')
     for name in SCHEMA_18_TABLES[1:]:
         if store._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0]:
             raise AssertionError('legacy fixture contains a hold, context, publication or settlement row')
