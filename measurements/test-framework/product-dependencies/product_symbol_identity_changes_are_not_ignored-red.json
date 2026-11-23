@@ -1,0 +1,9 @@
+{
+ "status": "red",
+ "base": "5ab0a9d3",
+ "diagnostic": "TF-26 changed product identity was ignored",
+ "witness": "root:test_product_dependencies.ProductDependencies.test_product_symbol_identity_changes_are_not_ignored",
+ "source_run": "old-red.run.json",
+ "job_seconds": 0.10589620802784339,
+ "jobs": 16
+}
