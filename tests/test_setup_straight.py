@@ -44,6 +44,8 @@ class SetupStraightTests(SetupUpdateTests):
         self.send("\r")
         self.expect("Commit now")
         self.send("\r")
+        self.expect("Not now")  # E1 (decision 112 A): the login-start question, once
+        self.send("\x1b[B\r")  # Not now
         code = self.finish(timeout=90)
         return project, code, self.plain(self.transcript)
 
@@ -72,6 +74,8 @@ class SetupStraightTests(SetupUpdateTests):
         self.send("\r")
         self.expect("Commit now")  # commit stays asked
         self.send("\r")
+        self.expect("Not now")  # E1 (decision 112 A): the login-start question, once
+        self.send("\x1b[B\r")  # Not now
         code = self.finish(timeout=90)
         screen = self.plain(self.transcript)
         self.assertEqual(0, code, screen[-1500:])
@@ -108,6 +112,8 @@ class SetupStraightTests(SetupUpdateTests):
         import subprocess
         project = self.set_up_to_commit()
         self.send("\x1b[B\r")  # I will commit myself
+        self.expect("Not now")  # E1 (decision 112 A): the login-start question, once
+        self.send("\x1b[B\r")  # Not now
         # Not the exit status: an uncommitted install is not verified, which setup already counts as a
         # failure on every path (a leftover recorded in PLAN S4, not an S4 change).
         self.finish(timeout=90)
@@ -119,6 +125,8 @@ class SetupStraightTests(SetupUpdateTests):
     def test_S4_2_a_failed_step_in_set_up_offers_the_retry_menu_and_going_back_leaves_set_up(self):
         self.set_up_to_commit(FAKE_ATTEST_FAILS="1")
         self.send("\r")  # commit
+        self.expect("Not now")  # E1 (decision 112 A): the login-start question, once
+        self.send("\x1b[B\r")  # Not now
         self.expect("attest stub run 1")
         self.expect("Try again")  # the retry menu, not update mode's stop
         self.assertIn("Back to the main menu", self.screen)
@@ -285,6 +293,9 @@ class SetupStraightTests(SetupUpdateTests):
         self.expect("Update the install and walk through every step")
         self.send("\x1b[B\r")
         for wait in ("Continue", "Keep the existing configuration", "Install now", "Continue", "Register now", "Continue"):
+            if wait == "Continue" and "Register now" in self.plain(self.transcript):  # E1 (decision 112 A)
+                self.expect("Not now", timeout=60)  # the login-start question, once
+                self.send("\x1b[B\r")  # Not now
             self.expect(wait, timeout=60)
             self.send("\r")
         self.expect("Keep the current signature", timeout=90)
@@ -341,6 +352,8 @@ class SetupStraightTests(SetupUpdateTests):
         self.send("\r")
         self.expect("Commit now")
         self.send("\r")
+        self.expect("Not now")  # E1 (decision 112 A): the login-start question, once
+        self.send("\x1b[B\r")  # Not now
         self.expect("Create the profile")  # asked
         self.send("\x1b[B\r")  # Skip
         self.expect("No, not now")  # the commands rule, asked, refusal first
