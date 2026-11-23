@@ -494,7 +494,7 @@ class WithdrawAccountTests(WithdrawHarness):
         self.assertEqual(('released', 'claimed'), self.project_row(run_handle)[:2])
 
     def test_W3_withdrawal_first_the_claim_is_refused_and_the_run_never_launches(self):
-        release, seen = self.held_at(lambda driver, run: run.state == 'observing')
+        release, seen = self.held_at(lambda driver, run: run.state == 'recording_open')
         context, route_path, orchestration, run_handle = self.opened()
         dispatch = self.separate_dispatch(context, route_path, run_handle)
         self.wait_for(lambda: seen, seconds=30)
