@@ -505,17 +505,27 @@ class _Store:
 
     def save(self, rows=(), qs=(), label='A', verify=False):
         db = self.connect()
+        # Freeze expected values before any write/hook can affect the input row.
+        expected_row = json.loads(_json(rows[0])) if verify else None
+        def parts(row):
+            return {'events': row['effective'], 'old_contents': [e[1] for e in row['effective']],
+                    'new_contents': [e[2] for e in row['effective']], 'batch_digest': row['batch'][6]}
+        expected_parts = {key: _json(value) for key, value in parts(expected_row).items()} if verify else {}
+        def read_part(part):
+            try:
+                stored = [json.loads(value) for (value,) in db.execute('SELECT value FROM rows ORDER BY id').fetchall()]
+                row = next(row for row in stored if row['id'] == expected_row['id'])
+                return _json(parts(row)[part])
+            except (ValueError, KeyError, IndexError, TypeError, StopIteration) as error:
+                raise _Refusal('corrupt_history') from error
         try:
             for table, values in (('rows', rows), ('queue', qs)):
                 for value in values:
                     self.io('sqlite_write', lambda v=value, t=table: db.execute('INSERT OR REPLACE INTO ' + t + ' VALUES (?,?)', (v['id'], _json(v))),
                             self.path, mutating=True, scope='history')
             if verify:
-                r = rows[0]
-                for part, value in (('events', r['effective']), ('old_contents', [e[1] for e in r['effective']]),
-                                    ('new_contents', [e[2] for e in r['effective']]), ('batch_digest', r['batch'][6])):
-                    expected = _json(value)
-                    observed = self.io('sqlite_read', lambda: expected, self.path, part=part)
+                for part, expected in expected_parts.items():
+                    observed = self.io('sqlite_read', lambda part=part: read_part(part), self.path, part=part)
                     if observed != expected:
                         raise _Refusal('corrupt_history')
             self.flush_all()
@@ -596,9 +606,13 @@ def _stage(s, batch, effective):
 
 
 def _git(s, *args):
-    return s.io('git_read', lambda: subprocess.run(['git', '-C', str(s.project), *args],
-                capture_output=True, timeout=15, env=dict(os.environ, GIT_OPTIONAL_LOCKS='0', GIT_CONFIG_NOSYSTEM='1')).stdout,
-                s.project / '.git', argv=args)
+    def read():
+        result = subprocess.run(['git', '-C', str(s.project), *args], capture_output=True, timeout=15,
+                                env=dict(os.environ, GIT_OPTIONAL_LOCKS='0', GIT_CONFIG_NOSYSTEM='1'))
+        if result.returncode:
+            raise _Refusal('io')
+        return result.stdout
+    return s.io('git_read', read, s.project / '.git', argv=args)
 
 
 def _head(s):

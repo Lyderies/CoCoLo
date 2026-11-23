@@ -383,7 +383,8 @@
    "codex:tests.test_merge_library_contract.Contract.test_ml_1_binding_git_link",
    "codex:tests.test_merge_library_contract.Contract.test_ml_1_binding_manifest",
    "codex:tests.test_merge_library_contract.Contract.test_ml_1_history_tampered_row",
-   "codex:tests.test_merge_library_contract.Contract.test_ml_1_refusing_check"
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_refusing_check",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p07_V1_stored_row_is_verified_before_commit_A"
   ],
   "source": "tests/requirements/merge-library.json#ML-1",
   "statement": "a tampered base, manifest, digest, git link, history row or a refusing check is refused. Test: tamper each binding separately and force a refusing check."
@@ -513,6 +514,8 @@
    "codex:tests.test_merge_library_r2.RoundTwo.test_M6_land_cancel_validation_read_guard",
    "codex:tests.test_merge_library_r2.RoundTwo.test_M6_rollback_initial_read_guard",
    "codex:tests.test_merge_library_r2.RoundTwo.test_M6_undo_initial_read_guard",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p07_V2_failed_check_attr_is_not_empty_success",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p07_V2_failed_ls_files_is_not_empty_success",
    "codex:tests.test_merge_library_recovery_faults.Campaign.test_ml_12_fault_sweep_cleanup",
    "codex:tests.test_merge_library_recovery_faults.Campaign.test_ml_12_fault_sweep_recovery",
    "codex:tests.test_merge_library_recovery_faults.Campaign.test_ml_12_fault_sweep_reverse",
@@ -875,7 +878,9 @@
    "codex:tests.test_merge_library_mutations.MutationProofs.test_missing_A_flush_is_caught_by_post_crash_staging_contents",
    "codex:tests.test_merge_library_mutations.MutationProofs.test_private_location_guard_mutation_is_caught_by_ML30_forgery",
    "codex:tests.test_merge_library_mutations.MutationProofs.test_swallowed_EIO_landed_is_caught_by_the_single_end_state_check",
-   "codex:tests.test_merge_library_mutations.MutationProofs.test_third_history_commit_is_caught_by_ML6_order"
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_third_history_commit_is_caught_by_ML6_order",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p07_V2_failed_check_attr_is_not_empty_success",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p07_V2_failed_ls_files_is_not_empty_success"
   ],
   "source": "tests/requirements/merge-library.json#ML-30",
   "statement": "the history, ledger, signatures and approvals live outside the project, and nothing under `.cocolo/` is trusted for them. Test: a child with write access to `.cocolo/` forges history or approvals and is ignored; removing the location check lets the forgery land."
@@ -900,6 +905,7 @@
    "codex:tests.test_merge_library_contract.Contract.test_ml_5_history_events",
    "codex:tests.test_merge_library_contract.Contract.test_ml_5_history_new_contents",
    "codex:tests.test_merge_library_contract.Contract.test_ml_5_history_old_contents",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p07_V1_stored_row_is_verified_before_commit_A",
    "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_5_kill_every_pre_A_history_write"
   ],
   "source": "tests/requirements/merge-library.json#ML-5",
