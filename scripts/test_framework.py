@@ -70,7 +70,9 @@ def inventory_suite(suite, layers=None):
     """Called only inside a suite's discovery child, honoring its load_tests hooks."""
     found = {}
     root = Path(__file__).resolve().parents[1]
-    baseline_file = root / 'scripts/test-legacy-bound-values.json'
+    baseline_file = root / 'scripts/test-legacy-captured-values.json'
+    if not baseline_file.exists():
+        baseline_file = root / 'scripts/test-legacy-bound-values.json'
     if not baseline_file.exists():
         baseline_file = root / 'scripts/test-legacy-values.json'
     baseline = decode_json(baseline_file.read_text()) if baseline_file.exists() else {}

@@ -193,6 +193,7 @@ class GoldenTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.compare()
         (self.root / 'state.txt').write_text('landed\n')
+        (self.root / 'state.txt.requirement').write_text('TF-14\n')
         self.compare()
         with self.assertRaisesRegex(AssertionError, 'reverted'):
             self.compare('reverted\n')
