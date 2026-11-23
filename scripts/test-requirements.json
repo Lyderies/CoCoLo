@@ -965,6 +965,28 @@
   "source": "REQUIREMENTS-merge-review.md#ML-R91",
   "statement": "**ML-R91 \u2014 Recorded empty folder trees.** Owner decision 91=A: a folder that holds only other empty folders CoCoLo itself made counts as empty, provided there is nothing else inside and every folder matches the device/inode identity CoCoLo recorded. Foreign files, unrecorded folders, and replaced folder identities do not qualify. The two C-3 checks must enforce this rule without accepting foreign contents."
  },
+ "RSA3-1": {
+  "checks": [
+   "codex:tests.test_rsa_step3.OutstandingOwnerSignatureTests.test_RSA3_1_swept_owner_signature_returns_without_fault_and_is_forgotten"
+  ],
+  "source": "measurements/rsa-step3/requirements.md#RSA3-1",
+  "statement": "**RSA3-1 \u2014 Outstanding owner preparation.** Decision 87 F6: a swept owner-API reservation whose prepare signature work is still running refuses its late return without faulting claims, forgets its handle and releases capacity once."
+ },
+ "RSA3-2": {
+  "checks": [
+   "codex:tests.test_rsa_step3.RestoredDecisionTests.test_RSA3_2_crashed_and_lost_slots_restore_exactly_once"
+  ],
+  "source": "measurements/rsa-step3/requirements.md#RSA3-2",
+  "statement": "**RSA3-2 \u2014 Crashed-slot restore.** Decision 87 F5: back up and restore a project with a crashed or lost run_holds slot; consistency passes and slot accounting is preserved exactly."
+ },
+ "RSA3-3": {
+  "checks": [
+   "codex:tests.test_rsa_step3.LateCompletionTests.test_RSA3_3_ledger_local_late_completion_matches_owner_refusal",
+   "codex:tests.test_rsa_step3.LateCompletionTests.test_RSA3_3_owner_release_refuses_a_decided_slot"
+  ],
+  "source": "measurements/rsa-step3/requirements.md#RSA3-3",
+  "statement": "**RSA3-3 \u2014 Late-completion comparison, test only.** Decision 87 F2: compare ledger-local _release_active_capacity after a decision with release_capacity refusal; mark expectedFailure if the ledger-local path accepts. The owner decides any fix."
+ },
  "TERM-13": {
   "checks": [],
   "source": "PLAN-0.4.0-terminal.md section 4",
