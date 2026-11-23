@@ -19,13 +19,16 @@ class RoundTwo(unittest.TestCase):
         f=support.Fixture(); self.addCleanup(f.close); return f
 
     def test_M1_fsync_and_fullfsync_each_need_a_sample(self):
-        points=[(('sync',1),ml.IOCall('fsync','before','history')),(('full',1),ml.IOCall('fullfsync','before','history'))]
+        from generate_merge_samples import choose
+        signature=('full_flush','history','before','project/a',None,None,None)
+        points=[((signature,1),ml.IOCall('fsync','before','history')),((signature,2),ml.IOCall('fullfsync','before','history'))]
+        self.assertEqual({'fsync','fullfsync'}, {row['operation'] for row in choose(points,'real')}, 'M1 generator merged flush signatures')
         for lane in ('real','model'):
-            inventory={'samples':{lane:{'forward':[{'key':['sync',1]}]}}}
+            inventory={'samples':{lane:{'forward':[{'key':points[0][0]}]}}}
             with mock.patch.dict(os.environ,{'COCOLO_TEST_PROFILE':'ci'}), mock.patch.object(Path,'read_text',return_value=json.dumps(inventory)):
                 with self.assertRaisesRegex(AssertionError,'new persistence boundary.*fullfsync'):
                     support.sample_boundaries(points,lane=lane)
-            inventory['samples'][lane]['forward'].append({'key':['full',1]})
+            inventory['samples'][lane]['forward'].append({'key':points[1][0]})
             with mock.patch.dict(os.environ,{'COCOLO_TEST_PROFILE':'ci'}), mock.patch.object(Path,'read_text',return_value=json.dumps(inventory)):
                 self.assertEqual(points,support.sample_boundaries(points,lane=lane))
 
