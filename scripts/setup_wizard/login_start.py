@@ -60,11 +60,17 @@ def is_installed(home, kind: str | None) -> bool:
     return kind is not None and os.path.lexists(entry_path(home, kind))
 
 
+def _has_control(text) -> bool:
+    return any(ord(char) < 32 or ord(char) == 127 for char in str(text))
+
+
 def _command_problem(argv) -> str:
     """Why this command is not an installed collector's own, or nothing. Absolute paths only."""
     argv = list(argv)
     if not argv or not all(type(item) is str and item for item in argv):
         return "the collector command is empty"
+    if any(_has_control(item) for item in argv):
+        return "the collector command holds a line break or other control character"
     if not argv[0].startswith("/"):
         return "the collector command does not start with an absolute path to Python"
     if "learning-serve" not in argv[1:] or argv.index("learning-serve") < 2:
@@ -95,14 +101,14 @@ def render_plist(argv, log_dir) -> bytes:
 
 
 def _unit_word(word: str) -> str:
-    word = word.replace("%", "%%")
+    word = word.replace("%", "%%").replace("$", "$$")
     if re.fullmatch(r"[A-Za-z0-9_./=:+,@-]+", word):
         return word
     return '"' + word.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def render_unit(argv, log_dir) -> str:
-    log = str(Path(log_dir) / LOG_NAME)
+    log = str(Path(log_dir) / LOG_NAME).replace("%", "%%").replace("$", "$$")
     return (
         "[Unit]\n"
         "Description=CoCoLo collector (records run outcomes on this machine only)\n"
@@ -142,14 +148,40 @@ def _write_entry(path: Path, data: bytes) -> str:
     return ""
 
 
+def _link_problem(home, path: Path, log_dir) -> str:
+    """A symbolic link in the way: any folder between the home and the entry, or the log folder itself.
+    The home itself may be a link (many systems do that); nothing below it may be."""
+    home = Path(home)
+    folder = path.parent
+    while folder != home and home in folder.parents:
+        if folder.is_symlink():
+            return f"{folder} is a symbolic link, so nothing was written through it"
+        folder = folder.parent
+    if Path(log_dir).is_symlink():
+        return f"{log_dir} is a symbolic link, so nothing was written through it"
+    return ""
+
+
+def _read_old(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes() if os.path.lexists(path) else None
+    except OSError:
+        return None
+
+
 def install(home, kind: str | None, argv, log_dir, runner, *, uid: int) -> Result:
-    """Write the entry and load it. Nothing is changed when a check fails; a failed load removes the entry again."""
+    """Write the entry and load it. Nothing is changed when a check fails; when the load fails, a new entry
+    is removed again and an older working one is put back (and loaded again)."""
     if kind not in ("launchd", "systemd"):
         return Result(False, "this system has no login-start support (macOS and Linux only)")
-    problem = _command_problem(argv)
+    problem = _command_problem(argv) or ("the log folder has a line break or other control character"
+                                          if _has_control(log_dir) else "")
     if problem:
         return Result(False, problem)
     path = entry_path(home, kind)
+    problem = _link_problem(home, path, log_dir)
+    if problem:
+        return Result(False, problem)
     if os.path.lexists(path) and not stat.S_ISREG(os.lstat(path).st_mode):
         return Result(False, f"{path} already exists and is not a plain file, so it was left alone")
     try:
@@ -157,22 +189,36 @@ def install(home, kind: str | None, argv, log_dir, runner, *, uid: int) -> Resul
         os.chmod(log_dir, 0o700)
     except OSError as exc:
         return Result(False, f"the log folder could not be made ({exc.strerror or 'refused'})")
+    old = _read_old(path)
+    data = render_plist(argv, log_dir) if kind == "launchd" else render_unit(argv, log_dir).encode("utf-8")
+    reason = _write_entry(path, data)  # A new file renamed over the old one: the old stays until the swap.
+    if reason:
+        return Result(False, reason)
     if kind == "launchd":
-        reason = _write_entry(path, render_plist(argv, log_dir))
-        if reason:
-            return Result(False, reason)
         runner([LAUNCHCTL, "bootout", f"gui/{uid}/{LABEL}"])  # Replaces an older load; fine when none.
         loaded = runner([LAUNCHCTL, "bootstrap", f"gui/{uid}", str(path)]) == 0
     else:
-        reason = _write_entry(path, render_unit(argv, log_dir).encode("utf-8"))
-        if reason:
-            return Result(False, reason)
         loaded = (runner([SYSTEMCTL, "--user", "daemon-reload"]) == 0
-                  and runner([SYSTEMCTL, "--user", "enable", "--now", UNIT]) == 0)
-    if not loaded:
+                  and runner([SYSTEMCTL, "--user", "enable", "--now", UNIT]) == 0
+                  # enable --now leaves a running unit as it was; a changed command needs a restart.
+                  and (old is None or old == data or runner([SYSTEMCTL, "--user", "try-restart", UNIT]) == 0))
+    if loaded:
+        return Result(True)
+    if old is None:
         path.unlink(missing_ok=True)
+        if kind == "systemd":
+            runner([SYSTEMCTL, "--user", "daemon-reload"])
         return Result(False, "the system's login tool did not accept the entry, so it was removed again")
-    return Result(True)
+    if _write_entry(path, old):
+        return Result(False, "the system's login tool did not accept the new entry, and the earlier one could not "
+                             f"be put back; check {path}")
+    if kind == "launchd":
+        runner([LAUNCHCTL, "bootout", f"gui/{uid}/{LABEL}"])
+        runner([LAUNCHCTL, "bootstrap", f"gui/{uid}", str(path)])
+    else:
+        runner([SYSTEMCTL, "--user", "daemon-reload"])
+        runner([SYSTEMCTL, "--user", "try-restart", UNIT])
+    return Result(False, "the system's login tool did not accept the new entry, so the earlier one was kept")
 
 
 def remove(home, kind: str | None, runner, *, uid: int) -> Result:
@@ -257,7 +303,7 @@ def details(kind: str, home, argv, log_dir) -> list[str]:
 def offer(*, home, kind, answer_file, argv, log_dir, runner, uid: int, ask, show, configure: bool) -> str:
     """The question, once. ask(items) -> index of the chosen item (None when nobody can be asked); show(text)
     puts a line or paragraph on the screen. Returns what happened: installed, declined, answered, kept,
-    removed, left_off, failed, unsupported, no_place or not_asked."""
+    removed, left_off, failed, unsupported, no_place, no_command, not_remembered or not_asked."""
     if kind is None:
         show("Login start for the collector is not available here (macOS and Linux only).")
         return "unsupported"
@@ -268,40 +314,62 @@ def offer(*, home, kind, answer_file, argv, log_dir, runner, uid: int, ask, show
     on = is_installed(home, kind)
     if answer is not None and not configure:
         return "answered"
+    if not (configure and on):  # The collector command is checked before the owner is asked to agree to it.
+        problem = _command_problem(argv)
+        if problem:
+            show(f"Login start was not offered: {problem}.")
+            return "no_command"
     if ask is None:
         show("Login start was not asked about. Run ./setup.sh and choose Configure -> Configure step by step to decide.")
         return "not_asked"
 
-    def choose(items: list[str]) -> int:
+    def keep(value: str) -> bool:
+        """Remember the answer; when that fails, say so in plain words (the entry itself is already as reported)."""
+        if write_answer(answer_file, value):
+            return True
+        show("Login start is " + ("on" if value == "yes" else "off") + ", but setup could not keep your answer in "
+             f"{answer_file}, so it may ask again.")
+        return False
+
+    def choose(items: list[str]) -> int | None:
         while True:
             pick = ask(items)
-            if pick != 2:
-                return pick
-            for line in details(kind, home, argv, log_dir):
-                show(line)
+            if pick == 2:
+                for line in details(kind, home, argv, log_dir):
+                    show(line)
+                continue
+            return pick if pick in (0, 1) else None  # Cancelled or unexpected: nothing is decided.
+
+    def cancelled() -> str:
+        show("No answer was given, so login start was left as it was.")
+        return "not_asked"
 
     if configure and on:
         show("Login start is on: the collector starts when you log in and restarts after a crash.")
-        if choose(["Keep it", "Remove it", "Show details"]) == 0:
-            write_answer(answer_file, "yes")
-            return "kept"
+        pick = choose(["Keep it", "Remove it", "Show details"])
+        if pick is None:
+            return cancelled()
+        if pick == 0:
+            return "kept" if keep("yes") else "not_remembered"
         result = remove(home, kind, runner, uid=uid)
         if not result.ok:
             show(result.reason)
             return "failed"
-        write_answer(answer_file, "no")
-        return "removed"
+        return "removed" if keep("no") else "not_remembered"
     show(REASON)
     if configure and answer is not None:
         items = ["Turn it on", "Leave it off", "Show details"]
     else:
         items = ["Yes, start the collector when I log in", "Not now", "Show details"]
-    if choose(items) != 0:
-        write_answer(answer_file, "no")
+    pick = choose(items)
+    if pick is None:
+        return cancelled()
+    if pick != 0:
+        if not keep("no"):
+            return "not_remembered"
         return "left_off" if configure and answer is not None else "declined"
     result = install(home, kind, argv, log_dir, runner, uid=uid)
     if not result.ok:
         show(result.reason)
         return "failed"
-    write_answer(answer_file, "yes")
-    return "installed"
+    return "installed" if keep("yes") else "not_remembered"

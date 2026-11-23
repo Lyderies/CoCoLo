@@ -107,7 +107,7 @@ class InstallTests(TempHome):
         (folder / "com.cocolo.collector.plist").symlink_to(self.home / "elsewhere")
         relative = ARGV[:6] + ["cli.py"] + ARGV[7:]
         cases = [("launchd", ["python3"] + ARGV[1:]), ("launchd", relative), (None, ARGV), ("launchd", []),
-                 ("launchd", ARGV), ("launchd", ARGV[:-1] + ["/srv/x\ny"])]
+                 ("launchd", ARGV)]  # the last: the symlinked entry path made above
         for kind, argv in cases:
             before = tree(self.home)
             result = login_start.install(self.home, kind, argv, self.logs, self.runner, uid=501)

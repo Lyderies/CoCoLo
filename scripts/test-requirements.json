@@ -136,6 +136,9 @@
  },
  "E1-1": {
   "checks": [
+   "root:test_login_start.InstallTests.test_E1_1_a_failed_reinstall_keeps_the_working_entry_launchd",
+   "root:test_login_start.InstallTests.test_E1_1_a_failed_reinstall_keeps_the_working_entry_systemd",
+   "root:test_login_start.InstallTests.test_E1_1_a_first_failed_install_leaves_no_entry",
    "root:test_login_start.OfferTests.test_E1_1_a_failed_install_is_reported_and_not_remembered",
    "root:test_login_start.OfferTests.test_E1_1_asks_once_with_reason_pick_list_and_details_and_installs_only_on_yes"
   ],
@@ -151,6 +154,8 @@
  },
  "E1-3": {
   "checks": [
+   "root:test_login_start.InstallTests.test_E1_3_a_changed_unit_is_restarted_after_enable_and_an_unchanged_or_new_one_is_not",
+   "root:test_login_start.InstallTests.test_E1_3_dollar_percent_and_newline_cannot_change_the_unit",
    "root:test_login_start.InstallTests.test_E1_3_systemd_unit_and_enable"
   ],
   "source": "measurements/e1/requirements.md#E1-3",
@@ -159,6 +164,8 @@
  "E1-4": {
   "checks": [
    "root:test_login_start.AnswerTests.test_E1_4_answer_round_trip_and_refusals",
+   "root:test_login_start.OfferTests.test_E1_4_a_cancelled_question_changes_and_remembers_nothing",
+   "root:test_login_start.OfferTests.test_E1_4_a_failed_answer_write_is_reported_not_claimed_as_success",
    "root:test_login_start.OfferTests.test_E1_4_answered_is_not_asked_again",
    "root:test_login_start.OfferTests.test_E1_4_no_place_to_keep_the_answer_means_no_question"
   ],
@@ -176,7 +183,10 @@
  },
  "E1-6": {
   "checks": [
+   "root:test_login_start.InstallTests.test_E1_6_a_symlinked_folder_above_the_entry_is_refused_and_nothing_changes",
+   "root:test_login_start.InstallTests.test_E1_6_a_symlinked_log_folder_is_refused_and_not_changed",
    "root:test_login_start.InstallTests.test_E1_6_refusals_change_nothing",
+   "root:test_login_start.OfferTests.test_E1_6_a_missing_collector_command_is_checked_before_the_owner_is_asked",
    "root:test_login_start.OfferTests.test_E1_6_unsupported_system_is_not_asked"
   ],
   "source": "measurements/e1/requirements.md#E1-6",
@@ -184,6 +194,9 @@
  },
  "E1-7": {
   "checks": [
+   "root:test_login_start.WiringTests.test_E1_7_an_update_never_asks_and_an_answers_file_can_answer",
+   "root:test_login_start.WiringTests.test_E1_7_configure_walk_through_offers_keep_or_remove_and_the_first_time_asks_yes_or_not_now",
+   "root:test_login_start.WiringTests.test_E1_7_set_up_asks_once_on_the_first_run_and_not_on_a_re_run",
    "root:test_login_start.WiringTests.test_E1_7_setup_offers_login_start_after_the_collector_is_ready"
   ],
   "source": "measurements/e1/requirements.md#E1-7",
