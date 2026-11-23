@@ -97,6 +97,7 @@ class ReviewSeams(unittest.TestCase):
         self.assertIn('removed', {p.path for p in report.paths})
         self.assertTrue(ml.history(f.project, f.private)[-1].contents_kept)
 
+    @__import__('test_framework').requirements('TF-18', 'TF-19')
     def test_r2_M4_each_missing_provenance_field_breaks_generated_EIO_proof(self):
         from tests import test_merge_library_machine as generated
         for field in ('call', 'fault'):

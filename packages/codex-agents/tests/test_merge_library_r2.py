@@ -9,15 +9,16 @@ from pathlib import Path
 from unittest import mock
 from codex_agents import merge_library as ml
 from tests import merge_library_support as support
+from test_framework import requirements
 
 
 class RoundTwo(unittest.TestCase):
-    __requirements__ = ('TF-18','TF-19','ML-12','ML-19','ML-20','ML-23')
     __why_not_scenario__ = 'Independent corrupt-state controls and exact injected boundaries are required to verify recovery and the oracle.'
 
     def fixture(self):
         f=support.Fixture(); self.addCleanup(f.close); return f
 
+    @requirements('TF-18')
     def test_M1_fsync_and_fullfsync_each_need_a_sample(self):
         from generate_merge_samples import choose
         signature=('full_flush','history','before','project/a',None,None,None)
@@ -32,6 +33,7 @@ class RoundTwo(unittest.TestCase):
             with mock.patch.dict(os.environ,{'COCOLO_TEST_PROFILE':'ci'}), mock.patch.object(Path,'read_text',return_value=json.dumps(inventory)):
                 self.assertEqual(points,support.sample_boundaries(points,lane=lane))
 
+    @requirements('TF-19', 'ML-23')
     def test_M3_regular_file_cannot_be_an_emptied_folder(self):
         f=self.fixture(); batch=f.batch({'a.txt':b'child'}); support.put(f.project/'a.txt',b'child')
         info=(f.project/'z.txt').stat()
@@ -46,6 +48,7 @@ class RoundTwo(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError,'EL must be a directory'):
                 support.check_end_state(self,f,batch,report,read_history=lambda:(row,))
 
+    @requirements('ML-12')
     def test_M5_close_error_after_release_must_not_close_reused_descriptor(self):
         f=self.fixture(); store=ml._Store(f.project,f.private); self.addCleanup(store.close)
         fd=os.open(f.project,os.O_RDONLY); real_close=os.close; calls=[]; replacement=[]
@@ -71,6 +74,7 @@ class RoundTwo(unittest.TestCase):
         self.assertEqual([boundary],fired,'M6 wrong or missing read boundary')
         self.assertEqual(('unknown','io',False),(report.state,report.reason,report.recorded),boundary)
 
+    @requirements('TF-19', 'ML-12')
     def test_M6_rollback_initial_read_guard(self):
         f=self.fixture(); batch=f.batch(); ml._seed_history(f.project,f.private,(ml.HistoryRow(1,batch,'applying'),))
         fired=[]
@@ -81,6 +85,7 @@ class RoundTwo(unittest.TestCase):
         self.unknown(report,fired,'rollback initial rows')
         self.assertEqual(f.before,support.tree(f.project))
 
+    @requirements('TF-19', 'ML-12')
     def test_M6_undo_initial_read_guard(self):
         f=self.fixture(); landed=f.land(f.batch()); before=support.tree(f.project); fired=[]
         def unreadable(call):
@@ -89,6 +94,7 @@ class RoundTwo(unittest.TestCase):
         report=ml.undo(f.project,f.private,landed.batch_no,hook=unreadable)
         self.unknown(report,fired,'undo initial rows'); self.assertEqual(before,support.tree(f.project))
 
+    @requirements('TF-19', 'ML-12')
     def test_M6_cleanup_initial_read_guard(self):
         f=self.fixture(); f.land(f.batch()); before=support.tree(f.project); fired=[]
         def unreadable(call):
@@ -97,6 +103,7 @@ class RoundTwo(unittest.TestCase):
         reports=ml.cleanup(f.project,f.private,hook=unreadable)
         self.assertEqual(1,len(reports)); self.unknown(reports[0],fired,'cleanup initial rows'); self.assertEqual(before,support.tree(f.project))
 
+    @requirements('TF-19', 'ML-12')
     def test_M6_land_IO_handler_read_guard(self):
         f=self.fixture(); batch=f.batch(); original=ml._Store.rows; fired=[]
         def rows(store):
@@ -110,6 +117,7 @@ class RoundTwo(unittest.TestCase):
         self.assertEqual(['exchange','land handler rows'],fired,'M6 wrong handler boundary')
         self.assertEqual(('unknown','io',False),(report.state,report.reason,report.recorded))
 
+    @requirements('TF-19', 'ML-12')
     def test_M6_land_cancel_validation_read_guard(self):
         f=self.fixture(); batch=f.batch(); original_rows=ml._Store.rows; original_queue=ml._Store.qrows; fired=[]
         def queue(store):
@@ -124,6 +132,7 @@ class RoundTwo(unittest.TestCase):
         with mock.patch.object(ml._Store,'rows',rows),mock.patch.object(ml._Store,'qrows',queue): report=f.land(batch)
         self.unknown(report,fired,'land cancelled validation rows')
 
+    @requirements('TF-19', 'ML-12')
     def test_M6_cleanup_durable_reread_guard_continues_later_rows(self):
         f=self.fixture(); f.land(f.batch({'a.txt':b'one'})); f.land(f.batch({'second':b'two'},'second'))
         original=ml._Store.rows; clean=ml._clean_row; fired=[]; cleaned=[]
@@ -142,6 +151,7 @@ class RoundTwo(unittest.TestCase):
         self.assertEqual(('unknown','io',False),(reports[0].state,reports[0].reason,reports[0].recorded))
         self.assertEqual('landed',reports[1].state)
 
+    @requirements('TF-19', 'ML-12')
     def test_M6_applying_cancel_enters_putback_and_terminal_retry_refuses(self):
         f=self.fixture(); batch=f.batch(); ticket=ml.enqueue(f.project,f.private,batch,policy=f.policy)
         ml._seed_history(f.project,f.private,(ml.HistoryRow(1,batch,'applying'),))
