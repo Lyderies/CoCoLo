@@ -292,6 +292,7 @@
  "root:test_install": "scenario",
  "root:test_install_claude_upgrade": "scenario",
  "root:test_install_report_validation": "scenario",
+ "root:test_login_start": "scenario",
  "root:test_measure_test_behaviour": "unit",
  "root:test_measure_test_behaviour_probe": "scenario",
  "root:test_owner_tool_bounds": "scenario",

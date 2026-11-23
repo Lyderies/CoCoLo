@@ -134,6 +134,61 @@
   "source": "PLAN-0.4.0-terminal.md section 9",
   "statement": "Health. Check: health.get gives each finding with a plain reason code and text."
  },
+ "E1-1": {
+  "checks": [
+   "root:test_login_start.OfferTests.test_E1_1_a_failed_install_is_reported_and_not_remembered",
+   "root:test_login_start.OfferTests.test_E1_1_asks_once_with_reason_pick_list_and_details_and_installs_only_on_yes"
+  ],
+  "source": "measurements/e1/requirements.md#E1-1",
+  "statement": "**E1-1 \u2014 Consent first.** RS-11, decision 90.11 A. Setup asks once, in plain words with the real reason, with a pick-list (yes / not now) and a details view, before the collector gets a login-start entry. Nothing is written or run without a yes; not now writes and runs nothing; a failed install is reported and not remembered. Tests: tests.test_login_start.OfferTests.test_E1_1_asks_once_with_reason_pick_list_and_details_and_installs_only_on_yes, tests.test_login_start.OfferTests.test_E1_1_a_failed_install_is_reported_and_not_remembered."
+ },
+ "E1-2": {
+  "checks": [
+   "root:test_login_start.InstallTests.test_E1_2_launchd_plist_and_load"
+  ],
+  "source": "measurements/e1/requirements.md#E1-2",
+  "statement": "**E1-2 \u2014 macOS entry.** A launchd user agent in the account's LaunchAgents folder runs the installed collector command (absolute paths, isolated Python, learning-serve) at login, restarts it after a crash with a throttle (KeepAlive on failure, ThrottleInterval), logs to the CoCoLo log folder, and holds no secret. Loaded through an injected runner (launchctl bootstrap), never the real one in tests. Test: tests.test_login_start.InstallTests.test_E1_2_launchd_plist_and_load."
+ },
+ "E1-3": {
+  "checks": [
+   "root:test_login_start.InstallTests.test_E1_3_systemd_unit_and_enable"
+  ],
+  "source": "measurements/e1/requirements.md#E1-3",
+  "statement": "**E1-3 \u2014 Linux entry.** A systemd user unit runs the same command, with Restart=on-failure, RestartSec and StartLimit back-off, logs to the CoCoLo log folder, WantedBy=default.target, and no secret; enabled through the injected runner (systemctl --user). Test: tests.test_login_start.InstallTests.test_E1_3_systemd_unit_and_enable."
+ },
+ "E1-4": {
+  "checks": [
+   "root:test_login_start.AnswerTests.test_E1_4_answer_round_trip_and_refusals",
+   "root:test_login_start.OfferTests.test_E1_4_answered_is_not_asked_again",
+   "root:test_login_start.OfferTests.test_E1_4_no_place_to_keep_the_answer_means_no_question"
+  ],
+  "source": "measurements/e1/requirements.md#E1-4",
+  "statement": "**E1-4 \u2014 Ask once.** The answer (yes or no) is kept in the private installer folder beside the project list. A re-run of setup does not ask again; with no private place to keep the answer, setup does not ask and says so; an update never asks. Tests: tests.test_login_start.OfferTests.test_E1_4_answered_is_not_asked_again, tests.test_login_start.OfferTests.test_E1_4_no_place_to_keep_the_answer_means_no_question, tests.test_login_start.AnswerTests.test_E1_4_answer_round_trip_and_refusals."
+ },
+ "E1-5": {
+  "checks": [
+   "root:test_login_start.OfferTests.test_E1_5_configure_offers_remove_when_on_and_turn_on_when_off",
+   "root:test_login_start.RemoveTests.test_E1_5_remove_tolerates_missing_file_and_failed_unload",
+   "root:test_login_start.RemoveTests.test_E1_5_remove_unloads_and_deletes"
+  ],
+  "source": "measurements/e1/requirements.md#E1-5",
+  "statement": "**E1-5 \u2014 Removal.** Removing unloads the entry through the runner, deletes its file, records no, and works when the file is already gone or the unload fails. Offered under Configure when the entry is on. Tests: tests.test_login_start.RemoveTests.test_E1_5_remove_unloads_and_deletes, tests.test_login_start.RemoveTests.test_E1_5_remove_tolerates_missing_file_and_failed_unload, tests.test_login_start.OfferTests.test_E1_5_configure_offers_remove_when_on_and_turn_on_when_off."
+ },
+ "E1-6": {
+  "checks": [
+   "root:test_login_start.InstallTests.test_E1_6_refusals_change_nothing",
+   "root:test_login_start.OfferTests.test_E1_6_unsupported_system_is_not_asked"
+  ],
+  "source": "measurements/e1/requirements.md#E1-6",
+  "statement": "**E1-6 \u2014 Refusals.** A relative command path, a symlinked entry path or an unsupported system is refused with a plain reason and changes nothing. Tests: tests.test_login_start.InstallTests.test_E1_6_refusals_change_nothing, tests.test_login_start.OfferTests.test_E1_6_unsupported_system_is_not_asked."
+ },
+ "E1-7": {
+  "checks": [
+   "root:test_login_start.WiringTests.test_E1_7_setup_offers_login_start_after_the_collector_is_ready"
+  ],
+  "source": "measurements/e1/requirements.md#E1-7",
+  "statement": "**E1-7 \u2014 Wired into setup.** The collector step offers login start after the collector is ready, in setup (an update never asks), through the audited terminal runner; the existing Configure menu is unchanged. Test: tests.test_login_start.WiringTests.test_E1_7_setup_offers_login_start_after_the_collector_is_ready."
+ },
  "G1": {
   "checks": [],
   "source": "PLAN-0.4.0.md T7",
