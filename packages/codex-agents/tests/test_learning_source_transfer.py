@@ -193,7 +193,8 @@ class LearningSourceTransferTests(unittest.TestCase):
         self.old_rows = {n: rows for n, rows in self.target_rows().items()
                          if n not in archive.SOURCE_COLUMNS and n not in ACTIVATION_COLUMNS
                          and n not in history.REGISTERED_RUN_COLUMNS
-                         and n not in history.PROJECT_HOLDS_COLUMNS}  # (requirement) SB: schema 18
+                         and n not in history.PROJECT_HOLDS_COLUMNS  # (requirement) SB: schema 18
+                         and n != 'project_result_recorders'}  # schema20 (B2, decision 114.1 A)
         directory = Path(self.fixture.temporary.name) / 'old14'
         directory.mkdir(mode=0o700)
         database = directory / 'history.sqlite3'

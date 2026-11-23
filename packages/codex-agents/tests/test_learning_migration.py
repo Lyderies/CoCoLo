@@ -412,7 +412,7 @@ class ActivationSchemaTests(unittest.TestCase):
             ProjectHistory(directory, project)
         store = ProjectHistory(directory, project, allow_schema_upgrade=True)
         try:
-            self.assertEqual(19, store._connection.execute("PRAGMA user_version").fetchone()[0])  # (requirement) SB: schema 19
+            self.assertEqual(20, store._connection.execute("PRAGMA user_version").fetchone()[0])  # (requirement) SB: schema 20
             self.assertEqual([], store._connection.execute("SELECT * FROM project_learning_activation").fetchall())
             self.assertEqual((7, 3), tuple(store._connection.execute(
                 "SELECT next_source_sequence,next_delivery_sequence FROM history_identity").fetchone()))

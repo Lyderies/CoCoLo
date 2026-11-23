@@ -23,6 +23,7 @@ def legacy_project_holds_layout(store):
     for name in SCHEMA_18_TABLES:
         store._connection.execute('DROP TABLE ' + name)
     store._connection.execute('DROP INDEX IF EXISTS project_registered_runs_run')  # schema19 (B3), on a table older formats keep
+    store._connection.execute('DROP TABLE IF EXISTS project_result_recorders')  # schema20 (B2, decision 114.1 A)
 
 
 def legacy_registered_run_layout(store):
