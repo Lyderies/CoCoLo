@@ -16,7 +16,6 @@ import parallel_tests as runner
 
 
 class RoundTwo(unittest.TestCase):
-    __requirements__ = ('TF-4', 'TF-5', 'TF-7', 'TF-8', 'TF-9', 'TF-14')
     __why_not_scenario__ = 'Controlled corrupt metadata and dependency graphs must be rejected before product scenarios can run.'
 
     def setUp(self):
@@ -31,6 +30,7 @@ class RoundTwo(unittest.TestCase):
         exec(compile(source, str(path), 'exec'), module.__dict__)
         return module
 
+    @fw.requirements('TF-7')
     def test_M1_unrelated_source_cannot_resolve_a_specific_dependency(self):
         unrelated = self.root / 'unrelated.py'; unrelated.write_text('VALUE = 1\n')
         sources = {
@@ -45,6 +45,7 @@ class RoundTwo(unittest.TestCase):
                 self.assertIsNone(fw.dependency_fingerprint(case, source_dependencies=(unrelated,)), 'unrelated source restored ' + kind + ' eligibility')
                 self.assertIsNotNone(fw.dependency_fingerprint(case, source_dependencies=(module.__file__,)))
 
+    @fw.requirements('TF-7')
     def test_N1_same_basename_dependencies_both_contribute(self):
         module = self.module('test_files', 'import unittest\nclass Case(unittest.TestCase):\n    def test_value(self): self.assertEqual(1,1)\n')
         paths = [self.root / part / 'fixture.py' for part in ('a','b')]
@@ -57,6 +58,7 @@ class RoundTwo(unittest.TestCase):
             path.write_text('VALUE = 1\n')
             self.assertEqual(initial, fingerprint())
 
+    @fw.requirements('TF-14')
     def test_M2_qualified_and_renamed_imports_retain_golden_provenance(self):
         (self.root / 'fixtures.py').write_text('from pathlib import Path\nGOLDEN_PATH = Path("goldens/result")\nEXPECTED = GOLDEN_PATH\nORDINARY = Path("input.txt")\n')
         for source in ('import fixtures\nactual = fixtures.GOLDEN_PATH.read_text()',
@@ -66,6 +68,7 @@ class RoundTwo(unittest.TestCase):
             self.assertTrue(any('direct golden' in e for e in errors), 'imported golden read escaped: ' + source)
         self.assertEqual([], fw.golden_bypasses('from fixtures import ORDINARY\nactual = ORDINARY.read_text()', filename=self.root/'test_consumer.py'))
 
+    @fw.requirements('TF-8', 'TF-9')
     def test_M3_no_report_or_empty_plan_cannot_authorize_retirement(self):
         row = dict(suite='root', unit='m#0', seconds=.1, names=['m.a'], returncode=0)
         options = dict(layers={'root:m':'unit'}, stages={'root:m':'unit'}, jobs=16, elapsed=.1, selection=['root:m'], budget_debt={'modules':{'root:m':10}})
@@ -85,6 +88,7 @@ class RoundTwo(unittest.TestCase):
             records.append(fw.measurements([row], layers, stages, jobs=16, elapsed=.1, selection=['root:'+module], catalogue=catalogue, part=part, invocation_id='r2', expected_fragments=plan))
         return records
 
+    @fw.requirements('TF-5', 'TF-9')
     def test_M4_real_gate_rejects_not_run_failed_and_incomplete_evidence(self):
         records=self.records()
         self.assertEqual({'TF-5':'passed'}, fw.combine_run_records(records)['requirements'])
@@ -101,17 +105,20 @@ class RoundTwo(unittest.TestCase):
         altered=copy.deepcopy(records[0]); altered['workers'][0]['outcomes'].clear(); Path(paths[0]).write_text(json.dumps(altered))
         self.assertEqual(1,runner.main(['--requirement-gate',*paths]), 'real CLI accepted missing requirement outcome')
 
+    @fw.requirements('TF-5', 'TF-9')
     def test_M4_caller_cannot_accept_failure_bearing_combiner_result(self):
         path=self.root/'record.json'; path.write_text('{}')
         for status in ('not_run','failed'):
             with mock.patch.object(fw,'combine_run_records',return_value={'requirements':{'TF-5':status}}):
                 self.assertEqual(1,runner.main(['--requirement-gate',str(path)]), 'caller accepted '+status+' requirement report')
 
+    @fw.requirements('TF-14')
     def test_M2_function_local_import_keeps_golden_provenance(self):
         (self.root/'fixtures.py').write_text('from pathlib import Path\nEXPECTED = Path("goldens/result")\n')
         source='def test_output():\n    from fixtures import EXPECTED as reference\n    return reference.read_text()\n'
         self.assertTrue(fw.golden_bypasses(source,filename=self.root/'test_consumer.py'), 'M2 function-local imported golden escaped')
 
+    @fw.requirements('TF-14')
     def test_M2_package_import_keeps_golden_provenance(self):
         (self.root/'reference_data').mkdir()
         (self.root/'reference_data/__init__.py').write_text('from pathlib import Path\nEXPECTED = Path("goldens/result")\n')
