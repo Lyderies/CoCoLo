@@ -81,7 +81,8 @@ class ReleaseBookkeeping(unittest.TestCase):
         overwrite=subprocess.run(command+['0.8.49'],cwd=ROOT,capture_output=True,text=True)
         self.assertEqual(1,overwrite.returncode);self.assertIn('immutable binding already exists',overwrite.stderr)
         self.assertEqual(original,path.read_bytes())
-        invalid=subprocess.run(command+['0.8.99'],cwd=ROOT,capture_output=True,text=True)
+        invalid_command=command.copy();invalid_command[4]='9e095c4c'  # Current admitted pre-bump files.
+        invalid=subprocess.run(invalid_command+['0.8.99'],cwd=ROOT,capture_output=True,text=True)
         self.assertEqual(1,invalid.returncode);self.assertIn('source version',invalid.stderr)
         self.assertFalse((ROOT/'scripts/test-release-bindings/0.8.99.json').exists())
 
