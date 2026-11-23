@@ -143,3 +143,46 @@ class RoundThree(unittest.TestCase):
                 contract.bounded_concurrency(lambda:threading.Event().wait(60),timeout=.03)
         self.assertEqual(1,len(children))
         with self.assertRaises(ChildProcessError):os.waitpid(children[0],os.WNOHANG)
+
+    @requirements('TF-13','ML-17')
+    def test_p10_diagnostic_failure_cannot_escape_child_to_caller(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from tests import test_merge_library_contract as contract
+        parent_pid = os.getpid()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_text = Path.write_text
+            def succeeds():
+                write_text(root / 'successful-action', str(os.getpid()))
+            contract.bounded_concurrency(succeeds, timeout=2)
+            self.assertNotEqual(str(parent_pid), (root / 'successful-action').read_text())
+            def fails():
+                write_text(root / 'failed-action', str(os.getpid()))
+                raise RuntimeError('p10 intended action failure')
+            with self.assertRaisesRegex(AssertionError, 'p10 intended action failure'):
+                contract.bounded_concurrency(fails, timeout=2)
+            def failed_diagnostic(path, *args, **kwargs):
+                if path.name == 'error':
+                    write_text(root / 'diagnostic-attempted', str(os.getpid()))
+                    raise OSError('p10 intended diagnostic failure')
+                return write_text(path, *args, **kwargs)
+            caught = None
+            try:
+                with mock.patch.object(Path, 'write_text', failed_diagnostic):
+                    contract.bounded_concurrency(fails, timeout=2)
+            except BaseException as error:
+                if os.getpid() == parent_pid:
+                    caught = error
+            finally:
+                # Contain the old helper's bug inside this witness: a child that
+                # reaches its caller records the escape and cannot run later tests.
+                if os.getpid() != parent_pid:
+                    write_text(root / 'escaped-caller', 'child reached caller')
+                    os._exit(91)
+            self.assertNotEqual(str(parent_pid), (root / 'failed-action').read_text())
+            self.assertEqual((root / 'failed-action').read_text(), (root / 'diagnostic-attempted').read_text())
+            self.assertFalse((root / 'escaped-caller').exists(), 'p10 diagnostic failure escaped child into caller')
+            self.assertIsInstance(caught, AssertionError)
+            self.assertIn('sealer child failed:', str(caught))
