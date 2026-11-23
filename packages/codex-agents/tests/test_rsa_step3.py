@@ -164,6 +164,10 @@ class LedgerLocalLateCompletionTests(unittest.TestCase):
                 case.ledger._clock_ms(), case.ledger._capacity_clock_reference())
         before = tuple(case.ledger._connection.execute(
             'SELECT released_at_ms,release_digest FROM active_run_capacity').fetchone())
+        decision_query = (
+            "SELECT a.released_at_ms,a.release_digest,r.release_kind FROM active_run_capacity a "
+            "JOIN run_holds r ON r.kind='run_slot' AND r.identity=a.handle_digest")
+        self.decision_before = tuple(case.ledger._connection.execute(decision_query).fetchone())
         refused = False
         try:
             reply = case.ledger._release_active_capacity(ticket)
@@ -177,11 +181,15 @@ class LedgerLocalLateCompletionTests(unittest.TestCase):
             self.assertEqual(before, tuple(case.ledger._connection.execute(
                 'SELECT released_at_ms,release_digest FROM active_run_capacity').fetchone()))
         self.refused = refused
+        self.decision_after = tuple(case.ledger._connection.execute(decision_query).fetchone())
+        self.receipts = case.ledger._connection.execute(
+            'SELECT receipt_digest FROM capacity_completions WHERE receipt_digest IS NOT NULL').fetchall()
 
-    @requirements('RSA3-3', why_not_scenario='Ledger-local transaction edge with synthetic cleaned registry custody: compare the durable late-release rule; no claim of process containment proof.')
-    @unittest.expectedFailure  # F2: ledger-local release accepts a decided slot; owner decides the fix.
-    def test_RSA3_3_ledger_local_late_completion_matches_owner_refusal(self):
-        self.assertTrue(self.refused, 'ledger-local late completion accepted after crashed decision; owner release_capacity refuses claim_cleanup_conflict')
+    @requirements('RSA3-3', why_not_scenario='Ledger-local transaction edge with synthetic cleaned registry custody: late completion is kept by design per RS-A-2 / decision 106b; no claim of process containment proof.')
+    def test_RSA3_3_ledger_local_late_completion_is_kept_by_design(self):
+        self.assertFalse(self.refused)
+        self.assertEqual(self.decision_before, self.decision_after)
+        self.assertEqual(1, len(self.receipts))
 
 
 class OwnerSignatureQueryTests(unittest.TestCase):

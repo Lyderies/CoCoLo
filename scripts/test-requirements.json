@@ -982,11 +982,11 @@
  },
  "RSA3-3": {
   "checks": [
-   "codex:tests.test_rsa_step3.LedgerLocalLateCompletionTests.test_RSA3_3_ledger_local_late_completion_matches_owner_refusal",
-   "codex:tests.test_rsa_step3.LateCompletionTests.test_RSA3_3_owner_release_refuses_a_decided_slot"
+   "codex:tests.test_rsa_step3.LateCompletionTests.test_RSA3_3_owner_release_refuses_a_decided_slot",
+   "codex:tests.test_rsa_step3.LedgerLocalLateCompletionTests.test_RSA3_3_ledger_local_late_completion_is_kept_by_design"
   ],
   "source": "measurements/rsa-step3/requirements.md#RSA3-3",
-  "statement": "**RSA3-3 \u2014 Late-completion comparison, test only.** Decision 87 F2: compare ledger-local _release_active_capacity after a decision with release_capacity refusal; mark expectedFailure if the ledger-local path accepts. The owner decides any fix."
+  "statement": "**RSA3-3 \u2014 Late-completion comparison, test only.** ledger-local and account releases differ by design on a decided slot (RS-A-2, decision 106b)."
  },
  "RSA3-4": {
   "checks": [
