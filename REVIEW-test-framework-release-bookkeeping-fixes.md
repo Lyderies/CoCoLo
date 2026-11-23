@@ -26,3 +26,62 @@ The new invalid-source CLI control originally used an obsolete pre-bump state an
 Procedure and exact command are in TESTING-framework.md. Routine bumps append one source-verified record, change the two matching counts and canonical annotations, then run `python -B scripts/rebind_release_bookkeeping.py --from <trusted-pre-bump> --source <previous-installed-source> --previous-release <version>` using the prepared pinned environment. The command refuses overwrite and creates a new immutable release-named file. New executable pins or unrelated changes require ordinary proof review.
 
 The authorized full run and its four reporting classes follow below. No installs, pushes, control-project edits or general cleanup were performed.
+
+## Single authorized full run
+
+Revision `65ca8c20` on feat/merge-library; command in `measurements/test-framework/release-bookkeeping/full-provenance.json`. Exact trusted base `b531844030fa619c1f62ddd6c092ebc2ea4fca38`; prepared hash-pinned environment, Python 3.14.7/macOS; **16 default jobs, 509.456003 s elapsed, 4825.323536 job-seconds, 396 units, 6201 tests**. Flat timings: `full-timings.json`; full structured record: `full.run.json` in the same evidence directory. Exit 1 is preserved. Exactly one full suite was run; subsequent runs select only the affected framework module.
+
+### 1. Failed units — one unexpected failure remains open
+
+| Unit | Cause / disposition |
+|---|---|
+| `root:test_e2e_requirements` | Expected: 80 missing step-4 lifecycle checks. |
+| `root:test_test_framework_guards` | Unexpected: `RunnerIntegrationTests.test_review_B3_runner_reaps_disabled_watchdog_with_diagnostics` received zero nested worker records and raised `IndexError` at original line 466. Its nested runner output was captured but not printed, so the reason for zero workers is not recoverable from the saved full-run log. No cause is asserted without evidence. |
+
+The latter unit passes in an affected rerun (**19.177335 job-seconds**) with every original assertion intact and one additional cardinality assertion that includes the captured nested runner output on failure. Fifty identical probes also pass on the framework worktree (**49.164339 job-seconds**) and the actual merge-library worktree (**49.380317 job-seconds**). Both repeated runs retain every timeout, diagnostic-content and retained-file assertion. The temporary repeat harness is preserved as `watchdog-repeat-source.txt`; final source runs the original single probe plus the diagnostic assertion. These are diagnostic observations, **not proof that the unexplained full-run failure is fixed**. The new assertion is `tests/test_test_framework_guards.py:466`; existing assertions are now lines 467–469. Old-code failure, positive control and green evidence are in the release witness manifest and `watchdog-*.json`. No timeout or budget was raised, no guard changed, and no existing assertion removed.
+
+**Readiness: not ready for merge under the owner's full-run criterion.** Both requested release changes are implemented and tested, but the unexpected full-run unit remains an open blocker. A future occurrence must retain the nested runner's now-exposed diagnostic before a requirement-based correction can be made. No second full run or speculative timing relaxation was performed.
+
+### 2. Deferred lifecycle checks
+
+Exactly **80** metadata errors, all for the deferred lifecycle requirements; **zero other metadata errors**. The same 80 missing checks cause the expected e2e worker failure. Step 4 closes them; it was not started in this pass.
+
+### 3. Not-run obligations (separate from failed units)
+
+`full-outstanding-obligations.json` names all 52 outstanding check IDs, their requirements, raw status, reason and closing step/lane. None is counted as passed evidence.
+
+| Obligations | Reason | What closes them |
+|---|---|---|
+| `review:TF-5`, `review:TF-6`, `review:TF-19`, `review:TF-22` | Registered review records were not supplied to this invocation. | Attach the cited owner/CoCoLo review evidence records; a narrative claim is insufficient. |
+| `review:TF-21` | Step-5 pruning review is outside this pass. | Complete step 5 and its review. |
+| `planned:TF-19` | Step-3 acceptance placeholder remains registered. | Replace it with an executed, cited acceptance record. |
+| `planned:TF-20` | Step-4 lifecycle acceptance is deferred. | Complete step 4. |
+| Complete model/real soak campaigns (ML-5/6/10/11/12/13/18/19; TF-18/19) | Normal `ci` profile intentionally omits the complete sweep. | Execute the `soak` profile; all exact check IDs are in the obligations artifact. |
+| Three `RealImages` checks (ML-4/12) | Opt-in real filesystem/disk-image fixture was unavailable. | Execute the mounted-filesystem/image lane. Raw unittest status remains `skipped` and strict requirement coverage remains non-passing; reporting these missing executions separately does not convert them to passes. |
+
+Python 3.11/Linux execution remains external platform evidence; this macOS/Python 3.14.7 run does not prove it.
+
+### 4. Budget debt
+
+**Zero budget failures, zero retirement obligations.** All new merge-library modules remain under 60 seconds (largest: adversarial 43.139 s). The same 14 existing-module debts remain, with unchanged ceilings and no new admissions:
+
+| Module | Ceiling seconds | Full-run seconds |
+|---|---:|---:|
+| `codex:tests.test_bridge` | 299.500 | 279.625 |
+| `codex:tests.test_container_stop` | 67.620 | 65.655 |
+| `codex:tests.test_host_commands` | 119.560 | 110.853 |
+| `codex:tests.test_learning_cli` | 95.440 | 90.050 |
+| `codex:tests.test_lost_run_settlement` | 98.640 | 94.260 |
+| `codex:tests.test_project_driver` | 390.320 | 348.637 |
+| `codex:tests.test_trial_run_driver_bugs` | 70.220 | 63.635 |
+| `codex:tests.test_write_merge` | 241.240 | 221.280 |
+| `root:test_install` | 110.140 | 106.016 |
+| `root:test_install_claude_upgrade` | 120.330 | 115.349 |
+| `root:test_setup_sh` | 177.880 | 171.686 |
+| `root:test_setup_straight` | 264.440 | 252.260 |
+| `root:test_setup_update` | 167.880 | 160.387 |
+| `root:test_setup_wizard_direct` | 265.860 | 260.659 |
+
+Old immutable baseline files and the 11d36a06 snapshot are unchanged. The three restored product files remain byte-identical to primary 30bf1fa9. The only permanent original-test assertion changes are the two owner-directed count restorations; the framework watchdog gets an additive diagnostic assertion. Assertions ledger and the TF-23 table preserve the distinction between the completed release fixes and the unresolved full-run incident.
+
+Final affected TF-23 evidence-manifest validation: 4.857699 job-seconds, default 16 jobs, 10 tests; zero failed workers, exactly 80 deferred lifecycle metadata errors, zero budget failures. This validates evidence records and does not close the unexplained full-run failure.

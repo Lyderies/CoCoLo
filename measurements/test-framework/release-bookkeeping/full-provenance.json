@@ -1,0 +1,14 @@
+{
+ "revision": "65ca8c20",
+ "base": "b531844030fa619c1f62ddd6c092ebc2ea4fca38",
+ "command": "/private/tmp/cocolo-testfw-venv/bin/python -B scripts/parallel_tests.py --base b531844030fa619c1f62ddd6c092ebc2ea4fca38 --save-timings /private/tmp/release-bookkeeping-full.json",
+ "raw_report_sha256": "1700f17a78033eb6beed6e05f1995befa8e1f583115a9401947446e36fbba31f",
+ "requirements_test_sha256": "60db8c9d8f1eecfcedd0e9fd20d6f2604ecb68899f0a02c4403f10cebafa1de5",
+ "exit_code": 1,
+ "jobs": 16,
+ "elapsed_seconds": 509.4560026249965,
+ "job_seconds": 4825.323536370881,
+ "units": 396,
+ "tests": 6201,
+ "normalization": "Only own absolute worktree paths replaced by <worktree>; numerical evidence and outcomes unchanged."
+}

@@ -463,6 +463,7 @@ class RunnerIntegrationTests(unittest.TestCase):
         code, output, report = self.run_fixture('import faulthandler,time\nfaulthandler.cancel_dump_traceback_later()\nprint("stuck witness", flush=True)\ntime.sleep(10)', timeout='0.3')
         self.assertLess(time.monotonic() - started, 5.)
         self.assertNotEqual(0, code, output)
+        self.assertEqual(1, len(report['workers']), output)
         self.assertTrue(report['workers'][0]['timed_out'])
         self.assertIn('stuck witness', report['workers'][0]['log_tail'])
         self.assertTrue(Path(report['workers'][0]['log']).is_file())

@@ -144,3 +144,13 @@
 - All assertion corrections are new-witness requirement contradictions recorded in ASSERTIONS-test-framework.md; no original product/test assertions removed or changed.
 - No push, install, shared/control edits, general cleanup or steps 4–5. Existing hash-pinned environment reused; Python 3.11/Linux remains CI evidence.
 - Final affected bookkeeping verification: 159.420827 job-seconds, 254 tests, all workers pass; exactly 80 deferred metadata errors, no budget failure. Runtime metadata fixes and final binding snapshot are on feat/merge-library.
+
+## Installed-release restoration and routine bookkeeping
+- TF-25 requirements 24b5cc0b → failing witnesses 4a261f41 → exact primary restoration 87d78e55 → rebinding 9e095c4c/fbacae18; final TF-23 evidence 3993143a, merged for the full run at 65ca8c20.
+- New immutable `scripts/test-release-bindings/0.8.49.json`; old baselines untouched. Narrow append/count/annotation procedure in TESTING-framework.md; eight positive/mutation witnesses with fix→line evidence in REVIEW-test-framework-release-bookkeeping-fixes.md.
+- Affected green: 32 tests, 10.371962 job-seconds. ONE full run: default 16 jobs, 509.456003 s elapsed / 4825.323536 job-seconds, 396 units / 6201 tests, exact b5318440 base and saved timings.
+- Exactly 80 deferred lifecycle metadata errors; no other metadata errors; no budget failures or retirements; 14 unchanged debt entries.
+- Failed units: expected root:test_e2e_requirements and unexpected root:test_test_framework_guards (nested watchdog probe returned zero workers; original diagnostic lost). This unexpected failure remains open, so not ready for merge.
+- Every original watchdog assertion retained; added output-bearing cardinality assertion at tests/test_test_framework_guards.py:466. Affected rerun passes (19.177335 job-seconds); 50-probe experiments pass on both worktrees (49.164339 / 49.380317), but do not establish a root-cause fix.
+- Four reporting classes, every outstanding obligation/reason/closing lane and debt measurements are preserved in the review report and full-outstanding-obligations.json. No missing evidence converted to a pass.
+- Assertions ledger records the two 9→10 restorations and additive diagnostic; no tests deleted or guards/budgets relaxed. No install, push, control-project edit, general cleanup or steps 4–5.
