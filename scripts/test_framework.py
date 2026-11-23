@@ -70,7 +70,9 @@ def inventory_suite(suite, layers=None):
     """Called only inside a suite's discovery child, honoring its load_tests hooks."""
     found = {}
     root = Path(__file__).resolve().parents[1]
-    baseline_file = root / 'scripts/test-legacy-values.json'
+    baseline_file = root / 'scripts/test-legacy-bound-values.json'
+    if not baseline_file.exists():
+        baseline_file = root / 'scripts/test-legacy-values.json'
     baseline = decode_json(baseline_file.read_text()) if baseline_file.exists() else {}
     def walk(tests):
         for test in tests:
@@ -206,7 +208,7 @@ def measurements(rows, layers, stages, *, jobs, elapsed, selection, part=(1, 1),
                  'status': 'measured' if name in modules else 'not_measured'}
                 for name, value in sorted(debt.items())]
     supplied_fragments = expected_fragments
-    expected_fragments = expected_fragments or {name: [row['unit'] for row in rows if row['suite'] + ':' + row['unit'].split('#')[0] == name] for name in modules}
+    expected_fragments = expected_fragments or {}
     complete = {name for name, units in expected_fragments.items() if units and
                 set(units) == {row['unit'] for row in rows if row['suite'] + ':' + row['unit'].split('#')[0] == name and row.get('returncode') == 0 and not row.get('timed_out')} }
     retirement = sorted(name for name in debt if name in complete and name in modules and modules[name] <= BUDGETS[layers[name]]) if part == (1, 1) else []
@@ -366,18 +368,28 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
     cls = type(test)
     module = sys.modules[cls.__module__]
     explicit = tuple(getattr(cls, '__fixture_dependencies__', ())) + tuple(source_dependencies)
-    source_backed = any(isinstance(value, (str, Path)) for value in explicit)
+    explicit_files = {Path(value).resolve() for value in explicit if isinstance(value, (str, Path))}
+    def covered(filename):
+        return bool(filename and Path(filename).resolve() in explicit_files)
+    def dependency_source(value):
+        # Decorated/generated fixture methods belong to their original definition.
+        original = inspect.unwrap(value)
+        filename = inspect.getsourcefile(original)
+        if filename and filename.startswith('<'):
+            owner = sys.modules.get(original.__module__)
+            return getattr(owner, '__file__', None)
+        return filename
     worktree_root = Path(__file__).resolve().parents[1]
     worktree_prefix = str(worktree_root)
-    def stable(value):
+    def stable(value, owner_file=None):
         if isinstance(value, types.CodeType):
             return code_value(value)
         if isinstance(value, (set, frozenset)):
-            return ('set', sorted((stable(v) for v in value), key=repr))
+            return ('set', sorted((stable(v, owner_file) for v in value), key=repr))
         if isinstance(value, (tuple, list)):
-            return (type(value).__name__, [stable(v) for v in value])
+            return (type(value).__name__, [stable(v, owner_file) for v in value])
         if isinstance(value, dict):
-            return ('dict', sorted(((stable(k), stable(v)) for k, v in value.items()), key=repr))
+            return ('dict', sorted(((stable(k, owner_file), stable(v, owner_file)) for k, v in value.items()), key=repr))
         if isinstance(value, (str, bytes, int, float, bool, type(None))):
             if include_values and isinstance(value, str):
                 if value == worktree_prefix or value.startswith(worktree_prefix + '/'):
@@ -385,10 +397,12 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
             return repr(value)
         if inspect.isfunction(value) or inspect.isclass(value):
             return (value.__module__, value.__qualname__)
+        if include_values and inspect.isbuiltin(value) and isinstance(getattr(value, '__self__', None), (types.ModuleType, type(None))):
+            return ('builtin', value.__module__, value.__qualname__)
         if include_values:
             if isinstance(value, Path):
                 return ('path', value.relative_to(worktree_root).as_posix() if value.is_relative_to(worktree_root) else value.as_posix())
-            if not source_backed:
+            if not covered(owner_file):
                 unresolved.append(type(value).__module__ + ':' + type(value).__qualname__)
         return type(value).__module__ + ':' + type(value).__qualname__
     def global_value(name, globals_, visited=()):
@@ -404,13 +418,13 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
             or isinstance(n, ast.Attribute) and ast.unparse(n) == 'os.environ'
             for n in ast.walk(binding))
         if dynamic:
-            if not source_backed:
+            if not covered(filename):
                 unresolved.append(name + ': runtime fixture value needs explicit source dependency')
             return ('source-defined', ast.dump(binding, include_attributes=False))
-        return stable(value)
+        return stable(value, filename)
 
     def code_value(code):
-        return (code.co_code.hex(), code.co_names, tuple(stable(v) for v in code.co_consts))
+        return (code.co_code.hex(), code.co_names, tuple(stable(v, code.co_filename) for v in code.co_consts))
     def local(value):
         owner = getattr(value, '__module__', '')
         try:
@@ -429,7 +443,7 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
         elif inspect.isfunction(value) and local(value):
             key = value.__module__ + ':' + value.__qualname__
             records[key] = (_source(value), code_value(value.__code__))
-            if include_values and any(name in value.__code__.co_names for name in ('getattr', '__import__', 'import_module', 'eval', 'exec')) and not source_backed:
+            if include_values and any(name in value.__code__.co_names for name in ('getattr', '__import__', 'import_module', 'eval', 'exec')) and not covered(dependency_source(value)):
                 unresolved.append(key + ': dynamic helper needs explicit source dependency')
             for name in value.__code__.co_names:
                 dependency = value.__globals__.get(name)
@@ -448,7 +462,7 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
                     if parent not in (object, unittest.TestCase) and name in vars(parent):
                         item = vars(parent)[name]
                         if include_values and not callable(item) and not isinstance(item, (classmethod, staticmethod)):
-                            records[key + ':class:' + parent.__qualname__ + ':' + name] = stable(item)
+                            records[key + ':class:' + parent.__qualname__ + ':' + name] = stable(item, inspect.getsourcefile(parent))
                         else:
                             walk(item)
             for index, cell in enumerate(value.__closure__ or ()):
@@ -456,7 +470,7 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
                 if inspect.isfunction(item) or inspect.isclass(item):
                     walk(item)
                 elif isinstance(item, (str, bytes, int, float, bool, tuple, list, dict, type(None))):
-                    records[key + ':closure:' + str(index)] = stable(item)
+                    records[key + ':closure:' + str(index)] = stable(item, dependency_source(value))
         elif inspect.isclass(value) and local(value):
             for item in vars(value).values():
                 walk(item)
@@ -472,7 +486,9 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
         if include_values and isinstance(value, (str, Path)):
             path = Path(value)
             try:
-                records['explicit:' + path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+                resolved = path.resolve()
+                identity = resolved.relative_to(worktree_root).as_posix() if resolved.is_relative_to(worktree_root) else resolved.as_posix()
+                records['explicit:' + identity] = hashlib.sha256(path.read_bytes()).hexdigest()
             except OSError:
                 unresolved.append(str(path))
         else:
@@ -492,44 +508,69 @@ def validate_legacy_values(records, legacy, baseline):
     return errors
 
 
-def golden_bypasses(source):
-    """Reject direct reads of declared golden paths; ordinary fixture/scalar reads remain valid."""
-    tree = ast.parse(source)
-    golden_names = {a.asname or a.name for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names if 'golden' in a.name.lower()}
-    temporary_names = set()
-    def references(node, names):
-        return any(isinstance(n, (ast.Name, ast.Attribute)) and ast.unparse(n) in names for n in ast.walk(node))
-    def temporary(node):
-        return references(node, temporary_names) or any(isinstance(n, ast.Call) and
-            isinstance(n.func, ast.Attribute) and n.func.attr in ('TemporaryDirectory', 'mkdtemp') for n in ast.walk(node))
-    def golden(node):
-        if temporary(node):
-            return False
-        return references(node, golden_names) or any(
-            isinstance(n, ast.Constant) and isinstance(n.value, str) and 'golden' in n.value.lower()
-            for n in ast.walk(node))
-    assignments = [n for n in ast.walk(tree) if isinstance(n, (ast.Assign, ast.AnnAssign)) and n.value]
-    for _ in range(len(assignments) + 1):
-        previous = (set(golden_names), set(temporary_names))
-        for node in assignments:
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            names = {ast.unparse(target) for target in targets if isinstance(target, (ast.Name, ast.Attribute))}
-            if temporary(node.value):
-                temporary_names.update(names)
-                golden_names.difference_update(names)
-            elif golden(node.value):
-                golden_names.update(names)
-        if previous == (golden_names, temporary_names):
-            break
-    errors = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if isinstance(node.func, ast.Attribute) and node.func.attr in ('read_text', 'read_bytes', 'open') and golden(node.func.value):
-            errors.append(f'line {node.lineno}: direct golden read bypasses shared helper')
-        elif isinstance(node.func, ast.Name) and node.func.id == 'open' and any(golden(arg) for arg in node.args):
-            errors.append(f'line {node.lineno}: direct golden open bypasses shared helper')
-    return errors
+def golden_bypasses(source, *, filename=None):
+    """Follow local imported path declarations without executing fixture modules."""
+    def analyze(source, filename, seen):
+        tree = ast.parse(source)
+        golden_names = {a.asname or a.name for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names if 'golden' in a.name.lower()}
+        if filename is not None:
+            filename = Path(filename).resolve()
+            seen = seen | {filename}
+            for node in tree.body:
+                if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                    continue
+                for alias in node.names:
+                    module_name = node.module if isinstance(node, ast.ImportFrom) else alias.name
+                    if not module_name:
+                        continue
+                    parts = module_name.split('.')
+                    bases = [filename.parent, *filename.parents]
+                    dependency = next((base.joinpath(*parts).with_suffix('.py') for base in bases
+                                       if base.joinpath(*parts).with_suffix('.py').is_file()), None)
+                    if dependency is None or dependency in seen:
+                        continue
+                    exported, _ = analyze(dependency.read_text(), dependency, seen)
+                    if isinstance(node, ast.ImportFrom):
+                        if alias.name in exported:
+                            golden_names.add(alias.asname or alias.name)
+                    else:
+                        local_name = alias.asname or alias.name
+                        golden_names.update(local_name + '.' + name for name in exported)
+        temporary_names = set()
+        def references(node, names):
+            return any(isinstance(n, (ast.Name, ast.Attribute)) and ast.unparse(n) in names for n in ast.walk(node))
+        def temporary(node):
+            return references(node, temporary_names) or any(isinstance(n, ast.Call) and
+                isinstance(n.func, ast.Attribute) and n.func.attr in ('TemporaryDirectory', 'mkdtemp') for n in ast.walk(node))
+        def golden(node):
+            if temporary(node):
+                return False
+            return references(node, golden_names) or any(
+                isinstance(n, ast.Constant) and isinstance(n.value, str) and 'golden' in n.value.lower()
+                for n in ast.walk(node))
+        assignments = [n for n in ast.walk(tree) if isinstance(n, (ast.Assign, ast.AnnAssign)) and n.value]
+        for _ in range(len(assignments) + 1):
+            previous = (set(golden_names), set(temporary_names))
+            for node in assignments:
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                names = {ast.unparse(target) for target in targets if isinstance(target, (ast.Name, ast.Attribute))}
+                if temporary(node.value):
+                    temporary_names.update(names)
+                    golden_names.difference_update(names)
+                elif golden(node.value):
+                    golden_names.update(names)
+            if previous == (golden_names, temporary_names):
+                break
+        errors = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Attribute) and node.func.attr in ('read_text', 'read_bytes', 'open') and golden(node.func.value):
+                errors.append(f'line {node.lineno}: direct golden read bypasses shared helper')
+            elif isinstance(node.func, ast.Name) and node.func.id == 'open' and any(golden(arg) for arg in node.args):
+                errors.append(f'line {node.lineno}: direct golden open bypasses shared helper')
+        return golden_names, errors
+    return analyze(source, filename, set())[1]
 
 
 def registered_outcomes(checks, evidence):
