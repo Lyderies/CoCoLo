@@ -500,6 +500,45 @@ class OpenBindingStoreTests(unittest.TestCase):
                                            instance='svc-' + 'a' * 32, now_ms=1000)
         self.assertEqual(6, self.sweep())  # the rows written before the upgrade are read and handled
 
+    # --- decision 111 A: the successor window is bounded by the window, not by the rows before the position ---
+
+    def _window_after_prefix(self, prefix):
+        """Database work of one window call whose position has `prefix` rows of another service behind it."""
+        owner = 'svc-' + 'a' * 32
+        identity = f"{'hrn_' + f'{100_000 + 49:048x}'}:1"  # the 50th row of the first fill
+        return self.steps(lambda: self.store._held_window('svc-' + 'b' * 32, (owner, identity), 10))
+
+    def test_D111_the_successor_window_work_does_not_grow_with_the_rows_before_its_position(self):
+        self.fill(70, 5, start=100_000)  # 50 rows behind the position, 20 after, and the live service's own
+        small = self._window_after_prefix(50)
+        self.fill(2000, 0, start=1000)  # 2,000 more rows of the same service, all before the position
+        large = self._window_after_prefix(2050)
+        self.assertLess(large, small * 1.5 + 200, (small, large))  # the window's work, not the rows passed
+
+    def test_D111_the_windows_plans_name_the_open_binding_indexes_exactly(self):
+        self.fill(5, 0)
+        register = self.plans(lambda: self.register(50))
+        self.assertTrue([d for d in register if 'INDEX project_holds_open_run' in d], register)
+        self.assertTrue([d for d in register if 'INDEX project_registered_runs_run' in d], register)
+        sweep = self.plans(self.sweep)
+        self.assertTrue([d for d in sweep if 'INDEX project_holds_open_held' in d], sweep)
+
+    def test_D111_a_row_with_a_real_armed_lease_is_refused_and_the_window_moves_on(self):
+        self.base.reserve(1)
+        self.record(1)
+        self.store.arm_result_lease(leases.lease_binding(1))
+        self.record(2)
+        with self.assertRaisesRegex(HistoryError, 'history_conflict'):
+            self.store.mark_open_withdrawing(binding(1).run_handle, 1, 'service_stopped',
+                                             project_id=PROJECT, runtime_digest=COLLECTOR_RUNTIME_DIGEST)
+        self.assertEqual('held', self.row(1)[0])
+        first = self.store.withdraw_earlier_open_bindings('svc-' + 'b' * 32, project_id=PROJECT,
+                                                          runtime_digest=COLLECTOR_RUNTIME_DIGEST, limit=1)
+        second = self.store.withdraw_earlier_open_bindings('svc-' + 'b' * 32, project_id=PROJECT,
+                                                           runtime_digest=COLLECTOR_RUNTIME_DIGEST, limit=1)
+        self.assertEqual((0, 1), (first, second))  # the armed row is passed over, the next one is marked
+        self.assertEqual(('held', 'releasing'), (self.row(1)[0], self.row(2)[0]))
+
     def _next_check(self, identity):
         return self.store._connection.execute("SELECT next_check_ms FROM project_holds WHERE kind='open_binding' "
                                               "AND identity=?", (identity,)).fetchone()[0]

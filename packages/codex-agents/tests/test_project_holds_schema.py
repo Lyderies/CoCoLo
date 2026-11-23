@@ -218,6 +218,31 @@ class SchemaStepTests(unittest.TestCase):
                 self.upgrade()
         self.assert_left_at_17(before)
 
+    def test_D111_a_failing_validator_in_the_18_to_19_step_leaves_18_and_removes_its_copy(self):
+        from codex_agents import project_holds_schema
+        self.store.close()
+        with closing(sqlite3.connect(self.database)) as db:  # a format 18 store: no open-binding indexes
+            for name in ('project_holds_open_run', 'project_holds_open_held', 'project_registered_runs_run'):
+                db.execute('DROP INDEX ' + name)
+            db.execute('PRAGMA user_version=18')
+            db.commit()
+        before, indexes = self.rows(), self.indexes()
+        with mock.patch.object(project_holds_schema, 'register_consistent', return_value=False):
+            with self.assertRaisesRegex(HistoryError, '^history_incompatible$'):
+                self.upgrade()
+        self.assertEqual(18, self.version())
+        self.assertEqual(before, self.rows())
+        self.assertEqual(indexes, self.indexes())  # none of the three indexes was left behind
+        self.assertEqual([], self.copies())  # HS-18: the copy made for the failed step goes too
+        self.assertFalse(list(self.directory.glob('*.partial')))
+        self.upgrade()  # a later attempt upgrades, with its one copy
+        self.assertEqual(19, self.version())
+        self.assertEqual(1, len(self.copies()))
+
+    def indexes(self, path=None):
+        with closing(sqlite3.connect(path or self.database)) as db:
+            return sorted(row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='index'"))
+
     def test_X5_M2_a_17_binary_refuses_an_18_store_and_changes_nothing(self):
         from codex_agents import project_holds_schema
         self.store.close()
