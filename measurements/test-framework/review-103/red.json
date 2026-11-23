@@ -1,0 +1,15 @@
+{
+ "status": "red",
+ "base": "d8b179d6",
+ "witness": "test_p10_diagnostic_failure_cannot_escape_child_to_caller",
+ "positive_control": "Successful action runs in a child and returns normally; failing action with a writable diagnostic reports its intended error. The failing-diagnostic case confirms both failures happened in the same child and no caller marker exists.",
+ "source_run": "red.json.run.json",
+ "source_sha256": "4fb78e6bf282561a2ac35a8d620f5b3985dcd4e12ef845afcef0dc815cb69e76",
+ "jobs": 16,
+ "job_seconds": 1.5917891670251265,
+ "diagnostic": ".......F\n======================================================================\nFAIL: test_p10_diagnostic_failure_cannot_escape_child_to_caller (tests.test_merge_library_r3.RoundThree.test_p10_diagnostic_failure_cannot_escape_child_to_caller)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"<cocolo-mergelib>/packages/codex-agents/tests/test_merge_library_r3.py\", line 186, in test_p10_diagnostic_failure_cannot_escape_child_to_caller\n    self.assertFalse((root / 'escaped-caller').exists(), 'p10 diagnostic failure escaped child into caller')\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: True is not false : p10 diagnostic failure escaped child into caller\n\n----------------------------------------------------------------------\nRan 8 tests in 1.453s\n\nFAILED (failures=1)\n",
+ "reviewed_source_sha256": {
+  "packages/codex-agents/tests/test_merge_library_contract.py": "44893cf8ac8f6f5201aeb6776f535347b04d9e2d89596c42d73e11ce324be757"
+ },
+ "red_test_commit": "a8e2a448"
+}

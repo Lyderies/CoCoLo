@@ -58,5 +58,15 @@
   "red": "measurements/test-framework/review-r3-merge/p10-red.json",
   "diagnostic": "p10 leaked non-daemon sealer threads",
   "green": "measurements/test-framework/review-r3-merge/p10-green.json"
+ },
+ {
+  "fix": "p10-decision-103",
+  "requirement": "TF-13",
+  "witness": "test_p10_diagnostic_failure_cannot_escape_child_to_caller",
+  "positive_control": "Successful action runs in a child and returns normally; failing action with a writable diagnostic reports its intended error. The failing-diagnostic case confirms both failures happened in the same child and no caller marker exists.",
+  "base": "d8b179d6",
+  "red": "measurements/test-framework/review-103/red.json",
+  "diagnostic": "p10 diagnostic failure escaped child into caller",
+  "green": "measurements/test-framework/review-103/green.json"
  }
 ]

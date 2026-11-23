@@ -131,3 +131,10 @@
 - Assertion ledgers list every changed/moved instance; no test deleted. Golden valid-fixture reconciliation is in CONTRADICTIONS-review-r3.md. Baseline keeps 5,683 IDs, verifies 304 unchanged sources, preserves every older immutable baseline, zero unresolved fingerprints.
 - Global gate remains exit 1 for the same 80 lifecycle checks. Full soak, image opt-ins, macOS/Linux Python 3.11 runtime, Ruff and concurrent real-campaign budgets remain open; Python 3.11 grammar only is verified locally.
 - Framework branch is merged into feat/merge-library. Both branches stop for the requested short review; steps 4–5 have not started. No push, install, primary/control-project edit or general cleanup.
+
+## Decision 103 — remaining p10 MED
+- Tests-first `a8e2a448`; fix/citations `1b684fa8`, on feat/merge-library only. Child diagnostic reporting is best effort; child-only finally always exits, nonzero on failure.
+- TF-13/ML-17 -> `test_merge_library_contract.py:40`–`:51`; witness -> `test_merge_library_r3.py:148` (both under packages/codex-agents/tests). Exact old-code red and positive controls recorded per TF-23.
+- Red: **1.5917891670251265 job-seconds**; green affected modules: **135 passing checks, 27.2427340419963 job-seconds**, DEFAULT 16 jobs, no worker/budget failures. Evidence -> `measurements/test-framework/review-103`.
+- Corrected only the requested table support citation :892 -> :952–955 and ledger :955 -> :954. Existing assertions unchanged; new assertions listed in ASSERTIONS-merge-checker.md.
+- Same 80 lifecycle metadata failures remain; all other code/known gaps and the framework branch are untouched. Ready for review; steps 4–5 remain stopped.

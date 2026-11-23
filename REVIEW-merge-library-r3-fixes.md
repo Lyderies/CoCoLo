@@ -32,3 +32,13 @@ The overall gate remains exit 1 for exactly 80 missing lifecycle checks. Open ga
 - Prior round-2 LOWs remain listed in REVIEW-merge-library-r2-fixes.md; p08's verifier confirms declare_ml_tests exists, while its complete mapping and earlier evidence limitations remain review concerns. Conditional kill-boundary, seed, cancel-report, power-loss and image-environment observations are not promoted to new fixes.
 
 All framework LOWs are listed in REVIEW-test-framework-r3-fixes.md. No push, installation, control-project edit or general cleanup was performed.
+
+## Decision 103 — p10 child diagnostic failure
+
+The short verifier check found one remaining MED: diagnostic formatting/writing could escape the child branch. This follow-up changes only that child exit path and the two requested support citations. Requirements: `REQUIREMENTS-merge-review.md:15` (TF-13/ML-17, evidence under TF-23). Enforcing fix: `packages/codex-agents/tests/test_merge_library_contract.py:40`–`:51`; status defaults to nonzero, diagnostic reporting is best effort, and child-only finally always calls os._exit. Successful actions retain status zero.
+
+Witness: `packages/codex-agents/tests/test_merge_library_r3.py:148`. Red on unchanged d8b179d6 helper: `measurements/test-framework/review-103/red.json`, exact diagnostic "p10 diagnostic failure escaped child into caller", **1.5917891670251265 job-seconds**, DEFAULT 16 jobs. The witness itself contains an escaped old-code child, so no later test executes there. Positive controls cover successful action and failed action with a writable diagnostic; the negative case proves action and diagnostic attempts occurred in the same child.
+
+Green: `measurements/test-framework/review-103/green.json` and `runs.json`: **135 passing checks, 27.2427340419963 job-seconds**, DEFAULT 16 jobs, no worker/budget failures. TF-23 manifest validation passes with the new declaration. Overall exit remains 1 for the same 80 missing lifecycle checks. No existing assertion was changed or removed. The fix-table support citation is now :952–955 and the ledger assertion citation :954. All other code and known gaps are unchanged; Python 3.11 grammar passes, runtime evidence remains macOS/Python 3.14.7.
+
+Commits: tests/requirement `a8e2a448`, child fix and requested citations `1b684fa8`; evidence/report in this hand-off commit. Ready for the requested review.
