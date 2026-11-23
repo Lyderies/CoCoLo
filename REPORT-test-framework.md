@@ -143,3 +143,4 @@
 - Debt: immutable new ceiling version; cli_billing_runtime/run_network retired from primary evidence, billing_gate/billing_rejudge/ledger_startup/session_guard retired from our full run. Fourteen current entries, unchanged ceilings, table in review report.
 - All assertion corrections are new-witness requirement contradictions recorded in ASSERTIONS-test-framework.md; no original product/test assertions removed or changed.
 - No push, install, shared/control edits, general cleanup or steps 4–5. Existing hash-pinned environment reused; Python 3.11/Linux remains CI evidence.
+- Final affected bookkeeping verification: 159.420827 job-seconds, 254 tests, all workers pass; exactly 80 deferred metadata errors, no budget failure. Runtime metadata fixes and final binding snapshot are on feat/merge-library.
