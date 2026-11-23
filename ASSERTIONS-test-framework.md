@@ -40,3 +40,16 @@ No test function was deleted. All pre-pass expressions are retained or explicitl
 | Same file :497/:501 embedded elapsed assertions in expected-failing workers | `tests/test_test_framework_guards.py:520` and `tests/test_test_framework_guards.py:524`, after unchanged embedded <0.5s assertions | TF-12/N3: outer checks prove elapsed assertions completed. |
 
 M3 changes only the budget fixture input at `tests/test_test_framework.py:289` to supply the authoritative fragment plan; every expected value/assertion is unchanged (CONTRADICTIONS-review-r2.md). M7 retains the old inventory test and all descendant-stop assertions, adds real runner checks at `tests/test_test_framework_guards.py:542` and external normal/interrupted elapsed assertions at `tests/test_test_framework_guards.py:397` / `tests/test_test_framework_guards.py:402`. No historical LOW assertion-ledger omissions were repaired in this scoped pass; L16 remains listed.
+
+## Round-3 assertion replacements
+
+No test was deleted. No expected outcome was relaxed.
+
+| Before at 9c18c4a3 | Current replacement | Reason |
+|---|---|---|
+| `tests/test_test_framework.py:429` [] for a timed-out row with no plan | `tests/test_test_framework.py:431` | Same expected [], with authoritative plan and independently passing clean-row retirement control. |
+| Same file :431 [] for failed returncode with no plan | `tests/test_test_framework.py:432` | Same expected []; only returncode differs from the clean control. Absent-plan rejection remains in the r2 tests. |
+| `tests/test_test_framework_guards.py:111` nonzero exit on asyncio.run(open_unix_connection), :112 socket output | `tests/test_test_framework_guards.py:117` and next line | Both original assertions retained across both Unix APIs and both layers, now with reached/recorded-denial/no-socketpair/no-file assertions. |
+| Same file :551 outcomes dictionary before cardinality assertions :555–556 | `tests/test_test_framework_guards.py:560` | Original union/cardinality/status assertions remain; new checks count and validate original worker records first. |
+
+Golden positive fixture at `tests/test_test_framework.py:196` adds only required provenance; all original assertions are unchanged (CONTRADICTIONS-review-r3.md). The PR merge-base fixture at `tests/test_test_framework_guards.py:504` adds only actual event context; all five original assertions remain. The defaults witness fixture was corrected before implementation to mutate only __defaults__/__kwdefaults__; its inequality and behavior assertions remain. New subtests preserve both timeout/returncode and both Unix API failures independently. Historical LOW omissions are deliberately left as listed known gaps.

@@ -4,9 +4,9 @@
  "witnesses": [
   "test_TF23_declared_fixes_require_red_green_and_positive_control"
  ],
- "source_run": "tf-r3-bootstrap-green.json.run.json",
- "source_sha256": "2740ac8ba291c62240cd45bfee77bc2f27b28e59ac5b598349d993e97a5dcb68",
- "job_seconds": 4.897907375008799,
+ "source_run": "tf-r3-final.json.run.json",
+ "source_sha256": "ea0db69d2d20dac246a7a425ea015ac2a81b9c6afdf0270b5ef5dcdf7156870a",
+ "job_seconds": 26.99471895804163,
  "jobs": 16,
  "positive_control": "Valid complete fixture passes; each missing field, wrong outcome and every declared manifest is checked."
 }

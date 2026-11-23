@@ -117,3 +117,17 @@
 - All 13 merge LOWs and conditional review items remain listed in `../cocolo-mergelib/REVIEW-merge-library-r2-fixes.md`, deliberately unfixed.
 - Open: full soak, mounted-image opt-ins, macOS/Linux Python 3.11 execution, Ruff, concurrent real-campaign budgets and the 80 lifecycle checks. No complete green gate is claimed.
 - This completes the requested scoped pass and stops for whole-worktree review; steps 4–5 have not begun.
+
+## Round-3 fixes
+
+- Decision 102: all 15 MED addressed in one scoped pass; no HIGH was found. Every new LOW remains explicitly listed, with no LOW fix in this pass.
+- Framework map (nine MEDs, p03, TF-23): `REVIEW-test-framework-r3-fixes.md`; merge map (six MEDs): `../cocolo-mergelib/REVIEW-merge-library-r3-fixes.md`. Each gives requirement, enforcing/witness file:line, old-code red, green and positive control.
+- Requirements `56971db9`/`101a2c0a` and `cb3c073d`; tests `0e0a0ccf`/`6d16db54`/`c4cb8725`/`9aea7ffe`; fixes `d1d4646d`/`fb7b48c8`/`4d7333a5`; versioned baseline `f3d56636`; evidence `bc8beac3`/`5e88116b`.
+- TF-23 -> `REQUIREMENTS-test-framework.md:304`, `scripts/test_framework.py:686`: small required-evidence manifest check; missing red/green/control fails. Semantic relevance still requires review.
+- Every red replays exact reviewed implementation files at `9c18c4a3` and checks the intended diagnostic. Default-location and TF-ID setup mistakes were corrected before enforcement and are not counted as intended reds.
+- Final framework: **115 checks; 26.99471895804163 job-seconds; DEFAULT 16 jobs**; integrated merge: **270 checks; 112.91237787512364 job-seconds; DEFAULT 16 jobs**. No failed workers or budget failures; four mutation proofs pass.
+- Separate real campaign: **49 checks; 44.652967874950264 job-seconds; DEFAULT 16 jobs**, 46 passing / three existing image skips. Saved timing extracts and per-fix evidence are in each worktree's `measurements/test-framework/review-r3-*` directory.
+- p03 already rejects all four categories at `scripts/test_framework.py:282`; valid/invalid real-combiner controls recorded; no speculative caller change.
+- Assertion ledgers list every changed/moved instance; no test deleted. Golden valid-fixture reconciliation is in CONTRADICTIONS-review-r3.md. Baseline keeps 5,683 IDs, verifies 304 unchanged sources, preserves every older immutable baseline, zero unresolved fingerprints.
+- Global gate remains exit 1 for the same 80 lifecycle checks. Full soak, image opt-ins, macOS/Linux Python 3.11 runtime, Ruff and concurrent real-campaign budgets remain open; Python 3.11 grammar only is verified locally.
+- Framework branch is merged into feat/merge-library. Both branches stop for the requested short review; steps 4–5 have not started. No push, install, primary/control-project edit or general cleanup.
