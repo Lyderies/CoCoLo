@@ -93,3 +93,35 @@ class ReleaseBookkeeping(unittest.TestCase):
                 module.build(ROOT,before,'b5318440','0.8.49',module.base_bindings(ROOT),after)
         result=module.build(ROOT,before,'b5318440','0.8.49',module.base_bindings(ROOT),after)
         self.assertEqual(14,len(result['tests']))
+
+    @requirements('TF-25','TF-7')
+    def test_later_edits_to_each_admitted_file_still_fail_metadata(self):
+        from unittest import mock
+        module=self.policy();original=Path.read_text
+        self.assertEqual(14,len(module.checked_bindings(ROOT)))
+        for name in FILES:
+            def changed(path,*args,**kwargs):
+                value=original(path,*args,**kwargs)
+                return value+' ' if path==ROOT/name else value
+            with self.subTest(file=name),mock.patch.object(Path,'read_text',changed):
+                with self.assertRaisesRegex(ValueError,'current bookkeeping sources'):
+                    module.checked_bindings(ROOT)
+        self.assertEqual(14,len(module.checked_bindings(ROOT)))
+
+    @requirements('TF-25')
+    def test_next_release_uses_the_same_narrow_procedure(self):
+        from unittest import mock
+        module=self.policy();before=self.sources('30bf1fa9');after=copy.deepcopy(before)
+        record=module.source_record(ROOT,'0ca9c36f','0.8.50')
+        catalogue=json.loads(after[FILES[0]]);catalogue['releases'].append(record)
+        after[FILES[0]]=json.dumps(catalogue,indent=1,sort_keys=True)+'\n'
+        after[FILES[1]]=after[FILES[1]].replace(' and 0.8.49 (source b5318440)',', 0.8.49 (source b5318440) and 0.8.50 (source 0ca9c36f)')
+        after[FILES[2]]=after[FILES[2]].replace('self.assertEqual(10, len','self.assertEqual(11, len').replace('0.8.49 (last nine: same bundle)','0.8.49, 0.8.50 (last ten: same bundle)')
+        self.assertEqual([],module.transition_errors(before,after,record))
+        original=module.texts
+        def sources(root,commit):return after if commit=='future-fixture' else original(root,commit)
+        state=module.base_bindings(ROOT);state.update(module.checked_bindings(ROOT))
+        with mock.patch.object(module,'texts',side_effect=sources):
+            result=module.build(ROOT,'9e095c4c','0ca9c36f','0.8.50',state,'future-fixture',module.source_hashes(before))
+        self.assertEqual(set(module.checked_bindings(ROOT)),set(result['tests']))
+        self.assertNotEqual(state[next(k for k in state if k.endswith('test_the_shipped_catalogue_is_accepted'))]['fingerprint'],result['tests'][next(k for k in result['tests'] if k.endswith('test_the_shipped_catalogue_is_accepted'))]['fingerprint'])

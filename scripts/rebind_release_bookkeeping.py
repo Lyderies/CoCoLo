@@ -141,9 +141,12 @@ print(json.dumps(out))
     return child(root,snapshot,code)
 
 
-def build(root,before_commit,source,previous,seed,after_commit=None):
+def build(root,before_commit,source,previous,seed,after_commit=None,expected_sources=None):
     before_commit=revision(root,before_commit);source=revision(root,source)
     before=texts(root,before_commit)
+    expected_sources = expected_sources or source_hashes(texts(root,fw.RELEASE_BASE))
+    if source_hashes(before)!=expected_sources:
+        raise ValueError("pre-bump bookkeeping sources do not match admitted state")
     after=texts(root,after_commit) if after_commit else {name:(root/name).read_text() for name in FILES}
     record=source_record(root,source,previous)
     errors=transition_errors(before,after,record)
@@ -157,24 +160,29 @@ def build(root,before_commit,source,previous,seed,after_commit=None):
         new=inventory(root,snapshot,eligible)
         if set(new)!=set(old) or any(rec['requirements'] or not rec['dependency_values'] for rec in new.values()):
             raise ValueError('bookkeeping cannot admit, retire or tag tests')
-    digest=lambda values:{name:hashlib.sha256(text.encode()).hexdigest() for name,text in values.items()}
     return dict(schema=1,previous_release=previous,before_commit=before_commit,source_commit=source,
-                before_sources=digest(before),after_sources=digest(after),tests=new)
+                before_sources=source_hashes(before),after_sources=source_hashes(after),tests=new)
 
 
-def checked_bindings(root):
+def source_hashes(values):
+    return {name:hashlib.sha256(text.encode()).hexdigest() for name,text in values.items()}
+
+
+def checked_bindings(root,check_current=True):
     """Re-derive each immutable admission from Git; current edits still face normal hashing."""
     state=base_bindings(root);admitted={}
+    anchor=source_hashes(texts(root,fw.RELEASE_BASE))
     paths=sorted((root/BINDINGS).glob('*.json'),key=lambda p:tuple(map(int,p.stem.split('.'))))
     for path in paths:
         name=path.relative_to(root).as_posix();data=fw.decode_json(path.read_text())
         commits=git(root,'log','--reverse','--format=%H','HEAD','--',name).decode().split()
         if not commits or fw.decode_json(git(root,'show',commits[0]+':'+name).decode())!=data:
             raise ValueError('immutable bookkeeping binding changed or uncommitted')
-        git(root,'merge-base','--is-ancestor',data['before_commit'],commits[0])
-        rebuilt=build(root,data['before_commit'],data['source_commit'],data['previous_release'],state,commits[0])
+        rebuilt=build(root,data['before_commit'],data['source_commit'],data['previous_release'],state,commits[0],anchor)
         if rebuilt!=data:raise ValueError('bookkeeping binding does not match permitted transition')
-        state.update(data['tests']);admitted.update(data['tests'])
+        state.update(data['tests']);admitted.update(data['tests']);anchor=data['after_sources']
+    if paths and check_current and source_hashes({name:(root/name).read_text() for name in FILES})!=anchor:
+        raise ValueError('current bookkeeping sources differ from admitted state; use the checked rebinding command for a permitted bump')
     return admitted
 
 
@@ -200,10 +208,12 @@ def main():
     path=root/BINDINGS/(args.previous_release+'.json')
     try:
         if path.exists():raise ValueError('immutable binding already exists')
-        state=base_bindings(root);state.update(checked_bindings(root))
+        state=base_bindings(root);state.update(checked_bindings(root,check_current=False))
         active=fw.decode_json((root/'scripts/test-legacy-0850.json').read_text())['tests']
         state={name:rec for name,rec in state.items() if name in active}
-        data=build(root,args.before,args.source,args.previous_release,state)
+        paths=sorted((root/BINDINGS).glob('*.json'),key=lambda p:tuple(map(int,p.stem.split('.'))))
+        anchor=fw.decode_json(paths[-1].read_text())['after_sources'] if paths else None
+        data=build(root,args.before,args.source,args.previous_release,state,expected_sources=anchor)
         write_new(path,data)
     except (ValueError,KeyError,subprocess.CalledProcessError) as error:
         parser.exit(1,str(error)+'\n')
