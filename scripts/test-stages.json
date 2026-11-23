@@ -229,6 +229,7 @@
  "codex:tests.test_qa_tree_scan": "unit",
  "codex:tests.test_rate_limit_contracts": "unit",
  "codex:tests.test_deadlines_retention": "integration",
+ "codex:tests.test_retirement_sweep": "integration",
  "codex:tests.test_record_context": "integration",
  "codex:tests.test_refusal_steps": "unit",
  "codex:tests.test_required_host_open": "integration",
