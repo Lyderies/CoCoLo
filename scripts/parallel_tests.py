@@ -372,6 +372,13 @@ def metadata():
         raise ValueError('legacy list requires an explicit trusted --base')
     from test_owned_baseline import checked as checked_test_owned, effective_records
     policy_bindings = effective_records(release['tests'] if release else {}, checked_test_owned(ROOT, legacy['tests']))
+    try:
+        from rebind_approved_edits import checked_bindings as checked_approved, apply_fingerprints
+        approved = checked_approved(ROOT)
+        apply_fingerprints((legacy, ceiling, previous), approved)
+        policy_bindings.update(approved)
+    except (OSError, ValueError, KeyError, IndexError, subprocess.CalledProcessError) as error:
+        errors.append('cannot verify approved test edits: ' + str(error))
     discovery_started = time.monotonic()
     try:
         discovered = inventory()

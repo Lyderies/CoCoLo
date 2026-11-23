@@ -1,0 +1,152 @@
+[
+ {
+  "base": "6fa05ecdd755f4a752935ef2c55ab9bd93701301",
+  "diagnostic": "TF-27 missing approved-edit validator",
+  "fix": "TF27-test_exact_transition_and_extra_unlisted_edits",
+  "green": "measurements/test-framework/approved-edits/test_exact_transition_and_extra_unlisted_edits-green.json",
+  "positive_control": "The exact two-line transition is accepted before and after extra literal, helper and assertion bytes are refused.",
+  "red": "measurements/test-framework/approved-edits/test_exact_transition_and_extra_unlisted_edits-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEdits.test_exact_transition_and_extra_unlisted_edits"
+ },
+ {
+  "base": "6fa05ecdd755f4a752935ef2c55ab9bd93701301",
+  "diagnostic": "TF-27 missing approved-edit validator",
+  "fix": "TF27-test_wrong_text_line_endings_and_stale_base",
+  "green": "measurements/test-framework/approved-edits/test_wrong_text_line_endings_and_stale_base-green.json",
+  "positive_control": "Matching old bytes produce the expected new bytes; changed old/new text, CRLF substitutions and a stale admitted source fail.",
+  "red": "measurements/test-framework/approved-edits/test_wrong_text_line_endings_and_stale_base-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEdits.test_wrong_text_line_endings_and_stale_base"
+ },
+ {
+  "base": "6fa05ecdd755f4a752935ef2c55ab9bd93701301",
+  "diagnostic": "TF-27 missing approved-edit validator",
+  "fix": "TF27-test_only_changed_active_proofs_rebind_all_three_kinds",
+  "green": "measurements/test-framework/approved-edits/test_only_changed_active_proofs_rebind_all_three_kinds-green.json",
+  "positive_control": "Unchanged proofs produce no overlay; one exact I/D/V transition produces only that record, while stale old I/D/V values fail.",
+  "red": "measurements/test-framework/approved-edits/test_only_changed_active_proofs_rebind_all_three_kinds-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEdits.test_only_changed_active_proofs_rebind_all_three_kinds"
+ },
+ {
+  "base": "6fa05ecdd755f4a752935ef2c55ab9bd93701301",
+  "diagnostic": "TF-27 missing approved-edit validator",
+  "fix": "TF27-test_renamed_restored_and_unresolved_proofs_are_refused",
+  "green": "measurements/test-framework/approved-edits/test_renamed_restored_and_unresolved_proofs_are_refused-green.json",
+  "positive_control": "The unchanged ID passes; a renamed ID, restored untagged ID or unresolved new value proof fails.",
+  "red": "measurements/test-framework/approved-edits/test_renamed_restored_and_unresolved_proofs_are_refused-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEdits.test_renamed_restored_and_unresolved_proofs_are_refused"
+ },
+ {
+  "base": "6fa05ecdd755f4a752935ef2c55ab9bd93701301",
+  "diagnostic": "TF-27 missing approved-edit validator",
+  "fix": "TF27-test_unrelated_legacy_proof_still_flags_and_retired_stays_retired",
+  "green": "measurements/test-framework/approved-edits/test_unrelated_legacy_proof_still_flags_and_retired_stays_retired-green.json",
+  "positive_control": "The approved kept proof passes; retired IDs stay absent, working eligibility cannot grow, and an unrelated implementation edit still fails normal metadata validation.",
+  "red": "measurements/test-framework/approved-edits/test_unrelated_legacy_proof_still_flags_and_retired_stays_retired-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEdits.test_unrelated_legacy_proof_still_flags_and_retired_stays_retired"
+ },
+ {
+  "base": "6fa05ecdd755f4a752935ef2c55ab9bd93701301",
+  "diagnostic": "TF-27 missing approved-edit validator",
+  "fix": "TF27-test_immutable_introduction_tampering_and_overwrite",
+  "green": "measurements/test-framework/approved-edits/test_immutable_introduction_tampering_and_overwrite-green.json",
+  "positive_control": "An unchanged committed document is accepted; uncommitted introduction, modified bytes, a committed forgery and overwrite are each refused.",
+  "red": "measurements/test-framework/approved-edits/test_immutable_introduction_tampering_and_overwrite-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEdits.test_immutable_introduction_tampering_and_overwrite"
+ },
+ {
+  "base": "6fa05ecdd755f4a752935ef2c55ab9bd93701301",
+  "diagnostic": "TF-27 missing approved-edit validator",
+  "fix": "TF27-test_recorded_owner_transitions_match_current_bytes",
+  "green": "measurements/test-framework/approved-edits/test_recorded_owner_transitions_match_current_bytes-green.json",
+  "positive_control": "All three historical owner manifests replay to exactly the current bytes; hold_lifecycle/refusal_steps are absent, and each stale pre-edit base fails.",
+  "red": "measurements/test-framework/approved-edits/test_recorded_owner_transitions_match_current_bytes-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEdits.test_recorded_owner_transitions_match_current_bytes"
+ },
+ {
+  "base": "6fa05ecdd755f4a752935ef2c55ab9bd93701301",
+  "diagnostic": "1381 owner-approved I/D/V legacy errors remain without TF-27 binding",
+  "fix": "TF27-1381-approved-errors-only",
+  "green": "measurements/test-framework/approved-edits/gate-green-summary.json",
+  "positive_control": "The committed fixture accepts exactly 902 replayed proofs (27 I, 452 D, 902 V); all 136 framework tests pass. All 12 excluded supplied errors and 55 unrelated global legacy errors still flag.",
+  "red": "measurements/test-framework/approved-edits/gate-red-summary.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEdits.test_recorded_owner_transitions_match_current_bytes"
+ },
+ {
+  "base": "5d4ab8607767ca67330afc32e47bd792bf7e562f",
+  "diagnostic": "TF-27 unanchored file contaminated a legacy proof",
+  "fix": "TF27-r1-unanchored-files",
+  "green": "measurements/test-framework/approved-edits/r1/unanchored-files-green.json",
+  "positive_control": "The later-added optional fixture is byte-verified but contributes no proofs; an anchored edit still rebinds; unexpected trusted-blob errors propagate.",
+  "red": "measurements/test-framework/approved-edits/r1/unanchored-files-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsR1.test_r1_unanchored_files_never_generate_proofs"
+ },
+ {
+  "base": "5d4ab8607767ca67330afc32e47bd792bf7e562f",
+  "diagnostic": "TF-27 stale unchanged old proof accepted",
+  "fix": "TF27-r1-stale-unchanged-old-proofs",
+  "green": "measurements/test-framework/approved-edits/r1/stale-unchanged-old-proofs-green.json",
+  "positive_control": "Matching unchanged I/D/V rows return an empty overlay; a stale unchanged I, D or V row is rejected.",
+  "red": "measurements/test-framework/approved-edits/r1/stale-unchanged-old-proofs-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsR1.test_r1_unchanged_stale_old_proofs_are_refused"
+ },
+ {
+  "base": "5d4ab8607767ca67330afc32e47bd792bf7e562f",
+  "diagnostic": "TF-27 unauthorized first introduction accepted",
+  "fix": "TF27-r1-owner-authority",
+  "green": "measurements/test-framework/approved-edits/r1/owner-authority-green.json",
+  "positive_control": "A committed exact decision/digest/binding approval admits the fixture; wrong digest, decision or binding and uncommitted policy edits fail.",
+  "red": "measurements/test-framework/approved-edits/r1/owner-authority-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsR1.test_r1_owner_record_authenticates_first_introduction"
+ },
+ {
+  "base": "5d4ab8607767ca67330afc32e47bd792bf7e562f",
+  "diagnostic": "TF-27 invalid introduction accepted",
+  "fix": "TF27-r1-introduction-provenance",
+  "green": "measurements/test-framework/approved-edits/r1/introduction-provenance-green.json",
+  "positive_control": "Matching ancestral introduction is accepted; nonancestral edit, wrong introduction source and wrong algorithm fail even after later repairs.",
+  "red": "measurements/test-framework/approved-edits/r1/introduction-provenance-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsR1.test_r1_introduction_requires_ancestry_sources_and_algorithm"
+ },
+ {
+  "base": "5d4ab8607767ca67330afc32e47bd792bf7e562f",
+  "diagnostic": "TF-27 deleted admission silently accepted",
+  "fix": "TF27-r1-deleted-bindings",
+  "green": "measurements/test-framework/approved-edits/r1/deleted-bindings-green.json",
+  "positive_control": "Present and restored immutable documents pass; working-tree and committed deletion of binding or manifest fail.",
+  "red": "measurements/test-framework/approved-edits/r1/deleted-bindings-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsR1.test_r1_deleted_admission_documents_are_refused"
+ },
+ {
+  "base": "5d4ab8607767ca67330afc32e47bd792bf7e562f",
+  "diagnostic": "TF-27 replay accepted duplicate discovery",
+  "fix": "TF27-r1-replay-discovery",
+  "green": "measurements/test-framework/approved-edits/r1/replay-discovery-green.json",
+  "positive_control": "A valid load_tests-filtered discovery passes; duplicate IDs and a caught socket violation fail in replay children.",
+  "red": "measurements/test-framework/approved-edits/r1/replay-discovery-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsR1.test_r1_replay_uses_guarded_discovery_and_rejects_duplicate_ids"
+ },
+ {
+  "base": "5d4ab8607767ca67330afc32e47bd792bf7e562f",
+  "diagnostic": "TF-27 metadata accepted invalid admission",
+  "fix": "TF27-r1-gate-witness-coverage",
+  "green": "measurements/test-framework/approved-edits/r1/gate-witness-coverage-green.json",
+  "positive_control": "Committed fixture metadata removes exactly the approved (ID,I/D/V) diagnostics, preserves all three unrelated changed-proof diagnostics, and rejects invalid introduction or a missing binding.",
+  "red": "measurements/test-framework/approved-edits/r1/gate-witness-coverage-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsR1.test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions"
+ }
+]

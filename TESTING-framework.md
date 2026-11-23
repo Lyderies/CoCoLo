@@ -65,3 +65,19 @@ Ordinary product implementation changes require no legacy proof rebinding. The g
 The immutable `scripts/test-legacy-test-owned-v1.json` and `-v2.json` versions were generated from trusted `5ab0a9d3`, never candidate test/helper files. Reproduction commands for their committed algorithms are `python -B scripts/generate_test_owned_baseline.py --algorithm 249d4f7d` (v1 generator revision) and `python -B scripts/generate_test_owned_baseline.py --algorithm 813661df` (v2 generator revision), using the prepared hash-pinned environment and the matching historical generator revision. The generator refuses to overwrite an existing version. Do not run it for a product fix or change an immutable file: a future policy change needs a new reviewed version.
 
 The ordinary command remains `python -B scripts/parallel_tests.py --base b531844030fa619c1f62ddd6c092ebc2ea4fca38 --save-timings <timings.json>` at the default job count. TF-25 release bookkeeping still uses its documented rebinding command; new records include the test-owned dependency interpretation alongside the historical one.
+
+## Owner-approved test edits (TF-27)
+
+Record each approved transition in `scripts/test-approved-edits/<decision>.json`: decision ID, repository test file, full trusted parent and edit commits, and each exact old/new line (including its newline) at its line number in the edit commit. Empty old/new strings encode insertion/deletion. Replay checks the entire file; an unlisted change cannot accompany an approved literal. The trusted starting proof remains `5ab0a9d3` under TF-26, with original I/D/V records preserved.
+
+The initial manifests record decision 107's three token lines, decision 109's 26 schema pins, and decision 114.1's schema-20 and fixture changes, including the lines following the owner's list. Decision 109 also explicitly inventories the schema-19 fixture addition from `648d58fa`, and the separate D111 test/indexes-helper and requirement decorator from `1ab0a49e` / `6f5a6f5f`; these bytes are necessary to account for the complete source transition of the existing module. This binding does not cover hold_lifecycle or refusal_steps.
+
+Use the prepared test interpreter:
+
+```
+python -B scripts/rebind_approved_edits.py --binding 107-109-114.1
+```
+
+Commit manifests before that command, or use `--prepare` to produce the initial reviewable binding while commits are unavailable. Preparation admits nothing to the gate. Commit the new manifests and binding together; the normal gate refuses uncommitted documents, any later byte change (including a committed forgery), a stale pre-edit source, or an extra change in a listed file. Existing binding files are never overwritten. Fingerprint generation and verification execute no test bodies and use sequential discovery children of at most ten modules. The ordinary runner still compares every unrelated legacy proof and enforces shrink-only lists.
+
+For review in a workspace that cannot commit, use a disposable repository containing the complete candidate, commit there, then run the ordinary gate with the trusted `--base`. Do not add an uncommitted-binding bypass to the gate. Keep actual test runs to at most ten selected modules while other reviews share the machine.

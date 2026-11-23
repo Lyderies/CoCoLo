@@ -1,0 +1,7 @@
+{
+ "base": "5d4ab8607767ca67330afc32e47bd792bf7e562f",
+ "diagnostic": "TF-27 stale unchanged old proof accepted",
+ "log": "measurements/test-framework/approved-edits/r1/red.log",
+ "status": "red",
+ "witness": "root:test_approved_edits.ApprovedEditsR1.test_r1_unchanged_stale_old_proofs_are_refused"
+}

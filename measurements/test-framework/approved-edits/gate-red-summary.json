@@ -1,0 +1,37 @@
+{
+ "approved_errors": 1381,
+ "base": "6fa05ecdd755f4a752935ef2c55ab9bd93701301",
+ "diagnostic": "1381 owner-approved I/D/V legacy errors remain without TF-27 binding",
+ "legacy_errors": 1448,
+ "metadata_errors": 1546,
+ "preflight_seconds": 408.2037961249589,
+ "status": "red",
+ "supplied_errors_observed": 1393,
+ "workers": [
+  {
+   "module": "codex:tests.test_signature_payloads",
+   "returncode": 0,
+   "tests": 12
+  },
+  {
+   "module": "codex:tests.test_refusal_steps",
+   "returncode": 0,
+   "tests": 12
+  },
+  {
+   "module": "codex:tests.test_history_service_upgrade",
+   "returncode": 0,
+   "tests": 30
+  },
+  {
+   "module": "codex:tests.test_hold_lifecycle",
+   "returncode": 1,
+   "tests": 9
+  },
+  {
+   "module": "codex:tests.test_signature_inputs",
+   "returncode": 0,
+   "tests": 36
+  }
+ ]
+}
