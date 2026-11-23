@@ -1,0 +1,62 @@
+FFFFFF
+======================================================================
+FAIL: test_discovery_imports_framework_and_preserves_package_names (test_test_framework_integration.ReleaseIntegration.test_discovery_imports_framework_and_preserves_package_names)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_test_framework_integration.py", line 29, in test_discovery_imports_framework_and_preserves_package_names
+    self.assertEqual(['tests.test_framework_user.Valid.test_ok'], found.get('tests.test_framework_user'), 'framework import failed during discovery')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ['tests.test_framework_user.Valid.test_ok'] != None : framework import failed during discovery
+
+======================================================================
+FAIL: test_exclusive_campaigns_wait_for_empty_pool_and_block_other_launches (test_test_framework_integration.ReleaseIntegration.test_exclusive_campaigns_wait_for_empty_pool_and_block_other_launches)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_test_framework_integration.py", line 53, in test_exclusive_campaigns_wait_for_empty_pool_and_block_other_launches
+    self.assertTrue(callable(can),'missing exclusive campaign scheduling')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : missing exclusive campaign scheduling
+
+======================================================================
+FAIL: test_existing_resource_modules_have_correct_layers_and_reasons (test_test_framework_integration.ReleaseIntegration.test_existing_resource_modules_have_correct_layers_and_reasons)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_test_framework_integration.py", line 40, in test_existing_resource_modules_have_correct_layers_and_reasons
+    self.assertEqual('unit',layers['root:test_test_stages'])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'unit' != 'scenario'
+- unit
++ scenario
+
+
+======================================================================
+FAIL: test_explicit_base_is_documented_and_missing_base_stops_before_discovery (test_test_framework_integration.ReleaseIntegration.test_explicit_base_is_documented_and_missing_base_stops_before_discovery)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_test_framework_integration.py", line 103, in test_explicit_base_is_documented_and_missing_base_stops_before_discovery
+    self.assertIn('--base '+base,(ROOT/'TESTING-framework.md').read_text(),'local full-run base is unspecified')
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '--base b531844030fa619c1f62ddd6c092ebc2ea4fca38' not found in "# Framework workflow\n\nUse the prepared, hash-checked test-only environment. Shipped programs need no test dependencies.\nFull runs use the runner's default jobs. Pass a trusted review base explicitly (the candidate cannot choose its own grandfather baseline):\n\n```\npython -B scripts/parallel_tests.py --base <trusted-commit> --save-timings /tmp/cocolo-timings.json\npython -B scripts/parallel_tests.py --base <trusted-commit> --module root:test_test_framework --save-timings /tmp/cocolo-affected.json\n```\n\nThe flat timing file remains scheduling input. Its `.run.json` companion records current worker job-seconds,\nseparate discovery/preflight time, module totals, selected checks, budgets/debt and actual outcomes.\nA debt warning does not mean failure; exceeding its unchanged ceiling does. A complete under-budget result\nrequires removing that module's debt entry before the next gate. Entries cannot be restored or ceilings edited.\nCombine all shard `.run.json` files using `--combine-timings`; partial records never certify module budgets.\n\nDeclare modules in `scripts/test-stages.json` and `scripts/test-layers.json`. Decorate new/migrated tests with\n`test_framework.requirements`; non-unit tests need `why_not_scenario`. Keep all assertions when migrating.\nGenerate catalogue links with `python -B scripts/generate_test_metadata.py --catalogue`; remove migrated legacy\nentries with `--shrink-legacy`. Original source and supplementary fixture/helper fingerprint baselines are immutable.\n\nUse `test_golden.compare` for checked-in UTF-8 expected output. Updates require exactly UPDATE_GOLDEN=1,\na known declared requirement and its adjacent `.requirement` sidecar. Update runs fail intentionally; review\nand rerun normally. Temporary helper contract fixtures may inspect their own writes; checked-in golden bypasses fail.\n\nRuns default to ci. Select dev or soak explicitly; a soak module cannot be selected with ci/dev, and multiple\nprofile selectors are rejected. Complete merge campaigns belong to the explicit soak inventory.\nRegistered future execution and semantic review records live in `test-checks.json`; absent evidence remains not_run.\nA full gate cannot pass missing or unexecuted required evidence. Entry-point links live in `test-entrypoints.json`.\n\nOwner's next checkpoint is after merge-library step 3. Assertion migrations are in ASSERTIONS-test-framework.md;\nrequirements and per-step evidence are in REQUIREMENTS-test-framework.md and REPORT-test-framework.md.\n" : local full-run base is unspecified
+
+======================================================================
+FAIL: test_release_overlay_is_immutable_and_candidate_changes_are_rejected (test_test_framework_integration.ReleaseIntegration.test_release_overlay_is_immutable_and_candidate_changes_are_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_test_framework_integration.py", line 70, in test_release_overlay_is_immutable_and_candidate_changes_are_rejected
+    self.assertTrue(callable(apply),'missing reviewed release baseline version')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : missing reviewed release baseline version
+
+======================================================================
+FAIL: test_versioned_debt_has_measured_ceilings_and_cannot_grow (test_test_framework_integration.ReleaseIntegration.test_versioned_debt_has_measured_ceilings_and_cannot_grow)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_test_framework_integration.py", line 87, in test_versioned_debt_has_measured_ceilings_and_cannot_grow
+    self.assertTrue(path.exists(),'missing measured release debt version')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : missing measured release debt version
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.034s
+
+FAILED (failures=6)

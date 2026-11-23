@@ -1,0 +1,10 @@
+{
+ "status": "red",
+ "base": "9bbf1582",
+ "diagnostic": "local full-run base is unspecified",
+ "witness": "root:test_test_framework_integration.ReleaseIntegration.test_explicit_base_is_documented_and_missing_base_stops_before_discovery",
+ "positive_control": "Explicit b5318440 affected runs execute; every CI selector names the release base and existing event-path tests pass.",
+ "jobs": 16,
+ "job_seconds": 0.17127020901534706,
+ "worker_log": "final-old-worker.log"
+}
