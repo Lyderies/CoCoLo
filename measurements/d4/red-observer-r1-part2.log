@@ -1,0 +1,15 @@
+test_L1_L2_observer_sees_the_callback_cached_at_writer_startup (tests.test_publication_replay_proofs.PublicationProofSensitivityTests.test_L1_L2_observer_sees_the_callback_cached_at_writer_startup) ... FAIL
+
+======================================================================
+FAIL: test_L1_L2_observer_sees_the_callback_cached_at_writer_startup (tests.test_publication_replay_proofs.PublicationProofSensitivityTests.test_L1_L2_observer_sees_the_callback_cached_at_writer_startup)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<work>/cocolo-d4/packages/codex-agents/tests/test_publication_replay_proofs.py", line 120, in test_L1_L2_observer_sees_the_callback_cached_at_writer_startup
+    self.assertEqual(2, len(getattr(case, 'live_packets', [])))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 2 != 0
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+FAILED (failures=1)

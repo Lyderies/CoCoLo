@@ -71,6 +71,7 @@ MAX_DELIVERY_PAGE_BYTES = 16_384
 RESULT_PURGE_GRACE_MS = 3_600_000
 # How many lease rows, live or finished, a reservation verifies at most (0.3.4 R1d).
 MAX_LEASE_ROWS = 4_096
+REPLAY_PASS_LIMIT = 4  # D4 (RS-D draft 3 §6): stored publications completed by one pass, each at most 1 MiB of body
 # How many results one reservation may retire before it is refused for capacity (0.3.4 R8).
 RECLAIM_BATCH = 16
 # How many rows one purge pass examines per row it may remove (0.3.4 R1g).
@@ -291,6 +292,7 @@ class ProjectHistory:
         self._result_expiry_cursor: int | None = None
         self._learning_purge_cursor = 0  # Scheduling only, like the cursor above; a restart starts over.
         self._lease_expiry_cursor: int | None = None
+        self._replay_cursor: int | None = None  # D4: where the next replay pass reads from (scheduling only)
         # Where the finished-row purge goes on from (0.3.4 R1g): scheduling state only, like the above.
         self._purge_cursors: dict[str, int | None] = {"reservations": None, "leases": None, "orchestrations": None, "earlier": None,
                                                           "record": None}
@@ -2280,7 +2282,8 @@ class ProjectHistory:
         }
         if usage_record is not None:
             material["client_usage_record"] = usage_record
-        prepared = keyed_digest(self._result_key, canonical_json(material))
+        encoded_material = canonical_json(material)
+        prepared = keyed_digest(self._result_key, encoded_material)
         if row["prepared_digest"] is not None and not secrets.compare_digest(row["prepared_digest"], prepared):
             raise HistoryError("history_conflict")
         if value.state == "committed":
@@ -2293,6 +2296,7 @@ class ProjectHistory:
                 if actual is None or actual.content != canonical_json(usage_record):
                     raise HistoryError("history_conflict")
             return self._delivery(terminal)
+        self._require_publishable(value)  # an authenticated committed retry above creates no new publication
         if row["prepared_digest"] is None:
             with self._transaction():
                 # Retention begins before the first possible private body write,
@@ -2309,24 +2313,251 @@ class ProjectHistory:
                      *(() if kept else (now + self._result_capacity.retention_ms,)),
                      self.project_id, binding.claim_id),
                 )
+                self._store_material(binding, encoded_material)  # D4: the exact prepared material, with the digest
+        elif self._connection.execute("SELECT 1 FROM project_result_publications WHERE project_id=? AND claim_id=?",
+                                      (self.project_id, binding.claim_id)).fetchone() is None:
+            with self._transaction():  # prepared before D4 stored it: kept now, before any further body I/O
+                self._store_material(binding, encoded_material)
         self._write_result_file(binding, body, digest)
         now = self._result_now()
         row, value = self._live_result(binding, now)
         if row["prepared_digest"] != prepared or value.state != "reserved":
             raise HistoryError("history_conflict")
+        self._require_publishable(value)
         with self._transaction():
-            delivery = self._commit_terminal_locked(content, checked, binding, canonical_json(binding.as_data()),
-                                                    hashlib.sha256(content).hexdigest(), now)
-            if usage_record is not None:
-                self._append_locked(usage_record, canonical_json(usage_record), "provider", now)
-            self._connection.execute(
+            return self._commit_publication_locked(content, checked, binding, usage_record, digest, len(body), now,
+                                                   value, prepared)
+
+    def _store_material(self, binding: AttemptBinding, encoded_material: bytes) -> None:
+        """D4 (RS-D draft 3 §3): the exact canonical bytes the prepared digest covers, in the caller's transaction."""
+        self._connection.execute("INSERT OR IGNORE INTO project_result_publications(project_id,claim_id,material) "
+                                 "VALUES(?,?,?)", (self.project_id, binding.claim_id, encoded_material))
+
+    def _require_publishable(self, value) -> None:
+        """D4 (S-3): a new publication needs its actual reservation obligation row `held`. A missing
+        hold is a defect kept for repair, never authority to publish. A `releasing` row means the writer
+        arbitrated the attempt away: nothing commits for it."""
+        held = self._connection.execute(
+            "SELECT 1 FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=? AND state='held'",
+            (self.project_id, value.binding.claim_id)).fetchone()
+        if held is None or self._connection.execute(
+                "SELECT 1 FROM project_account_settlements WHERE project_id=? AND run_handle=? AND attempt=?",
+                (self.project_id, value.binding.run_handle, value.binding.attempt)).fetchone() is not None:
+            raise HistoryError("history_result_expired")
+
+    def _commit_publication_locked(self, content, checked, binding, usage_record, digest, size, now, value, prepared):
+        """The one commit transaction body, shared by the live lane and by replay (RS-D draft 3 §2): eligibility is
+        a compare-and-set inside the transaction (reservation `reserved` with this prepared digest, obligation not
+        `releasing` or `released`, context `bound`), so a settlement written between the checks and here wins."""
+        self._require_publishable(value)
+        delivery = self._commit_terminal_locked(content, checked, binding, canonical_json(binding.as_data()),
+                                                hashlib.sha256(content).hexdigest(), now)
+        if usage_record is not None:
+            self._append_locked(usage_record, canonical_json(usage_record), "provider", now)
+        if self._connection.execute(
                 "UPDATE result_reservations SET state='committed',committed_at_ms=?,expires_at_ms=?,"
-                "body_size=?,result_digest=?,terminal_record_id=? WHERE project_id=? AND claim_id=?",
-                (now, value.retained_until_ms, len(body), digest, delivery.record_id,
-                 self.project_id, binding.claim_id),
-            )
-            project_result_contexts.commit(self, binding, value.retained_until_ms)  # D1
+                "body_size=?,result_digest=?,terminal_record_id=? WHERE project_id=? AND claim_id=? "
+                "AND state='reserved' AND prepared_digest=?",
+                (now, value.retained_until_ms, size, digest, delivery.record_id, self.project_id, binding.claim_id,
+                 prepared)).rowcount != 1:
+            raise HistoryError("history_conflict")
+        self._connection.execute("DELETE FROM project_result_publications WHERE project_id=? AND claim_id=?",
+                                 (self.project_id, binding.claim_id))
+        project_result_contexts.commit(self, binding, value.retained_until_ms)  # D1
         return delivery
+
+    # D4: publication replay and settlement arbitration (RS-D draft 3 §2-§3, draft 4 §2-§4, shared rule S-3).
+
+    def _verified_publication(self, binding: AttemptBinding, row, now: int, *, loss_outcome=False):
+        """The stored material of a still-eligible `reserved` publication, with its final body, checked (RS-D draft 3
+        §3): the digest, the binding, the assignment digest, the terminal record, the usage record and the body's
+        keyed digest. Returns (content, checked, usage_record, digest, body size, prepared digest). Refuses with
+        `history_conflict` when anything is altered or missing, and `history_result_not_ready` with no material.
+        Arbitration alone requests an explicit None outcome for absent material or a proven missing/invalid body;
+        envelope, read and commit failures propagate and cannot authorize release."""
+        stored = self._connection.execute("SELECT material FROM project_result_publications WHERE project_id=? "
+                                          "AND claim_id=?", (self.project_id, binding.claim_id)).fetchone()
+        if stored is None:
+            if loss_outcome:
+                return None  # explicit absence, not a read or authentication failure
+            raise HistoryError("history_result_not_ready")
+        encoded, prepared = bytes(stored[0]), row["prepared_digest"]
+        if (not 0 < len(encoded) <= 2 * MAX_RECORD_BYTES + MAX_BINDING_BYTES + 4096 or prepared is None
+                or not secrets.compare_digest(keyed_digest(self._result_key, encoded), prepared)):
+            raise HistoryError("history_conflict")
+        failure = False
+        try:
+            material = parse_bounded_json(encoded, max_bytes=len(encoded))
+            names = {"binding", "record", "result_digest", "assignment_digest"}
+            if (type(material) is not dict or not names <= set(material) <= names | {"client_usage_record"}
+                    or canonical_json(material) != encoded or material["binding"] != binding.as_data()
+                    or material["assignment_digest"] != row["assignment_digest"]
+                    or not matches(material["result_digest"], _DIGEST)):
+                raise HistoryError("history_conflict")
+            content = canonical_json(material["record"])
+            checked = self._checked_record(content, "host", now)
+            if (checked["record_type"] != "dispatch_result" or checked["run_id"] != binding.run_id
+                    or checked["result_digest"] != material["result_digest"]):
+                raise HistoryError("history_conflict")
+            usage_record = material.get("client_usage_record")
+            if usage_record is not None:
+                usage_content = canonical_json(usage_record)
+                usage_record = self._checked_record(usage_content, "provider", checked["observed_at_ms"])
+                if (canonical_json(usage_record) != usage_content
+                        or usage_record["record_id"] != self._client_usage_id(binding)
+                        or usage_record["run_id"] != binding.run_id or usage_record["phase"] != "after"
+                        or usage_record["provider"] not in {"codex", "claude"}
+                        or usage_record["observed_at_ms"] != checked["observed_at_ms"]
+                        or usage_record["record_type"] not in {"provider_usage", "observation_unavailable"}):
+                    raise HistoryError("history_conflict")
+        except HistoryError as error:
+            if error.reason_code != "history_invalid_input":
+                raise
+            failure = True
+        except (ContractError, KeyError, TypeError, ValueError, OverflowError, RecursionError):
+            failure = True
+        if failure:
+            raise HistoryError("history_conflict")
+        try:
+            body = self._read_result_file(binding, material["result_digest"])
+        except HistoryError as error:
+            if error.reason_code != "history_result_unavailable":
+                raise  # unsafe paths and transient read failures are not proof of loss
+            if loss_outcome:
+                return None  # _read_result_file proved the final body missing or invalid
+            raise HistoryError("history_conflict") from None
+        return content, checked, usage_record, material["result_digest"], len(body), prepared
+
+    def _replay_locked(self, binding: AttemptBinding, now: int, *, loss_outcome=False):
+        """Complete one publication from the store (RS-D draft 3 §2, draft 4 §2). Eligible only while the reservation
+        is `reserved` with its obligation row `held` and its context `bound`; no deadline is a condition. Anything
+        else only finishes cleanup (it is refused here and never deleted here)."""
+        row, value = self._result_row(binding)
+        if value.state == "committed":
+            terminal = self._connection.execute("SELECT * FROM terminal_outbox WHERE project_id=? AND claim_id=?",
+                                                (self.project_id, binding.claim_id)).fetchone()
+            return self._delivery(terminal)
+        if value.state != "reserved" or self._obligation_state(value) != "held":
+            raise HistoryError("history_result_expired")
+        self._require_publishable(value)  # also: no settlement row of the attempt
+        context = project_result_contexts.stored_state(self, binding)
+        if context != "bound":
+            raise HistoryError("history_conflict")
+        publication = self._verified_publication(binding, row, now, loss_outcome=loss_outcome)
+        if publication is None:
+            return None
+        content, checked, usage_record, digest, size, prepared = publication
+        with self._transaction():
+            return self._commit_publication_locked(content, checked, binding, usage_record, digest, size, now, value,
+                                                   prepared)
+
+    @_operation
+    def replay_publication(self, binding: AttemptBinding) -> TerminalDelivery:
+        """D4: commit one stranded publication from its stored material and final body (idempotent: a committed one
+        returns its stored delivery). Refused, with nothing changed, when it is not eligible or does not verify."""
+        binding = self._result_binding(binding)
+        return self._replay_locked(binding, self._expiry_now())
+
+    @_operation
+    def replay_publications(self, skip: frozenset = frozenset(), limit: int = 4) -> list[str]:
+        """D4: the replay pass of the writer, after start-up and on every expire pass: at most `limit` (4, each
+        reading one body of at most 1 MiB and its material) stored publications whose claim has no job publishing in
+        this instance (`skip`) are committed. A refusal never stops the others. Returns the claims committed."""
+        if not valid_integer(limit, minimum=1, maximum=REPLAY_PASS_LIMIT):
+            raise HistoryError("history_invalid_input")
+        now = self._expiry_now()
+
+        def replay_candidates(after):
+            statement = ("SELECT p.rowid,p.claim_id FROM project_result_publications p WHERE p.project_id=?"
+                         + ("" if after is None else " AND p.rowid>?") + " ORDER BY p.rowid LIMIT ?")
+            return self._connection.execute(statement, (self.project_id, *(() if after is None else (after,)),
+                                                        limit + len(skip))).fetchall()
+        rows = replay_candidates(self._replay_cursor)
+        if not rows and self._replay_cursor is not None:
+            self._replay_cursor = None
+            rows = replay_candidates(None)
+        committed, tried = [], 0
+        for position, claim_id in rows:
+            if tried >= limit:
+                break  # do not advance past an untried candidate
+            self._replay_cursor = position
+            if claim_id in skip:
+                continue
+            tried += 1
+            try:
+                reservation = self._connection.execute("SELECT * FROM result_reservations WHERE project_id=? "
+                                                       "AND claim_id=?", (self.project_id, claim_id)).fetchone()
+                if reservation is None:
+                    continue
+                before = reservation["state"]
+                self._replay_locked(self._reservation(reservation).binding, now)
+                if before == "reserved":
+                    committed.append(claim_id)
+            except (HistoryError, sqlite3.Error, OSError):
+                continue  # refused or failing: it stays as it is, charged, for retirement or the next pass
+        return committed
+
+    @_operation
+    def committed_delivery(self, binding: AttemptBinding) -> TerminalDelivery:
+        """D4: the stored delivery of a committed claim (a live lane adopts it after a replay committed its claim)."""
+        binding = self._result_binding(binding)
+        _, value = self._result_row(binding)
+        terminal = self._connection.execute("SELECT * FROM terminal_outbox WHERE project_id=? AND claim_id=?",
+                                            (self.project_id, binding.claim_id)).fetchone()
+        if value.state not in {"committed", "retiring", "expired"} or terminal is None:
+            raise HistoryError("history_result_not_ready")
+        return self._delivery(terminal)
+
+    @_operation
+    def arbitrate_publication(self, run_handle: str, attempt: int, request_id: str) -> str:
+        """D4, shared rule S-3: before the account is asked to settle an admitted attempt, the writer decides.
+        `recovered`: the reservation is `reserved` with a verifiable material and final body, committed here (and an
+        already committed one stays so). `unrecoverable`: no stored material, or a body that does not verify: the
+        obligation row goes `releasing` with the settlement's request id, in one transaction, so no publication of
+        the attempt, live or replayed, commits afterwards. `settling`: a `releasing` row or a settlement row
+        already exists: nothing is published. `none`: nothing to publish (no reservation, or one already retired)."""
+        if (type(run_handle) is not str or not 0 < len(run_handle) <= 128 or not valid_integer(attempt, minimum=0)
+                or type(request_id) is not str or not 0 < len(request_id) <= 128):
+            raise HistoryError("history_invalid_input")
+        now = self._expiry_now()
+        row = self._connection.execute("SELECT * FROM result_reservations WHERE project_id=? AND run_handle=? "
+                                       "AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
+        if row is None:
+            return "none"
+        claim_id = row["claim_id"]
+        obligation = self._connection.execute("SELECT state FROM project_holds WHERE project_id=? AND "
+                                              "kind='reservation' AND identity=?", (self.project_id, claim_id)).fetchone()
+        settled = self._connection.execute("SELECT 1 FROM project_account_settlements WHERE project_id=? AND "
+                                           "run_handle=? AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
+        if settled is not None or (obligation is not None and obligation[0] != "held"):
+            return "settling"
+        if row["state"] in {"retiring", "expired"}:
+            return "none"
+        value = self._reservation(row)
+        if value.state == "committed":
+            return "recovered"
+        if obligation is None:
+            raise HistoryError("history_service_unavailable")  # no release fence can be installed
+        # Migration can leave held legacy reservations without replayable context
+        # or a source lease. Absent material is still proven loss after the hold check.
+        material = self._connection.execute(
+            "SELECT 1 FROM project_result_publications WHERE project_id=? AND claim_id=?",
+            (self.project_id, claim_id)).fetchone()
+        if material is not None and self._replay_locked(value.binding, now, loss_outcome=True) is not None:
+            return "recovered"
+        with self._transaction():
+            if self._connection.execute(
+                    "UPDATE project_holds SET state='releasing',request_id=? WHERE project_id=? AND kind='reservation' "
+                    "AND identity=? AND state='held'", (request_id, self.project_id, claim_id)).rowcount != 1:
+                fence = self._connection.execute(
+                    "SELECT 1 FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=? "
+                    "AND state IN ('releasing','released') UNION ALL SELECT 1 FROM project_account_settlements "
+                    "WHERE project_id=? AND run_handle=? AND attempt=?",
+                    (self.project_id, claim_id, self.project_id, run_handle, attempt)).fetchone()
+                if fence is None:
+                    raise HistoryError("history_service_unavailable")
+                return "settling"
+        return "unrecoverable"
 
     def _client_usage_id(self, binding):
         return "client_usage:" + keyed_digest(self._result_key, b"project-client-usage-v1\0" + canonical_json(binding.as_data()))
@@ -2424,6 +2655,9 @@ class ProjectHistory:
                 kind = "retention"
         with self._transaction():
             self._connection.execute("UPDATE result_reservations SET state='retiring' WHERE project_id=? AND claim_id=?",
+                                     (self.project_id, binding.claim_id))
+            # D4: a material exists only for a `reserved` reservation (SH-7); it goes with the state, never replayed.
+            self._connection.execute("DELETE FROM project_result_publications WHERE project_id=? AND claim_id=?",
                                      (self.project_id, binding.claim_id))
             project_result_contexts.begin_retirement(self, binding, kind, evidence)
         try:
@@ -2664,6 +2898,8 @@ class ProjectHistory:
         self._connection.execute("DELETE FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
                                  attempt_key)
         if claim_id is not None:
+            self._connection.execute("DELETE FROM project_result_publications WHERE project_id=? AND claim_id=?",
+                                     (self.project_id, claim_id))
             self._connection.execute("DELETE FROM result_reservations WHERE project_id=? AND claim_id=?",
                                      (self.project_id, claim_id))
 

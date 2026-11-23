@@ -110,6 +110,7 @@ class _Pending:
     cleanup_custody: object = None
     cleanup_raw: bytes | None = None
     release_acknowledgement: bytes | None = None
+    adoption_pending: bool = False  # D4: retry attestation after replay has removed the material
     release_confirmed: bytes | None = None
     record_inputs: dict | None = None  # D1: the host class and client capability stored with the lease
 
@@ -627,7 +628,7 @@ class ResultPersistenceLane:
         with self._lock:
             if self._closed or self._fault:
                 raise HistoryError("history_service_unavailable")
-            if pending.state in {"queued", "committing", "committed", "acknowledging", "acknowledged"}:
+            if pending.state in {"queued", "committing", "adopting", "committed", "acknowledging", "acknowledged"}:
                 return
             if pending.state != "failed" or pending.selected is None:
                 raise HistoryError("history_result_not_ready")
@@ -1012,6 +1013,7 @@ class ResultPersistenceLane:
             pending.delivery, pending.state, pending.reason = delivery, "committed", None
             pending.terminal_evidence = evidence
             pending.selected = None
+            pending.adoption_pending = False
         self._record_published(pending.binding)
 
     def _record_authority(self):
@@ -1082,6 +1084,74 @@ class ResultPersistenceLane:
     def expire_results(self):
         """Ask the writer to run one bounded result cleanup (0.3.4 R2); poll its `state`."""
         return self._queue_counted(_EarlierLeases('expire'), '_earlier_held', EARLIER_SLOTS)
+
+    def arbitrate_publication(self, run_handle, attempt, request_id):
+        """D4 (shared rule S-3): the writer's decision on one attempt before the account is asked to settle it; poll
+        `state`, then read `result`: `recovered`, `unrecoverable`, `settling` or `none`. `history_writer_busy` when
+        no room is left: ask again later."""
+        if (type(run_handle) is not str or type(attempt) is not int or type(request_id) is not str
+                or not 0 < len(request_id) <= 128):
+            raise HistoryError('history_invalid_input')
+        return self._queue_counted(_EarlierLeases('arbitrate', arguments=(run_handle, attempt, request_id)),
+                                   '_earlier_held', EARLIER_SLOTS)
+
+    def arbitrate_after_stop(self, run_handle, attempt, request_id):
+        """D4 (shared rule S-3): the same decision, for the owner's thread once this lane's writer has stopped (this
+        service's own exit settles what it still holds): on a store opened for this call alone, so the exiting service
+        never asks the account about an attempt whose body the writer could still publish."""
+        if type(run_handle) is not str or type(attempt) is not int or type(request_id) is not str:
+            raise HistoryError('history_invalid_input')
+        with self._lock:
+            if self._fault or not self._closed:
+                raise HistoryError('history_service_unavailable')
+        self._writer.join(10)
+        if self._writer.is_alive():
+            raise HistoryError('history_service_unavailable')
+        store = self._open()
+        try:
+            if type(store) is not ProjectHistory or store.project_id != self._project:
+                raise HistoryError('history_service_unavailable')
+            return store.arbitrate_publication(run_handle, attempt, request_id)
+        finally:
+            if type(store) is ProjectHistory:
+                store.close()
+
+    def _install_delivery(self, pending, delivery, evidence):
+        """D4 (RS-D draft 4 §3, `adopt_delivery`): install a delivery the writer committed for this job's claim, with
+        the three fields `_publish` sets. Idempotent: a job that already has an equal delivery is left alone, an
+        unequal one is `history_conflict`."""
+        with self._lock:
+            if pending.delivery is not None:
+                if pending.delivery != delivery:
+                    raise HistoryError('history_conflict')
+                return
+            pending.delivery, pending.state, pending.reason = delivery, 'committed', None
+            pending.terminal_evidence = evidence
+            pending.selected = None
+            pending.adoption_pending = False
+
+    def _adopt_committed(self, history, claim_ids=None, *, run=None):
+        """Writer step: a job of this service that failed publishing, whose claim was committed from the store (a
+        replay or the arbitration), takes the stored delivery instead of publishing it again."""
+        with self._lock:
+            failed = [pending for pending in self._jobs.values()
+                      if pending.state == 'failed' and pending.delivery is None and type(pending.binding) is AttemptBinding
+                      and (pending.adoption_pending or (claim_ids is not None and pending.binding.claim_id in claim_ids)
+                           or (run is not None and (pending.binding.run_handle, pending.binding.attempt) == run))]
+            for pending in failed:
+                # Claim adoption under the same lock as retry's queue decision;
+                # store I/O and attestation happen after releasing the lock.
+                pending.state = 'adopting'
+                pending.adoption_pending = True
+        for pending in failed:
+            try:
+                delivery = history.committed_delivery(pending.binding)
+                evidence = None if pending.grant is None else history.attest_terminal_delivery(pending.binding)
+                self._install_delivery(pending, delivery, evidence)
+            except (HistoryError, sqlite3.Error, OSError):
+                with self._lock:
+                    pending.state = 'failed'
+                continue  # retain the trigger on this bounded live job for later expiry passes
 
     def open_binding(self, operation, *arguments, **options):
         """B3: bounded writer requests for the open-binding outbox (polled by the owner)."""
@@ -1159,12 +1229,24 @@ class ResultPersistenceLane:
                 # with no client action (O10 D1). Armed leases are never expired by time.
                 with contextlib.suppress(HistoryError, sqlite3.Error):
                     history.expire_result_leases(limit=10)
+                # D4 (RS-D draft 3 §6): stored publications whose job is not publishing here are completed, at most
+                # 4 a pass, before the cleanup; a job of this service that failed takes the delivery committed.
+                with self._lock:
+                    publishing = frozenset(pending.binding.claim_id for pending in self._jobs.values()
+                                           if pending.state in {'queued', 'committing'}
+                                           and type(pending.binding) is AttemptBinding)
+                with contextlib.suppress(HistoryError, sqlite3.Error):
+                    self._adopt_committed(history, set(history.replay_publications(publishing)))
                 # B2 (decision 92.2 A): the backstop and the check after a restart: record what is committed and
                 # unrecorded. A refusal never stops the result cleanup below.
                 with contextlib.suppress(Exception):  # each candidate is isolated inside; this is the pass's own limit
                     service_record.record_pass(history, self._record_authority(), clock=history._result_now,
                                                notes=self.recording_notes)
                 result = history.expire_results(limit=10)
+            elif request.kind == 'arbitrate':
+                result = history.arbitrate_publication(*request.arguments)
+                if result == 'recovered':
+                    self._adopt_committed(history, run=request.arguments[:2])
             elif request.kind == 'register':
                 handle, run_handle, run_id, attempt, instance = request.arguments
                 result = history.record_registered_run(handle, run_handle, run_id, attempt, instance=instance,
@@ -1245,6 +1327,9 @@ class ResultPersistenceLane:
                 with self._lock:
                     pending = self._jobs[handle]
                     if operation == "publish":
+                        if pending.delivery is not None:
+                            pending = handle = command = None
+                            continue  # an adoption already completed this queued publication
                         pending.state = "committing"
                 try:
                     operations[operation](pending)

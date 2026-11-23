@@ -1298,6 +1298,11 @@
    "checks": 2,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "project_history.py::replay_candidates": {
+   "checks": 1,
+   "ends": "D4 (RS-D draft 3 \u00a76): one bounded page per replay pass (at most REPLAY_PASS_LIMIT = 4 publications tried, each one body of at most 1 MiB) over `project_result_publications`, which holds only unfinished publications: a row ends with its commit or with the transaction that records `retiring`, so nothing accumulates and tombstones cost nothing; a refused row stays for retirement and the cursor moves on, so it never holds later ones back",
+   "test": "test_the_replay_pass_completes_at_most_four_publications_and_the_next_pass_the_rest"
+  },
   "project_history.py::settle_earlier_registrations": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"

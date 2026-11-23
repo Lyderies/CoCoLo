@@ -231,6 +231,12 @@ def verify_open(history, run_handle: str, attempt: int, inputs: dict) -> bool:
     return True
 
 
+def stored_state(history, binding: AttemptBinding):
+    """D4: the state of the attempt's context row, or None when it has none (the test-only non-lease path)."""
+    row = _row(history, binding.run_handle, binding.attempt)
+    return None if row is None else row["state"]
+
+
 def mark_opened(history, run_handle: str, attempt: int) -> None:
     """In the host open's transaction."""
     history._connection.execute(
