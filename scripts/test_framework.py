@@ -70,7 +70,9 @@ def inventory_suite(suite, layers=None):
     """Called only inside a suite's discovery child, honoring its load_tests hooks."""
     found = {}
     root = Path(__file__).resolve().parents[1]
-    baseline_file = root / 'scripts/test-legacy-bound-values.json'
+    baseline_file = root / 'scripts/test-legacy-captured-values.json'
+    if not baseline_file.exists():
+        baseline_file = root / 'scripts/test-legacy-bound-values.json'
     if not baseline_file.exists():
         baseline_file = root / 'scripts/test-legacy-values.json'
     baseline = decode_json(baseline_file.read_text()) if baseline_file.exists() else {}
@@ -396,6 +398,8 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
                     return repr('<worktree>' + value[len(worktree_prefix):])
             return repr(value)
         if inspect.isfunction(value) or inspect.isclass(value):
+            if include_values:
+                walk(value)
             return (value.__module__, value.__qualname__)
         if include_values and inspect.isbuiltin(value) and isinstance(getattr(value, '__self__', None), (types.ModuleType, type(None))):
             return ('builtin', value.__module__, value.__qualname__)
@@ -445,6 +449,10 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
             records[key] = (_source(value), code_value(value.__code__))
             if include_values and any(name in value.__code__.co_names for name in ('getattr', '__import__', 'import_module', 'eval', 'exec')) and not covered(dependency_source(value)):
                 unresolved.append(key + ': dynamic helper needs explicit source dependency')
+            if include_values:
+                for name, defaults in (('defaults', value.__defaults__), ('kwdefaults', value.__kwdefaults__)):
+                    if defaults:
+                        records[key + ':' + name] = stable(defaults, dependency_source(value))
             for name in value.__code__.co_names:
                 dependency = value.__globals__.get(name)
                 if inspect.isfunction(dependency) or inspect.isclass(dependency):
@@ -469,7 +477,7 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
                 item = cell.cell_contents
                 if inspect.isfunction(item) or inspect.isclass(item):
                     walk(item)
-                elif isinstance(item, (str, bytes, int, float, bool, tuple, list, dict, type(None))):
+                elif include_values or isinstance(item, (str, bytes, int, float, bool, tuple, list, dict, type(None))):
                     records[key + ':closure:' + str(index)] = stable(item, dependency_source(value))
         elif inspect.isclass(value) and local(value):
             for item in vars(value).values():
@@ -520,23 +528,27 @@ def golden_bypasses(source, *, filename=None):
                 if not isinstance(node, (ast.Import, ast.ImportFrom)):
                     continue
                 for alias in node.names:
-                    module_name = node.module if isinstance(node, ast.ImportFrom) else alias.name
-                    if not module_name:
-                        continue
-                    parts = module_name.split('.')
-                    bases = ([filename.parents[node.level - 1]] if isinstance(node, ast.ImportFrom) and node.level
+                    is_from = isinstance(node, ast.ImportFrom)
+                    module_name = (node.module or '') if is_from else alias.name
+                    bases = ([filename.parents[node.level - 1]] if is_from and node.level
                              else [filename.parent, *filename.parents])
-                    candidates = [path for base in bases for path in
-                                  (base.joinpath(*parts) / '__init__.py', base.joinpath(*parts).with_suffix('.py'))]
-                    dependency = next((path for path in candidates if path.is_file()), None)
-                    if dependency is None or dependency in seen:
-                        continue
-                    exported, _ = analyze(dependency.read_text(), dependency, seen)
-                    if isinstance(node, ast.ImportFrom):
+                    def exports(name):
+                        parts = name.split('.') if name else []
+                        candidates = [path for base in bases for path in
+                                      (base.joinpath(*parts) / '__init__.py', base.joinpath(*parts).with_suffix('.py'))]
+                        dependency = next((path for path in candidates if path.is_file()), None)
+                        if dependency is None or dependency in seen:
+                            return set()
+                        return analyze(dependency.read_text(), dependency, seen)[0]
+                    exported = exports(module_name)
+                    local_name = alias.asname or alias.name
+                    if is_from:
                         if alias.name in exported:
-                            golden_names.add(alias.asname or alias.name)
+                            golden_names.add(local_name)
+                        golden_names.update(local_name + name[len(alias.name):] for name in exported if name.startswith(alias.name + '.'))
+                        submodule = '.'.join(part for part in (module_name, alias.name) if part)
+                        golden_names.update(local_name + '.' + name for name in exports(submodule))
                     else:
-                        local_name = alias.asname or alias.name
                         golden_names.update(local_name + '.' + name for name in exported)
         temporary_names = set()
         def references(node, names):
@@ -668,4 +680,25 @@ def validate_entrypoints(root, inventory, check_layers):
         for check in record.get('checks', []):
             if check_layers.get(check) not in ('crash', 'scenario', 'soak'):
                 errors.append(name + ': missing real check ' + check)
+    return errors
+
+
+def validate_witness_evidence(root, records):
+    """TF-23: small presence/outcome gate; reviewers judge semantic relevance."""
+    errors = []
+    for row in records:
+        label = row.get('fix', '<unnamed>')
+        fields = ('fix', 'requirement', 'witness', 'positive_control', 'base', 'red', 'diagnostic', 'green')
+        if any(not isinstance(row.get(key), str) or not row[key].strip() for key in fields):
+            errors.append(label + ': incomplete witness evidence')
+            continue
+        try:
+            red = decode_json((root / row['red']).read_text())
+            green = decode_json((root / row['green']).read_text())
+            if red.get('status') != 'red' or red.get('base') != row['base'] or row['diagnostic'] not in red.get('diagnostic', ''):
+                errors.append(label + ': wrong red evidence')
+            if green.get('status') != 'green':
+                errors.append(label + ': wrong green evidence')
+        except (OSError, ValueError, TypeError, AttributeError):
+            errors.append(label + ': unreadable witness evidence')
     return errors

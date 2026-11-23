@@ -307,6 +307,7 @@
  "root:test_test_framework": "integration",
  "root:test_test_framework_guards": "integration",
  "root:test_test_framework_r2": "integration",
+ "root:test_test_framework_r3": "integration",
  "root:test_test_framework_review": "integration",
  "root:test_test_stages": "integration",
  "root:test_wizard_clock": "integration"

@@ -29,9 +29,9 @@ def compare(*, root, name, actual, requirement, declared, known, environ):
     target = _destination(root, name)
     provenance = _destination(root, str(name) + '.requirement')
     expected = target.read_bytes().decode('utf-8') if target.exists() else None
-    if expected == actual:
-        if environ.get('UPDATE_GOLDEN') == '1':
-            raise GoldenUpdated(f'golden update mode for {requirement}; rerun without UPDATE_GOLDEN')
+    if expected == actual and environ.get('UPDATE_GOLDEN') != '1':
+        if not provenance.is_file() or provenance.read_text(encoding='utf-8') != requirement + '\n':
+            raise AssertionError('golden provenance missing or mismatched for ' + requirement)
         return
     if environ.get('UPDATE_GOLDEN') == '1':
         target.parent.mkdir(parents=True, exist_ok=True)

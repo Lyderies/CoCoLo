@@ -1,0 +1,21 @@
+{
+ "positive": "all requirements passed",
+ "controls": [
+  {
+   "category": "metadata",
+   "diagnostic": "failed worker, metadata or budget evidence"
+  },
+  {
+   "category": "worker",
+   "diagnostic": "failed worker, metadata or budget evidence"
+  },
+  {
+   "category": "budget",
+   "diagnostic": "failed worker, metadata or budget evidence"
+  },
+  {
+   "category": "retirement",
+   "diagnostic": "failed worker, metadata or budget evidence"
+  }
+ ]
+}

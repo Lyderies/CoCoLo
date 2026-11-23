@@ -60,10 +60,23 @@ jobs:
           python-version: "3.11"
       - name: Select trusted review base
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          TRUSTED_BASE: a1d25560c7748680387a542fb7d047c32205dad8
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BASE: ${{ github.event.before }}
         run: |
-          base="${PR_BASE:-$PUSH_BASE}"
+          case "$EVENT_NAME" in
+            pull_request) base="$PR_BASE" ;;
+            schedule) base="$TRUSTED_BASE" ;;
+            push)
+              case "$EVENT_REF" in
+                refs/tags/*) base="$TRUSTED_BASE" ;;
+                refs/heads/*) base="$PUSH_BASE" ;;
+                *) echo 'Unsupported trusted-base event ref' >&2; exit 1 ;;
+              esac ;;
+            *) echo 'Unsupported trusted-base event' >&2; exit 1 ;;
+          esac
           if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
             echo 'Missing trusted review base' >&2
             exit 1
@@ -104,10 +117,23 @@ jobs:
           python-version: "3.11"
       - name: Select trusted review base
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          TRUSTED_BASE: a1d25560c7748680387a542fb7d047c32205dad8
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BASE: ${{ github.event.before }}
         run: |
-          base="${PR_BASE:-$PUSH_BASE}"
+          case "$EVENT_NAME" in
+            pull_request) base="$PR_BASE" ;;
+            schedule) base="$TRUSTED_BASE" ;;
+            push)
+              case "$EVENT_REF" in
+                refs/tags/*) base="$TRUSTED_BASE" ;;
+                refs/heads/*) base="$PUSH_BASE" ;;
+                *) echo 'Unsupported trusted-base event ref' >&2; exit 1 ;;
+              esac ;;
+            *) echo 'Unsupported trusted-base event' >&2; exit 1 ;;
+          esac
           if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
             echo 'Missing trusted review base' >&2
             exit 1
@@ -181,10 +207,23 @@ jobs:
           python-version: "3.11"
       - name: Select trusted review base
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          TRUSTED_BASE: a1d25560c7748680387a542fb7d047c32205dad8
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BASE: ${{ github.event.before }}
         run: |
-          base="${PR_BASE:-$PUSH_BASE}"
+          case "$EVENT_NAME" in
+            pull_request) base="$PR_BASE" ;;
+            schedule) base="$TRUSTED_BASE" ;;
+            push)
+              case "$EVENT_REF" in
+                refs/tags/*) base="$TRUSTED_BASE" ;;
+                refs/heads/*) base="$PUSH_BASE" ;;
+                *) echo 'Unsupported trusted-base event ref' >&2; exit 1 ;;
+              esac ;;
+            *) echo 'Unsupported trusted-base event' >&2; exit 1 ;;
+          esac
           if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
             echo 'Missing trusted review base' >&2
             exit 1
@@ -241,6 +280,9 @@ jobs:
           python-version: "3.11"
       - name: Validate trusted PR merge base
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          TRUSTED_BASE: a1d25560c7748680387a542fb7d047c32205dad8
           PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           test -n "$PR_BASE" || exit 1
