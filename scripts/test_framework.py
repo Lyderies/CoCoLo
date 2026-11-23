@@ -516,7 +516,7 @@ def golden_bypasses(source, *, filename=None):
         if filename is not None:
             filename = Path(filename).resolve()
             seen = seen | {filename}
-            for node in tree.body:
+            for node in ast.walk(tree):
                 if not isinstance(node, (ast.Import, ast.ImportFrom)):
                     continue
                 for alias in node.names:
@@ -524,9 +524,11 @@ def golden_bypasses(source, *, filename=None):
                     if not module_name:
                         continue
                     parts = module_name.split('.')
-                    bases = [filename.parent, *filename.parents]
-                    dependency = next((base.joinpath(*parts).with_suffix('.py') for base in bases
-                                       if base.joinpath(*parts).with_suffix('.py').is_file()), None)
+                    bases = ([filename.parents[node.level - 1]] if isinstance(node, ast.ImportFrom) and node.level
+                             else [filename.parent, *filename.parents])
+                    candidates = [path for base in bases for path in
+                                  (base.joinpath(*parts) / '__init__.py', base.joinpath(*parts).with_suffix('.py'))]
+                    dependency = next((path for path in candidates if path.is_file()), None)
                     if dependency is None or dependency in seen:
                         continue
                     exported, _ = analyze(dependency.read_text(), dependency, seen)
