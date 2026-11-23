@@ -60,3 +60,75 @@ class RoundThree(unittest.TestCase):
 
     @requirements('ML-12','ML-30')
     def test_p07_V2_failed_check_attr_is_not_empty_success(self): self.failed_git('check-attr')
+
+    @requirements('TF-19','ML-R91')
+    def test_p08_V1_unreadable_folder_is_not_certified_empty(self):
+        import os
+        from tests import merge_library_support as support
+        f=self.fixture();folder=f.project/'empty';folder.mkdir()
+        support.check_empty_recorded_tree(self,f,'empty',{})
+        original=os.scandir;fired=[]
+        def denied(path):
+            if str(path)==str(folder):fired.append(str(path));raise PermissionError('p08 denied listing')
+            return original(path)
+        with mock.patch.object(support.os,'scandir',denied):
+            with self.assertRaisesRegex(PermissionError,'p08 denied listing'):
+                support.check_empty_recorded_tree(self,f,'empty',{})
+        self.assertEqual([str(folder)],fired)
+
+    @requirements('TF-19','ML-12')
+    def test_p08_V2_unresolved_row_needs_recovery_or_status_evidence(self):
+        from tests import merge_library_support as support
+        f=self.fixture();batch=f.batch();row=ml.HistoryRow(1,batch,'applying');report=ml.Report('needs_owner','io',1)
+        with mock.patch.object(ml,'history',return_value=(row,)),mock.patch.object(support,'outcome_oracle') as oracle:
+            for recovering,status in [((report,),()),((),(report,))]:
+                with mock.patch.object(ml,'recover',return_value=recovering),mock.patch.object(ml,'status',return_value=status):
+                    self.assertEqual((report,),support.recover_checked(self,f,batch,'forward'))
+                    oracle.assert_called_once();oracle.reset_mock()
+            with mock.patch.object(ml,'recover',return_value=()),mock.patch.object(ml,'status',return_value=()):
+                with self.assertRaisesRegex(AssertionError,'unresolved row has no recovery or status evidence'):
+                    support.recover_checked(self,f,batch,'forward')
+
+    @requirements('ML-8','TF-19')
+    def test_p09_final_reader_exception_fails_the_concurrency_witness(self):
+        import os
+        import threading
+        from pathlib import Path
+        from tests.test_merge_library_adversarial import Adversarial
+        f=self.fixture();batch=f.batch({'a.txt':b'child'});original=Path.read_bytes
+        for fail in (False,True):
+            reads=[]
+            def read(path):
+                if path==f.project/'a.txt' and threading.current_thread()!=threading.main_thread():
+                    reads.append(1)
+                    if fail and len(reads)==2:raise PermissionError('p09 final reader boundary')
+                return original(path)
+            def land(batch,hook):
+                hook(ml.IOCall('write','before','staging',detail={'data':b'ab','fd':123}))
+                hook(ml.IOCall('checkpoint','after','cleanup'))
+            case=Adversarial('test_ml_8_synchronized_reader_partial_write_and_boundaries');case.setUp=lambda:None;case.f=f
+            result=unittest.TestResult()
+            with mock.patch.object(f,'batch',return_value=batch),mock.patch.object(f,'land',land),mock.patch.object(Path,'read_bytes',read),mock.patch.object(os,'write',return_value=1):case.run(result)
+            self.assertEqual([],result.errors);self.assertEqual(2,len(reads),'p09 did not reach exactly the final reader boundary')
+            if fail:
+                self.assertEqual(1,len(result.failures),'p09 old witness swallowed final reader exception')
+                self.assertIn('p09 final reader boundary',result.failures[0][1])
+            else:self.assertTrue(result.wasSuccessful(),result.failures)
+
+    @requirements('ML-17','TF-13')
+    def test_p10_blocked_sealers_leave_no_threads_in_the_test_process(self):
+        import threading
+        from tests import test_merge_library_contract as contract
+        from tests.merge_library_support import child_run
+        name='test_ml_17_concurrent_sealers_fifo_restart'
+        control=unittest.TestResult();contract.Contract(name).run(control);self.assertTrue(control.wasSuccessful(),control.errors+control.failures)
+        def probe():
+            real_join=threading.Thread.join;stop=threading.Event()
+            def blocked(*args,**kwargs):stop.wait(60)
+            def short_join(thread,timeout=None):return real_join(thread,.02)
+            result=unittest.TestResult()
+            with mock.patch.object(ml,'enqueue',blocked),mock.patch.object(threading.Thread,'join',short_join):contract.Contract(name).run(result)
+            self.assertEqual(1,len(result.failures),'p10 blocked enqueue was not reported')
+            leaked=[t for t in threading.enumerate() if t is not threading.main_thread() and not t.daemon]
+            self.assertEqual([],leaked,'p10 leaked non-daemon sealer threads')
+        self.assertEqual(0,child_run(probe,timeout=3))
