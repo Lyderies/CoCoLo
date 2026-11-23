@@ -160,6 +160,8 @@ try each available process API, git under an absolute path, an import-time spawn
 no child-side marker is created. Run platform-specific API witnesses on their supported OS; the matrix must
 contain evidence for both macOS and Linux.
 
+Decision 100 A (2026-11-23): discovery and test workers, locally and in CI, inherit only an explicit environment allowlist: PATH, HOME, temporary-directory variables, locale variables, COCOLO_TEST_* and named framework necessities. Every other variable is dropped, including GITHUB_TOKEN, AWS_SESSION_TOKEN and arbitrary *_PASSWORD variables. TF-10 witnesses must verify the actual worker boundary and permitted-variable controls.
+
 **TF-11 — Refuse real sockets in unit/component.** Deny socket creation/connect/bind and applicable address
 resolution/network APIs before OS effects; include AF_UNIX and AF_INET and socketpair. Patch/audit supported
 stdlib entry points without blocking construction of test doubles. Explicitly refuse socket.socket,
