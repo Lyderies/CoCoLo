@@ -529,13 +529,37 @@ def sweep(history, limit: int) -> int:
     return ended
 
 
-def repairs(history, limit: int = 20) -> list[dict]:
-    """The retirements still waiting (RS-D draft 3 §4), bounded by `limit`, for status. Each stays charged until every
-    fixed name is gone. A context in `repair_required` is shown with its stored reason (`directory`). Any other
-    unfinished retirement is shown as `retrying`: a context still `retiring` (an unlink or fsync error, or a stop, that
-    the next pass retries), and a reservation in `retiring` that has no context row at all (the non-lease path), for
-    which `directory` is derived from the fixed names, since a reservation has no repair column (no schema step)."""
-    report = []
+class RepairReport(list):
+    """The entries of one bounded page, in order, plus `truncated` and `cursor`: when `truncated`, pass `cursor` to
+    `repairs` to get the entries after this page, so that every remaining entry stays discoverable."""
+
+    truncated = False
+    cursor = None
+
+
+_TIERS = ("repair_required", "reservation", "retiring")  # the order of the report: operator-needed first
+
+
+def _parse_cursor(cursor) -> tuple[int, int]:
+    if cursor is None:
+        return 0, 0
+    if isinstance(cursor, str):
+        tier, _, rowid = cursor.partition(":")
+        if tier.isdigit() and rowid.isdigit() and int(tier) < len(_TIERS) and len(rowid) <= 18:
+            return int(tier), int(rowid)
+    raise HistoryError("history_invalid_input")
+
+
+def repairs(history, limit: int = 20, cursor=None) -> RepairReport:
+    """The retirements still waiting (RS-D draft 3 §4), at most `limit` per page, for status. Each stays charged until
+    every fixed name is gone. Entries come in three groups, each in row order: a context in `repair_required` (shown
+    with its stored reason, `directory`), then a reservation in `retiring` that has no context row (the non-lease
+    path; `directory` is derived from the fixed names, since a reservation has no repair column and there is no
+    schema step), then a context still `retiring` (an unlink or fsync error, or a stop, that the next pass retries;
+    shown as `retrying`). So persistent retries never hide an entry an operator must repair. A page that does not
+    reach the end is `truncated` and carries a `cursor` for the next page."""
+    report = RepairReport()
+    tier, after = _parse_cursor(cursor)
 
     def directories(fixed):
         found = []
@@ -547,34 +571,66 @@ def repairs(history, limit: int = 20) -> list[dict]:
                 continue
         return found
 
-    for run_handle, attempt, state, reason in history._connection.execute(
-            "SELECT run_handle,attempt,state,repair_reason FROM project_result_contexts INDEXED BY "
-            "project_result_contexts_live WHERE project_id=? AND state NOT IN ('ended','expired') "
-            "AND state IN ('repair_required','retiring') ORDER BY rowid LIMIT ?", (history.project_id, limit)).fetchall():
-        fixed = list(names(history, run_handle, attempt))
+    def context_rows(state, room):
+        return history._connection.execute(
+            "SELECT rowid AS position,run_handle,attempt,state,repair_reason FROM project_result_contexts INDEXED BY "
+            "project_result_contexts_live WHERE project_id=? AND state NOT IN ('ended','expired') AND state=? "
+            "AND rowid>? ORDER BY rowid LIMIT ?", (history.project_id, state, after, room)).fetchall()
+
+    def context_entry(row):
+        fixed = list(names(history, row["run_handle"], row["attempt"]))
         reservation = history._connection.execute(
             "SELECT * FROM result_reservations WHERE project_id=? AND run_handle=? AND attempt=?",
-            (history.project_id, run_handle, attempt)).fetchone()
+            (history.project_id, row["run_handle"], row["attempt"])).fetchone()
         if reservation is not None:
             try:
                 fixed += history._result_names(history._reservation(reservation).binding)
             except HistoryError:
                 pass
-        report.append({"run_handle": run_handle, "attempt": attempt,
-                       "reason": reason if state == "repair_required" else "retrying", "names": directories(fixed)})
-    if len(report) < limit:
-        for row in history._connection.execute(
-                "SELECT * FROM result_reservations AS s WHERE s.project_id=? AND s.state='retiring' "
-                "AND NOT EXISTS(SELECT 1 FROM project_result_contexts c WHERE c.project_id=s.project_id "
-                "AND c.run_handle=s.run_handle AND c.attempt=s.attempt) ORDER BY s.rowid LIMIT ?",
-                (history.project_id, limit - len(report))).fetchall():
-            try:
-                value = history._reservation(row)
-            except HistoryError:
-                continue
-            found = directories(history._result_names(value.binding))
-            report.append({"run_handle": value.binding.run_handle, "attempt": value.binding.attempt,
-                           "reason": "directory" if found else "retrying", "names": found})
+        return {"run_handle": row["run_handle"], "attempt": row["attempt"],
+                "reason": row["repair_reason"] if row["state"] == "repair_required" else "retrying",
+                "names": directories(fixed)}
+
+    def reservation_rows(room):
+        return history._connection.execute(
+            "SELECT s.rowid AS position,s.* FROM result_reservations AS s WHERE s.project_id=? AND s.state='retiring' "
+            "AND NOT EXISTS(SELECT 1 FROM project_result_contexts c WHERE c.project_id=s.project_id "
+            "AND c.run_handle=s.run_handle AND c.attempt=s.attempt) AND s.rowid>? ORDER BY s.rowid LIMIT ?",
+            (history.project_id, after, room)).fetchall()
+
+    def reservation_entry(row):
+        try:
+            value = history._reservation(row)
+        except HistoryError:
+            return None
+        found = directories(history._result_names(value.binding))
+        return {"run_handle": value.binding.run_handle, "attempt": value.binding.attempt,
+                "reason": "directory" if found else "retrying", "names": found}
+
+    while tier < len(_TIERS) and limit > 0:
+        room = limit - len(report)
+        if _TIERS[tier] == "reservation":
+            rows, entry = reservation_rows(room + 1), reservation_entry
+        else:
+            state = "repair_required" if _TIERS[tier] == "repair_required" else "retiring"
+            rows, entry = context_rows(state, room + 1), context_entry
+        for row in rows[:room]:
+            made = entry(row)
+            if made is not None:
+                report.append(made)
+        if len(rows) > room:  # this group has more: the page is full, and the next one starts after the last row shown
+            report.truncated, report.cursor = True, f"{tier}:{rows[room - 1]['position']}"
+            return report
+        tier, after = tier + 1, 0
+        if len(report) >= limit:  # full exactly at the end of a group: more only if a later group has an entry
+            while tier < len(_TIERS):
+                probe = reservation_rows(1) if _TIERS[tier] == "reservation" else context_rows(
+                    "repair_required" if _TIERS[tier] == "repair_required" else "retiring", 1)
+                if probe:
+                    report.truncated, report.cursor = True, f"{tier}:0"
+                    return report
+                tier += 1
+            return report
     return report
 
 

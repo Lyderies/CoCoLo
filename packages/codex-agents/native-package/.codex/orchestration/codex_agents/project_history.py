@@ -2426,11 +2426,12 @@ class ProjectHistory:
             project_result_contexts.end_retirement(self, binding)
 
     @_operation
-    def result_retirement_repairs(self, limit: int = 20) -> list[dict]:
-        """D3 (RS-D draft 3 §4): the retirements that wait for an operator, for status. Each stays charged."""
+    def result_retirement_repairs(self, limit: int = 20, cursor: str | None = None) -> list[dict]:
+        """D3 (RS-D draft 3 §4): the retirements that wait, for status, operator-needed first. Each stays charged. The
+        list has `truncated` and `cursor`; pass the cursor back to read the entries after a truncated page."""
         if not valid_integer(limit, minimum=1, maximum=100):
             raise HistoryError("history_invalid_input")
-        return project_result_contexts.repairs(self, limit)
+        return project_result_contexts.repairs(self, limit, cursor)
 
     @_operation
     def retire_result(self, binding: AttemptBinding) -> None:

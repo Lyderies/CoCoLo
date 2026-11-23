@@ -50,3 +50,10 @@ migration). Not done here.
 ## Not in D3
 S2/S3 (D4 replay, query plans), orphan body *final* names without a row (a body write always follows its reservation row, so none arises),
 the `crashed` settlement (RS-C), status projection (B7).
+
+## Fix round 2 (review rev040d3r2c)
+MED: `repairs` lists contexts in `repair_required` first, then reservation-only rows, then `retrying` contexts, so persistent retries cannot
+hide an operator-needed repair; the page has `truncated` and `cursor` (pass it back as `result_retirement_repairs(limit, cursor)`). Tests:
+`test_R2_*`. LOW: crash tests seed distinct on-disk states (a partial name each side); the start-up trace covers str and bytes paths and
+only descriptors it saw opened (inherited descriptors are not covered); the S1 comment states its 20-step tolerance. Decision 116 and
+io behaviour unchanged.
