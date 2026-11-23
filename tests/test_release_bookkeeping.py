@@ -76,6 +76,14 @@ class ReleaseBookkeeping(unittest.TestCase):
         self.assertEqual(json.loads(self.sources('30bf1fa9')[FILES[0]])['releases'][-1],record)
         with self.assertRaisesRegex(ValueError,'immutable binding already exists'):
             module.write_new(ROOT/'scripts/test-legacy-release-0850.json',{})
+        path=ROOT/'scripts/test-release-bindings/0.8.49.json';original=path.read_bytes()
+        command=[sys.executable,'-B',str(ROOT/'scripts/rebind_release_bookkeeping.py'),'--from','c75eba51','--source','b5318440','--previous-release']
+        overwrite=subprocess.run(command+['0.8.49'],cwd=ROOT,capture_output=True,text=True)
+        self.assertEqual(1,overwrite.returncode);self.assertIn('immutable binding already exists',overwrite.stderr)
+        self.assertEqual(original,path.read_bytes())
+        invalid=subprocess.run(command+['0.8.99'],cwd=ROOT,capture_output=True,text=True)
+        self.assertEqual(1,invalid.returncode);self.assertIn('source version',invalid.stderr)
+        self.assertFalse((ROOT/'scripts/test-release-bindings/0.8.99.json').exists())
 
     @requirements('TF-25','TF-7')
     def test_claimed_pre_bump_commit_cannot_hide_old_record_edits(self):
@@ -125,3 +133,19 @@ class ReleaseBookkeeping(unittest.TestCase):
             result=module.build(ROOT,'9e095c4c','0ca9c36f','0.8.50',state,'future-fixture',module.source_hashes(before))
         self.assertEqual(set(module.checked_bindings(ROOT)),set(result['tests']))
         self.assertNotEqual(state[next(k for k in state if k.endswith('test_the_shipped_catalogue_is_accepted'))]['fingerprint'],result['tests'][next(k for k in result['tests'] if k.endswith('test_the_shipped_catalogue_is_accepted'))]['fingerprint'])
+
+    @requirements('TF-25','TF-7')
+    def test_immutable_binding_tampering_is_rejected(self):
+        from unittest import mock
+        module=self.policy();original=Path.read_text;path=ROOT/'scripts/test-release-bindings/0.8.49.json'
+        self.assertEqual(14,len(module.checked_bindings(ROOT)))
+        def changed(file,*args,**kwargs):
+            text=original(file,*args,**kwargs)
+            if file==path:
+                data=json.loads(text);data['tests'][next(iter(data['tests']))]['fingerprint']='forged'
+                return json.dumps(data)
+            return text
+        with mock.patch.object(Path,'read_text',changed):
+            with self.assertRaisesRegex(ValueError,'immutable bookkeeping binding'):
+                module.checked_bindings(ROOT)
+        self.assertEqual(14,len(module.checked_bindings(ROOT)))
