@@ -150,15 +150,15 @@ def sources(root, manifests):
     return original, state
 
 
-def changed_proofs(before, after, seed, retired=()):
+def changed_proofs(before, after, seed, retired=(), *, candidate):
     result = {}
     for name, expected in seed.items():
-        if name not in before or name not in after:
+        if name not in before or name not in after or name not in candidate:
             raise ValueError(name + ': changed legacy identity')
         new = after[name]; old = before[name]
         if any(old.get(f) != expected[f] for f in FIELDS):
             raise ValueError(name + ': trusted old proof differs from admitted baseline')
-        if new.get('requirements'):
+        if candidate[name].get('requirements'):
             if name in retired:
                 # A normal migration is checked by requirement metadata, never
                 # admitted as an approved-edit legacy proof.
@@ -301,7 +301,16 @@ def build(root, manifests, active=None, *, at=None):
                 continue
             path = snapshot / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(content)
         after = inventory(root, snapshot, seed)
-    tests = changed_proofs(before, after, seed, retired=seed.keys() - listed_ids(root, at))
+    # Replay overlays only manifest files. A normally migrated definition can
+    # live elsewhere, so discover its metadata in the commit being bound (or
+    # the immutable introduction when verifying), never in the replay snapshot.
+    with tempfile.TemporaryDirectory(prefix='approved-edit-candidate-') as folder:
+        candidate_tree = Path(folder).resolve()
+        candidate_revision = at or 'HEAD'
+        extract(root, candidate_revision, candidate_tree)
+        candidate = inventory(root, candidate_tree, seed)
+    tests = changed_proofs(before, after, seed, retired=seed.keys() - listed_ids(root, candidate_revision),
+                           candidate=candidate)
     tests = {name: row for name, row in tests.items() if name in active}
     return dict(schema=1, source_revision=SOURCE_REVISION,
                 algorithm_sha256=hashlib.sha256((root / 'scripts/test_framework.py').read_bytes()).hexdigest(),

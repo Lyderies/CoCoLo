@@ -56,21 +56,21 @@ class ApprovedEdits(unittest.TestCase):
         after['changed'].update(fingerprint='I', dependencies='D', dependency_values='V')
         after['new_tagged'] = {**row, 'requirements': ['TF-27']}
         self.assertEqual({'changed': dict(fingerprint='I', dependencies='D', dependency_values='V')},
-                         p.changed_proofs(before, after, seed))
-        self.assertEqual({}, p.changed_proofs(before, before, seed))
+                         p.changed_proofs(before, after, seed, candidate=after))
+        self.assertEqual({}, p.changed_proofs(before, before, seed, candidate=before))
         for field in ('fingerprint', 'dependencies', 'dependency_values'):
             bad = copy.deepcopy(before); bad['changed'][field] = 'stale'
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'trusted old proof'):
-                p.changed_proofs(bad, after, seed)
+                p.changed_proofs(bad, after, seed, candidate=after)
 
     def test_renamed_restored_and_unresolved_proofs_are_refused(self):
         p = self.policy()
         row = dict(fingerprint='i', dependencies='d', dependency_values='v', requirements=[])
         seed = {'kept': row}; before = copy.deepcopy(seed)
-        self.assertEqual({}, p.changed_proofs(before, before, seed))
+        self.assertEqual({}, p.changed_proofs(before, before, seed, candidate=before))
         for after in ({'renamed': row}, {**before, 'restored': row}, {'kept': {**row, 'dependency_values': None}}):
             with self.subTest(after=after), self.assertRaisesRegex(ValueError, 'identity|unresolved|new untagged'):
-                p.changed_proofs(before, after, seed)
+                p.changed_proofs(before, after, seed, candidate=after)
 
     def test_unrelated_legacy_proof_still_flags_and_retired_stays_retired(self):
         p = self.policy()
@@ -243,12 +243,12 @@ class ApprovedEditsR1(unittest.TestCase):
     def test_r1_unchanged_stale_old_proofs_are_refused(self):
         p = self.policy()
         row = dict(fingerprint='i', dependencies='d', dependency_values='v', requirements=[])
-        self.assertEqual({}, p.changed_proofs({'kept': row}, {'kept': row}, {'kept': row}))
+        self.assertEqual({}, p.changed_proofs({'kept': row}, {'kept': row}, {'kept': row}, candidate={'kept': row}))
         for field in p.FIELDS:
             stale = {**row, field: 'stale'}
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'trusted old proof',
                     msg='TF-27 stale unchanged old proof accepted'):
-                p.changed_proofs({'kept': stale}, {'kept': stale}, {'kept': row})
+                p.changed_proofs({'kept': stale}, {'kept': stale}, {'kept': row}, candidate={'kept': row})
 
     def test_r1_owner_record_authenticates_first_introduction(self):
         for invalid in (None, 'owner', 'binding', 'decision'):
@@ -363,12 +363,16 @@ class ApprovedEditsMigration(unittest.TestCase):
     write_json = ApprovedEditsR1.write_json
     snapshot = ApprovedEditsR1.snapshot
 
-    def migration(self, root, p, fault=None):
+    def migration(self, root, p, fault=None, *, outside_manifest=False):
         import hashlib
         subprocess.run(['git', 'init', '-q', str(root)], check=True)
         ids = self.snapshot(root)
         path = root / 'tests/test_case.py'
         path.write_text(path.read_text() + '    def test_active(self):\n        self.assertEqual(1, 1)\n')
+        if outside_manifest:
+            path.write_text('from fixture import VALUE\n' + path.read_text().replace(
+                'self.assertEqual(1, 1)', 'self.assertEqual(VALUE, 1)'))
+            (root / 'tests/fixture.py').write_text('VALUE = 1\n')
         ids['root:test_case.Case.test_active'] = {}
         seed = p.inventory(root, root, ids)
         baseline = {'baseline': 'fixture', 'tests': {n: r['fingerprint'] for n, r in seed.items()}}
@@ -391,6 +395,11 @@ class ApprovedEditsMigration(unittest.TestCase):
                      dict(line=4, old='', new='    @requirements("TF-27")\n'),
                      *[{**e, 'line': e['line'] + 2} for e in edits]]
         path.write_text(new)
+        manifest_file = 'tests/test_case.py'
+        if outside_manifest:
+            manifest_file = 'tests/fixture.py'
+            (root / manifest_file).write_text('VALUE = 2\n')
+            edits = [dict(line=1, old='VALUE = 1\n', new='VALUE = 2\n')]
         active = copy.deepcopy(baseline)
         del active['tests'][migrated]
         for name in ('test-legacy.json', 'test-legacy-0850.json'):
@@ -398,7 +407,7 @@ class ApprovedEditsMigration(unittest.TestCase):
         self.write_json(root / 'scripts/test-requirements.json', {'TF-27': {
             'statement': 'Normal migration', 'source': 'fixture', 'checks': [migrated]}})
         edit = self.commit(root, 'approved assertions and normal requirement migration')
-        manifest = dict(schema=1, decision='1', transitions=[dict(file='tests/test_case.py',
+        manifest = dict(schema=1, decision='1', transitions=[dict(file=manifest_file,
             before_commit=base, edit_commit=edit, edits=edits)])
         self.write_json(root / p.MANIFESTS / '1.json', manifest)
         digest = hashlib.sha256((root / p.MANIFESTS / '1.json').read_bytes()).hexdigest()
@@ -413,6 +422,35 @@ class ApprovedEditsMigration(unittest.TestCase):
                                  for name in ('test-legacy.json', 'test-legacy-0850.json')))
         self.enterContext(mock.patch.object(p, 'active_ids', side_effect=active_ids))
         return manifest, seed, active, migrated
+
+    def test_migration_outside_manifest_uses_candidate_and_introduction_requirements(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); p = self.policy()
+            manifest, seed, _, migrated = self.migration(root, p, outside_manifest=True)
+            self.assertEqual(['tests/fixture.py'], [t['file'] for t in manifest['transitions']])
+            self.assertNotIn(migrated, p.listed_ids(root))
+            self.assertEqual(['TF-27'], p.inventory(root, root, seed)[migrated]['requirements'])
+            # The replay keeps the undecorated definition, but its helper changes.
+            from generate_test_owned_baseline import extract
+            with tempfile.TemporaryDirectory() as replay:
+                snapshot = Path(replay)
+                extract(root, p.SOURCE_REVISION, snapshot)
+                (snapshot / 'tests/fixture.py').write_text('VALUE = 2\n')
+                row = p.inventory(root, snapshot, seed)[migrated]
+                self.assertEqual([], row['requirements'])
+                self.assertNotEqual(seed[migrated]['dependency_values'], row['dependency_values'])
+            data = p.build(root, [manifest])
+            self.assertEqual({'root:test_case.Case.test_active'}, set(data['tests']))
+            self.write_json(root / p.BINDINGS / '1.json', data)
+            introduction = self.commit(root, 'binding introduction')
+            self.assertEqual(data['tests'], p.checked_bindings(root))
+            path = root / 'tests/test_case.py'
+            path.write_text(path.read_text().replace('    @requirements("TF-27")\n', ''))
+            self.commit(root, 'later definition cannot alter introduction migration')
+            self.assertEqual(data, p.build(root, [manifest], set(data['tests']), at=introduction))
+            self.assertEqual(data['tests'], p.checked_bindings(root))
+            with self.assertRaisesRegex(ValueError, 'retired.*requirement'):
+                p.build(root, [manifest])
 
     def test_normal_migration_skips_binding_and_uses_requirement_gate(self):
         import parallel_tests as runner
@@ -455,19 +493,29 @@ class ApprovedEditsMigration(unittest.TestCase):
             self.assertEqual({}, p.checked_bindings(root))
 
     def test_retired_undecorated_changed_proof_is_refused(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder); p = self.policy()
-            manifest, _, _, _ = self.migration(root, p, 'undecorated')
-            with self.assertRaisesRegex(ValueError, 'retired.*requirement'):
-                p.build(root, [manifest])
+        for outside in (False, True):
+            with self.subTest(outside_manifest=outside), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); p = self.policy()
+                manifest, _, _, _ = self.migration(root, p, 'undecorated', outside_manifest=outside)
+                with self.assertRaisesRegex(ValueError, 'retired.*requirement'):
+                    p.build(root, [manifest])
 
     def test_decorated_proof_in_either_legacy_list_is_refused(self):
-        for name in ('test-legacy.json', 'test-legacy-0850.json'):
-            with self.subTest(legacy=name), tempfile.TemporaryDirectory() as folder:
+        for name, outside in ((name, outside) for name in ('test-legacy.json', 'test-legacy-0850.json')
+                              for outside in (False, True)):
+            with self.subTest(legacy=name, outside_manifest=outside), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder); p = self.policy()
-                manifest, seed, _, migrated = self.migration(root, p, name)
+                manifest, seed, _, migrated = self.migration(root, p, name, outside_manifest=outside)
                 # Effective eligibility may already exclude a superseded ID;
                 # presence in either raw list must still reject its decorator.
                 with mock.patch.object(p, 'active_ids', return_value=set(seed) - {migrated}), \
                      self.assertRaisesRegex(ValueError, 'changed legacy identity/metadata'):
+                    p.build(root, [manifest])
+                # Uncommitted list shrinkage cannot retire a proof still listed
+                # in the candidate commit whose definition we discover.
+                listed = root / 'scripts' / name
+                data = p.fw.decode_json(listed.read_text())
+                del data['tests'][migrated]
+                self.write_json(listed, data)
+                with self.assertRaisesRegex(ValueError, 'changed legacy identity/metadata'):
                     p.build(root, [manifest])
