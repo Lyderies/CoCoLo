@@ -2,7 +2,7 @@
 
 Base ef08e42c (D3 head, on D2 on B3; all unmerged). Code: PH = project_history.py, PRC = project_result_contexts.py,
 RP = result_persistence.py, PD = project_driver.py, all in packages/codex-agents/native-package/.codex/orchestration/codex_agents/.
-Tests: packages/codex-agents/tests/test_publication_replay.py (22, store level) and test_publication_replay_driver.py (7, through the
+Tests: packages/codex-agents/tests/test_publication_replay.py (23, store level) and test_publication_replay_driver.py (7, through the
 real driver and writer lane), requirement RS-D-D4 (REQUIREMENTS-publication-replay.md). Sources: reviews/040-rs-bf-a1/requirements.numbered.txt:393-396
 (slice D4) and :507, DESIGN-0.4.0-RS-D.md draft 3 s1-s3, s6, draft 4 s2-s4 and rows :674-683, :943-955, DESIGN-0.4.0-RS-BD-shared.md S-2/S-3,
 ANALYSIS-0.4.0-rs-bf-audit.md (D4 rows; the verifier's list expands "R2+" to this catalogue plus the production retry).
@@ -46,3 +46,12 @@ the `project_result_publications` table (step 18, no schema step here). Retireme
 - The driver's live retry still ends at the run's hard deadline (pinned by test_publication_retry `test_D4_the_runs_deadline_ends_the_retries...`); after that the
   stranded body is recovered by replay or arbitration, not by the live lane.
 - `replay_publications` completes at most `REPLAY_PASS_LIMIT` = 4 stored publications per pass (each one body of at most 1 MiB): registered in lifetime_caps.json.
+
+## Results (this worktree, via scripts/parallel_tests.py)
+- test_publication_replay 23 pass (~1 s), test_publication_replay_driver 7 pass (22 s), test_deadlines_retention 36, test_retirement_sweep 50, test_project_results 46,
+  test_result_persistence 25, test_lost_run_settlement 26 (4 shards, slowest 19.6 s), test_result_publication 14, test_publication_retry 9: all pass.
+- test_lifetime_cap_guard: 1 of 4 fails, on the 7 sites that were already unlisted at ef08e42c (open_withdrawal.custody_matches, project_driver._advance (3 checks, 2 listed),
+  _release_failed, project_history.<module>, open_withdrawals, project_result_contexts.context_rows and reservation_rows); D4's one new site
+  (`project_history.py::replay_candidates`) is listed with its end and a past-the-limit test.
+- Existing tests changed: none. Schema step and new account operation: none.
+- P4' (the window from the packet's return to the directory fsync) is not in D4's assigned catalogue and is not measured here (owner decision 90.2 A: measure, no promised number).
