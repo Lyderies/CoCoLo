@@ -234,6 +234,7 @@
  "codex:tests.test_b2_service_outcome_sweep": "scenario",
  "codex:tests.test_b2_service_outcome_round2": "scenario",
  "codex:tests.test_deadlines_retention": "scenario",
+ "codex:tests.test_retirement_sweep": "scenario",
  "codex:tests.test_record_context": "scenario",
  "codex:tests.test_refusal_steps": "unit",
  "codex:tests.test_release_batch_queries": "unit",

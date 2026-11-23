@@ -18,13 +18,17 @@ DESIGN-0.4.0-RS-BD-shared.md SH-3):
 
 A context is a file, never a SQLite blob. Each is at most MAX_RECORD_CONTEXT_BYTES, and the live ones together at
 most MAX_LIVE_CONTEXT_BYTES, counted from the rows not `ended` or `expired` (SH-6). No reader is given bytes once a
-context's retirement began. Functions here take the owning ProjectHistory and run on its writer thread; the ones
+context's retirement began. D3 (RS-D draft 3 §4-§6, draft 4 §1): a retirement unlinks the fixed names without
+opening them (`retire_names`); only a directory under a fixed name needs repair (`repair_required`, still charged,
+shown by `repairs`, retried every pass); `sweep` finishes the context-only custody (no reservation row) that the
+reservation-backed retirement never reaches. Functions here take the owning ProjectHistory and run on its writer thread; the ones
 marked "in the transaction" run inside the caller's store transaction.
 """
 from __future__ import annotations
 
 import os
 import secrets
+import sqlite3
 import stat
 
 from .history_contracts import AttemptBinding, HistoryError, _DIGEST, matches
@@ -316,14 +320,61 @@ def release_unfinished(history, run_handle: str, attempt: int, cause: str, now_m
     return True
 
 
+def retire_names(history, fixed_names) -> str | None:
+    """RS-D draft 3 §4: unlink each fixed name through the store's directory descriptor without opening or following
+    it, then fsync the directory. An absent name is skipped. Anything but a directory (a regular file of any owner,
+    mode or link count, a symlink, a FIFO, a socket) is unlinked: only the directory entry goes, so an extra hard link
+    keeps its other name, outside the store. Returns None when every name is gone and the directory is synced,
+    `directory` when a name is a directory (an operator must repair it), or `io` for an unlink or fsync error."""
+    reason = None
+    for name in fixed_names:
+        try:
+            info = os.stat(name, dir_fd=history._directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            reason = reason or "io"
+            continue
+        if stat.S_ISDIR(info.st_mode):
+            reason = "directory"
+            continue
+        try:
+            os.unlink(name, dir_fd=history._directory_fd)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            reason = reason or "io"
+    try:
+        os.fsync(history._directory_fd)
+    except OSError:
+        reason = reason or "io"
+    return reason
+
+
+def refuse_retirement(history, run_handle: str, attempt: int, reason: str) -> HistoryError:
+    """After `retire_names` reported `reason`: a directory puts the context in `repair_required` (the row stays
+    charged, shown and retried); the error returned is the failure the pass reports. Raise it outside any `except`."""
+    if reason == "directory":
+        with history._transaction():
+            history._connection.execute(
+                "UPDATE project_result_contexts SET state='repair_required',repair_reason='directory' "
+                "WHERE project_id=? AND run_handle=? AND attempt=? AND state IN ('retiring','repair_required')",
+                (history.project_id, run_handle, attempt))
+        return HistoryError("history_unsafe_path")
+    return HistoryError("history_unavailable")
+
+
 def finish(history, run_handle: str, attempt: int) -> None:
-    """After that transaction: the file goes, then the context is `ended` (a stop in between is finished at the
-    next open). A failure leaves it `retiring`, still charged."""
-    _unlink(history, run_handle, attempt)
+    """After that transaction: the files go (`retire_names`), then the context is `ended` (a stop in between is
+    finished by the next pass). A directory leaves it `repair_required`, any other failure `retiring`; either way it
+    stays charged."""
+    reason = retire_names(history, names(history, run_handle, attempt))
+    if reason is not None:
+        raise refuse_retirement(history, run_handle, attempt, reason)
     with history._transaction():
         history._connection.execute(
-            "UPDATE project_result_contexts SET state='ended' WHERE project_id=? AND run_handle=? AND attempt=? "
-            "AND state='retiring'", (history.project_id, run_handle, attempt))
+            "UPDATE project_result_contexts SET state='ended',repair_reason=NULL WHERE project_id=? AND run_handle=? "
+            "AND attempt=? AND state IN ('retiring','repair_required')", (history.project_id, run_handle, attempt))
 
 
 def finish_quietly(history, run_handle: str, attempt: int) -> None:
@@ -342,22 +393,22 @@ def begin_retirement(history, binding: AttemptBinding, kind: str, evidence=None)
     if row is None or row["state"] in ("ended", "expired"):
         return
     _release_custody(history, binding.run_handle, binding.attempt, kind, history._hold_now(), evidence)
-    history._connection.execute(
-        "UPDATE project_result_contexts SET state='retiring' WHERE project_id=? AND run_handle=? AND attempt=?",
-        (history.project_id, binding.run_handle, binding.attempt))
+    history._connection.execute(  # a `repair_required` retry keeps its state (and its reason) until it is repaired
+        "UPDATE project_result_contexts SET state='retiring' WHERE project_id=? AND run_handle=? AND attempt=? "
+        "AND state<>'repair_required'", (history.project_id, binding.run_handle, binding.attempt))
 
 
-def unlink_for_retirement(history, binding: AttemptBinding) -> None:
-    """Between `_retire_result`'s two transactions, with the body's names."""
-    for name in names(history, binding.run_handle, binding.attempt):
-        _remove_entry(history, name)
+def body_and_context_names(history, binding: AttemptBinding) -> tuple[str, ...]:
+    """The four fixed names of one retirement: the body's (partial, final) and the context's (partial, final)."""
+    return (*history._result_names(binding), *names(history, binding.run_handle, binding.attempt))
 
 
 def end_retirement(history, binding: AttemptBinding) -> None:
     """In `_retire_result`'s `expired` transaction."""
     history._connection.execute(
-        "UPDATE project_result_contexts SET state='expired' WHERE project_id=? AND run_handle=? AND attempt=? "
-        "AND state='retiring'", (history.project_id, binding.run_handle, binding.attempt))
+        "UPDATE project_result_contexts SET state='expired',repair_reason=NULL WHERE project_id=? AND run_handle=? "
+        "AND attempt=? AND state IN ('retiring','repair_required')",
+        (history.project_id, binding.run_handle, binding.attempt))
 
 
 def purgeable(history, run_handle: str, attempt: int) -> bool:
@@ -366,32 +417,221 @@ def purgeable(history, run_handle: str, attempt: int) -> bool:
     return row is None or row["state"] in ("ended", "expired")
 
 
+def _remove_body_partials(history, listing) -> None:
+    """RS-D draft 3 §6, by directory listing and `lstat` alone (no byte is read): a lone body partial (a write that
+    stopped before its link) goes, and so does the partial name of a link pair (the same inode under both fixed
+    names, two links), which leaves the final name. A pair with any other link count or inode is unsafe: it is left
+    for the read and retirement paths, which refuse and unlink it."""
+    for name in listing:
+        if not (name.startswith(".result-") and name.endswith(".partial")):
+            continue
+        final = name[:-len(".partial")] + ".json"
+        try:
+            left = os.stat(name, dir_fd=history._directory_fd, follow_symlinks=False)
+            if stat.S_ISDIR(left.st_mode):
+                continue
+            try:
+                right = os.stat(final, dir_fd=history._directory_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                right = None
+            if right is not None and not (left.st_nlink == right.st_nlink == 2
+                                          and (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)):
+                continue
+            os.unlink(name, dir_fd=history._directory_fd)
+        except OSError:
+            continue  # Best effort; a body's readers and its retirement handle what is left.
+
+
 def reconcile(history) -> None:
     """At open, under the writer lock, before anything is served (RS-D draft 3 §6): a context file with no live row
-    (left by a lease transaction that never committed, O1) or a lone partial goes, and a context-only retirement a
-    stop interrupted is finished. Reads directory entries and rows, never a context's bytes."""
+    (left by a lease transaction that never committed, O1) or a lone partial goes, so does a body's lone partial or
+    the partial name of a link pair, and a context-only retirement a stop interrupted is finished. Reads directory
+    entries, `lstat` and rows, never a body's or a context's bytes, and visits only live rows (the partial index), so
+    its work does not grow with the tombstones (RS-D-9)."""
     connection = history._connection
     keep = set()
     for run_handle, attempt in connection.execute(
             "SELECT run_handle,attempt FROM project_result_contexts INDEXED BY project_result_contexts_live "
             f"WHERE state NOT IN ('ended','expired') AND state IN {project_holds_schema._in(FILE_STATES)}"):
         keep.add(names(history, run_handle, attempt)[1])
-    for name in os.listdir(history._directory_fd):
+    listing = os.listdir(history._directory_fd)
+    for name in listing:
         if name.startswith(_PREFIX) and name not in keep:
             try:
                 _remove_entry(history, name)
             except HistoryError:
                 pass  # A directory under a context's name is never removed (D3 reports it for repair).
+    _remove_body_partials(history, listing)
     # Only one whose custody is already released: no retirement is started here, only finished.
     retiring = connection.execute(
         "SELECT c.run_handle,c.attempt FROM project_result_contexts c INDEXED BY project_result_contexts_live "
-        "WHERE c.state NOT IN ('ended','expired') AND c.state='retiring' AND NOT EXISTS(SELECT 1 FROM result_reservations s WHERE s.project_id=c.project_id "
+        "WHERE c.state NOT IN ('ended','expired') AND c.state IN ('retiring','repair_required') "
+        "AND NOT EXISTS(SELECT 1 FROM result_reservations s WHERE s.project_id=c.project_id "
         "AND s.run_handle=c.run_handle AND s.attempt=c.attempt) AND NOT EXISTS(SELECT 1 FROM project_holds h "
         "WHERE h.project_id=c.project_id AND h.kind='result_custody' AND h.identity=c.run_handle||':'||c.attempt "
         "AND h.state<>'released')").fetchall()
     for run_handle, attempt in retiring:
         finish_quietly(history, run_handle, attempt)
     os.fsync(history._directory_fd)
+
+
+# The context sweep and the repair report (D3) -----------------------------------------------------------------------
+
+def _sweep_candidates(history, after, limit: int):
+    """RS-D draft 4 §1: context rows with no reservation row whose custody is released, still not `ended` or
+    `expired`; this includes their own `retiring` and `repair_required` retries. A context with a reservation (a
+    bound attempt) is never selected: `_retire_result` retires it with its body. Uses the live partial index, so a
+    tombstone costs nothing; the rowid cursor makes the pass fair."""
+    statement = (
+        "SELECT c.rowid,c.run_handle,c.attempt FROM project_result_contexts c INDEXED BY project_result_contexts_live "
+        "WHERE c.project_id=? AND c.state NOT IN ('ended','expired') "
+        "AND NOT EXISTS(SELECT 1 FROM result_reservations s WHERE s.project_id=c.project_id "
+        "AND s.run_handle=c.run_handle AND s.attempt=c.attempt) "
+        "AND EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=c.project_id AND h.kind='result_custody' "
+        "AND h.identity=c.run_handle||':'||c.attempt AND h.state='released')")
+    arguments = [history.project_id]
+    if after is not None:
+        statement += " AND c.rowid>?"
+        arguments.append(after)
+    return history._connection.execute(statement + " ORDER BY c.rowid LIMIT ?", (*arguments, limit)).fetchall()
+
+
+def sweep(history, limit: int) -> int:
+    """One bounded, cursor-fair pass of the context sweep, after the reservations' retirement in the same expire
+    pass: each selected context is recorded `retiring`, its files unlinked and its directory synced, then `ended`.
+    A failure leaves that context charged (`retiring`, or `repair_required` for a directory) and the pass moves on;
+    the first failure is reported at the end. Returns how many contexts ended. No reservation row is read or
+    written for a selected context (it has none)."""
+    after = getattr(history, "_context_sweep_cursor", None)
+    rows = _sweep_candidates(history, after, limit)
+    if not rows and after is not None:
+        after = None
+        rows = _sweep_candidates(history, None, limit)
+    failure = None
+    ended = 0
+    for position, run_handle, attempt in rows:
+        after = position
+        try:
+            with history._transaction():
+                history._connection.execute(
+                    "UPDATE project_result_contexts SET state='retiring' WHERE project_id=? AND run_handle=? "
+                    "AND attempt=? AND state NOT IN ('retiring','repair_required','ended','expired')",
+                    (history.project_id, run_handle, attempt))
+            finish(history, run_handle, attempt)
+            ended += 1
+        except HistoryError as exc:
+            failure = failure or exc.reason_code
+        except (sqlite3.Error, OSError):
+            failure = failure or "history_unavailable"
+    history._context_sweep_cursor = after
+    if failure is not None:
+        raise HistoryError(failure)
+    return ended
+
+
+class RepairReport(list):
+    """The entries of one bounded page, in order, plus `truncated` and `cursor`: when `truncated`, pass `cursor` to
+    `repairs` to get the entries after this page, so that every remaining entry stays discoverable."""
+
+    truncated = False
+    cursor = None
+
+
+_TIERS = ("repair_required", "reservation", "retiring")  # the order of the report: operator-needed first
+
+
+def _parse_cursor(cursor) -> tuple[int, int]:
+    if cursor is None:
+        return 0, 0
+    if isinstance(cursor, str):
+        tier, _, rowid = cursor.partition(":")
+        if tier.isdigit() and rowid.isdigit() and int(tier) < len(_TIERS) and len(rowid) <= 18:
+            return int(tier), int(rowid)
+    raise HistoryError("history_invalid_input")
+
+
+def repairs(history, limit: int = 20, cursor=None) -> RepairReport:
+    """The retirements still waiting (RS-D draft 3 §4), at most `limit` per page, for status. Each stays charged until
+    every fixed name is gone. Entries come in three groups, each in row order: a context in `repair_required` (shown
+    with its stored reason, `directory`), then a reservation in `retiring` that has no context row (the non-lease
+    path; `directory` is derived from the fixed names, since a reservation has no repair column and there is no
+    schema step), then a context still `retiring` (an unlink or fsync error, or a stop, that the next pass retries;
+    shown as `retrying`). So persistent retries never hide an entry an operator must repair. A page that does not
+    reach the end is `truncated` and carries a `cursor` for the next page."""
+    report = RepairReport()
+    tier, after = _parse_cursor(cursor)
+
+    def directories(fixed):
+        found = []
+        for name in fixed:
+            try:
+                if stat.S_ISDIR(os.stat(name, dir_fd=history._directory_fd, follow_symlinks=False).st_mode):
+                    found.append(name)
+            except OSError:
+                continue
+        return found
+
+    def context_rows(state, room):
+        return history._connection.execute(
+            "SELECT rowid AS position,run_handle,attempt,state,repair_reason FROM project_result_contexts INDEXED BY "
+            "project_result_contexts_live WHERE project_id=? AND state NOT IN ('ended','expired') AND state=? "
+            "AND rowid>? ORDER BY rowid LIMIT ?", (history.project_id, state, after, room)).fetchall()
+
+    def context_entry(row):
+        fixed = list(names(history, row["run_handle"], row["attempt"]))
+        reservation = history._connection.execute(
+            "SELECT * FROM result_reservations WHERE project_id=? AND run_handle=? AND attempt=?",
+            (history.project_id, row["run_handle"], row["attempt"])).fetchone()
+        if reservation is not None:
+            try:
+                fixed += history._result_names(history._reservation(reservation).binding)
+            except HistoryError:
+                pass
+        return {"run_handle": row["run_handle"], "attempt": row["attempt"],
+                "reason": row["repair_reason"] if row["state"] == "repair_required" else "retrying",
+                "names": directories(fixed)}
+
+    def reservation_rows(room):
+        return history._connection.execute(
+            "SELECT s.rowid AS position,s.* FROM result_reservations AS s WHERE s.project_id=? AND s.state='retiring' "
+            "AND NOT EXISTS(SELECT 1 FROM project_result_contexts c WHERE c.project_id=s.project_id "
+            "AND c.run_handle=s.run_handle AND c.attempt=s.attempt) AND s.rowid>? ORDER BY s.rowid LIMIT ?",
+            (history.project_id, after, room)).fetchall()
+
+    def reservation_entry(row):
+        try:
+            value = history._reservation(row)
+        except HistoryError:
+            return None
+        found = directories(history._result_names(value.binding))
+        return {"run_handle": value.binding.run_handle, "attempt": value.binding.attempt,
+                "reason": "directory" if found else "retrying", "names": found}
+
+    while tier < len(_TIERS) and limit > 0:
+        room = limit - len(report)
+        if _TIERS[tier] == "reservation":
+            rows, entry = reservation_rows(room + 1), reservation_entry
+        else:
+            state = "repair_required" if _TIERS[tier] == "repair_required" else "retiring"
+            rows, entry = context_rows(state, room + 1), context_entry
+        for row in rows[:room]:
+            made = entry(row)
+            if made is not None:
+                report.append(made)
+        if len(rows) > room:  # this group has more: the page is full, and the next one starts after the last row shown
+            report.truncated, report.cursor = True, f"{tier}:{rows[room - 1]['position']}"
+            return report
+        tier, after = tier + 1, 0
+        if len(report) >= limit:  # full exactly at the end of a group: more only if a later group has an entry
+            while tier < len(_TIERS):
+                probe = reservation_rows(1) if _TIERS[tier] == "reservation" else context_rows(
+                    "repair_required" if _TIERS[tier] == "repair_required" else "retiring", 1)
+                if probe:
+                    report.truncated, report.cursor = True, f"{tier}:0"
+                    return report
+                tier += 1
+            return report
+    return report
 
 
 # Readers -----------------------------------------------------------------------------------------------------------
