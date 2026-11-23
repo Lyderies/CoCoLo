@@ -1066,6 +1066,14 @@
    "checks": 2,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "merge_library.py::_validate": {
+   "checks": 3,
+   "ends": "per-merge size and path limits on one landing's inputs (MAX_FILE_BYTES, MAX_PATHS, MAX_LANDING_BYTES); the counted files and events belong to a single merge operation and end with it, nothing accumulates across merges (0.8.50 merge library)"
+  },
+  "merge_library.py::read": {
+   "checks": 2,
+   "ends": "per-merge size and path limits on one landing's inputs (MAX_FILE_BYTES, MAX_PATHS, MAX_LANDING_BYTES); the counted files and events belong to a single merge operation and end with it, nothing accumulates across merges (0.8.50 merge library)"
+  },
   "open_scope_contracts.py::checked_open_scope": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"

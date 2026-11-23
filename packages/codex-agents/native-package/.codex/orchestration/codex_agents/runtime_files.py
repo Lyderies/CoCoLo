@@ -125,6 +125,7 @@ RUNTIME_FILES = (
     "codex_agents/ledger_waits.py",
     "codex_agents/liveness_clock.py",
     "codex_agents/lost_run_contracts.py",
+    "codex_agents/merge_library.py",
     "codex_agents/observation_failure_contracts.py",
     "codex_agents/open_scope_contracts.py",
     "codex_agents/operational_qa_contracts.py",
