@@ -106,3 +106,15 @@ class RoundTwo(unittest.TestCase):
         for status in ('not_run','failed'):
             with mock.patch.object(fw,'combine_run_records',return_value={'requirements':{'TF-5':status}}):
                 self.assertEqual(1,runner.main(['--requirement-gate',str(path)]), 'caller accepted '+status+' requirement report')
+
+    def test_M2_function_local_import_keeps_golden_provenance(self):
+        (self.root/'fixtures.py').write_text('from pathlib import Path\nEXPECTED = Path("goldens/result")\n')
+        source='def test_output():\n    from fixtures import EXPECTED as reference\n    return reference.read_text()\n'
+        self.assertTrue(fw.golden_bypasses(source,filename=self.root/'test_consumer.py'), 'M2 function-local imported golden escaped')
+
+    def test_M2_package_import_keeps_golden_provenance(self):
+        (self.root/'reference_data').mkdir()
+        (self.root/'reference_data/__init__.py').write_text('from pathlib import Path\nEXPECTED = Path("goldens/result")\n')
+        source='from reference_data import EXPECTED as reference\nactual = reference.read_text()'
+        self.assertTrue(fw.golden_bypasses(source,filename=self.root/'test_consumer.py'), 'M2 package imported golden escaped')
+
