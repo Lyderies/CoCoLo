@@ -320,6 +320,38 @@ class ApprovedEditsR1(unittest.TestCase):
                 else:
                     self.assertEqual(data['tests'], p.checked_bindings(root))
 
+    def test_non_git_metadata_admits_nothing_and_documents_fail_closed(self):
+        import parallel_tests as runner
+        import test_owned_baseline as owned
+        import rebind_approved_edits as live_policy
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); p = self.policy()
+            baseline = {'baseline': 'fixture', 'tests': {}}
+            for name in ('test-stages.json', 'test-layers.json', 'test-requirements.json',
+                         'test-legacy-dependencies.json'):
+                self.write_json(root / 'scripts' / name, {})
+            for name in ('test-legacy.json', 'test-legacy-ceiling.json'):
+                self.write_json(root / 'scripts' / name, baseline)
+            with mock.patch.object(runner, 'ROOT', root), \
+                 mock.patch.object(runner, 'inventory', return_value={}), \
+                 mock.patch.object(runner, 'legacy_versions', return_value=(baseline, baseline, [])), \
+                 mock.patch.object(runner.framework, 'validate_sources', return_value=[]), \
+                 mock.patch.object(owned, 'checked', return_value={}), \
+                 mock.patch.object(live_policy, 'checked_bindings', side_effect=p.checked_bindings):
+                with mock.patch.object(p, 'git', side_effect=AssertionError('document-free fixture called Git')):
+                    self.assertEqual({}, p.checked_bindings(root))
+                    self.assertEqual([], runner.metadata()[-1])
+                for name in (p.MANIFESTS + '/1.json', p.APPROVALS, p.BINDINGS + '/1.json'):
+                    with self.subTest(document=name):
+                        path = root / name
+                        self.write_json(path, {})
+                        self.assertTrue(any(e.startswith('cannot verify approved test edits:')
+                                            for e in runner.metadata()[-1]))
+                        path.unlink()
+                # The bindings directory itself is evidence requiring checks.
+                self.assertTrue(any(e.startswith('cannot verify approved test edits:')
+                                    for e in runner.metadata()[-1]))
+
     def test_r1_deleted_admission_documents_are_refused(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder); p = self.policy(); _, data, _ = self.fixture(root, p)
@@ -345,6 +377,13 @@ class ApprovedEditsR1(unittest.TestCase):
                     p.checked_bindings(root)
                 self.commit(root, 'restore admission bytes')
                 self.assertEqual(data['tests'], p.checked_bindings(root))
+            # Removing both directories cannot hide their admitted history.
+            import shutil
+            for directory in (p.BINDINGS, p.MANIFESTS):
+                shutil.rmtree(root / directory)
+            self.commit(root, 'delete all admission documents')
+            with self.assertRaisesRegex(ValueError, 'missing admitted'):
+                p.checked_bindings(root)
 
     def test_r1_replay_uses_guarded_discovery_and_rejects_duplicate_ids(self):
         p = self.policy()

@@ -675,11 +675,17 @@
    "codex:tests.test_hold_lifecycle.HoldLifecycleTests.test_B0_6_baseline_is_empty",
    "codex:tests.test_hold_lifecycle.HoldLifecycleTests.test_B0_narrowed_status_shows_a_held_binding",
    "codex:tests.test_hold_lifecycle.HoldLifecycleTests.test_RS_A_F14_status_shows_the_account_holds_by_kind",
-   "codex:tests.test_hold_lifecycle.LostServiceHoldTests.test_B0_2_a_reservation_left_by_a_service_that_stopped_gets_its_lost_terminal",
    "codex:tests.test_hold_lifecycle.LostSlotReleaseTests.test_RS_A_2_a_lost_run_s_slot_is_released_as_lost_by_its_settlement"
   ],
   "source": "packages/codex-agents/tests/test_hold_lifecycle.py#LEGACY-HOLD-LIFECYCLE",
-  "statement": "**LEGACY-HOLD-LIFECYCLE \u2014 Existing hold lifecycle boundary checks.**\nWith real in-process account and project services, the baseline has zero live results, account slots and pending\nbindings; opening a run increments pending bindings by one with limit 4096; account-hold status reports the binding\nincrement, exactly the run_slot, binding and probe kinds, and an Account holds summary naming binding. Recording a\ncompleted run eventually leaves zero account slots and at most one live result. Settling a lost run writes exactly\none released slot with release kind lost. Cancelling a container run removes its container, eventually releases its\nslot and leaves no failed stop. A container that cannot stop reports cancel_requested and an attention message,\nkeeps its slot across repeated stop attempts, then releases it after a retried stop succeeds. The deferred B0-2\ncheck asserts that a reservation left by a stopped service exists and eventually receives its lost terminal; that\ncheck remains skipped and supplies no passing coverage while skipped."
+  "statement": "**LEGACY-HOLD-LIFECYCLE \u2014 Existing hold lifecycle boundary checks.**\nWith real in-process account and project services, the baseline has zero live results, account slots and pending\nbindings; opening a run increments pending bindings by one with limit 4096; account-hold status reports the binding\nincrement, exactly the run_slot, binding and probe kinds, and an Account holds summary naming binding. Recording a\ncompleted run eventually leaves zero account slots and at most one live result. Settling a lost run writes exactly\none released slot with release kind lost. Cancelling a container run removes its container, eventually releases its\nslot and leaves no failed stop. A container that cannot stop reports cancel_requested and an attention message,\nkeeps its slot across repeated stop attempts, then releases it after a retried stop succeeds."
+ },
+ "LEGACY-HOLD-LIFECYCLE-B0-2": {
+  "checks": [
+   "codex:tests.test_hold_lifecycle.LostServiceHoldTests.test_B0_2_a_reservation_left_by_a_service_that_stopped_gets_its_lost_terminal"
+  ],
+  "source": "packages/codex-agents/tests/test_hold_lifecycle.py#LEGACY-HOLD-LIFECYCLE-B0-2",
+  "statement": "**LEGACY-HOLD-LIFECYCLE-B0-2 \u2014 Deferred run supervisor reservation settlement.**\nA reservation left by a stopped service exists and eventually receives its lost terminal. B0-2 gates the run\nsupervisor and remains skipped under the owner's narrowed B0 scope of 2026-11-20. Its registered executable\nobligation remains not_run and supplies no passing coverage until that deferred work is executed."
  },
  "ML-1": {
   "checks": [
@@ -1856,6 +1862,7 @@
    "root:test_approved_edits.ApprovedEditsMigration.test_migration_outside_manifest_uses_candidate_and_introduction_requirements",
    "root:test_approved_edits.ApprovedEditsMigration.test_normal_migration_skips_binding_and_uses_requirement_gate",
    "root:test_approved_edits.ApprovedEditsMigration.test_retired_undecorated_changed_proof_is_refused",
+   "root:test_approved_edits.ApprovedEditsR1.test_non_git_metadata_admits_nothing_and_documents_fail_closed",
    "root:test_approved_edits.ApprovedEditsR1.test_r1_deleted_admission_documents_are_refused",
    "root:test_approved_edits.ApprovedEditsR1.test_r1_introduction_requires_ancestry_sources_and_algorithm",
    "root:test_approved_edits.ApprovedEditsR1.test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions",
@@ -1928,6 +1935,7 @@
    "root:test_approved_edits.ApprovedEditsMigration.test_migration_outside_manifest_uses_candidate_and_introduction_requirements",
    "root:test_approved_edits.ApprovedEditsMigration.test_normal_migration_skips_binding_and_uses_requirement_gate",
    "root:test_approved_edits.ApprovedEditsMigration.test_retired_undecorated_changed_proof_is_refused",
+   "root:test_approved_edits.ApprovedEditsR1.test_non_git_metadata_admits_nothing_and_documents_fail_closed",
    "root:test_approved_edits.ApprovedEditsR1.test_r1_deleted_admission_documents_are_refused",
    "root:test_approved_edits.ApprovedEditsR1.test_r1_introduction_requires_ancestry_sources_and_algorithm",
    "root:test_approved_edits.ApprovedEditsR1.test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions",

@@ -26,6 +26,8 @@ and rerun normally. Temporary helper contract fixtures may inspect their own wri
 Runs default to ci. Select dev or soak explicitly; a soak module cannot be selected with ci/dev, and multiple
 profile selectors are rejected. Complete merge campaigns belong to the explicit soak inventory.
 Registered future execution and semantic review records live in `test-checks.json`; absent evidence remains not_run.
+The deferred hold-lifecycle B0-2 check has its own requirement and a registered executable record under its exact
+test ID, so its skipped outcome is reported as `not_run` without failing the passing hold-lifecycle checks.
 A full gate cannot pass missing or unexecuted required evidence. Entry-point links live in `test-entrypoints.json`.
 
 Owner's next checkpoint is after merge-library step 3. Assertion migrations are in ASSERTIONS-test-framework.md;

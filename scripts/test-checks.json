@@ -1,4 +1,12 @@
 {
+  "codex:tests.test_hold_lifecycle.LostServiceHoldTests.test_B0_2_a_reservation_left_by_a_service_that_stopped_gets_its_lost_terminal": {
+    "deferred": true,
+    "kind": "executable",
+    "reason": "Deferred B0-2 gates the run supervisor; owner narrowed B0 on 2026-11-20. The skipped test remains not_run.",
+    "requirements": [
+      "LEGACY-HOLD-LIFECYCLE-B0-2"
+    ]
+  },
   "planned:TF-19": {
     "kind": "executable",
     "requirements": [

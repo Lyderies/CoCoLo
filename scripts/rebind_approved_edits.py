@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -359,10 +360,19 @@ def verify_introduction(root, manifests, data, introduction):
 
 
 def checked_bindings(root):
+    # Disposable runner fixtures have neither admission documents nor Git
+    # metadata. Do not invoke Git there; an actual repository must still check
+    # history even when every current admission document has been deleted.
+    documents = (root / BINDINGS).exists() or any((root / MANIFESTS).glob('*.json'))
+    repository = (any(os.path.lexists(parent / '.git') for parent in (root, *root.parents))
+                  or os.environ.get('GIT_DIR') or os.environ.get('GIT_COMMON_DIR')
+                  or ((root / 'HEAD').is_file() and (root / 'objects').is_dir()))
+    if not documents and not repository:
+        return {}
     paths = admitted_paths(root, BINDINGS)
+    admitted_paths(root, MANIFESTS)
     if not paths:
         return {}
-    admitted_paths(root, MANIFESTS)
     manifests = read_manifests(root)
     admitted = {}; covered = set()
     for path in paths:

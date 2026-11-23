@@ -80,7 +80,8 @@ def main():
                 for requirement in check['requirements']:
                     if requirement not in catalogue:
                         raise SystemExit(name + ': unknown registered requirement ' + requirement)
-                    catalogue[requirement]['checks'].append(name)
+                    if name not in catalogue[requirement]['checks']:
+                        catalogue[requirement]['checks'].append(name)
                     catalogue[requirement]['checks'].sort()
         target.write_text(json.dumps(catalogue, indent=1, sort_keys=True) + '\n')
 
