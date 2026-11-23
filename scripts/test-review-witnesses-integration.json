@@ -68,5 +68,15 @@
   "red": "measurements/test-framework/release-0850/history-red.json",
   "diagnostic": "missing committed release version validation",
   "green": "measurements/test-framework/release-0850/history-green.json"
+ },
+ {
+  "fix": "fullrun-retirement-witness",
+  "requirement": "TF-24",
+  "witness": "root:test_test_framework_integration.ReleaseIntegration.test_versioned_debt_has_measured_ceilings_and_cannot_grow",
+  "positive_control": "Initial admission manifest passed in the complete full run; valid retirement fails only the old witness.",
+  "base": "c0c8c76f",
+  "red": "measurements/test-framework/release-0850/retirement-red.json",
+  "diagnostic": "KeyError: 'codex:tests.test_billing_gate'",
+  "green": "measurements/test-framework/release-0850/retirement-green.json"
  }
 ]

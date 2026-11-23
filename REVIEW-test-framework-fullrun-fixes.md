@@ -25,3 +25,45 @@ Ten affected merge modules passed at default 16 jobs: elapsed 161.515750 s, 161.
 Full runs use `--base b531844030fa619c1f62ddd6c092ebc2ea4fca38 --save-timings ...` and omit `--jobs`. CI schedule/tag selectors use that release base; PR/push selectors retain their trusted event bases and fail-closed validation. The nightly schedule is retained. The existing hash-pinned test-only environment was reused without installation; both installed distribution versions and all RECORD hashes verified. No shipped code changed.
 
 Outstanding review-evidence, soak and future-step obligations remain visible and are reported separately by owner instruction. Previously listed LOW gaps remain unchanged. Python 3.11/Linux execution remains a CI gate; local measurements use macOS/Python 3.14.7.
+
+## Single full-run result
+
+Revision `f69da048`, explicit base `b531844030fa619c1f62ddd6c092ebc2ea4fca38`, pinned prepared environment, default **16 jobs**: **496.778018 s elapsed, 4535.410045 job-seconds, 395 units, 6193 tests**. Discovery/preflight remain separately recorded. Exactly one full suite was run. Saved timings and report: `measurements/test-framework/release-0850/integrated-full-timings.json` and `integrated-full.run.json`; raw-report digest and command are in `integrated-full-provenance.json`. No module exceeded its budget.
+
+| Failed unit in the full run | Cause / disposition |
+|---|---|
+| `codex:tests.test_host_commands#0` | Missing merge_library.py runtime registration from primary bookkeeping 0ca9c36f; exact file-list guard/refusal. Affected rerun after copying its runtime registration and paired version/digest. |
+| `codex:tests.test_host_commands#2` | Missing merge_library.py runtime registration from primary bookkeeping 0ca9c36f; exact file-list guard/refusal. Affected rerun after copying its runtime registration and paired version/digest. |
+| `root:test_install#1` | Missing merge_library.py runtime registration from primary bookkeeping 0ca9c36f; exact file-list guard/refusal. Affected rerun after copying its runtime registration and paired version/digest. |
+| `codex:tests.test_host_commands#1` | Missing merge_library.py runtime registration from primary bookkeeping 0ca9c36f; exact file-list guard/refusal. Affected rerun after copying its runtime registration and paired version/digest. |
+| `root:test_attest` | Missing merge_library.py runtime registration from primary bookkeeping 0ca9c36f; exact file-list guard/refusal. Affected rerun after copying its runtime registration and paired version/digest. |
+| `codex:tests.test_lifetime_cap_guard` | Missing two bounded merge-library cap registrations supplied by primary bookkeeping 0ca9c36f; affected rerun after copying the registrations. |
+| `codex:tests.test_runtime_release` | Missing merge_library.py runtime registration from primary bookkeeping 0ca9c36f; exact file-list guard/refusal. Affected rerun after copying its runtime registration and paired version/digest. |
+| `root:test_e2e_requirements` | Expected: 80 step-4 lifecycle checks remain unimplemented; unchanged and deferred. |
+
+The full-run bookkeeping failures were real failures and remain in the saved record. They were fixed afterward on feat/merge-library using the primary-reviewed metadata, with affected-only reruns; this report does not represent the original full run as green. All six original failure-source test files and all 32 incoming test files remain byte-identical. No original assertion was changed.
+
+The four newly admitted existing-module debts retired from this full run: billing_gate 56.596 s, billing_rejudge 37.463 s, ledger_startup 1.359 s, session_guard 3.824 s. Their immutable admission ceilings remain recorded. Current debt list (14 entries; all ceilings unchanged):
+
+| Module | Ceiling seconds | Full-run seconds |
+|---|---:|---:|
+| `codex:tests.test_bridge` | 299.500 | 277.278 |
+| `codex:tests.test_container_stop` | 67.620 | 62.123 |
+| `codex:tests.test_host_commands` | 119.560 | 61.072 |
+| `codex:tests.test_learning_cli` | 95.440 | 89.422 |
+| `codex:tests.test_lost_run_settlement` | 98.640 | 88.740 |
+| `codex:tests.test_project_driver` | 390.320 | 316.821 |
+| `codex:tests.test_trial_run_driver_bugs` | 70.220 | 63.795 |
+| `codex:tests.test_write_merge` | 241.240 | 196.939 |
+| `root:test_install` | 110.140 | 94.972 |
+| `root:test_install_claude_upgrade` | 120.330 | 111.117 |
+| `root:test_setup_sh` | 177.880 | 159.281 |
+| `root:test_setup_straight` | 264.440 | 236.005 |
+| `root:test_setup_update` | 167.880 | 152.170 |
+| `root:test_setup_wizard_direct` | 265.860 | 236.071 |
+
+The debt witness's admission assertions now read the immutable ceiling and separately validate current shrink-only debt; its old rejection of valid retirement is saved (0.576609 job-seconds), and its corrected module plus TF-23 checks pass (5.661973 job-seconds). All assertion replacements are in ASSERTIONS-test-framework.md.
+
+## Preserved obligations (owner-authorized separate reporting)
+
+The only expected failed worker is `root:test_e2e_requirements`, and the only metadata errors are the 80 deferred lifecycle requirements. The aggregate requirement gate is intentionally still non-green: TF-5/6/19/21/22 review records, the step-3 placeholder, TF-18/20 and soak execution are not run. ML-4/12 also retain skipped real-filesystem/image probes, reported as failed requirement coverage by the strict AND gate. No skipped or missing evidence was converted into a pass. `outstanding-obligations.json` records every exact non-passing check/status. Steps 4–5 remain untouched.
