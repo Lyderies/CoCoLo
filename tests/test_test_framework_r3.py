@@ -70,12 +70,13 @@ class RoundThree(unittest.TestCase):
         control=unittest.TestResult();ReviewCoreTests(name).run(control);self.assertTrue(control.wasSuccessful(),control.errors+control.failures)
         original=fw.measurements
         for field,value in [('timed_out',False),('returncode',0)]:
-            def ignore(rows,*args,**kwargs): return original([{**r,field:value} for r in rows],*args,**kwargs)
-            result=unittest.TestResult()
-            with mock.patch.object(fw,'measurements',ignore): ReviewCoreTests(name).run(result)
-            self.assertEqual([],result.errors)
-            self.assertEqual(1,len(result.failures),'p02 old witness accepted status-blind '+field)
-            self.assertIn('p02 '+field,result.failures[0][1])
+            with self.subTest(field=field):
+                def ignore(rows,*args,**kwargs): return original([{**r,field:value} for r in rows],*args,**kwargs)
+                result=unittest.TestResult()
+                with mock.patch.object(fw,'measurements',ignore): ReviewCoreTests(name).run(result)
+                self.assertEqual([],result.errors)
+                self.assertEqual(1,len(result.failures),'p02 old witness accepted status-blind '+field)
+                self.assertIn('p02 '+field,result.failures[0][1])
 
     @requirements('TF-1','TF-9')
     def test_p04_shard_witness_rejects_duplicate_original_worker_records(self):
@@ -98,15 +99,16 @@ class RoundThree(unittest.TestCase):
         name='test_inherited_socket_methods_and_asyncio_have_no_guard_exemption'; original=WorkerTests.probe
         control=unittest.TestResult();WorkerTests(name).run(control);self.assertTrue(control.wasSuccessful(),control.failures+control.errors)
         for api in ('open_unix_connection','start_unix_server'):
-            def permit(self,body,*args,**kwargs):
-                extra='import asyncio\nasync def allowed(*args,**kwargs): return None\nasyncio.'+api+'=allowed\n'
-                kwargs['bootstrap']=kwargs.get('bootstrap','')+'\n'+extra
-                return original(self,body,*args,**kwargs)
-            result=unittest.TestResult()
-            with mock.patch.object(WorkerTests,'probe',permit): WorkerTests(name).run(result)
-            self.assertEqual([],result.errors)
-            self.assertEqual(1,len(result.failures),'p04 old Unix witness accepted permitted '+api)
-            self.assertIn('p04 Unix operation allowed',result.failures[0][1])
+            with self.subTest(api=api):
+                def permit(self,body,*args,**kwargs):
+                    extra='import asyncio\nasync def allowed(*args,**kwargs): return None\nasyncio.'+api+'=allowed\n'
+                    kwargs['bootstrap']=kwargs.get('bootstrap','')+'\n'+extra
+                    return original(self,body,*args,**kwargs)
+                result=unittest.TestResult()
+                with mock.patch.object(WorkerTests,'probe',permit): WorkerTests(name).run(result)
+                self.assertEqual([],result.errors)
+                self.assertEqual(1,len(result.failures),'p04 old Unix witness accepted permitted '+api)
+                self.assertIn('p04 Unix operation allowed',result.failures[0][1])
 
     @requirements('TF-11')
     def test_p05_connected_socket_io_is_sticky_in_both_layers(self):
