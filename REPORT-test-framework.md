@@ -132,9 +132,15 @@
 - Global gate remains exit 1 for the same 80 lifecycle checks. Full soak, image opt-ins, macOS/Linux Python 3.11 runtime, Ruff and concurrent real-campaign budgets remain open; Python 3.11 grammar only is verified locally.
 - Framework branch is merged into feat/merge-library. Both branches stop for the requested short review; steps 4–5 have not started. No push, install, primary/control-project edit or general cleanup.
 
-## Decision 103 — remaining p10 MED
-- Tests-first `a8e2a448`; fix/citations `1b684fa8`, on feat/merge-library only. Child diagnostic reporting is best effort; child-only finally always exits, nonzero on failure.
-- TF-13/ML-17 -> `test_merge_library_contract.py:40`–`:51`; witness -> `test_merge_library_r3.py:148` (both under packages/codex-agents/tests). Exact old-code red and positive controls recorded per TF-23.
-- Red: **1.5917891670251265 job-seconds**; green affected modules: **135 passing checks, 27.2427340419963 job-seconds**, DEFAULT 16 jobs, no worker/budget failures. Evidence -> `measurements/test-framework/review-103`.
-- Corrected only the requested table support citation :892 -> :952–955 and ledger :955 -> :954. Existing assertions unchanged; new assertions listed in ASSERTIONS-merge-checker.md.
-- Same 80 lifecycle metadata failures remain; all other code/known gaps and the framework branch are untouched. Ready for review; steps 4–5 remain stopped.
+
+## First integrated full-suite fixes
+- Merged b5318440 into both own branches; all 32 incoming test files preserved, all six discovery/resource test files unchanged.
+- Requirements 97bc854c → red 9bbf1582 → fixes 56941ec4/51257b92/9f76022e; evidence c0c8c76f; retirement 190a6deb. TF-23/24 fix → line/control table: REVIEW-test-framework-fullrun-fixes.md.
+- Discovery import/qualified names fixed; five layers corrected with reasons; guards unchanged; default-capacity runner isolates complete merge campaigns.
+- Exact local full base: b531844030fa619c1f62ddd6c092ebc2ea4fca38. CI trusted event paths retained; nightly retained.
+- ONE full run: 496.778018 s elapsed, 4535.410045 job-seconds, 16 default jobs, 395 units / 6193 tests; zero budget failures. Saved flat timing + run files under measurements/test-framework/release-0850.
+- Seven unexpected units exposed missing primary bookkeeping; merge branch applies its runtime/cap registration and paired 0.8.50 version/digest with unchanged affected tests. Original full reds remain recorded.
+- Remaining expected worker: root:test_e2e_requirements; 80 lifecycle metadata errors. Review/soak/image/future-step obligations preserved separately as owner requested; no claim of a green aggregate requirement gate.
+- Debt: immutable new ceiling version; cli_billing_runtime/run_network retired from primary evidence, billing_gate/billing_rejudge/ledger_startup/session_guard retired from our full run. Fourteen current entries, unchanged ceilings, table in review report.
+- All assertion corrections are new-witness requirement contradictions recorded in ASSERTIONS-test-framework.md; no original product/test assertions removed or changed.
+- No push, install, shared/control edits, general cleanup or steps 4–5. Existing hash-pinned environment reused; Python 3.11/Linux remains CI evidence.

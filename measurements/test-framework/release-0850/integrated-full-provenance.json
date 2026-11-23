@@ -1,0 +1,7 @@
+{
+ "source_sha256": "e3fb3102c1c577d9065687934741008672a417c93086f5224cbb6b7d9bd6aa7d",
+ "source_revision": "f69da048",
+ "base": "b531844030fa619c1f62ddd6c092ebc2ea4fca38",
+ "command": "/private/tmp/cocolo-testfw-venv/bin/python -B scripts/parallel_tests.py --base b531844030fa619c1f62ddd6c092ebc2ea4fca38 --save-timings /private/tmp/testfw-integrated-full.json",
+ "redaction": "Only local worktree prefixes in diagnostics replaced; all timings and outcomes unchanged."
+}

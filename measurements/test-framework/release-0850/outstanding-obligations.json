@@ -1,0 +1,154 @@
+{
+ "ML-10": {
+  "status": "not_run",
+  "checks": {
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_cleanup_chmod": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_cleanup_delete": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_cleanup_in_place": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_cleanup_safe_save": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_compensation_chmod": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_compensation_delete": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_compensation_in_place": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_compensation_safe_save": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_forward_chmod": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_forward_delete": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_forward_in_place": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_forward_safe_save": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_recovery_chmod": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_recovery_delete": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_recovery_in_place": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_recovery_safe_save": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_reverse_chmod": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_reverse_delete": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_reverse_in_place": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_reverse_safe_save": "not_run"
+  }
+ },
+ "ML-11": {
+  "status": "not_run",
+  "checks": {
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_reverse_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_undoing_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_11_kill_cleanup": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_11_kill_every_compensation_call": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_11_kill_forward": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_11_kill_recovery": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_11_kill_reverse": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_11_kill_undo": "not_run"
+  }
+ },
+ "ML-12": {
+  "status": "failed",
+  "checks": {
+   "codex:tests.test_merge_library_adversarial.RealImages.test_ml_12_really_full_image": "skipped",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_reverse_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_undoing_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_12_fault_every_compensation_call": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_12_fault_sweep_cleanup": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_12_fault_sweep_forward": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_12_fault_sweep_recovery": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_12_fault_sweep_reverse": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_12_fault_sweep_undo": "not_run"
+  }
+ },
+ "ML-13": {
+  "status": "not_run",
+  "checks": {
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_13_undo_kill_around_combined_commit": "not_run"
+  }
+ },
+ "ML-18": {
+  "status": "not_run",
+  "checks": {
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_18_kill_during_retirement": "not_run"
+  }
+ },
+ "ML-19": {
+  "status": "not_run",
+  "checks": {
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_reverse_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_undoing_persistence_samples": "not_run"
+  }
+ },
+ "ML-4": {
+  "status": "failed",
+  "checks": {
+   "codex:tests.test_merge_library_adversarial.RealImages.test_ml_4_FAT_HFS_images": "skipped",
+   "codex:tests.test_merge_library_adversarial.RealImages.test_ml_4_actual_mounted_target_and_staging": "skipped"
+  }
+ },
+ "ML-5": {
+  "status": "not_run",
+  "checks": {
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_5_kill_every_pre_A_history_write": "not_run"
+  }
+ },
+ "ML-6": {
+  "status": "not_run",
+  "checks": {
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_6_kill_at_mkdir_inspects_durable_folder_identities": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_6_kill_both_sides_A_B": "not_run"
+  }
+ },
+ "TF-18": {
+  "status": "not_run",
+  "checks": {
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_reverse_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_undoing_persistence_samples": "not_run"
+  }
+ },
+ "TF-19": {
+  "status": "not_run",
+  "checks": {
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_reverse_persistence_samples": "not_run",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_undoing_persistence_samples": "not_run",
+   "planned:TF-19": "not_run",
+   "review:TF-19": "not_run"
+  }
+ },
+ "TF-20": {
+  "status": "not_run",
+  "checks": {
+   "planned:TF-20": "not_run"
+  }
+ },
+ "TF-21": {
+  "status": "not_run",
+  "checks": {
+   "review:TF-21": "not_run"
+  }
+ },
+ "TF-22": {
+  "status": "not_run",
+  "checks": {
+   "review:TF-22": "not_run"
+  }
+ },
+ "TF-5": {
+  "status": "not_run",
+  "checks": {
+   "review:TF-5": "not_run"
+  }
+ },
+ "TF-6": {
+  "status": "not_run",
+  "checks": {
+   "review:TF-6": "not_run"
+  }
+ }
+}

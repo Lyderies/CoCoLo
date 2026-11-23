@@ -1,0 +1,9 @@
+{
+ "status": "red",
+ "base": "c0c8c76f",
+ "diagnostic": "KeyError: 'codex:tests.test_billing_gate'",
+ "positive_control": "Initial admission manifest passed in the complete full run; valid retirement fails only the old witness.",
+ "job_seconds": 0.5766092920093797,
+ "jobs": 16,
+ "worker_log": "retirement-old-worker.log"
+}
