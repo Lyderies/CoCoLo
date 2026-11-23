@@ -1,0 +1,14 @@
+F....
+======================================================================
+FAIL: test_claimed_pre_bump_commit_cannot_hide_old_record_edits (test_release_bookkeeping.ReleaseBookkeeping.test_claimed_pre_bump_commit_cannot_hide_old_record_edits)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<cocolo-testfw>/tests/test_release_bookkeeping.py", line 92, in test_claimed_pre_bump_commit_cannot_hide_old_record_edits
+    with self.assertRaisesRegex(ValueError,'pre-bump bookkeeping sources'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.527s
+
+FAILED (failures=1)

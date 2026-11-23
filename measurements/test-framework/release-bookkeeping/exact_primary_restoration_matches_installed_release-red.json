@@ -1,0 +1,9 @@
+{
+ "status": "red",
+ "base": "c75eba51",
+ "diagnostic": "installed 0.8.49 bookkeeping not restored",
+ "witness": "root:test_release_bookkeeping.ReleaseBookkeeping.test_exact_primary_restoration_matches_installed_release",
+ "source_run": "old.run.json",
+ "job_seconds": 0.1650093750213273,
+ "jobs": 16
+}
