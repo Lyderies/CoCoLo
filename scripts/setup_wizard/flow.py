@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import effects, steps
+from . import effects, login_start, steps
 from .terminal import Stop
 
 CLONE = effects.CLONE
@@ -1247,12 +1247,47 @@ class Wizard:
                 t.pause()
                 return
             t.list_add("ok", "This project's service: running")
+            self.login_start_step()
             self.mark_step(5, "ok", "registered, ready")
         else:
             self.failure_detail("Collector status: not ready")
             self.version_hint()
             self.mark_step(5, "fail", "not ready")
         t.pause()
+
+    def login_start_step(self) -> None:
+        """E1 (RS-11, decision 90.11 A): the question about starting the collector at login, once, with
+        the answer kept beside the project list. An update never asks (unless its answers file does);
+        Configure step by step offers to turn it off or on again. Nothing here ends the step badly."""
+        t = self.t
+        projects = self.projects_file()
+        state = projects.parent.parent if projects is not None else None
+        kind = login_start.kind_for(sys.platform)
+        cli = Path(self.project) / ".codex" / "orchestration" / "cli.py"
+        argv = []
+        if state is not None and cli.is_file():
+            argv = self.python_argv(str(cli.resolve()), "learning-serve", "--state-root", str(state))
+        ask = None
+        if not self.update:
+            ask = lambda items: t.menu(0, items)  # noqa: E731 - consent is never an implied answer
+        elif self.answers is not None and "login_start" in self.answers:
+            ask = lambda items: 0 if self.answers["login_start"] else 1  # noqa: E731
+        outcome = login_start.offer(
+            home=self.home, kind=kind, answer_file=projects.parent / "login-start" if projects is not None else None,
+            argv=argv, log_dir=login_start.log_folder(state) if state is not None else "",
+            runner=login_start.terminal_runner(t), uid=os.getuid(), ask=ask, show=t.body,
+            configure=not self.update and not self.straight)
+        lines = {"installed": ("ok", "Login start: on. The collector starts when you log in and restarts after a crash."),
+                 "declined": ("skip", "Login start: not now. Choose Configure -> Configure step by step to turn it on."),
+                 "kept": ("ok", "Login start: kept on."),
+                 "removed": ("ok", "Login start: removed. The collector no longer starts at login."),
+                 "left_off": ("skip", "Login start: left off."),
+                 "failed": ("warn", "Login start: not changed. The collector still works; run setup again to retry."),
+                 "unsupported": ("skip", "Login start: not available on this system."),
+                 "no_place": ("skip", "Login start: not offered (no private place to keep your answer)."),
+                 "not_asked": ("skip", "Login start: not asked about during an update.")}.get(outcome)
+        if lines is not None:
+            t.list_add(*lines)
 
     # Step 6: billing and the owner key ------------------------------------------------------
 
