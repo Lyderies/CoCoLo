@@ -13,6 +13,8 @@ Rows of the RS-B matrix (draft 3 §14.2): W1, W2, W3, W4a-W4e, W5. Unit stage fo
 rest is the integration stage (the in-process collector, account and project services, the real CLI).
 """
 from contextlib import closing
+import dataclasses
+import hashlib
 import json
 import sqlite3
 import threading
@@ -27,7 +29,7 @@ from tests.learning_support import attest_provider
 from tests.test_bridge import CLEAN, git, null_filled, result
 from tests.test_lost_run_settlement import LostRunAfterStopTests
 from tests.test_project_driver import DriverHarness
-from tests.test_project_history import PROJECT_A, binding
+from tests.test_project_history import PROJECT_A, binding as history_binding
 
 from codex_agents import codex_preparation, project_driver, service_transport
 from codex_agents.account_api import (
@@ -54,6 +56,12 @@ INPUTS = '3' * 64
 PROJECT = 'prj_' + '4' * 32
 
 
+def binding(number: int = 1):
+    """test_project_history's attempt binding, with the canonical run id (`run:<64 hex>`) the wire requires."""
+    return dataclasses.replace(history_binding(number),
+                               run_id='run:' + hashlib.sha256(f'run-{number}'.encode()).hexdigest())
+
+
 def withdrawal(**changes):
     values = dict(run_handle=HANDLE, attempt=1, run_id=RUN_ID, inputs_digest=INPUTS, generation=1,
                   reason='cancelled_before_claim')
@@ -61,6 +69,7 @@ def withdrawal(**changes):
     return WithdrawOpenInput(**values)
 
 
+@__import__('test_framework').requirements('RS-B-5', why_not_scenario='B3 checks the real codec, store, or enrolled service path; direct fault and custody controls expose the withdrawal boundary.')
 class WithdrawWireTests(unittest.TestCase):
     """W1 (the encode and decode half), W4e (the reply check), the fixed request id and the reason codes."""
 
@@ -139,6 +148,7 @@ def open_row(db, run_handle, attempt=1, project=PROJECT_A):
     return None if row is None else tuple(row)
 
 
+@__import__('test_framework').requirements('RS-B-5', why_not_scenario='B3 checks the real codec, store, or enrolled service path; direct fault and custody controls expose the withdrawal boundary.')
 class OpenBindingStoreTests(unittest.TestCase):
     """The project's `open_binding` register row (draft 3 §7): taken before registration, marked `releasing` with its
     withdrawal request before the account is asked, released by that request's answer or by the claim's own end, and
@@ -339,6 +349,7 @@ class WithdrawHarness(WithdrawReads, DriverHarness):
     pass
 
 
+@__import__('test_framework').requirements('RS-B-5', why_not_scenario='B3 checks the real codec, store, or enrolled service path; direct fault and custody controls expose the withdrawal boundary.')
 class WithdrawAccountTests(WithdrawHarness):
     """W1-W4 through the account's real route, from both sources."""
 
@@ -499,6 +510,7 @@ class WithdrawAccountTests(WithdrawHarness):
         self.assertEqual(('released', 'fenced'), self.project_row(run_handle)[:2])
 
 
+@__import__('test_framework').requirements('RS-B-5', why_not_scenario='B3 checks the real codec, store, or enrolled service path; direct fault and custody controls expose the withdrawal boundary.')
 class DriverWithdrawalTests(WithdrawHarness):
     """W5: the project service withdraws each no-claim exit's open by itself, exactly once."""
 
@@ -558,6 +570,27 @@ class DriverWithdrawalTests(WithdrawHarness):
             self.withdrawn(run_handle)
         self.assertEqual([False, True], calls)
 
+    def test_M7_a_registration_refused_after_the_binding_exists_withdraws_the_open(self):
+        from codex_agents import project_history
+        for code in ('history_conflict', 'history_service_unavailable'):
+            with self.subTest(refusal=code), mock.patch.object(
+                    project_history.ProjectHistory, 'record_registered_run', side_effect=HistoryError(code)):
+                *_, run_handle = self.opened()
+                self.assertEqual('refused_before_claim', self.withdrawn(run_handle)['reason'])
+                self.assertEqual([], self.executions())
+
+    def test_M7_a_writer_faulted_at_record_open_binding_gets_one_memory_withdrawal(self):
+        from codex_agents import project_history
+        with mock.patch.object(project_history.ProjectHistory, 'record_open_binding',
+                               side_effect=HistoryError('history_service_unavailable')):
+            context, route_path, _, run_handle = self.open_run()
+            self.wait_for(lambda: self.account_binding(run_handle)[0] == 'abandoned', seconds=30)
+        # No duty row could be written, so the one withdrawal is the run's own, sent from memory; the account holds it.
+        self.assertEqual(('abandoned', 'withdrawn', 'released', 'withdrawn', 2), self.account_binding(run_handle))
+        self.assertIsNone(self.project_row(run_handle))
+        self.assertEqual([(run_handle, False)], [t for t in self.transitions if t[0] == run_handle and not t[1]])
+        self.assertEqual([], self.executions())
+
     def test_W5_the_entry_is_retired_only_after_its_row_is_releasing(self):
         from codex_agents.project_history import ProjectHistory
         gate, original = threading.Event(), ProjectHistory.mark_open_withdrawing
@@ -579,6 +612,7 @@ class DriverWithdrawalTests(WithdrawHarness):
 
 
 
+@__import__('test_framework').requirements('RS-B-5', why_not_scenario='B3 checks the real codec, store, or enrolled service path; direct fault and custody controls expose the withdrawal boundary.')
 class SuccessorWithdrawalTests(WithdrawReads, LostRunAfterStopTests):
     """W5 (driver stopping): a stopped service's never-claimed open is withdrawn by the next service's start pass."""
 
