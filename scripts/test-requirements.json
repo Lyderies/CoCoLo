@@ -598,6 +598,7 @@
    "codex:tests.test_merge_library_contract.Contract.test_ml_17_unresolved_blocks_until_accept",
    "codex:tests.test_merge_library_machine.TestMergeMachine.runTest",
    "codex:tests.test_merge_library_r3.RoundThree.test_p10_blocked_sealers_leave_no_threads_in_the_test_process",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p10_diagnostic_failure_cannot_escape_child_to_caller",
    "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_D6_retry_and_cancel_cannot_reverse_durable_landed",
    "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_D7_unreadable_history_reports_unknown_and_touches_nothing",
    "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_Q5_all_emptied_ancestors_are_recorded_and_unlisted_empty_folder_survives",
@@ -1051,6 +1052,7 @@
  "TF-13": {
   "checks": [
    "codex:tests.test_merge_library_r3.RoundThree.test_p10_blocked_sealers_leave_no_threads_in_the_test_process",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p10_diagnostic_failure_cannot_escape_child_to_caller",
    "root:test_entrypoint_inventory.EntryPointTests.test_argparse_entrypoints_start_in_real_stdlib_only_processes",
    "root:test_entrypoint_inventory.EntryPointTests.test_inventory_rejects_missing_entry_points_and_missing_real_checks",
    "root:test_entrypoint_inventory.EntryPointTests.test_job_reader_process_refuses_unbound_invocation_without_output",

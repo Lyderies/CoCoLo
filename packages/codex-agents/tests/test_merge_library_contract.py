@@ -38,12 +38,17 @@ def bounded_concurrency(action, timeout=30):
         error_path = Path(directory) / 'error'
         pid = os.fork()
         if pid == 0:
+            status = 73
             try:
                 action()
+                status = 0
             except BaseException:
-                error_path.write_text(traceback.format_exc())
-                os._exit(73)
-            os._exit(0)
+                try:
+                    error_path.write_text(traceback.format_exc())
+                except BaseException:
+                    pass  # Diagnostic reporting must never let the child escape.
+            finally:
+                os._exit(status)
         reaped = False
         try:
             deadline = time.monotonic() + timeout
