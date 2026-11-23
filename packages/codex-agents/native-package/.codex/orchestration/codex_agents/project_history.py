@@ -60,7 +60,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 18
+_SCHEMA_VERSION = 19
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
@@ -186,7 +186,18 @@ REGISTERED_RUN_COLUMNS = {
 }
 _SCHEMA_V17 = _SCHEMA_V16 + REGISTERED_RUN_SCHEMA
 # O0b slice SB (SH-1): RS-B's register and RS-D's custody tables, one step 17 -> 18 (project_holds_schema).
-_SCHEMA = _SCHEMA_V17 + PROJECT_HOLDS_SCHEMA
+_SCHEMA_V18 = _SCHEMA_V17 + PROJECT_HOLDS_SCHEMA
+# B3 (decision 108 A), step 18 -> 19: the indexes that keep the open-binding checks' database work bounded. The run id
+# and the instance live in the row's evidence, so the first two are indexes on that expression, over only the rows
+# the check reads (the live ones, and the held ones); the third is the run-id lookup of the registered runs.
+OPEN_BINDING_INDEX_SCHEMA = """
+CREATE INDEX project_holds_open_run ON project_holds(project_id,json_extract(evidence,'$.run_id'))
+ WHERE kind='open_binding' AND state<>'released';
+CREATE INDEX project_holds_open_held ON project_holds(project_id,json_extract(evidence,'$.instance'),identity)
+ WHERE kind='open_binding' AND state='held';
+CREATE INDEX project_registered_runs_run ON project_registered_runs(project_id,run_id);
+"""
+_SCHEMA = _SCHEMA_V18 + OPEN_BINDING_INDEX_SCHEMA
 _COLUMNS = {
     **PROJECT_HOLDS_COLUMNS,
     **ACTIVATION_COLUMNS,
@@ -266,6 +277,7 @@ class ProjectHistory:
         allow_legacy_orchestration_reference: bool = False,
     ) -> None:
         self._pid = os.getpid()
+        self._successor_position = ('', '')  # where the next successor pass reads from (in memory only)
         self._thread = threading.current_thread()
         self._closed = False
         self._connection = None
@@ -443,19 +455,19 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17} and application == _APPLICATION_ID
+        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18} and application == _APPLICATION_ID
               and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4,
                                                5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7, 8: _SCHEMA_V8,
                                                9: _SCHEMA_V9, 10: _SCHEMA_V10, 11: _SCHEMA_V11,
                                                12: _SCHEMA_V12, 13: _SCHEMA_V13, 14: _SCHEMA_V14,
-                                               15: _SCHEMA_V15, 16: _SCHEMA_V16, 17: _SCHEMA_V17}[version])):
+                                               15: _SCHEMA_V15, 16: _SCHEMA_V16, 17: _SCHEMA_V17, 18: _SCHEMA_V18}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {*PROJECT_HOLDS_COLUMNS, *(REGISTERED_RUN_COLUMNS if version < 17 else set()), *(ACTIVATION_COLUMNS if version < 16 else set()), *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
+            omitted = {*(PROJECT_HOLDS_COLUMNS if version < 18 else set()), *(REGISTERED_RUN_COLUMNS if version < 17 else set()), *(ACTIVATION_COLUMNS if version < 16 else set()), *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
             old_columns = {name: (columns[:-1] if ((name == 'result_leases' and version < 9)
                                                  or (name == 'project_cleanup_reservations' and version == 9)) else columns)
@@ -509,11 +521,14 @@ class ProjectHistory:
                               + (ACTIVATION_SCHEMA if version < 16 else '')
                               + (REGISTERED_RUN_SCHEMA if version < 17 else '')
                               # SH-1: the four tables (each slice adopts its own holds into them).
-                              + PROJECT_HOLDS_SCHEMA).split(';'):
+                              + (PROJECT_HOLDS_SCHEMA if version < 18 else '')
+                              # B3: the open-binding indexes (step 18 -> 19).
+                              + OPEN_BINDING_INDEX_SCHEMA).split(';'):
                 if statement.strip():
                     connection.execute(statement)
             # B1: every lease and reservation gets its register row by class, idempotently, before the validators.
-            project_holds_schema.adopt_project_holds(connection, self._hold_now())
+            if version < 18:
+                project_holds_schema.adopt_project_holds(connection, self._hold_now())
             # SH-1: both validators inside the step, before it commits; a failure rolls everything back to the
             # earlier format (and the copy made for it goes, O10 HS-18).
             self._check_project_holds()
@@ -1606,12 +1621,13 @@ class ProjectHistory:
                     raise HistoryError('history_conflict')
                 return
             # A run id cannot acquire a second registration identity.
-            if self._connection.execute('SELECT 1 FROM project_registered_runs WHERE project_id=? AND run_id=? '
-                    'AND (run_handle<>? OR attempt<>?)', (self.project_id, run_id, run_handle, attempt)).fetchone():
+            # Both checks search an index on the run id: the work is one lookup, not the rows held or registered.
+            if self._connection.execute('SELECT 1 FROM project_registered_runs INDEXED BY project_registered_runs_run '
+                    'WHERE project_id=? AND run_id=? AND (run_handle<>? OR attempt<>?) LIMIT 1',
+                    (self.project_id, run_id, run_handle, attempt)).fetchone():
                 raise HistoryError('history_conflict')
-            # One row is read, never every live duty: the partial index holds only the rows not yet released.
             if self._connection.execute(
-                    "SELECT 1 FROM project_holds INDEXED BY project_holds_kind_due WHERE project_id=? "
+                    "SELECT 1 FROM project_holds INDEXED BY project_holds_open_run WHERE project_id=? "
                     "AND kind='open_binding' AND state<>'released' AND json_extract(evidence,'$.run_id')=? LIMIT 1",
                     (self.project_id, run_id)).fetchone() is not None:
                 raise HistoryError('history_conflict')
@@ -1694,20 +1710,35 @@ class ProjectHistory:
             project_holds_schema.release_hold(self._connection, self.project_id, 'open_binding', row['identity'],
                                               release_kind, now_ms=self._hold_now(), receipt=receipt)
 
+    _HELD_WINDOW = ("SELECT identity,evidence,json_extract(evidence,'$.instance') AS owner FROM project_holds "
+                    "INDEXED BY project_holds_open_held WHERE project_id=? AND kind='open_binding' AND state='held' "
+                    "AND json_extract(evidence,'$.instance') {side} ? "
+                    "AND (json_extract(evidence,'$.instance'),identity) > (?,?) "
+                    "ORDER BY json_extract(evidence,'$.instance'),identity LIMIT ?")
+
+    def _held_window(self, instance, after, limit):
+        """At most `limit` held duties of other services, in index order, after the position `after`: the index
+        holds only held rows, split around the live service's own so those are never read, and gives the order, so
+        nothing is sorted and the work is the window, not the rows held."""
+        rows = []
+        for side in ('<', '>'):
+            if len(rows) < limit:
+                rows += self._connection.execute(self._HELD_WINDOW.format(side=side),
+                    (self.project_id, instance, *after, limit - len(rows))).fetchall()
+        return rows
+
     @_operation
     def withdraw_earlier_open_bindings(self, instance, *, project_id, runtime_digest, limit=10):
-        """Mark at most `limit` of an earlier service's held duties for withdrawal. The rows the pass would skip (the
-        live service's own, and those whose lease is armed or ended some other way: the fence's) are left out by
-        the query itself, so every row read is one to be marked and each pass makes progress."""
-        rows = self._connection.execute(
-            "SELECT h.identity,h.evidence FROM project_holds h INDEXED BY project_holds_kind_due "
-            "WHERE h.project_id=? AND h.kind='open_binding' AND h.state<>'released' AND h.state='held' "
-            "AND json_extract(h.evidence,'$.instance') IS NOT ? "
-            "AND NOT EXISTS(SELECT 1 FROM project_holds l WHERE l.project_id=h.project_id AND l.kind='lease' "
-            "AND l.identity=h.identity AND NOT (l.state='released' AND l.release_kind='withdrawn_unsent')) "
-            "ORDER BY h.identity LIMIT ?", (self.project_id, instance, limit)).fetchall()
+        """Mark an earlier service's held duties for withdrawal, reading one window of at most `limit` rows. The
+        window moves on after every call, over the rows it could not mark (a lease armed or ended another way is the
+        fence's; a row that changed) as over those it did, and starts again from the first row once the end is
+        reached, so every pass is bounded and no row stops the others."""
+        window = self._held_window(instance, self._successor_position, limit)
+        if not window and self._successor_position != ('', ''):
+            window = self._held_window(instance, ('', ''), limit)
+        self._successor_position = (window[-1]['owner'], window[-1]['identity']) if window else ('', '')
         count = 0
-        for row in rows:
+        for row in window:
             evidence = json.loads(row['evidence'])
             try:
                 self.mark_open_withdrawing(evidence['run_handle'], evidence['attempt'], 'service_stopped',
@@ -1715,7 +1746,7 @@ class ProjectHistory:
             except HistoryError as error:
                 if error.reason_code != 'history_conflict':
                     raise
-                continue  # Changed since it was read: the next pass reads it again.
+                continue  # Not markable now (the lease is the fence's, or the row changed): the window moves on.
             count += 1
         return count
 

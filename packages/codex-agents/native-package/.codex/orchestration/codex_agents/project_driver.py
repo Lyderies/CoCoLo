@@ -1178,8 +1178,12 @@ class RunDriver:
                 'defer_open_withdrawal', entry['identity'], now_ms=_wall_ms(),
                 base_ms=int(WITHDRAW_RETRY_SECONDS * 1000) or 1, max_ms=int(WITHDRAW_BACKOFF_MAX_SECONDS * 1000))
         except Exception:
+            # The failed row stays `releasing` with its envelope and its old schedule, so the next list has it again;
+            # the rest of the batch is not dropped with it.
             self._withdraw_request, self._withdraw_phase = None, 'start'
-            self._withdraw_queue = []
+            if self._withdraw_queue:
+                self._send_withdrawal(self._withdraw_queue.pop(0))
+                return
             self._next_withdraw = self._clock() + WITHDRAW_RETRY_SECONDS
 
     def _result(self, run):
