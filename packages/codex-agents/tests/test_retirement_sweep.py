@@ -130,6 +130,9 @@ class UnsafeFileRetirementTests(RetirementFixture):
         if target == 'body' and kind != 'link_pair':  # a clean pair is recovered by a read, not refused
             with self.assertRaises(HistoryError):
                 self.store.read_result(binding(1))
+        if target == 'context' and kind != 'missing':  # the unsafe context is never served either
+            with self.assertRaises(HistoryError):
+                self.store.stored_result_context(binding(1), host_class='codex')
         self.assertEqual(2, self.charged())
         self.now = self.due(1)
         self.assertIsNone(self.pass_())  # the unsafe entry does not make the pass fail
@@ -227,8 +230,10 @@ class RepairRequiredTests(RetirementFixture):
         report = self.store.result_retirement_repairs()
         self.assertEqual([(self.attempt(1)[0], self.attempt(1)[1], 'directory', (directory.name,))],
                          [(row['run_handle'], row['attempt'], row['reason'], tuple(row['names'])) for row in report])
-        with self.assertRaises(HistoryError):  # reads refuse while it waits
-            self.store.read_result(binding(1))
+        for read in (lambda: self.store.read_result(binding(1)),  # reads refuse while it waits
+                     lambda: self.store.stored_result_context(binding(1), host_class='codex')):
+            with self.assertRaises(HistoryError):
+                read()
         self.assertEqual('history_unsafe_path', self.pass_())  # retried on every pass
         self.assertEqual('repair_required', self.context_state(1))
         self.consistent()
@@ -298,6 +303,14 @@ class CrashSafeRetirementTests(RetirementFixture):
         elif point == 'after_body_unlink':
             body, context = self.names(1)
             patch = self.failing_unlink(Stop(), only={context[1]})
+        elif point == 'body_unlinked_only':  # the body's names went, the context's did not
+            body, context = self.names(1)
+            patch = self.failing_unlink(Stop(), only={context[1]})
+        elif point == 'context_unlinked_only':  # the context's names went, the body's did not
+            body, context = self.names(1)
+            for name in context:
+                self.path(name).unlink(missing_ok=True)
+            patch = self.failing_unlink(Stop(), only={body[1]})
         elif point == 'after_context_unlink':
             patch = self.failing_fsync(error=Stop())
         elif point == 'after_directory_fsync':
@@ -313,8 +326,8 @@ class CrashSafeRetirementTests(RetirementFixture):
         self.assertEqual('retiring', self.row_state())  # the retirement is recorded, not finished
         self.assertEqual(('released', 'retention'), self.release_kind())
         self.assertEqual(1, self.charged())  # the charge is kept until `expired`
-        if point in ('after_retiring', 'after_body_unlink'):  # a file remains: no read returns it in between
-            with self.failing_unlink(OSError('still failing')):
+        if point in ('after_retiring', 'after_body_unlink', 'body_unlinked_only', 'context_unlinked_only'):
+            with self.failing_unlink(OSError('still failing')):  # a file remains: no read returns it in between
                 for read in (lambda: self.store.read_result(binding(1)),
                              lambda: self.store.stored_result_context(binding(1), host_class='codex')):
                     with self.assertRaises(HistoryError):
@@ -333,6 +346,12 @@ class CrashSafeRetirementTests(RetirementFixture):
 
     def test_K1_a_stop_after_the_body_unlink_is_finished_by_the_next_pass(self):
         self.check('after_body_unlink')
+
+    def test_K1_a_stop_with_only_the_body_names_unlinked_is_finished_by_the_next_pass(self):
+        self.check('body_unlinked_only')
+
+    def test_K1_a_stop_with_only_the_context_names_unlinked_is_finished_by_the_next_pass(self):
+        self.check('context_unlinked_only')
 
     def test_K1_a_stop_after_the_context_unlink_is_finished_by_the_next_pass(self):
         self.check('after_context_unlink')
@@ -421,7 +440,10 @@ class ContextSweepTests(RetirementFixture):
 
     def test_U8_a_stop_after_the_context_is_retiring_is_finished_by_the_next_pass(self):
         self.withdrawn_but_not_finished(1)
-        self.base.reopen(result_capacity=self.fixture.capacity)  # the restart; the open itself is not relied on
+        with mock.patch.object(project_result_contexts, 'reconcile'):  # the start-up reconcile must not finish it
+            self.base.reopen(result_capacity=self.fixture.capacity)
+        self.assertEqual('retiring', self.context_state(1))  # so the pass, not the open, finishes it
+        self.assertEqual(1, len(rc.context_files(self.fixture.directory)))
         self.assertIsNone(self.pass_())
         self.assertEqual('ended', self.context_state(1))
         self.assertEqual([], rc.context_files(self.fixture.directory))
@@ -605,6 +627,70 @@ class StartupReconcileTests(RetirementFixture):
         return sorted(set(row[0] for row in self.store._connection.execute(
             'SELECT state FROM project_result_contexts')))
 
+    def traced_start_up(self):
+        """The whole start-up (a fresh open of the store, its reconcile included) with every route a body or context
+        file's bytes could take watched: open by name (builtins, io, os), and a read, pread or readv of any
+        descriptor opened on such a name, which covers an inherited descriptor too."""
+        import io
+        opened, tracked, read = [], set(), []
+
+        def matches(name):
+            return str(name).rsplit('/', 1)[-1].startswith(('.context-', '.result-'))
+
+        def wrap_open(real):
+            def traced(name, *args, **kwargs):
+                if matches(name):
+                    opened.append(str(name))
+                return real(name, *args, **kwargs)
+            return traced
+        real_os_open = os.open
+
+        def traced_os_open(name, *args, **kwargs):
+            descriptor = real_os_open(name, *args, **kwargs)
+            if matches(name):
+                opened.append(str(name))
+                tracked.add(descriptor)
+            return descriptor
+
+        def wrap_read(real):
+            def traced(descriptor, *args, **kwargs):
+                if descriptor in tracked:
+                    read.append(descriptor)
+                return real(descriptor, *args, **kwargs)
+            return traced
+        with mock.patch.object(builtins, 'open', wrap_open(builtins.open)), \
+                mock.patch.object(io, 'open', wrap_open(io.open)), mock.patch.object(os, 'open', traced_os_open), \
+                mock.patch.object(os, 'read', wrap_read(os.read)), mock.patch.object(os, 'pread', wrap_read(os.pread)), \
+                mock.patch.object(os, 'readv', wrap_read(os.readv)):
+            self.base.reopen(result_capacity=self.fixture.capacity)
+        return opened, read
+
+    def test_S1_the_whole_start_up_opens_and_reads_no_body_or_context_file(self):
+        pair = self.litter()
+        opened, read = self.traced_start_up()
+        self.assertEqual([], opened)  # 0 files opened by name
+        self.assertEqual([], read)  # 0 reads of any descriptor on one
+        self.assertNotIn(f'.result-{pair}.partial', self.attempt_files())  # and the start-up did its work
+
+    def test_S1_one_failing_entry_does_not_stop_the_start_up_and_nothing_outside_the_store_is_followed(self):
+        directory = self.fixture.directory
+        outside = directory.parent / 'outside-start-up-target'
+        outside.write_bytes(b'OUTSIDE-CANARY')
+        self.addCleanup(lambda: outside.unlink(missing_ok=True))
+        broken = f'.context-{"a" * 64}.json'  # a directory under an orphan context name: cannot be removed
+        (directory / broken).mkdir()
+        (directory / f'.context-{"b" * 64}.json').symlink_to(outside)  # an orphan symlink: unlinked, not followed
+        (directory / f'.result-{"c" * 64}.partial').symlink_to(outside)  # a body partial symlink
+        (directory / f'.context-{"d" * 64}.json').write_bytes(b'ORPHAN')  # a plain orphan after the broken one
+        os.mkfifo(directory / f'.context-{"e" * 64}.json', 0o600)  # a FIFO would block an open
+        self.base.reopen(result_capacity=self.fixture.capacity)  # the open does not fail
+        names = self.attempt_files()
+        self.assertIn(broken, names)  # the directory is left for repair
+        for letter in 'bde':
+            self.assertNotIn(f'.context-{letter * 64}.json', names)
+        self.assertNotIn(f'.result-{"c" * 64}.partial', names)
+        self.assertEqual(b'OUTSIDE-CANARY', outside.read_bytes())  # nothing was followed or truncated
+
     def add_tombstones(self):
         connection = self.store._connection
         project = PROJECT_A
@@ -618,15 +704,157 @@ class StartupReconcileTests(RetirementFixture):
                 ((project, f'tomb-{n}:1') for n in range(self.TOMBSTONES)))
 
     def test_S1_reconciliation_work_is_the_same_at_zero_and_at_one_hundred_thousand_tombstones(self):
-        self.litter()
-        few, opened_few = self.measured_reconcile()
+        runs = 5
+        few_runs, many_runs, opened = [], [], []
+        for _ in range(runs):
+            self.litter()
+            steps, seen = self.measured_reconcile()
+            few_runs.append(steps)
+            opened += seen
         self.add_tombstones()
-        self.litter()
-        many, opened_many = self.measured_reconcile()
-        self.assertEqual([], opened_few + opened_many)
-        self.assertGreater(few, 0)
-        self.assertLessEqual(many, few * 1.05 + 1000, (few, many))  # not one row per tombstone
+        for _ in range(runs):
+            self.litter()
+            steps, seen = self.measured_reconcile()
+            many_runs.append(steps)
+            opened += seen
+        few, many = max(few_runs), max(many_runs)
+        self.assertEqual([], opened)
+        self.assertGreater(min(few_runs), 0)
+        # Measured: the same litter costs 480 steps on every run but one of 490 (the handler counts in ticks of 10),
+        # with and without 100 000 tombstones. Two ticks of margin over the worst quiet run; one statement per
+        # tombstone would add at least 100 000 steps, so this bound still fails for any growth with the tombstones.
+        self.assertLessEqual(many, few + 20, (few_runs, many_runs))
         self.assertEqual(self.LIVE, len([name for name in self.attempt_files() if name.startswith('.context-')]))
+
+
+@__import__('test_framework').requirements('RS-D-D3', why_not_scenario=WHY)
+class ReservationOnlyAndVisibilityTests(RetirementFixture):
+    """D3 r1 MED-1 and the io deviation: a reservation without a context row (the test-only non-lease path) with a
+    directory under its name is repair-visible and retried; an unlink or fsync error stays `retiring` but is shown."""
+
+    def direct(self, number):
+        self.fixture.reserve(number)
+        self.fixture.commit(number)
+
+    def reservation_only_names(self, number):
+        return self.store._result_names(binding(number))
+
+    def report(self):
+        return [(row['run_handle'], row['attempt'], row['reason'], tuple(row['names']))
+                for row in self.store.result_retirement_repairs()]
+
+    def test_M1_a_directory_under_a_reservation_only_body_name_is_shown_charged_retried_and_finished_when_removed(self):
+        self.direct(7)
+        self.assertIsNone(rc.context_row(self.store, *self.attempt(7)))  # no context row at all
+        directory = self.path(self.reservation_only_names(7)[1])
+        directory.unlink()
+        directory.mkdir()
+        self.now = self.due(7)
+        self.assertEqual('history_unsafe_path', self.pass_())
+        self.assertEqual('retiring', self.row_state(7))
+        self.assertEqual(1, self.charged())  # charges kept
+        expected = [(self.attempt(7)[0], self.attempt(7)[1], 'directory', (directory.name,))]
+        self.assertEqual(expected, self.report())
+        with self.assertRaises(HistoryError):
+            self.store.read_result(binding(7))
+        self.assertEqual('history_unsafe_path', self.pass_())  # retried on every pass
+        self.base.reopen(result_capacity=self.fixture.capacity)  # and the shown state is durable
+        self.assertEqual(expected, self.report())
+        directory.rmdir()  # the operator's repair
+        self.assertIsNone(self.pass_())
+        self.assertEqual('expired', self.row_state(7))
+        self.assertEqual([], self.report())
+        self.assertEqual(0, self.charged())
+        self.assertEqual([], self.attempt_files())
+
+    def test_M1_a_reservation_only_directory_row_does_not_starve_a_later_row_when_the_limit_is_one(self):
+        self.direct(7)
+        self.committed(1)
+        directory = self.path(self.reservation_only_names(7)[1])
+        directory.unlink()
+        directory.mkdir()
+        self.now = max(self.due(7), self.due(1))
+        results = [self.pass_(limit=1) for _ in range(4)]
+        self.assertIn('history_unsafe_path', results)
+        self.assertEqual(('expired', 'expired'), (self.row_state(1), self.context_state(1)))
+        self.assertEqual('retiring', self.row_state(7))
+
+    def test_M2_an_unlink_error_stays_retiring_charged_retried_and_is_shown_as_retrying(self):
+        self.committed(1)
+        self.direct(7)
+        self.now = max(self.due(1), self.due(7))
+        body, context = self.names(1)
+        failing = {body[1], context[1], self.reservation_only_names(7)[1]}
+        with self.failing_unlink(PermissionError('CANARY-delete'), only=failing):
+            self.assertEqual('history_unavailable', self.pass_())
+            self.assertEqual(('retiring', 'retiring', 'retiring'),
+                             (self.row_state(1), self.context_state(1), self.row_state(7)))
+            self.assertEqual(2, self.charged())
+            self.assertEqual({(self.attempt(1), 'retrying', ()), (self.attempt(7), 'retrying', ())},
+                             {((handle, attempt), reason, names) for handle, attempt, reason, names in self.report()})
+            self.assertEqual('history_unavailable', self.pass_())  # retried every pass
+        self.assertIsNone(self.pass_())
+        self.assertEqual(('expired', 'expired', 'expired'),
+                         (self.row_state(1), self.context_state(1), self.row_state(7)))
+        self.assertEqual([], self.report())
+        self.assertEqual(0, self.charged())
+
+    def test_M2_a_directory_fsync_error_stays_retiring_and_is_shown_as_retrying(self):
+        self.committed(1)
+        self.now = self.due(1)
+        with self.failing_fsync():
+            self.assertEqual('history_unavailable', self.pass_())
+            self.assertEqual([(*self.attempt(1), 'retrying', ())], self.report())
+        self.assertIsNone(self.pass_())
+        self.assertEqual([], self.report())
+
+    def test_M3_a_context_only_sweep_fsync_error_stays_retiring_is_shown_and_recovers(self):
+        helper = ContextSweepTests(methodName='runTest')
+        helper.base, helper.fixture = self.base, self.fixture
+        helper.withdrawn_but_not_finished(1)
+        with self.failing_fsync():
+            self.assertEqual('history_unavailable', self.pass_())
+            self.assertEqual('retiring', self.context_state(1))
+            self.assertEqual([(*self.attempt(1), 'retrying', ())], self.report())
+            self.assertEqual(1, project_result_contexts_live(self.store))  # still charged
+        self.assertIsNone(self.pass_())
+        self.assertEqual('ended', self.context_state(1))
+        self.assertEqual([], self.report())
+
+    def test_M3_a_context_only_directory_row_survives_a_restart_without_failing_the_open_and_finishes_when_repaired(self):
+        helper = ContextSweepTests(methodName='runTest')
+        helper.base, helper.fixture = self.base, self.fixture
+        for number in (1, 2):
+            helper.withdrawn_but_not_finished(number)
+        context = project_result_contexts.names(self.store, *self.attempt(1))[1]
+        self.path(context).unlink()
+        self.path(context).mkdir()
+        self.assertEqual('history_unsafe_path', self.pass_())
+        self.assertEqual(('repair_required', 'ended'), (self.context_state(1), self.context_state(2)))
+        self.base.reopen(result_capacity=self.fixture.capacity)  # the open does not fail, and keeps the repair state
+        self.assertEqual('repair_required', self.context_state(1))
+        self.assertEqual([(*self.attempt(1), 'directory', (context,))], self.report())
+        self.path(context).rmdir()
+        self.assertIsNone(self.pass_())
+        self.assertEqual('ended', self.context_state(1))
+        self.assertEqual([], self.report())
+
+    def test_M3_a_persistently_failing_context_only_row_does_not_starve_later_rows_when_the_limit_is_one(self):
+        helper = ContextSweepTests(methodName='runTest')
+        helper.base, helper.fixture = self.base, self.fixture
+        for number in (1, 2, 3):
+            helper.release_context_only(number, 'denied')
+        context = project_result_contexts.names(self.store, *self.attempt(1))[1]
+        self.path(context).unlink()
+        self.path(context).mkdir()
+        results = [self.pass_(limit=1) for _ in range(4)]
+        self.assertIn('history_unsafe_path', results)
+        self.assertEqual(['repair_required', 'ended', 'ended'], [self.context_state(n) for n in (1, 2, 3)])
+
+
+def project_result_contexts_live(store):
+    return store._connection.execute("SELECT COUNT(*) FROM project_result_contexts WHERE state NOT IN "
+                                     "('ended','expired')").fetchone()[0]
 
 
 LIVE_STATES = ['leased']
