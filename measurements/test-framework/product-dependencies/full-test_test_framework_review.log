@@ -1,0 +1,14 @@
+..F...
+======================================================================
+FAIL: test_fixture_and_transitive_helper_changes_change_dependency_fingerprint (test_test_framework_review.ReviewTests.test_fixture_and_transitive_helper_changes_change_dependency_fingerprint)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_test_framework_review.py", line 100, in test_fixture_and_transitive_helper_changes_change_dependency_fingerprint
+    self.assertNotEqual(original, changed)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+AssertionError: '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a' == '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a'
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.012s
+
+FAILED (failures=1)

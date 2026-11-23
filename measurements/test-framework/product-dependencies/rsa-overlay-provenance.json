@@ -1,0 +1,35 @@
+{
+ "rsa_revision": "2357016b0cd8d4edc4d48ded1bbf4c4ce8ad083c",
+ "framework_revision": "d56e084cc14b9dd59db2efcc14df6a877768bcfb",
+ "modules": [
+  "codex:tests.test_account_billing_jobs",
+  "codex:tests.test_account_claim_jobs",
+  "codex:tests.test_account_claim_storage",
+  "codex:tests.test_account_lane_restart",
+  "codex:tests.test_account_observation_jobs",
+  "codex:tests.test_account_original_open",
+  "codex:tests.test_cli_observation_runtime",
+  "codex:tests.test_open_request_lifetime",
+  "codex:tests.test_project_execution_processes",
+  "codex:tests.test_rsa_step3"
+ ],
+ "metadata_additions": {
+  "scripts/test-layers.json": [
+   "codex:tests.test_rsa_step3"
+  ],
+  "scripts/test-stages.json": [
+   "codex:tests.test_rsa_step3"
+  ],
+  "scripts/test-requirements.json": [
+   "RSA3-1",
+   "RSA3-2",
+   "RSA3-3"
+  ]
+ },
+ "files": {
+  "packages/codex-agents/native-package/.codex/orchestration/codex_agents/account_claim_jobs.py": "0e635f5d935556cee266c96eb42f4792aaf7c265a315d9c49a81f3cd857c4c21",
+  "packages/codex-agents/tests/test_rsa_step3.py": "8218f77e1b24f54a4a52eee8f891b86cc38d26e5193628ec5c83d16ae8102ee6",
+  "measurements/rsa-step3/requirements.md": "a5cc8041fec30f0410b96bd2e088dc8eb9c14f202751398391df5d26b3119710"
+ },
+ "worktree_policy": "Applied only to own merge-library worktree; restored in finally. RSA worktree never touched."
+}

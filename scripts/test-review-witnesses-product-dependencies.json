@@ -58,5 +58,15 @@
   "red": "measurements/test-framework/product-dependencies/later_bookkeeping_proof_takes_precedence_over_older_policy_record-red.json",
   "diagnostic": "TF-26 missing release/policy dependency precedence",
   "green": "measurements/test-framework/product-dependencies/later_bookkeeping_proof_takes_precedence_over_older_policy_record-green.json"
+ },
+ {
+  "fix": "TF26-generated-helper-regression",
+  "requirement": "TF-26",
+  "witness": "root:test_product_dependencies.ProductDependencies.test_fileless_generated_helpers_keep_owned_namespace_and_external_identity",
+  "positive_control": "Unchanged generated fixtures compare equal; a changed helper is rejected; a separate generated product namespace may change without changing the proof. The original ReviewTests witness is unchanged and passes after the fix.",
+  "base": "93624f19",
+  "red": "measurements/test-framework/product-dependencies/generated-helper-red.json",
+  "diagnostic": "TF-26 generated test helper edit was hidden",
+  "green": "measurements/test-framework/product-dependencies/generated-helper-green.json"
  }
 ]

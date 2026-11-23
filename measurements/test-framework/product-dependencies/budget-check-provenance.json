@@ -1,0 +1,11 @@
+{
+ "raw_sha256": "1d818dc1d3aaabfc85bb0293eebd6050629f15c7ebc249f11d76a422a0ffcfa2",
+ "jobs": 16,
+ "job_seconds": 160.01889083400602,
+ "elapsed_seconds": 26.755621707998216,
+ "modules": {
+  "codex:tests.test_container_runtime": 44.898609291994944,
+  "root:test_setup_update": 115.12028154201107
+ },
+ "code_changes": "None between full-run product modules and this isolated timing check; tests and budgets unchanged."
+}
