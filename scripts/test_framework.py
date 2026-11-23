@@ -49,7 +49,7 @@ def _source(value):
                      code.co_code.hex() if code else 'generated'))
 
 
-def describe_test(test, source_dependencies=()):
+def describe_test(test, source_dependencies=(), *, test_owned=True):
     method = getattr(type(test), test._testMethodName)
     ids = getattr(method, '__requirements__', getattr(type(test), '__requirements__', ()))
     rationale = getattr(method, '__why_not_scenario__', None) or getattr(type(test), '__why_not_scenario__', '') or ''
@@ -63,8 +63,8 @@ def describe_test(test, source_dependencies=()):
                 sources.append(_source(cls.__dict__[name]))
     return {'requirements': list(ids), 'rationale': rationale,
             'fingerprint': hashlib.sha256('\n'.join(sources).encode()).hexdigest(),
-            'dependencies': dependency_fingerprint(test, include_values=False),
-            'dependency_values': dependency_fingerprint(test, source_dependencies=source_dependencies)}
+            'dependencies': dependency_fingerprint(test, include_values=False, test_owned=test_owned),
+            'dependency_values': dependency_fingerprint(test, source_dependencies=source_dependencies, test_owned=test_owned)}
 
 
 def inventory_suite(suite, layers=None):
@@ -383,7 +383,7 @@ def source_bindings(filename):
     return bindings
 
 
-def dependency_fingerprint(test, *, include_values=True, source_dependencies=()):
+def dependency_fingerprint(test, *, include_values=True, source_dependencies=(), test_owned=True):
     """Hash local test fixtures/helpers transitively, including generated closure constants."""
     import sys
     import types
@@ -405,6 +405,24 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
         return filename
     worktree_root = Path(__file__).resolve().parents[1]
     worktree_prefix = str(worktree_root)
+    test_file = Path(getattr(module, '__file__', '')).resolve()
+    test_root = next((parent for parent in test_file.parents if parent.name == 'tests'), test_file.parent)
+    test_roots = (test_root, worktree_root / 'tests',
+                  worktree_root / 'packages/codex-agents/tests', worktree_root / 'packages/claude-agents/tests')
+    product_roots = (worktree_root / 'packages/codex-agents/native-package',
+                     worktree_root / 'packages/claude-agents/src')
+    @lru_cache(maxsize=None)
+    def owned_path(filename):
+        if not filename or filename.startswith('<'):
+            return False
+        path = Path(filename).resolve()
+        if any(path.is_relative_to(root) for root in product_roots):
+            return False
+        return any(path.is_relative_to(root) for root in test_roots) or path in explicit_files
+    def identity(value):
+        if isinstance(value, types.ModuleType):
+            return ('module', value.__name__)
+        return ('reference', value.__module__, value.__qualname__)
     def stable(value, owner_file=None):
         if isinstance(value, types.CodeType):
             return code_value(value)
@@ -437,8 +455,10 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
         binding = source_bindings(filename).get(name) if filename else None
         if isinstance(binding, tuple) and binding not in visited:
             imported = sys.modules.get(binding[0])
-            if imported is not None and (binding[0].startswith(('tests.', 'test_')) or local(imported)):
+            if imported is not None and (local(imported) if test_owned else binding[0].startswith(('tests.', 'test_')) or local(imported)):
                 return global_value(binding[1], vars(imported), visited + (binding,))
+            if test_owned:
+                return ('reference', *binding)
         dynamic = binding is not None and not isinstance(binding, tuple) and any(
             isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and ast.unparse(n.func).startswith(('secrets.', 'random.', 'time.', 'tempfile.', 'os.path.realpath'))
             or isinstance(n, ast.Attribute) and ast.unparse(n) == 'os.environ'
@@ -454,9 +474,11 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
     def local(value):
         owner = getattr(value, '__module__', '')
         try:
-            path = getattr(value, '__file__', None) if isinstance(value, types.ModuleType) else inspect.getsourcefile(value) if inspect.isfunction(value) or inspect.isclass(value) else None
+            path = getattr(value, '__file__', None) if isinstance(value, types.ModuleType) else (dependency_source(value) if test_owned else inspect.getsourcefile(value)) if inspect.isfunction(value) or inspect.isclass(value) else None
         except TypeError:
             path = None
+        if test_owned:
+            return owned_path(path)
         return owner == cls.__module__ or owner.startswith(('tests.', 'test_')) or bool(path and ('/tests/' in path or include_values and Path(path).parent == Path(getattr(module, '__file__', '')).parent))
     def walk(value):
         if id(value) in seen:
@@ -478,8 +500,14 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
             for name in value.__code__.co_names:
                 dependency = value.__globals__.get(name)
                 if inspect.isfunction(dependency) or inspect.isclass(dependency):
-                    walk(dependency)
-                elif isinstance(dependency, types.ModuleType) and (dependency.__name__.startswith(('tests.', 'test_')) or include_values and local(dependency)):
+                    if test_owned and not local(dependency):
+                        records[key + ':reference:' + name] = identity(dependency)
+                    else:
+                        walk(dependency)
+                elif test_owned and isinstance(dependency, types.ModuleType) and not local(dependency):
+                    records[key + ':reference:' + name] = identity(dependency)
+                elif isinstance(dependency, types.ModuleType) and (local(dependency) if test_owned else dependency.__name__.startswith(('tests.', 'test_')) or include_values and local(dependency)):
+
                     for referenced in value.__code__.co_names:
                         item = getattr(dependency, referenced, None)
                         if include_values and referenced in vars(dependency) and not callable(item) and not isinstance(item, types.ModuleType):
@@ -517,8 +545,11 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=())
             path = Path(value)
             try:
                 resolved = path.resolve()
-                identity = resolved.relative_to(worktree_root).as_posix() if resolved.is_relative_to(worktree_root) else resolved.as_posix()
-                records['explicit:' + identity] = hashlib.sha256(path.read_bytes()).hexdigest()
+                source_identity = resolved.relative_to(worktree_root).as_posix() if resolved.is_relative_to(worktree_root) else resolved.as_posix()
+                if test_owned and not owned_path(str(resolved)):
+                    unresolved.append(source_identity + ': explicit dependency is not test-owned')
+                else:
+                    records['explicit:' + source_identity] = hashlib.sha256(path.read_bytes()).hexdigest()
             except OSError:
                 unresolved.append(str(path))
         else:
