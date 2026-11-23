@@ -232,6 +232,7 @@
  "codex:tests.test_b2_service_outcome_hosts": "scenario",
  "codex:tests.test_b2_service_outcome_paths": "scenario",
  "codex:tests.test_b2_service_outcome_sweep": "scenario",
+ "codex:tests.test_b2_service_outcome_round2": "scenario",
  "codex:tests.test_deadlines_retention": "scenario",
  "codex:tests.test_record_context": "scenario",
  "codex:tests.test_refusal_steps": "unit",

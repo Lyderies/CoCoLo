@@ -119,8 +119,9 @@ class AuthenticatedRequestTests(HostFixture):
 
     def test_the_service_entry_is_not_a_request_and_a_forged_operation_is_refused_by_the_decoder(self):
         service, token = self.serve()
-        with self.assertRaises(Exception):
+        with self.assertRaises(HistoryError) as caught:
             self.ask(service, token, 'history.admit_service_result', 'x', {})
+        self.assertEqual('history_invalid_request', caught.exception.reason_code)
         self.assertFalse(any('service' in name for name in history_api.HISTORY_OPERATIONS if 'result' in name))
 
     def test_the_orchestration_report_of_a_service_names_its_own_runtime(self):

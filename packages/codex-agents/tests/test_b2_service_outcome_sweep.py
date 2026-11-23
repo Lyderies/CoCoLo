@@ -203,8 +203,6 @@ class SweepLimitTests(SweepFixture):
         self.store._connection = Spy()
         try:
             service_record.record_pass(self.store, self.authority(), limit=2, clock=lambda: 1)
-        except HistoryError:
-            pass
         finally:
             self.store._connection = original
         self.assertEqual([2 * 16], window[:1])
@@ -253,9 +251,11 @@ class SweepLimitTests(SweepFixture):
                 steps[0] += 1
                 return 0
             db.set_progress_handler(tick, 1)
-            rows = db.execute(service_record.WINDOW_SQL, (self.store.project_id, 0, 0,
-                                                          service_record.SWEEP_WINDOW)).fetchall()
-            db.set_progress_handler(None, 1)
+            try:
+                rows = db.execute(service_record.WINDOW_SQL, (self.store.project_id, 0, 0,
+                                                              service_record.SWEEP_WINDOW)).fetchall()
+            finally:
+                db.set_progress_handler(None, 1)
             return len(rows), steps[0]
         rows, without = work()
         db.executemany("INSERT INTO project_result_contexts(project_id,run_handle,attempt,state,context_size,lease_deadline_ms) "
@@ -337,8 +337,9 @@ class LaneRecordingTests(LaneFixture):
                 fresh.setUp()
                 self.addCleanup(fresh.doCleanups)
                 lane = fresh.lane()
-                with mock.patch.object(ProjectHistory, 'admit_service_result', side_effect=error):
+                with mock.patch.object(ProjectHistory, 'admit_service_result', side_effect=error) as admit:
                     pending = fresh.publish_through(lane)
+                self.assertEqual(1, admit.call_count)  # the injected failure was reached
                 self.assertEqual('committed', pending.state)
                 self.assertFalse(lane._fault)
                 fresh.stop(lane)
@@ -358,8 +359,7 @@ class LaneRecordingTests(LaneFixture):
         store = self.reopened()
         self.assertEqual('recorded', rc.context_row(store, *self.attempt)[0])
         self.assertEqual('service', self.recorder_row())
-        self.assertEqual(['recording:'], [s for s in ['recording:'] if lane.recording_notes.snapshot()[0] is not None] or
-                         ['recording:'])
+        self.assertEqual((self.binding.project_id, []), lane.recording_notes.snapshot())  # the pass published: none stuck
 
     def publish_direct(self, store):
         from codex_agents.result_contracts import ResultObservation
@@ -373,9 +373,10 @@ class LaneRecordingTests(LaneFixture):
         store.close()
         self.fixture.base.stamp = due  # the result is past its retention: the pass retires it
         lane = self.lane()
-        with mock.patch.object(service_record, 'record_pass', side_effect=RuntimeError('boom')):
+        with mock.patch.object(service_record, 'record_pass', side_effect=RuntimeError('boom')) as record_pass:
             request = lane.expire_results()
             self.wait(lambda: request.state != 'queued')
+        self.assertEqual(1, record_pass.call_count)  # the pass was reached and failed
         self.assertEqual(('done', None), (request.state, request.reason))
         self.assertFalse(lane._fault)
         self.stop(lane)

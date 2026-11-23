@@ -198,6 +198,7 @@ class RealOwnershipTests(RealFixture):
             worker = threading.Thread(target=attempt)
             worker.start()
             worker.join(5)
+            self.assertFalse(worker.is_alive())
             self.assertEqual(['history_wrong_owner'], seen, entry)
             self.assertEqual(before, self.writes())
 
@@ -322,12 +323,16 @@ class AuthorityLowsTests(RealFixture):
         with mock.patch.object(self.store, '_result_now', side_effect=now), \
                 mock.patch.object(ServiceRecordAuthority, 'check', autospec=True, side_effect=check):
             self.service_record()
+        self.assertEqual(3, log.count('check'))  # the predicate ran before the body I/O, in the transaction, and last
+        self.assertEqual(['now', 'check', 'now', 'check'], log[:4])  # each early decision sampled the clock once
+        self.assertEqual('check', log[-1])
         last = len(log) - 1 - log[::-1].index('check')
         self.assertNotIn('now', log[last + 1:])  # nothing samples the clock again once the last decision is made
 
     def test_L5_the_orchestration_prefilter_is_replaced_by_a_documented_permanent_set(self):
         self.assertIn('permanent', service_record.record_pass.__doc__)
-        source = ' '.join(open(service_record.__file__).read().split())
+        with open(service_record.__file__) as module:
+            source = ' '.join(module.read().split())
         self.assertIn('replaces the design 4.6 orchestration prefilter', source)
 
     def test_L9_every_new_refusal_has_plain_guidance(self):
@@ -513,12 +518,6 @@ class UsageFixture(StatedFixture):
 
 
 @requirement
-class UsageRun(UsageFixture):
-    def runTest(self):
-        self.assertTrue(self.store.record(self.receipt) if False else True)
-
-
-@requirement
 class ReceiptVersionTests(UsageFixture):
     """B2-17, B2-2: both receipt versions, the expected comparison on a known receipt, matching and not."""
 
@@ -577,10 +576,8 @@ class OtherBodyFixture(StatedFixture):
                                              self.delivery.record_content_digest, self.delivery.result_digest)
 
 
-@requirement
 class OtherBodyRun(OtherBodyFixture):
-    def runTest(self):
-        self.assertIsNotNone(self.reference)
+    """A fixture only (it has no test of its own): `SwappedRunTests` builds it for the second publication."""
 
 
 @requirement
@@ -659,7 +656,7 @@ class FailedWriteTests(StatedFixture):
         self.assertEqual(3, len(calls))  # the intended failure point was reached, after two real appends
         self.assertEqual(before, self.writes())
         store = self.reopen()
-        self.assertEqual(before, store._connection.execute('SELECT COUNT(*) FROM records').fetchone()[0:1] and self.counts())
+        self.assertEqual(before, self.counts())  # a new writer reads the same counts as before the failed write
         self.assertEqual(1, service_record.record_pass(store, self.authority())['recorded'])
         self.assertEqual('service', self.recorder())
         self.assertEqual((1, 1, 1), tuple(store._connection.execute(

@@ -232,6 +232,7 @@
  "codex:tests.test_b2_service_outcome_hosts": "integration",
  "codex:tests.test_b2_service_outcome_paths": "integration",
  "codex:tests.test_b2_service_outcome_sweep": "integration",
+ "codex:tests.test_b2_service_outcome_round2": "integration",
  "codex:tests.test_deadlines_retention": "integration",
  "codex:tests.test_record_context": "integration",
  "codex:tests.test_refusal_steps": "unit",

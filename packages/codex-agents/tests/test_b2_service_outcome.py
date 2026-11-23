@@ -107,7 +107,9 @@ class B2Fixture(rc.RecordedContextFixture):
         self.fixture.store = rc.seven_day_store(self.fixture)
         other = copy.copy(self.fixture)
         other.directory = target
-        return rc.seven_day_store(other)
+        copied = rc.seven_day_store(other)
+        self.addCleanup(lambda: copied.close())  # closed whatever the test does after this
+        return copied
 
 
 @requirement
@@ -474,8 +476,11 @@ class RestartTests(B2Fixture):
         self.assertEqual({'other_runtime': 1}, status['unrecordable'])
 
     def test_restart_e_a_second_process_cannot_open_the_writer(self):
+        opened = []
         with self.assertRaisesRegex(HistoryError, 'history_writer_busy'):
-            rc.seven_day_store(self.fixture)
+            opened.append(rc.seven_day_store(self.fixture))  # must not succeed; if it did it is closed below
+        for leaked in opened:
+            leaked.close()
 
 
 @requirement
