@@ -218,6 +218,7 @@ class SchemaStepTests(unittest.TestCase):
                 self.upgrade()
         self.assert_left_at_17(before)
 
+    @__import__('test_framework').requirements('RS-B-5', why_not_scenario='B3 schema step 18 -> 19: a real store with an injected validator failure exposes the rollback boundary.')
     def test_D111_a_failing_validator_in_the_18_to_19_step_leaves_18_and_removes_its_copy(self):
         from codex_agents import project_holds_schema
         self.store.close()
