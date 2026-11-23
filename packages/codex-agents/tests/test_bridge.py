@@ -2395,7 +2395,7 @@ class BridgeCliLifecycleTests(ServiceHarness, CliTestCase):
             "--result", self.write("made-up.json", made_up),
             "--observation", observation, expected=2,
         )
-        self.assertEqual("history_conflict", refused["reason_code"])
+        self.assertEqual("recheck_result_mismatch", refused["reason_code"])  # B2-5 (decision 92 A / 119 A): a body that is not the stored one has its own reason
         recorded = self.cli(
             "learning-record-host-result", *context,
             "--result", self.write("result.json", dispatched["result"]),

@@ -198,9 +198,10 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
         wrong_body = dict(dispatched['result'], summary='PRIVATE-CHANGED-RESULT-CANARY')
         changed_assignment = dict(self.base.fixture.assignment, objective='Different original objective')
         for options, reason in (({'route': False}, 'history_invalid_input'),
-                ({'body': wrong_body}, 'history_conflict'), ({'terminal': None}, 'history_conflict'),
+                ({'body': wrong_body}, 'recheck_result_mismatch'),  # B2-5 (119 A)
+                ({'terminal': None}, 'history_conflict'),
                 ({'host': 'claude' if self.parent_host == 'codex' else 'codex'}, 'host_client_mismatch'),
-                ({'inputs': {'assignment': changed_assignment}}, 'dispatch_conflict')):
+                ({'inputs': {'assignment': changed_assignment}}, 'recheck_inputs_mismatch')):  # B2-5 (119 A)
             code, refused = self.invoke_record(child, dispatched, **options)
             self.assertEqual(2, code, refused)
             self.assertEqual(reason, refused['reason_code'])

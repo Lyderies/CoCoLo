@@ -172,7 +172,7 @@ class ProjectDriverTests(DriverHarness):
         made_up = {**dispatched['result'], 'summary': 'A verdict the child never gave.'}
         refused = self.cli('learning-record-host-result', *context, '--route', route_path,
                            '--result', self.write('made-up.json', made_up), '--observation', observation, expected=2)
-        self.assertEqual('history_conflict', refused['reason_code'])
+        self.assertEqual('recheck_result_mismatch', refused['reason_code'])  # B2-5 (decision 92 A / 119 A): a body that is not the stored one has its own reason
         recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
                             '--result', self.write('result.json', dispatched['result']), '--observation', observation)
         self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
@@ -839,7 +839,7 @@ class LifecycleBoundaryTests(DriverHarness):
         softened = {**dispatched['result'], 'semantic_verdict': 'pass', 'status': 'completed', 'execution_state': 'completed'}
         code, refused = self.attempt('learning-record-host-result', *context, '--route', route_path,
                                      '--result', self.write('softened.json', softened), '--observation', observation)
-        self.assertEqual((2, 'history_conflict'), (code, refused['reason_code']))
+        self.assertEqual((2, 'recheck_result_mismatch'), (code, refused['reason_code']))  # B2-5 (decision 92 A / 119 A)
         recorded = self.cli(*record)
         self.assertFalse(recorded['outcome']['accepted'])
         self.assertEqual('missing_evidence', recorded['dispatch_diagnostics']['result_validation_reason_code'])
@@ -1882,8 +1882,8 @@ class StoredContextRestartTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
         self.assertEqual('result', dispatched['bridge_report']['outcome'])
-        # The child's result body is on disk and committed; nothing has recorded it. The service stops here.
-        self.assertEqual(('committed', self.primary + '-host-v1'), self.stored_context(run_handle))
+        # B2 (decision 92 A / 119 A): the service records the committed result itself, at once.
+        self.assertEqual(('recorded', self.primary + '-host-v1'), self.stored_context(run_handle))
         self.restart_host()
         observation = self.write('observation.json', {'run_handle': run_handle, 'result_attempts': [
             {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
