@@ -317,6 +317,100 @@
   "source": "REQUIREMENTS-b2-outcome.md#B2-OUTCOME",
   "statement": "**B2-OUTCOME \u2014 The project service records a finished child's outcome itself.**\nA committed terminal whose orchestration is still open (active or paused), whose reservation is live, whose context is\n`committed` and whose run belongs to the writer's own runtime and host class is recorded by the service on its own\nwriter, right after the result is safely stored and again by a bounded, fair sweep after a restart. The outcome is a\npure function of the store: the service's and the primary's records are byte-identical. One final predicate\n(`ServiceRecordAuthority`, a required typed check) runs as the first statement of the admission transaction at the\nservice entry and at the primary's, so admission, close, interruption, the 24 h idle end and expiry meet at one\nboundary; after any of those nothing new is recorded and \"unrecorded\" is final (owner decision 92.1 A). The primary's\nlater call on a recorded run is a read-only retrieval that writes nothing, works after a normal close, and never\nchanges who recorded it; its refusals are named and write nothing. Who recorded (`service` or `primary`) lives in a\nsmall separate table keyed by the receipt id with no foreign key (schema step 19 -> 20, owner decision 92.3 A);\nreceipts, records and the enrolled operation set are unchanged; the service entry has no socket entry; the service\nwrites no QA and never sets `accepted`.\nSource: DESIGN-0.4.0-B2-outcome.md draft 2 with the s2 corrections, rows B2-1 to B2-18; owner decision 92; measurements/b2/requirements.md."
  },
+ "E1-1": {
+  "checks": [
+   "root:test_login_start.InstallTests.test_E1_1_a_failed_reinstall_does_not_load_an_old_entry_that_was_not_loaded",
+   "root:test_login_start.InstallTests.test_E1_1_a_failed_reinstall_does_not_start_a_service_that_was_stopped",
+   "root:test_login_start.InstallTests.test_E1_1_a_failed_reinstall_keeps_the_working_entry_launchd",
+   "root:test_login_start.InstallTests.test_E1_1_a_failed_reinstall_keeps_the_working_entry_systemd",
+   "root:test_login_start.InstallTests.test_E1_1_a_failed_reinstall_leaves_a_running_service_running",
+   "root:test_login_start.InstallTests.test_E1_1_a_failed_rollback_is_reported",
+   "root:test_login_start.InstallTests.test_E1_1_a_first_failed_install_leaves_no_entry",
+   "root:test_login_start.OfferTests.test_E1_1_a_failed_install_is_reported_and_not_remembered",
+   "root:test_login_start.OfferTests.test_E1_1_asks_once_with_reason_pick_list_and_details_and_installs_only_on_yes"
+  ],
+  "source": "measurements/e1/requirements.md#E1-1",
+  "statement": "**E1-1 \u2014 Consent first.** RS-11, decision 90.11 A. Setup asks once, in plain words with the real reason, with a pick-list (yes / not now) and a details view, before the collector gets a login-start entry. Nothing is written or run without a yes; not now writes and runs nothing; a failed install is reported and not remembered. Tests: tests.test_login_start.OfferTests.test_E1_1_asks_once_with_reason_pick_list_and_details_and_installs_only_on_yes, tests.test_login_start.OfferTests.test_E1_1_a_failed_install_is_reported_and_not_remembered."
+ },
+ "E1-2": {
+  "checks": [
+   "root:test_login_start.InstallTests.test_E1_2_launchd_plist_and_load"
+  ],
+  "source": "measurements/e1/requirements.md#E1-2",
+  "statement": "**E1-2 \u2014 macOS entry.** A launchd user agent in the account's LaunchAgents folder runs the installed collector command (absolute paths, isolated Python, learning-serve) at login, restarts it after a crash with a throttle (KeepAlive on failure, ThrottleInterval), logs to the CoCoLo log folder, and holds no secret. Loaded through an injected runner (launchctl bootstrap), never the real one in tests. Test: tests.test_login_start.InstallTests.test_E1_2_launchd_plist_and_load."
+ },
+ "E1-3": {
+  "checks": [
+   "root:test_login_start.InstallTests.test_E1_3_a_changed_unit_is_restarted_after_enable_and_an_unchanged_or_new_one_is_not",
+   "root:test_login_start.InstallTests.test_E1_3_dollar_percent_and_newline_cannot_change_the_unit",
+   "root:test_login_start.InstallTests.test_E1_3_systemd_unit_and_enable"
+  ],
+  "source": "measurements/e1/requirements.md#E1-3",
+  "statement": "**E1-3 \u2014 Linux entry.** A systemd user unit runs the same command, with Restart=on-failure, RestartSec and StartLimit back-off, logs to the CoCoLo log folder, WantedBy=default.target, and no secret; enabled through the injected runner (systemctl --user). Test: tests.test_login_start.InstallTests.test_E1_3_systemd_unit_and_enable."
+ },
+ "E1-4": {
+  "checks": [
+   "root:test_login_start.AnswerTests.test_E1_4_answer_round_trip_and_refusals",
+   "root:test_login_start.OfferTests.test_E1_4_a_cancelled_question_changes_and_remembers_nothing",
+   "root:test_login_start.OfferTests.test_E1_4_a_failed_answer_write_is_reported_not_claimed_as_success",
+   "root:test_login_start.OfferTests.test_E1_4_a_failed_answer_write_when_keeping_is_reported_and_the_entry_stays",
+   "root:test_login_start.OfferTests.test_E1_4_answered_is_not_asked_again",
+   "root:test_login_start.OfferTests.test_E1_4_no_place_to_keep_the_answer_means_no_question"
+  ],
+  "source": "measurements/e1/requirements.md#E1-4",
+  "statement": "**E1-4 \u2014 Ask once.** The answer (yes or no) is kept in the private installer folder beside the project list. A re-run of setup does not ask again; with no private place to keep the answer, setup does not ask and says so; an update never asks. Tests: tests.test_login_start.OfferTests.test_E1_4_answered_is_not_asked_again, tests.test_login_start.OfferTests.test_E1_4_no_place_to_keep_the_answer_means_no_question, tests.test_login_start.AnswerTests.test_E1_4_answer_round_trip_and_refusals."
+ },
+ "E1-5": {
+  "checks": [
+   "root:test_login_start.OfferTests.test_E1_5_configure_offers_remove_when_on_and_turn_on_when_off",
+   "root:test_login_start.RemoveTests.test_E1_5_remove_tolerates_missing_file_and_failed_unload",
+   "root:test_login_start.RemoveTests.test_E1_5_remove_unloads_and_deletes"
+  ],
+  "source": "measurements/e1/requirements.md#E1-5",
+  "statement": "**E1-5 \u2014 Removal.** Removing unloads the entry through the runner, deletes its file, records no, and works when the file is already gone or the unload fails. Offered under Configure when the entry is on. Tests: tests.test_login_start.RemoveTests.test_E1_5_remove_unloads_and_deletes, tests.test_login_start.RemoveTests.test_E1_5_remove_tolerates_missing_file_and_failed_unload, tests.test_login_start.OfferTests.test_E1_5_configure_offers_remove_when_on_and_turn_on_when_off."
+ },
+ "E1-6": {
+  "checks": [
+   "root:test_login_start.InstallTests.test_E1_6_a_symlinked_folder_above_the_entry_is_refused_and_nothing_changes",
+   "root:test_login_start.InstallTests.test_E1_6_a_symlinked_log_folder_is_refused_and_not_changed",
+   "root:test_login_start.InstallTests.test_E1_6_an_unreadable_old_entry_is_refused_not_replaced",
+   "root:test_login_start.InstallTests.test_E1_6_refusals_change_nothing",
+   "root:test_login_start.OfferTests.test_E1_6_a_missing_collector_command_is_checked_before_the_owner_is_asked",
+   "root:test_login_start.OfferTests.test_E1_6_unsupported_system_is_not_asked"
+  ],
+  "source": "measurements/e1/requirements.md#E1-6",
+  "statement": "**E1-6 \u2014 Refusals.** A relative command path, a symlinked entry path or an unsupported system is refused with a plain reason and changes nothing. Tests: tests.test_login_start.InstallTests.test_E1_6_refusals_change_nothing, tests.test_login_start.OfferTests.test_E1_6_unsupported_system_is_not_asked."
+ },
+ "E1-7": {
+  "checks": [
+   "root:test_login_start.WiringTests.test_E1_7_a_cancelled_question_is_summarised_as_left_as_it_was",
+   "root:test_login_start.WiringTests.test_E1_7_an_update_never_asks_and_an_answers_file_can_answer",
+   "root:test_login_start.WiringTests.test_E1_7_configure_walk_through_offers_keep_or_remove_and_the_first_time_asks_yes_or_not_now",
+   "root:test_login_start.WiringTests.test_E1_7_set_up_asks_once_on_the_first_run_and_not_on_a_re_run",
+   "root:test_login_start.WiringTests.test_E1_7_setup_offers_login_start_after_the_collector_is_ready",
+   "root:test_login_start.WiringTests.test_E1_7_the_real_set_up_choice_makes_the_first_run_ask_once_and_a_re_run_not_ask"
+  ],
+  "source": "measurements/e1/requirements.md#E1-7",
+  "statement": "**E1-7 \u2014 Wired into setup.** The collector step offers login start after the collector is ready, in setup (an update never asks), through the audited terminal runner; the existing Configure menu is unchanged. Test: tests.test_login_start.WiringTests.test_E1_7_setup_offers_login_start_after_the_collector_is_ready."
+ },
+ "E1-WS": {
+  "checks": [
+   "root:test_setup_wizard_source.WizardSourceTests.test_commands_and_commit_screens_say_what_the_rule_and_commit_do",
+   "root:test_setup_wizard_source.WizardSourceTests.test_every_git_call_is_literal_and_never_porcelain",
+   "root:test_setup_wizard_source.WizardSourceTests.test_every_git_call_uses_the_trusted_binary_with_helpers_off",
+   "root:test_setup_wizard_source.WizardSourceTests.test_every_git_call_with_paths_is_literal",
+   "root:test_setup_wizard_source.WizardSourceTests.test_every_launch_uses_the_audited_builders",
+   "root:test_setup_wizard_source.WizardSourceTests.test_every_python_the_wizard_starts_is_isolated",
+   "root:test_setup_wizard_source.WizardSourceTests.test_header_and_welcome_name_the_product",
+   "root:test_setup_wizard_source.WizardSourceTests.test_provider_clients_are_never_run_by_name",
+   "root:test_setup_wizard_source.WizardSourceTests.test_the_builders_add_the_isolation_flags_and_gits_safety_settings",
+   "root:test_setup_wizard_source.WizardSourceTests.test_the_checks_reject_every_reviewed_bypass",
+   "root:test_setup_wizard_source.WizardSourceTests.test_the_git_builder_accepts_only_the_wizards_read_only_invocations",
+   "root:test_setup_wizard_source.WizardSourceTests.test_wizard_messages_for_the_polished_screens"
+  ],
+  "source": "measurements/e1/requirements.md#E1-WS",
+  "statement": "**E1-WS \u2014 Wizard source safety.** The Python setup wizard keeps the source-level safety properties setup.sh's source tests checked (audited launch builders, literal non-porcelain git with the trusted binary and helpers off, isolated Python, provider clients never run by name, product naming and screen wording). Source: tests/test_setup_wizard_source.py module docstring (S5) and owner decision 112b A (2026-11-24)."
+ },
  "G1": {
   "checks": [],
   "source": "PLAN-0.4.0.md T7",
@@ -1148,45 +1242,6 @@
   "source": "REQUIREMENTS-merge-review.md#ML-R91",
   "statement": "**ML-R91 \u2014 Recorded empty folder trees.** Owner decision 91=A: a folder that holds only other empty folders CoCoLo itself made counts as empty, provided there is nothing else inside and every folder matches the device/inode identity CoCoLo recorded. Foreign files, unrecorded folders, and replaced folder identities do not qualify. The two C-3 checks must enforce this rule without accepting foreign contents."
  },
- "RSA3-1": {
-  "checks": [
-   "codex:tests.test_rsa_step3.OutstandingOwnerSignatureTests.test_RSA3_1_swept_owner_signature_returns_without_fault_and_is_forgotten",
-   "codex:tests.test_rsa_step3.OwnerSignatureQueryTests.test_owner_signature_query"
-  ],
-  "source": "measurements/rsa-step3/requirements.md#RSA3-1",
-  "statement": "**RSA3-1 \u2014 Outstanding owner preparation.** Decision 87 F6: a swept owner-API reservation whose prepare signature work is still running refuses its late return without faulting claims, forgets its handle and releases capacity once."
- },
- "RSA3-2": {
-  "checks": [
-   "codex:tests.test_rsa_step3.RestoredDecisionTests.test_RSA3_2_crashed_and_lost_slots_restore_exactly_once"
-  ],
-  "source": "measurements/rsa-step3/requirements.md#RSA3-2",
-  "statement": "**RSA3-2 \u2014 Crashed-slot restore.** Decision 87 F5: back up and restore a project with a crashed or lost run_holds slot; consistency passes and slot accounting is preserved exactly."
- },
- "RSA3-3": {
-  "checks": [
-   "codex:tests.test_rsa_step3.LateCompletionTests.test_RSA3_3_owner_release_refuses_a_decided_slot",
-   "codex:tests.test_rsa_step3.LedgerLocalLateCompletionTests.test_RSA3_3_ledger_local_late_completion_is_kept_by_design"
-  ],
-  "source": "measurements/rsa-step3/requirements.md#RSA3-3",
-  "statement": "**RSA3-3 \u2014 Late-completion comparison, test only.** ledger-local and account releases differ by design on a decided slot (RS-A-2, decision 106b)."
- },
- "RSA3-4": {
-  "checks": [
-   "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_account_holds_due_plans",
-   "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_additive_index_reopen_preserves_limited_batches_and_due_rows",
-   "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_close_expired_reserved_plans"
-  ],
-  "source": "measurements/rsa-step3/requirements.md#RSA3-4",
-  "statement": "**RSA3-4 \u2014 Release-batch query cost.** Every SQL statement run per release batch by account_holds_due and close_expired_reserved uses an index for its WHERE/ORDER; EXPLAIN QUERY PLAN on a real ledger shows no table scans."
- },
- "RSA3-5": {
-  "checks": [
-   "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_additive_index_reopen_preserves_limited_batches_and_due_rows"
-  ],
-  "source": "measurements/rsa-step3/requirements.md#RSA3-5",
-  "statement": "**RSA3-5 \u2014 Release-batch rows unchanged.** The same seeded ledger selects the same due rows before and after the query-cost fix; account_holds_due agrees with _release_due_locked."
- },
  "RS-B-5": {
   "checks": [
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_L2_a_failed_deferral_submission_keeps_the_batch_and_the_failed_rows_duty",
@@ -1359,6 +1414,45 @@
   ],
   "source": "REQUIREMENTS-retirement-sweep.md#RS-D-D3",
   "statement": "**RS-D-D3 \u2014 Crash-safe retirement and the context sweep.**\nRetirement records `retiring` (custody released, reads refused), unlinks the fixed names without opening or following them\n(a missing, corrupt, wrong-mode, extra-hard-link, symlink, FIFO or link-pair entry is unlinked as an entry), fsyncs the\ndirectory, and only then records `expired`; a stop at any step is finished by the next pass, and the charge is kept until\n`expired`. Only a directory under a fixed name needs repair: the row stays `retiring` and charged, its context is\n`repair_required` with the reason, it is shown by `result_retirement_repairs`, retried every pass, and other custody keeps\nretiring in the same pass; an unlink or fsync error keeps the row `retiring`, charged and retried. The context sweep finishes\ncontext-only custody (custody released, no reservation row, or its own `retiring` / `repair_required` retry) with no\nreservation row read or written, and never selects a context that has a reservation. Start-up reconciliation removes orphan\nand partial context and body files and one name of a link pair using directory listing and `lstat` only: no body or context\nbytes are read, and its work does not grow with the number of tombstones (RS-D-9). A 1 MiB body is returned through every\nchunk (K2).\nSource: DESIGN-0.4.0-RS-D.md draft 3 s4-s6, draft 4 s1, rows U1-U10, K1, K2, S1; DESIGN-0.4.0-RS-BD-shared.md SH-3 (retirement); measurements/d3/requirements.md."
+ },
+ "RSA3-1": {
+  "checks": [
+   "codex:tests.test_rsa_step3.OutstandingOwnerSignatureTests.test_RSA3_1_swept_owner_signature_returns_without_fault_and_is_forgotten",
+   "codex:tests.test_rsa_step3.OwnerSignatureQueryTests.test_owner_signature_query"
+  ],
+  "source": "measurements/rsa-step3/requirements.md#RSA3-1",
+  "statement": "**RSA3-1 \u2014 Outstanding owner preparation.** Decision 87 F6: a swept owner-API reservation whose prepare signature work is still running refuses its late return without faulting claims, forgets its handle and releases capacity once."
+ },
+ "RSA3-2": {
+  "checks": [
+   "codex:tests.test_rsa_step3.RestoredDecisionTests.test_RSA3_2_crashed_and_lost_slots_restore_exactly_once"
+  ],
+  "source": "measurements/rsa-step3/requirements.md#RSA3-2",
+  "statement": "**RSA3-2 \u2014 Crashed-slot restore.** Decision 87 F5: back up and restore a project with a crashed or lost run_holds slot; consistency passes and slot accounting is preserved exactly."
+ },
+ "RSA3-3": {
+  "checks": [
+   "codex:tests.test_rsa_step3.LateCompletionTests.test_RSA3_3_owner_release_refuses_a_decided_slot",
+   "codex:tests.test_rsa_step3.LedgerLocalLateCompletionTests.test_RSA3_3_ledger_local_late_completion_is_kept_by_design"
+  ],
+  "source": "measurements/rsa-step3/requirements.md#RSA3-3",
+  "statement": "**RSA3-3 \u2014 Late-completion comparison, test only.** ledger-local and account releases differ by design on a decided slot (RS-A-2, decision 106b)."
+ },
+ "RSA3-4": {
+  "checks": [
+   "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_account_holds_due_plans",
+   "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_additive_index_reopen_preserves_limited_batches_and_due_rows",
+   "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_close_expired_reserved_plans"
+  ],
+  "source": "measurements/rsa-step3/requirements.md#RSA3-4",
+  "statement": "**RSA3-4 \u2014 Release-batch query cost.** Every SQL statement run per release batch by account_holds_due and close_expired_reserved uses an index for its WHERE/ORDER; EXPLAIN QUERY PLAN on a real ledger shows no table scans."
+ },
+ "RSA3-5": {
+  "checks": [
+   "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_additive_index_reopen_preserves_limited_batches_and_due_rows"
+  ],
+  "source": "measurements/rsa-step3/requirements.md#RSA3-5",
+  "statement": "**RSA3-5 \u2014 Release-batch rows unchanged.** The same seeded ledger selects the same due rows before and after the query-cost fix; account_holds_due agrees with _release_due_locked."
  },
  "TERM-13": {
   "checks": [],

@@ -1,0 +1,471 @@
+METADATA: API-1: requirement has no statement, source or check
+METADATA: API-10: requirement has no statement, source or check
+METADATA: API-11: requirement has no statement, source or check
+METADATA: API-12: requirement has no statement, source or check
+METADATA: API-13: requirement has no statement, source or check
+METADATA: API-14: requirement has no statement, source or check
+METADATA: API-15: requirement has no statement, source or check
+METADATA: API-16: requirement has no statement, source or check
+METADATA: API-17: requirement has no statement, source or check
+METADATA: API-18: requirement has no statement, source or check
+METADATA: API-19: requirement has no statement, source or check
+METADATA: API-2: requirement has no statement, source or check
+METADATA: API-20: requirement has no statement, source or check
+METADATA: API-21: requirement has no statement, source or check
+METADATA: API-22: requirement has no statement, source or check
+METADATA: API-23: requirement has no statement, source or check
+METADATA: API-24: requirement has no statement, source or check
+METADATA: API-25: requirement has no statement, source or check
+METADATA: API-26: requirement has no statement, source or check
+METADATA: API-27: requirement has no statement, source or check
+METADATA: API-3: requirement has no statement, source or check
+METADATA: API-4: requirement has no statement, source or check
+METADATA: API-5: requirement has no statement, source or check
+METADATA: API-6: requirement has no statement, source or check
+METADATA: API-7: requirement has no statement, source or check
+METADATA: API-8: requirement has no statement, source or check
+METADATA: API-9: requirement has no statement, source or check
+METADATA: G1: requirement has no statement, source or check
+METADATA: G2: requirement has no statement, source or check
+METADATA: G3: requirement has no statement, source or check
+METADATA: G4: requirement has no statement, source or check
+METADATA: G5: requirement has no statement, source or check
+METADATA: G6: requirement has no statement, source or check
+METADATA: G7: requirement has no statement, source or check
+METADATA: G8: requirement has no statement, source or check
+METADATA: G9: requirement has no statement, source or check
+METADATA: L1.1: requirement has no statement, source or check
+METADATA: L1.2: requirement has no statement, source or check
+METADATA: L10.1: requirement has no statement, source or check
+METADATA: L10.2: requirement has no statement, source or check
+METADATA: L10.3: requirement has no statement, source or check
+METADATA: L11.1: requirement has no statement, source or check
+METADATA: L11.2: requirement has no statement, source or check
+METADATA: L12.1: requirement has no statement, source or check
+METADATA: L12.2: requirement has no statement, source or check
+METADATA: L12.3: requirement has no statement, source or check
+METADATA: L12.4: requirement has no statement, source or check
+METADATA: L12.5: requirement has no statement, source or check
+METADATA: L12.6: requirement has no statement, source or check
+METADATA: L12.7: requirement has no statement, source or check
+METADATA: L13.1: requirement has no statement, source or check
+METADATA: L13.2: requirement has no statement, source or check
+METADATA: L14.1: requirement has no statement, source or check
+METADATA: L15.1: requirement has no statement, source or check
+METADATA: L2.1: requirement has no statement, source or check
+METADATA: L2.2: requirement has no statement, source or check
+METADATA: L3.1: requirement has no statement, source or check
+METADATA: L3.2: requirement has no statement, source or check
+METADATA: L3.3: requirement has no statement, source or check
+METADATA: L4.1: requirement has no statement, source or check
+METADATA: L4.2: requirement has no statement, source or check
+METADATA: L5.1: requirement has no statement, source or check
+METADATA: L5.2: requirement has no statement, source or check
+METADATA: L5.3: requirement has no statement, source or check
+METADATA: L6.1: requirement has no statement, source or check
+METADATA: L6.2: requirement has no statement, source or check
+METADATA: L7.1: requirement has no statement, source or check
+METADATA: L7.2: requirement has no statement, source or check
+METADATA: L7.3: requirement has no statement, source or check
+METADATA: L8.1: requirement has no statement, source or check
+METADATA: L8.2: requirement has no statement, source or check
+METADATA: L8.3: requirement has no statement, source or check
+METADATA: L9.1: requirement has no statement, source or check
+METADATA: L9.2: requirement has no statement, source or check
+METADATA: L9.3: requirement has no statement, source or check
+METADATA: TERM-13: requirement has no statement, source or check
+METADATA: TERM-17: requirement has no statement, source or check
+METADATA: TERM-5: requirement has no statement, source or check
+METADATA: TERM-6: requirement has no statement, source or check
+METADATA: TERM-7: requirement has no statement, source or check
+METADATA: root:test_setup_wizard_source.WizardSourceTests.test_commands_and_commit_screens_say_what_the_rule_and_commit_do: legacy constants/helper sources changed or unresolved; migrate its requirement proof
+METADATA: root:test_setup_wizard_source.WizardSourceTests.test_every_git_call_is_literal_and_never_porcelain: legacy constants/helper sources changed or unresolved; migrate its requirement proof
+METADATA: root:test_setup_wizard_source.WizardSourceTests.test_every_git_call_uses_the_trusted_binary_with_helpers_off: legacy constants/helper sources changed or unresolved; migrate its requirement proof
+METADATA: root:test_setup_wizard_source.WizardSourceTests.test_every_git_call_with_paths_is_literal: legacy constants/helper sources changed or unresolved; migrate its requirement proof
+METADATA: root:test_setup_wizard_source.WizardSourceTests.test_every_launch_uses_the_audited_builders: legacy constants/helper sources changed or unresolved; migrate its requirement proof
+METADATA: root:test_setup_wizard_source.WizardSourceTests.test_every_python_the_wizard_starts_is_isolated: legacy constants/helper sources changed or unresolved; migrate its requirement proof
+METADATA: root:test_setup_wizard_source.WizardSourceTests.test_header_and_welcome_name_the_product: legacy constants/helper sources changed or unresolved; migrate its requirement proof
+METADATA: root:test_setup_wizard_source.WizardSourceTests.test_provider_clients_are_never_run_by_name: legacy constants/helper sources changed or unresolved; migrate its requirement proof
+METADATA: root:test_setup_wizard_source.WizardSourceTests.test_wizard_messages_for_the_polished_screens: legacy constants/helper sources changed or unresolved; migrate its requirement proof
+[60s] 29/32 units done, 0 failed; running: root:test_setup_straight#2 60s, root:test_setup_straight#0 60s, root:test_setup_straight#3 38s
+[120s] 29/32 units done, 0 failed; running: root:test_setup_straight#2 120s, root:test_setup_straight#0 120s, root:test_setup_straight#3 98s
+FAILED root:test_setup_straight#3 (exit 1) -> /private/tmp/pth54aextq/19.log
+    self.expect("Create the profile")  # asked
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "<home>/Code/temp/cocolo-e1/tests/wizard_direct_driver.py", line 406, in expect
+    self.fail(f"never saw {text!r}; last screen: {re.sub(chr(27) + r'.*?[A-Za-z]', '', self.screen[-1500:])!r}")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: never saw 'Create the profile'; last screen: "hecks  Project  Providers  Install  [Collector]  Billing  Profile  Commands  Done\n ######################------------------\n---------------------------------------------------------------------------------------------------\n\n  OK   Collector registered\n  OK   Collector status: ready (runtime 0.0.0)\n\n\r COCOLO setup  Step 5 of 9\n  Checks  Project  Providers  Install  [Collector]  Billing  Profile  Commands  Done\n ######################------------------\n---------------------------------------------------------------------------------------------------\n\n  The CoCoLo collector is the small local service that records run outcomes on this machine. If \n  it stops (a crash, or you log out or restart), nothing records until something starts it again. \n  Login start makes your computer start it when you log in, and restart it after a crash, waiting \n  between restarts.\n  \n  OK   Collector registered\n  OK   Collector status: ready (runtime 0.0.0)\n  OK   This project's service: running\n\n   > Yes, start the collector when I log in\n     Not now\n     Show details\n\n  Up/Down move   Enter select   ? what ran   q quit\n"
+
+======================================================================
+FAIL: test_S4_3_straight_set_up_still_signs_when_the_signature_is_not_current (test_setup_straight.SetupStraightTests.test_S4_3_straight_set_up_still_signs_when_the_signature_is_not_current)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<home>/Code/temp/cocolo-e1/tests/test_setup_straight.py", line 62, in test_S4_3_straight_set_up_still_signs_when_the_signature_is_not_current
+    project, code, screen = self.straight_set_up(**env)
+                            ~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "<home>/Code/temp/cocolo-e1/tests/test_setup_straight.py", line 47, in straight_set_up
+    code = self.finish(timeout=90)
+  File "<home>/Code/temp/cocolo-e1/tests/wizard_direct_driver.py", line 429, in finish
+    self.fail("the wizard did not exit")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: the wizard did not exit
+
+----------------------------------------------------------------------
+Ran 4 tests in 157.566s
+
+FAILED (failures=3)
+
+[180s] 30/32 units done, 1 failed; running: root:test_setup_straight#2 180s, root:test_setup_straight#0 180s
+[240s] 30/32 units done, 1 failed; running: root:test_setup_straight#2 240s, root:test_setup_straight#0 240s
+FAILED root:test_setup_straight#2 (exit 1) -> /private/tmp/pth54aextq/1.log
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<home>/Code/temp/cocolo-e1/tests/wizard_direct_driver.py", line 406, in expect
+    self.fail(f"never saw {text!r}; last screen: {re.sub(chr(27) + r'.*?[A-Za-z]', '', self.screen[-1500:])!r}")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: never saw 'Continue'; last screen: "hecks  Project  Providers  Install  [Collector]  Billing  Profile  Commands  Done\n ######################------------------\n---------------------------------------------------------------------------------------------------\n\n  OK   Collector registered\n  OK   Collector status: ready (runtime 0.0.0)\n\n\r COCOLO setup  Step 5 of 9\n  Checks  Project  Providers  Install  [Collector]  Billing  Profile  Commands  Done\n ######################------------------\n---------------------------------------------------------------------------------------------------\n\n  The CoCoLo collector is the small local service that records run outcomes on this machine. If \n  it stops (a crash, or you log out or restart), nothing records until something starts it again. \n  Login start makes your computer start it when you log in, and restart it after a crash, waiting \n  between restarts.\n  \n  OK   Collector registered\n  OK   Collector status: ready (runtime 0.0.0)\n  OK   This project's service: running\n\n   > Yes, start the collector when I log in\n     Not now\n     Show details\n\n  Up/Down move   Enter select   ? what ran   q quit\n"
+
+======================================================================
+FAIL: test_S4_3_choosing_sign_again_on_a_current_signature_signs (test_setup_straight.SetupStraightTests.test_S4_3_choosing_sign_again_on_a_current_signature_signs)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<home>/Code/temp/cocolo-e1/tests/test_setup_straight.py", line 302, in test_S4_3_choosing_sign_again_on_a_current_signature_signs
+    self.walk_through_to_billing({"FAKE_STATUS_REPLY": self.ATTESTED})
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<home>/Code/temp/cocolo-e1/tests/test_setup_straight.py", line 288, in walk_through_to_billing
+    self.expect(wait, timeout=60)
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "<home>/Code/temp/cocolo-e1/tests/wizard_direct_driver.py", line 406, in expect
+    self.fail(f"never saw {text!r}; last screen: {re.sub(chr(27) + r'.*?[A-Za-z]', '', self.screen[-1500:])!r}")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: never saw 'Continue'; last screen: "hecks  Project  Providers  Install  [Collector]  Billing  Profile  Commands  Done\n ######################------------------\n---------------------------------------------------------------------------------------------------\n\n  OK   Collector registered\n  OK   Collector status: ready (runtime 0.0.0)\n\n\r COCOLO setup  Step 5 of 9\n  Checks  Project  Providers  Install  [Collector]  Billing  Profile  Commands  Done\n ######################------------------\n---------------------------------------------------------------------------------------------------\n\n  The CoCoLo collector is the small local service that records run outcomes on this machine. If \n  it stops (a crash, or you log out or restart), nothing records until something starts it again. \n  Login start makes your computer start it when you log in, and restart it after a crash, waiting \n  between restarts.\n  \n  OK   Collector registered\n  OK   Collector status: ready (runtime 0.0.0)\n  OK   This project's service: running\n\n   > Yes, start the collector when I log in\n     Not now\n     Show details\n\n  Up/Down move   Enter select   ? what ran   q quit\n"
+
+----------------------------------------------------------------------
+Ran 5 tests in 245.809s
+
+FAILED (failures=3)
+
+FAILED root:test_setup_straight#0 (exit 1) -> /private/tmp/pth54aextq/3.log
+  File "<home>/Code/temp/cocolo-e1/tests/test_setup_straight.py", line 75, in test_S4_2_set_up_asks_only_the_owners_choices_and_installs_everything
+    code = self.finish(timeout=90)
+  File "<home>/Code/temp/cocolo-e1/tests/wizard_direct_driver.py", line 429, in finish
+    self.fail("the wizard did not exit")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: the wizard did not exit
+
+======================================================================
+FAIL: test_S4_3_straight_set_up_keeps_a_current_signature_without_signing (test_setup_straight.SetupStraightTests.test_S4_3_straight_set_up_keeps_a_current_signature_without_signing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<home>/Code/temp/cocolo-e1/tests/test_setup_straight.py", line 54, in test_S4_3_straight_set_up_keeps_a_current_signature_without_signing
+    project, code, screen = self.straight_set_up(**env)
+                            ~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "<home>/Code/temp/cocolo-e1/tests/test_setup_straight.py", line 47, in straight_set_up
+    code = self.finish(timeout=90)
+  File "<home>/Code/temp/cocolo-e1/tests/wizard_direct_driver.py", line 429, in finish
+    self.fail("the wizard did not exit")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: the wizard did not exit
+
+----------------------------------------------------------------------
+Ran 5 tests in 254.366s
+
+FAILED (failures=2)
+
+BUDGET DEBT: codex:tests.test_bridge ceiling=299.500s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_container_stop ceiling=67.620s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_host_commands ceiling=119.560s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_learning_cli ceiling=95.440s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_lost_run_settlement ceiling=98.640s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_project_driver ceiling=390.320s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_trial_run_driver_bugs ceiling=70.220s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_write_merge ceiling=241.240s not_measured seconds=None
+BUDGET DEBT: root:test_install ceiling=110.140s not_measured seconds=None
+BUDGET DEBT: root:test_install_claude_upgrade ceiling=120.330s not_measured seconds=None
+BUDGET DEBT: root:test_setup_sh ceiling=177.880s measured seconds=144.79482983407797
+BUDGET DEBT: root:test_setup_straight ceiling=264.440s measured seconds=708.551631792041
+BUDGET DEBT: root:test_setup_update ceiling=167.880s measured seconds=126.69932962395251
+BUDGET DEBT: root:test_setup_wizard_direct ceiling=265.860s measured seconds=209.08929754100973
+OVER BUDGET: root:test_setup_straight integration/scenario 708.552s > 60.000s (4 fragments)
+RUN RECORD: /var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/cocolo-test-record-u9bpywqx/run.json
+{
+ "elapsed_seconds": 254.8,
+ "jobs": 16,
+ "stages": [
+  "e2e",
+  "integration",
+  "unit"
+ ],
+ "job_seconds": 1226.434,
+ "over_budget": [
+  {
+   "module": "root:test_setup_sh",
+   "seconds": 144.79482983407797,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "e2e",
+   "fragments": 5
+  },
+  {
+   "module": "root:test_setup_straight",
+   "seconds": 708.551631792041,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 4
+  },
+  {
+   "module": "root:test_setup_update",
+   "seconds": 126.69932962395251,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 5
+  },
+  {
+   "module": "root:test_setup_wizard_direct",
+   "seconds": 209.08929754100973,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 8
+  }
+ ],
+ "budget_failures": [
+  {
+   "module": "root:test_setup_straight",
+   "seconds": 708.551631792041,
+   "budget": 60.0,
+   "layer": "scenario",
+   "stage": "integration",
+   "fragments": 4
+  }
+ ],
+ "budget_warnings": [
+  {
+   "module": "codex:tests.test_bridge",
+   "ceiling": 299.5,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_container_stop",
+   "ceiling": 67.62,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_host_commands",
+   "ceiling": 119.56,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_learning_cli",
+   "ceiling": 95.44,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_lost_run_settlement",
+   "ceiling": 98.64,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_project_driver",
+   "ceiling": 390.32,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_trial_run_driver_bugs",
+   "ceiling": 70.22,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_write_merge",
+   "ceiling": 241.24,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_install",
+   "ceiling": 110.14,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_install_claude_upgrade",
+   "ceiling": 120.33,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_sh",
+   "ceiling": 177.88,
+   "seconds": 144.79482983407797,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_setup_straight",
+   "ceiling": 264.44,
+   "seconds": 708.551631792041,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_setup_update",
+   "ceiling": 167.88,
+   "seconds": 126.69932962395251,
+   "status": "measured"
+  },
+  {
+   "module": "root:test_setup_wizard_direct",
+   "ceiling": 265.86,
+   "seconds": 209.08929754100973,
+   "status": "measured"
+  }
+ ],
+ "debt_retirement_required": [],
+ "discovery_seconds": 33.798707083042245,
+ "preflight_seconds": 22.161275333957747,
+ "metadata_errors": [
+  "API-1: requirement has no statement, source or check",
+  "API-10: requirement has no statement, source or check",
+  "API-11: requirement has no statement, source or check",
+  "API-12: requirement has no statement, source or check",
+  "API-13: requirement has no statement, source or check",
+  "API-14: requirement has no statement, source or check",
+  "API-15: requirement has no statement, source or check",
+  "API-16: requirement has no statement, source or check",
+  "API-17: requirement has no statement, source or check",
+  "API-18: requirement has no statement, source or check",
+  "API-19: requirement has no statement, source or check",
+  "API-2: requirement has no statement, source or check",
+  "API-20: requirement has no statement, source or check",
+  "API-21: requirement has no statement, source or check",
+  "API-22: requirement has no statement, source or check",
+  "API-23: requirement has no statement, source or check",
+  "API-24: requirement has no statement, source or check",
+  "API-25: requirement has no statement, source or check",
+  "API-26: requirement has no statement, source or check",
+  "API-27: requirement has no statement, source or check",
+  "API-3: requirement has no statement, source or check",
+  "API-4: requirement has no statement, source or check",
+  "API-5: requirement has no statement, source or check",
+  "API-6: requirement has no statement, source or check",
+  "API-7: requirement has no statement, source or check",
+  "API-8: requirement has no statement, source or check",
+  "API-9: requirement has no statement, source or check",
+  "G1: requirement has no statement, source or check",
+  "G2: requirement has no statement, source or check",
+  "G3: requirement has no statement, source or check",
+  "G4: requirement has no statement, source or check",
+  "G5: requirement has no statement, source or check",
+  "G6: requirement has no statement, source or check",
+  "G7: requirement has no statement, source or check",
+  "G8: requirement has no statement, source or check",
+  "G9: requirement has no statement, source or check",
+  "L1.1: requirement has no statement, source or check",
+  "L1.2: requirement has no statement, source or check",
+  "L10.1: requirement has no statement, source or check",
+  "L10.2: requirement has no statement, source or check",
+  "L10.3: requirement has no statement, source or check",
+  "L11.1: requirement has no statement, source or check",
+  "L11.2: requirement has no statement, source or check",
+  "L12.1: requirement has no statement, source or check",
+  "L12.2: requirement has no statement, source or check",
+  "L12.3: requirement has no statement, source or check",
+  "L12.4: requirement has no statement, source or check",
+  "L12.5: requirement has no statement, source or check",
+  "L12.6: requirement has no statement, source or check",
+  "L12.7: requirement has no statement, source or check",
+  "L13.1: requirement has no statement, source or check",
+  "L13.2: requirement has no statement, source or check",
+  "L14.1: requirement has no statement, source or check",
+  "L15.1: requirement has no statement, source or check",
+  "L2.1: requirement has no statement, source or check",
+  "L2.2: requirement has no statement, source or check",
+  "L3.1: requirement has no statement, source or check",
+  "L3.2: requirement has no statement, source or check",
+  "L3.3: requirement has no statement, source or check",
+  "L4.1: requirement has no statement, source or check",
+  "L4.2: requirement has no statement, source or check",
+  "L5.1: requirement has no statement, source or check",
+  "L5.2: requirement has no statement, source or check",
+  "L5.3: requirement has no statement, source or check",
+  "L6.1: requirement has no statement, source or check",
+  "L6.2: requirement has no statement, source or check",
+  "L7.1: requirement has no statement, source or check",
+  "L7.2: requirement has no statement, source or check",
+  "L7.3: requirement has no statement, source or check",
+  "L8.1: requirement has no statement, source or check",
+  "L8.2: requirement has no statement, source or check",
+  "L8.3: requirement has no statement, source or check",
+  "L9.1: requirement has no statement, source or check",
+  "L9.2: requirement has no statement, source or check",
+  "L9.3: requirement has no statement, source or check",
+  "TERM-13: requirement has no statement, source or check",
+  "TERM-17: requirement has no statement, source or check",
+  "TERM-5: requirement has no statement, source or check",
+  "TERM-6: requirement has no statement, source or check",
+  "TERM-7: requirement has no statement, source or check",
+  "root:test_setup_wizard_source.WizardSourceTests.test_commands_and_commit_screens_say_what_the_rule_and_commit_do: legacy constants/helper sources changed or unresolved; migrate its requirement proof",
+  "root:test_setup_wizard_source.WizardSourceTests.test_every_git_call_is_literal_and_never_porcelain: legacy constants/helper sources changed or unresolved; migrate its requirement proof",
+  "root:test_setup_wizard_source.WizardSourceTests.test_every_git_call_uses_the_trusted_binary_with_helpers_off: legacy constants/helper sources changed or unresolved; migrate its requirement proof",
+  "root:test_setup_wizard_source.WizardSourceTests.test_every_git_call_with_paths_is_literal: legacy constants/helper sources changed or unresolved; migrate its requirement proof",
+  "root:test_setup_wizard_source.WizardSourceTests.test_every_launch_uses_the_audited_builders: legacy constants/helper sources changed or unresolved; migrate its requirement proof",
+  "root:test_setup_wizard_source.WizardSourceTests.test_every_python_the_wizard_starts_is_isolated: legacy constants/helper sources changed or unresolved; migrate its requirement proof",
+  "root:test_setup_wizard_source.WizardSourceTests.test_header_and_welcome_name_the_product: legacy constants/helper sources changed or unresolved; migrate its requirement proof",
+  "root:test_setup_wizard_source.WizardSourceTests.test_provider_clients_are_never_run_by_name: legacy constants/helper sources changed or unresolved; migrate its requirement proof",
+  "root:test_setup_wizard_source.WizardSourceTests.test_wizard_messages_for_the_polished_screens: legacy constants/helper sources changed or unresolved; migrate its requirement proof"
+ ],
+ "partial": false,
+ "profile": "ci",
+ "requirement_failures": [],
+ "units": 32,
+ "tests": {
+  "root": 383
+ },
+ "failed_units": [
+  "root:test_setup_straight#3",
+  "root:test_setup_straight#2",
+  "root:test_setup_straight#0"
+ ],
+ "slowest_units": [
+  [
+   "root:test_setup_straight#0",
+   254.8
+  ],
+  [
+   "root:test_setup_straight#2",
+   246.2
+  ],
+  [
+   "root:test_setup_straight#3",
+   158.0
+  ],
+  [
+   "root:test_setup_straight#1",
+   49.5
+  ],
+  [
+   "root:test_setup_sh#3",
+   42.0
+  ],
+  [
+   "root:test_setup_sh#1",
+   38.4
+  ],
+  [
+   "root:test_setup_wizard_direct#1",
+   30.9
+  ],
+  [
+   "root:test_setup_wizard_direct#0",
+   30.8
+  ]
+ ],
+ "logs": "/private/tmp/pth54aextq"
+}

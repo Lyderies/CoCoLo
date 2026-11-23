@@ -13,6 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATION = ROOT / "packages" / "codex-agents" / "native-package" / ".codex" / "orchestration"
 sys.path.insert(0, str(ROOT / "scripts"))
+
+from test_framework import requirements  # noqa: E402
+
 WIZARD = ROOT / "scripts" / "setup_wizard"
 SOURCES = {path.name: path.read_text(encoding="utf-8") for path in sorted(WIZARD.glob("*.py"))}
 SOURCES["setup-wizard.py"] = (ROOT / "scripts" / "setup-wizard.py").read_text(encoding="utf-8")
@@ -196,6 +199,7 @@ def git_problems(source: str) -> list[str]:
 
 
 class WizardSourceTests(unittest.TestCase):
+    @requirements('E1-WS')
     def test_the_checks_reject_every_reviewed_bypass(self) -> None:
         """Reviews 040-s5-wizard-2 and -3 (b): each bypass a review built is rejected."""
         launches = {
@@ -258,16 +262,19 @@ class WizardSourceTests(unittest.TestCase):
                 self.assertTrue(git_problems(source))
         self.assertEqual([], git_problems("install._git_run(Path(p), 'ls-files', '-z', '--', *candidates)\n"))
 
+    @requirements('E1-WS')
     def test_every_launch_uses_the_audited_builders(self) -> None:
         for name, source in SOURCES.items():
             with self.subTest(source=name):
                 self.assertEqual([], launch_problems(source, name))
 
+    @requirements('E1-WS')
     def test_every_git_call_is_literal_and_never_porcelain(self) -> None:
         for name, source in SOURCES.items():
             with self.subTest(source=name):
                 self.assertEqual([], git_problems(source))
 
+    @requirements('E1-WS')
     def test_the_git_builder_accepts_only_the_wizards_read_only_invocations(self) -> None:
         """Review 040-s5-wizard-4 (b): the builder is the boundary, not the scanner: no configuration
         override, alias, other directory or other command can follow the safety settings."""
@@ -284,6 +291,7 @@ class WizardSourceTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     flow.Wizard.git_argv(wizard, *args, project="/p")
 
+    @requirements('E1-WS')
     def test_the_builders_add_the_isolation_flags_and_gits_safety_settings(self) -> None:
         from types import SimpleNamespace
         from setup_wizard import flow
@@ -294,6 +302,7 @@ class WizardSourceTests(unittest.TestCase):
                          flow.Wizard.git_argv(wizard, "rev-parse", "--show-toplevel", project="/p"))
         self.assertEqual(["/trusted/git", *flow.GIT_SAFE, "--version"], flow.Wizard.git_argv(wizard, "--version"))
 
+    @requirements('E1-WS')
     def test_every_python_the_wizard_starts_is_isolated(self) -> None:
         """Replaces SetupScriptTests.test_every_python_the_wizard_starts_is_isolated (W1.3, W1.6)."""
         # Every argument list that starts with the trusted interpreter, whether it goes to subprocess
@@ -326,6 +335,7 @@ class WizardSourceTests(unittest.TestCase):
         self.assertIn("self.python_argv(str(CLONE_CLI), *args)", SOURCES["flow.py"])
         self.assertNotIn('".codex", "orchestration", "cli.py")]', ALL)
 
+    @requirements('E1-WS')
     def test_every_git_call_uses_the_trusted_binary_with_helpers_off(self) -> None:
         """Replaces SetupScriptTests.test_every_git_call_uses_the_trusted_binary_with_helpers_off (W1.4)."""
         for source in SOURCES.values():
@@ -352,6 +362,7 @@ class WizardSourceTests(unittest.TestCase):
         self.assertIn("sys.exit(module.git_tool(sys.argv[2:]))", SOURCES["effects.py"])
         self.assertIn('effects.owner_git_argv(self.py, "commit"', SOURCES["flow.py"])
 
+    @requirements('E1-WS')
     def test_every_git_call_with_paths_is_literal(self) -> None:
         """Replaces SetupScriptTests.test_every_git_call_with_paths_is_literal (W5.2)."""
         for needle in (" add -A -- ", " commit -m "):
@@ -368,6 +379,7 @@ class WizardSourceTests(unittest.TestCase):
             with self.subTest(at=ALL[match.start() - 60:match.end()]):
                 self.assertIn("install._git_run(", call)  # Always --literal-pathspecs (install.py's _git_run).
 
+    @requirements('E1-WS')
     def test_provider_clients_are_never_run_by_name(self) -> None:
         """Replaces SetupScriptTests.test_provider_clients_are_never_run_by_name (W1.5)."""
         for source in SOURCES.values():
@@ -386,6 +398,7 @@ class WizardSourceTests(unittest.TestCase):
             '                                "', "")).group(1)
         self.assertEqual(re.split(r", | or ", message), list(TRUSTED_SEARCH_DIRECTORIES))
 
+    @requirements('E1-WS')
     def test_commands_and_commit_screens_say_what_the_rule_and_commit_do(self) -> None:
         """Replaces SetupScriptTests.test_commands_and_commit_screens_say_what_the_rule_and_commit_do (W8.2, W5.3)."""
         from setup_wizard import steps
@@ -404,12 +417,14 @@ class WizardSourceTests(unittest.TestCase):
         self.assertIn("Keep this setup folder outside every folder you open in Codex", ALL)
         self.assertIn("including the Codex commands rule", ALL)
 
+    @requirements('E1-WS')
     def test_header_and_welcome_name_the_product(self) -> None:
         """Replaces SetupScriptTests.test_header_and_welcome_name_the_product (W9.2)."""
         self.assertIn(" COCOLO setup ", SOURCES["terminal.py"])
         self.assertNotIn("Agent orchestration setup", ALL)
         self.assertIn('"Welcome to COCOLO\\nClaude Orchestrator, Codex Orchestrator, Local Orchestrator"', ALL)
 
+    @requirements('E1-WS')
     def test_wizard_messages_for_the_polished_screens(self) -> None:
         """Replaces SetupScriptTests.test_wizard_messages_for_the_polished_screens (W5.4, W7, W8.1, W10.1)."""
         for text in ("Nothing to commit: the project already has these files committed", "The install can be updated.",
