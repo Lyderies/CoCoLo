@@ -4,6 +4,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.52: D4 recovers a stored result after a crash: a publication interrupted between
+  its prepare and commit is replayed from the kept packet or settled lost, and only a held reservation may
+  publish.
 - Package 0.8.51: B3 withdraws unclaimed opens (schema 19); D2 applies deadlines and retention;
   B2 lets CoCoLo record a finished helper's result (schema 20), with D3's retirement sweep clearing
   retired run state. E1 offers start at login during Set up. TF-26 keeps product fixes independent
