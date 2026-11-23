@@ -15,7 +15,7 @@ TOOL = runpy.run_path(str(REPOSITORY_ROOT / "scripts/backup_installed_project.py
 
 class InstalledBackupManifestTests(unittest.TestCase):
     def test_exact_version_manifests_match_owner_reader_and_keep_old_tables_absent(self):
-        for version in (5, 6, 7, 8, 9, 10, 11, 12, 13, 14):
+        for version in (5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16):
             with self.subTest(version=version):
                 tables = TOOL["_tables"](version)
                 self.assertEqual(learning_store._backup_tables(version), tables)
@@ -29,11 +29,13 @@ class InstalledBackupManifestTests(unittest.TestCase):
                 self.assertEqual(version >= 12, 'account_observation_requests' in tables)
                 self.assertEqual(version >= 13, 'account_billing_probe_origins' in tables)
                 self.assertEqual(version >= 13, 'account_billing_probe_requests' in tables)
+                self.assertEqual(version >= 15, 'run_holds' in tables)
+                self.assertEqual(version >= 16, 'probe_id' in TOOL["_expected_columns"](version, 'records'))
                 for table in tables:
                     self.assertEqual(learning_store._backup_expected_columns(version, table),
                                      TOOL["_expected_columns"](version, table))
                     self.assertEqual(learning_store._BACKUP_ORDER_COLUMNS[table], TOOL["_TABLE_ORDER"][table])
-        for version in (0, 4, 16):  # O0b RS-A (requirement): 15 is now supported
+        for version in (0, 4, 17):  # PC-4 (requirement): 16 is now supported
             with self.subTest(unsupported=version), self.assertRaises(RuntimeError):
                 TOOL["_tables"](version)
 

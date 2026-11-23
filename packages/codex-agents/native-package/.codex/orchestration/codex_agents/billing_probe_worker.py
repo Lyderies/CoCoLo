@@ -9,6 +9,7 @@ import hashlib
 import os
 from pathlib import Path
 import queue
+import secrets
 from threading import local as _ThreadLocal
 import threading
 import time
@@ -21,7 +22,7 @@ from .history_contracts import _DIGEST, _PROJECT, matches, valid_integer
 from .learning_contracts import canonical_json, parse_bounded_json_value, validate_learning_record
 from .owned_execution import ExecutionTicket, OwnedExecutionKey, OwnedExecutionRegistry
 from .provider_restrictions import BILLING_RANK, merged_restriction
-from .providers import claude_rate_limit_records, client_environment, resolve_client
+from .providers import probe_records, claude_rate_limit_records, client_environment, resolve_client
 
 MAX_PROBE_INPUT_BYTES = 128*1024
 MAX_PROBE_PACKET_BYTES = 16*1024
@@ -230,6 +231,7 @@ def _prepare(payload):
 
 
 def _normalized(infos, failure, identity, observed, client_version=None):
+    probe_id = secrets.token_hex(32)
     heads, bills, invalid = [], [], 0
     for info in infos:
         try:
@@ -251,6 +253,7 @@ def _normalized(infos, failure, identity, observed, client_version=None):
     # CI-3: a probe the init check stopped keeps its fixed reason; any other failure stays probe_incomplete.
     reason = (failure if failure in PROBE_INIT_REASONS else 'probe_incomplete') if failure is not None else ('probe_invalid_events' if invalid
         else 'probe_no_events' if not heads else None)
+    records = probe_records(records, probe_id)
     body = canonical_json({'records': records, 'observed_at_ms': observed, 'reason_code': reason,
         'client_version': client_version})
     if len(body) > MAX_PROBE_PACKET_BYTES:

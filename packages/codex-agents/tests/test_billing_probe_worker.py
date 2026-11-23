@@ -27,6 +27,20 @@ class BillingProbeProtocolTests(unittest.TestCase):
         return bridge.claude_billing_probe(fixtures.CLEAN, project_root=self.fixture.project,
                                           untrusted=(self.fixture.project,))
 
+    def test_PC4_every_probe_has_distinct_provenance_even_when_half_failed(self):
+        clean = fixtures.FAVOURABLE['rate_limit_info']
+        cases = [(clean, None, 2), ({**clean, 'status': 'allowed_warning'}, 'failed', 1),
+                 ({**clean, 'isUsingOverage': True, 'overageStatus': 'allowed'}, 'failed', 1)]
+        ids = []
+        for info, failure, count in cases:
+            body, _ = workers._normalized([info], failure, {'account_fingerprint': 'a'*64}, 5)
+            records = json.loads(body)['records']
+            self.assertEqual(count, len(records))
+            probe_ids = {record['probe_id'] for record in records}
+            self.assertEqual(1, len(probe_ids))
+            ids.append(probe_ids.pop())
+        self.assertEqual(len(ids), len(set(ids)))
+
     def test_nonzero_exit_cannot_refresh_clean_billing_even_after_a_success_frame(self):
         (self.fixture.tools/'claude-exit-code').write_text('1')
         infos, reason = self.probe([fixtures.PROBE_INIT, fixtures.FAVOURABLE, fixtures.result_frame('OK')])

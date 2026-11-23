@@ -6,7 +6,7 @@ from typing import Any
 
 from .learning_contracts import MAX_RECORD_BYTES
 
-LEDGER_SCHEMA_VERSION = 15  # O0b RS-A: the hold register
+LEDGER_SCHEMA_VERSION = 16  # PC-4: nullable probe provenance
 COLLECTOR_PROTOCOL_VERSION = 1
 MAX_REQUEST_BYTES = MAX_RECORD_BYTES + 16_384
 

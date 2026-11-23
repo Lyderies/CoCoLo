@@ -73,7 +73,7 @@ def _closed(value: object, fields: set[str]) -> bool:
     return type(value) is dict and value.keys() == fields
 
 
-def _checked_history_record(value: object, *, expected_type: str | None = None) -> dict:
+def _checked_history_record(value: object, *, expected_type: str | None = None, stored: bool = False) -> dict:
     # Protocol-v1 history values describe the new typed store, not legacy import.
     # The existing shared legacy reader and its canonical bytes remain unchanged.
     if (
@@ -82,7 +82,7 @@ def _checked_history_record(value: object, *, expected_type: str | None = None) 
         or (expected_type is not None and value["record_type"] != expected_type)
     ):
         raise HistoryError("history_invalid_input")
-    return validate_learning_record(value)
+    return validate_learning_record(value, stored=stored)
 
 
 def _validate_request(request: HistoryRequest) -> None:
@@ -494,7 +494,7 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
         if not _closed(result, {"record", "metadata"}) or type(result["record"]) is not dict:
             raise HistoryError("history_invalid_response")
         _validate_metadata(result["metadata"])
-        record, metadata = _checked_history_record(result["record"]), result["metadata"]
+        record, metadata = _checked_history_record(result["record"], stored=True), result["metadata"]
         if (
             record["record_id"] != request.payload["record_id"] or metadata["record_id"] != record["record_id"]
             or metadata["observed_at_ms"] != record["observed_at_ms"]

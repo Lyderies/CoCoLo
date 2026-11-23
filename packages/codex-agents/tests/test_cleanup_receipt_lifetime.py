@@ -216,6 +216,7 @@ class StrandedReceiptAdoptionTests(ReceiptDecisionTests):
                 if kind == 'trigger':
                     self.ledger._connection.execute(f'DROP TRIGGER IF EXISTS {name}')
             self.ledger._connection.execute('DROP TABLE IF EXISTS run_holds')
+            self.ledger._connection.execute('ALTER TABLE records DROP COLUMN probe_id')  # schema 16 added it
             self.ledger._connection.execute('PRAGMA user_version=14')
         body = learning_store._snapshot_project_partition(self.ledger._connection, self.project,
                                                           ledger_schema_version=14)

@@ -11,7 +11,7 @@ import re
 import time
 
 from .control_api import ControlScope, scope_data
-from .contracts import RESULT_VALIDATION_REASON_CODES
+from .contracts import RESULT_DIAGNOSTIC_REASON_CODES
 from .history_contracts import AttemptBinding, TerminalDelivery, _DIGEST, _RUN, matches, valid_integer
 from .learning_contracts import (
     SUPPORTED_EFFORTS, SUPPORTED_MODELS, canonical_json, parse_bounded_json, validate_client_diagnostics,
@@ -168,7 +168,7 @@ def decode_dispatch_response(raw, request):
                         'export_commit', 'export_manifest_digest'}
                         or type(report.get('reviewed')) is not bool or report.get('capacity_state') != 'retained'
                         or report.get('terminal_state') not in {None, 'timed_out', 'cancelled', 'failed', 'interrupted'}
-                        or report.get('result_validation_reason_code') not in {None, *RESULT_VALIDATION_REASON_CODES}):
+                        or report.get('result_validation_reason_code') not in {None, *RESULT_DIAGNOSTIC_REASON_CODES}):
                     raise ValueError()
                 if (report.get('requested_model') not in SUPPORTED_MODELS
                         or report.get('observed_model') not in {None, *SUPPORTED_MODELS}

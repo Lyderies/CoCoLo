@@ -498,15 +498,23 @@ def probe_latest(billing: list[tuple[dict[str, Any], str]], fingerprint: str) ->
     )
 
 
-def probe_head(headroom: list[tuple[dict[str, Any], str]], fingerprint: str) -> dict[str, Any] | None:
-    """The newest observed headroom reading of this account that a probe itself took (not the last one stored)."""
+def probe_retry_at(passed_at_ms: int) -> str:
+    """The account-wide cooldown ends five minutes after the latest qualifying pass."""
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp((passed_at_ms + 300_000) / 1000, timezone.utc).isoformat().replace('+00:00', 'Z')
 
-    return max(
-        (record for record, _ in headroom
-         if record["account_fingerprint"] == fingerprint
-         and record.get("run_id") is None and record.get("phase") is None),
-        key=lambda record: record["observed_at_ms"], default=None,
-    )
+
+def probe_head(
+    headroom: list[tuple[dict[str, Any], str]], fingerprint: str, latest: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Only a unique headroom row with the reused billing row's probe provenance is its own."""
+    probe_id = latest.get("probe_id")
+    if probe_id is None:
+        return None
+    own = [record for record, _ in headroom
+           if record["account_fingerprint"] == fingerprint and record.get("run_id") is None
+           and record.get("phase") is None and record.get("probe_id") == probe_id]
+    return own[0] if len(own) == 1 else None
 
 
 def newer_run_restricts(
@@ -518,7 +526,7 @@ def newer_run_restricts(
     order: dict[str, int],
 ) -> bool:
     """R2: a run record newer than the probe's latest billing that is more restrictive (paid usage usable,
-    overage in use, or headroom that is not ample) means the probe's favourable reading is not enough.
+    overage in use, or headroom more restrictive than the probe's own) means the probe's reading is not enough.
 
     BR-2 (decision 44): "newer" is serialized insertion order (`order`: record id to its row's insertion
     number) OR a later-or-equal observation time, so a restriction stored late with an earlier stamp still
@@ -541,7 +549,20 @@ def newer_run_restricts(
         if record["account_fingerprint"] == fingerprint
         and record.get("run_id") is not None and newer_than(record)
     ]
-    return bool(newer) and headroom_state("claude", fingerprint, newer, [], now_ms)[0] != "ample"
+    if not newer:
+        return False
+    # PC-1: a newer run record blocks the reuse only when it is MORE restrictive than the reused probe's own
+    # reading; one as constrained as the probe's own changes nothing the probe did not already show (the
+    # re-evaluation and the final gate still judge it). Equal rank is left to that re-evaluation even when the
+    # restriction sits on another window (LOW-3): it reads every headroom record, the run's included.
+    #
+    # PC-5: timestamps cannot establish ownership (complementary partial failures can share a stamp).
+    # Missing or ambiguous provenance keeps the legacy ample baseline, so any constrained run blocks.
+    rank = {"ample": 0, "constrained": 1, "exhausted": 2}
+    head = probe_head(headroom, fingerprint, latest)
+    own = [] if head is None else [(head, "")]
+    return (rank[headroom_state("claude", fingerprint, newer, [], now_ms)[0]]
+            > rank[headroom_state("claude", fingerprint, own, [], now_ms)[0]])
 
 
 def reuse_gate(

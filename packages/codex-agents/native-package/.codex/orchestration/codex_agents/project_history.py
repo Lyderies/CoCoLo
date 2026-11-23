@@ -47,6 +47,7 @@ from .project_learning_activation import ACTIVATION_SCHEMA, ACTIVATION_COLUMNS
 from . import project_holds_schema, project_result_contexts
 from .project_holds_schema import PROJECT_HOLDS_COLUMNS, PROJECT_HOLDS_SCHEMA, attempt_identity
 from .learning_contracts import (
+    validate_outcome,
     DISPATCH_RESULT_SCHEMA_VERSION, MAX_RECORD_BYTES, SOURCES, canonical_json, content_digest,
     keyed_digest, parse_bounded_json, validate_execution_configuration, validate_learning_record,
 )
@@ -614,7 +615,7 @@ class ProjectHistory:
                     os.close(descriptor)
 
     @staticmethod
-    def _checked_record(content: bytes, source: str, ingested_at_ms: int) -> dict:
+    def _checked_record(content: bytes, source: str, ingested_at_ms: int, *, stored: bool = False) -> dict:
         if (
             type(content) is not bytes or not 0 < len(content) <= MAX_RECORD_BYTES
             or type(source) is not str or source not in SOURCES or not valid_integer(ingested_at_ms)
@@ -631,7 +632,7 @@ class ProjectHistory:
                 or type(parsed.get("schema_version")) is not int
             ):
                 raise HistoryError("history_invalid_input")
-            checked = validate_learning_record(parsed)
+            checked = validate_learning_record(parsed, stored=stored)
             if (
                 canonical_json(checked) != content
                 or not valid_integer(checked.get("observed_at_ms"))
@@ -647,7 +648,7 @@ class ProjectHistory:
         invalid = False
         try:
             content = self._stored_blob(row["content"], maximum=MAX_RECORD_BYTES)
-            checked = self._checked_record(content, row["source"], row["ingested_at_ms"])
+            checked = self._checked_record(content, row["source"], row["ingested_at_ms"], stored=True)
             invalid = (
                 row["project_id"] != self.project_id or row["record_id"] != checked["record_id"]
                 or row["record_type"] != checked["record_type"]
@@ -667,6 +668,8 @@ class ProjectHistory:
         )
 
     def _append_locked(self, checked: dict, content: bytes, source: str, timestamp: int) -> HistoryEntry:
+        if checked.get("record_type") == "outcome":
+            validate_outcome(checked)  # a new row never takes the stored-read leniency, whoever built it
         digest = hashlib.sha256(content).hexdigest()
         row = self._connection.execute(
             "SELECT * FROM records WHERE project_id=? AND record_id=?", (self.project_id, checked["record_id"]),

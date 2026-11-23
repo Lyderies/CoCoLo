@@ -167,6 +167,46 @@ class LearningContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "repair reason codes"):
             validate_learning_record(record)
 
+    def test_or1_stored_outcome_keeps_only_the_historical_repair_code_readable(self) -> None:
+        """OR-1: 4b49660c (0.8.43) split `inconsistent_axes`; outcomes older releases wrote still validate.
+        Nothing else widens: `contract_validation_failed` was never written into an outcome."""
+        from codex_agents.contracts import RESULT_VALIDATION_REASON_CODES
+        from codex_agents.learning_contracts import LEGACY_OUTCOME_REPAIR_CODES
+
+        self.assertEqual(frozenset({"inconsistent_axes"}), LEGACY_OUTCOME_REPAIR_CODES)
+        for code in sorted(RESULT_VALIDATION_REASON_CODES | {"inconsistent_axes"}):
+            record = verification_outcome("legacy_repair_" + code)
+            record["repairs"] = 1
+            record["repair_reason_codes"] = [code]
+            self.assertEqual(record, validate_learning_record(record, stored=True), code)
+        record = verification_outcome("never_written")
+        record["repairs"] = 1
+        record["repair_reason_codes"] = ["contract_validation_failed"]
+        with self.assertRaisesRegex(ContractError, "repair reason codes"):
+            validate_learning_record(record, stored=True)
+
+    def test_or1_default_is_strict_and_only_an_explicit_stored_read_is_lenient(self) -> None:
+        from codex_agents.learning_contracts import validate_outcome
+        record = verification_outcome("legacy_default")
+        record["repairs"] = 1
+        record["repair_reason_codes"] = ["inconsistent_axes"]
+        for check in (validate_learning_record, validate_outcome):
+            with self.subTest(check=check.__name__), self.assertRaisesRegex(ContractError, "repair reason codes"):
+                check(record)
+            self.assertEqual(record, check(record, stored=True))
+
+    def test_or1_a_new_outcome_takes_only_codes_a_rejected_attempt_can_carry(self) -> None:
+        for code in ("inconsistent_axes", "contract_validation_failed", "free text"):
+            record = verification_outcome("fresh_" + code[:4])
+            record["repairs"] = 1
+            record["repair_reason_codes"] = [code]
+            with self.subTest(code=code), self.assertRaisesRegex(ContractError, "repair reason codes"):
+                validate_learning_record(record)
+        record = verification_outcome("fresh_ok")
+        record["repairs"] = 1
+        record["repair_reason_codes"] = ["missing_evidence"]
+        self.assertEqual(record, validate_learning_record(record))
+
     def test_event_is_closed_and_contains_no_project_claim(self) -> None:
         record = event_record()
         self.assertEqual("evt_1", validate_learning_record(record)["record_id"])
