@@ -1,0 +1,259 @@
+.FFFF.FFFFFF.FFFFFFFFFFFF..FF..
+======================================================================
+FAIL: test_FR1_a_preparation_that_stays_stale_is_refused_after_its_last_retry (tests.test_account_claim_jobs.AccountClaimJobTests.test_FR1_a_preparation_that_stays_stale_is_refused_after_its_last_retry)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 338, in test_FR1_a_preparation_that_stays_stale_is_refused_after_its_last_retry
+    self.assert_wire_error(self.pump(self.begin()), self.request(), "claim_preparation_stale")
+                           ~~~~~~~~~^^^^^^^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 119, in pump
+    self.assertLess(time.monotonic() - started, 10, "deferred claim did not finish")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.001490416005254 not less than 10 : deferred claim did not finish
+
+======================================================================
+FAIL: test_FR1_a_preparation_that_stays_stale_is_refused_after_its_last_retry (tests.test_account_claim_jobs.AccountClaimJobTests.test_FR1_a_preparation_that_stays_stale_is_refused_after_its_last_retry)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 69, in tearDown
+    self.assertLess(time.monotonic() - started, 10, "disposable workers did not drain")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.002744458033703 not less than 10 : disposable workers did not drain
+
+======================================================================
+FAIL: test_FR1_a_run_whose_own_rows_changed_is_not_prepared_again (tests.test_account_claim_jobs.AccountClaimJobTests.test_FR1_a_run_whose_own_rows_changed_is_not_prepared_again)
+Review 040-fr-stale: a new capture cannot mend a run whose own rows changed, so it is refused at once.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 292, in test_FR1_a_run_whose_own_rows_changed_is_not_prepared_again
+    self.assert_wire_error(self.pump(self.begin()), self.request(), "claim_preparation_stale")
+                           ~~~~~~~~~^^^^^^^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 119, in pump
+    self.assertLess(time.monotonic() - started, 10, "deferred claim did not finish")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.00296354101738 not less than 10 : deferred claim did not finish
+
+======================================================================
+FAIL: test_FR1_a_run_whose_own_rows_changed_is_not_prepared_again (tests.test_account_claim_jobs.AccountClaimJobTests.test_FR1_a_run_whose_own_rows_changed_is_not_prepared_again)
+Review 040-fr-stale: a new capture cannot mend a run whose own rows changed, so it is refused at once.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 69, in tearDown
+    self.assertLess(time.monotonic() - started, 10, "disposable workers did not drain")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.000630958995316 not less than 10 : disposable workers did not drain
+
+======================================================================
+FAIL: test_actual_deferred_claim_verifies_off_owner_and_uses_original_atomic_receipt (tests.test_account_claim_jobs.AccountClaimJobTests.test_actual_deferred_claim_verifies_off_owner_and_uses_original_atomic_receipt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 160, in test_actual_deferred_claim_verifies_off_owner_and_uses_original_atomic_receipt
+    result = decode_account_response(self.pump(ticket), self.request())
+                                     ~~~~~~~~~^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 119, in pump
+    self.assertLess(time.monotonic() - started, 10, "deferred claim did not finish")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.000886416004505 not less than 10 : deferred claim did not finish
+
+======================================================================
+FAIL: test_actual_deferred_claim_verifies_off_owner_and_uses_original_atomic_receipt (tests.test_account_claim_jobs.AccountClaimJobTests.test_actual_deferred_claim_verifies_off_owner_and_uses_original_atomic_receipt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 69, in tearDown
+    self.assertLess(time.monotonic() - started, 10, "disposable workers did not drain")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.000772374973167 not less than 10 : disposable workers did not drain
+
+======================================================================
+FAIL: test_changed_before_observation_after_preparation_is_rechecked (tests.test_account_claim_jobs.AccountClaimJobTests.test_changed_before_observation_after_preparation_is_rechecked)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 440, in test_changed_before_observation_after_preparation_is_rechecked
+    self.assert_wire_error(self.pump(ticket), self.request(), "claim_preparation_stale")
+                           ~~~~~~~~~^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 119, in pump
+    self.assertLess(time.monotonic() - started, 10, "deferred claim did not finish")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.000873707991559 not less than 10 : deferred claim did not finish
+
+======================================================================
+FAIL: test_changed_before_observation_after_preparation_is_rechecked (tests.test_account_claim_jobs.AccountClaimJobTests.test_changed_before_observation_after_preparation_is_rechecked)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 69, in tearDown
+    self.assertLess(time.monotonic() - started, 10, "disposable workers did not drain")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.00255329196807 not less than 10 : disposable workers did not drain
+
+======================================================================
+FAIL: test_changed_run_parameters_after_preparation_are_stale_without_claim (tests.test_account_claim_jobs.AccountClaimJobTests.test_changed_run_parameters_after_preparation_are_stale_without_claim)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 523, in test_changed_run_parameters_after_preparation_are_stale_without_claim
+    self.assert_wire_error(self.pump(ticket), self.request(), "claim_preparation_stale")
+                           ~~~~~~~~~^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 119, in pump
+    self.assertLess(time.monotonic() - started, 10, "deferred claim did not finish")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.000336457975209 not less than 10 : deferred claim did not finish
+
+======================================================================
+FAIL: test_changed_run_parameters_after_preparation_are_stale_without_claim (tests.test_account_claim_jobs.AccountClaimJobTests.test_changed_run_parameters_after_preparation_are_stale_without_claim)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 69, in tearDown
+    self.assertLess(time.monotonic() - started, 10, "disposable workers did not drain")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.002693292044569 not less than 10 : disposable workers did not drain
+
+======================================================================
+FAIL: test_deleted_candidate_after_preparation_is_decided_again_on_a_new_capture (tests.test_account_claim_jobs.AccountClaimJobTests.test_deleted_candidate_after_preparation_is_decided_again_on_a_new_capture)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 410, in test_deleted_candidate_after_preparation_is_decided_again_on_a_new_capture
+    result = decode_account_response(self.pump(ticket), self.request())
+                                     ~~~~~~~~~^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 119, in pump
+    self.assertLess(time.monotonic() - started, 10, "deferred claim did not finish")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.000281125016045 not less than 10 : deferred claim did not finish
+
+======================================================================
+FAIL: test_deleted_candidate_after_preparation_is_decided_again_on_a_new_capture (tests.test_account_claim_jobs.AccountClaimJobTests.test_deleted_candidate_after_preparation_is_decided_again_on_a_new_capture)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 69, in tearDown
+    self.assertLess(time.monotonic() - started, 10, "disposable workers did not drain")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.001882000011392 not less than 10 : disposable workers did not drain
+
+======================================================================
+FAIL: test_fault_after_returned_input_release_can_drain_confirmed_completion_metadata (tests.test_account_claim_jobs.AccountClaimJobTests.test_fault_after_returned_input_release_can_drain_confirmed_completion_metadata)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 709, in test_fault_after_returned_input_release_can_drain_confirmed_completion_metadata
+    self.pump(ticket)
+    ~~~~~~~~~^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 119, in pump
+    self.assertLess(time.monotonic() - started, 10, "deferred claim did not finish")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.000674209033605 not less than 10 : deferred claim did not finish
+
+======================================================================
+FAIL: test_fault_after_returned_input_release_can_drain_confirmed_completion_metadata (tests.test_account_claim_jobs.AccountClaimJobTests.test_fault_after_returned_input_release_can_drain_confirmed_completion_metadata)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 69, in tearDown
+    self.assertLess(time.monotonic() - started, 10, "disposable workers did not drain")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.002918541023973 not less than 10 : disposable workers did not drain
+
+======================================================================
+FAIL: test_faulted_coordinator_has_public_cleanup_without_offer_or_recommit (tests.test_account_claim_jobs.AccountClaimJobTests.test_faulted_coordinator_has_public_cleanup_without_offer_or_recommit)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 685, in test_faulted_coordinator_has_public_cleanup_without_offer_or_recommit
+    self.pump(ticket)
+    ~~~~~~~~~^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 119, in pump
+    self.assertLess(time.monotonic() - started, 10, "deferred claim did not finish")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.001700082968455 not less than 10 : deferred claim did not finish
+
+======================================================================
+FAIL: test_faulted_coordinator_has_public_cleanup_without_offer_or_recommit (tests.test_account_claim_jobs.AccountClaimJobTests.test_faulted_coordinator_has_public_cleanup_without_offer_or_recommit)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 69, in tearDown
+    self.assertLess(time.monotonic() - started, 10, "disposable workers did not drain")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.002043584012426 not less than 10 : disposable workers did not drain
+
+======================================================================
+FAIL: test_interrupted_final_commit_rolls_back_and_retains_returned_job_without_replay (tests.test_account_claim_jobs.AccountClaimJobTests.test_interrupted_final_commit_rolls_back_and_retains_returned_job_without_replay)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 662, in test_interrupted_final_commit_rolls_back_and_retains_returned_job_without_replay
+    self.pump(ticket)
+    ~~~~~~~~~^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 119, in pump
+    self.assertLess(time.monotonic() - started, 10, "deferred claim did not finish")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.00082479196135 not less than 10 : deferred claim did not finish
+
+======================================================================
+FAIL: test_interrupted_final_commit_rolls_back_and_retains_returned_job_without_replay (tests.test_account_claim_jobs.AccountClaimJobTests.test_interrupted_final_commit_rolls_back_and_retains_returned_job_without_replay)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 69, in tearDown
+    self.assertLess(time.monotonic() - started, 10, "disposable workers did not drain")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.002083334024064 not less than 10 : disposable workers did not drain
+
+======================================================================
+FAIL: test_missing_captured_launch_input_is_stale_and_can_be_explicitly_prepared_again (tests.test_account_claim_jobs.AccountClaimJobTests.test_missing_captured_launch_input_is_stale_and_can_be_explicitly_prepared_again)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 455, in test_missing_captured_launch_input_is_stale_and_can_be_explicitly_prepared_again
+    self.assert_wire_error(self.pump(ticket), self.request(), "claim_preparation_stale")
+                           ~~~~~~~~~^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 119, in pump
+    self.assertLess(time.monotonic() - started, 10, "deferred claim did not finish")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.00266079098219 not less than 10 : deferred claim did not finish
+
+======================================================================
+FAIL: test_missing_captured_launch_input_is_stale_and_can_be_explicitly_prepared_again (tests.test_account_claim_jobs.AccountClaimJobTests.test_missing_captured_launch_input_is_stale_and_can_be_explicitly_prepared_again)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 69, in tearDown
+    self.assertLess(time.monotonic() - started, 10, "disposable workers did not drain")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.001335958018899 not less than 10 : disposable workers did not drain
+
+======================================================================
+FAIL: test_pending_duplicate_is_one_ticket_and_changed_parameters_conflict (tests.test_account_claim_jobs.AccountClaimJobTests.test_pending_duplicate_is_one_ticket_and_changed_parameters_conflict)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 209, in test_pending_duplicate_is_one_ticket_and_changed_parameters_conflict
+    self.assertEqual("claimed", decode_account_response(self.pump(ticket), self.request())["state"])
+                                                        ~~~~~~~~~^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 119, in pump
+    self.assertLess(time.monotonic() - started, 10, "deferred claim did not finish")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.002698916010559 not less than 10 : deferred claim did not finish
+
+======================================================================
+FAIL: test_pending_duplicate_is_one_ticket_and_changed_parameters_conflict (tests.test_account_claim_jobs.AccountClaimJobTests.test_pending_duplicate_is_one_ticket_and_changed_parameters_conflict)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 69, in tearDown
+    self.assertLess(time.monotonic() - started, 10, "disposable workers did not drain")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.001516750024166 not less than 10 : disposable workers did not drain
+
+======================================================================
+FAIL: test_slow_signature_work_leaves_health_and_other_project_claim_available (tests.test_account_claim_jobs.AccountClaimJobTests.test_slow_signature_work_leaves_health_and_other_project_claim_available)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 197, in test_slow_signature_work_leaves_health_and_other_project_claim_available
+    self.assertEqual("claimed", decode_account_response(self.pump(other), request)["state"])
+                                                        ~~~~~~~~~^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 119, in pump
+    self.assertLess(time.monotonic() - started, 10, "deferred claim did not finish")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.002748832979705 not less than 10 : deferred claim did not finish
+
+======================================================================
+FAIL: test_slow_signature_work_leaves_health_and_other_project_claim_available (tests.test_account_claim_jobs.AccountClaimJobTests.test_slow_signature_work_leaves_health_and_other_project_claim_available)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_claim_jobs.py", line 69, in tearDown
+    self.assertLess(time.monotonic() - started, 10, "disposable workers did not drain")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10.00178158300696 not less than 10 : disposable workers did not drain
+
+----------------------------------------------------------------------
+Ran 19 tests in 247.011s
+
+FAILED (failures=24)

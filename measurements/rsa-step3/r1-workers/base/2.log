@@ -1,0 +1,295 @@
+.FF.FFFFFFFFFFFF.FF...FF...FF.FFFF
+======================================================================
+FAIL: test_C9_a_probe_admitted_but_never_launched_frees_its_worker_and_settles (tests.test_account_billing_jobs.AccountBillingJobTests.test_C9_a_probe_admitted_but_never_launched_frees_its_worker_and_settles)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 505, in test_C9_a_probe_admitted_but_never_launched_frees_its_worker_and_settles
+    self.take(self.begin())
+    ~~~~~~~~~^^^^^^^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 108, in take
+    self.until(ready)
+    ~~~~~~~~~~^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 95, in until
+    self.assertLess(time.monotonic(), end, 'fixed billing phases did not progress')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 432884.223258333 not less than 432884.2226135 : fixed billing phases did not progress
+
+======================================================================
+FAIL: test_C9_a_probe_admitted_but_never_launched_frees_its_worker_and_settles (tests.test_account_billing_jobs.AccountBillingJobTests.test_C9_a_probe_admitted_but_never_launched_frees_its_worker_and_settles)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 80, in stop
+    self.assertLess(time.monotonic(), end, 'actual fixture workers did not stop')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 432894.226499 not less than 432894.2240795 : actual fixture workers did not stop
+
+======================================================================
+FAIL: test_C9d_a_cleanup_request_that_always_fails_still_answers (tests.test_account_billing_jobs.AccountBillingJobTests.test_C9d_a_cleanup_request_that_always_fails_still_answers)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 691, in test_C9d_a_cleanup_request_that_always_fails_still_answers
+    self.take(self.begin())
+    ~~~~~~~~~^^^^^^^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 108, in take
+    self.until(ready)
+    ~~~~~~~~~~^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 95, in until
+    self.assertLess(time.monotonic(), end, 'fixed billing phases did not progress')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 432904.808494708 not less than 432904.807672125 : fixed billing phases did not progress
+
+======================================================================
+FAIL: test_C9d_a_cleanup_request_that_always_fails_still_answers (tests.test_account_billing_jobs.AccountBillingJobTests.test_C9d_a_cleanup_request_that_always_fails_still_answers)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 80, in stop
+    self.assertLess(time.monotonic(), end, 'actual fixture workers did not stop')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 432914.809668291 not less than 432914.809152833 : actual fixture workers did not stop
+
+======================================================================
+FAIL: test_C9d_a_failed_cleanup_request_is_asked_again (tests.test_account_billing_jobs.AccountBillingJobTests.test_C9d_a_failed_cleanup_request_is_asked_again)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 643, in test_C9d_a_failed_cleanup_request_is_asked_again
+    self.take(self.begin())
+    ~~~~~~~~~^^^^^^^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 108, in take
+    self.until(ready)
+    ~~~~~~~~~~^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 95, in until
+    self.assertLess(time.monotonic(), end, 'fixed billing phases did not progress')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 432925.025853 not less than 432925.02268625 : fixed billing phases did not progress
+
+======================================================================
+FAIL: test_C9d_a_failed_cleanup_request_is_asked_again (tests.test_account_billing_jobs.AccountBillingJobTests.test_C9d_a_failed_cleanup_request_is_asked_again)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 80, in stop
+    self.assertLess(time.monotonic(), end, 'actual fixture workers did not stop')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 432935.03328775 not less than 432935.026520375 : actual fixture workers did not stop
+
+======================================================================
+FAIL: test_C9d_a_kept_job_whose_worker_was_retired_does_not_fail_other_probes (tests.test_account_billing_jobs.AccountBillingJobTests.test_C9d_a_kept_job_whose_worker_was_retired_does_not_fail_other_probes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 752, in test_C9d_a_kept_job_whose_worker_was_retired_does_not_fail_other_probes
+    self.take(self.begin())
+    ~~~~~~~~~^^^^^^^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 108, in take
+    self.until(ready)
+    ~~~~~~~~~~^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 95, in until
+    self.assertLess(time.monotonic(), end, 'fixed billing phases did not progress')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 432945.2677215 not less than 432945.267200958 : fixed billing phases did not progress
+
+======================================================================
+FAIL: test_C9d_a_kept_job_whose_worker_was_retired_does_not_fail_other_probes (tests.test_account_billing_jobs.AccountBillingJobTests.test_C9d_a_kept_job_whose_worker_was_retired_does_not_fail_other_probes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 80, in stop
+    self.assertLess(time.monotonic(), end, 'actual fixture workers did not stop')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 432955.274654625 not less than 432955.268385916 : actual fixture workers did not stop
+
+======================================================================
+FAIL: test_C9d_a_transient_error_while_discarding_is_retried (tests.test_account_billing_jobs.AccountBillingJobTests.test_C9d_a_transient_error_while_discarding_is_retried)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 629, in test_C9d_a_transient_error_while_discarding_is_retried
+    self.take(self.begin())
+    ~~~~~~~~~^^^^^^^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 108, in take
+    self.until(ready)
+    ~~~~~~~~~~^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 95, in until
+    self.assertLess(time.monotonic(), end, 'fixed billing phases did not progress')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 432965.493072958 not less than 432965.492447083 : fixed billing phases did not progress
+
+======================================================================
+FAIL: test_C9d_a_transient_error_while_discarding_is_retried (tests.test_account_billing_jobs.AccountBillingJobTests.test_C9d_a_transient_error_while_discarding_is_retried)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 80, in stop
+    self.assertLess(time.monotonic(), end, 'actual fixture workers did not stop')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 432975.496999875 not less than 432975.493748 : actual fixture workers did not stop
+
+======================================================================
+FAIL: test_C9d_a_worker_held_by_a_kept_job_counts_as_stuck (tests.test_account_billing_jobs.AccountBillingJobTests.test_C9d_a_worker_held_by_a_kept_job_counts_as_stuck)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 732, in test_C9d_a_worker_held_by_a_kept_job_counts_as_stuck
+    self.take(self.begin())
+    ~~~~~~~~~^^^^^^^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 108, in take
+    self.until(ready)
+    ~~~~~~~~~~^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 95, in until
+    self.assertLess(time.monotonic(), end, 'fixed billing phases did not progress')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 432985.708314333 not less than 432985.703214458 : fixed billing phases did not progress
+
+======================================================================
+FAIL: test_C9d_a_worker_held_by_a_kept_job_counts_as_stuck (tests.test_account_billing_jobs.AccountBillingJobTests.test_C9d_a_worker_held_by_a_kept_job_counts_as_stuck)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 80, in stop
+    self.assertLess(time.monotonic(), end, 'actual fixture workers did not stop')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 432995.715868083 not less than 432995.708918666 : actual fixture workers did not stop
+
+======================================================================
+FAIL: test_C9d_settling_works_when_the_permit_was_never_installed (tests.test_account_billing_jobs.AccountBillingJobTests.test_C9d_settling_works_when_the_permit_was_never_installed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 604, in test_C9d_settling_works_when_the_permit_was_never_installed
+    self.take(self.begin())
+    ~~~~~~~~~^^^^^^^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 108, in take
+    self.until(ready)
+    ~~~~~~~~~~^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 95, in until
+    self.assertLess(time.monotonic(), end, 'fixed billing phases did not progress')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 433005.930174708 not less than 433005.922976666 : fixed billing phases did not progress
+
+======================================================================
+FAIL: test_C9d_settling_works_when_the_permit_was_never_installed (tests.test_account_billing_jobs.AccountBillingJobTests.test_C9d_settling_works_when_the_permit_was_never_installed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 80, in stop
+    self.assertLess(time.monotonic(), end, 'actual fixture workers did not stop')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 433015.932977666 not less than 433015.930955291 : actual fixture workers did not stop
+
+======================================================================
+FAIL: test_P2_a_probe_tries_its_identity_observation_once_more_before_failing (tests.test_account_billing_jobs.AccountBillingJobTests.test_P2_a_probe_tries_its_identity_observation_once_more_before_failing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 475, in test_P2_a_probe_tries_its_identity_observation_once_more_before_failing
+    self.assertEqual('completed', self.take(self.begin())['probe'])
+                                  ~~~~~~~~~^^^^^^^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 108, in take
+    self.until(ready)
+    ~~~~~~~~~~^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 95, in until
+    self.assertLess(time.monotonic(), end, 'fixed billing phases did not progress')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 433026.503983875 not less than 433026.501424458 : fixed billing phases did not progress
+
+======================================================================
+FAIL: test_P2_a_probe_tries_its_identity_observation_once_more_before_failing (tests.test_account_billing_jobs.AccountBillingJobTests.test_P2_a_probe_tries_its_identity_observation_once_more_before_failing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 80, in stop
+    self.assertLess(time.monotonic(), end, 'actual fixture workers did not stop')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 433036.5109615 not less than 433036.504806166 : actual fixture workers did not stop
+
+======================================================================
+FAIL: test_RS_A_G9_a_signature_return_after_the_sweep_ends_with_the_stored_answer (tests.test_account_billing_jobs.AccountBillingJobTests.test_RS_A_G9_a_signature_return_after_the_sweep_ends_with_the_stored_answer)
+Round 2 G9 (2): the job's signature work returns after the sweep committed, and the return is handled
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 208, in test_RS_A_G9_a_signature_return_after_the_sweep_ends_with_the_stored_answer
+    self.assertEndedWithStoredAnswer(ticket)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 157, in assertEndedWithStoredAnswer
+    answer = self.take(ticket)
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 108, in take
+    self.until(ready)
+    ~~~~~~~~~~^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 95, in until
+    self.assertLess(time.monotonic(), end, 'fixed billing phases did not progress')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 433047.544524625 not less than 433047.54344775 : fixed billing phases did not progress
+
+======================================================================
+FAIL: test_RS_A_G9_a_signature_return_after_the_sweep_ends_with_the_stored_answer (tests.test_account_billing_jobs.AccountBillingJobTests.test_RS_A_G9_a_signature_return_after_the_sweep_ends_with_the_stored_answer)
+Round 2 G9 (2): the job's signature work returns after the sweep committed, and the return is handled
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 80, in stop
+    self.assertLess(time.monotonic(), end, 'actual fixture workers did not stop')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 433057.547516833 not less than 433057.545071 : actual fixture workers did not stop
+
+======================================================================
+FAIL: test_commit_survives_local_retirement_fault_and_known_recovery_does_not_relaunch (tests.test_account_billing_jobs.AccountBillingJobTests.test_commit_survives_local_retirement_fault_and_known_recovery_does_not_relaunch)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 920, in test_commit_survives_local_retirement_fault_and_known_recovery_does_not_relaunch
+    self.take(ticket)
+    ~~~~~~~~~^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 108, in take
+    self.until(ready)
+    ~~~~~~~~~~^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 95, in until
+    self.assertLess(time.monotonic(), end, 'fixed billing phases did not progress')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 433068.594000083 not less than 433068.589194666 : fixed billing phases did not progress
+
+======================================================================
+FAIL: test_commit_survives_local_retirement_fault_and_known_recovery_does_not_relaunch (tests.test_account_billing_jobs.AccountBillingJobTests.test_commit_survives_local_retirement_fault_and_known_recovery_does_not_relaunch)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 80, in stop
+    self.assertLess(time.monotonic(), end, 'actual fixture workers did not stop')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 433078.595972833 not less than 433078.59463225 : actual fixture workers did not stop
+
+======================================================================
+FAIL: test_held_model_does_not_block_another_project_observation_or_health (tests.test_account_billing_jobs.AccountBillingJobTests.test_held_model_does_not_block_another_project_observation_or_health)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 872, in test_held_model_does_not_block_another_project_observation_or_health
+    self.until(lambda: self.billing._jobs[ticket].state == 'offered'
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+               and self.billing._jobs[ticket].supervisor.snapshot()['state'] == 'active')
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 95, in until
+    self.assertLess(time.monotonic(), end, 'fixed billing phases did not progress')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 433089.063374416 not less than 433089.058207583 : fixed billing phases did not progress
+
+======================================================================
+FAIL: test_held_model_does_not_block_another_project_observation_or_health (tests.test_account_billing_jobs.AccountBillingJobTests.test_held_model_does_not_block_another_project_observation_or_health)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 80, in stop
+    self.assertLess(time.monotonic(), end, 'actual fixture workers did not stop')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 433099.07008575 not less than 433099.064039166 : actual fixture workers did not stop
+
+======================================================================
+FAIL: test_service_reply_contains_no_private_answer (tests.test_account_billing_jobs.AccountBillingJobTests.test_service_reply_contains_no_private_answer)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 911, in test_service_reply_contains_no_private_answer
+    result = self.take(self.begin())
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 108, in take
+    self.until(ready)
+    ~~~~~~~~~~^^^^^^^
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 95, in until
+    self.assertLess(time.monotonic(), end, 'fixed billing phases did not progress')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 433109.28351425 not less than 433109.278947041 : fixed billing phases did not progress
+
+======================================================================
+FAIL: test_service_reply_contains_no_private_answer (tests.test_account_billing_jobs.AccountBillingJobTests.test_service_reply_contains_no_private_answer)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_jobs.py", line 80, in stop
+    self.assertLess(time.monotonic(), end, 'actual fixture workers did not stop')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 433119.284862916 not less than 433119.284148625 : actual fixture workers did not stop
+
+----------------------------------------------------------------------
+Ran 22 tests in 245.629s
+
+FAILED (failures=24)

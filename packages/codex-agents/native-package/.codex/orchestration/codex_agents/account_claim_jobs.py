@@ -322,6 +322,10 @@ class AccountClaimJobs:
                 if self._billing is not None and self._billing.owns_signature(notice.handle):
                     self._billing.finish_signature(notice.handle)
                     continue
+                if self._billing is not None and self._billing.owns_owner_signature(notice.handle):
+                    # Owner-API preparation need not have a billing ticket. Leave its return to that
+                    # owner; drive() below also forgets closed reservations once their workers stop.
+                    continue
                 ticket = self._signatures[notice.handle]
                 job = self._job(ticket)
                 if job.state != "pending":

@@ -383,6 +383,10 @@ class AccountBillingAdmission:
             self._signatures[reservation] = self._intake.capture_admission(reservation.project, 'claude', self._limits)
         return self._signatures[reservation]
 
+    def owns_signature(self, handle):
+        """Whether an owner-API preparation still retains this signature handle."""
+        return handle in self._signatures.values()
+
     def abort_reserved(self, reservation):
         """Drop only original unadmitted memory after its fixed jobs are stopped.
 

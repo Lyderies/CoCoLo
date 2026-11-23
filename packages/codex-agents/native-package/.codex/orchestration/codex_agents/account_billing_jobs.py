@@ -332,6 +332,9 @@ class AccountBillingJobs:
     def owns_signature(self, handle):
         return handle in self._signatures
 
+    def owns_owner_signature(self, handle):
+        return self._owner.owns_signature(handle)
+
     def finish_signature(self, handle):
         self._guard()
         ticket = self._signatures[handle]
