@@ -23,11 +23,46 @@ Code: packages/codex-agents/native-package/.codex/orchestration/codex_agents/ (R
 | B2-18 | service_record.py:175-250 (permanent set, backoff 1 min doubling to 30 min, health signals) | test_selection_invariants; test_permanent_refusals_do_not_starve; test_transient_retry_backoff; test_refusal_health_signal |
 | Schema 19 -> 20 | project_history.py:64,201-203,473,509,539 | SchemaStepTests (3) |
 
+Fix round 1 (reviews rev040b2r1a / rev040b2r1b). Tests: test_b2_service_outcome_paths.py (real orchestration end, idle end,
+ownership, missing orchestration, K1/K2/K3 by state, altered rows, receipt versions 1 and 2, swapped publications, a failed
+write), test_b2_service_outcome_hosts.py (the host's own authorization and the primary's record command through the history
+service), test_b2_service_outcome_sweep.py (sweep isolation, limits, starvation, health; the writer lane's publication and
+backstop request).
+
+| Finding | Fix | Tests |
+|---|---|---|
+| MED-1 | record_pass isolates each candidate (any non-HistoryError is a transient `unexpected_error`: backoff, an `error` health signal, cursor progress kept per candidate); the lane suppresses a failure of the record in the publication and of the pass in the cleanup request, so the cleanup always runs | SweepIsolationTests, LaneRecordingTests |
+| MED-2 | a missing or unverifiable orchestration view refuses (`history_unrecordable_orchestration_closed`) for the service entry and for every run with a stored context (K1, K3); only a primary-path run with no stored context (before D1) is let through | MissingOrchestrationTests |
+| L1 | `ServiceRecordAuthority(service=True)` requires the writer's runtime; the primary service path passes its own; the primary's default instance (no runtime) stays, owner decision 114.2 open | AuthorityLowsTests.test_L1 |
+| L2 | the race loser repeats the source and expected-field comparison before returning the winner's receipt | test_L2 |
+| L3 | `check` returns the one clock sample the eligibility decision was made on; the admission uses it | test_L3 |
+| L4 | health signals cleared on recovery, bounded by BACKOFF_MAP_LIMIT | SweepIsolationTests |
+| L5 | no orchestration SQL prefilter: the in-memory permanent set replaces it (design 4.6 deviation, see below) | test_L5, RealOrchestrationEndTests |
+| L7 | recorder key and foreign key deviation documented below | (document) |
+| L8 | status of already_recorded_by, the HM-0 check and the report corrected below | RecordCommandTests |
+| L9 | plain guidance for every new reason code and for history_result_expired (refusal_steps) | test_L9 |
+| L10 | the orchestration report passes the writer's runtime to the recording status | test_L10, AuthenticatedRequestTests |
+| limits | `limit` must be a positive int and is capped at SWEEP_ATTEMPTS; the window is `min(SWEEP_WINDOW, limit*16)` | SweepLimitTests |
+| permanent refusals | each carries a fingerprint (context, reservation, orchestration checkpoint); a changed state is tried again | test_a_permanent_refusal_is_tried_again... |
+| host class | an unsupported or other host class is `history_unrecordable_host_class`, not other_runtime | test_unsupported_host_class... |
+
 Deviations from the design text (also in the report): (1) `final_check` is a required keyword at the service entry
-only; at the primary's `admit_host_result` it defaults to the store's own ServiceRecordAuthority instance, so every
-existing caller keeps working and none can skip the predicate (any non-ServiceRecordAuthority is history_invalid_input).
+only; at the primary's `admit_host_result` it defaults to the store's own ServiceRecordAuthority instance (no runtime),
+so every existing caller keeps working and none can skip the predicate (any non-ServiceRecordAuthority is
+history_invalid_input); the primary's service path passes the writer's runtime (owner decision 114.2 open).
 (2) The `unrecordable:<reason>` labels are new history reason codes `history_unrecordable_<reason>` (expired reuses
-history_result_expired). (3) B2-10/B2-18 are store level: recording_status, health_signals; the CLI text, the
-`already_recorded_by` output and the HM-S8 monitor wiring are not done (they need the status/health surfaces).
-(4) The orchestration state in the tests is set through OrchestrationOwner._current; a real journal close/idle end is not
-driven end to end.
+history_result_expired). (3) B2-10/B2-18 are wired: the orchestration report carries the recording section (recorder,
+what waits, why something cannot be recorded, the unreviewed marker), the record command prints `already_recorded_by`
+(best effort), and the HM-0 `recording` check reads what the sweep published. The check is not registered by name in
+the health monitor's own list (the monitor is owner-wired) and the heuristic label `primary (before B2)` stays.
+(4) The recorder table is keyed by (project_id, record_id) with a foreign key to `history_identity(project_id)`, not by the
+claim/reservation key of the design (4.5): the receipt's record id outlives the reservation's retirement, and the
+foreign key is to the project identity row only, so a retired reservation never removes attribution. (5) No orchestration
+SQL prefilter (design 4.6): selection reads committed contexts with a live reservation through the live-state index, and
+the in-memory permanent set (fingerprinted) skips a refused run until its state changes. (6) The status lists runs whose
+context is still held; after a reservation retires, attribution is the recorder row only. (7) The orchestration state in
+the first module's tests is set through `OrchestrationOwner._current`; the fix-round modules drive the store's own close,
+interruption and idle end instead (the account's release of the run, `_account_released`, is the one control used there).
+(8) The host-authorization tests call the host's own `_authorize_history` and the history service directly, with the
+transport replaced by a direct call (no sockets, no collector); the record command's orchestration status and result
+read are answered by the same store.

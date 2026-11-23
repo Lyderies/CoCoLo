@@ -56,7 +56,7 @@ def _orchestration(history, orchestration_id):
         after = handles[-1][0]
 
 
-def orchestration_report(history, orchestration_id):
+def orchestration_report(history, orchestration_id, runtime_digest=None):
     """Counts for one orchestration. The work in this process is bounded by the
     orchestration's own runs (at most `MAX_RUNS`): rows are selected by SQLite and
     only this orchestration's are parsed here; a larger one is refused."""
@@ -126,7 +126,9 @@ def orchestration_report(history, orchestration_id):
     # B2-10: who recorded each outcome, what waits, what cannot be recorded (plain words in `lines`).
     try:
         from .service_record import ServiceRecordAuthority, recording_status
-        recording = recording_status(history, ServiceRecordAuthority(service=True), handle)
+        # The writer's own runtime decides what this service could record; a store read alone has none.
+        authority = ServiceRecordAuthority(runtime_digest=runtime_digest, service=runtime_digest is not None)
+        recording = recording_status(history, authority, handle)
     except HistoryError:
         recording = None  # too many held results to list: the counts above still stand
     usage_fields = tuple(empty_usage())

@@ -327,7 +327,7 @@ class AuthorityLowsTests(RealFixture):
 
     def test_L5_the_orchestration_prefilter_is_replaced_by_a_documented_permanent_set(self):
         self.assertIn('permanent', service_record.record_pass.__doc__)
-        source = open(service_record.__file__).read()
+        source = ' '.join(open(service_record.__file__).read().split())
         self.assertIn('replaces the design 4.6 orchestration prefilter', source)
 
     def test_L9_every_new_refusal_has_plain_guidance(self):

@@ -2843,8 +2843,8 @@ class ProjectHistory:
                 lost = True  # the other recorder committed first: this one writes nothing
             else:
                 # B2 (4.2): eligibility is decided from rows read here, inside the transaction, before any write.
-                final_check.check(self, binding, "K1", reservation=reservation)
-                now = self._result_now()
+                sampled = final_check.check(self, binding, "K1", reservation=reservation)
+                now = sampled if type(sampled) is int else self._result_now()  # one sample decides eligibility
                 if now < terminal["observed_at_ms"]:
                     raise HistoryError("history_result_expired")
                 for value, content in zip(checked, encoded):
@@ -2857,8 +2857,10 @@ class ProjectHistory:
             prior = self._connection.execute("SELECT * FROM records WHERE project_id=? AND record_id=?",
                                              (self.project_id, identity)).fetchone()
             known = self._entry(prior)
-            return self._known_receipt(known, parse_bounded_json(known.content), binding, reservation, before_commit,
-                                       final_check, recorder)
+            receipt = parse_bounded_json(known.content)
+            if known.source != "host" or any(receipt.get(name) != value for name, value in expected.items()):
+                raise HistoryError("history_conflict")  # the same comparison as a receipt known from the start
+            return self._known_receipt(known, receipt, binding, reservation, before_commit, final_check, recorder)
         return self._host_result_receipt(entry)
 
     def _known_receipt(self, entry, receipt, binding, reservation, before_commit, final_check, recorder):

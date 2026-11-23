@@ -412,7 +412,8 @@ class HistoryService:
             elif request.operation == 'history.orchestration_report':
                 from .project_orchestration_report import orchestration_report
                 self._history()
-                result = orchestration_report(self._store, request.payload['orchestration_id'])
+                result = orchestration_report(self._store, request.payload['orchestration_id'],
+                                             runtime_digest=self._runtime)
             elif request.operation == 'history.routing_evidence':
                 if authorization.host_result_context is None:
                     raise HistoryError('history_not_authorized')

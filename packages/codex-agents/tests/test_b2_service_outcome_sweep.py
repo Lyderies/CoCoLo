@@ -46,7 +46,7 @@ class SweepFixture(dr.LeaseBackedFixture):
         return [row[0] for row in self.store._connection.execute(
             service_record.WINDOW_SQL, (self.store.project_id, 0, 0, service_record.SWEEP_WINDOW))]
 
-    def drive(self, behave, *, passes=1, notes=None, start=0, step=1, **options):
+    def drive(self, behave, *, passes=1, notes=None, start=0, step=1, rewind=False, **options):
         seen = []
 
         def admit(binding, *, final_check):
@@ -60,6 +60,8 @@ class SweepFixture(dr.LeaseBackedFixture):
         counts = []
         with mock.patch.object(self.store, 'admit_service_result', side_effect=admit):
             for index in range(passes):
+                if rewind:
+                    self.store._purge_cursors['record'] = None
                 counts.append(service_record.record_pass(self.store, self.authority(), notes=notes,
                                                          clock=lambda at=start + index * step: at, **options))
         return seen, counts
@@ -109,7 +111,7 @@ class SweepIsolationTests(SweepFixture):
         seen, _ = self.drive(lambda binding: ValueError('x') if binding.claim_id == bad and failing[0] else None,
                              passes=1, start=0)
         failing[0] = False
-        seen, counts = self.drive(lambda binding: None, passes=1, start=10 ** 9)
+        seen, counts = self.drive(lambda binding: None, passes=1, start=10 ** 9, rewind=True)
         self.assertIn(bad, seen)
         self.assertEqual({}, counts[0]['refused'])
 
@@ -127,9 +129,9 @@ class SweepIsolationTests(SweepFixture):
         key = history_binding(1).claim_id
         for index in range(service_record.HEALTH_TRANSIENT_FAILURES):
             self.drive(lambda binding: 'history_result_unavailable' if binding.claim_id == key else None,
-                       start=(index + 1) * 10 ** 9, notes=notes)
+                       start=(index + 1) * 10 ** 9, notes=notes, rewind=True)
         self.assertEqual(1, len([s for s in service_record.health_signals(self.store) if s.startswith('transient:')]))
-        self.drive(lambda binding: None, start=10 ** 12, notes=notes)  # it recovers
+        self.drive(lambda binding: None, start=10 ** 12, notes=notes, rewind=True)  # it recovers
         self.assertEqual([], service_record.health_signals(self.store))
         self.assertEqual([], notes.snapshot()[1])
 
@@ -145,7 +147,7 @@ class SweepIsolationTests(SweepFixture):
         key = history_binding(1).claim_id
         for index in range(service_record.HEALTH_TRANSIENT_FAILURES - 1):
             self.drive(lambda binding: 'history_result_unavailable' if binding.claim_id == key else None,
-                       start=(index + 1) * 10 ** 9)
+                       start=(index + 1) * 10 ** 9, rewind=True)
             self.assertEqual([], service_record.health_signals(self.store), index)
 
     def test_the_backoff_doubles_from_one_minute_and_stops_at_half_an_hour(self):

@@ -84,19 +84,23 @@ def recorder_of(history, record_id: str) -> str | None:
 
 @dataclass(frozen=True)
 class ServiceRecordAuthority:
-    """The final predicate (4.3). `runtime_digest` is the writer's own runtime (None only for a store tested alone);
-    `service` is True at the service's own entry, where a run with no stored context cannot be recorded."""
+    """The final predicate (4.3). `runtime_digest` is the writer's own runtime: required at the service's own entry, and
+    supplied by the primary's service path; None only for a store used alone (the primary's default instance, owner
+    decision 114.2 still open). `service` is True at the service's own entry, where a run with no stored context
+    cannot be recorded."""
 
     runtime_digest: str | None = None
     service: bool = False
 
     def __post_init__(self):
         if ((self.runtime_digest is not None and not matches(self.runtime_digest, re.compile(r"[0-9a-f]{64}")))
-                or type(self.service) is not bool):
+                or type(self.service) is not bool
+                or (self.service and self.runtime_digest is None)):  # the service's own entry always has its runtime
             raise HistoryError("history_invalid_input")
 
-    def check(self, history, binding, phase: str, *, reservation=None, receipt=None) -> None:
-        """Raise a named HistoryError unless this admission may write (K1, K3) or may be read back (K2)."""
+    def check(self, history, binding, phase: str, *, reservation=None, receipt=None):
+        """Raise a named HistoryError unless this admission may write (K1, K3) or may be read back (K2). K1 and K3
+        return the one clock sample the decision was made on, so the admission uses the same instant (None for K2)."""
         from . import project_result_contexts as contexts
 
         if type(self) is not ServiceRecordAuthority or phase not in PHASES:
@@ -123,7 +127,7 @@ class ServiceRecordAuthority:
         if self.runtime_digest is not None and binding.runtime_digest != self.runtime_digest:
             raise HistoryError(UNRECORDABLE["other_runtime"])
         self._orchestration(history, binding, row)
-        self._reservation(history, binding, phase, reservation)
+        return self._reservation(history, binding, phase, reservation)
 
     def _orchestration(self, history, binding, row) -> None:
         from .orchestration_api import HOST_CLIENT_VERSIONS, OrchestrationScope, SCOPE_FIELDS
@@ -136,16 +140,20 @@ class ServiceRecordAuthority:
                 raise
             view = False  # not verifiable: refused like a closed one (4.3d)
         if view is None:
-            return  # a reference from before orchestrations were kept in the store (legacy, only when allowed)
+            # No checkpoint is kept for this reference. The service never records into it, and neither does any run
+            # with a stored context (it was reserved after orchestrations were kept in the store): a missing view is
+            # never an open one (4.3d). Only a primary-path run with no stored context (before D1) is let through.
+            if self.service or row is not None:
+                raise HistoryError(UNRECORDABLE["orchestration_closed"])
+            return
         if view is False or view["snapshot"]["status"] not in ("active", "paused"):
             raise HistoryError(UNRECORDABLE["orchestration_closed"])
         snapshot = view["snapshot"]
         if (snapshot["client_version"] not in HOST_CLIENT_VERSIONS
-                or (row is not None and row["host_class"] != snapshot["client_version"])
-                or (self.runtime_digest is not None and snapshot["scope"]["runtime_digest"] != self.runtime_digest)):
-            raise HistoryError(UNRECORDABLE["host_class"] if (row is not None and row["host_class"]
-                                                              != snapshot["client_version"])
-                               else UNRECORDABLE["other_runtime"])
+                or (row is not None and row["host_class"] != snapshot["client_version"])):
+            raise HistoryError(UNRECORDABLE["host_class"])
+        if self.runtime_digest is not None and snapshot["scope"]["runtime_digest"] != self.runtime_digest:
+            raise HistoryError(UNRECORDABLE["other_runtime"])
 
     @staticmethod
     def _reservation(history, binding, phase, before) -> None:
@@ -160,6 +168,7 @@ class ServiceRecordAuthority:
         now = history._result_now()
         if now >= current.expires_at_ms:
             raise HistoryError(UNRECORDABLE["expired"])
+        return now
 
 
 # The sweep ---------------------------------------------------------------------------------------------------------
@@ -175,36 +184,49 @@ WINDOW_SQL = (
 
 def record_pass(history, authority: ServiceRecordAuthority, *, limit: int = SWEEP_ATTEMPTS, clock=None,
                 notes=None) -> dict:
-    """One bounded pass: at most `limit` recording attempts over a window of `limit*16` committed contexts, from a
-    cursor that advances on every attempt (refusals too) and wraps. Selection input is only this project's contexts
-    still `committed` with a live reservation; the binding comes only from the sealed lease, the reference only from the
-    stored terminal (4.6). Permanent refusals are not retried until a restart; transient ones back off 1 min doubling
-    to 30 min. Returns counts and the refusals met."""
+    """One bounded pass: at most `limit` (never more than SWEEP_ATTEMPTS) recording attempts over a window of
+    `limit*16` committed contexts (never more than SWEEP_WINDOW), from a cursor that advances on every attempt (refusals
+    too, and a failure too) and wraps. Selection input is only this project's contexts still `committed` with a live
+    reservation; the binding comes only from the sealed lease, the reference only from the stored terminal (4.6).
+
+    Each candidate is isolated: a refusal is counted by its reason, and any other error is a transient `unexpected_error`
+    (backoff, a health signal) that never stops the pass or loses its progress. The in-memory `permanent` set replaces
+    the design 4.6 orchestration prefilter: a candidate refused for a reason that cannot change (a closed orchestration,
+    another runtime, ...) is skipped without another read until its own state changes (its fingerprint: context,
+    reservation and orchestration checkpoint), which also frees a refusal that later heals. Transient refusals back off
+    1 min doubling to 30 min. Returns counts and the refusals met."""
     from . import project_result_contexts as contexts
 
     history._require_owner()
     if type(authority) is not ServiceRecordAuthority or not authority.service:
         raise HistoryError("history_invalid_input")
+    if type(limit) is not int or limit < 1:
+        raise HistoryError("history_invalid_input")
+    limit = min(limit, SWEEP_ATTEMPTS)
+    size = min(SWEEP_WINDOW, limit * 16)
     now_ms = (clock or (lambda: time.time_ns() // 1_000_000))()
     state = history._record_sweep
     after = history._purge_cursors.get("record") or 0
     result = {"attempted": 0, "recorded": 0, "refused": {}, "already": 0}
     window = history._connection.execute(WINDOW_SQL, (history.project_id, after, history._result_now(),
-                                                      SWEEP_WINDOW)).fetchall()
+                                                      size)).fetchall()
     wrapped = False
     if not window and after:
         wrapped = True
         history._purge_cursors["record"] = None
         window = history._connection.execute(WINDOW_SQL, (history.project_id, 0, history._result_now(),
-                                                          SWEEP_WINDOW)).fetchall()
+                                                          size)).fetchall()
     last = None
     for position, run_handle, attempt in window:
         if result["attempted"] >= limit:
             break
         key = (run_handle, attempt)
         last = position
+        history._purge_cursors["record"] = position  # progress is kept whatever happens to this candidate
         if key in state["permanent"]:
-            continue
+            if state["permanent"][key][1] == _fingerprint(history, run_handle, attempt):
+                continue
+            _forget_permanent(state, key)  # its state changed: it may be recordable now
         waiting = state["backoff"].get(key)
         if waiting is not None and now_ms < waiting[0]:
             continue
@@ -217,15 +239,21 @@ def record_pass(history, authority: ServiceRecordAuthority, *, limit: int = SWEE
             reason = error.reason_code
             result["refused"][reason] = result["refused"].get(reason, 0) + 1
             if reason in PERMANENT_REASONS:
-                if len(state["permanent"]) >= BACKOFF_MAP_LIMIT:
-                    state["permanent"].pop(next(iter(state["permanent"])))
-                state["permanent"][key] = reason
+                while len(state["permanent"]) >= BACKOFF_MAP_LIMIT:
+                    _forget_permanent(state, next(iter(state["permanent"])))
+                state["permanent"][key] = (reason, _fingerprint(history, run_handle, attempt))
                 if reason in {"history_conflict", "history_incompatible"}:
-                    state["health"].add(("integrity", key))
+                    _signal(state, ("integrity", key))
             else:
                 _backoff(state, key, now_ms)
             continue
+        except Exception:  # any other failure of one candidate: a signal and a later retry, never the pass's end
+            result["refused"]["unexpected_error"] = result["refused"].get("unexpected_error", 0) + 1
+            _backoff(state, key, now_ms)
+            _signal(state, ("error", key))
+            continue
         state["backoff"].pop(key, None)
+        state["health"].difference_update({("transient", key), ("error", key)})  # it recovered
         result["recorded"] += 1
     if notes is not None:
         notes.publish(history.project_id, health_signals(history))
@@ -236,19 +264,46 @@ def record_pass(history, authority: ServiceRecordAuthority, *, limit: int = SWEE
     return result
 
 
+def _fingerprint(history, run_handle, attempt):
+    """What a permanent refusal depended on, read cheaply: the context's and the reservation's state and the
+    orchestration's latest checkpoint. A change in any of them lets the candidate be tried again."""
+    row = history._connection.execute(
+        "SELECT c.state,s.state,s.terminal_record_id,s.result_digest,o.sequence,o.checkpoint_digest "
+        "FROM project_result_contexts c LEFT JOIN result_reservations s ON s.project_id=c.project_id "
+        "AND s.run_handle=c.run_handle AND s.attempt=c.attempt LEFT JOIN project_orchestrations o "
+        "ON o.project_id=s.project_id AND o.orchestration_handle=s.orchestration_handle "
+        "WHERE c.project_id=? AND c.run_handle=? AND c.attempt=?", (history.project_id, run_handle, attempt)).fetchone()
+    return None if row is None else tuple(row)
+
+
+def _forget_permanent(state, key) -> None:
+    state["permanent"].pop(key, None)
+    state["health"].discard(("integrity", key))
+
+
+def _signal(state, signal) -> None:
+    """A health signal, kept within the same bound as the other in-memory sweep state."""
+    while len(state["health"]) >= BACKOFF_MAP_LIMIT and signal not in state["health"]:
+        state["health"].discard(next(iter(state["health"])))
+    state["health"].add(signal)
+
+
 def _backoff(state, key, now_ms) -> None:
     previous = state["backoff"].get(key)
     count = 1 if previous is None else previous[1] + 1
     delay = min(BACKOFF_LAST_MS, BACKOFF_FIRST_MS * (2 ** (count - 1)))
     if previous is None and len(state["backoff"]) >= BACKOFF_MAP_LIMIT:
-        state["backoff"].pop(next(iter(state["backoff"])))
+        dropped = next(iter(state["backoff"]))
+        state["backoff"].pop(dropped)
+        state["health"].difference_update({("transient", dropped), ("error", dropped)})
     state["backoff"][key] = (now_ms + delay, count)
     if count >= HEALTH_TRANSIENT_FAILURES:
-        state["health"].add(("transient", key))
+        _signal(state, ("transient", key))
 
 
 def health_signals(history) -> list:
-    """HM-S8 inputs (proposal): an integrity refusal once per claim, a transient failure after five in a row."""
+    """HM-S8 inputs (proposal): an integrity refusal once per claim, an unexpected error once per claim, a transient
+    failure after five in a row. A recovered run's signal is cleared; the set is bounded."""
     return sorted(f"{kind}:{key[0]}:{key[1]}" for kind, key in history._record_sweep["health"])
 
 
@@ -294,6 +349,11 @@ def _health_check_class():
                     findings.append(Finding(self.name, "project", subject, "reported", "recording_integrity",
                                             "A finished run's result could not be recorded because its stored "
                                             "records do not agree: run learning-status and keep the project's folder as it is.",
+                                            self.project_id))
+                elif kind == "error":
+                    findings.append(Finding(self.name, "project", subject, "reported", "recording_error",
+                                            "A finished run's result could not be recorded because of an unexpected "
+                                            "error: the service tries again; run learning-status, or restart it.",
                                             self.project_id))
                 else:
                     findings.append(Finding(self.name, "project", subject, "reported", "recording_stuck",

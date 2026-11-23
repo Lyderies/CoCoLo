@@ -52,6 +52,16 @@ EXACT = {
                                "with the inputs of its own open.",
     'history_unrecordable_orchestration_closed': "This orchestration has ended, so this run's result can no longer "
                                                  "be recorded; its report stays as it was (unrecorded).",
+    'history_unrecordable_other_runtime': "This run was made by another version of the service, so this service "
+                                          "cannot record it: its result stays unrecorded (start that version's service "
+                                          "if it must be recorded).",
+    'history_unrecordable_host_class': "This run belongs to the other host (Codex or Claude): record it from that "
+                                       "host's own session.",
+    'history_unrecordable_context_state': "This run's stored inputs are not in a state that can be recorded: run "
+                                          "learning-status, and open the run again if it never finished.",
+    'history_unrecordable_legacy_no_context': "This run was stored by an older version without its inputs, so only "
+                                              "its primary can record it: record it with the original inputs.",
+    'history_result_expired': "This result passed its retention time and was removed: dispatch the work again.",
     'service_refused_busy': "The service is busy with other connections: wait a moment, then try again.",
 }
 

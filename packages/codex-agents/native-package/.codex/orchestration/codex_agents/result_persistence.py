@@ -1021,7 +1021,7 @@ class ResultPersistenceLane:
         """B2 (decision 92.2 A): right after the result is safely stored, the writer records its outcome itself. A
         refusal is a normal outcome (the status names it) and the restart/backstop sweep tries again; nothing here
         can fail the publication, which is already committed."""
-        with contextlib.suppress(HistoryError, sqlite3.Error):
+        with contextlib.suppress(Exception):  # any failure: the sweep tries again and the status names what is left
             self._history().admit_service_result(binding, final_check=self._record_authority())
 
     def _acknowledge_terminal(self, pending):
@@ -1156,7 +1156,7 @@ class ResultPersistenceLane:
                     history.expire_result_leases(limit=10)
                 # B2 (decision 92.2 A): the backstop and the check after a restart: record what is committed and
                 # unrecorded. A refusal never stops the result cleanup below.
-                with contextlib.suppress(HistoryError, sqlite3.Error):
+                with contextlib.suppress(Exception):  # each candidate is isolated inside; this is the pass's own limit
                     service_record.record_pass(history, self._record_authority(), clock=history._result_now,
                                                notes=self.recording_notes)
                 result = history.expire_results(limit=10)
