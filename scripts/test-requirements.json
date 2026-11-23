@@ -210,6 +210,24 @@
   "source": "measurements/e1/requirements.md#E1-7",
   "statement": "**E1-7 \u2014 Wired into setup.** The collector step offers login start after the collector is ready, in setup (an update never asks), through the audited terminal runner; the existing Configure menu is unchanged. Test: tests.test_login_start.WiringTests.test_E1_7_setup_offers_login_start_after_the_collector_is_ready."
  },
+ "E1-WS": {
+  "checks": [
+   "root:test_setup_wizard_source.WizardSourceTests.test_commands_and_commit_screens_say_what_the_rule_and_commit_do",
+   "root:test_setup_wizard_source.WizardSourceTests.test_every_git_call_is_literal_and_never_porcelain",
+   "root:test_setup_wizard_source.WizardSourceTests.test_every_git_call_uses_the_trusted_binary_with_helpers_off",
+   "root:test_setup_wizard_source.WizardSourceTests.test_every_git_call_with_paths_is_literal",
+   "root:test_setup_wizard_source.WizardSourceTests.test_every_launch_uses_the_audited_builders",
+   "root:test_setup_wizard_source.WizardSourceTests.test_every_python_the_wizard_starts_is_isolated",
+   "root:test_setup_wizard_source.WizardSourceTests.test_header_and_welcome_name_the_product",
+   "root:test_setup_wizard_source.WizardSourceTests.test_provider_clients_are_never_run_by_name",
+   "root:test_setup_wizard_source.WizardSourceTests.test_the_builders_add_the_isolation_flags_and_gits_safety_settings",
+   "root:test_setup_wizard_source.WizardSourceTests.test_the_checks_reject_every_reviewed_bypass",
+   "root:test_setup_wizard_source.WizardSourceTests.test_the_git_builder_accepts_only_the_wizards_read_only_invocations",
+   "root:test_setup_wizard_source.WizardSourceTests.test_wizard_messages_for_the_polished_screens"
+  ],
+  "source": "measurements/e1/requirements.md#E1-WS",
+  "statement": "**E1-WS \u2014 Wizard source safety.** The Python setup wizard keeps the source-level safety properties setup.sh's source tests checked (audited launch builders, literal non-porcelain git with the trusted binary and helpers off, isolated Python, provider clients never run by name, product naming and screen wording). Source: tests/test_setup_wizard_source.py module docstring (S5) and owner decision 112b A (2026-11-24)."
+ },
  "G1": {
   "checks": [],
   "source": "PLAN-0.4.0.md T7",

@@ -11,3 +11,5 @@
 **E1-6 — Refusals.** A relative command path, a symlinked entry path or an unsupported system is refused with a plain reason and changes nothing. Tests: tests.test_login_start.InstallTests.test_E1_6_refusals_change_nothing, tests.test_login_start.OfferTests.test_E1_6_unsupported_system_is_not_asked.
 
 **E1-7 — Wired into setup.** The collector step offers login start after the collector is ready, in setup (an update never asks), through the audited terminal runner; the existing Configure menu is unchanged. Test: tests.test_login_start.WiringTests.test_E1_7_setup_offers_login_start_after_the_collector_is_ready.
+
+**E1-WS — Wizard source safety.** The Python setup wizard keeps the source-level safety properties setup.sh's source tests checked (audited launch builders, literal non-porcelain git with the trusted binary and helpers off, isolated Python, provider clients never run by name, product naming and screen wording). Source: tests/test_setup_wizard_source.py module docstring (S5) and owner decision 112b A (2026-11-24).
