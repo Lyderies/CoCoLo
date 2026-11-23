@@ -79,3 +79,22 @@ No accepted test function was deleted and no existing expected value was relaxed
 - M1: sampled/observed coverage equality at `packages/codex-agents/tests/merge_library_support.py:971` keeps the same equality assertion but strengthens its operands to actual operation names, so fsync cannot satisfy fullfsync coverage. Portable replay keys remain normalized. Witness at `packages/codex-agents/tests/test_merge_library_r2.py:22` verifies each kind and both-kind positive controls; generator grouping at `scripts/generate_merge_samples.py:13` matches it.
 - M4: existing generated-EIO own-report assertions at `packages/codex-agents/tests/test_merge_library_review.py:18` are unchanged; `packages/codex-agents/tests/test_merge_library_review.py:101` adds omission controls, exact failure counts/messages and boundary provenance.
 - M5/M6 add the new named tests in `packages/codex-agents/tests/test_merge_library_r2.py:52` through `packages/codex-agents/tests/test_merge_library_r2.py:155`; all earlier close/read/cancel/retry assertions remain. No historical LOW ledger gaps were repaired in this pass.
+
+## Round-3 assertion replacements
+
+No test function was deleted and no expected value was relaxed. p07 and p08 add enforcing comparisons; p09 retains all existing assertions and adds captured exceptions to the collection already asserted empty.
+
+| Original p10 assertion at 9c18c4a3 | Unchanged assertion in bounded child |
+|---|---|
+| `packages/codex-agents/tests/test_merge_library_contract.py:228` `self.assertFalse(worker.is_alive())` | `packages/codex-agents/tests/test_merge_library_contract.py:270` |
+| `packages/codex-agents/tests/test_merge_library_contract.py:232` `self.assertEqual(order, [t.child_id for t in ml.queue(self.f.project, self.f.private)])` | `packages/codex-agents/tests/test_merge_library_contract.py:274` |
+| `packages/codex-agents/tests/test_merge_library_contract.py:233` `self.assertEqual(order, fresh_queue(self.f))` | `packages/codex-agents/tests/test_merge_library_contract.py:275` |
+| `packages/codex-agents/tests/test_merge_library_contract.py:235` `self.assertEqual(order, [t.child_id for t in ml.queue(self.f.project, self.f.private)])` | `packages/codex-agents/tests/test_merge_library_contract.py:277` |
+| `packages/codex-agents/tests/test_merge_library_contract.py:239` `self.assertEqual('refused', blocked.state)` | `packages/codex-agents/tests/test_merge_library_contract.py:281` |
+| `packages/codex-agents/tests/test_merge_library_contract.py:240` `self.assertEqual(before, tree(self.f.project))` | `packages/codex-agents/tests/test_merge_library_contract.py:282` |
+| `packages/codex-agents/tests/test_merge_library_contract.py:241` `self.assertFalse(any((r.state == 'landed' for r in ml.history(self.f.project, self.f.private))))` | `packages/codex-agents/tests/test_merge_library_contract.py:283` |
+| `packages/codex-agents/tests/test_merge_library_contract.py:242` `self.assertEqual(order, [q.child_id for q in ml.queue(self.f.project, self.f.private)])` | `packages/codex-agents/tests/test_merge_library_contract.py:284` |
+| `packages/codex-agents/tests/test_merge_library_contract.py:244` `self.assertEqual('landed', self.f.land(next((b for b in batches if b.child_id == child))).state)` | `packages/codex-agents/tests/test_merge_library_contract.py:286` |
+| `packages/codex-agents/tests/test_merge_library_contract.py:245` `self.assertEqual(order, [r.batch.child_id for r in ml.history(self.f.project, self.f.private) if r.state == 'landed'])` | `packages/codex-agents/tests/test_merge_library_contract.py:287` |
+
+The original named method remains at `packages/codex-agents/tests/test_merge_library_contract.py:251` and calls the bounded child. The wrapper at `packages/codex-agents/tests/test_merge_library_contract.py:35` reaps normal, failed and timed-out children; `packages/codex-agents/tests/test_merge_library_r3.py:119` checks the old leak and explicit timeout reaping. p09 keeps the original `assertEqual([], errors)` at `packages/codex-agents/tests/test_merge_library_adversarial.py:209` while `packages/codex-agents/tests/test_merge_library_adversarial.py:183` records final-reader exceptions. p08 tree enumeration now raises rather than silently omitting unreadable contents; recovery adds the evidence-presence assertion at `packages/codex-agents/tests/merge_library_support.py:955`. All old support assertions remain. Historical LOW citation/ledger gaps are listed, not repaired.

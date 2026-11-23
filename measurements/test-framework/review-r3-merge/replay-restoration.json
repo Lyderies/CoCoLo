@@ -1,0 +1,9 @@
+{
+ "base": "9c18c4a3",
+ "restored_sha256": {
+  "packages/codex-agents/native-package/.codex/orchestration/codex_agents/merge_library.py": "dec64b0f7595b7096100f576fc137b8a571d26782e358212d2c1e6c55e3764ce",
+  "packages/codex-agents/tests/merge_library_support.py": "593385418f94d28b6710741c3b8a8861d8666e31290dc0f8672c27edce4eaa23",
+  "packages/codex-agents/tests/test_merge_library_adversarial.py": "c2847b488a47b3d430d63428266f164d0eac31fc6932fbf0262365e4e7e6de89",
+  "packages/codex-agents/tests/test_merge_library_contract.py": "44893cf8ac8f6f5201aeb6776f535347b04d9e2d89596c42d73e11ce324be757"
+ }
+}
