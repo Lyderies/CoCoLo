@@ -1322,8 +1322,9 @@
  },
  "TF-23": {
   "checks": [
-   "root:test_test_framework_r3.RoundThree.test_TF23_declared_fixes_require_red_green_and_positive_control",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_exact_primary_restoration_matches_installed_release"
+   "root:test_product_dependencies.ProductDependencies.test_migration_rejects_wrong_provenance_and_changed_test_identity",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_exact_primary_restoration_matches_installed_release",
+   "root:test_test_framework_r3.RoundThree.test_TF23_declared_fixes_require_red_green_and_positive_control"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-23",
   "statement": "**TF-23 \u2014 Review witnesses need falsifiable evidence.** Every new or changed review-fix witness must name its requirement, positive control, an old-code red run at the reviewed base revision (round 3: `9c18c4a3`) with the intended failure diagnostic, and its green run after the fix. For a witness-only repair, the red must show that the old witness accepts a deliberately invalid result; the repaired witness must reject that same result and accept the valid control. A small committed evidence manifest declares each fix and its witnesses. A framework check rejects a declared fix without a requirement, positive control, reviewed base, red-run evidence/diagnostic, or green-run evidence. Referenced evidence files must exist and record the stated outcome. Human review verifies that the diagnostic and control prove the requirement; mechanical presence checks do not replace that judgment. No changed assertion may be omitted from the assertion ledger."
@@ -1354,6 +1355,18 @@
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-25",
   "statement": "**TF-25 \u2014 Narrow release bookkeeping may rebind its existing proof.** The only eligible files are `packages/claude-agents/previous-releases.json`, `packages/claude-agents/src/claude_agents/packaging.py`, and `packages/claude-agents/tests/test_previous_release_catalogue.py`. Accept exactly one appended catalogue record for the explicitly named previous installed release, whose version and compiled bundle/files match its trusted Git source revision; preserve every existing record and the catalogue schema. In the test file permit only the two existing catalogue-size assertions (`test_the_shipped_catalogue_is_accepted`, `test_cl1_a_catalogue_up_to_2_mib_is_accepted`) to increase from N to N+1 and their mechanically derived release-list comment. Preserve all other assertion operands, limits, test bodies, helpers, imports and comments. In packaging.py permit only the corresponding canonical release/source annotation on its existing pinned digest; a previously unpinned digest or any executable change requires ordinary proof review, not this routine path. This covers routine version bumps sharing an already reviewed bundle; new bundle/pin semantics remain subject to normal review. Reject removed/reordered/modified existing records, extra records, mismatched source/version/bundle, unpaired or excessive count changes, and every other edit in these files.\n\nAn explicit `scripts/rebind_release_bookkeeping.py` command verifies a trusted pre-bookkeeping revision against the existing discovered catalogue-test bindings before admitting any replacement. Compute the before and after bindings in isolated temporary snapshots using the same fingerprint implementation and pinned interpreter, and require identical test IDs. Restrict rebinding to those already-grandfathered catalogue tests; never restore retired tests or admit new tests. Publish a new immutable release-named binding file with before/after source hashes and Git provenance, refusing overwrite. At run time verify immutable introduction, the permitted source transition and the binding chain, then compare the current test/helper/value fingerprints normally. Changing an admitted file later must still fail. Prior immutable baselines, including 11d36a06, remain unchanged. The initial repair restores all three files exactly from primary 0ca9c36f/30bf1fa9 and advances both count assertions from 9 to 10 for installed 0.8.49. Positive and mutation controls, actual command/runner integration, and TF-23 red/green evidence are required."
+ },
+ "TF-26": {
+  "checks": [
+   "root:test_product_dependencies.ProductDependencies.test_assertion_edit_and_rename_still_fail_legacy_gate",
+   "root:test_product_dependencies.ProductDependencies.test_migration_rejects_wrong_provenance_and_changed_test_identity",
+   "root:test_product_dependencies.ProductDependencies.test_product_only_constant_and_implementation_changes_keep_legacy_proof",
+   "root:test_product_dependencies.ProductDependencies.test_product_symbol_identity_changes_are_not_ignored",
+   "root:test_product_dependencies.ProductDependencies.test_source_ownership_wins_over_test_looking_product_alias",
+   "root:test_product_dependencies.ProductDependencies.test_test_owned_helper_and_constant_edits_still_flag"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-26",
+  "statement": "**TF-26 \u2014 Legacy proof fingerprints describe test-owned code, not product implementation.** Refine TF-7: source, bytecode, captured state and constant values belong in a legacy fingerprint only when owned by the test module, its fixtures or its shared test helpers. Ownership follows the defining source file (including unwrapped decorators), not an imported alias or a product class's name. Test directories, helpers alongside the defining test module, and declared test fixture sources are test-owned; shipped product roots take precedence and are never test-owned. Product functions/classes and imported product constants, including source-derived runtime digests, are referenced by module and qualified attribute identity. Their implementation/source/value changes alone must not invalidate a legacy proof, including when reached transitively through shared fixtures. Changing which product symbol a test references still changes its proof. A changed test-owned helper, constant/default/closure, assertion or legacy ID must continue to fail the existing gate. Unresolved dynamic test-owned state remains fail-closed; this rule is not an exemption for arbitrary fixture changes.\n\nPublish an immutable `test-owned-v1` dependency baseline generated from trusted `5ab0a9d3`, with full source revision, generator/algorithm provenance, unchanged test IDs and unchanged implementation fingerprints. Compare the old discovery against its admitted baseline before translating dependencies; refuse a candidate test/helper edit, new or retired ID, or an overwritten baseline. Only dependency hashes are translated; retain the existing shrink-only lists and implementation checks. Runtime validation verifies immutable introduction, trusted provenance, and identity/fingerprint agreement before using a translated dependency record; later test/helper changes still face ordinary comparison. Existing release-bookkeeping records retain their original hashing interpretation; later records carry the new dependency interpretation as well so TF-25 remains usable without rewriting an old binding. TF-23 witnesses include the actual RSA product-only edit at old 5ab0a9d3, identity-preserving product changes, helper and test-edit/rename controls, migration tamper controls, and green results with the new version. No product test assertions are changed to accommodate this policy."
  },
  "TF-3": {
   "checks": [
@@ -1441,6 +1454,16 @@
  },
  "TF-7": {
   "checks": [
+   "root:test_product_dependencies.ProductDependencies.test_assertion_edit_and_rename_still_fail_legacy_gate",
+   "root:test_product_dependencies.ProductDependencies.test_migration_rejects_wrong_provenance_and_changed_test_identity",
+   "root:test_product_dependencies.ProductDependencies.test_product_only_constant_and_implementation_changes_keep_legacy_proof",
+   "root:test_product_dependencies.ProductDependencies.test_product_symbol_identity_changes_are_not_ignored",
+   "root:test_product_dependencies.ProductDependencies.test_source_ownership_wins_over_test_looking_product_alias",
+   "root:test_product_dependencies.ProductDependencies.test_test_owned_helper_and_constant_edits_still_flag",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_claimed_pre_bump_commit_cannot_hide_old_record_edits",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_immutable_binding_tampering_is_rejected",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_later_edits_to_each_admitted_file_still_fail_metadata",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebinding_retains_retirement_and_catches_later_fingerprint_edits",
    "root:test_test_framework.MetadataTests.test_legacy_list_cannot_grow_restore_entries_change_fingerprints_or_rename_tests",
    "root:test_test_framework.MetadataTests.test_migration_removes_legacy_entry_and_new_tagged_proof_is_required",
    "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
@@ -1464,19 +1487,15 @@
    "root:test_test_framework.ReviewLifecycleTests.test_C3_C13_cross_module_helper_is_found_by_source_path",
    "root:test_test_framework.ReviewLifecycleTests.test_C9_assertion_free_lifecycle_check_fails_the_real_gate",
    "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards",
+   "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration",
+   "root:test_test_framework_integration.ReleaseIntegration.test_explicit_base_is_documented_and_missing_base_stops_before_discovery",
+   "root:test_test_framework_integration.ReleaseIntegration.test_release_overlay_is_immutable_and_candidate_changes_are_rejected",
    "root:test_test_framework_r2.RoundTwo.test_M1_unrelated_source_cannot_resolve_a_specific_dependency",
    "root:test_test_framework_r2.RoundTwo.test_N1_same_basename_dependencies_both_contribute",
    "root:test_test_framework_r3.RoundThree.test_p01_closure_fixture_state_invalidates_metadata",
    "root:test_test_framework_r3.RoundThree.test_p01_positional_and_keyword_defaults_are_dependencies",
    "root:test_test_framework_review.ReviewTests.test_fixture_and_transitive_helper_changes_change_dependency_fingerprint",
-   "root:test_test_framework_review.ReviewTests.test_missing_trusted_base_fails_closed_without_using_candidate_head",
-   "root:test_test_framework_integration.ReleaseIntegration.test_release_overlay_is_immutable_and_candidate_changes_are_rejected",
-   "root:test_test_framework_integration.ReleaseIntegration.test_explicit_base_is_documented_and_missing_base_stops_before_discovery",
-   "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebinding_retains_retirement_and_catches_later_fingerprint_edits",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_claimed_pre_bump_commit_cannot_hide_old_record_edits",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_later_edits_to_each_admitted_file_still_fail_metadata",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_immutable_binding_tampering_is_rejected"
+   "root:test_test_framework_review.ReviewTests.test_missing_trusted_base_fails_closed_without_using_candidate_head"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-7",
   "statement": "**TF-7 \u2014 Grandfather only the unchanged baseline, and only shrink it.** Generate and commit the initial\nlegacy list from discovery on `a1d25560`, recording full suite/test IDs, baseline commit and a SHA-256 source\nfingerprint of the test implementation (including an inherited implementation's defining source and class\nsetup/teardown sources). Include the effective setUp/tearDown/setUpClass/tearDownClass definitions across\nthe MRO, module setUpModule/tearDownModule, and repository-local functions/classes transitively referenced\nby those fixtures or the test body (including imported shared fixture helpers). External stdlib/test-tool\nimplementations are excluded; their versions are independently pinned. Resolve dependencies by module\nand qualified name with cycle detection; unresolved dynamic helper dependencies need an explicit declared\nsource dependency, otherwise fail closed for grandfather eligibility. Keep deterministic sorted output and the generator command. The list exempts only\nmissing requirement/rationale metadata. Compare later lists against an immutable initial ceiling AND the\nreview base version: reject additions, restored removed entries, changed fingerprints or a replaced baseline.\nRenamed, overridden or changed tests must be tagged and removed from the list; missing/stale IDs must be\nremoved. Duplicate IDs are rejected. Witness: add a new test, rename a legacy test, edit its assertion or a shared fixture/helper, grow\nthe list, re-add a migrated entry, or replace its fingerprint; each fails. A tagged migration removes the entry\nand passes. The checker must fail closed if the review-base comparison cannot be made; use an explicit base\ncommit argument locally and a trusted CI merge-base; never trust a base supplied by the candidate manifest itself\nor silently substitute candidate HEAD. Missing or unavailable trusted base fails closed."
