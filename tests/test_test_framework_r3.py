@@ -57,7 +57,9 @@ class RoundThree(unittest.TestCase):
                 source='import unittest\nEXPECTED=1\ndef helper('+signature+'):\n    return value\nclass Case(unittest.TestCase):\n    def test_value(self): self.assertEqual(1,helper())\n'
                 module=self.module('test_r3_defaults',source);case=module.Case('test_value');before=fw.describe_test(case)
                 result=unittest.TestResult();case.run(result);self.assertTrue(result.wasSuccessful());self.assertIsNotNone(before['dependency_values'])
-                module.EXPECTED=2;exec(compile('def helper('+signature+'):\n    return value\n',module.__file__,'exec'),vars(module))
+                module.EXPECTED=2
+                if signature.startswith('*'): module.helper.__kwdefaults__={'value':module.EXPECTED}
+                else: module.helper.__defaults__=(module.EXPECTED,)
                 result=unittest.TestResult();case.run(result);self.assertEqual(1,len(result.failures))
                 self.assertNotEqual(before,fw.describe_test(case),'p01 default-only behavior change kept identical metadata')
 
