@@ -107,9 +107,18 @@ class WorkerTests(unittest.TestCase):
             code, output, result = self.probe(body, 'component', bootstrap=bootstrap)
             self.assertNotEqual(0, code, output)
             self.assertTrue(result['violations'])
-        code, output, _ = self.probe("import asyncio\nasyncio.run(asyncio.open_unix_connection('absent-fixture.sock'))", 'component')
-        self.assertNotEqual(0, code, output)
-        self.assertIn('socket', output)
+        for layer in ('unit', 'component'):
+            for api in ("asyncio.open_unix_connection('fixture.sock')", "asyncio.start_unix_server(lambda r,w: None,'fixture.sock')"):
+                bootstrap = 'import asyncio,builtins; builtins.TF_LOOP=asyncio.new_event_loop()'
+                body = ("import asyncio,builtins\nfrom pathlib import Path\nasync def exercise():\n    Path('async-reached').write_text('yes')\n    await " + api +
+                        "\ntry:\n    builtins.TF_LOOP.run_until_complete(exercise())\nexcept Exception:\n    pass\nfinally:\n    builtins.TF_LOOP.close()")
+                code, output, result = self.probe(body, layer, bootstrap=bootstrap)
+                self.assertTrue(result['markers']['async-reached'], 'p04 Unix coroutine not reached')
+                self.assertNotEqual(0, code, 'p04 Unix operation allowed: ' + api)
+                self.assertIn('socket', output)
+                self.assertTrue(any('socket' in v['operation'] for v in result['violations']))
+                self.assertFalse(any('socketpair' in v['operation'] for v in result['violations']))
+                self.assertFalse(result['markers']['fixture.sock'])
 
     @requirements('TF-12', why_not_scenario='Verify blocking unit waits fail but ready events and nonblocking polls pass using isolated framework fixtures.')
     def test_blocking_unit_waits_fail_but_ready_events_and_nonblocking_polls_pass(self):
@@ -492,7 +501,7 @@ class RunnerIntegrationTests(unittest.TestCase):
             git('checkout', '-b', 'feature'); git('commit', '--allow-empty', '-m', 'feature')
             git('checkout', 'main'); git('commit', '--allow-empty', '-m', 'advanced base'); advanced = git('rev-parse', 'HEAD')
             git('checkout', 'feature')
-            env = {**os.environ, 'PR_BASE': '', 'PUSH_BASE': '', 'GITHUB_ENV': str(root / 'environment')}
+            env = {**os.environ, 'EVENT_NAME': 'pull_request', 'EVENT_REF': 'refs/pull/1/merge', 'PR_BASE': '', 'PUSH_BASE': '', 'GITHUB_ENV': str(root / 'environment')}
             missing = subprocess.run(['bash', '-e', '-c', shell], cwd=root, env=env, capture_output=True, text=True, timeout=5)
             self.assertNotEqual(0, missing.returncode)
             self.assertFalse((root / 'environment').exists())
@@ -548,7 +557,11 @@ class RunnerIntegrationTests(unittest.TestCase):
             for part in ('1/2','2/2'):
                 code, output, report = self.run_fixture(fixture_source=source, fixture_checks=sorted(expected), estimates={'root:test_probe':40}, extra_args=('--shard',part))
                 self.assertEqual(0, code, output)
-                outcomes={name:status for w in report['workers'] for name,status in w['outcomes'].items()}
+                executions=[(name,status) for w in report['workers'] for name,status in w['outcomes'].items()]
+                self.assertEqual(len(executions),len({name for name,status in executions}), 'p04 repeated worker outcome')
+                self.assertEqual(sum(w['tests'] for w in report['workers']),len(executions), 'p04 worker test counts disagree')
+                self.assertTrue(all(status=='passed' for name,status in executions))
+                outcomes=dict(executions)
                 self.assertTrue(outcomes, 'M7 shard did not execute a worker')
                 self.assertEqual({'passed'}, set(outcomes.values()))
                 observed.extend(outcomes); partitions.append(sorted(outcomes))

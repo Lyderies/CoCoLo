@@ -416,7 +416,9 @@
    "root:test_test_framework_guards.RunnerIntegrationTests.test_runner_counts_structured_results_and_saves_only_current_job_seconds",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_worker_secrets_are_stripped_and_temporary_roots_are_isolated",
    "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error",
-   "root:test_test_framework_guards.WorkerTests.test_review_C8_discovery_and_shards_have_a_stable_disjoint_union"
+   "root:test_test_framework_guards.WorkerTests.test_review_C8_discovery_and_shards_have_a_stable_disjoint_union",
+   "root:test_test_framework_r3.RoundThree.test_p04_shard_witness_rejects_duplicate_original_worker_records",
+   "root:test_test_framework_r3.RoundThree.test_p05_CI_selects_trusted_bases_for_supported_events"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-1",
   "statement": "**TF-1 \u2014 Retain the supported runner and isolation.** Keep unittest and `scripts/parallel_tests.py`, the three\nsuites, module/stage/shard selection, separate worker processes and per-worker temporary directories, secret\nstripping, and bounded worker teardown. A full normal run uses the runner's DEFAULT job count (no fixed 6).\nSharding/module splitting must not omit or duplicate tests. Preserve existing `load_tests` discovery hooks.\nWitness: discovery and execution of inherited, ordinary, `load_tests`-filtered and generated unittest cases;\nstable shard partition; failing worker and import error both make the\nrunner nonzero; child environments omit fixture secrets; concurrent workers have distinct temporary roots\nand cannot see each other's fixture files; an intentionally stuck worker and its owned descendants are\nreaped within the configured teardown bound with diagnostics; default jobs remains `max(1, (os.cpu_count() or 2) - 2)`."
@@ -439,7 +441,9 @@
    "root:test_test_framework_guards.WorkerTests.test_inherited_socket_methods_and_asyncio_have_no_guard_exemption",
    "root:test_test_framework_guards.WorkerTests.test_review_A9_discovery_hooks_keep_the_declared_guard",
    "root:test_test_framework_guards.WorkerTests.test_review_C5_inherited_and_convenience_socket_apis_in_both_layers",
-   "root:test_test_framework_guards.WorkerTests.test_socket_creation_pair_bind_and_resolution_are_denied"
+   "root:test_test_framework_guards.WorkerTests.test_socket_creation_pair_bind_and_resolution_are_denied",
+   "root:test_test_framework_r3.RoundThree.test_p04_unix_witness_rejects_permitted_async_operations",
+   "root:test_test_framework_r3.RoundThree.test_p05_connected_socket_io_is_sticky_in_both_layers"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-11",
   "statement": "**TF-11 \u2014 Refuse real sockets in unit/component.** Deny socket creation/connect/bind and applicable address\nresolution/network APIs before OS effects; include AF_UNIX and AF_INET and socketpair. Patch/audit supported\nstdlib entry points without blocking construction of test doubles. Explicitly refuse socket.socket,\nsocket.socketpair, socket.create_connection, socket.create_server, socket.fromfd and socket.fromshare\n(where available), connect/connect_ex/bind/listen/accept/sendto/sendmsg, and getaddrinfo/gethostbyname/\ngethostbyname_ex/gethostbyaddr/getnameinfo. Cover asyncio open_connection/start_server and Unix variants\nthrough the same underlying guards; there is no asyncio exemption without an explicit evidence-backed\nrequirement change. Existing creation/connect/bind/socketpair protections remain mandatory. The denial is sticky as in TF-10. Witness:\nimport-time creation, bind/connect, socketpair and caught denial fail without creating socket files or contacting\na service; in-memory transport fakes pass. Allowed-layer probes use only local fixture sockets."
@@ -487,6 +491,8 @@
    "root:test_test_framework_r2.RoundTwo.test_M2_function_local_import_keeps_golden_provenance",
    "root:test_test_framework_r2.RoundTwo.test_M2_package_import_keeps_golden_provenance",
    "root:test_test_framework_r2.RoundTwo.test_M2_qualified_and_renamed_imports_retain_golden_provenance",
+   "root:test_test_framework_r3.RoundThree.test_p01_M2_submodule_aliases_and_relative_imports",
+   "root:test_test_framework_r3.RoundThree.test_p06_matching_golden_requires_provenance_and_update_repairs_it",
    "root:test_test_framework_review.ReviewTests.test_direct_golden_read_and_assert_bypass_is_rejected",
    "root:test_test_framework_review.ReviewTests.test_temporary_helper_output_and_unrelated_owner_files_are_not_repository_goldens"
   ],
@@ -579,6 +585,13 @@
   "source": "REQUIREMENTS-test-framework.md#TF-22",
   "statement": "**TF-22 \u2014 Review checkpoints and evidence.** Step reports are under 15 lines each and name commits,\nrequirements -> red/green or measurement evidence, every assertion replacement, and open issues. Owner subsequently set the next review stop after step 3 (step-1 review r1). Apply that stop before proceeding to steps 4\u20135. Use only own worktrees/branches; never push, install outside the authorized temporary test environment, or modify the\ncontrol project or 0.3.3. Step 2 is authorized; step 3 rebases the existing merge\nbranch only after step 2 is committed. Acceptance includes macOS and Linux / Python 3.11 evidence or an\nexplicit outstanding platform gate; this Mac run alone cannot prove portability."
  },
+ "TF-23": {
+  "checks": [
+   "root:test_test_framework_r3.RoundThree.test_TF23_declared_fixes_require_red_green_and_positive_control"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-23",
+  "statement": "**TF-23 \u2014 Review witnesses need falsifiable evidence.** Every new or changed review-fix witness must name its requirement, positive control, an old-code red run at the reviewed base revision (round 3: `9c18c4a3`) with the intended failure diagnostic, and its green run after the fix. For a witness-only repair, the red must show that the old witness accepts a deliberately invalid result; the repaired witness must reject that same result and accept the valid control. A small committed evidence manifest declares each fix and its witnesses. A framework check rejects a declared fix without a requirement, positive control, reviewed base, red-run evidence/diagnostic, or green-run evidence. Referenced evidence files must exist and record the stated outcome. Human review verifies that the diagnostic and control prove the requirement; mechanical presence checks do not replace that judgment. No changed assertion may be omitted from the assertion ledger."
+ },
  "TF-3": {
   "checks": [
    "root:test_test_framework.MetadataTests.test_decorator_inheritance_and_override_follow_the_actual_implementation",
@@ -649,7 +662,8 @@
    "root:test_test_framework_guards.RunnerIntegrationTests.test_skipped_only_requirement_is_not_a_passing_run",
    "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error",
    "root:test_test_framework_r2.RoundTwo.test_M4_caller_cannot_accept_failure_bearing_combiner_result",
-   "root:test_test_framework_r2.RoundTwo.test_M4_real_gate_rejects_not_run_failed_and_incomplete_evidence"
+   "root:test_test_framework_r2.RoundTwo.test_M4_real_gate_rejects_not_run_failed_and_incomplete_evidence",
+   "root:test_test_framework_r3.RoundThree.test_p05_CI_selects_trusted_bases_for_supported_events"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-5",
   "statement": "**TF-5 \u2014 Coverage metadata is not a passing outcome.** A full gate reports a requirement passing only when\nevery registered required check has run and passed. Skipped, missing, errored, assertion-free lifecycle checks,\nand unexpected successes cannot establish a passing requirement. Partial runs report unselected requirements\nas not run, never green; global structural validation still runs, and the selected checks determine runtime\nresults. Expected failures also cannot count as a passing proof. Preserve `Phase.expect` assertion counting and requirement-level AND across all scenario parts,\nincluding G1\u2013G9 checks selected for every affected flow. Witness: two checks for one ID, one failing or\nmissing from a shard result, cannot aggregate to pass; skipped-only and expected-failure-only proofs are\nnot coverage. An assertion-free lifecycle proof and an unexpected success both fail the coverage gate. Assertion counting\nis not proof of semantic correctness: review against the statement and fault sensitivity are also required."
@@ -689,6 +703,8 @@
    "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards",
    "root:test_test_framework_r2.RoundTwo.test_M1_unrelated_source_cannot_resolve_a_specific_dependency",
    "root:test_test_framework_r2.RoundTwo.test_N1_same_basename_dependencies_both_contribute",
+   "root:test_test_framework_r3.RoundThree.test_p01_closure_fixture_state_invalidates_metadata",
+   "root:test_test_framework_r3.RoundThree.test_p01_positional_and_keyword_defaults_are_dependencies",
    "root:test_test_framework_review.ReviewTests.test_fixture_and_transitive_helper_changes_change_dependency_fingerprint",
    "root:test_test_framework_review.ReviewTests.test_missing_trusted_base_fails_closed_without_using_candidate_head"
   ],
@@ -713,7 +729,8 @@
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
    "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards",
-   "root:test_test_framework_r2.RoundTwo.test_M3_no_report_or_empty_plan_cannot_authorize_retirement"
+   "root:test_test_framework_r2.RoundTwo.test_M3_no_report_or_empty_plan_cannot_authorize_retirement",
+   "root:test_test_framework_r3.RoundThree.test_p02_retirement_witness_rejects_each_status_blind_mutant"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-8",
   "statement": "**TF-8 \u2014 Enforce module budgets, not worker-fragment budgets.** For each module sum actual elapsed seconds\nof every executed fragment (including import/setup/body/teardown), compare with the layer budget above, and\nname EVERY over-budget module with stage, layer, measured seconds, limit and fragment count. Apply\nowner-selected option A: generate and commit `scripts/test-budget-debt.json` from a1d25560's recorded\nmodule job-seconds, recording each module and its baseline ceiling. Every run names EVERY remaining debt\nentry as a warning (including unselected modules, explicitly marked not measured). A debt module fails if\nits complete measured total exceeds its unchanged recorded ceiling. A complete measurement at or below\nits layer budget requires removal from the debt file; afterward any excess over that budget fails. The\nfile may only shrink: no added/restored modules, increased ceilings, or baseline replacement. Validate\nagainst the immutable generated baseline and the explicit trusted review base. Partial shards cannot\nretire debt or certify a complete module. All new modules and modules absent from the debt file fail\nabove their layer budget. Do not bail out after the first offender.\nSeparate shards produce mergeable records; the combined gate enforces the aggregate module budget and\ndebt ceiling. A shard labels its measurement partial. Witness: two 20s component fragments fail its 30s\nbudget unless authorized baseline debt covers 40s; equality passes and a value just above fails; two\noffenders are both printed. A baseline debt warning appears even when unselected; ceiling regression,\nrestored debt, edited ceiling and debt retained after a complete under-budget result are rejected. Use an\ninjected clock for these tests, not real sleeps. Overall wall time has no five-minute failure threshold."
@@ -758,7 +775,9 @@
    "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error",
    "root:test_test_framework_r2.RoundTwo.test_M3_no_report_or_empty_plan_cannot_authorize_retirement",
    "root:test_test_framework_r2.RoundTwo.test_M4_caller_cannot_accept_failure_bearing_combiner_result",
-   "root:test_test_framework_r2.RoundTwo.test_M4_real_gate_rejects_not_run_failed_and_incomplete_evidence"
+   "root:test_test_framework_r2.RoundTwo.test_M4_real_gate_rejects_not_run_failed_and_incomplete_evidence",
+   "root:test_test_framework_r3.RoundThree.test_p02_retirement_witness_rejects_each_status_blind_mutant",
+   "root:test_test_framework_r3.RoundThree.test_p04_shard_witness_rejects_duplicate_original_worker_records"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-9",
   "statement": "**TF-9 \u2014 Preserve honest timing and timeout evidence.** Save per-worker elapsed values and run identity,\nselected tests, actual jobs, platform/interpreter, completion/timeout status and module totals. Sum only\ncurrent-run workers for job-seconds (never stale seed timings, module totals plus per-test estimates, or CPU).\nKeep wall time separate; report discovery and preflight seconds separately from worker job-seconds,\nincluding on preflight failure. Always write available measurements on test failure and timeout. Name timed-out\nworkers and keep their diagnostic log. The scheduler's historical estimates are not measurements. Witness:\nseed timings with obsolete entries, fail one worker and time out another; current totals and diagnostics remain\ncorrect. Hard worker timeout is a safety bound separate from the module's budget. Overall elapsed time is\nreported without a five-minute failure threshold."

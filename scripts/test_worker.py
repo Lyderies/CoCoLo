@@ -48,7 +48,8 @@ class Guard:
                     return original(*args, **kwargs)
                 self.deny('use a socket (' + name + ')')
             return call
-        for name in ('connect', 'connect_ex', 'bind', 'listen', 'accept', 'sendto', 'sendmsg'):
+        for name in ('connect', 'connect_ex', 'bind', 'listen', 'accept', 'sendto', 'sendmsg',
+                     'send', 'sendall', 'recv', 'recv_into', 'recvfrom', 'recvfrom_into', 'recvmsg', 'recvmsg_into'):
             if hasattr(socket.socket, name):
                 setattr(socket.socket, name, refused('socket.' + name, getattr(socket.socket, name)))
         for name in ('socketpair', 'create_connection', 'create_server', 'fromfd', 'fromshare',
