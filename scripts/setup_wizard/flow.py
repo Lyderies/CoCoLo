@@ -1287,6 +1287,7 @@ class Wizard:
                  "no_command": ("skip", "Login start: not offered (the collector command is not available here)."),
                  "not_remembered": ("warn", "Login start: done, but your answer could not be kept, so setup may ask again."),
                  "no_place": ("skip", "Login start: not offered (no private place to keep your answer)."),
+                 "cancelled": ("skip", "Login start: left as it was."),
                  "not_asked": ("skip", "Login start: not asked about during an update.")}.get(outcome)
         if lines is not None:
             t.list_add(*lines)
