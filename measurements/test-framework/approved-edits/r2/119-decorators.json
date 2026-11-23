@@ -1,0 +1,71 @@
+{
+ "authority": "Separate decorator-only review scope within the unchanged historical decision 119 replay; not an approval or new gate admission.",
+ "name": "119-decorators",
+ "schema": 1,
+ "status": "pending owner decision 121",
+ "transitions": [
+  {
+   "before_commit": "f1d09f1bba036937857d64837173fdc9fd1ffba5",
+   "edit_commit": "aab460a92f84dc525f4bdb66d84d021ee26541e0",
+   "edits": [
+    {
+     "line": 2357,
+     "new": "    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')\n",
+     "old": ""
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_bridge.py"
+  },
+  {
+   "before_commit": "f1d09f1bba036937857d64837173fdc9fd1ffba5",
+   "edit_commit": "aab460a92f84dc525f4bdb66d84d021ee26541e0",
+   "edits": [
+    {
+     "line": 269,
+     "new": "    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')\n",
+     "old": ""
+    },
+    {
+     "line": 274,
+     "new": "    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')\n",
+     "old": ""
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_cli_open_client_runtime.py"
+  },
+  {
+   "before_commit": "f1d09f1bba036937857d64837173fdc9fd1ffba5",
+   "edit_commit": "aab460a92f84dc525f4bdb66d84d021ee26541e0",
+   "edits": [
+    {
+     "line": 321,
+     "new": "    @__import__('test_framework').requirements('B2-OUTCOME', 'RS-B-5', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')\n",
+     "old": ""
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_lost_run_settlement.py"
+  },
+  {
+   "before_commit": "f1d09f1bba036937857d64837173fdc9fd1ffba5",
+   "edit_commit": "aab460a92f84dc525f4bdb66d84d021ee26541e0",
+   "edits": [
+    {
+     "line": 128,
+     "new": "    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')\n",
+     "old": ""
+    },
+    {
+     "line": 820,
+     "new": "    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')\n",
+     "old": ""
+    },
+    {
+     "line": 1881,
+     "new": "    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')\n",
+     "old": ""
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_project_driver.py"
+  }
+ ]
+}

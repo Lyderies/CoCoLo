@@ -1,0 +1,29 @@
+{
+ "authority": "Review scope record only, not an admission or owner approval. No APPROVALS.json entry, manifest digest or binding is changed. Owner decision 121 remains pending.",
+ "before_commit": "f1d09f1bba036937857d64837173fdc9fd1ffba5",
+ "edit_commit": "aab460a92f84dc525f4bdb66d84d021ee26541e0",
+ "edits": [
+  {
+   "line": 25,
+   "new": "# Subprocess fixtures import this module outside the parallel runner.\n",
+   "old": ""
+  },
+  {
+   "line": 26,
+   "new": "sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'scripts'))\n",
+   "old": ""
+  },
+  {
+   "line": 27,
+   "new": "\n",
+   "old": ""
+  }
+ ],
+ "file": "packages/codex-agents/tests/test_bridge.py",
+ "name": "119-migration-plumbing",
+ "reason": "Package-only fixture subprocesses import tests.test_bridge without the repository scripts directory. Removing these three lines makes the existing decorator import fail with ModuleNotFoundError for test_framework. The other modules' __import__('test_framework').requirements form has the same import-path requirement; it does not remove this need.",
+ "schema": 1,
+ "scope": "Only the comment, sys.path.insert and following blank line at aab460a9 lines 25-27. All seven aab460a9 decorator insertions are the separate 119-decorators transition. The existing historical replay remains byte-exact and immutable.",
+ "source_decision": "119",
+ "status": "pending owner decision 121"
+}

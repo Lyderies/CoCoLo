@@ -1,0 +1,144 @@
+test_bridge_migration_plumbing_has_separate_exact_scope (test_approved_edits.ApprovedEdits.test_bridge_migration_plumbing_has_separate_exact_scope) ... FAIL
+test_exact_transition_and_extra_unlisted_edits (test_approved_edits.ApprovedEdits.test_exact_transition_and_extra_unlisted_edits) ... ok
+test_immutable_introduction_tampering_and_overwrite (test_approved_edits.ApprovedEdits.test_immutable_introduction_tampering_and_overwrite) ... ok
+test_only_changed_active_proofs_rebind_all_three_kinds (test_approved_edits.ApprovedEdits.test_only_changed_active_proofs_rebind_all_three_kinds) ... ok
+test_recorded_owner_transitions_match_current_bytes (test_approved_edits.ApprovedEdits.test_recorded_owner_transitions_match_current_bytes) ... ok
+test_renamed_restored_and_unresolved_proofs_are_refused (test_approved_edits.ApprovedEdits.test_renamed_restored_and_unresolved_proofs_are_refused) ... ok
+test_unrelated_legacy_proof_still_flags_and_retired_stays_retired (test_approved_edits.ApprovedEdits.test_unrelated_legacy_proof_still_flags_and_retired_stays_retired) ... ok
+test_wrong_text_line_endings_and_stale_base (test_approved_edits.ApprovedEdits.test_wrong_text_line_endings_and_stale_base) ... ok
+test_decorated_proof_in_either_legacy_list_is_refused (test_approved_edits.ApprovedEditsMigration.test_decorated_proof_in_either_legacy_list_is_refused) ... ok
+test_later_bound_retirement_requires_original_identity_and_normal_migration (test_approved_edits.ApprovedEditsMigration.test_later_bound_retirement_requires_original_identity_and_normal_migration) ... 
+  test_later_bound_retirement_requires_original_identity_and_normal_migration (test_approved_edits.ApprovedEditsMigration.test_later_bound_retirement_requires_original_identity_and_normal_migration) (fault='delete') ... FAIL
+  test_later_bound_retirement_requires_original_identity_and_normal_migration (test_approved_edits.ApprovedEditsMigration.test_later_bound_retirement_requires_original_identity_and_normal_migration) (fault='move') ... FAIL
+  test_later_bound_retirement_requires_original_identity_and_normal_migration (test_approved_edits.ApprovedEditsMigration.test_later_bound_retirement_requires_original_identity_and_normal_migration) (fault='undecorated') ... FAIL
+  test_later_bound_retirement_requires_original_identity_and_normal_migration (test_approved_edits.ApprovedEditsMigration.test_later_bound_retirement_requires_original_identity_and_normal_migration) (fault='unknown') ... FAIL
+  test_later_bound_retirement_requires_original_identity_and_normal_migration (test_approved_edits.ApprovedEditsMigration.test_later_bound_retirement_requires_original_identity_and_normal_migration) (fault='unlinked') ... FAIL
+test_migration_outside_manifest_uses_candidate_and_introduction_requirements (test_approved_edits.ApprovedEditsMigration.test_migration_outside_manifest_uses_candidate_and_introduction_requirements) ... FAIL
+test_normal_migration_skips_binding_and_uses_requirement_gate (test_approved_edits.ApprovedEditsMigration.test_normal_migration_skips_binding_and_uses_requirement_gate) ... FAIL
+test_retired_undecorated_changed_proof_is_refused (test_approved_edits.ApprovedEditsMigration.test_retired_undecorated_changed_proof_is_refused) ... ok
+test_r1_deleted_admission_documents_are_refused (test_approved_edits.ApprovedEditsR1.test_r1_deleted_admission_documents_are_refused) ... FAIL
+test_r1_introduction_requires_ancestry_sources_and_algorithm (test_approved_edits.ApprovedEditsR1.test_r1_introduction_requires_ancestry_sources_and_algorithm) ... ok
+test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions (test_approved_edits.ApprovedEditsR1.test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions) ... ok
+test_r1_owner_record_authenticates_first_introduction (test_approved_edits.ApprovedEditsR1.test_r1_owner_record_authenticates_first_introduction) ... ok
+test_r1_replay_uses_guarded_discovery_and_rejects_duplicate_ids (test_approved_edits.ApprovedEditsR1.test_r1_replay_uses_guarded_discovery_and_rejects_duplicate_ids) ... Traceback (most recent call last):
+  File "<string>", line 25, in <module>
+    found=fw.inventory_suite('root',layers)
+  File "/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/tmppjyd_h2h/scripts/test_framework.py", line 120, in inventory_suite
+    walk(Loader().discover('tests', top_level_dir=top))
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/tmppjyd_h2h/scripts/test_framework.py", line 92, in walk
+    walk(test)
+    ~~~~^^^^^^
+  File "/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/tmppjyd_h2h/scripts/test_framework.py", line 101, in walk
+    raise ValueError(f'duplicate discovered test: {key}')
+ValueError: duplicate discovered test: root:test_case.Case.test_changed
+Traceback (most recent call last):
+  File "<string>", line 28, in <module>
+    if row.get('import_error'):raise ValueError('trusted snapshot import/discovery guard failed: '+key)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: trusted snapshot import/discovery guard failed: root:test_case.__import_guard__
+ok
+test_r1_unanchored_files_never_generate_proofs (test_approved_edits.ApprovedEditsR1.test_r1_unanchored_files_never_generate_proofs) ... ok
+test_r1_unchanged_stale_old_proofs_are_refused (test_approved_edits.ApprovedEditsR1.test_r1_unchanged_stale_old_proofs_are_refused) ... ok
+
+======================================================================
+FAIL: test_bridge_migration_plumbing_has_separate_exact_scope (test_approved_edits.ApprovedEdits.test_bridge_migration_plumbing_has_separate_exact_scope)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/tf27-r2-final-red-mo8ft_j2/repo/tests/test_approved_edits.py", line 164, in test_bridge_migration_plumbing_has_separate_exact_scope
+    self.assertTrue(record.is_file(), 'TF-27 decision 119 lacks separate migration-plumbing scope')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : TF-27 decision 119 lacks separate migration-plumbing scope
+
+======================================================================
+FAIL: test_later_bound_retirement_requires_original_identity_and_normal_migration (test_approved_edits.ApprovedEditsMigration.test_later_bound_retirement_requires_original_identity_and_normal_migration) (fault='delete')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/tf27-r2-final-red-mo8ft_j2/repo/tests/test_approved_edits.py", line 608, in test_later_bound_retirement_requires_original_identity_and_normal_migration
+    self.assertTrue(any(e.startswith('cannot verify approved test edits:') for e in errors),
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        'TF-27 later bound retirement accepted ' + fault + ': ' + repr(errors))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : TF-27 later bound retirement accepted delete: []
+
+======================================================================
+FAIL: test_later_bound_retirement_requires_original_identity_and_normal_migration (test_approved_edits.ApprovedEditsMigration.test_later_bound_retirement_requires_original_identity_and_normal_migration) (fault='move')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/tf27-r2-final-red-mo8ft_j2/repo/tests/test_approved_edits.py", line 608, in test_later_bound_retirement_requires_original_identity_and_normal_migration
+    self.assertTrue(any(e.startswith('cannot verify approved test edits:') for e in errors),
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        'TF-27 later bound retirement accepted ' + fault + ': ' + repr(errors))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : TF-27 later bound retirement accepted move: []
+
+======================================================================
+FAIL: test_later_bound_retirement_requires_original_identity_and_normal_migration (test_approved_edits.ApprovedEditsMigration.test_later_bound_retirement_requires_original_identity_and_normal_migration) (fault='undecorated')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/tf27-r2-final-red-mo8ft_j2/repo/tests/test_approved_edits.py", line 608, in test_later_bound_retirement_requires_original_identity_and_normal_migration
+    self.assertTrue(any(e.startswith('cannot verify approved test edits:') for e in errors),
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        'TF-27 later bound retirement accepted ' + fault + ': ' + repr(errors))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : TF-27 later bound retirement accepted undecorated: ['root:test_case.Case.test_active: no requirement']
+
+======================================================================
+FAIL: test_later_bound_retirement_requires_original_identity_and_normal_migration (test_approved_edits.ApprovedEditsMigration.test_later_bound_retirement_requires_original_identity_and_normal_migration) (fault='unknown')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/tf27-r2-final-red-mo8ft_j2/repo/tests/test_approved_edits.py", line 608, in test_later_bound_retirement_requires_original_identity_and_normal_migration
+    self.assertTrue(any(e.startswith('cannot verify approved test edits:') for e in errors),
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        'TF-27 later bound retirement accepted ' + fault + ': ' + repr(errors))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : TF-27 later bound retirement accepted unknown: ["root:test_case.Case.test_active: unknown requirement 'TF-27'", "root:test_case.Case.test_changed: unknown requirement 'TF-27'"]
+
+======================================================================
+FAIL: test_later_bound_retirement_requires_original_identity_and_normal_migration (test_approved_edits.ApprovedEditsMigration.test_later_bound_retirement_requires_original_identity_and_normal_migration) (fault='unlinked')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/tf27-r2-final-red-mo8ft_j2/repo/tests/test_approved_edits.py", line 608, in test_later_bound_retirement_requires_original_identity_and_normal_migration
+    self.assertTrue(any(e.startswith('cannot verify approved test edits:') for e in errors),
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        'TF-27 later bound retirement accepted ' + fault + ': ' + repr(errors))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : TF-27 later bound retirement accepted unlinked: ['root:test_case.Case.test_active: TF-27 does not list its check']
+
+======================================================================
+FAIL: test_migration_outside_manifest_uses_candidate_and_introduction_requirements (test_approved_edits.ApprovedEditsMigration.test_migration_outside_manifest_uses_candidate_and_introduction_requirements)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/tf27-r2-final-red-mo8ft_j2/repo/tests/test_approved_edits.py", line 511, in test_migration_outside_manifest_uses_candidate_and_introduction_requirements
+    self.assertIn(witness, catalogue[requirement]['checks'],
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                  'TF-27 candidate-tree witness missing reciprocal catalogue link: ' + requirement)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'root:test_approved_edits.ApprovedEditsMigration.test_migration_outside_manifest_uses_candidate_and_introduction_requirements' not found in ['root:test_approved_edits.ApprovedEdits.test_exact_transition_and_extra_unlisted_edits', 'root:test_approved_edits.ApprovedEdits.test_immutable_introduction_tampering_and_overwrite', 'root:test_approved_edits.ApprovedEdits.test_only_changed_active_proofs_rebind_all_three_kinds', 'root:test_approved_edits.ApprovedEdits.test_recorded_owner_transitions_match_current_bytes', 'root:test_approved_edits.ApprovedEdits.test_renamed_restored_and_unresolved_proofs_are_refused', 'root:test_approved_edits.ApprovedEdits.test_unrelated_legacy_proof_still_flags_and_retired_stays_retired', 'root:test_approved_edits.ApprovedEdits.test_wrong_text_line_endings_and_stale_base', 'root:test_approved_edits.ApprovedEditsMigration.test_decorated_proof_in_either_legacy_list_is_refused', 'root:test_approved_edits.ApprovedEditsMigration.test_normal_migration_skips_binding_and_uses_requirement_gate', 'root:test_approved_edits.ApprovedEditsMigration.test_retired_undecorated_changed_proof_is_refused', 'root:test_approved_edits.ApprovedEditsR1.test_r1_deleted_admission_documents_are_refused', 'root:test_approved_edits.ApprovedEditsR1.test_r1_introduction_requires_ancestry_sources_and_algorithm', 'root:test_approved_edits.ApprovedEditsR1.test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions', 'root:test_approved_edits.ApprovedEditsR1.test_r1_owner_record_authenticates_first_introduction', 'root:test_approved_edits.ApprovedEditsR1.test_r1_replay_uses_guarded_discovery_and_rejects_duplicate_ids', 'root:test_approved_edits.ApprovedEditsR1.test_r1_unanchored_files_never_generate_proofs', 'root:test_approved_edits.ApprovedEditsR1.test_r1_unchanged_stale_old_proofs_are_refused', 'root:test_product_dependencies.ProductDependencies.test_migration_rejects_wrong_provenance_and_changed_test_identity', 'root:test_release_bookkeeping.ReleaseBookkeeping.test_exact_primary_restoration_matches_installed_release', 'root:test_test_framework_r3.RoundThree.test_TF23_declared_fixes_require_red_green_and_positive_control'] : TF-27 candidate-tree witness missing reciprocal catalogue link: TF-23
+
+======================================================================
+FAIL: test_normal_migration_skips_binding_and_uses_requirement_gate (test_approved_edits.ApprovedEditsMigration.test_normal_migration_skips_binding_and_uses_requirement_gate)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/tf27-r2-final-red-mo8ft_j2/repo/tests/test_approved_edits.py", line 551, in test_normal_migration_skips_binding_and_uses_requirement_gate
+    with self.assertRaisesRegex(ValueError, 'retired.*requirement',
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            msg='TF-27 later retirement silently discarded bound test'):
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised : TF-27 later retirement silently discarded bound test
+
+======================================================================
+FAIL: test_r1_deleted_admission_documents_are_refused (test_approved_edits.ApprovedEditsR1.test_r1_deleted_admission_documents_are_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/tf27-r2-final-red-mo8ft_j2/repo/tests/test_approved_edits.py", line 336, in test_r1_deleted_admission_documents_are_refused
+    with self.assertRaisesRegex(ValueError, 'immutable',
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+            msg='TF-27 local restoration concealed committed admission deletion'):
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised : TF-27 local restoration concealed committed admission deletion
+
+----------------------------------------------------------------------
+Ran 20 tests in 78.885s
+
+FAILED (failures=9)

@@ -1,0 +1,13 @@
+{
+ "base": "fcc66f9d2066c334630d678911488919a4214bd8",
+ "diagnostic": "TF-27 decision 119 lacks separate migration-plumbing scope",
+ "interpreter": "<test-venv>/bin/python",
+ "log": "measurements/test-framework/approved-edits/r2/red.log",
+ "returncode": 1,
+ "selection": [
+  "root:test_approved_edits"
+ ],
+ "status": "red",
+ "test_source_sha256": "302e779af4eea1dd75245cc1b0f5699dbb6caff8ce40a192fcad37a231d6fe8b",
+ "witness": "root:test_approved_edits.ApprovedEdits.test_bridge_migration_plumbing_has_separate_exact_scope"
+}

@@ -35,7 +35,14 @@ def immutable(root, path):
         commits = git(root, 'log', '--reverse', '--format=%H', 'HEAD', '--', name).decode().split()
     except subprocess.CalledProcessError:
         commits = []
-    if not commits or path.read_bytes() != git(root, 'show', commits[0] + ':' + name):
+    if not commits:
+        raise ValueError(name + ': immutable approved-edit document changed or uncommitted')
+    try:
+        introduced = git(root, 'show', commits[0] + ':' + name)
+        committed = git(root, 'show', 'HEAD:' + name)
+    except subprocess.CalledProcessError as error:
+        raise ValueError(name + ': immutable approved-edit document missing from introduction or HEAD') from error
+    if introduced != committed or path.read_bytes() != committed:
         raise ValueError(name + ': immutable approved-edit document changed or uncommitted')
     return fw.decode_json(path.read_text()), commits[0]
 
@@ -176,11 +183,14 @@ def changed_proofs(before, after, seed, retired=(), *, candidate):
     return result
 
 
-def inventory(root, snapshot, seed):
+def inventory(root, snapshot, seed, *, seed_path=None):
     """Fingerprint only: no fixtures/test bodies; at most ten modules per child."""
+    if seed_path is None:
+        with tempfile.TemporaryDirectory(prefix='approved-edit-seed-') as folder:
+            return inventory(root, snapshot, seed, seed_path=Path(folder) / 'seed.json')
     from parallel_tests import worker_environment
     result = {}
-    (snapshot / 'approved-seed.json').write_text(json.dumps(seed))
+    seed_path.write_text(json.dumps(seed))
     for suite in ('root', 'codex', 'claude'):
         modules = sorted({name.split(':', 1)[1].rsplit('.', 2)[0] for name in seed if name.startswith(suite + ':')})
         package = snapshot if suite == 'root' else snapshot / 'packages' / (suite + '-agents')
@@ -191,7 +201,7 @@ from pathlib import Path
 root=Path({str(snapshot)!r}); package=Path({str(package)!r})
 sys.path[:0]=[str(root/'scripts'),str(package/'src'),str(package),str(root/'tests')]
 import test_framework as fw
-seed=json.loads((root/'approved-seed.json').read_text()); out={{}}
+seed=json.loads(Path({str(seed_path)!r}).read_text()); out={{}}
 describe=fw.describe_test
 def describe_seed(test, dependencies=()):
  key={suite!r}+':'+test.id()
@@ -376,7 +386,42 @@ def checked_bindings(root):
     _, expected = sources(root, [m for m in manifests if m['decision'] in covered])
     exact_current(expected, {name: (root / name).read_bytes() for name in expected})
     active = active_ids(root)
+    check_later_retirements(root, {name: row for name, row in admitted.items() if name not in active})
     return {name: row for name, row in admitted.items() if name in active}
+
+
+def check_later_retirements(root, retired):
+    """Filtering an old binding requires a current, normally migrated identity."""
+    if not retired:
+        return
+    current = inventory(root, root, retired)
+    listed = listed_ids(root)
+    for name in retired:
+        if name not in current:
+            raise ValueError(name + ': retired bound test changed legacy identity')
+        if not current[name].get('requirements'):
+            raise ValueError(name + ': retired bound test has no requirement')
+        if name in listed:
+            raise ValueError(name + ': retired bound test must leave both legacy lists')
+    # Reuse ordinary metadata validation, restricted to the identities whose
+    # protection would otherwise disappear. The full gate still validates all
+    # other catalogue checks and their authoritative requirement sources.
+    modules = {name.rsplit('.', 2)[0] for name in retired}
+    discovered = {module: {n: current[n] for n in retired if n.rsplit('.', 2)[0] == module}
+                  for module in modules}
+    stages = fw.decode_json((root / 'scripts/test-stages.json').read_text())
+    layers = fw.decode_json((root / 'scripts/test-layers.json').read_text())
+    catalogue = fw.decode_json((root / 'scripts/test-requirements.json').read_text())
+    requirements = {requirement for name in retired for requirement in current[name]['requirements']}
+    catalogue = {requirement: {**row, 'checks': [n for n in row.get('checks', []) if n in retired]}
+                 for requirement, row in catalogue.items() if requirement in requirements}
+    empty = {'baseline': 'retired', 'tests': {}}
+    errors = fw.validate_metadata(inventory=discovered,
+        stages={m: s for m, s in stages.items() if m in modules},
+        layers={m: s for m, s in layers.items() if m in modules}, catalogue=catalogue,
+        legacy=empty, ceiling=empty, previous=empty)
+    if errors:
+        raise ValueError('retired bound test requirement metadata invalid: ' + '; '.join(errors))
 
 
 def main():

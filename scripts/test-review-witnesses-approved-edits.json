@@ -168,5 +168,65 @@
   "red": "measurements/test-framework/approved-edits/migration/undecorated-retirement-red.json",
   "requirement": "TF-27",
   "witness": "root:test_approved_edits.ApprovedEditsMigration.test_retired_undecorated_changed_proof_is_refused"
+ },
+ {
+  "base": "fcc66f9d2066c334630d678911488919a4214bd8",
+  "diagnostic": "TF-27 later bound retirement accepted delete: []",
+  "fix": "TF27-r2-later-bound-retirement",
+  "green": "measurements/test-framework/approved-edits/r2/later-bound-retirement-green.json",
+  "positive_control": "The committed binding remains effective before retirement; a registered move and deletion evade ordinary metadata on the old gate. After the fix both are refused. A normally migrated original identity with a decorator and reciprocal catalogue link passes metadata and filters the overlay without changing introduction replay.",
+  "red": "measurements/test-framework/approved-edits/r2/later-bound-retirement-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsMigration.test_later_bound_retirement_requires_original_identity_and_normal_migration"
+ },
+ {
+  "base": "fcc66f9d2066c334630d678911488919a4214bd8",
+  "diagnostic": "TF-27 later retirement silently discarded bound test",
+  "fix": "TF27-r2-undecorated-later-retirement",
+  "green": "measurements/test-framework/approved-edits/r2/undecorated-later-retirement-green.json",
+  "positive_control": "Normal migration at introduction passes, stale old I/D/V tuples and a missing requirement fail; shrinking both lists later without decorating the bound test now fails instead of silently discarding it.",
+  "red": "measurements/test-framework/approved-edits/r2/undecorated-later-retirement-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsMigration.test_normal_migration_skips_binding_and_uses_requirement_gate"
+ },
+ {
+  "base": "fcc66f9d2066c334630d678911488919a4214bd8",
+  "diagnostic": "TF-27 local restoration concealed committed admission deletion",
+  "fix": "TF27-r2-committed-admission-restoration",
+  "green": "measurements/test-framework/approved-edits/r2/committed-admission-restoration-green.json",
+  "positive_control": "Original documents and restored-and-committed originals pass. Deletion in the worktree or HEAD, and locally restored original bytes over a deleted or altered HEAD binding or manifest, all fail.",
+  "red": "measurements/test-framework/approved-edits/r2/committed-admission-restoration-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsR1.test_r1_deleted_admission_documents_are_refused"
+ },
+ {
+  "base": "fcc66f9d2066c334630d678911488919a4214bd8",
+  "diagnostic": "TF-27 decision 119 lacks separate migration-plumbing scope",
+  "fix": "TF27-r2-decision119-migration-plumbing",
+  "green": "measurements/test-framework/approved-edits/r2/decision119-migration-plumbing-green.json",
+  "positive_control": "Package-only subprocess fixture import succeeds with the exact three plumbing lines; removing them fails with ModuleNotFoundError for test_framework. The separate named record lists those exact bytes and explicitly leaves decision 121 pending; existing admission bytes remain unchanged.",
+  "red": "measurements/test-framework/approved-edits/r2/decision119-migration-plumbing-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEdits.test_bridge_migration_plumbing_has_separate_exact_scope"
+ },
+ {
+  "base": "fcc66f9d2066c334630d678911488919a4214bd8",
+  "diagnostic": "TF-27 candidate-tree witness missing reciprocal catalogue link: TF-23",
+  "fix": "TF27-r2-candidate-tree-catalogue",
+  "green": "measurements/test-framework/approved-edits/r2/candidate-tree-catalogue-green.json",
+  "positive_control": "The old 18-test witness module passes at 9be79b00 despite the missing catalogue links. The expanded witness rejects those missing links at fcc66f9d, passes with its ID listed in both TF-23 and TF-27, and retains the valid outside-manifest migration and frozen-introduction controls.",
+  "red": "measurements/test-framework/approved-edits/r2/candidate-tree-catalogue-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsMigration.test_migration_outside_manifest_uses_candidate_and_introduction_requirements"
+ },
+ {
+  "base": "920150d9feb41e6211c51744cd4411da3f174d24",
+  "diagnostic": "root:test_case.Case.test_changed: retired changed legacy proof has no requirement",
+  "fix": "TF27-candidate-tree-9be79b00",
+  "green": "measurements/test-framework/approved-edits/r2/candidate-tree-green.json",
+  "positive_control": "Only tests/fixture.py is in the replay manifest; the original migrated ID is decorated in the candidate and absent from both lists. The binding contains only the other active test. The 18-test module fails this witness at 920150d9 and passes all 18 at 9be79b00. Removing the later decorator does not change introduction replay, but makes a newly built binding fail.",
+  "red": "measurements/test-framework/approved-edits/r2/candidate-tree-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsMigration.test_migration_outside_manifest_uses_candidate_and_introduction_requirements"
  }
 ]

@@ -131,6 +131,49 @@ class ApprovedEdits(unittest.TestCase):
             with self.subTest(decision=manifest['decision']), self.assertRaisesRegex(ValueError, 'stale base|old line|historical'):
                 p.sources(ROOT, [bad])
 
+    def test_bridge_migration_plumbing_has_separate_exact_scope(self):
+        import json
+        package = ROOT / 'packages/codex-agents'
+        bridge = package / 'tests/test_bridge.py'
+        plumbing = ("# Subprocess fixtures import this module outside the parallel runner.\n"
+                    "sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'scripts'))\n\n")
+        source = bridge.read_text()
+        self.assertEqual(1, source.count(plumbing))
+        # Use the package-only import path of fixture subprocesses. Import the
+        # definitions, never execute the product tests they contain.
+        code = '''import sys
+from pathlib import Path
+sys.path[:0] = [PACKAGE, str(Path(PACKAGE) / 'src')]
+source = Path(BRIDGE).read_text()
+if REMOVE:
+    source = source.replace(PLUMBING, '')
+namespace = {'__file__': BRIDGE, '__name__': 'tests.test_bridge'}
+exec(compile(source, BRIDGE, 'exec'), namespace)
+assert 'test_framework' in sys.modules
+'''
+        for remove in (False, True):
+            script = ('PACKAGE = ' + repr(str(package)) + '\nBRIDGE = ' + repr(str(bridge)) +
+                      '\nPLUMBING = ' + repr(plumbing) + '\nREMOVE = ' + repr(remove) + '\n' + code)
+            result = subprocess.run([sys.executable, '-I', '-B', '-c', script], capture_output=True, text=True)
+            if remove:
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("ModuleNotFoundError: No module named 'test_framework'", result.stderr)
+            else:
+                self.assertEqual(0, result.returncode, result.stderr)
+        record = ROOT / 'measurements/test-framework/approved-edits/r2/119-migration-plumbing.json'
+        self.assertTrue(record.is_file(), 'TF-27 decision 119 lacks separate migration-plumbing scope')
+        scope = json.loads(record.read_text())
+        self.assertEqual('119-migration-plumbing', scope['name'])
+        p = self.policy()
+        manifest = next(m for m in p.read_manifests(ROOT) if m['decision'] == '119')
+        transition = next(t for t in manifest['transitions']
+                          if t['file'] == bridge.relative_to(ROOT).as_posix() and t['edit_commit'].startswith('aab460a9'))
+        extra = [e for e in transition['edits'] if not e['new'].lstrip().startswith('@')]
+        self.assertEqual(extra, scope['edits'])
+        self.assertEqual(plumbing, ''.join(e['new'] for e in scope['edits']))
+        self.assertTrue(scope['reason'].strip())
+        self.assertEqual('pending owner decision 121', scope['status'])
+
 
 @requirements('TF-27', 'TF-23', why_not_scenario='Tiny committed repositories exercise owner authority, replay discovery and the real metadata gate without executing product tests.')
 class ApprovedEditsR1(unittest.TestCase):
@@ -289,7 +332,18 @@ class ApprovedEditsR1(unittest.TestCase):
                 self.commit(root, 'deleted admission')
                 with self.assertRaisesRegex(ValueError, 'missing admitted'):
                     p.checked_bindings(root)
-                path.write_bytes(content); self.commit(root, 'restore admission')
+                path.write_bytes(content)
+                with self.assertRaisesRegex(ValueError, 'immutable',
+                        msg='TF-27 local restoration concealed committed admission deletion'):
+                    p.checked_bindings(root)
+                self.commit(root, 'restore admission')
+                self.assertEqual(data['tests'], p.checked_bindings(root))
+                path.write_bytes(content + b'\n'); self.commit(root, 'alter admission')
+                path.write_bytes(content)
+                with self.assertRaisesRegex(ValueError, 'immutable',
+                        msg='TF-27 local restoration concealed changed HEAD admission'):
+                    p.checked_bindings(root)
+                self.commit(root, 'restore admission bytes')
                 self.assertEqual(data['tests'], p.checked_bindings(root))
 
     def test_r1_replay_uses_guarded_discovery_and_rejects_duplicate_ids(self):
@@ -451,6 +505,11 @@ class ApprovedEditsMigration(unittest.TestCase):
             self.assertEqual(data['tests'], p.checked_bindings(root))
             with self.assertRaisesRegex(ValueError, 'retired.*requirement'):
                 p.build(root, [manifest])
+            catalogue = p.fw.decode_json((ROOT / 'scripts/test-requirements.json').read_text())
+            witness = 'root:' + self.id()
+            for requirement in ('TF-23', 'TF-27'):
+                self.assertIn(witness, catalogue[requirement]['checks'],
+                              'TF-27 candidate-tree witness missing reciprocal catalogue link: ' + requirement)
 
     def test_normal_migration_skips_binding_and_uses_requirement_gate(self):
         import parallel_tests as runner
@@ -484,13 +543,73 @@ class ApprovedEditsMigration(unittest.TestCase):
                 catalogue = root / 'scripts/test-requirements.json'
                 self.write_json(catalogue, {})
                 self.assertEqual([migrated + ": unknown requirement 'TF-27'"], runner.metadata()[-1])
-            # Later retirement filters application, but must not rederive the
-            # immutable binding using today's lists instead of introduction's.
+            # Shrinking lists alone cannot discard a still-undecorated proof.
             for name in ('test-legacy.json', 'test-legacy-0850.json'):
                 self.write_json(root / 'scripts' / name, {**active, 'tests': {
                     n: f for n, f in active['tests'].items() if n not in data['tests']}})
             self.commit(root, 'later eligibility shrink')
-            self.assertEqual({}, p.checked_bindings(root))
+            with self.assertRaisesRegex(ValueError, 'retired.*requirement',
+                    msg='TF-27 later retirement silently discarded bound test'):
+                p.checked_bindings(root)
+
+    def test_later_bound_retirement_requires_original_identity_and_normal_migration(self):
+        import parallel_tests as runner
+        import test_owned_baseline as owned
+        import rebind_approved_edits as live_policy
+        for fault in ('delete', 'move', 'undecorated', 'unknown', 'unlinked', None):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); p = self.policy()
+                manifest, seed, active, _ = self.migration(root, p, outside_manifest=True)
+                data = p.build(root, [manifest])
+                bound = 'root:test_case.Case.test_active'
+                self.assertEqual({bound}, set(data['tests']))
+                self.write_json(root / p.BINDINGS / '1.json', data)
+                introduction = self.commit(root, 'binding introduction')
+                self.assertEqual(data['tests'], p.checked_bindings(root))
+                path = root / 'tests/test_case.py'
+                original = '    def test_active(self):\n        self.assertEqual(VALUE, 1)\n'
+                self.assertIn(original, path.read_text())
+                decorated = '    @requirements("TF-27")\n' + original
+                path.write_text(path.read_text().replace(original,
+                    '' if fault in ('delete', 'move') else original if fault == 'undecorated' else decorated))
+                catalogue = p.fw.decode_json((root / 'scripts/test-requirements.json').read_text())
+                if fault == 'move':
+                    destination = 'root:test_moved.Case.test_active'
+                    (root / 'tests/test_moved.py').write_text(
+                        'import unittest\nfrom test_framework import requirements\nfrom fixture import VALUE\n'
+                        'class Case(unittest.TestCase):\n' + decorated)
+                    catalogue['TF-27']['checks'].append(destination)
+                    for name in ('test-layers.json', 'test-stages.json'):
+                        mapping = p.fw.decode_json((root / 'scripts' / name).read_text())
+                        self.write_json(root / 'scripts' / name, {**mapping, 'root:test_moved': 'unit'})
+                elif fault not in ('unlinked', 'delete', 'undecorated'):
+                    catalogue['TF-27']['checks'].append(bound)
+                if fault == 'unknown':
+                    catalogue = {}
+                self.write_json(root / 'scripts/test-requirements.json', catalogue)
+                retired = {**active, 'tests': {n: f for n, f in active['tests'].items() if n != bound}}
+                for name in ('test-legacy.json', 'test-legacy-0850.json'):
+                    self.write_json(root / 'scripts' / name, retired)
+                self.commit(root, 'later retirement ' + str(fault))
+                # Introduction reconstruction stays frozen even after retirement.
+                self.assertEqual(data, p.build(root, [manifest], set(data['tests']), at=introduction))
+                current = p.inventory(root, root, {**seed, **({destination: {}} if fault == 'move' else {})})
+                discovered = {module: {n: r for n, r in current.items() if n.rsplit('.', 2)[0] == module}
+                              for module in p.fw.decode_json((root / 'scripts/test-layers.json').read_text())}
+                with mock.patch.object(runner, 'ROOT', root), \
+                     mock.patch.object(runner, 'SUITES', {'root': root}), \
+                     mock.patch.object(runner, 'inventory', return_value=discovered), \
+                     mock.patch.object(runner, 'legacy_versions', side_effect=lambda *args: (copy.deepcopy(retired), copy.deepcopy(active), [])), \
+                     mock.patch.object(runner.framework, 'validate_sources', return_value=[]), \
+                     mock.patch.object(owned, 'checked', return_value=seed), \
+                     mock.patch.object(live_policy, 'checked_bindings', side_effect=p.checked_bindings):
+                    errors = runner.metadata()[-1]
+                    if fault:
+                        self.assertTrue(any(e.startswith('cannot verify approved test edits:') for e in errors),
+                            'TF-27 later bound retirement accepted ' + fault + ': ' + repr(errors))
+                    else:
+                        self.assertEqual({}, p.checked_bindings(root))
+                        self.assertEqual([], errors)
 
     def test_retired_undecorated_changed_proof_is_refused(self):
         for outside in (False, True):

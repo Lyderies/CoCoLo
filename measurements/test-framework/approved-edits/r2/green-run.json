@@ -1,0 +1,10 @@
+{
+ "base": "fcc66f9d2066c334630d678911488919a4214bd8",
+ "candidate": "uncommitted working tree",
+ "returncode": 0,
+ "selection": [
+  "root:test_approved_edits"
+ ],
+ "test_source_sha256": "302e779af4eea1dd75245cc1b0f5699dbb6caff8ce40a192fcad37a231d6fe8b",
+ "policy_sha256": "c27e6ed6c666000bb16382883cc9f2fb135db8bb53e4048b8d54c854afc2936e"
+}
