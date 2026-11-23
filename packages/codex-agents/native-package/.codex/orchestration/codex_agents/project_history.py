@@ -2321,10 +2321,13 @@ class ProjectHistory:
                                  "VALUES(?,?,?)", (self.project_id, binding.claim_id, encoded_material))
 
     def _require_publishable(self, value) -> None:
-        """D4 (S-3): a publication of a lease-born attempt needs its obligation row `held`. A missing
-        lease-born hold is a defect kept for repair, never authority to publish. A `releasing` row means the writer
+        """D4 (S-3): a new publication needs its actual reservation obligation row `held`. A missing
+        hold is a defect kept for repair, never authority to publish. A `releasing` row means the writer
         arbitrated the attempt away: nothing commits for it."""
-        if self._obligation_state(value) not in {None, "held"} or self._connection.execute(
+        held = self._connection.execute(
+            "SELECT 1 FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=? AND state='held'",
+            (self.project_id, value.binding.claim_id)).fetchone()
+        if held is None or self._connection.execute(
                 "SELECT 1 FROM project_account_settlements WHERE project_id=? AND run_handle=? AND attempt=?",
                 (self.project_id, value.binding.run_handle, value.binding.attempt)).fetchone() is not None:
             raise HistoryError("history_result_expired")
@@ -2522,7 +2525,12 @@ class ProjectHistory:
             return "recovered"
         if obligation is None:
             raise HistoryError("history_service_unavailable")  # no release fence can be installed
-        if self._replay_locked(value.binding, now, loss_outcome=True) is not None:
+        # Migration can leave held legacy reservations without replayable context
+        # or a source lease. Absent material is still proven loss after the hold check.
+        material = self._connection.execute(
+            "SELECT 1 FROM project_result_publications WHERE project_id=? AND claim_id=?",
+            (self.project_id, claim_id)).fetchone()
+        if material is not None and self._replay_locked(value.binding, now, loss_outcome=True) is not None:
             return "recovered"
         with self._transaction():
             if self._connection.execute(

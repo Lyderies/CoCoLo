@@ -5,10 +5,13 @@ that accepts the regression fails here, including the original round-one false p
 """
 import contextlib
 import inspect
+import json
 import queue
+import tempfile
 import threading
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import tests.support  # noqa: F401
@@ -27,6 +30,125 @@ class PublicationProofSensitivityTests(unittest.TestCase):
         case.setUp()
         self.addCleanup(case.doCleanups)
         return case
+
+    def stopped_scenario(self, fault):
+        """Run the real stopped-instance observer with socket-free service/dispatch substitutes."""
+        case = driver_tests.StoppedInstanceOrderTests(methodName='runTest')
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        case.tools = Path(directory.name)
+        case.open_run = lambda: (None, None, 'orchestration', 'target')
+        case.frames = lambda *args: None
+        case.store_rows = lambda: dict(terminals=1, usage=1, material=0, states=['reserved'])
+        process = mock.Mock()
+        process.poll.return_value = 0
+        case.separate_dispatch = lambda *args: process
+        case.stop_without_settling = lambda: None
+        case.counted = lambda: 0
+        case.remaining = lambda: 2
+        case.wait_for = lambda condition: self.assertTrue(condition())
+        held = types.SimpleNamespace(binding=types.SimpleNamespace(claim_id='claim'), failed=threading.Event())
+        held.failed.set()
+        sweeps = []
+
+        def sweep(driver):
+            sweeps.append(1)
+            if fault == 'empty_first' and len(sweeps) == 1:
+                return
+            case.store_rows = lambda: dict(terminals=1, usage=1, material=0, states=['committed'])
+            values = [types.SimpleNamespace(run_handle='target', bridge_run_id='claim')]
+            if fault == 'wrong_run':
+                values.insert(0, types.SimpleNamespace(run_handle='other', bridge_run_id='claim'))
+            if fault == 'wrong_claim':
+                values.insert(0, types.SimpleNamespace(run_handle='target', bridge_run_id='other'))
+            for value in values:
+                try:
+                    driver_tests.AccountClient.settle_lost_run(None, value)
+                except AssertionError:
+                    pass  # the real lost sweep also catches callback failures
+
+        def expire(lane, request):
+            request.state = 'done'
+
+        def start_host():
+            driver_tests.project_driver.RunDriver._sweep_lost(None)
+            driver_tests.project_driver.RunDriver._expire_results(None)
+            if fault == 'empty_first':
+                driver_tests.project_driver.RunDriver._sweep_lost(None)
+
+        case.start_host = start_host
+        with mock.patch.object(driver_tests, 'HeldLiveCommit', lambda: contextlib.nullcontext(held)), \
+                mock.patch.object(driver_tests.AccountClient, 'settle_lost_run', return_value='reply'), \
+                mock.patch.object(driver_tests.project_driver.RunDriver, '_settle_lost', sweep), \
+                mock.patch.object(driver_tests.project_driver.RunDriver, '_sweep_lost',
+                                  lambda driver: driver_tests.project_driver.RunDriver._settle_lost(driver)), \
+                mock.patch.object(driver_tests.result_persistence.ResultPersistenceLane, '_earlier', expire), \
+                mock.patch.object(driver_tests.project_driver.RunDriver, '_expire_results',
+                                  lambda driver: driver_tests.result_persistence.ResultPersistenceLane._earlier(
+                                      None, types.SimpleNamespace(kind='expire'))):
+            events, _, run = case.stranded_then_successor('sweep_first')
+        case.check(events, run)
+        return events
+
+    def test_settlement_observer_retains_wrong_run_and_claim_calls(self):
+        for fault in ('wrong_run', 'wrong_claim'):
+            with self.subTest(fault=fault), self.assertRaises(AssertionError):
+                self.stopped_scenario(fault)
+        self.stopped_scenario(None)
+
+    def test_sweep_first_observer_rejects_settlement_only_after_expiry(self):
+        with self.assertRaises(AssertionError):
+            self.stopped_scenario('empty_first')
+        self.stopped_scenario(None)
+
+    def test_driver_teardown_still_rejects_each_inherited_named_worker_leak(self):
+        case = driver_tests.StoppedInstanceOrderTests(methodName='runTest')
+        case.stop, case.threads, case.failures = threading.Event(), [], []
+        case._host_stop = threading.Event()
+        for name in ('account-observation', 'signature-fixed-worker', 'codex-agents-collector', 'account-ingress'):
+            worker = types.SimpleNamespace(name=name, is_alive=lambda: True)
+            with self.subTest(worker=name), mock.patch.object(driver_tests.threading, 'enumerate', return_value=[worker]), \
+                    self.assertRaises(AssertionError):
+                case.stop_services()
+        with mock.patch.object(driver_tests.threading, 'enumerate', return_value=[]):
+            case.stop_services()
+
+    def test_registered_cleanup_obeys_the_shared_deadline_even_after_teardown_fails(self):
+        case = driver_tests.StoppedInstanceOrderTests(methodName='runTest')
+        case.stop, case.failures = threading.Event(), []
+        case._host_stop = threading.Event()
+        clock, joins = [59.5], []
+
+        def join(timeout):
+            joins.append(timeout)
+            clock[0] += timeout  # emulate a thread that consumes the whole join timeout
+
+        case.threads = [types.SimpleNamespace(name='stuck-host', join=join, is_alive=lambda: True)]
+        with mock.patch.object(driver_tests, 'MODULE_END', 50), \
+                mock.patch.object(driver_tests.time, 'monotonic', side_effect=lambda: clock[0]):
+            with self.assertRaises(AssertionError):
+                case.stop_services()
+            case._end_services(case.stop)  # registered by the inherited harness before teardown
+        self.assertEqual([0.5, 0], joins)
+        self.assertEqual(60, clock[0])
+        self.assertTrue(case.stop.is_set())
+
+    def test_lifetime_registry_keeps_both_D3_entries_and_D4_replay(self):
+        registry = json.loads(Path(__file__).with_name('lifetime_caps.json').read_text())['sites']
+        expected = {
+            'project_result_contexts.py::context_rows': {
+                'checks': 1,
+                'ends': 'a page read inside repairs(): at most limit+1 context rows of one state after the cursor, one index range; rows leave as their retirement finishes (ended/expired); BOUNDED',
+                'test': 'test_R2_a_truncated_report_says_so_and_its_continuation_reaches_every_remaining_entry'},
+            'project_result_contexts.py::reservation_rows': {
+                'checks': 1,
+                'ends': 'a page read inside repairs(): at most limit+1 retiring reservations without a context row after the cursor; rows leave as their retirement finishes; BOUNDED',
+                'test': 'test_R2_a_reservation_only_directory_is_listed_before_earlier_retrying_contexts'},
+        }
+        for site, entry in expected.items():
+            with self.subTest(site=site):
+                self.assertEqual(entry, registry.get(site))
+        self.assertIn('project_history.py::replay_candidates', registry)
 
     def test_P1_proof_detects_retention_recomputed_on_retry(self):
         case = self.fixture(store_tests.KeptPacketRetryTests)
@@ -91,7 +213,7 @@ class PublicationProofSensitivityTests(unittest.TestCase):
     def test_L1_L2_observer_sees_the_callback_cached_at_writer_startup(self):
         case = driver_tests.LiveRetryLifecycleTests(methodName='runTest')
         selected = object()
-        pending = types.SimpleNamespace(selected=selected, observed_at_ms=123, state='queued')
+        pending = types.SimpleNamespace(selected=selected, observed_at_ms=123, state='queued', delivery=None)
         lane = object.__new__(result_persistence.ResultPersistenceLane)
         lane._lock = threading.Lock()
         lane._ready = threading.Event()

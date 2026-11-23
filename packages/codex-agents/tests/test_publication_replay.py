@@ -658,8 +658,138 @@ class ReviewRegressionTests(ReplayFixture):
         self.store._connection.execute('PRAGMA foreign_keys=OFF')
         self.store._connection.execute('DELETE FROM result_leases WHERE claim_id=?', (self.claim(),))
         self.store._connection.execute('PRAGMA foreign_keys=ON')
+        before = (self.counts(), self.files(), self.prepared(), self.material(),
+                  self.store._result_counts(), rc.context_row(self.store, *self.attempt()), self.release_kind())
+        self.assertLess(self.now, self.reservation().reserved_until_ms)
+        with self.assertRaises(HistoryError) as caught:
+            self.commit()  # live publication must require the hold even before the deadline
+        self.assertEqual('history_result_expired', caught.exception.reason_code)
+        self.assertEqual(before, (self.counts(), self.files(), self.prepared(), self.material(),
+                                 self.store._result_counts(), rc.context_row(self.store, *self.attempt()),
+                                 self.release_kind()))
         self.now = 10_000_000
         self.refused(reason='history_result_expired')
+
+    def test_migrated_reserved_row_without_material_can_be_fenced_without_bound_context(self):
+        from tests import test_project_holds_schema as schema_tests
+        schema = schema_tests.SchemaStepTests(methodName='runTest')
+        schema.setUp()
+        self.addCleanup(schema.doCleanups)
+        # The fixture prepares claim 4 using today's writer; format 17 had no publication table.
+        schema.store._connection.execute('DELETE FROM project_result_publications')
+        schema.format_17_store()
+        history = schema.upgrade()
+        for number, reason in ((2, 'history_conflict'), (4, 'history_result_expired')):
+            with self.subTest(source='lease' if number == 2 else 'reference'):
+                target = binding(number)  # migration may retain a lease-born or a reference reservation
+                self.assertEqual('legacy_no_context', rc.context_row(history, target.run_handle, target.attempt)[0])
+                self.assertTrue(project_holds_schema.custody_consistent(history._connection, KEY))
+                with self.assertRaises(HistoryError) as caught:
+                    history.replay_publication(target)
+                self.assertEqual(reason, caught.exception.reason_code)
+                before = tuple(history._connection.execute('SELECT * FROM result_reservations WHERE claim_id=?',
+                                                          (target.claim_id,)).fetchone())
+                self.assertEqual('unrecoverable', history.arbitrate_publication(target.run_handle, target.attempt, 'legacy'))
+                self.assertEqual(('releasing', 'legacy'), tuple(history._connection.execute(
+                    "SELECT state,request_id FROM project_holds WHERE kind='reservation' AND identity=?",
+                    (target.claim_id,)).fetchone()))
+                self.assertEqual(before, tuple(history._connection.execute('SELECT * FROM result_reservations WHERE claim_id=?',
+                                                                          (target.claim_id,)).fetchone()))
+                self.assertEqual('settling', history.arbitrate_publication(target.run_handle, target.attempt, 'again'))
+                self.assertIsNone(history._connection.execute('SELECT 1 FROM terminal_outbox WHERE claim_id=?',
+                                                             (target.claim_id,)).fetchone())
+
+    def test_retry_during_adoption_attestation_preserves_the_installed_delivery(self):
+        self.strand()
+        pending = types.SimpleNamespace(binding=claim_binding(), state='failed', delivery=None, grant=object(),
+                                        adoption_pending=False, selected=object(), reason='history_service_unavailable',
+                                        terminal_evidence=None)
+        lane = object.__new__(result_persistence.ResultPersistenceLane)
+        lane._lock = threading.RLock()
+        handle = result_persistence.ResultPersistenceHandle()
+        lane._jobs = {handle: pending}
+        lane._closed, lane._fault = False, False
+        lane._pid, lane._owner = os.getpid(), mock.Mock()
+        lane._history = lambda: self.store
+        lane._incoming = queue.Queue()
+        lane._ready = threading.Event()
+        lane._bootstrap_history = False
+        lane._requests = lane._store = None
+        lane._unanswered, lane._earlier_held = {}, 1
+        request = types.SimpleNamespace(kind='arbitrate', arguments=(*self.attempt(), 'race'))
+        lane._incoming.put(('earlier', request))
+        attesting, retried = threading.Event(), threading.Event()
+        errors = []
+
+        def retry():
+            try:
+                if not attesting.wait(2):
+                    raise AssertionError('writer never reached attestation')
+                lane.retry(handle)
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                retried.set()
+                lane._closed = True
+                lane._incoming.put(None)
+
+        def attest(_):
+            attesting.set()
+            self.assertTrue(retried.wait(2), 'retry must execute during attestation')
+            return b'evidence'
+
+        lane._thread = threading.Thread(target=retry, name='d4-adoption-retry')
+        lane._thread.start()
+        try:
+            with mock.patch.object(self.store, 'attest_terminal_delivery', side_effect=attest), \
+                    mock.patch.object(lane, '_publish', wraps=lane._publish) as publish:
+                lane._run()  # actual operation dispatch, including any stale queued publish
+        finally:
+            lane._thread.join(3)
+        self.assertFalse(lane._thread.is_alive())
+        self.assertEqual([], errors)
+        self.assertEqual(('done', 'recovered'), (request.state, request.result))
+        self.assertFalse(lane._fault)
+        self.assertEqual(('committed', None, None, b'evidence'),
+                         (pending.state, pending.reason, pending.selected, pending.terminal_evidence))
+        self.assertEqual(self.store.committed_delivery(claim_binding()), pending.delivery)
+        publish.assert_not_called()
+        self.assertEqual((1, 1, 1), self.counts())
+
+    def test_stale_queued_publish_leaves_an_already_installed_delivery_alone(self):
+        self.strand()
+        self.store.replay_publication(claim_binding())
+        delivery, evidence = self.store.committed_delivery(claim_binding()), object()
+        pending = types.SimpleNamespace(state='committed', reason=None, delivery=delivery,
+                                        terminal_evidence=evidence, selected=None)
+        lane = object.__new__(result_persistence.ResultPersistenceLane)
+        lane._lock, lane._ready = threading.RLock(), threading.Event()
+        lane._jobs = {'live': pending}
+        lane._bootstrap_history = False
+        lane._requests = lane._store = None
+        lane._closed, lane._fault = True, False
+        lane._unanswered = {}
+        lane._incoming = queue.Queue()
+        lane._incoming.put(('publish', 'live'))
+        lane._incoming.put(None)
+        with mock.patch.object(lane, '_publish', wraps=lane._publish) as publish:
+            lane._run()
+        self.assertFalse(lane._fault)
+        self.assertEqual(('committed', None), (pending.state, pending.reason))
+        self.assertIs(delivery, pending.delivery)
+        self.assertIs(evidence, pending.terminal_evidence)
+        publish.assert_not_called()
+        # A later acknowledgement failure still owns its installed delivery;
+        # adoption must not take its state away from acknowledgement retry.
+        pending.binding, pending.adoption_pending = claim_binding(), False
+        pending.grant = None
+        pending.state, pending.reason = 'failed', 'history_service_unavailable'
+        history = mock.Mock(committed_delivery=mock.Mock(return_value=delivery))
+        lane._adopt_committed(history, {self.claim()})
+        self.assertEqual(('failed', 'history_service_unavailable'), (pending.state, pending.reason))
+        self.assertIs(delivery, pending.delivery)
+        self.assertIs(evidence, pending.terminal_evidence)
+        history.committed_delivery.assert_not_called()
 
     def test_four_refusals_and_a_skipped_claim_do_not_starve_the_next_candidate(self):
         for number in range(1, 7):

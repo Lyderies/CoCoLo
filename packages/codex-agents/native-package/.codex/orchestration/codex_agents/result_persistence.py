@@ -624,7 +624,7 @@ class ResultPersistenceLane:
         with self._lock:
             if self._closed or self._fault:
                 raise HistoryError("history_service_unavailable")
-            if pending.state in {"queued", "committing", "committed", "acknowledging", "acknowledged"}:
+            if pending.state in {"queued", "committing", "adopting", "committed", "acknowledging", "acknowledged"}:
                 return
             if pending.state != "failed" or pending.selected is None:
                 raise HistoryError("history_result_not_ready")
@@ -1115,17 +1115,22 @@ class ResultPersistenceLane:
         replay or the arbitration), takes the stored delivery instead of publishing it again."""
         with self._lock:
             failed = [pending for pending in self._jobs.values()
-                      if pending.state == 'failed' and type(pending.binding) is AttemptBinding
+                      if pending.state == 'failed' and pending.delivery is None and type(pending.binding) is AttemptBinding
                       and (pending.adoption_pending or (claim_ids is not None and pending.binding.claim_id in claim_ids)
                            or (run is not None and (pending.binding.run_handle, pending.binding.attempt) == run))]
-        for pending in failed:
-            with self._lock:
+            for pending in failed:
+                # Claim adoption under the same lock as retry's queue decision;
+                # store I/O and attestation happen after releasing the lock.
+                pending.state = 'adopting'
                 pending.adoption_pending = True
+        for pending in failed:
             try:
                 delivery = history.committed_delivery(pending.binding)
                 evidence = None if pending.grant is None else history.attest_terminal_delivery(pending.binding)
                 self._install_delivery(pending, delivery, evidence)
             except (HistoryError, sqlite3.Error, OSError):
+                with self._lock:
+                    pending.state = 'failed'
                 continue  # retain the trigger on this bounded live job for later expiry passes
 
     def open_binding(self, operation, *arguments, **options):
@@ -1297,6 +1302,9 @@ class ResultPersistenceLane:
                 with self._lock:
                     pending = self._jobs[handle]
                     if operation == "publish":
+                        if pending.delivery is not None:
+                            pending = handle = command = None
+                            continue  # an adoption already completed this queued publication
                         pending.state = "committing"
                 try:
                     operations[operation](pending)

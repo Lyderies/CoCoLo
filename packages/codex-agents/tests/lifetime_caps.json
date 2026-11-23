@@ -1476,6 +1476,16 @@
    "ends": "D3 (RS-D draft 3 \u00a74): three report bounds per page, over contexts in `repair_required`, over reservations in `retiring` that have no context row, and over contexts in `retiring`, in that order with a cursor for the next page; each ends `ended` or `expired` once the retry succeeds or an operator removes the directory under its fixed name",
    "test": "test_M1_a_directory_under_a_reservation_only_body_name_is_shown_charged_retried_and_finished_when_removed"
   },
+  "project_result_contexts.py::context_rows": {
+   "checks": 1,
+   "ends": "a page read inside repairs(): at most limit+1 context rows of one state after the cursor, one index range; rows leave as their retirement finishes (ended/expired); BOUNDED",
+   "test": "test_R2_a_truncated_report_says_so_and_its_continuation_reaches_every_remaining_entry"
+  },
+  "project_result_contexts.py::reservation_rows": {
+   "checks": 1,
+   "ends": "a page read inside repairs(): at most limit+1 retiring reservations without a context row after the cursor; rows leave as their retirement finishes; BOUNDED",
+   "test": "test_R2_a_reservation_only_directory_is_listed_before_earlier_retrying_contexts"
+  },
   "project_runtime.py::__post_init__": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"

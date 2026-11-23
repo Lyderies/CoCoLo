@@ -58,6 +58,14 @@ class Observed:
             thread.join(max(0, MODULE_END + 10 - time.monotonic()))
             self.assertFalse(thread.is_alive(), thread.name + ' exceeded the shared 60 s module budget')
         self.assertEqual([], self.failures)
+        workers = {'account-observation', 'signature-fixed-worker', 'codex-agents-collector', 'account-ingress'}
+        self.assertEqual([], [t.name for t in threading.enumerate() if t.name in workers and t.is_alive()])
+
+    def _end_services(self, stop):
+        """The separately registered cleanup shares teardown's module deadline."""
+        stop.set()
+        for thread in reversed(self.threads):
+            thread.join(max(0, MODULE_END + 10 - time.monotonic()))
 
     def dispatch_result(self, context, route_path, run_handle):
         process = self.separate_dispatch(context, route_path, run_handle)
@@ -317,9 +325,9 @@ class StoppedInstanceOrderTests(Observed, lost.LostRunHarness):
         context, route_path, orchestration, run_handle = self.open_run()
 
         def settling(client, value, **options):
-            self.assertEqual(run_handle, value.run_handle)
-            self.assertEqual(held.binding.claim_id, value.bridge_run_id)
-            events.append(('settle', tuple(self.store_rows()['states']), value.run_handle, value))
+            event = ['settle', None, value.run_handle, value]
+            events.append(event)  # record identity before anything the sweep could catch
+            event[1] = tuple(self.store_rows()['states'])
             reply = settle(client, value, **options)
             events.append(('settled', value.run_handle, reply))
             return reply
@@ -378,6 +386,10 @@ class StoppedInstanceOrderTests(Observed, lost.LostRunHarness):
                         first, second = (('expiry_done', 'sweep_start') if mode == 'expiry_first'
                                          else ('sweep_done', 'expiry_done'))
                         self.assertLess(names.index(first), names.index(second), events)
+                        if mode == 'sweep_first':
+                            first_sweep = events[names.index('sweep_start') + 1:names.index('sweep_done')]
+                            self.assertTrue(any(e[0] == 'settled' and e[1] == run_handle for e in first_sweep),
+                                            'target settlement must return inside the first sweep: %r' % (events,))
                 dispatch.communicate(timeout=self.remaining())
                 self.wait_for(lambda: self.counted() == 0 and
                               any(e[0] == 'settled' and e[1] == run_handle for e in events))
@@ -385,6 +397,12 @@ class StoppedInstanceOrderTests(Observed, lost.LostRunHarness):
                 if dispatch.poll() is None:
                     dispatch.kill()
                     dispatch.communicate(timeout=2)
+        # These assertions belong to the test thread: the sweep catches callback
+        # exceptions, which must never erase a wrong-target call from the proof.
+        for event in events:
+            if event[0] == 'settle':
+                self.assertEqual(run_handle, event[2])
+                self.assertEqual(held.binding.claim_id, event[3].bridge_run_id)
         return events, orchestration, run_handle
 
     def check(self, events, run_handle):
