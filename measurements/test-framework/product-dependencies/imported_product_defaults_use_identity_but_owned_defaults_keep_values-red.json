@@ -1,0 +1,9 @@
+{
+ "status": "red",
+ "base": "5ab0a9d3",
+ "diagnostic": "TF-26 imported product default invalidated legacy proof",
+ "witness": "root:test_product_dependencies.ProductDependencies.test_imported_product_defaults_use_identity_but_owned_defaults_keep_values",
+ "source_run": "old-red.run.json",
+ "job_seconds": 0.10589620802784339,
+ "jobs": 16
+}

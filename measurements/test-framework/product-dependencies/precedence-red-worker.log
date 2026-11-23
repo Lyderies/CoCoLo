@@ -1,0 +1,14 @@
+..F.....
+======================================================================
+FAIL: test_later_bookkeeping_proof_takes_precedence_over_older_policy_record (test_product_dependencies.ProductDependencies.test_later_bookkeeping_proof_takes_precedence_over_older_policy_record)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_product_dependencies.py", line 109, in test_later_bookkeeping_proof_takes_precedence_over_older_policy_record
+    self.assertTrue(callable(combine),'TF-26 missing release/policy dependency precedence')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : TF-26 missing release/policy dependency precedence
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.020s
+
+FAILED (failures=1)

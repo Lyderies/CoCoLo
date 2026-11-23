@@ -360,7 +360,7 @@ def metadata():
                         raise ValueError('immutable release source bindings changed')
                     release = {**release, 'tests': {**release['tests'], **bindings['tests']}}
             from rebind_release_bookkeeping import checked_bindings, apply_fingerprints
-            bookkeeping = checked_bindings(ROOT)
+            bookkeeping = checked_bindings(ROOT, test_owned=True)
             if bookkeeping:
                 release = {**release, 'tests': {**release['tests'], **bookkeeping}}
             legacy, ceiling, previous = framework.release_legacy(legacy, ceiling, previous, release,
@@ -370,6 +370,8 @@ def metadata():
             errors.append('cannot verify release legacy baseline: '+str(error))
     if 'legacy list requires an explicit trusted --base' in errors:
         raise ValueError('legacy list requires an explicit trusted --base')
+    from test_owned_baseline import checked as checked_test_owned, effective_records
+    policy_bindings = effective_records(release['tests'] if release else {}, checked_test_owned(ROOT, legacy['tests']))
     discovery_started = time.monotonic()
     try:
         discovered = inventory()
@@ -415,6 +417,7 @@ def metadata():
         dependencies = framework.decode_json(dependency_file.read_text())
         if release:
             dependencies.update({name: record['dependencies'] for name, record in release['tests'].items()})
+        dependencies.update({name: record['dependencies'] for name, record in policy_bindings.items()})
         for cases in discovered.values():
             for name, record in cases.items():
                 if name in legacy['tests'] and record.get('dependencies') != dependencies.get(name):
@@ -425,6 +428,7 @@ def metadata():
     values = framework.decode_json(value_file.read_text()) if value_file.exists() else {}
     if release:
         values.update({name: {'fingerprint': record['dependency_values']} for name, record in release['tests'].items()})
+    values.update({name: {'fingerprint': record['dependency_values']} for name, record in policy_bindings.items()})
     errors += framework.validate_legacy_values({key: rec for cases in discovered.values() for key, rec in cases.items()}, legacy, values)
     entrypoints = ROOT / 'scripts/test-entrypoints.json'
     entries = framework.decode_json(entrypoints.read_text()) if entrypoints.exists() else {}

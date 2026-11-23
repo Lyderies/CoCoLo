@@ -1,0 +1,15 @@
+{
+ "revision": "93624f199f51fb1fb60ebeb86315ee1ea9882b95",
+ "command": [
+  "/private/tmp/cocolo-testfw-venv/bin/python",
+  "-B",
+  "scripts/parallel_tests.py",
+  "--base",
+  "b531844030fa619c1f62ddd6c092ebc2ea4fca38",
+  "--save-timings",
+  "/private/tmp/tf26-full.json"
+ ],
+ "exit_code": 1,
+ "end_to_end_seconds": 558.1105226660147,
+ "requirements_test_sha256": "60db8c9d8f1eecfcedd0e9fd20d6f2604ecb68899f0a02c4403f10cebafa1de5"
+}

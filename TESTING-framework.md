@@ -56,3 +56,12 @@ python -B scripts/parallel_tests.py --base b531844030fa619c1f62ddd6c092ebc2ea4fc
 ```
 
 The runner checks every binding's immutable introduction and permitted source transition, then verifies the current files and test fingerprints. Retired grandfather entries stay retired. The binding is a narrow permission for the recorded bookkeeping transition, not a waiver for later edits or changed helpers.
+
+
+## Product fixes and test-owned legacy dependencies (TF-26)
+
+Ordinary product implementation changes require no legacy proof rebinding. The gate fingerprints test-owned assertions, fixtures/helpers and their constants; product functions/classes and imported constants/defaults are referenced by identity. A changed helper, assertion or legacy test ID still requires the normal requirement proof migration.
+
+The immutable `scripts/test-legacy-test-owned-v1.json` and `-v2.json` versions were generated from trusted `5ab0a9d3`, never candidate test/helper files. Reproduction commands for their committed algorithms are `python -B scripts/generate_test_owned_baseline.py --algorithm 249d4f7d` (v1 generator revision) and `python -B scripts/generate_test_owned_baseline.py --algorithm 813661df` (v2 generator revision), using the prepared hash-pinned environment and the matching historical generator revision. The generator refuses to overwrite an existing version. Do not run it for a product fix or change an immutable file: a future policy change needs a new reviewed version.
+
+The ordinary command remains `python -B scripts/parallel_tests.py --base b531844030fa619c1f62ddd6c092ebc2ea4fca38 --save-timings <timings.json>` at the default job count. TF-25 release bookkeeping still uses its documented rebinding command; new records include the test-owned dependency interpretation alongside the historical one.

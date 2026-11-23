@@ -162,3 +162,14 @@
 - Every original watchdog assertion retained; added output-bearing cardinality assertion at tests/test_test_framework_guards.py:466. Affected rerun passes (19.177335 job-seconds); 50-probe experiments pass on both worktrees (49.164339 / 49.380317), but do not establish a root-cause fix.
 - Four reporting classes, every outstanding obligation/reason/closing lane and debt measurements are preserved in the review report and full-outstanding-obligations.json. No missing evidence converted to a pass.
 - Assertions ledger records the two 9→10 restorations and additive diagnostic; no tests deleted or guards/budgets relaxed. No install, push, control-project edit, general cleanup or steps 4–5.
+
+## TF-26 product-code dependency boundary
+- Requirements cc3ef2c7 → red witnesses 912ad5c8/765cd2e5/ed171c73 → ownership/default/precedence fixes 249d4f7d/813661df/cc236c6b. Exact-base TF-23 evidence and fix→line table: REVIEW-test-framework-product-dependencies-fixes.md.
+- Exact 5ab0a9d3 replay plus RSA's four product lines reproduces 1,028 legacy errors across 79 modules. Final affected product-overlay run: 120 tests pass / 34.292031 job-seconds, zero legacy errors.
+- New immutable v1/v2 baselines d4f9ef00/7a58d4d3 preserve all 5,739 IDs and implementation fingerprints; all 15 pre-existing baseline/debt files are unchanged. Old release bindings retain their interpretation; later release proofs take precedence.
+- ONE full run at 93624f19: default 16 jobs, 504.505392 s runner elapsed / 4658.292280 job-seconds, 397 units / 6209 tests; exactly 80 deferred lifecycle metadata errors and zero legacy/other metadata errors.
+- Full-run generated-helper regression: unchanged ReviewTests witness fails; new red 261f3acb precedes fix d56e084c. All nine affected framework modules pass afterward: 135 tests / 35.992503 job-seconds. No original assertion changed.
+- Post-full RSA overlay at 2357016b: nine affected modules plus its new tests, 199 tests / 195.150842 job-seconds, zero failed workers/legacy errors/budget failures; supplied expected-failure probe preserved. Overlay restored; RSA worktree untouched.
+- Full timing failures retained: container_runtime 63.398968 > 60; setup_update 171.402884 > existing debt ceiling 167.88. Isolated checks pass (44.898609 / 115.120282; total 160.018891 job-seconds), without changes to tests, scheduling or limits.
+- Four reporting classes and all 52 missing obligations/reasons/closing lanes are preserved; 14 unchanged debt entries. Full-run timing overruns remain disclosed; no all-green aggregate claim.
+- Assertions ledger: nine new tests; zero existing assertions removed/changed and zero tests deleted. No push, install, control-project/RSA-branch edits, general cleanup or steps 4–5.

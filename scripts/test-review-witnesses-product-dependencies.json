@@ -1,0 +1,72 @@
+[
+ {
+  "fix": "TF26-product_only_constant_and_implementation_changes_keep_legacy_proof",
+  "requirement": "TF-26",
+  "witness": "root:test_product_dependencies.ProductDependencies.test_product_only_constant_and_implementation_changes_keep_legacy_proof",
+  "positive_control": "Unchanged product/test state is equal; a product implementation-only change is accepted; shared-helper edits remain rejected.",
+  "base": "5ab0a9d3",
+  "red": "measurements/test-framework/product-dependencies/product_only_constant_and_implementation_changes_keep_legacy_proof-red.json",
+  "diagnostic": "TF-26 product-only edit invalidated legacy proof",
+  "green": "measurements/test-framework/product-dependencies/product_only_constant_and_implementation_changes_keep_legacy_proof-green.json"
+ },
+ {
+  "fix": "TF26-product_symbol_identity_changes_are_not_ignored",
+  "requirement": "TF-26",
+  "witness": "root:test_product_dependencies.ProductDependencies.test_product_symbol_identity_changes_are_not_ignored",
+  "positive_control": "Same identity is equal; another product module with equal values changes the proof.",
+  "base": "5ab0a9d3",
+  "red": "measurements/test-framework/product-dependencies/product_symbol_identity_changes_are_not_ignored-red.json",
+  "diagnostic": "TF-26 changed product identity was ignored",
+  "green": "measurements/test-framework/product-dependencies/product_symbol_identity_changes_are_not_ignored-green.json"
+ },
+ {
+  "fix": "TF26-source_ownership_wins_over_test_looking_product_alias",
+  "requirement": "TF-26",
+  "witness": "root:test_product_dependencies.ProductDependencies.test_source_ownership_wins_over_test_looking_product_alias",
+  "positive_control": "Unchanged source is equal; a product function with a test-looking module alias may change its implementation.",
+  "base": "5ab0a9d3",
+  "red": "measurements/test-framework/product-dependencies/source_ownership_wins_over_test_looking_product_alias-red.json",
+  "diagnostic": "TF-26 product source followed a test-looking alias",
+  "green": "measurements/test-framework/product-dependencies/source_ownership_wins_over_test_looking_product_alias-green.json"
+ },
+ {
+  "fix": "TF26-imported_product_defaults_use_identity_but_owned_defaults_keep_values",
+  "requirement": "TF-26",
+  "witness": "root:test_product_dependencies.ProductDependencies.test_imported_product_defaults_use_identity_but_owned_defaults_keep_values",
+  "positive_control": "Unchanged defaults are equal; product positional/keyword defaults may vary, but a test-owned default change is rejected.",
+  "base": "5ab0a9d3",
+  "red": "measurements/test-framework/product-dependencies/imported_product_defaults_use_identity_but_owned_defaults_keep_values-red.json",
+  "diagnostic": "TF-26 imported product default invalidated legacy proof",
+  "green": "measurements/test-framework/product-dependencies/imported_product_defaults_use_identity_but_owned_defaults_keep_values-green.json"
+ },
+ {
+  "fix": "TF26-migration_rejects_wrong_provenance_and_changed_test_identity",
+  "requirement": "TF-26",
+  "witness": "root:test_product_dependencies.ProductDependencies.test_migration_rejects_wrong_provenance_and_changed_test_identity",
+  "positive_control": "Correct provenance and unchanged IDs/fingerprints are accepted before and after wrong source, changed ID/fingerprint and unresolved dependency controls.",
+  "base": "5ab0a9d3",
+  "red": "measurements/test-framework/product-dependencies/migration_rejects_wrong_provenance_and_changed_test_identity-red.json",
+  "diagnostic": "TF-26 missing immutable test-owned baseline validator",
+  "green": "measurements/test-framework/product-dependencies/migration_rejects_wrong_provenance_and_changed_test_identity-green.json"
+ },
+ {
+  "fix": "TF26-later_bookkeeping_proof_takes_precedence_over_older_policy_record",
+  "requirement": "TF-26",
+  "witness": "root:test_product_dependencies.ProductDependencies.test_later_bookkeeping_proof_takes_precedence_over_older_policy_record",
+  "positive_control": "Old release records receive the new policy; a later release record wins even with the same test implementation fingerprint.",
+  "base": "5ab0a9d3",
+  "red": "measurements/test-framework/product-dependencies/later_bookkeeping_proof_takes_precedence_over_older_policy_record-red.json",
+  "diagnostic": "TF-26 missing release/policy dependency precedence",
+  "green": "measurements/test-framework/product-dependencies/later_bookkeeping_proof_takes_precedence_over_older_policy_record-green.json"
+ },
+ {
+  "fix": "TF26-generated-helper-regression",
+  "requirement": "TF-26",
+  "witness": "root:test_product_dependencies.ProductDependencies.test_fileless_generated_helpers_keep_owned_namespace_and_external_identity",
+  "positive_control": "Unchanged generated fixtures compare equal; a changed helper is rejected; a separate generated product namespace may change without changing the proof. The original ReviewTests witness is unchanged and passes after the fix.",
+  "base": "93624f19",
+  "red": "measurements/test-framework/product-dependencies/generated-helper-red.json",
+  "diagnostic": "TF-26 generated test helper edit was hidden",
+  "green": "measurements/test-framework/product-dependencies/generated-helper-green.json"
+ }
+]

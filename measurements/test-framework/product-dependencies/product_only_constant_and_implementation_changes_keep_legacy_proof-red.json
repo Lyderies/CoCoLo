@@ -1,0 +1,9 @@
+{
+ "status": "red",
+ "base": "5ab0a9d3",
+ "diagnostic": "TF-26 product-only edit invalidated legacy proof",
+ "witness": "root:test_product_dependencies.ProductDependencies.test_product_only_constant_and_implementation_changes_keep_legacy_proof",
+ "source_run": "old-red.run.json",
+ "job_seconds": 0.10589620802784339,
+ "jobs": 16
+}

@@ -119,7 +119,7 @@ def base_bindings(root):
     return result
 
 
-def inventory(root,snapshot,seed):
+def inventory(root,snapshot,seed,*,test_owned=False):
     scripts=snapshot/'scripts';scripts.mkdir(exist_ok=True)
     shutil.copyfile(root/'scripts/test_framework.py',scripts/'test_framework.py')
     code=f"""import sys,json,unittest
@@ -134,14 +134,14 @@ def walk(suite):
   if isinstance(test,unittest.TestSuite):walk(test)
   else:
    key='claude:'+test.id();deps=seed.get(key,{{}}).get('source_dependencies',[])
-   out[key]={{**fw.describe_test(test,tuple(root/p for p in deps)),'source_dependencies':deps}}
+   out[key]={{**fw.describe_test(test,tuple(root/p for p in deps),test_owned={test_owned!r}),'source_dependencies':deps}}
 walk(unittest.defaultTestLoader.loadTestsFromModule(module))
 print(json.dumps(out))
 """
     return child(root,snapshot,code)
 
 
-def build(root,before_commit,source,previous,seed,after_commit=None,expected_sources=None):
+def build(root,before_commit,source,previous,seed,after_commit=None,expected_sources=None,*,include_policy=False):
     before_commit=revision(root,before_commit);source=revision(root,source)
     before=texts(root,before_commit)
     expected_sources = expected_sources or source_hashes(texts(root,fw.RELEASE_BASE))
@@ -158,17 +158,20 @@ def build(root,before_commit,source,previous,seed,after_commit=None,expected_sou
         if old!=eligible:raise ValueError('pre-bump proof does not match existing bindings')
         for name,text in after.items():(snapshot/name).write_text(text)
         new=inventory(root,snapshot,eligible)
+        translated=inventory(root,snapshot,eligible,test_owned=True) if include_policy else None
         if set(new)!=set(old) or any(rec['requirements'] or not rec['dependency_values'] for rec in new.values()):
             raise ValueError('bookkeeping cannot admit, retire or tag tests')
-    return dict(schema=1,previous_release=previous,before_commit=before_commit,source_commit=source,
+    result=dict(schema=1,previous_release=previous,before_commit=before_commit,source_commit=source,
                 before_sources=source_hashes(before),after_sources=source_hashes(after),tests=new)
+    if translated is not None:result['test_owned_tests']=translated
+    return result
 
 
 def source_hashes(values):
     return {name:hashlib.sha256(text.encode()).hexdigest() for name,text in values.items()}
 
 
-def checked_bindings(root,check_current=True):
+def checked_bindings(root,check_current=True,*,test_owned=False):
     """Re-derive each immutable admission from Git; current edits still face normal hashing."""
     state=base_bindings(root);admitted={}
     anchor=source_hashes(texts(root,fw.RELEASE_BASE))
@@ -178,9 +181,13 @@ def checked_bindings(root,check_current=True):
         commits=git(root,'log','--reverse','--format=%H','HEAD','--',name).decode().split()
         if not commits or fw.decode_json(git(root,'show',commits[0]+':'+name).decode())!=data:
             raise ValueError('immutable bookkeeping binding changed or uncommitted')
-        rebuilt=build(root,data['before_commit'],data['source_commit'],data['previous_release'],state,commits[0],anchor)
+        rebuilt=build(root,data['before_commit'],data['source_commit'],data['previous_release'],state,commits[0],anchor,include_policy='test_owned_tests' in data)
         if rebuilt!=data:raise ValueError('bookkeeping binding does not match permitted transition')
-        state.update(data['tests']);admitted.update(data['tests']);anchor=data['after_sources']
+        state.update(data['tests'])
+        records = data['tests']
+        if test_owned and 'test_owned_tests' in data:
+            records = {name: {**row, 'dependency_policy': 'test-owned'} for name, row in data['test_owned_tests'].items()}
+        admitted.update(records);anchor=data['after_sources']
     if paths and check_current and source_hashes({name:(root/name).read_text() for name in FILES})!=anchor:
         raise ValueError('current bookkeeping sources differ from admitted state; use the checked rebinding command for a permitted bump')
     return admitted
@@ -213,7 +220,7 @@ def main():
         state={name:rec for name,rec in state.items() if name in active}
         paths=sorted((root/BINDINGS).glob('*.json'),key=lambda p:tuple(map(int,p.stem.split('.'))))
         anchor=fw.decode_json(paths[-1].read_text())['after_sources'] if paths else None
-        data=build(root,args.before,args.source,args.previous_release,state,expected_sources=anchor)
+        data=build(root,args.before,args.source,args.previous_release,state,expected_sources=anchor,include_policy=(root/'scripts/test-legacy-test-owned-v1.json').exists())
         write_new(path,data)
     except (ValueError,KeyError,subprocess.CalledProcessError) as error:
         parser.exit(1,str(error)+'\n')
