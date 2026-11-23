@@ -288,6 +288,7 @@
  "root:test_setup_wizard_terminal": "unit",
  "root:test_test_framework": "component",
  "root:test_test_framework_guards": "scenario",
+ "root:test_test_framework_integration": "scenario",
  "root:test_test_framework_r2": "scenario",
  "root:test_test_framework_r3": "scenario",
  "root:test_test_framework_review": "component",
