@@ -1,0 +1,268 @@
+FF.FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF..FFFFFFFFFFFTimeout (0:10:00)!
+Thread 0x00000070261c3000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x00000070241ab000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x0000007022193000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x000000702017b000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x000000701e163000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x000000701c14b000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x000000701a133000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x000000701811b000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x0000007016103000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x00000070140eb000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x00000070120d3000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x00000070100bb000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x000000700e0a3000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x000000700c08b000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x000000700a073000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x000000700805b000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x0000007006043000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x000000700402b000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x0000007002013000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x000000017fdf7000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x000000017dddf000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x000000017bdc7000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x0000000179daf000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x0000000177d97000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x0000000175d7f000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x0000000173d67000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x0000000171d4f000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x000000016fd37000 [signature-fixed-worker] (most recent call first):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 369 in wait
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 670 in wait
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 195 in _worker_loop
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_worker_pool.py", line 204 in _worker
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1024 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1082 in _bootstrap_inner
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1044 in _bootstrap
+
+Thread 0x0000000201a29300 (most recent call first):
+  File "/private/tmp/cocolo-rsa3-r1-base/packages/codex-agents/tests/test_account_billing_admission.py", line 63 in stop
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/case.py", line 632 in _callCleanup
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/case.py", line 706 in doCleanups
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/case.py", line 673 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/case.py", line 725 in __call__
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/suite.py", line 122 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/suite.py", line 84 in __call__
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/suite.py", line 122 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/suite.py", line 84 in __call__
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/suite.py", line 122 in run
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/suite.py", line 84 in __call__
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/runner.py", line 257 in run
+  File "/private/tmp/cocolo-rsa3-r1-base/scripts/test_worker.py", line 221 in main
+  File "<string>", line 4 in <module>

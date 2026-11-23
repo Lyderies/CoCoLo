@@ -967,7 +967,8 @@
  },
  "RSA3-1": {
   "checks": [
-   "codex:tests.test_rsa_step3.OutstandingOwnerSignatureTests.test_RSA3_1_swept_owner_signature_returns_without_fault_and_is_forgotten"
+   "codex:tests.test_rsa_step3.OutstandingOwnerSignatureTests.test_RSA3_1_swept_owner_signature_returns_without_fault_and_is_forgotten",
+   "codex:tests.test_rsa_step3.OwnerSignatureQueryTests.test_owner_signature_query"
   ],
   "source": "measurements/rsa-step3/requirements.md#RSA3-1",
   "statement": "**RSA3-1 \u2014 Outstanding owner preparation.** Decision 87 F6: a swept owner-API reservation whose prepare signature work is still running refuses its late return without faulting claims, forgets its handle and releases capacity once."
@@ -981,7 +982,7 @@
  },
  "RSA3-3": {
   "checks": [
-   "codex:tests.test_rsa_step3.LateCompletionTests.test_RSA3_3_ledger_local_late_completion_matches_owner_refusal",
+   "codex:tests.test_rsa_step3.LedgerLocalLateCompletionTests.test_RSA3_3_ledger_local_late_completion_matches_owner_refusal",
    "codex:tests.test_rsa_step3.LateCompletionTests.test_RSA3_3_owner_release_refuses_a_decided_slot"
   ],
   "source": "measurements/rsa-step3/requirements.md#RSA3-3",

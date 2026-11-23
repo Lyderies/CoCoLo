@@ -145,9 +145,9 @@ class LateCompletionTests(unittest.TestCase):
         self.assertIsNone(case.ledger._connection.execute(
             'SELECT receipt_digest FROM capacity_completions').fetchone()[0])
 
-    @requirements('RSA3-3', why_not_scenario='Ledger-local transaction edge with synthetic cleaned registry custody: compare the durable late-release rule; no claim of process containment proof.')
-    @unittest.expectedFailure  # F2: ledger-local release accepts a decided slot; owner decides the fix.
-    def test_RSA3_3_ledger_local_late_completion_matches_owner_refusal(self):
+
+class LedgerLocalLateCompletionTests(unittest.TestCase):
+    def setUp(self):
         case = execution_fixtures.CapacityCompletionTests('runTest')
         case.setUp()
         self.addCleanup(lambda: self.assertTrue(case.doCleanups()))
@@ -167,7 +167,8 @@ class LateCompletionTests(unittest.TestCase):
         refused = False
         try:
             reply = case.ledger._release_active_capacity(ticket)
-        except learning_store.LedgerError:
+        except learning_store.LedgerError as error:
+            self.assertEqual('claim_cleanup_conflict', str(error))
             refused = True
         if not refused:
             self.assertEqual(('released', False), (reply['state'], reply['known']))
@@ -175,4 +176,24 @@ class LateCompletionTests(unittest.TestCase):
                 'SELECT receipt_digest FROM capacity_completions').fetchone()[0])
             self.assertEqual(before, tuple(case.ledger._connection.execute(
                 'SELECT released_at_ms,release_digest FROM active_run_capacity').fetchone()))
-        self.assertTrue(refused, 'ledger-local late completion accepted after crashed decision; owner release_capacity refuses claim_cleanup_conflict')
+        self.refused = refused
+
+    @requirements('RSA3-3', why_not_scenario='Ledger-local transaction edge with synthetic cleaned registry custody: compare the durable late-release rule; no claim of process containment proof.')
+    @unittest.expectedFailure  # F2: ledger-local release accepts a decided slot; owner decides the fix.
+    def test_RSA3_3_ledger_local_late_completion_matches_owner_refusal(self):
+        self.assertTrue(self.refused, 'ledger-local late completion accepted after crashed decision; owner release_capacity refuses claim_cleanup_conflict')
+
+
+class OwnerSignatureQueryTests(unittest.TestCase):
+    setUp = OutstandingOwnerSignatureTests.setUp
+
+    @requirements('RSA3-1', why_not_scenario='Narrow ownership query: an owner-API preparation is recognized and an unknown handle is not.')
+    def test_owner_signature_query(self):
+        case = self.case
+        project = case.fixture.project_id
+        reservation = case.billing._owner.reserve(
+            project, case.runtime, 'b' * 64, 'owner-query', case.contexts[project],
+            before_commit=lambda: True)
+        handle = case.billing._owner.prepare(reservation)
+        self.assertTrue(case.billing.owns_owner_signature(handle))
+        self.assertFalse(case.billing.owns_owner_signature(object()))
