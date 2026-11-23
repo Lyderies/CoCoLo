@@ -80,6 +80,9 @@ def inventory_suite(suite, layers=None):
     release_file = root/'scripts/test-legacy-release-0850.json'
     if release_file.exists():
         baseline.update(decode_json(release_file.read_text())['tests'])
+    bindings_file = root/'scripts/test-legacy-release-0850-bindings.json'
+    if bindings_file.exists():
+        baseline.update(decode_json(bindings_file.read_text())['tests'])
     def walk(tests):
         for test in tests:
             if isinstance(test, unittest.TestSuite):
