@@ -4,12 +4,13 @@ import subprocess
 import test_framework as fw
 
 SOURCE_REVISION = '5ab0a9d3c146980bf8c8a3fcbfa6a07883204c1c'
-NAME = 'scripts/test-legacy-test-owned-v1.json'
+POLICIES = ('test-owned-v1', 'test-owned-v2')
+NAME = 'scripts/test-legacy-' + POLICIES[-1] + '.json'
 
 
 def validate_document(document, active):
     errors = []
-    if document.get('schema') != 1 or document.get('policy') != 'test-owned-v1' or document.get('source_revision') != SOURCE_REVISION:
+    if document.get('schema') != 1 or document.get('policy') not in POLICIES or document.get('source_revision') != SOURCE_REVISION:
         errors.append('wrong test-owned baseline provenance')
     for name, record in document.get('tests', {}).items():
         if name not in active or record.get('fingerprint') != active.get(name):
@@ -19,16 +20,19 @@ def validate_document(document, active):
     return errors
 
 
-def checked(root, admitted):
-    path = root / NAME
+def checked_version(root, admitted, policy):
+    name = "scripts/test-legacy-" + policy + ".json"
+    path = root / name
     if not path.exists():
         return {}
     def git(*args):
         return subprocess.check_output(['git', *args], cwd=root, text=True, stderr=subprocess.DEVNULL)
     document = fw.decode_json(path.read_text())
-    commits = git('log', '--reverse', '--format=%H', 'HEAD', '--', NAME).split()
-    if not commits or document != fw.decode_json(git('show', commits[0] + ':' + NAME)):
+    commits = git('log', '--reverse', '--format=%H', 'HEAD', '--', name).split()
+    if not commits or document != fw.decode_json(git('show', commits[0] + ':' + name)):
         raise ValueError('immutable test-owned baseline changed or uncommitted')
+    if document['policy'] != policy:
+        raise ValueError('wrong test-owned baseline policy version')
     source = git('rev-parse', SOURCE_REVISION + '^{commit}').strip()
     if document['source_revision'] != source or document['source_tree'] != git('rev-parse', source + '^{tree}').strip():
         raise ValueError('wrong test-owned baseline source')
@@ -47,3 +51,10 @@ def checked(root, admitted):
     # admitted bookkeeping assertion gets its own translated record, not this one.
     return {name: row for name, row in document['tests'].items()
             if name in admitted and row['fingerprint'] == admitted[name]}
+
+
+def checked(root, admitted):
+    records = {}
+    for policy in POLICIES:
+        records.update(checked_version(root, admitted, policy))
+    return records

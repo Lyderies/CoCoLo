@@ -11,7 +11,7 @@ import tarfile
 import tempfile
 
 import test_framework as fw
-from test_owned_baseline import NAME, SOURCE_REVISION, validate_document
+from test_owned_baseline import NAME, POLICIES, SOURCE_REVISION, validate_document
 
 
 def git(root, *args):
@@ -99,7 +99,7 @@ def generate(root, algorithm_revision):
         before = inventory(snapshot)
         (snapshot / 'scripts/test_framework.py').write_bytes(algorithm)
         after = inventory(snapshot)
-    document = dict(schema=1, policy='test-owned-v1', source_revision=SOURCE_REVISION,
+    document = dict(schema=1, policy=POLICIES[-1], source_revision=SOURCE_REVISION,
                     source_tree=git(root, 'rev-parse', SOURCE_REVISION + '^{tree}').decode().strip(),
                     algorithm_revision=revision, algorithm_sha256=hashlib.sha256(algorithm).hexdigest(),
                     generator_revision=git(root, 'rev-parse', 'HEAD').decode().strip(),

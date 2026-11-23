@@ -469,6 +469,39 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=(),
             return ('source-defined', ast.dump(binding, include_attributes=False))
         return stable(value, filename)
 
+    def default_values(value, kind, defaults):
+        # Imported product defaults retain their declaration identity. Owned
+        # defaults still use the captured value, including runtime mutations.
+        if not test_owned:
+            return stable(defaults, dependency_source(value))
+        import textwrap
+        try:
+            node = ast.parse(textwrap.dedent(_source(value))).body[0]
+            expressions = node.args.defaults if kind == 'defaults' else dict(
+                (arg.arg, expr) for arg, expr in zip(node.args.kwonlyargs, node.args.kw_defaults))
+        except (SyntaxError, AttributeError, IndexError):
+            return stable(defaults, dependency_source(value))
+        def declared(expr, captured):
+            if isinstance(expr, ast.Name):
+                reference = global_value(expr.id, value.__globals__)
+                if isinstance(reference, tuple) and reference[0] == 'reference':
+                    return reference
+            elif isinstance(expr, ast.Attribute):
+                names = []
+                while isinstance(expr, ast.Attribute):
+                    names.insert(0, expr.attr); expr = expr.value
+                if isinstance(expr, ast.Name):
+                    module = value.__globals__.get(expr.id)
+                    if isinstance(module, types.ModuleType) and not local(module):
+                        return ('reference', module.__name__, '.'.join(names))
+            return stable(captured, dependency_source(value))
+        if kind == 'defaults' and len(expressions) == len(defaults):
+            return ('tuple', [declared(expr, captured) for expr, captured in zip(expressions, defaults)])
+        if kind == 'kwdefaults':
+            return ('dict', sorted(((stable(name), declared(expressions.get(name), captured))
+                                    for name, captured in defaults.items()), key=repr))
+        return stable(defaults, dependency_source(value))
+
     def code_value(code):
         return (code.co_code.hex(), code.co_names, tuple(stable(v, code.co_filename) for v in code.co_consts))
     def local(value):
@@ -496,7 +529,7 @@ def dependency_fingerprint(test, *, include_values=True, source_dependencies=(),
             if include_values:
                 for name, defaults in (('defaults', value.__defaults__), ('kwdefaults', value.__kwdefaults__)):
                     if defaults:
-                        records[key + ':' + name] = stable(defaults, dependency_source(value))
+                        records[key + ':' + name] = default_values(value, name, defaults)
             for name in value.__code__.co_names:
                 dependency = value.__globals__.get(name)
                 if inspect.isfunction(dependency) or inspect.isclass(dependency):
