@@ -44,9 +44,8 @@ class ReleaseBookkeeping(unittest.TestCase):
         catalogue('wrong release',lambda d:d['releases'][-1].update(release='0.8.99'))
         catalogue('forged bundle',lambda d:d['releases'][-1]['files'].update({'forged':'x'}))
         catalogue('extra schema key',lambda d:d.update(unreviewed=True))
-        for label,name,old,new in [('packaging executable',FILES[1],'MAX_CATALOGUE_BYTES =','MAX_CATALOGUE_BYTES = 1 #'),('unrelated comment',FILES[1],'import ast','import ast # unrelated'),('weaken size limit',FILES[2],'self.padded(2_097_152)','self.padded(1)'),('wrong count',FILES[2],'self.assertEqual(10, len','self.assertEqual(11, len'),('unpaired count',FILES[2],'self.assertEqual(10, len','self.assertEqual(9, len'),('helper edit',FILES[2],'def digest_of(record: dict)','def digest_of(record: object)')]:
+        for label,name,old,new in [('packaging executable',FILES[1],'_CATALOGUE_LIMIT = 2_097_152','_CATALOGUE_LIMIT = 1'),('unrelated comment',FILES[1],'import ast','import ast # unrelated'),('weaken size limit',FILES[2],'self.padded(2_097_152)','self.padded(1)'),('wrong count',FILES[2],'self.assertEqual(10, len','self.assertEqual(11, len'),('unpaired count',FILES[2],'self.assertEqual(10, len','self.assertEqual(9, len'),('helper edit',FILES[2],'def digest_of(record: dict)','def digest_of(record: object)')]:
             bad=copy.deepcopy(after)
-            if old not in bad[name]:old='import json';new='import json # unrelated executable annotation'
             self.assertIn(old,bad[name]);bad[name]=bad[name].replace(old,new,1);mutations.append((label,bad))
         for label,bad in mutations:
             with self.subTest(mutation=label):self.assertTrue(module.transition_errors(before,bad,record),'accepted unrelated edit: '+label)
