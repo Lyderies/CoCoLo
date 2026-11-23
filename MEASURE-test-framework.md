@@ -270,3 +270,17 @@ All rows use the runner's DEFAULT 16 jobs; no full suite was repeated. Job-secon
 | Separate real crash campaign | 49 | 45.08007408300182 | 46 pass, three existing mounted-image opt-ins skipped |
 
 No budget failures in these green runs. Overall exit remains 1 for exactly 80 lifecycle metadata failures. This is not a new end-to-end performance claim; concurrent real-campaign budgets remain an open gate. No old timing ceilings were increased or debt retired by this pass.
+
+## Round-3 scoped verification
+
+Saved `--save-timings` `.run.json` records, DEFAULT jobs throughout; only affected modules ran. No full-suite performance claim or budget increase.
+
+| Run | Checks / job-seconds / jobs |
+|---|---|
+| Exact-base framework red | 10 checks; 5.5558232920011505 job-seconds; DEFAULT 16 jobs |
+| Final framework green | 115 checks; 26.99471895804163 job-seconds; DEFAULT 16 jobs |
+| Exact-base merge red | 7 checks; 1.983410916000139 job-seconds; DEFAULT 16 jobs |
+| Integrated merge green | 270 checks; 112.91237787512364 job-seconds; DEFAULT 16 jobs |
+| Separate real crash campaign | 49 checks; 44.652967874950264 job-seconds; DEFAULT 16 jobs |
+
+Green workers pass with no budget failures; real campaign retains three image opt-in skips. Overall exit remains 1 for 80 lifecycle metadata errors. Concurrent real-campaign performance remains open. The immutable dependency migration changes 4,419 fingerprints with zero unresolved entries and unchanged 5,683 legacy IDs.

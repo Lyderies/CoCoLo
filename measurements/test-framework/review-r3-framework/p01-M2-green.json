@@ -4,9 +4,9 @@
  "witnesses": [
   "test_p01_M2_submodule_aliases_and_relative_imports"
  ],
- "source_run": "tf-r3-initial-green.json.run.json",
- "source_sha256": "9bdfd011f8bd9d89e1b355c0d0932f22d5be8a276f4ba6366e83e706d2bc9f6b",
- "job_seconds": 26.559201124997344,
+ "source_run": "tf-r3-final.json.run.json",
+ "source_sha256": "ea0db69d2d20dac246a7a425ea015ac2a81b9c6afdf0270b5ef5dcdf7156870a",
+ "job_seconds": 26.99471895804163,
  "jobs": 16,
  "positive_control": "Ordinary input paths through each identical import form pass."
 }
