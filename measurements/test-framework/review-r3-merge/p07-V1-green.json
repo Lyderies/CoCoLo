@@ -1,0 +1,12 @@
+{
+ "status": "green",
+ "base": "9c18c4a3",
+ "witnesses": [
+  "test_p07_V1_stored_row_is_verified_before_commit_A"
+ ],
+ "source_run": "ml-g1-green.json.run.json",
+ "source_sha256": "3deb25a97499570f5529f822aacc3c92581cd3eda484eee88212058c5e0f2253",
+ "job_seconds": 37.252726165927015,
+ "jobs": 16,
+ "positive_control": "Untampered row lands with commit A; four independently changed stored fields are rejected."
+}

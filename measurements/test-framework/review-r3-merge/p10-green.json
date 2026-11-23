@@ -1,0 +1,12 @@
+{
+ "status": "green",
+ "base": "9c18c4a3",
+ "witnesses": [
+  "test_p10_blocked_sealers_leave_no_threads_in_the_test_process"
+ ],
+ "source_run": "ml-g5-green.json.run.json",
+ "source_sha256": "06407d28c55053367e6d2574b4bcac228fdb32edf97e3e344f4d13cd5e22f2df",
+ "job_seconds": 30.39645612507593,
+ "jobs": 16,
+ "positive_control": "Normal concurrent queue assertions pass; blocked enqueue is reported with no live parent threads; timeout child is reaped."
+}

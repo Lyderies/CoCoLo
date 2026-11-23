@@ -1,0 +1,62 @@
+[
+ {
+  "fix": "p07-V1",
+  "requirement": "ML-5",
+  "witness": "test_p07_V1_stored_row_is_verified_before_commit_A",
+  "positive_control": "Untampered row lands with commit A; four independently changed stored fields are rejected.",
+  "base": "9c18c4a3",
+  "red": "measurements/test-framework/review-r3-merge/p07-V1-red.json",
+  "diagnostic": "stored corruption was admitted",
+  "green": "measurements/test-framework/review-r3-merge/p07-V1-green.json"
+ },
+ {
+  "fix": "p07-V2",
+  "requirement": "ML-12",
+  "witness": "test_p07_V2_failed_ls_files_is_not_empty_success, test_p07_V2_failed_check_attr_is_not_empty_success",
+  "positive_control": "Both real Git validation commands succeed for a normal landing before independent nonzero exits.",
+  "base": "9c18c4a3",
+  "red": "measurements/test-framework/review-r3-merge/p07-V2-red.json",
+  "diagnostic": "p07 V2 failed",
+  "green": "measurements/test-framework/review-r3-merge/p07-V2-green.json"
+ },
+ {
+  "fix": "p08-V1",
+  "requirement": "TF-19",
+  "witness": "test_p08_V1_unreadable_folder_is_not_certified_empty",
+  "positive_control": "Readable empty recorded tree passes; denied scandir fires and raises.",
+  "base": "9c18c4a3",
+  "red": "measurements/test-framework/review-r3-merge/p08-V1-red.json",
+  "diagnostic": "PermissionError not raised",
+  "green": "measurements/test-framework/review-r3-merge/p08-V1-green.json"
+ },
+ {
+  "fix": "p08-V2",
+  "requirement": "TF-19",
+  "witness": "test_p08_V2_unresolved_row_needs_recovery_or_status_evidence",
+  "positive_control": "Recovery-report and fallback-status controls each invoke the oracle; both empty must fail.",
+  "base": "9c18c4a3",
+  "red": "measurements/test-framework/review-r3-merge/p08-V2-red.json",
+  "diagnostic": "AssertionError not raised",
+  "green": "measurements/test-framework/review-r3-merge/p08-V2-green.json"
+ },
+ {
+  "fix": "p09-V-M1",
+  "requirement": "ML-8",
+  "witness": "test_p09_final_reader_exception_fails_the_concurrency_witness",
+  "positive_control": "Two successful synchronized reads pass; only the second/final read raises in the negative control.",
+  "base": "9c18c4a3",
+  "red": "measurements/test-framework/review-r3-merge/p09-V-M1-red.json",
+  "diagnostic": "p09 old witness swallowed",
+  "green": "measurements/test-framework/review-r3-merge/p09-V-M1-green.json"
+ },
+ {
+  "fix": "p10",
+  "requirement": "ML-17",
+  "witness": "test_p10_blocked_sealers_leave_no_threads_in_the_test_process",
+  "positive_control": "Normal concurrent queue assertions pass; blocked enqueue is reported with no live parent threads; timeout child is reaped.",
+  "base": "9c18c4a3",
+  "red": "measurements/test-framework/review-r3-merge/p10-red.json",
+  "diagnostic": "p10 leaked non-daemon sealer threads",
+  "green": "measurements/test-framework/review-r3-merge/p10-green.json"
+ }
+]

@@ -1,0 +1,13 @@
+{
+ "status": "green",
+ "base": "9c18c4a3",
+ "witnesses": [
+  "test_p07_V2_failed_ls_files_is_not_empty_success",
+  "test_p07_V2_failed_check_attr_is_not_empty_success"
+ ],
+ "source_run": "ml-g1-green.json.run.json",
+ "source_sha256": "3deb25a97499570f5529f822aacc3c92581cd3eda484eee88212058c5e0f2253",
+ "job_seconds": 37.252726165927015,
+ "jobs": 16,
+ "positive_control": "Both real Git validation commands succeed for a normal landing before independent nonzero exits."
+}
