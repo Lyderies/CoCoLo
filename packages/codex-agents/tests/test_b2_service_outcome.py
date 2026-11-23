@@ -717,7 +717,7 @@ class HealthWiringTests(dr.LeaseBackedFixture):
             self.bound(number)
             self.publish(number)
 
-    def sweep(self, notes, behave):
+    def sweep(self, notes, behave, now=1):
         def admit(binding, *, final_check):
             outcome = behave(binding)
             if outcome is not None:
@@ -725,7 +725,7 @@ class HealthWiringTests(dr.LeaseBackedFixture):
             return {}
         authority = ServiceRecordAuthority(history_binding().runtime_digest, True)
         with mock.patch.object(self.store, 'admit_service_result', side_effect=admit):
-            return service_record.record_pass(self.store, authority, clock=lambda: 1, notes=notes)
+            return service_record.record_pass(self.store, authority, clock=lambda: now, notes=notes)
 
     def test_an_integrity_refusal_is_reported_once_per_run_in_plain_words(self):
         from codex_agents.health_monitor import HealthMonitor
@@ -757,8 +757,8 @@ class HealthWiringTests(dr.LeaseBackedFixture):
         self.committed()
         notes = service_record.RecordingNotes()
         for index in range(service_record.HEALTH_TRANSIENT_FAILURES):
-            self.store._record_sweep['backoff'].clear()
-            self.sweep(notes, lambda binding: 'history_result_unavailable' if binding.claim_id == 'claim-1' else None)
+            self.sweep(notes, lambda binding: 'history_result_unavailable' if binding.claim_id == 'claim-1' else None,
+                       now=(index + 1) * 10 ** 9)  # each pass comes after the wait of the one before
         findings = service_record.RecordingHealthCheck(notes, self.store.project_id).run(None)
         self.assertEqual(['recording_stuck'], [finding.reason_code for finding in findings])
 

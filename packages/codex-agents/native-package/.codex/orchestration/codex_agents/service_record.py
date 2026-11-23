@@ -17,6 +17,7 @@ Nothing here is reachable over a socket: the entry points are methods of the pro
 from __future__ import annotations
 
 import re
+import threading
 import time
 from dataclasses import dataclass
 
@@ -172,7 +173,8 @@ WINDOW_SQL = (
     "ORDER BY c.rowid LIMIT ?")
 
 
-def record_pass(history, authority: ServiceRecordAuthority, *, limit: int = SWEEP_ATTEMPTS, clock=None) -> dict:
+def record_pass(history, authority: ServiceRecordAuthority, *, limit: int = SWEEP_ATTEMPTS, clock=None,
+                notes=None) -> dict:
     """One bounded pass: at most `limit` recording attempts over a window of `limit*16` committed contexts, from a
     cursor that advances on every attempt (refusals too) and wraps. Selection input is only this project's contexts
     still `committed` with a live reservation; the binding comes only from the sealed lease, the reference only from the
@@ -225,6 +227,8 @@ def record_pass(history, authority: ServiceRecordAuthority, *, limit: int = SWEE
             continue
         state["backoff"].pop(key, None)
         result["recorded"] += 1
+    if notes is not None:
+        notes.publish(history.project_id, health_signals(history))
     if last is not None:
         history._purge_cursors["record"] = last
     elif not window and not wrapped:
@@ -246,6 +250,66 @@ def _backoff(state, key, now_ms) -> None:
 def health_signals(history) -> list:
     """HM-S8 inputs (proposal): an integrity refusal once per claim, a transient failure after five in a row."""
     return sorted(f"{kind}:{key[0]}:{key[1]}" for kind, key in history._record_sweep["health"])
+
+
+# Health (B2-18, HM-0) ----------------------------------------------------------------------------------------------
+
+class RecordingNotes:
+    """What the sweep last published for the health check: a plain list under a lock, so the check never touches the
+    store or any ledger."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._published = (None, [])
+
+    def publish(self, project_id, signals) -> None:
+        with self._lock:
+            self._published = (project_id, list(signals))
+
+    def snapshot(self):
+        with self._lock:
+            return self._published[0], list(self._published[1])
+
+
+def _health_check_class():
+    from .health_monitor import Check, Finding
+
+    class RecordingHealthCheck(Check):
+        """HM-0 check `recording`: an integrity refusal of a result is reported once per run, and a run the service
+        could not record five times in a row is reported as stuck. Ordinary refusals (a closed orchestration, an
+        expired result) are normal outcomes shown in the status, not findings."""
+
+        name = "recording"
+
+        def __init__(self, notes, project_id):
+            self.notes, self.project_id = notes, project_id
+
+        def run(self, context):
+            project, signals = self.notes.snapshot()
+            findings = []
+            for signal in signals:
+                kind, run_handle, attempt = signal.split(":")
+                subject = f"{run_handle}:{attempt}"
+                if kind == "integrity":
+                    findings.append(Finding(self.name, "project", subject, "reported", "recording_integrity",
+                                            "A finished run's result could not be recorded because its stored "
+                                            "records do not agree: run learning-status and keep the project's folder as it is.",
+                                            self.project_id))
+                else:
+                    findings.append(Finding(self.name, "project", subject, "reported", "recording_stuck",
+                                            "A finished run's result could not be recorded after several tries: "
+                                            "run learning-status; the service tries again, or restart it.",
+                                            self.project_id))
+            return findings
+    return RecordingHealthCheck
+
+
+def __getattr__(name):
+    if name == "RecordingHealthCheck":  # built on first use: health_monitor stays out of the writer's imports
+        value = _health_check_class()
+        globals()[name] = value
+        return value
+    raise AttributeError(name)
 
 
 # Status ------------------------------------------------------------------------------------------------------------
@@ -280,7 +344,8 @@ def recording_status(history, authority: ServiceRecordAuthority, orchestration_h
             status["recorded"].append({
                 "run_handle": run_handle, "attempt": attempt, "outcome_digest": outcome_digest,
                 "recorded_by": who if who is not None else _legacy_label(history, identity),
-                "automatic": who == "service"})
+                "automatic": who == "service",
+                "note": "recorded by the service, not reviewed by the primary" if who == "service" else None})
             continue
         try:
             authority.check(history, binding, "K1", reservation=history._result_row(binding)[1])
@@ -288,7 +353,34 @@ def recording_status(history, authority: ServiceRecordAuthority, orchestration_h
         except HistoryError as error:
             label = next((name for name, code in UNRECORDABLE.items() if code == error.reason_code), error.reason_code)
             status["unrecordable"][label] = status["unrecordable"].get(label, 0) + 1
+    status["lines"] = _lines(status)
     return status
+
+
+_PLAIN = {
+    "orchestration_closed": "its orchestration has ended, so it stays unrecorded",
+    "expired": "its result passed its retention time",
+    "other_runtime": "it was run by another version of the service",
+    "host_class": "it belongs to the other host (Codex or Claude)",
+    "context_state": "its stored inputs are not in a state that can be recorded",
+    "legacy_no_context": "it was stored by an older version without its inputs",
+}
+
+
+def _lines(status) -> list:
+    """Plain sentences for the status: who recorded, what waits, and the real reason something cannot be recorded."""
+    lines = []
+    service = sum(1 for entry in status["recorded"] if entry["automatic"])
+    if service:
+        lines.append(f"{service} result(s) recorded by the service, not reviewed by the primary.")
+    mine = [entry for entry in status["recorded"] if not entry["automatic"]]
+    if mine:
+        lines.append(f"{len(mine)} result(s) recorded by the primary.")
+    if status["awaiting_record"]:
+        lines.append(f"{status['awaiting_record']} finished result(s) waiting to be recorded; the service records them on its next pass.")
+    for label, count in sorted(status["unrecordable"].items()):
+        lines.append(f"{count} finished result(s) cannot be recorded: {_PLAIN.get(label, label)}.")
+    return lines
 
 
 def _receipt_id(history, binding) -> str:

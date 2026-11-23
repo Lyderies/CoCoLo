@@ -123,6 +123,12 @@ def orchestration_report(history, orchestration_id):
                 reviewed[run_id] = _json(history, qa).get("accepted") is True
     except (KeyError, TypeError, ValueError, AttributeError, IndexError):
         raise HistoryError("history_incompatible") from None
+    # B2-10: who recorded each outcome, what waits, what cannot be recorded (plain words in `lines`).
+    try:
+        from .service_record import ServiceRecordAuthority, recording_status
+        recording = recording_status(history, ServiceRecordAuthority(service=True), handle)
+    except HistoryError:
+        recording = None  # too many held results to list: the counts above still stand
     usage_fields = tuple(empty_usage())
     totals = {field: 0 for field in usage_fields}
     unknown = {field: 0 for field in usage_fields}
@@ -175,6 +181,7 @@ def orchestration_report(history, orchestration_id):
     unresolved = len(before_open) - failed_before_open
     goal_known = current["goal_tokens_used"] is not None or current["goal_time_used_seconds"] is not None
     return {
+        "recording": recording,
         "orchestration_id": orchestration_id, "status": str(current["status"]),
         "started_at_ms": int(current["started_at_ms"]), "ended_at_ms": ended,
         "duration_ms": None if ended is None else int(ended) - int(current["started_at_ms"]),

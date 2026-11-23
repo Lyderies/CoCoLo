@@ -158,6 +158,8 @@ class ResultPersistenceLane:
         # This service process's own instance, new at every start (O10 D2). The scope's supervisor id is
         # durable per project, so it cannot tell a restarted service's rows from its predecessor's.
         self._service_instance = 'svc-' + secrets.token_hex(16)
+        # B2-18: what the recording sweep last published, for the health check (read without any store or lock).
+        self.recording_notes = service_record.RecordingNotes()
         self._runtime = owner._monitor.scope().runtime_digest
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._maximum = max_entries
@@ -1155,7 +1157,8 @@ class ResultPersistenceLane:
                 # B2 (decision 92.2 A): the backstop and the check after a restart: record what is committed and
                 # unrecorded. A refusal never stops the result cleanup below.
                 with contextlib.suppress(HistoryError, sqlite3.Error):
-                    service_record.record_pass(history, self._record_authority(), clock=history._result_now)
+                    service_record.record_pass(history, self._record_authority(), clock=history._result_now,
+                                               notes=self.recording_notes)
                 result = history.expire_results(limit=10)
             elif request.kind == 'register':
                 handle, run_handle, run_id, attempt, instance = request.arguments

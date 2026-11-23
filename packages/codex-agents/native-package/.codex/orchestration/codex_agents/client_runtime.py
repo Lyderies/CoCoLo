@@ -939,6 +939,15 @@ def observe_provider_client(state_root, project_root, provider, *, request_id=No
 
 # B2 (4.4, B2-5): the primary's recheck of a recorded result still compares the body it holds with the stored one and
 # the original inputs it opened with; each refusal is named and writes nothing.
+def recorded_by_from_report(report, run_handle):
+    """B2-10: who recorded this run, from the orchestration report's recording section (None when unknown)."""
+    recording = report.get('recording') if type(report) is dict else None
+    for entry in (recording or {}).get('recorded', ()):
+        if entry.get('run_handle') == run_handle:
+            return entry.get('recorded_by')
+    return None
+
+
 RECHECK_REASONS = frozenset({'recheck_result_mismatch', 'recheck_inputs_mismatch'})
 
 
@@ -1199,12 +1208,20 @@ def record_codex_result_client(state_root, project_root, task, route, assignment
                              'host_outcome_digest': admitted['admission']['host_outcome_digest']}, timeout=5)
         except Exception:
             pass  # A hint only: the run's dispatch view then stays its short while (D1).
+        recorded_by = None
+        try:  # B2: who recorded it (best effort): a result the service recorded first is only retrieved here
+            recorded_by = recorded_by_from_report(history.orchestration_report(
+                current['current']['snapshot']['orchestration_id']), binding.run_handle)
+        except Exception:
+            pass
         # The validator's safe reason and the client's diagnostics, from the durable terminal record.
         diagnostics = {name: record[name] for name in ('result_validation_reason_code', 'client_diagnostics')
                        if record.get(name) is not None}
         return {'ready': True, **admitted, **records,
                 'host_outcome_digest': admitted['admission']['host_outcome_digest'], 'capacity_state': 'retained',
-                **({'dispatch_diagnostics': diagnostics} if diagnostics else {})}
+                **({'dispatch_diagnostics': diagnostics} if diagnostics else {}),
+                **({'already_recorded_by': 'service', 'recorded_note': 'recorded by the service, not reviewed by the primary'}
+                   if recorded_by == 'service' else {})}
     except RuntimeResultError:
         raise
     except (DispatchError, HistoryError, HostClientMismatch) as error:
