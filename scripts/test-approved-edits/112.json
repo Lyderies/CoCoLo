@@ -1,0 +1,78 @@
+{
+ "decision": "112",
+ "schema": 1,
+ "transitions": [
+  {
+   "before_commit": "5b43ae3e83faf2b22397ea7e889bad6c317e7907",
+   "edit_commit": "0be4354fb9b0d3807f3032ea15f885115baa4ed9",
+   "edits": [
+    {
+     "line": 47,
+     "new": "        self.expect(\"Not now\")  # E1 (decision 112 A): the login-start question, once\n",
+     "old": ""
+    },
+    {
+     "line": 48,
+     "new": "        self.send(\"\\x1b[B\\r\")  # Not now\n",
+     "old": ""
+    },
+    {
+     "line": 77,
+     "new": "        self.expect(\"Not now\")  # E1 (decision 112 A): the login-start question, once\n",
+     "old": ""
+    },
+    {
+     "line": 78,
+     "new": "        self.send(\"\\x1b[B\\r\")  # Not now\n",
+     "old": ""
+    },
+    {
+     "line": 115,
+     "new": "        self.expect(\"Not now\")  # E1 (decision 112 A): the login-start question, once\n",
+     "old": ""
+    },
+    {
+     "line": 116,
+     "new": "        self.send(\"\\x1b[B\\r\")  # Not now\n",
+     "old": ""
+    },
+    {
+     "line": 128,
+     "new": "        self.expect(\"Not now\")  # E1 (decision 112 A): the login-start question, once\n",
+     "old": ""
+    },
+    {
+     "line": 129,
+     "new": "        self.send(\"\\x1b[B\\r\")  # Not now\n",
+     "old": ""
+    },
+    {
+     "line": 296,
+     "new": "            if wait == \"Continue\" and \"Register now\" in self.plain(self.transcript):  # E1 (decision 112 A)\n",
+     "old": ""
+    },
+    {
+     "line": 297,
+     "new": "                self.expect(\"Not now\", timeout=60)  # the login-start question, once\n",
+     "old": ""
+    },
+    {
+     "line": 298,
+     "new": "                self.send(\"\\x1b[B\\r\")  # Not now\n",
+     "old": ""
+    },
+    {
+     "line": 355,
+     "new": "        self.expect(\"Not now\")  # E1 (decision 112 A): the login-start question, once\n",
+     "old": ""
+    },
+    {
+     "line": 356,
+     "new": "        self.send(\"\\x1b[B\\r\")  # Not now\n",
+     "old": ""
+    }
+   ],
+   "file": "tests/test_setup_straight.py"
+  }
+ ]
+}

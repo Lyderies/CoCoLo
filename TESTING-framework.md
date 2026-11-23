@@ -75,7 +75,7 @@ The initial manifests record decision 107's three token lines, decision 109's 26
 Use the prepared test interpreter:
 
 ```
-python -B scripts/rebind_approved_edits.py --binding 107-109-114.1
+python -B scripts/rebind_approved_edits.py --binding 0851
 ```
 
 Commit manifests before that command, or use `--prepare` to produce the initial reviewable binding while commits are unavailable. Preparation admits nothing to the gate. Commit the new manifests and binding together; the normal gate refuses uncommitted documents, any later byte change (including a committed forgery), a stale pre-edit source, or an extra change in a listed file. Existing binding files are never overwritten. Fingerprint generation and verification execute no test bodies and use sequential discovery children of at most ten modules. The ordinary runner still compares every unrelated legacy proof and enforces shrink-only lists.

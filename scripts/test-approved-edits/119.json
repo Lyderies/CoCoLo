@@ -1,0 +1,172 @@
+{
+ "decision": "119",
+ "schema": 1,
+ "transitions": [
+  {
+   "before_commit": "6fa05ecdd755f4a752935ef2c55ab9bd93701301",
+   "edit_commit": "6677d90ad20ae45b9663d1d87cdf451be10fd820",
+   "edits": [
+    {
+     "line": 2398,
+     "new": "        self.assertEqual(\"recheck_result_mismatch\", refused[\"reason_code\"])  # B2-5 (decision 92 A / 119 A): a body that is not the stored one has its own reason\n",
+     "old": "        self.assertEqual(\"history_conflict\", refused[\"reason_code\"])\n"
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_bridge.py"
+  },
+  {
+   "before_commit": "6fa05ecdd755f4a752935ef2c55ab9bd93701301",
+   "edit_commit": "6677d90ad20ae45b9663d1d87cdf451be10fd820",
+   "edits": [
+    {
+     "line": 201,
+     "new": "                ({'body': wrong_body}, 'recheck_result_mismatch'),  # B2-5 (119 A)\n",
+     "old": "                ({'body': wrong_body}, 'history_conflict'), ({'terminal': None}, 'history_conflict'),\n"
+    },
+    {
+     "line": 202,
+     "new": "                ({'terminal': None}, 'history_conflict'),\n",
+     "old": ""
+    },
+    {
+     "line": 204,
+     "new": "                ({'inputs': {'assignment': changed_assignment}}, 'recheck_inputs_mismatch')):  # B2-5 (119 A)\n",
+     "old": "                ({'inputs': {'assignment': changed_assignment}}, 'dispatch_conflict')):\n"
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_cli_open_client_runtime.py"
+  },
+  {
+   "before_commit": "6fa05ecdd755f4a752935ef2c55ab9bd93701301",
+   "edit_commit": "6677d90ad20ae45b9663d1d87cdf451be10fd820",
+   "edits": [
+    {
+     "line": 338,
+     "new": "        # C7: the report counts the closed run as abandoned, not pending; B2 (decision 92 A / 119 A): the\n",
+     "old": "        # C7: the report counts the closed run as abandoned, not pending; the next run's result was\n"
+    },
+    {
+     "line": 339,
+     "new": "        # service records the next run's result itself, so nothing is pending or active.\n",
+     "old": "        # never recorded here, so it alone is pending.\n"
+    },
+    {
+     "line": 342,
+     "new": "        self.assertEqual((1, 0, 0), (report['runs']['abandoned'], report['runs']['pending'],\n",
+     "old": "        self.assertEqual((1, 1, 1), (report['runs']['abandoned'], report['runs']['pending'],\n"
+    },
+    {
+     "line": 346,
+     "new": "        self.assertEqual(1, report['usage']['unknown_runs']['input_tokens'])  # B2 (119 A): the recorded run's usage is known\n",
+     "old": "        self.assertEqual(2, report['usage']['unknown_runs']['input_tokens'])\n"
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_lost_run_settlement.py"
+  },
+  {
+   "before_commit": "6fa05ecdd755f4a752935ef2c55ab9bd93701301",
+   "edit_commit": "6677d90ad20ae45b9663d1d87cdf451be10fd820",
+   "edits": [
+    {
+     "line": 175,
+     "new": "        self.assertEqual('recheck_result_mismatch', refused['reason_code'])  # B2-5 (decision 92 A / 119 A): a body that is not the stored one has its own reason\n",
+     "old": "        self.assertEqual('history_conflict', refused['reason_code'])\n"
+    },
+    {
+     "line": 842,
+     "new": "        self.assertEqual((2, 'recheck_result_mismatch'), (code, refused['reason_code']))  # B2-5 (decision 92 A / 119 A)\n",
+     "old": "        self.assertEqual((2, 'history_conflict'), (code, refused['reason_code']))\n"
+    },
+    {
+     "line": 1885,
+     "new": "        # B2 (decision 92 A / 119 A): the service records the committed result itself, at once.\n",
+     "old": "        # The child's result body is on disk and committed; nothing has recorded it. The service stops here.\n"
+    },
+    {
+     "line": 1886,
+     "new": "        self.assertEqual(('recorded', self.primary + '-host-v1'), self.stored_context(run_handle))\n",
+     "old": "        self.assertEqual(('committed', self.primary + '-host-v1'), self.stored_context(run_handle))\n"
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_project_driver.py"
+  },
+  {
+   "before_commit": "f1d09f1bba036937857d64837173fdc9fd1ffba5",
+   "edit_commit": "aab460a92f84dc525f4bdb66d84d021ee26541e0",
+   "edits": [
+    {
+     "line": 25,
+     "new": "# Subprocess fixtures import this module outside the parallel runner.\n",
+     "old": ""
+    },
+    {
+     "line": 26,
+     "new": "sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'scripts'))\n",
+     "old": ""
+    },
+    {
+     "line": 27,
+     "new": "\n",
+     "old": ""
+    },
+    {
+     "line": 2357,
+     "new": "    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')\n",
+     "old": ""
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_bridge.py"
+  },
+  {
+   "before_commit": "f1d09f1bba036937857d64837173fdc9fd1ffba5",
+   "edit_commit": "aab460a92f84dc525f4bdb66d84d021ee26541e0",
+   "edits": [
+    {
+     "line": 269,
+     "new": "    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')\n",
+     "old": ""
+    },
+    {
+     "line": 274,
+     "new": "    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')\n",
+     "old": ""
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_cli_open_client_runtime.py"
+  },
+  {
+   "before_commit": "f1d09f1bba036937857d64837173fdc9fd1ffba5",
+   "edit_commit": "aab460a92f84dc525f4bdb66d84d021ee26541e0",
+   "edits": [
+    {
+     "line": 321,
+     "new": "    @__import__('test_framework').requirements('B2-OUTCOME', 'RS-B-5', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')\n",
+     "old": ""
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_lost_run_settlement.py"
+  },
+  {
+   "before_commit": "f1d09f1bba036937857d64837173fdc9fd1ffba5",
+   "edit_commit": "aab460a92f84dc525f4bdb66d84d021ee26541e0",
+   "edits": [
+    {
+     "line": 128,
+     "new": "    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')\n",
+     "old": ""
+    },
+    {
+     "line": 820,
+     "new": "    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')\n",
+     "old": ""
+    },
+    {
+     "line": 1881,
+     "new": "    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')\n",
+     "old": ""
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_project_driver.py"
+  }
+ ]
+}
