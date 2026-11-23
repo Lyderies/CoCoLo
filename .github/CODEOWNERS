@@ -1,0 +1,9 @@
+# Owner control of approved test edits (TF-27, owner decision 121 A, 2026-11-24).
+# A change to these paths needs the owner's review on the pull request to main.
+# This takes effect once "Require review from Code Owners" is on for main without
+# admin bypass for these paths (an owner GitHub step); until then it is a known gap.
+/scripts/test-approved-edits/        @Lyderies
+/scripts/test-approved-edit-bindings/ @Lyderies
+/scripts/rebind_approved_edits.py    @Lyderies
+/scripts/parallel_tests.py           @Lyderies
+/.github/CODEOWNERS                  @Lyderies
