@@ -139,3 +139,11 @@ Raw run records are retained in `/private/tmp/cocolo-review-r1`; `measurements/t
 The five runs total **146.5805857910309 job-seconds** across 78 checks (75 pass, three original image opt-ins skipped). Every module is below its 60s budget. These are separate affected-module runs, not a combined CI gate. The final read-only-provenance follow-up passes 75 checks in **34.64630295801908 job-seconds**, including both the model C-3 case and all four mutation proofs. All final records report exactly 80 missing step-4 checks and no other metadata errors.
 
 The earlier concurrent five-module campaign used **475.9808796250145 job-seconds** and exceeded all five module budgets despite passing test bodies. That result remains in the evidence; isolated timings do not clear the concurrent performance gate.
+
+## Round-2 MED pass — ready for whole-worktree review
+
+All six MEDs from REVIEW-testfw-step3-r2.md are addressed under decision 99 A. `REVIEW-merge-library-r2-fixes.md:7` is the complete M1–M6 -> requirement/fix/witness file:line map, with exact intended-red and sensitivity diagnostics. Tests-first commits: `a2ab496b`, `3fb8af31`, `83ea6830`; implementation `81cc6fac`; specific mappings `16be3593`; integrated framework `67f89368` plus final hand-off merge.
+
+Integrated affected run: 253 checks pass, **90.15853699890431 job-seconds**, DEFAULT 16 jobs; all four original mutation proofs pass. Separate real crash campaign: 49 checks (46 pass, three original mounted-image opt-ins skipped), **45.08007408300182 job-seconds**, DEFAULT 16 jobs. No worker/budget failures. Saved timing evidence and initial reds: `measurements/test-framework/review-r2-merge/runs.json`; sensitivity failures: `merge-sensitivity.json` in that directory. The two original decision-91 cases pass unchanged.
+
+Every changed assertion is in the round-2 appendix of ASSERTIONS-merge-checker.md; no test deleted. All 13 LOW gaps and conditional full-worktree review items are explicitly listed in REVIEW-merge-library-r2-fixes.md, deliberately unfixed. Earlier A1 HIGH remains fixed. Open gates remain full soak, mounted-image execution, macOS/Linux Python 3.11 runtime, Ruff, concurrent real-campaign performance and 80 missing lifecycle requirements; the overall gate still exits 1. Steps 4–5 remain stopped for the requested review.
