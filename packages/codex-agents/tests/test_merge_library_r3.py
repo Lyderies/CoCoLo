@@ -132,3 +132,14 @@ class RoundThree(unittest.TestCase):
             leaked=[t for t in threading.enumerate() if t is not threading.main_thread() and not t.daemon]
             self.assertEqual([],leaked,'p10 leaked non-daemon sealer threads')
         self.assertEqual(0,child_run(probe,timeout=3))
+        import os
+        real_fork=os.fork; children=[]
+        def tracked_fork():
+            pid=real_fork()
+            if pid:children.append(pid)
+            return pid
+        with mock.patch.object(contract.os,'fork',tracked_fork):
+            with self.assertRaisesRegex(AssertionError,'sealer child exceeded bounded deadline'):
+                contract.bounded_concurrency(lambda:threading.Event().wait(60),timeout=.03)
+        self.assertEqual(1,len(children))
+        with self.assertRaises(ChildProcessError):os.waitpid(children[0],os.WNOHANG)
