@@ -96,3 +96,21 @@ class ReviewSeams(unittest.TestCase):
         self.assertEqual([], list((f.project / 'removed').iterdir()))
         self.assertIn('removed', {p.path for p in report.paths})
         self.assertTrue(ml.history(f.project, f.private)[-1].contents_kept)
+
+    def test_r2_M4_each_missing_provenance_field_breaks_generated_EIO_proof(self):
+        from tests import test_merge_library_machine as generated
+        for field in ('call', 'fault'):
+            original = generated.check_end_state
+            observed = []
+            def omit(test, fixture, batch, report, **kwargs):
+                observed.append((report.state, kwargs['call'].operation, kwargs['fault']))
+                kwargs.pop(field)
+                return original(test, fixture, batch, report, **kwargs)
+            case = ReviewSeams('test_B3_generated_EIO_checks_the_operations_own_report')
+            result = unittest.TestResult()
+            with mock.patch.object(generated, 'check_end_state', omit):
+                case.run(result)
+            self.assertEqual([], result.errors, 'M4 proof failed before its outcome assertion')
+            self.assertEqual(1, len(result.failures), 'M4 omission did not break the deterministic EIO proof: ' + field)
+            self.assertIn('AssertionError not raised', result.failures[0][1])
+            self.assertEqual([('landed', 'exchange', errno.EIO)], observed, 'M4 wrong generated failure boundary')
