@@ -663,6 +663,114 @@ class SweepTests(dr.LeaseBackedFixture):
 
 
 @requirement
+class StatusWiringTests(B2Fixture):
+    """B2-10 wired: the orchestration report and the record command say who recorded, in plain words."""
+
+    def report(self):
+        from codex_agents import project_orchestration_report as report
+        snapshot = {'status': 'active', 'started_at_ms': 1, 'ended_at_ms': None, 'observed_at_ms': 1, 'sequence': 1,
+                    'goal_tokens_used': None, 'goal_time_used_seconds': None}
+        with mock.patch.object(report, '_orchestration',
+                               return_value=(self.binding.orchestration_handle, [snapshot], 1)):
+            return report.orchestration_report(self.store, 'orc:' + 'a' * 64)
+
+    def test_the_report_lists_what_awaits_a_record_and_why_something_cannot_be_recorded(self):
+        recording = self.report()['recording']
+        self.assertEqual(1, recording['awaiting_record'])
+        self.assertTrue(any('waiting to be recorded' in line for line in recording['lines']))
+        with self.orchestration('completed'):
+            recording = self.report()['recording']
+        self.assertEqual({'orchestration_closed': 1}, recording['unrecordable'])
+        self.assertTrue(any('orchestration has ended' in line for line in recording['lines']), recording['lines'])
+
+    def test_the_report_names_who_recorded_and_marks_the_service_record_unreviewed(self):
+        self.service_record()
+        recording = self.report()['recording']
+        (entry,) = recording['recorded']
+        self.assertEqual(('service', True), (entry['recorded_by'], entry['automatic']))
+        self.assertEqual('recorded by the service, not reviewed by the primary', entry['note'])
+        self.assertIn('recorded by the service, not reviewed by the primary', ' '.join(recording['lines']))
+
+    def test_a_primary_record_has_no_unreviewed_marker_and_an_old_receipt_reads_before_b2(self):
+        self.primary_record()
+        (entry,) = self.report()['recording']['recorded']
+        self.assertEqual(('primary', None), (entry['recorded_by'], entry['note']))
+        self.store._connection.execute('DELETE FROM project_result_recorders')
+        (entry,) = self.report()['recording']['recorded']
+        self.assertEqual('primary (before B2)', entry['recorded_by'])
+
+    def test_the_record_command_prints_already_recorded_by(self):
+        from codex_agents import client_runtime
+        self.service_record()
+        report = self.report()
+        self.assertEqual('service', client_runtime.recorded_by_from_report(report, self.binding.run_handle))
+        self.assertIsNone(client_runtime.recorded_by_from_report(report, 'hrn_' + '9' * 48))
+        self.assertIsNone(client_runtime.recorded_by_from_report({}, self.binding.run_handle))
+
+
+@requirement
+class HealthWiringTests(dr.LeaseBackedFixture):
+    """B2-18 wired: the recording signals are a HM-0 check that reads only what the sweep published."""
+
+    def committed(self):
+        for number in (1, 2):
+            self.bound(number)
+            self.publish(number)
+
+    def sweep(self, notes, behave):
+        def admit(binding, *, final_check):
+            outcome = behave(binding)
+            if outcome is not None:
+                raise HistoryError(outcome)
+            return {}
+        authority = ServiceRecordAuthority(history_binding().runtime_digest, True)
+        with mock.patch.object(self.store, 'admit_service_result', side_effect=admit):
+            return service_record.record_pass(self.store, authority, clock=lambda: 1, notes=notes)
+
+    def test_an_integrity_refusal_is_reported_once_per_run_in_plain_words(self):
+        from codex_agents.health_monitor import HealthMonitor
+        self.committed()
+        notes = service_record.RecordingNotes()
+        self.sweep(notes, lambda binding: 'history_conflict' if binding.claim_id == 'claim-1' else None)
+        monitor = HealthMonitor((service_record.RecordingHealthCheck(notes, self.store.project_id),))
+        monitor.run_pass(now_ms=1, mono_ms=1)
+        view = monitor.view(self.store.project_id)
+        (finding,) = view['findings']
+        self.assertEqual(('recording', 'reported', 'recording_integrity'),
+                         (finding['check'], finding['outcome'], finding['reason_code']))
+        self.assertIn('could not be recorded', finding['text'])
+        self.assertEqual([], monitor.view('prj_' + '2' * 32)['findings'])  # another project sees nothing
+        self.sweep(notes, lambda binding: None)  # the pass repeats: still one finding, not two
+        monitor.run_pass(now_ms=2, mono_ms=2)
+        self.assertEqual(1, len(monitor.view(self.store.project_id)['findings']))
+
+    def test_ordinary_refusals_raise_nothing_and_the_check_reads_only_published_state(self):
+        self.committed()
+        notes = service_record.RecordingNotes()
+        self.sweep(notes, lambda binding: 'history_unrecordable_orchestration_closed')
+        check = service_record.RecordingHealthCheck(notes, self.store.project_id)
+        with mock.patch.object(self.store, '_connection') as touched:
+            self.assertEqual([], check.run(None))
+        self.assertEqual([], touched.mock_calls)  # no store, no ledger: published notes only
+
+    def test_five_transient_failures_in_a_row_are_reported(self):
+        self.committed()
+        notes = service_record.RecordingNotes()
+        for index in range(service_record.HEALTH_TRANSIENT_FAILURES):
+            self.store._record_sweep['backoff'].clear()
+            self.sweep(notes, lambda binding: 'history_result_unavailable' if binding.claim_id == 'claim-1' else None)
+        findings = service_record.RecordingHealthCheck(notes, self.store.project_id).run(None)
+        self.assertEqual(['recording_stuck'], [finding.reason_code for finding in findings])
+
+    def test_the_lane_publishes_and_the_check_is_registered_by_name(self):
+        from codex_agents import result_persistence
+        source = inspect.getsource(result_persistence.ResultPersistenceLane)
+        self.assertIn('recording_notes', source)
+        self.assertIn("notes=self.recording_notes", source)
+        self.assertEqual('recording', service_record.RecordingHealthCheck.name)
+
+
+@requirement
 class SchemaStepTests(B2Fixture):
     """Owner decision 92.3 A: one schema step, 19 -> 20, for the recorder table, with its upgrade path."""
 
