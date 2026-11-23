@@ -370,8 +370,8 @@ def metadata():
             errors.append('cannot verify release legacy baseline: '+str(error))
     if 'legacy list requires an explicit trusted --base' in errors:
         raise ValueError('legacy list requires an explicit trusted --base')
-    from test_owned_baseline import checked as checked_test_owned
-    policy_bindings = checked_test_owned(ROOT, legacy['tests'])
+    from test_owned_baseline import checked as checked_test_owned, effective_records
+    policy_bindings = effective_records(release['tests'] if release else {}, checked_test_owned(ROOT, legacy['tests']))
     discovery_started = time.monotonic()
     try:
         discovered = inventory()

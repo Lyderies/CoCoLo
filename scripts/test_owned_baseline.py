@@ -58,3 +58,10 @@ def checked(root, admitted):
     for policy in POLICIES:
         records.update(checked_version(root, admitted, policy))
     return records
+
+
+def effective_records(bookkeeping, translated):
+    """Translate historical bindings, but never roll back a later release proof."""
+    result = {**bookkeeping, **translated}
+    result.update({name: row for name, row in bookkeeping.items() if row.get('dependency_policy') == 'test-owned'})
+    return result

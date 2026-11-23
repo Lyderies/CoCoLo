@@ -183,7 +183,11 @@ def checked_bindings(root,check_current=True,*,test_owned=False):
             raise ValueError('immutable bookkeeping binding changed or uncommitted')
         rebuilt=build(root,data['before_commit'],data['source_commit'],data['previous_release'],state,commits[0],anchor,include_policy='test_owned_tests' in data)
         if rebuilt!=data:raise ValueError('bookkeeping binding does not match permitted transition')
-        state.update(data['tests']);admitted.update(data.get('test_owned_tests',data['tests']) if test_owned else data['tests']);anchor=data['after_sources']
+        state.update(data['tests'])
+        records = data['tests']
+        if test_owned and 'test_owned_tests' in data:
+            records = {name: {**row, 'dependency_policy': 'test-owned'} for name, row in data['test_owned_tests'].items()}
+        admitted.update(records);anchor=data['after_sources']
     if paths and check_current and source_hashes({name:(root/name).read_text() for name in FILES})!=anchor:
         raise ValueError('current bookkeeping sources differ from admitted state; use the checked rebinding command for a permitted bump')
     return admitted
