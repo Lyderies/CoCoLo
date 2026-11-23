@@ -31,6 +31,17 @@ The design table (draft 3 s4) puts an unlink or fsync error in `repair_required:
 assert that an unlink error leaves the row AND the context `retiring`, so an I/O error keeps `retiring` (charged, retried every pass, the
 pass raises `history_unavailable`); only a directory, the unsafe file that needs an operator, is `repair_required`. Status wiring of
 `result_retirement_repairs` into the owner-facing status is B7's projection (nothing reads it yet).
+Owner decision 116 (whether an I/O error should be `repair_required:io`) is open. Today an I/O error is not invisible: the report lists
+every context still `retiring` as `retrying` (names empty), so a permanent error shows either way (RepairAndVisibility M2, M3).
+
+## Fix round 1 (review rev040d3r1)
+MED-1: a reservation with no context row (only the test-only non-lease path; D2 refuses it at run time on service lanes) cannot take
+`repair_required` (the reservation CHECK has no such state and a schema step is out of scope). Its durable state is the `retiring`
+reservation row (charged, retried each pass, reads refused); `repairs` lists such rows (second bounded query) with `directory` derived from
+the fixed names, or `retrying`. Tests: ReservationOnlyAndVisibilityTests M1-M3. LOW tests added: U8 not satisfied by reconcile, context-read
+refusals, individual body-only and context-only unlink crashes, whole start-up byte tracing (0 opens, 0 reads), start-up failure isolation
+and path safety (verified green, no defect), S1 bound from five measured runs (480-490 steps; bound = worst quiet run + 20). LOW-1
+(`_recover_result_link` in retirement) checked: stat and unlink only, never opens; LOW-6 checked: reconcile uses `finish_quietly`; LOW-5 withdrawn.
 
 ## Owner decisions
 90.9 A (a box that would not stop: retire command) and 90.6 A (old-version records closed and shown): D3 touches neither (no stop path, no

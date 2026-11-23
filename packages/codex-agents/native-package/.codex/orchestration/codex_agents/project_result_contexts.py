@@ -530,13 +530,27 @@ def sweep(history, limit: int) -> int:
 
 
 def repairs(history, limit: int = 20) -> list[dict]:
-    """The retirements waiting for an operator (RS-D draft 3 §4): each context in `repair_required`, with its reason
-    and the fixed names that are directories now. Shown in status; the row stays charged until every name is gone."""
+    """The retirements still waiting (RS-D draft 3 §4), bounded by `limit`, for status. Each stays charged until every
+    fixed name is gone. A context in `repair_required` is shown with its stored reason (`directory`). Any other
+    unfinished retirement is shown as `retrying`: a context still `retiring` (an unlink or fsync error, or a stop, that
+    the next pass retries), and a reservation in `retiring` that has no context row at all (the non-lease path), for
+    which `directory` is derived from the fixed names, since a reservation has no repair column (no schema step)."""
     report = []
-    for run_handle, attempt, reason in history._connection.execute(
-            "SELECT run_handle,attempt,repair_reason FROM project_result_contexts INDEXED BY "
-            "project_result_contexts_live WHERE project_id=? AND state NOT IN ('ended','expired') AND state='repair_required' ORDER BY rowid LIMIT ?",
-            (history.project_id, limit)).fetchall():
+
+    def directories(fixed):
+        found = []
+        for name in fixed:
+            try:
+                if stat.S_ISDIR(os.stat(name, dir_fd=history._directory_fd, follow_symlinks=False).st_mode):
+                    found.append(name)
+            except OSError:
+                continue
+        return found
+
+    for run_handle, attempt, state, reason in history._connection.execute(
+            "SELECT run_handle,attempt,state,repair_reason FROM project_result_contexts INDEXED BY "
+            "project_result_contexts_live WHERE project_id=? AND state NOT IN ('ended','expired') "
+            "AND state IN ('repair_required','retiring') ORDER BY rowid LIMIT ?", (history.project_id, limit)).fetchall():
         fixed = list(names(history, run_handle, attempt))
         reservation = history._connection.execute(
             "SELECT * FROM result_reservations WHERE project_id=? AND run_handle=? AND attempt=?",
@@ -546,14 +560,21 @@ def repairs(history, limit: int = 20) -> list[dict]:
                 fixed += history._result_names(history._reservation(reservation).binding)
             except HistoryError:
                 pass
-        directories = []
-        for name in fixed:
+        report.append({"run_handle": run_handle, "attempt": attempt,
+                       "reason": reason if state == "repair_required" else "retrying", "names": directories(fixed)})
+    if len(report) < limit:
+        for row in history._connection.execute(
+                "SELECT * FROM result_reservations AS s WHERE s.project_id=? AND s.state='retiring' "
+                "AND NOT EXISTS(SELECT 1 FROM project_result_contexts c WHERE c.project_id=s.project_id "
+                "AND c.run_handle=s.run_handle AND c.attempt=s.attempt) ORDER BY s.rowid LIMIT ?",
+                (history.project_id, limit - len(report))).fetchall():
             try:
-                if stat.S_ISDIR(os.stat(name, dir_fd=history._directory_fd, follow_symlinks=False).st_mode):
-                    directories.append(name)
-            except OSError:
+                value = history._reservation(row)
+            except HistoryError:
                 continue
-        report.append({"run_handle": run_handle, "attempt": attempt, "reason": reason, "names": directories})
+            found = directories(history._result_names(value.binding))
+            report.append({"run_handle": value.binding.run_handle, "attempt": value.binding.attempt,
+                           "reason": "directory" if found else "retrying", "names": found})
     return report
 
 
