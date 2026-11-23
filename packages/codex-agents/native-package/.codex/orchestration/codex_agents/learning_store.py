@@ -11948,7 +11948,7 @@ class LearningLedger:
             if hold is None:
                 raise LedgerError("withdrawal is not authorized" if owner is not None else "withdrawal is unavailable")
             if hold["release_kind"] == "withdrawn" and hold["evidence"] is not None:
-                stored = json.loads(hold["evidence"])
+                stored = self._stored_withdrawal(hold["evidence"])
                 if owner is not None and any(stored.get(name) != owner[name]
                                              for name in ('caller_scope', 'run_id', 'inputs_digest')):
                     # W4c: another caller scope, or a request for another run, learns nothing about this handle's
@@ -11990,9 +11990,12 @@ class LearningLedger:
                         "released_at_ms": released, "answer": answer}
             if owner is not None:
                 # B3: the ownership an exact replay is answered against, kept with the receipt for the row's life.
-                evidence = {**evidence, "decision": "binding-withdrawal-v2", "caller_scope": owner["caller_scope"],
-                            "run_id": owner["run_id"], "inputs_digest": owner["inputs_digest"],
-                            "attempt": owner["attempt"], "reason": owner["reason"]}
+                # The row already is the project, the handle, the release kind and its time, and the answer is
+                # fixed, so only what the row does not say is kept, under short names (under 512 bytes at most;
+                # `_stored_withdrawal` reads it, and the earlier v1/v2 records, back).
+                evidence = {"d": "w3", "q": request_digest, "g": generation, "c": owner["caller_scope"],
+                            "r": owner["run_id"], "i": owner["inputs_digest"], "a": owner["attempt"],
+                            "w": owner["reason"]}
             receipt = content_digest(evidence)
             # F13: written with the release, so a lost reply's retry finds it.
             self._connection.execute(
@@ -12000,6 +12003,17 @@ class LearningLedger:
                 "AND state='released' AND release_kind='withdrawn'",
                 (receipt, canonical_json(evidence).decode(), project_id, handle))
         return {**answer, "run_handle": run_handle, "receipt": receipt, "known": False}
+
+    @staticmethod
+    def _stored_withdrawal(raw) -> dict:
+        """A withdrawn row's stored evidence under the names `withdraw_open` reads: the compact B3 record (`d: w3`),
+        or an earlier v1/v2 record as it was written."""
+        stored = json.loads(raw)
+        if stored.get("d") != "w3":
+            return stored
+        return {"decision": "binding-withdrawal-v3", "request_digest": stored["q"], "generation": stored["g"],
+                "caller_scope": stored["c"], "run_id": stored["r"], "inputs_digest": stored["i"],
+                "attempt": stored["a"], "reason": stored["w"], "answer": {"state": "withdrawn"}}
 
     def account_holds_due(self) -> bool:
         """O0b RS-A round 2 G6: whether any held register row's hold is due now (what the next release batch

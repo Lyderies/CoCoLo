@@ -128,7 +128,8 @@ MAX_RUN_RATE_LIMIT_EVENTS = 1_000
 # Retired runs whose status this host still answers as not found (newest kept).
 MAX_RETIRED_RUNS = 256
 REGISTERED_IDLE_SECONDS = 3600  # Owner decision 90.7 (2026-11-23).
-WITHDRAW_RETRY_SECONDS = 1.0
+WITHDRAW_RETRY_SECONDS = 1.0  # also the first backoff of a withdrawal that failed (doubled each time)
+WITHDRAW_BACKOFF_MAX_SECONDS = 300.0
 FAILED_VIEW_SECONDS = 30.0  # a failed run is kept this long for a dispatch that has not yet asked
 _RETRYING = object()
 
@@ -366,7 +367,7 @@ class RunDriver:
         # bindings whose monitor slots are still to be freed: binding -> (refusals, next try).
         self._retired, self._forgetting = {}, {}
         self._withdraw_request = self._withdraw_future = self._withdraw_entry = None
-        self._withdraw_phase, self._next_withdraw = 'start', 0.0
+        self._withdraw_phase, self._next_withdraw, self._withdraw_queue = 'start', 0.0, []
         self._call = _Call()
         self._account = account_endpoint_path(state)
         self._preparation = runtime.bind_preparation(
@@ -1093,7 +1094,11 @@ class RunDriver:
             run.state = 'released'
 
     def _withdraw_opens(self):
-        """One bounded writer batch and account call at a time; retries use the stored envelope."""
+        """One bounded writer batch and account call at a time; retries use the stored envelope.
+
+        Each due row is tried in turn. A row that fails is deferred with its own backoff (persisted on the row) and
+        the next due row goes on, so one refused row never keeps the others waiting. Only the account's own
+        `withdraw_stale` is final; any other failure leaves the duty for a later try."""
         from .open_withdrawal import decode_withdraw_open, checked_withdraw_reply
         lane, now = self._runtime.persistence, self._clock()
         if now < self._next_withdraw:
@@ -1102,42 +1107,34 @@ class RunDriver:
             if self._withdraw_future is not None:
                 if not self._withdraw_future.done():
                     return
-                entry = self._withdraw_entry
-                evidence = json.loads(entry['evidence'])
-                value = decode_withdraw_open(evidence['payload'])
+                future, self._withdraw_future, entry = self._withdraw_future, None, self._withdraw_entry
+                value = decode_withdraw_open(json.loads(entry['evidence'])['payload'])
                 try:
-                    answer = checked_withdraw_reply(self._withdraw_future.result(), value)
+                    answer = checked_withdraw_reply(future.result(), value)
                     kind, receipt = 'withdrawn', answer['receipt']
                 except AccountError as error:
                     if error.reason_code != 'withdraw_stale':
-                        raise  # claim_exists/unavailable remains held for the fence path.
+                        raise  # claim_exists/unavailable/not authorized: held for a later try or the fence path.
                     kind, receipt = 'account_final', None
+                self._withdraw_phase = 'released'
                 self._withdraw_request = lane.open_binding('release_open_binding', value.run_handle, value.attempt,
                     kind, receipt=receipt, request_digest=entry['request_digest'])
-                self._withdraw_future, self._withdraw_phase = None, 'released'
             request = self._withdraw_request
             if request is not None:
                 if request.state == 'queued':
                     return
                 self._withdraw_request = None
-                if request.state != 'done':
+                phase = self._withdraw_phase
+                if request.state != 'done' and phase != 'deferred':
                     raise HistoryError(request.reason)
-                if self._withdraw_phase == 'list' and request.result:
-                    entry = self._withdraw_entry = request.result[0]
-                    evidence = json.loads(entry['evidence'])
-                    value = decode_withdraw_open(evidence['payload'])
-                    # Recheck the complete persisted envelope before any call.
-                    envelope = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.withdraw_open', entry['request_id'],
-                                              evidence['project_id'], evidence['runtime_digest'], value.payload())
-                    if (envelope.project_id != self._scope.project_id or envelope.runtime_digest != COLLECTOR_RUNTIME_DIGEST
-                            or account_request_digest(envelope) != entry['request_digest']):
-                        raise HistoryError('history_conflict')
-                    self._withdraw_future = self._executor.submit(self._withdraw_call, value,
-                                                                 evidence['host_client'], entry['request_id'])
-                    return
-                if self._withdraw_phase == 'start':
+                if phase == 'start':
                     self._withdraw_phase = 'list'
-                    self._withdraw_request = lane.open_binding('open_withdrawals')
+                    self._withdraw_request = lane.open_binding('open_withdrawals', now_ms=_wall_ms())
+                    return
+                if phase == 'list':
+                    self._withdraw_queue = list(request.result or ())
+                if self._withdraw_queue:
+                    self._send_withdrawal(self._withdraw_queue.pop(0))
                     return
                 self._withdraw_phase = 'start'
                 self._next_withdraw = now + WITHDRAW_RETRY_SECONDS
@@ -1146,9 +1143,44 @@ class RunDriver:
                 project_id=self._scope.project_id, runtime_digest=COLLECTOR_RUNTIME_DIGEST)
             self._withdraw_phase = 'start'
         except Exception:
-            self._withdraw_request = self._withdraw_future = None
+            failed = self._withdraw_entry if self._withdraw_phase in {'sending', 'released'} else None
+            self._withdraw_request = self._withdraw_future = self._withdraw_entry = None
             self._withdraw_phase = 'start'
-            self._next_withdraw = now + WITHDRAW_RETRY_SECONDS
+            if failed is not None:
+                self._defer_withdrawal(failed)
+            else:
+                self._withdraw_queue = []
+                self._next_withdraw = now + WITHDRAW_RETRY_SECONDS
+
+    def _send_withdrawal(self, entry):
+        """Recheck one row's complete persisted envelope, then send it; a row that fails is deferred."""
+        from .open_withdrawal import decode_withdraw_open
+        self._withdraw_entry, self._withdraw_phase = entry, 'sending'
+        try:
+            evidence = json.loads(entry['evidence'])
+            value = decode_withdraw_open(evidence['payload'])
+            envelope = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.withdraw_open', entry['request_id'],
+                                      evidence['project_id'], evidence['runtime_digest'], value.payload())
+            if (envelope.project_id != self._scope.project_id or envelope.runtime_digest != COLLECTOR_RUNTIME_DIGEST
+                    or account_request_digest(envelope) != entry['request_digest']):
+                raise HistoryError('history_conflict')
+            self._withdraw_future = self._executor.submit(self._withdraw_call, value, evidence['host_client'],
+                                                          entry['request_id'])
+        except Exception:
+            self._withdraw_entry = None
+            self._defer_withdrawal(entry)
+
+    def _defer_withdrawal(self, entry):
+        """Persist the row's next try (doubling backoff) and go on with the rest of the batch."""
+        self._withdraw_entry, self._withdraw_phase = None, 'deferred'
+        try:
+            self._withdraw_request = self._runtime.persistence.open_binding(
+                'defer_open_withdrawal', entry['identity'], now_ms=_wall_ms(),
+                base_ms=int(WITHDRAW_RETRY_SECONDS * 1000) or 1, max_ms=int(WITHDRAW_BACKOFF_MAX_SECONDS * 1000))
+        except Exception:
+            self._withdraw_request, self._withdraw_phase = None, 'start'
+            self._withdraw_queue = []
+            self._next_withdraw = self._clock() + WITHDRAW_RETRY_SECONDS
 
     def _result(self, run):
         """The finished account call's reply, None while it runs; failures stop the run.

@@ -1609,10 +1609,12 @@ class ProjectHistory:
             if self._connection.execute('SELECT 1 FROM project_registered_runs WHERE project_id=? AND run_id=? '
                     'AND (run_handle<>? OR attempt<>?)', (self.project_id, run_id, run_handle, attempt)).fetchone():
                 raise HistoryError('history_conflict')
-            for held in self._connection.execute("SELECT evidence FROM project_holds WHERE project_id=? "
-                    "AND kind='open_binding' AND state<>'released'", (self.project_id,)):
-                if json.loads(held['evidence'])['run_id'] == run_id:
-                    raise HistoryError('history_conflict')
+            # One row is read, never every live duty: the partial index holds only the rows not yet released.
+            if self._connection.execute(
+                    "SELECT 1 FROM project_holds INDEXED BY project_holds_kind_due WHERE project_id=? "
+                    "AND kind='open_binding' AND state<>'released' AND json_extract(evidence,'$.run_id')=? LIMIT 1",
+                    (self.project_id, run_id)).fetchone() is not None:
+                raise HistoryError('history_conflict')
             project_holds_schema.take_hold(self._connection, self.project_id, 'open_binding', identity,
                                            now_ms=now_ms, evidence=evidence)
 
@@ -1648,10 +1650,32 @@ class ProjectHistory:
             return dict(self._open_binding(identity))
 
     @_operation
-    def open_withdrawals(self, *, limit=10):
+    def open_withdrawals(self, *, now_ms=None, limit=10):
+        """The withdrawals due now (`next_check_ms` <= now), the earliest due first, then by identity."""
         return [dict(row) for row in self._connection.execute("SELECT * FROM project_holds WHERE project_id=? "
-                "AND kind='open_binding' AND state='releasing' ORDER BY next_check_ms,identity LIMIT ?",
-                (self.project_id, limit))]
+                "AND kind='open_binding' AND state='releasing' AND next_check_ms<=? ORDER BY next_check_ms,identity "
+                "LIMIT ?", (self.project_id, (1 << 62) if now_ms is None else now_ms, limit))]
+
+    @_operation
+    def defer_open_withdrawal(self, identity, *, now_ms, base_ms, max_ms):
+        """A withdrawal that failed waits before its next try, twice as long each time (up to `max_ms`), so one
+        refused row never keeps the others waiting. The request itself is never changed."""
+        if (type(identity) is not str or not re.fullmatch(r'hrn_[0-9a-f]{48}:[0-9]{1,19}', identity)
+                or not valid_integer(now_ms) or not valid_integer(base_ms, minimum=1)
+                or not valid_integer(max_ms, minimum=1)):
+            raise HistoryError('history_invalid_input')
+        with self._transaction():
+            row = self._open_binding(identity)
+            if row is None or row['state'] != 'releasing':
+                return
+            evidence = json.loads(row['evidence'])
+            failures = int(evidence.get('failures', 0)) + 1
+            evidence['failures'] = failures
+            self._connection.execute(
+                "UPDATE project_holds SET next_check_ms=?,evidence=? WHERE project_id=? AND kind='open_binding' "
+                "AND identity=? AND state='releasing'",
+                (now_ms + min(max_ms, base_ms * 2 ** min(failures - 1, 32)),
+                 project_holds_schema.evidence_json(**evidence), self.project_id, identity))
 
     @_operation
     def release_open_binding(self, run_handle, attempt, release_kind, *, receipt=None, request_digest=None):
@@ -1672,23 +1696,27 @@ class ProjectHistory:
 
     @_operation
     def withdraw_earlier_open_bindings(self, instance, *, project_id, runtime_digest, limit=10):
-        rows = self._connection.execute("SELECT identity,evidence FROM project_holds WHERE project_id=? "
-                "AND kind='open_binding' AND state='held' ORDER BY identity", (self.project_id,)).fetchall()
+        """Mark at most `limit` of an earlier service's held duties for withdrawal. The rows the pass would skip (the
+        live service's own, and those whose lease is armed or ended some other way: the fence's) are left out by
+        the query itself, so every row read is one to be marked and each pass makes progress."""
+        rows = self._connection.execute(
+            "SELECT h.identity,h.evidence FROM project_holds h INDEXED BY project_holds_kind_due "
+            "WHERE h.project_id=? AND h.kind='open_binding' AND h.state<>'released' AND h.state='held' "
+            "AND json_extract(h.evidence,'$.instance') IS NOT ? "
+            "AND NOT EXISTS(SELECT 1 FROM project_holds l WHERE l.project_id=h.project_id AND l.kind='lease' "
+            "AND l.identity=h.identity AND NOT (l.state='released' AND l.release_kind='withdrawn_unsent')) "
+            "ORDER BY h.identity LIMIT ?", (self.project_id, instance, limit)).fetchall()
         count = 0
         for row in rows:
             evidence = json.loads(row['evidence'])
-            if evidence['instance'] == instance:
-                continue
             try:
                 self.mark_open_withdrawing(evidence['run_handle'], evidence['attempt'], 'service_stopped',
                                             project_id=project_id, runtime_digest=runtime_digest)
             except HistoryError as error:
                 if error.reason_code != 'history_conflict':
                     raise
-                continue  # An armed lease belongs to the fence, never withdrawal.
+                continue  # Changed since it was read: the next pass reads it again.
             count += 1
-            if count >= limit:
-                break
         return count
 
     def _release_claimed_open(self, run_handle, attempt, kind, receipt):

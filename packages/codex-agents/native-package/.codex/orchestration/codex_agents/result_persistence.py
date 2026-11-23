@@ -1059,7 +1059,8 @@ class ResultPersistenceLane:
     def open_binding(self, operation, *arguments, **options):
         """B3: bounded writer requests for the open-binding outbox (polled by the owner)."""
         if operation not in {'record_open_binding', 'mark_open_withdrawing', 'open_withdrawals',
-                             'release_open_binding', 'withdraw_earlier_open_bindings'}:
+                             'release_open_binding', 'withdraw_earlier_open_bindings',
+                             'defer_open_withdrawal'}:
             raise HistoryError('history_invalid_input')
         return self._queue_counted(_EarlierLeases('open_binding', arguments=(operation, arguments, options)),
                                    '_earlier_held', EARLIER_SLOTS)
