@@ -1082,6 +1082,11 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "open_withdrawal.py::custody_matches": {
+   "checks": 1,
+   "ends": "a byte-size check on one enrolled custody value: not a stored count, nothing accumulates; an oversize custody is refused",
+   "test": "test_a_custody_past_its_byte_limit_is_refused_and_the_exact_custody_is_accepted"
+  },
   "operational_qa_contracts.py::checked_operational_qa": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
@@ -1176,8 +1181,9 @@
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
   "project_driver.py::_advance": {
-   "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR; B3 adds REGISTERED_IDLE_SECONDS, a time threshold: an idle registered run is retired and withdrawn once it passes it",
+   "test": "test_W5_an_idle_registered_run_is_retired_and_withdrawn"
   },
   "project_driver.py::_authorize_dispatch": {
    "checks": 1,
@@ -1211,6 +1217,11 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "project_driver.py::_release_failed": {
+   "checks": 1,
+   "ends": "FAILED_VIEW_SECONDS is a time threshold, not a count: a failed run is kept at most that long for a late prepare, then released; cancelled, idle or already-viewed runs are released at once",
+   "test": "test_W5_a_failed_run_is_kept_for_a_late_prepare_for_a_bounded_time_and_then_released"
+  },
   "project_driver.py::_retry_cleanup": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
@@ -1232,6 +1243,11 @@
    "checks": 1,
    "ends": "O0c M4: counts given-back preparations whose removal was asked MAX_CLEANUP_ATTEMPTS times; each is retired once its retried removal finishes, and all end when the host they hold is replaced once idle",
    "test": "test_M4_a_preparation_whose_removal_was_given_up_is_kept_and_counted_stuck"
+  },
+  "project_history.py::<module>": {
+   "checks": 1,
+   "ends": "the successor window query (_HELD_WINDOW): at most its limit of held duties per call, one index range, advancing by position; rows leave as they are marked withdrawing; BOUNDED",
+   "test": "test_M2_the_successor_pass_reads_at_most_its_limit_of_rows_and_every_row_is_handled"
   },
   "project_history.py::_checked_record": {
    "checks": 1,
@@ -1268,6 +1284,11 @@
   "project_history.py::learning_outcome_page": {
    "checks": 3,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::open_withdrawals": {
+   "checks": 1,
+   "ends": "a page size on a read of due withdrawals: rows leave the list as their withdrawal is released, and a failing row is deferred behind the others; BOUNDED",
+   "test": "test_M1_the_withdrawal_list_returns_at_most_its_limit_and_the_rest_follow_as_these_are_released"
   },
   "project_history.py::pending_terminals": {
    "checks": 2,

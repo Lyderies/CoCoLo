@@ -42,7 +42,7 @@ from codex_agents.learning_contracts import canonical_json, keyed_digest
 from codex_agents.learning_store import LearningLedger
 from codex_agents.open_withdrawal import (
     WITHDRAW_ERROR_CODES, WITHDRAW_REASONS, WithdrawError, WithdrawOpenInput, checked_withdraw_reply,
-    decode_withdraw_open, withdrawal_custody, withdrawal_request_id,
+    custody_matches, decode_withdraw_open, withdrawal_custody, withdrawal_request_id,
 )
 from codex_agents.refusal_steps import DEFAULT, next_step
 from codex_agents.service_enrollment import (
@@ -113,6 +113,13 @@ class WithdrawWireTests(unittest.TestCase):
         custody = json.loads(withdrawal_custody(withdrawal()))
         self.assertEqual({'purpose': 'withdraw', 'run_handle': HANDLE, 'attempt': 1, 'run_id': RUN_ID,
                           'inputs_digest': INPUTS}, custody)
+
+    def test_a_custody_past_its_byte_limit_is_refused_and_the_exact_custody_is_accepted(self):
+        exact = withdrawal_custody(withdrawal())
+        self.assertTrue(custody_matches(exact, withdrawal()))
+        padded = exact[:-1] + b',"pad":"' + b'x' * 1_100 + b'"}'
+        self.assertGreater(len(padded), 1_024)
+        self.assertFalse(custody_matches(padded, withdrawal()))
 
     def reply(self, **changes):
         return {'state': 'withdrawn', 'run_handle': HANDLE, 'receipt': '5' * 64, 'known': False, **changes}
@@ -340,6 +347,19 @@ class OpenBindingStoreTests(unittest.TestCase):
                                            instance='svc-' + 'a' * 32, now_ms=1000)
         self.assertLessEqual(counted.rows, 1)
         self.assertIsNone(self.row(41))
+
+    def test_M1_the_withdrawal_list_returns_at_most_its_limit_and_the_rest_follow_as_these_are_released(self):
+        for number in range(1, 13):
+            self.record(number)
+            self.store.mark_open_withdrawing(binding(number).run_handle, 1, 'cancelled_before_claim',
+                                             project_id=PROJECT, runtime_digest=COLLECTOR_RUNTIME_DIGEST)
+        page = self.store.open_withdrawals(now_ms=5000, limit=5)
+        self.assertEqual(5, len(page))  # past the limit: only a page is returned
+        self.assertEqual(12, len(self.store.open_withdrawals(now_ms=5000, limit=50)))
+        for entry in page:
+            self.store.defer_open_withdrawal(entry['identity'], now_ms=10_000, base_ms=1000, max_ms=5000)
+        later = {entry['identity'] for entry in self.store.open_withdrawals(now_ms=5000, limit=5)}
+        self.assertFalse(later & {entry['identity'] for entry in page})  # the deferred rows no longer crowd it out
 
     def test_M1_a_withdrawal_is_listed_only_when_due_and_each_failure_waits_twice_as_long(self):
         for number in (1, 2):
@@ -886,6 +906,19 @@ class DriverWithdrawalTests(WithdrawHarness):
             self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
         self.assertEqual('failed_before_claim', self.withdrawn(run_handle)['reason'])
         self.assertEqual([], self.executions())
+
+    def test_W5_a_failed_run_is_kept_for_a_late_prepare_for_a_bounded_time_and_then_released(self):
+        now = [100.0]
+        stub = mock.Mock(_clock=lambda: now[0])
+        run = mock.Mock(duty_done_at=None, withdraw_reason='failed_before_claim', failed_viewed=False, state='failed')
+        project_driver.RunDriver._release_failed(stub, run)
+        self.assertEqual('failed', run.state)  # still inside its view window
+        now[0] += project_driver.FAILED_VIEW_SECONDS - 1
+        project_driver.RunDriver._release_failed(stub, run)
+        self.assertEqual('failed', run.state)
+        now[0] += 2  # past the limit
+        project_driver.RunDriver._release_failed(stub, run)
+        self.assertEqual('released', run.state)
 
     def test_W5_an_idle_registered_run_is_retired_and_withdrawn(self):
         with mock.patch.object(project_driver, 'REGISTERED_IDLE_SECONDS', 0.5):
