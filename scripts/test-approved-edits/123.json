@@ -1,0 +1,35 @@
+{
+ "decision": "123",
+ "schema": 1,
+ "transitions": [
+  {
+   "before_commit": "d1baaa9910a89fee6008e44b600334cb5ed7b2af",
+   "edit_commit": "7d2974112055faa0781aa20d9068eb19e5a0c3c9",
+   "edits": [
+    {
+     "line": 20,
+     "new": "    # D4 (decision 123 A): the prepare step keeps a reservation's material; an older format never had it.\n",
+     "old": ""
+    },
+    {
+     "line": 21,
+     "new": "    store._connection.execute('DELETE FROM project_result_publications WHERE claim_id IN (SELECT claim_id FROM result_reservations)')\n",
+     "old": ""
+    }
+   ],
+   "file": "packages/codex-agents/tests/project_schema_fixtures.py"
+  },
+  {
+   "before_commit": "d1baaa9910a89fee6008e44b600334cb5ed7b2af",
+   "edit_commit": "7d2974112055faa0781aa20d9068eb19e5a0c3c9",
+   "edits": [
+    {
+     "line": 352,
+     "new": "        return ('INSERT OR REPLACE INTO project_result_publications(project_id,claim_id,material) VALUES(?,?,?)',\n",
+     "old": "        return ('INSERT INTO project_result_publications(project_id,claim_id,material) VALUES(?,?,?)',\n"
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_project_holds_schema.py"
+  }
+ ]
+}
