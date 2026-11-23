@@ -1,0 +1,10 @@
+{
+ "status": "green",
+ "base": "d8b179d6",
+ "witness": "test_p10_diagnostic_failure_cannot_escape_child_to_caller",
+ "positive_control": "Successful action runs in a child and returns normally; failing action with a writable diagnostic reports its intended error. The failing-diagnostic case confirms both failures happened in the same child and no caller marker exists.",
+ "source_run": "green.json.run.json",
+ "source_sha256": "3c18eccb3ef264e6a286507384fbfecb71e8ec13a3a8a236cb2804ae69b95f41",
+ "jobs": 16,
+ "job_seconds": 27.2427340419963
+}

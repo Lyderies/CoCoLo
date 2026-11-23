@@ -1,0 +1,82 @@
+[
+ {
+  "fix": "fullrun-discovery",
+  "requirement": "TF-24",
+  "witness": "root:test_test_framework_integration.ReleaseIntegration.test_discovery_imports_framework_and_preserves_package_names",
+  "positive_control": "A plain package test is discovered; broken import keeps tests.test_broken.",
+  "base": "9bbf1582",
+  "red": "measurements/test-framework/release-0850/discovery-red.json",
+  "diagnostic": "framework import failed during discovery",
+  "green": "measurements/test-framework/release-0850/discovery-green.json"
+ },
+ {
+  "fix": "fullrun-layers",
+  "requirement": "TF-24",
+  "witness": "root:test_test_framework_integration.ReleaseIntegration.test_existing_resource_modules_have_correct_layers_and_reasons",
+  "positive_control": "Plain root:test_check_identifiers remains unit; all five original modules pass unchanged.",
+  "base": "9bbf1582",
+  "red": "measurements/test-framework/release-0850/layers-red.json",
+  "diagnostic": "existing resource module misclassified",
+  "green": "measurements/test-framework/release-0850/layers-green.json"
+ },
+ {
+  "fix": "fullrun-campaigns",
+  "requirement": "TF-24",
+  "witness": "root:test_test_framework_integration.ReleaseIntegration.test_exclusive_campaigns_wait_for_empty_pool_and_block_other_launches",
+  "positive_control": "Ordinary workers can overlap up to default capacity; exclusive campaign runs with an empty pool.",
+  "base": "9bbf1582",
+  "red": "measurements/test-framework/release-0850/campaigns-red.json",
+  "diagnostic": "missing exclusive campaign scheduling",
+  "green": "measurements/test-framework/release-0850/campaigns-green.json"
+ },
+ {
+  "fix": "fullrun-base",
+  "requirement": "TF-24",
+  "witness": "root:test_test_framework_integration.ReleaseIntegration.test_explicit_base_is_documented_and_missing_base_stops_before_discovery",
+  "positive_control": "Explicit b5318440 affected runs execute; every CI selector names the release base and existing event-path tests pass.",
+  "base": "9bbf1582",
+  "red": "measurements/test-framework/release-0850/base-red.json",
+  "diagnostic": "local full-run base is unspecified",
+  "green": "measurements/test-framework/release-0850/base-green.json"
+ },
+ {
+  "fix": "fullrun-legacy",
+  "requirement": "TF-24",
+  "witness": "root:test_test_framework_integration.ReleaseIntegration.test_release_overlay_is_immutable_and_candidate_changes_are_rejected",
+  "positive_control": "Reviewed fingerprints pass; changed implementation and untagged additions fail.",
+  "base": "9bbf1582",
+  "red": "measurements/test-framework/release-0850/legacy-red.json",
+  "diagnostic": "missing reviewed release baseline version",
+  "green": "measurements/test-framework/release-0850/legacy-green.json"
+ },
+ {
+  "fix": "fullrun-debt",
+  "requirement": "TF-24",
+  "witness": "root:test_test_framework_integration.ReleaseIntegration.test_versioned_debt_has_measured_ceilings_and_cannot_grow",
+  "positive_control": "Measured current debt validates; added keys and higher ceilings fail.",
+  "base": "9bbf1582",
+  "red": "measurements/test-framework/release-0850/debt-red.json",
+  "diagnostic": "missing measured release debt version",
+  "green": "measurements/test-framework/release-0850/debt-green.json"
+ },
+ {
+  "fix": "fullrun-history",
+  "requirement": "TF-24",
+  "witness": "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration",
+  "positive_control": "Real Git introduction and retirement pass; immutable tamper, raised ceiling and historical restoration fail.",
+  "base": "9bbf1582",
+  "red": "measurements/test-framework/release-0850/history-red.json",
+  "diagnostic": "missing committed release version validation",
+  "green": "measurements/test-framework/release-0850/history-green.json"
+ },
+ {
+  "fix": "fullrun-retirement-witness",
+  "requirement": "TF-24",
+  "witness": "root:test_test_framework_integration.ReleaseIntegration.test_versioned_debt_has_measured_ceilings_and_cannot_grow",
+  "positive_control": "Initial admission manifest passed in the complete full run; valid retirement fails only the old witness.",
+  "base": "c0c8c76f",
+  "red": "measurements/test-framework/release-0850/retirement-red.json",
+  "diagnostic": "KeyError: 'codex:tests.test_billing_gate'",
+  "green": "measurements/test-framework/release-0850/retirement-green.json"
+ }
+]

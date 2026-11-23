@@ -1,0 +1,1558 @@
+{
+ "API-1": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Headless core. Check: the core starts with no screen; the runner keeps running and `orch` commands fall back to the files when the core dies."
+ },
+ "API-10": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Files stay canonical. Check: deleting the core's cache and restarting gives identical answers; records survive a restart."
+ },
+ "API-11": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Ordered events. Check: events have a gap-free increasing seq and the envelope {seq, ts, kind, data, v}."
+ },
+ "API-12": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Resume. Check: `events.subscribe from_seq` replays exactly the missed events; an expired cursor returns cursor_expired with a snapshot."
+ },
+ "API-13": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Filtering and bounds. Check: a kind filter works; a slow subscriber is dropped without delaying others or the writer."
+ },
+ "API-14": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Events carry no secrets. Check: events hold ids and summaries only; a planted secret and transcript text never appear."
+ },
+ "API-15": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Records-first answers. Check: canned questions (status, usage, CI, versions, history, why stopped) are answered from records with sources, as_of and tokens_used 0, and nothing is written to the inbox."
+ },
+ "API-16": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Forwarding at safe points. Check: a judgment question is queued only in the inbox, delivered at a safe point as at most 300 tokens with a TTL; query.reply produces query.answered for the asker."
+ },
+ "API-17": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Talk is labelled and capped. Check: context.push is labelled by source, capped (2 KB, 10 per minute), delivered as quoted untrusted data, and never counted as an owner decision."
+ },
+ "API-18": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Tokens. Check: 256-bit, stored hashed, revocable, minted only at the owner's terminal (refused over the API); an agent token defaults to read plus context.push."
+ },
+ "API-19": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Scope matrix. Check: read, confirm and owner scopes each allow exactly their methods; others return forbidden."
+ },
+ "API-2": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Socket. Check: socket mode 0600 in a 0700 directory, path under 104 bytes, a stale socket is replaced, no TCP listener."
+ },
+ "API-20": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Decisions. Check: decision.answer works for the owner role only."
+ },
+ "API-21": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Two-step confirm. Check: a control call first returns confirm_required with an id; the second call within 60 s executes once; reuse, expiry and a different token or params are refused."
+ },
+ "API-22": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Owner-only wall. Check: install, update, setup, reviewed install, live-record writes, billing attestation, client-range widening and token minting are refused over the API even with an owner token."
+ },
+ "API-23": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Audit. Check: every change and confirm is a commands.jsonl line; every refusal is an audit.jsonl line (rotated separately, so refusals cannot push changes out); each line has caller, method, outcome; no token or secret appears."
+ },
+ "API-24": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Limits. Check: request size, string length, method time, connection count and subscription count are capped with fixed error codes."
+ },
+ "API-25": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Provider neutrality. Check: no provider name in method, event or field names; provider detail only under `extra`."
+ },
+ "API-26": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "(later adapter) HTTP+SSE bridge on 127.0.0.1 with Host/Origin/token checks, SSE id = seq. Tested with the dashboard milestone."
+ },
+ "API-27": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "(later adapter) stdio MCP adapter on a pinned spec exposing the same operations. Tested last."
+ },
+ "API-3": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Peer identity. Check: a connection from another uid is refused before any method runs."
+ },
+ "API-4": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Framing. Check: JSON-RPC 2.0 as newline-delimited JSON; a malformed line gets a parse error and the connection lives; an oversize line is refused."
+ },
+ "API-5": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Handshake and versioning. Check: `initialize` returns protocol version and features; a major mismatch is refused; any other method before it is refused."
+ },
+ "API-6": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "One contract. Check: `schema.get` lists methods, event kinds and error codes; every response carries `seq_at`; the in-process adapter and the socket give identical results."
+ },
+ "API-7": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "State, units and runs. Check: state.get, units.list/get/history and runs.list equal the record files field for field."
+ },
+ "API-8": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Usage, history, CI, versions. Check: values equal the records; unreadable or missing data is \"unknown\", never a guessed number."
+ },
+ "API-9": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 9",
+  "statement": "Health. Check: health.get gives each finding with a plain reason code and text."
+ },
+ "G1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Every step exits 0, or refuses with a reason the step expects; a bare run_unavailable, account_unavailable or probe_unavailable is a failure."
+ },
+ "G2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Worker: every answer value matches the oracle; each required evidence outcome is pass or observed."
+ },
+ "G3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Verifier: opened for the worker's digest; each required evidence outcome is pass; no discrepancy; verdict pass or ready."
+ },
+ "G4": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Operational QA: accepted: true."
+ },
+ "G5": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Capacity: after close, a supported per-run read shows every claimed run released, and the next billing probe gets a slot; final statistics show zero active or pending runs."
+ },
+ "G6": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "An update never needs the collector stopped by hand, and finishes with the collector healthy on the new build."
+ },
+ "G7": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Records keep their history across every update: counts by kind, never content."
+ },
+ "G8": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "No private value appears in any output: keys, fingerprints, paths under the temporary HOME."
+ },
+ "G9": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A content-free JSON report with phases, seconds, reason codes and pass or fail per requirement is written, kept as the CI artifact."
+ },
+ "L1.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A fresh install through the scripted setup (S1 answers file and passphrase) finishes with every step ok, the protected command rule installed and the collector ready."
+ },
+ "L1.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Setup run again on an installed project changes nothing: same files, same digests, no new records except its own checks."
+ },
+ "L10.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Hook events are ingested with recording on and not with it off (S2)."
+ },
+ "L10.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "The learning history moves to the project store; learning-run-cycle runs."
+ },
+ "L10.3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Retention removes expired raw events and keeps their summaries (controllable clock)."
+ },
+ "L11.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "learning-backup-project and learning-verify-backup succeed."
+ },
+ "L11.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A failed upgrade forced part-way leaves the records unchanged, learning-rollback works and the next attempt succeeds."
+ },
+ "L12.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "From each earlier release tag (v0.3.1 on), with history built on it, an update to HEAD succeeds and the full run passes again."
+ },
+ "L12.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A one-command update with an admitted-never-launched run and 0.2.x leftovers present needs no manual stop."
+ },
+ "L12.3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "An update with a child really running refuses plainly and changes nothing."
+ },
+ "L12.4": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "An update with uncommitted managed files is refused."
+ },
+ "L12.5": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A second project updated after the first works (no other project stops working)."
+ },
+ "L12.6": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "History built on an earlier release with more than 512 admission records, runs left by 0.2.x and a project over 128 MiB still opens, dispatches and upgrades (the four live-test bugs: unbounded admission history, a masked busy probe, 0.2.x leftovers blocking updates, a protected copy without role files)."
+ },
+ "L12.7": {
+  "checks": [],
+  "source": "DESIGN-0.3.3-claim-capture.md",
+  "statement": "A dispatch refused at its claim on a project with long history closes by itself, and after an update from the release before, the next service closes any such run an earlier version left (0.3.3 C2, C3, C3f)."
+ },
+ "L13.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A session with danger-full-access, an unknown host, or opened above the project is refused with its reason."
+ },
+ "L13.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "The protected copy refuses a project it is not bound to."
+ },
+ "L14.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "learning-status, learning-run-status, earlier_version_runs and learning-orchestration-report give the right values at each phase, and none is private."
+ },
+ "L15.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "learning-delete-project removes the project's records and services and leaves another project untouched."
+ },
+ "L2.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "The owner key is configured; a wrong passphrase is refused with its fixed reason and changes nothing."
+ },
+ "L2.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Replacing the owner key refuses signatures made with the old key and accepts the new one's."
+ },
+ "L3.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "provider-observe succeeds for both fake clients, and the Claude billing probe succeeds."
+ },
+ "L3.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Billing attestation is recorded and admission accepts it."
+ },
+ "L3.3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Paid usage on is refused with paid_usage_usable; an API key in the environment with provider_api_key_present; an unreviewed client version with client_version_unreviewed; a signed-out client with observation_unavailable."
+ },
+ "L4.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Routing for a Codex primary and a Claude primary returns the policy's role, model, effort, agent and sandbox, and the child runs with exactly those."
+ },
+ "L4.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A route edited after learning-route is refused."
+ },
+ "L5.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "For each primary, readiness, assignment and result preflight and export preflight pass."
+ },
+ "L5.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Open, dispatch, validate (with one structural repair on a native path where one applies) and record the result succeed; the worker's answer values match the oracle and each required evidence outcome is pass or observed."
+ },
+ "L5.3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "The verifier opened for the worker's outcome digest passes every required evidence item with no discrepancy and verdict pass or ready; operational checks pass and QA records accepted: true; the orchestration closes and its report is right."
+ },
+ "L6.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A child that tries to read outside its export, write anywhere or use the network is stopped, and its result says so."
+ },
+ "L6.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Uncommitted read paths are refused before admission."
+ },
+ "L7.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "learning-cancel-run stops a running child; it ends cancelled with its capacity released."
+ },
+ "L7.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A child that goes silent is stopped at the cutoff (controllable clock) and ends with work_silence and its capacity released."
+ },
+ "L7.3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "A hard timeout stops a child and ends it with the right terminal state and released capacity."
+ },
+ "L8.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Killing the project service mid-run: the next service settles the run (run_lost), frees its slot and records nothing twice."
+ },
+ "L8.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Killing the collector mid-run: the same, once it is back."
+ },
+ "L8.3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7 L8b (control project, 2026-11-16)",
+  "statement": "A project service replaced while its dispatch runs (another project's setup restarting the shared collector) leaves no run in limbo: the run ends run_lost with its slot freed, the dispatching CLI says so plainly instead of dispatch_not_authorized, and the orchestration can close."
+ },
+ "L9.1": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Two children at once run; a third is refused with claim_busy and the probe with probe_busy."
+ },
+ "L9.2": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Capacity is released after each terminal, shown by a supported per-run read."
+ },
+ "L9.3": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "Two projects share one collector, each with its own runs and capacity."
+ },
+ "ML-1": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_binding_approval",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_binding_base_commit",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_binding_batch_digest",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_binding_candidate_digest",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_binding_git_link",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_binding_manifest",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_history_tampered_row",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_1_refusing_check",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p07_V1_stored_row_is_verified_before_commit_A"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-1",
+  "statement": "a tampered base, manifest, digest, git link, history row or a refusing check is refused. Test: tamper each binding separately and force a refusing check."
+ },
+ "ML-10": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_old_open_handle_write_during_cleanup",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_10_overlap_keeps_both_and_states_open_handle_limit",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_H3_rejects_owner_somewhere_with_unrelated_damage_or_missing_child",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_cleanup_chmod",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_cleanup_delete",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_cleanup_in_place",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_cleanup_safe_save",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_compensation_chmod",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_compensation_delete",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_compensation_in_place",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_compensation_safe_save",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_forward_chmod",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_forward_delete",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_forward_in_place",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_forward_safe_save",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_recovery_chmod",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_recovery_delete",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_recovery_in_place",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_recovery_safe_save",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_reverse_chmod",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_reverse_delete",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_reverse_in_place",
+   "codex:tests.test_merge_library_owners.Campaign.test_ml_10_edit_reverse_safe_save",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_cleanup_chmod",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_cleanup_delete",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_cleanup_in_place",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_cleanup_safe_save",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_compensation_chmod",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_compensation_delete",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_compensation_in_place",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_compensation_safe_save",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_forward_chmod",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_forward_delete",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_forward_in_place",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_forward_safe_save",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_recovery_chmod",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_recovery_delete",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_recovery_in_place",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_recovery_safe_save",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_reverse_chmod",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_reverse_delete",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_reverse_in_place",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_10_edit_reverse_safe_save"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-10",
+  "statement": "an owner edit, or overlapping edits, stop the landing; both versions are kept and named. The open-handle limit is stated in the report. Test: in-place, safe-save, delete and chmod injected through forward, compensation, reverse and cleanup; an overlapping hunk; an old handle writing during cleanup."
+ },
+ "ML-11": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_11_applying_all_new_reverses_from_history",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_11_kill_every_compensation_call",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_H2_rejects_reverted_new_tree_and_landed_base_tree",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_H2_reverse_and_undo_use_operation_specific_durable_direction",
+   "codex:tests.test_merge_library_kills.Campaign.test_ml_11_kill_cleanup",
+   "codex:tests.test_merge_library_kills.Campaign.test_ml_11_kill_forward",
+   "codex:tests.test_merge_library_kills.Campaign.test_ml_11_kill_recovery",
+   "codex:tests.test_merge_library_kills.Campaign.test_ml_11_kill_reverse",
+   "codex:tests.test_merge_library_kills.Campaign.test_ml_11_kill_undo",
+   "codex:tests.test_merge_library_machine.TestMergeMachine.runTest",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_cleaning_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_forward_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_recovering_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_reverse_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_D6_retry_and_cancel_cannot_reverse_durable_landed",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_D7_unreadable_history_reports_unknown_and_touches_nothing",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_Q5_all_emptied_ancestors_are_recorded_and_unlisted_empty_folder_survives",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_Q6_cancel_applying_attempts_putback_and_records_the_outcome",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C1_parent_descriptors_close_on_second_open_and_first_close_failure",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C2_cancel_new_ticket_leaves_earlier_landed_row",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C3_populated_ancestor_is_not_an_emptied_folder",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C5_report_restores_phase_after_failure",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C6_cleanup_reread_failure_reports_unknown_and_continues",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_B3_generated_EIO_checks_the_operations_own_report",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C3_owner_empty_descendant_keeps_ancestor_out_of_emptied",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_reverse_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_undoing_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_11_kill_cleanup",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_11_kill_every_compensation_call",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_11_kill_forward",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_11_kill_recovery",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_11_kill_reverse",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_11_kill_undo"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-11",
+  "statement": "recovery direction comes from the history only and is idempotent; staging is never read for direction. Test: kill oracle with recover twice; tree all-new while state is `applying` is still put back."
+ },
+ "ML-12": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_failed_terminal_commit_not_claimed_recorded",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_fault_every_compensation_call",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_fault_sweep_undo",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_missing_staging_failed_restore_then_retry",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_uncertain_A",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_12_uncertain_B",
+   "codex:tests.test_merge_library_adversarial.RealImages.test_ml_12_really_full_image",
+   "codex:tests.test_merge_library_forward_faults.Campaign.test_ml_12_fault_sweep_forward",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_ML12_rejects_swallowed_IO_failures_even_with_landed_tree_and_row",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_ml_12_campaign_partition_preserves_every_discovered_check_once",
+   "codex:tests.test_merge_library_machine.TestMergeMachine.runTest",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_cleaning_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_forward_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_recovering_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_reverse_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_missing_A_flush_is_caught_by_post_crash_staging_contents",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_private_location_guard_mutation_is_caught_by_ML30_forgery",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_swallowed_EIO_landed_is_caught_by_the_single_end_state_check",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_third_history_commit_is_caught_by_ML6_order",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M5_close_error_after_release_must_not_close_reused_descriptor",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M6_applying_cancel_enters_putback_and_terminal_retry_refuses",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M6_cleanup_durable_reread_guard_continues_later_rows",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M6_cleanup_initial_read_guard",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M6_land_IO_handler_read_guard",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M6_land_cancel_validation_read_guard",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M6_rollback_initial_read_guard",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M6_undo_initial_read_guard",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p07_V2_failed_check_attr_is_not_empty_success",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p07_V2_failed_ls_files_is_not_empty_success",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p08_V2_unresolved_row_needs_recovery_or_status_evidence",
+   "codex:tests.test_merge_library_recovery_faults.Campaign.test_ml_12_fault_sweep_cleanup",
+   "codex:tests.test_merge_library_recovery_faults.Campaign.test_ml_12_fault_sweep_recovery",
+   "codex:tests.test_merge_library_recovery_faults.Campaign.test_ml_12_fault_sweep_reverse",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_B3_generated_EIO_checks_the_operations_own_report",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C3_owner_empty_descendant_keeps_ancestor_out_of_emptied",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_reverse_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_undoing_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_12_fault_every_compensation_call",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_12_fault_sweep_cleanup",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_12_fault_sweep_forward",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_12_fault_sweep_recovery",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_12_fault_sweep_reverse",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_12_fault_sweep_undo"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-12",
+  "statement": "I/O failure ends reverted or needs_owner(io), with history contents pinned; no claim of allocation-free restore. Test: fault sweep, a really full image, missing staging file, failed terminal commit, retry."
+ },
+ "ML-13": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_13_undo_kill_around_combined_commit",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_13_ancestor_overlap_refused",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_13_deleted_empty_folders_not_recreated",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_13_exact_map_and_order",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_13_internal_mode_fixture",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_13_owner_change_refuses_undo",
+   "codex:tests.test_merge_library_machine.TestMergeMachine.runTest",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_13_undo_kill_around_combined_commit"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-13",
+  "statement": "undo restores bytes, mode, absence and recorded created folders in order, and refuses on owner change; empty folders left by deletes are not recreated. Test: map equality; L1/L2/undo-L2/undo-L1; ancestor overlap refused; crash around the combined commit; mode via an internal fixture."
+ },
+ "ML-14": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_14_move_inside",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_14_move_outside",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_14_unknown_contents_reported",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_14_report_independent_oracle",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_M2_rejects_retained_wrong_bytes_mode_and_false_moved_identity"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-14",
+  "statement": "the report class per path matches the tree. It lists merged files, conflicts, leftover staging objects and \"unknown\" for inaccessible contents, and I/O is distinct from owner. Test: independent report oracle after each kill, fault and move."
+ },
+ "ML-15": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_15_walk_child_staging_symlink",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_15_walk_cocolo_symlink",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_15_walk_history_symlink",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_15_walk_mount_swap",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_15_walk_parent_symlink",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_15_walk_staging_symlink"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-15",
+  "statement": "walks are anchored and same-device, including the staging folder and the history. Test: symlink or mount swap after intake, and a swapped `.cocolo` or staging folder, with outside canaries."
+ },
+ "ML-16": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_16_git_never_written",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_16_head_change_final_validation",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_M6_rejects_git_directory_destination_and_relative_write"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-16",
+  "statement": "`.git` is never written, and a HEAD change before commit B puts the landing back. Test: write trace across merge, staging and cleanup; change HEAD at final validation."
+ },
+ "ML-17": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_17_cancel_forward",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_17_cancel_history",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_17_cancel_intake",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_17_cancel_staging",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_17_cancel_validation",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_17_concurrent_sealers_fifo_restart",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_17_stale_default_waits_without_builder",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_17_unresolved_blocks_until_accept",
+   "codex:tests.test_merge_library_machine.TestMergeMachine.runTest",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p10_blocked_sealers_leave_no_threads_in_the_test_process",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p10_diagnostic_failure_cannot_escape_child_to_caller",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_D6_retry_and_cancel_cannot_reverse_durable_landed",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_D7_unreadable_history_reports_unknown_and_touches_nothing",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_Q5_all_emptied_ancestors_are_recorded_and_unlisted_empty_folder_survives",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_Q6_cancel_applying_attempts_putback_and_records_the_outcome",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C1_parent_descriptors_close_on_second_open_and_first_close_failure",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C2_cancel_new_ticket_leaves_earlier_landed_row",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C3_populated_ancestor_is_not_an_emptied_folder",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C5_report_restores_phase_after_failure",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C6_cleanup_reread_failure_reports_unknown_and_continues",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_B3_generated_EIO_checks_the_operations_own_report",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C3_owner_empty_descendant_keeps_ancestor_out_of_emptied",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-17",
+  "statement": "the \"busy\" answer is replaced by a durable per-project FIFO. Cancel and unresolved landings (d) block the queue until retried or accepted. Test: concurrent sealers land in order; cancel at each phase; an unresolved landing blocks admission; a restart keeps the queue."
+ },
+ "ML-18": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_18_kill_during_retirement",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_18_retention_10_vs_11",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_18_kill_during_retirement"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-18",
+  "statement": "history contents are kept until undone or 10 newer landings, and retired only after cleanup or handoff (no blob refcount). Test: 10 vs 11 landings, a kill during retirement."
+ },
+ "ML-19": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_19_full_flush_order",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_cross_directory_rename_requires_both_parent_flushes",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_existing_store_io_runs_against_memory_without_creating_real_files",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_file_flush_does_not_persist_create_and_parent_flush_does_not_persist_bytes",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_real_land_uses_memory_namespace_history_and_full_modes",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_review_B11_left_parent_exchange_and_unflushed_unlink",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_review_B1_flush_open_inode_after_rename",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_review_B2_missing_read_is_ENOENT",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_review_B5_database_identity_survives_rename_not_unlink",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_review_B6_power_loss_latches_finally_IO_until_recovery",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_review_B7_open_flags_and_B8_directory_errors",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_skipping_flush_before_A_is_caught_after_model_power_loss",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_unflushed_removal_is_lost_and_directory_removal_requires_parent_flush",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_unflushed_write_is_lost_but_flushed_write_survives",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_H1_rejects_missing_either_parent_and_stale_history_flush",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_H1_write_opens_require_staged_file_and_parent_flushes",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_ML19_all_commit_labels_require_fresh_flush_and_own_history_write",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_ML19_full_flush_replay_identity_is_portable_without_changing_trace_operations",
+   "codex:tests.test_merge_library_machine.TestMergeMachine.runTest",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_cleaning_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_forward_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_recovering_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_reverse_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_missing_A_flush_is_caught_by_post_crash_staging_contents",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_private_location_guard_mutation_is_caught_by_ML30_forgery",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_swallowed_EIO_landed_is_caught_by_the_single_end_state_check",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_third_history_commit_is_caught_by_ML6_order",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_D6_retry_and_cancel_cannot_reverse_durable_landed",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_D7_unreadable_history_reports_unknown_and_touches_nothing",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_Q5_all_emptied_ancestors_are_recorded_and_unlisted_empty_folder_survives",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_Q6_cancel_applying_attempts_putback_and_records_the_outcome",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C1_parent_descriptors_close_on_second_open_and_first_close_failure",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C2_cancel_new_ticket_leaves_earlier_landed_row",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C3_populated_ancestor_is_not_an_emptied_folder",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C5_report_restores_phase_after_failure",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C6_cleanup_reread_failure_reports_unknown_and_continues",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_B3_generated_EIO_checks_the_operations_own_report",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C3_owner_empty_descendant_keeps_ancestor_out_of_emptied",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_reverse_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_undoing_persistence_samples"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-19",
+  "statement": "full flush before each commit. Test: order trace; power loss is separate APFS/ext4 evidence."
+ },
+ "ML-2": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_base_limit_file",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_base_limit_total",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_candidate_block_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_candidate_char_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_candidate_directory",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_candidate_fifo",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_candidate_hardlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_candidate_socket",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_candidate_symlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_dot_git",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_target_block_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_target_char_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_target_directory",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_target_fifo",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_target_hardlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_target_socket",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_intake_target_symlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_limit_file_at",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_limit_file_over",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_limit_total_at",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_limit_total_over",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_candidate_block_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_candidate_char_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_candidate_fifo",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_candidate_hardlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_candidate_regular",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_candidate_socket",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_candidate_symlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_target_block_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_target_char_device",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_target_fifo",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_target_hardlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_target_regular",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_target_socket",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_parent_target_symlink",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_2_path_count_boundary"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-2",
+  "statement": "safe intake with no blocking, and more than 2000 paths is refused with a reason and nothing split. Test: one valid-but-forbidden case per type or limit; 2000 vs 2001 paths; a FIFO under a timeout."
+ },
+ "ML-20": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_20_created_nonempty",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_20_created_substituted",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_20_created_unrecorded",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_B3_generated_EIO_checks_the_operations_own_report",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C3_owner_empty_descendant_keeps_ancestor_out_of_emptied",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-20",
+  "statement": "a created folder is removed on reverse only if empty and matching its recorded identity. Test: substituted, unrecorded and non-empty folders are kept."
+ },
+ "ML-21": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_21_owner_delete_after_A_not_recreated",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_21_owner_empty_folder_after_A_kept"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-21",
+  "statement": "reverse acts only on positive evidence. Test: owner deletes a target or creates an empty folder, then a crash right after commit A; recovery changes neither."
+ },
+ "ML-22": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_22_reinspect_every_path"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-22",
+  "statement": "before commit B every path is re-inspected. Test: inject an owner edit just before final validation; the landing is put back, the edit kept."
+ },
+ "ML-23": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_23_cleanup_owner_empty",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_23_cleanup_owner_file",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_23_cleanup_owner_nonempty_directory",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_23_cleanup_swapped",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_23_cleanup_unlisted_ancestor",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M3_regular_file_cannot_be_an_emptied_folder",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_D6_retry_and_cancel_cannot_reverse_durable_landed",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_D7_unreadable_history_reports_unknown_and_touches_nothing",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_Q5_all_emptied_ancestors_are_recorded_and_unlisted_empty_folder_survives",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_Q6_cancel_applying_attempts_putback_and_records_the_outcome",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C1_parent_descriptors_close_on_second_open_and_first_close_failure",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C2_cancel_new_ticket_leaves_earlier_landed_row",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C3_populated_ancestor_is_not_an_emptied_folder",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C5_report_restores_phase_after_failure",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C6_cleanup_reread_failure_reports_unknown_and_continues",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_B3_generated_EIO_checks_the_operations_own_report",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C3_owner_empty_descendant_keeps_ancestor_out_of_emptied",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-23",
+  "statement": "the cleanup job removes an emptied folder only if it is on the commit-A list, still empty, identity-matching and not owner-created after the landing; it walks upward only through listed folders. Test: owner adds a file, creates an empty folder, or swaps the folder; each is kept."
+ },
+ "ML-24": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_24_killed_staging_listed_then_removed_on_start",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_24_ignored_staging_and_negative_control"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-24",
+  "statement": "staging lives at `.cocolo/staging/<child id>/` and holds a `.gitignore` containing `*`. It is removed after the landing, and a leftover is listed and removed on next start. Test: `git status` stays clean; a kill leaves one listed folder; restart removes it; remove the `.gitignore` and expect git to show it."
+ },
+ "ML-25": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_25_merge_child_only",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_25_merge_disjoint",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_25_merge_overlap",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_25_merge_owner_only"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-25",
+  "statement": "at landing, each file is merged three-way from the history's base; an owner-only change stands, a child-only change applies, and overlapping edits are a conflict that keeps both. Test: the three cases on plain files, with a merge-file trace showing no `.git` write."
+ },
+ "ML-26": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_26_whole_fail_file_1",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_26_whole_fail_file_2",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_26_whole_fail_file_3"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-26",
+  "statement": "a change lands whole or not at all. Any failed file puts the change back, and none lands file by file. Test: fail the Nth file for each N; the tree equals the base."
+ },
+ "ML-27": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_27_merged_report_checks_before_B"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-27",
+  "statement": "merged results are listed and the project's checks run before commit B. Test: a merged file appears in the report; a failing check puts the landing back."
+ },
+ "ML-28": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_28_owner_first_clean_reapply",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_28_owner_first_unclean_stops"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-28",
+  "statement": "a version CoCoLo did not make always stands. It goes to the front of the queue and a builder only re-applies the child's change on top; not clean means stop and ask. Test: an owner commit between seal and turn; a clean re-apply; an unclean one stops. The builder is faked until write children exist."
+ },
+ "ML-29": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_29_conflict_waits_no_builder"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-29",
+  "statement": "until write-capable children exist, a conflict waits for the owner, with no builder started. Test: force a conflict and assert no spawn and a visible waiting state."
+ },
+ "ML-3": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_base_0",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_base_1",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_base_2",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_base_3",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_base_4",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_candidate_0",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_candidate_1",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_candidate_2",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_candidate_3",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_converted_candidate_4",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_BISECT_LOG",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_CHERRY_PICK_HEAD",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_MERGE_HEAD",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_REVERT_HEAD",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_absolute",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_add_existing",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_attribute_eol_crlf",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_attribute_filter_custom",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_attribute_ident",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_attribute_text",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_attribute_working_tree_encoding_UTF_16",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_autocrlf",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_aux_alias",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_base_bytes",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_base_mode",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_case_alias",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_chmod",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_dotdot",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_duplicate",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_exec_change",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_head",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_nested_repository",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_rebase_apply",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_rebase_merge",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_rename",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_skip_worktree",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_sparse",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_submodule",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_3_predicate_unicode_alias"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-3",
+  "statement": "each precondition and conflict is refused, including aliases and any permission-bit change in a candidate (git class 644/755 is only a header). Test: one case per predicate with the others satisfied; a candidate chmod."
+ },
+ "ML-30": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_30_forgery_approvals.json",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_30_forgery_history.sqlite",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_30_forgery_ledger.json",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_30_forgery_private_location",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_30_forgery_signatures.json",
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_ML30_location_oracle_rejects_otherwise_valid_forgery_landing",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_missing_A_flush_is_caught_by_post_crash_staging_contents",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_private_location_guard_mutation_is_caught_by_ML30_forgery",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_swallowed_EIO_landed_is_caught_by_the_single_end_state_check",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_third_history_commit_is_caught_by_ML6_order",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p07_V2_failed_check_attr_is_not_empty_success",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p07_V2_failed_ls_files_is_not_empty_success"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-30",
+  "statement": "the history, ledger, signatures and approvals live outside the project, and nothing under `.cocolo/` is trusted for them. Test: a child with write access to `.cocolo/` forges history or approvals and is ignored; removing the location check lets the forgery land."
+ },
+ "ML-4": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.RealImages.test_ml_4_FAT_HFS_images",
+   "codex:tests.test_merge_library_adversarial.RealImages.test_ml_4_actual_mounted_target_and_staging",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_4_filesystem_cross_drive_history",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_4_filesystem_cross_drive_staging",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_4_filesystem_fat_no_exchange",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_4_filesystem_hfs_no_noreplace",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_4_filesystem_mounted_target"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-4",
+  "statement": "refuse a drive lacking exchange and no-replace, or a staging folder or CoCoLo storage on another st_dev than any target. Test: FAT/HFS+ images, a mounted subfolder target, a cross-drive staging case."
+ },
+ "ML-5": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_5_kill_every_pre_A_history_write",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_5_history_batch_digest",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_5_history_events",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_5_history_new_contents",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_5_history_old_contents",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p07_V1_stored_row_is_verified_before_commit_A",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_5_kill_every_pre_A_history_write"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-5",
+  "statement": "events and old/new contents in the history verify before commit A. Test: corrupt each separately; a kill at each history write leaves no `applying` row and the tree unchanged."
+ },
+ "ML-6": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_6_emptied_identities_are_durable_immediately_after_A",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_6_kill_at_mkdir_inspects_durable_folder_identities",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_6_kill_both_sides_A_B",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_6_failing_check_blocks_B",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_6_normal_two_commit_order",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_missing_A_flush_is_caught_by_post_crash_staging_contents",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_private_location_guard_mutation_is_caught_by_ML30_forgery",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_swallowed_EIO_landed_is_caught_by_the_single_end_state_check",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_third_history_commit_is_caught_by_ML6_order",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_6_kill_at_mkdir_inspects_durable_folder_identities",
+   "codex:tests.test_merge_library_soak.CompleteRealCampaign.test_ml_6_kill_both_sides_A_B"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-6",
+  "statement": "a normal landing has exactly two commits, A before the first tree change and B after all parent flushes and after the project checks pass. Test: syscall-trace checker; a kill each side of each commit; a failing check blocks B."
+ },
+ "ML-7": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_7_safe_save_captured_then_kill",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_7_staging_complete",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_7_staging_missing",
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_7_staging_partial"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-7",
+  "statement": "the staging folder holds only complete staged bytes; an unknown object there is kept and reported, never unlinked. Test: foreign complete file, foreign partial file, missing file, safe-save B captured then a kill (B survives)."
+ },
+ "ML-8": {
+  "checks": [
+   "codex:tests.test_merge_library_adversarial.Adversarial.test_ml_8_synchronized_reader_partial_write_and_boundaries",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p09_final_reader_exception_fails_the_concurrency_witness"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-8",
+  "statement": "a path always holds a complete version or legitimate absence. Test: synchronized readers during injected partial writes and at each mutation boundary."
+ },
+ "ML-9": {
+  "checks": [
+   "codex:tests.test_merge_library_contract.Contract.test_ml_9_foreign_staging_file_is_unlink_guard_witness",
+   "codex:tests.test_merge_library_contract.Contract.test_ml_9_syscall_allowlist_and_cross_folder_exchange"
+  ],
+  "source": "tests/requirements/merge-library.json#ML-9",
+  "statement": "only cross-folder exchange, no-replace rename, mkdir, rmdir, one compensation and the content-checked unlink are used. Test: syscall-trace allowlist; remove the unlink authorization and expect a foreign file in staging to be deleted."
+ },
+ "ML-R91": {
+  "checks": [
+   "codex:tests.test_merge_library_r3.RoundThree.test_p08_V1_unreadable_folder_is_not_certified_empty",
+   "codex:tests.test_merge_library_states.EndStates.test_decision_91_only_recorded_empty_descendants_qualify"
+  ],
+  "source": "REQUIREMENTS-merge-review.md#ML-R91",
+  "statement": "**ML-R91 \u2014 Recorded empty folder trees.** Owner decision 91=A: a folder that holds only other empty folders CoCoLo itself made counts as empty, provided there is nothing else inside and every folder matches the device/inode identity CoCoLo recorded. Foreign files, unrecorded folders, and replaced folder identities do not qualify. The two C-3 checks must enforce this rule without accepting foreign contents."
+ },
+ "TERM-13": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 4",
+  "statement": "Authority tiers are enforced in the core, not the client."
+ },
+ "TERM-17": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 4",
+  "statement": "Every terminal read goes through the API only."
+ },
+ "TERM-5": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 4",
+  "statement": "The terminal and the core are separate processes; the core runs headless."
+ },
+ "TERM-6": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 4",
+  "statement": "Run counts through the API match learning-orchestration-status."
+ },
+ "TERM-7": {
+  "checks": [],
+  "source": "PLAN-0.4.0-terminal.md section 4",
+  "statement": "Usage through the API matches usage-report --json and is 'unknown' when unreadable."
+ },
+ "TF-1": {
+  "checks": [
+   "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
+   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B5_workflow_has_validated_merge_base_and_no_parent_fallback",
+   "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B6_full_gate_rejects_not_run_and_incomplete_stage_evidence",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_B5_missing_base_fails_and_advanced_PR_base_uses_merge_base",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_a_worker_exiting_zero_without_a_result_is_not_a_passing_check",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_owned_descendants_are_reaped_when_a_worker_finishes",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_r2_M7_real_runner_shards_and_import_failure",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_C13_unpatched_runner_fails_closed_without_trusted_base",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_runner_counts_structured_results_and_saves_only_current_job_seconds",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_worker_secrets_are_stripped_and_temporary_roots_are_isolated",
+   "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error",
+   "root:test_test_framework_guards.WorkerTests.test_review_C8_discovery_and_shards_have_a_stable_disjoint_union",
+   "root:test_test_framework_r3.RoundThree.test_p04_shard_witness_rejects_duplicate_original_worker_records",
+   "root:test_test_framework_r3.RoundThree.test_p05_CI_selects_trusted_bases_for_supported_events",
+   "root:test_test_framework_integration.ReleaseIntegration.test_discovery_imports_framework_and_preserves_package_names"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-1",
+  "statement": "**TF-1 \u2014 Retain the supported runner and isolation.** Keep unittest and `scripts/parallel_tests.py`, the three\nsuites, module/stage/shard selection, separate worker processes and per-worker temporary directories, secret\nstripping, and bounded worker teardown. A full normal run uses the runner's DEFAULT job count (no fixed 6).\nSharding/module splitting must not omit or duplicate tests. Preserve existing `load_tests` discovery hooks.\nWitness: discovery and execution of inherited, ordinary, `load_tests`-filtered and generated unittest cases;\nstable shard partition; failing worker and import error both make the\nrunner nonzero; child environments omit fixture secrets; concurrent workers have distinct temporary roots\nand cannot see each other's fixture files; an intentionally stuck worker and its owned descendants are\nreaped within the configured teardown bound with diagnostics; default jobs remains `max(1, (os.cpu_count() or 2) - 2)`."
+ },
+ "TF-10": {
+  "checks": [
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_decision_100_allowlist_applies_to_local_and_CI_workers",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_discovery_cannot_run_a_restricted_module_import_side_effect",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B7_discovery_filters_secrets",
+   "root:test_test_framework_guards.WorkerTests.test_import_time_and_caught_denials_still_fail_the_worker",
+   "root:test_test_framework_guards.WorkerTests.test_process_apis_are_denied_in_unit_and_component_before_os_effects",
+   "root:test_test_framework_guards.WorkerTests.test_review_A9_discovery_hooks_keep_the_declared_guard",
+   "root:test_test_framework_integration.ReleaseIntegration.test_existing_resource_modules_have_correct_layers_and_reasons"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-10",
+  "statement": "**TF-10 \u2014 Refuse real processes and git in unit/component.** Extend the existing audit guard, installed before\ntest-module imports, to both restricted layers. Deny subprocess starts, spawn, exec, fork/forkpty and system\nshell calls; a real git invocation is denied regardless of executable spelling or wrapper. Fakes/in-process\nfunctions remain allowed. Guard violations name layer, module, operation and test ID if known, and cannot be\nturned into green by catching the exception (worker records the violation and fails at completion). Witness:\ntry each available process API, git under an absolute path, an import-time spawn and a caught denial; verify\nno child-side marker is created. Run platform-specific API witnesses on their supported OS; the matrix must\ncontain evidence for both macOS and Linux.\n\nDecision 100 A (2026-11-23): discovery and test workers, locally and in CI, inherit only an explicit environment allowlist: PATH, HOME, temporary-directory variables, locale variables, COCOLO_TEST_* and named framework necessities. Every other variable is dropped, including GITHUB_TOKEN, AWS_SESSION_TOKEN and arbitrary *_PASSWORD variables. TF-10 witnesses must verify the actual worker boundary and permitted-variable controls."
+ },
+ "TF-11": {
+  "checks": [
+   "root:test_test_framework_guards.WorkerTests.test_import_time_and_caught_denials_still_fail_the_worker",
+   "root:test_test_framework_guards.WorkerTests.test_inherited_socket_methods_and_asyncio_have_no_guard_exemption",
+   "root:test_test_framework_guards.WorkerTests.test_review_A9_discovery_hooks_keep_the_declared_guard",
+   "root:test_test_framework_guards.WorkerTests.test_review_C5_inherited_and_convenience_socket_apis_in_both_layers",
+   "root:test_test_framework_guards.WorkerTests.test_socket_creation_pair_bind_and_resolution_are_denied",
+   "root:test_test_framework_r3.RoundThree.test_p04_unix_witness_rejects_permitted_async_operations",
+   "root:test_test_framework_r3.RoundThree.test_p05_connected_socket_io_is_sticky_in_both_layers"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-11",
+  "statement": "**TF-11 \u2014 Refuse real sockets in unit/component.** Deny socket creation/connect/bind and applicable address\nresolution/network APIs before OS effects; include AF_UNIX and AF_INET and socketpair. Patch/audit supported\nstdlib entry points without blocking construction of test doubles. Explicitly refuse socket.socket,\nsocket.socketpair, socket.create_connection, socket.create_server, socket.fromfd and socket.fromshare\n(where available), connect/connect_ex/bind/listen/accept/sendto/sendmsg, and getaddrinfo/gethostbyname/\ngethostbyname_ex/gethostbyaddr/getnameinfo. Cover asyncio open_connection/start_server and Unix variants\nthrough the same underlying guards; there is no asyncio exemption without an explicit evidence-backed\nrequirement change. Existing creation/connect/bind/socketpair protections remain mandatory. The denial is sticky as in TF-10. Witness:\nimport-time creation, bind/connect, socketpair and caught denial fail without creating socket files or contacting\na service; in-memory transport fakes pass. Allowed-layer probes use only local fixture sockets."
+ },
+ "TF-12": {
+  "checks": [
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_C13_ready_join_fake_clock_poll_and_elapsed_bound",
+   "root:test_test_framework_guards.WorkerTests.test_blocking_unit_waits_fail_but_ready_events_and_nonblocking_polls_pass",
+   "root:test_test_framework_guards.WorkerTests.test_review_B1_thread_start_handshake_and_B2_cached_selectors",
+   "root:test_test_framework_guards.WorkerTests.test_review_B2_nonblocking_cached_selectors_are_allowed",
+   "root:test_test_framework_integration.ReleaseIntegration.test_existing_resource_modules_have_correct_layers_and_reasons"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-12",
+  "statement": "**TF-12 \u2014 Keep unit time deterministic.** Preserve the existing unit sleep prohibition; reject positive-duration\nexplicit waits/polls in unit tests (thread condition/event waits, select/poll and joins that would block).\nAllow immediately ready/nonblocking operations and injected clocks. Component may wait on in-process\nthreads, subject to its budget. Witness: unit sleep still fails; a positive wait fails without waiting; zero-time\npoll and a ready event succeed; a fake clock advances without real time. This is an accidental-I/O guard,\nnot a security sandbox against malicious tests using native libraries or disabling the harness."
+ },
+ "TF-13": {
+  "checks": [
+   "codex:tests.test_merge_library_r3.RoundThree.test_p10_blocked_sealers_leave_no_threads_in_the_test_process",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p10_diagnostic_failure_cannot_escape_child_to_caller",
+   "root:test_entrypoint_inventory.EntryPointTests.test_argparse_entrypoints_start_in_real_stdlib_only_processes",
+   "root:test_entrypoint_inventory.EntryPointTests.test_inventory_rejects_missing_entry_points_and_missing_real_checks",
+   "root:test_entrypoint_inventory.EntryPointTests.test_job_reader_process_refuses_unbound_invocation_without_output",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_C13_failing_and_timed_out_workers_keep_both_logs",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B3_runner_reaps_disabled_watchdog_with_diagnostics",
+   "root:test_test_framework_guards.WorkerTests.test_real_process_git_and_local_socket_contracts_still_work_in_allowed_layers"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-13",
+  "statement": "**TF-13 \u2014 Allowed layers retain real boundary evidence.** Crash/scenario/soak may use real processes, git and\nlocal sockets under isolated fixtures and their budgets. Do not globally stub these resources to obtain speed.\nMaintain a checked-in inventory of shipped process entry points with the named real check for each;\nmissing inventory entries or missing real checks fail. Witness: the same tiny process/git/socket fixture refused in unit/component succeeds in each allowed layer,\nand all owned resources are reaped. Keep at least one real invocation per product entry point during pruning;\nprocess-boundary/concurrency/durability assertions require suitable real contract evidence, not only a fake."
+ },
+ "TF-14": {
+  "checks": [
+   "root:test_test_framework.GoldenTests.test_equal_update_mode_is_not_green_and_newlines_are_not_silently_normalized",
+   "root:test_test_framework.GoldenTests.test_expected_output_is_exact_and_missing_or_different_fails",
+   "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
+   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
+   "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
+   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
+   "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
+   "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
+   "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
+   "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
+   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework_r2.RoundTwo.test_M2_function_local_import_keeps_golden_provenance",
+   "root:test_test_framework_r2.RoundTwo.test_M2_package_import_keeps_golden_provenance",
+   "root:test_test_framework_r2.RoundTwo.test_M2_qualified_and_renamed_imports_retain_golden_provenance",
+   "root:test_test_framework_r3.RoundThree.test_p01_M2_submodule_aliases_and_relative_imports",
+   "root:test_test_framework_r3.RoundThree.test_p06_matching_golden_requires_provenance_and_update_repairs_it",
+   "root:test_test_framework_review.ReviewTests.test_direct_golden_read_and_assert_bypass_is_rejected",
+   "root:test_test_framework_review.ReviewTests.test_temporary_helper_output_and_unrelated_owner_files_are_not_repository_goldens"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-14",
+  "statement": "**TF-14 \u2014 One shared golden-output comparison.** Provide one stdlib test-only helper (about 30 lines of core\ncomparison/update logic; security/metadata checks may be separate). New/migrated file-based expected output\ngoes through it. The framework rejects new/migrated golden comparisons that bypass this helper;\na direct golden read-and-assert bypass must fail preflight. Ordinary scalar assertions stay allowed.\nExact bytes or canonical UTF-8 text comparison produces a bounded useful diff; missing\ngoldens fail. Deterministic, explicitly reviewed normalization happens before the helper; never silently mask\nstates, reason codes, content, permissions or evidence required by a statement. Ordinary scalar/value assertions\nare not forced into snapshots. Witness: equal, differing and missing golden, binary or documented text-only\nbehavior, and a changed required reason code. Existing assertions are retained until a named equal proof exists."
+ },
+ "TF-15": {
+  "checks": [
+   "root:test_test_framework.GoldenTests.test_equal_update_mode_is_not_green_and_newlines_are_not_silently_normalized",
+   "root:test_test_framework.GoldenTests.test_provenance_symlink_cannot_write_outside_the_golden_root",
+   "root:test_test_framework.GoldenTests.test_update_cannot_escape_through_dotdot_absolute_path_or_symlink",
+   "root:test_test_framework.GoldenTests.test_update_requires_exact_environment_and_a_known_declared_requirement",
+   "root:test_test_framework_r3.RoundThree.test_p06_matching_golden_requires_provenance_and_update_repairs_it"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-15",
+  "statement": "**TF-15 \u2014 Golden updates need explicit intent and requirement provenance.** A golden can be created or changed\nonly with exactly `UPDATE_GOLDEN=1` AND a valid requirement ID supplied to the helper and declared by the\ncalling test. Fail closed for missing/unknown/unrelated IDs and other environment values. Restrict writes to\nthe checked-in test golden root; reject traversal and symlink escapes. Persist/review the requirement ID with\nthe golden change in an adjacent `<golden-name>.requirement` UTF-8 sidecar inside the checked-in golden\nroot, included in review with the golden; report update mode visibly, and do not count an update run as passing evidence. Witness:\nunset/0/true without exact 1 cannot write; invalid ID and escape leave files untouched; authorized update\nrecords its ID, and a subsequent normal run is needed for green evidence. Never update a golden to fit code\nthat contradicts its requirement."
+ },
+ "TF-16": {
+  "checks": [
+   "root:test_entrypoint_inventory.EntryPointTests.test_argparse_entrypoints_start_in_real_stdlib_only_processes",
+   "root:test_entrypoint_inventory.EntryPointTests.test_inventory_rejects_missing_entry_points_and_missing_real_checks",
+   "root:test_entrypoint_inventory.EntryPointTests.test_job_reader_process_refuses_unbound_invocation_without_output",
+   "root:test_test_framework.DependencyTests.test_dependencies_are_exactly_pinned_hashed_and_excluded_from_shipped_imports",
+   "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
+   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
+   "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
+   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
+   "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
+   "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
+   "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
+   "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-16",
+  "statement": "**TF-16 \u2014 Only pinned test-only dependencies.** Hypothesis is the only newly introduced third-party test tool.\nRecord its exact version and SHA-256 artifact hash(es) in a test-only requirements file; also pin/hash required\ntransitive dependencies so a hash-required offline-prepared environment is reproducible. No shipped module,\nruntime manifest, installer or provider imports/installs them. Keep shipped code stdlib only and runnable with\nPython 3.11. Only the subsequently owner-authorized temporary test-only environment may receive these dependencies. Witness: static distribution-boundary check and a\nshipped-code smoke test with test packages unavailable; dependency file rejects unpinned/unhashed additions.\nSelect/verify the concrete Hypothesis release and artifact hashes from primary sources in step 2, not from the\nunverified version claim in a review packet. If an existing prepared interpreter lacks it, record that limitation\nand use the authorized temporary test environment; do not silently skip required property checks."
+ },
+ "TF-17": {
+  "checks": [
+   "root:test_test_framework.DependencyTests.test_hypothesis_profiles_are_bounded_and_io_deadline_is_disabled",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_unknown_profile_environment_is_rejected_by_runner_discovery",
+   "root:test_test_framework_guards.WorkerTests.test_a_failing_hypothesis_machine_retains_its_reproducer_and_nonzero_exit"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-17",
+  "statement": "**TF-17 \u2014 Explicit reproducible Hypothesis profiles.** Provide test-only `dev` (20 examples), `ci` (100 examples,\n`derandomize=True`), and `soak` (at least 1000 examples). Runs default to ci; dev and soak need explicit selection. Unknown profiles fail. I/O/stateful rules use `deadline=None`, and still obey module budgets and\nhard timeouts. Keep unittest-compatible generated TestCases. Witness: inspect each loaded setting; reproduce\na deliberately failing state machine and verify its minimized trace and unittest failure are retained in the\nrunner log and yield nonzero. Parser compatibility must be demonstrated, not assumed from unittest ancestry."
+ },
+ "TF-18": {
+  "checks": [
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_cross_directory_rename_requires_both_parent_flushes",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_existing_store_io_runs_against_memory_without_creating_real_files",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_file_flush_does_not_persist_create_and_parent_flush_does_not_persist_bytes",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_real_land_uses_memory_namespace_history_and_full_modes",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_review_B11_left_parent_exchange_and_unflushed_unlink",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_review_B1_flush_open_inode_after_rename",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_review_B2_missing_read_is_ENOENT",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_review_B5_database_identity_survives_rename_not_unlink",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_review_B6_power_loss_latches_finally_IO_until_recovery",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_review_B7_open_flags_and_B8_directory_errors",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_skipping_flush_before_A_is_caught_after_model_power_loss",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_unflushed_removal_is_lost_and_directory_removal_requires_parent_flush",
+   "codex:tests.test_merge_library_disk.DurableDiskTests.test_unflushed_write_is_lost_but_flushed_write_survives",
+   "codex:tests.test_merge_library_machine.TestMergeMachine.runTest",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_cleaning_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_forward_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_recovering_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_reverse_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M1_fsync_and_fullfsync_each_need_a_sample",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_B3_generated_EIO_checks_the_operations_own_report",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C3_owner_empty_descendant_keeps_ancestor_out_of_emptied",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_r2_M4_each_missing_provenance_field_breaks_generated_EIO_proof",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_reverse_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_undoing_persistence_samples",
+   "root:test_test_framework.MetadataTests.test_complete_sweep_is_explicit_soak_only_and_profiles_are_validated",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_conflicting_explicit_profile_selectors_are_rejected",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_explicit_soak_module_requires_explicit_soak_profile",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_unknown_profile_environment_is_rejected_by_runner_discovery"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-18",
+  "statement": "**TF-18 \u2014 Normal sampling and soak separation.** Normal crash runs include an in-memory disk model\nwith separate volatile and durable file-content, mode and namespace states. Writes change volatile file\ncontents; create/unlink/rename/exchange/mkdir/rmdir change volatile namespace links. A file flush persists\nthat file's complete bytes/mode; a directory flush persists that directory's name-to-object links, never\nimplicitly an unflushed child's contents. SQLite commit state is tracked separately. Crash discards volatile\nstate and exposes only durable contents reachable through durable namespace links; recovery is then checked\nagainst the single ML invariant and table. Permitted outcomes include complete S or T according to the\ndurable row, preserved owner objects and named unrecorded directories; torn published contents, lost\nowner edits and a history direction inconsistent with recovered contents are rejected.\nWitnesses distinguish flushed from unflushed writes, creates and renames, including flushing only one\nrename parent; a missing production flush must change the model's post-crash outcome and fail the check.\nA checked-in `tests/merge-persistence-samples.json` names the normal sample inventory by operation,\nphase, before/after side and commit label where applicable, plus stable occurrence/reproducer. Validate it\nagainst discovered persistence-significant calls; every operation kind and relevant boundary needs a normal\nsample. Normal selection includes the model and ci-profile generated cases, excluding complete sweeps.\nComplete crash/fault sweeps, including recovery faults, run only under explicit `--profile soak` in\nlocal-routing; soak includes the complete inventory, not merely persistence samples. Reject explicit soak\nmodule selection with dev/ci, a complete-sweep request without soak, conflicting profile selectors and\nunknown profiles. Report the effective profile and sample seed or minimized reproducer. The Linux/podman\npower-loss lane is later work (81 A); kills and the model do not prove it, and this task installs no podman."
+ },
+ "TF-19": {
+  "checks": [
+   "codex:tests.test_merge_library_harness.HarnessOracles.test_M1_rejects_different_operation_phase_side_paths_or_occurrence",
+   "codex:tests.test_merge_library_machine.TestMergeMachine.runTest",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_cleaning_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_forward_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_recovering_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_reverse_persistence_samples",
+   "codex:tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_missing_A_flush_is_caught_by_post_crash_staging_contents",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_private_location_guard_mutation_is_caught_by_ML30_forgery",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_swallowed_EIO_landed_is_caught_by_the_single_end_state_check",
+   "codex:tests.test_merge_library_mutations.MutationProofs.test_third_history_commit_is_caught_by_ML6_order",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M3_regular_file_cannot_be_an_emptied_folder",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M6_applying_cancel_enters_putback_and_terminal_retry_refuses",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M6_cleanup_durable_reread_guard_continues_later_rows",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M6_cleanup_initial_read_guard",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M6_land_IO_handler_read_guard",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M6_land_cancel_validation_read_guard",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M6_rollback_initial_read_guard",
+   "codex:tests.test_merge_library_r2.RoundTwo.test_M6_undo_initial_read_guard",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p08_V1_unreadable_folder_is_not_certified_empty",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p08_V2_unresolved_row_needs_recovery_or_status_evidence",
+   "codex:tests.test_merge_library_r3.RoundThree.test_p09_final_reader_exception_fails_the_concurrency_witness",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_D6_retry_and_cancel_cannot_reverse_durable_landed",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_D7_unreadable_history_reports_unknown_and_touches_nothing",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_Q5_all_emptied_ancestors_are_recorded_and_unlisted_empty_folder_survives",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_Q6_cancel_applying_attempts_putback_and_records_the_outcome",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C1_parent_descriptors_close_on_second_open_and_first_close_failure",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C2_cancel_new_ticket_leaves_earlier_landed_row",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C3_populated_ancestor_is_not_an_emptied_folder",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C5_report_restores_phase_after_failure",
+   "codex:tests.test_merge_library_recovery.RecoveryPolicies.test_review_C6_cleanup_reread_failure_reports_unknown_and_continues",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_B3_generated_EIO_checks_the_operations_own_report",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C3_owner_empty_descendant_keeps_ancestor_out_of_emptied",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_r2_M4_each_missing_provenance_field_breaks_generated_EIO_proof",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_reverse_persistence_samples",
+   "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_undoing_persistence_samples",
+   "codex:tests.test_merge_library_states.EndStates.test_A5_waiting_owner_requires_owner_at_target_not_merely_retained",
+   "codex:tests.test_merge_library_states.EndStates.test_B1_io_cannot_end_landed_unless_commit_uncertainty",
+   "codex:tests.test_merge_library_states.EndStates.test_B2_unrecorded_directory_is_empty_named_and_does_not_change_before",
+   "codex:tests.test_merge_library_states.EndStates.test_B3_pins_only_this_operation_and_rejects_partial_bytes",
+   "codex:tests.test_merge_library_states.EndStates.test_C3_record_pending_requires_applying_row_and_pinned_contents",
+   "codex:tests.test_merge_library_states.EndStates.test_E1_unlisted_empty_folder_is_never_removed",
+   "codex:tests.test_merge_library_states.EndStates.test_E2_cleanup_fault_preserves_durable_reverted_and_restored_tree",
+   "codex:tests.test_merge_library_states.EndStates.test_F1_retirement_fault_preserves_terminal_direction",
+   "codex:tests.test_merge_library_states.EndStates.test_G2_failed_undo_returns_post_cleanup_start_including_absent_empty_folders",
+   "codex:tests.test_merge_library_states.EndStates.test_checker_rereads_real_history_instead_of_trusting_report",
+   "codex:tests.test_merge_library_states.EndStates.test_decision_91_only_recorded_empty_descendants_qualify",
+   "codex:tests.test_merge_library_states.EndStates.test_review_A10_early_return_cannot_mutate_start_evidence",
+   "codex:tests.test_merge_library_states.EndStates.test_review_A1_cleanup_cannot_rewrite_terminal_direction",
+   "codex:tests.test_merge_library_states.EndStates.test_review_A2_unknown_needs_independent_history_failure",
+   "codex:tests.test_merge_library_states.EndStates.test_review_A3_retry_landed_is_rejected",
+   "codex:tests.test_merge_library_states.EndStates.test_review_A4_Q5_ancestor_policy_is_checked_on_the_record",
+   "codex:tests.test_merge_library_states.EndStates.test_review_A4_each_policy_changes_its_end_state_check",
+   "codex:tests.test_merge_library_states.EndStates.test_review_A4_policy_switches_are_live_and_independent",
+   "codex:tests.test_merge_library_states.EndStates.test_review_A5_admission_cannot_hide_applying_row",
+   "codex:tests.test_merge_library_states.EndStates.test_review_A6_terminal_rows_pin_contents_until_release",
+   "codex:tests.test_merge_library_states.EndStates.test_review_A7_real_samples_reject_stale_and_uncovered_kinds",
+   "codex:tests.test_merge_library_states.EndStates.test_review_A8_unknown_cannot_authorize_protected_directory_deletion",
+   "codex:tests.test_merge_library_states.EndStates.test_review_A9_unmapped_method_is_not_grandfathered",
+   "codex:tests.test_merge_library_states.EndStates.test_review_L12_emptied_directory_mode_is_protected",
+   "codex:tests.test_merge_library_states.EndStates.test_review_L13_reporting_flag_cannot_authorize_a_mutating_EIO",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_A1_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_A2_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_A3_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_A4_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_A5_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_A6_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_A7_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_B1_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_B2_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_B3_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_B4_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_B5_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_B6_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_B7_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_C1_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_C2_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_C3_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_D1_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_D2_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_D3_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_D4_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_D5_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_D6_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_D7_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_D8_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_E1_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_E2_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_E3_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_E4_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_F1_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_F2_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_G1_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_G2_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_G3_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_G4_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_G5_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_G6_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_H1_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_H2_accepts_permitted_and_rejects_corrupt_outcomes",
+   "codex:tests.test_merge_library_table.TableOutcomes.test_I1_accepts_permitted_and_rejects_corrupt_outcomes",
+   "planned:TF-19",
+   "review:TF-19"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-19",
+  "statement": "**TF-19 \u2014 Preserve the single merge oracle and its review gate.** Step 3's `check_end_state` is derived from\nsections 1, 2, 3 and 5 of `ANALYSIS-0.4.0-merge-library-states.md`, with one POLICY dictionary at Q1\u2013Q6 recommended\ndefaults. Read durable history independently; never infer direction from a report or all-new tree. The state\nmachine selects land/retry/cancel/undo/crash/recover and fault points, not a second handwritten outcome oracle.\nTrace every replaced assertion to a table cell and replacement file:line; primary checks the table line by line.\nWitness: every permitted outcome in all 41 cells is ACCEPTED and deliberately wrong outcomes for each cell are rejected; the four required mutations (private-location\ncheck, flush before A, third history commit, injected EIO falsely landed) each have a named catching test.\nIf a current test contradicts its requirement, stop on it and record test name, exact requirement and conflict;\nthe already-identified oracle corrections are requirement-driven work, not permission to fit expectations to code."
+ },
+ "TF-2": {
+  "checks": [
+   "root:test_test_framework.MetadataTests.test_layer_is_required_for_every_module_even_outside_selection",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_missing_layer_in_unselected_module_is_not_hidden_by_module_filter"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-2",
+  "statement": "**TF-2 \u2014 Every module declares one valid layer.** Before running bodies, reject missing, duplicate, unknown,\nor stale module declarations and incompatible stage/layer pairs. Stale means no longer discovered. Check all discovered suites, including\nmodules selected out of the current run, and import failures; never silently default an undeclared module to\nintegration. Witness: remove one module's layer, add a bogus layer, add a stale entry, duplicate a JSON key,\nor declare layer component with stage unit; each is rejected with the full module ID. Valid mappings above pass."
+ },
+ "TF-20": {
+  "checks": [
+   "planned:TF-20"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-20",
+  "statement": "**TF-20 \u2014 Scenario coverage uses the shared fixture and exact statements.** Step 4 extends the existing\n`scripts/e2e_lifecycle.py` with a shared temporary project, prepared git repo, scripted stand-in Claude/Codex\nbinaries and service on a Unix socket. Build the shared project/providers first, then implement the\nchecks in six parts covering all 80 requirements. Cover all 80 requirements, not necessarily exactly 80 checks, in six\nparts: API (27), G1\u2013G9 (9), L12 (7), TERM (5), and two parts containing the other L requirements (32 total).\nParts do not multiply a module's budget; fragments aggregate under TF-8. Each part obeys the scenario budget, preserves all-flow checks and AND aggregation, and emits per-requirement\npass/fail with content-free reports. Every assertion matches its statement's exact reason codes/states. One\ndeliberate fault per group must make that group's checks red; shared G checks may also detect it and must\nnever be suppressed to obtain an 'exactly one group' presentation. `test_e2e_requirements` must pass unchanged\nin meaning. Witness: all-80 execution, isolated and combined part execution, fault matrix, private-value checks."
+ },
+ "TF-21": {
+  "checks": [
+   "review:TF-21"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-21",
+  "statement": "**TF-21 \u2014 Prune only with equivalent named proof.** After step 4, address the ten heaviest modules by\nbaseline job-seconds (`MEASURE-test-framework.md` top-ten rows, originally lines 92\u2013101) before wider\npruning. Before each step-5 module change, record its requirement\nIDs and keep/move/remove disposition. A removed test requires a named start-to-finish check proving the same\nstatement and relevant edge cases; a moved function test keeps identical assertions/expected values and cites\nthe requirement. Every removed/changed assertion is listed with old and replacement file:line; no weakening.\nKeep real boundary checks per TF-13 and remeasure the affected module after each change, quoting the timing\nfile's job-seconds. Witness: report links to executed replacement and retained assertions, with before/after\nmeasurements; metadata-only replacement is insufficient. No pruning precedes the matching scenario proof."
+ },
+ "TF-22": {
+  "checks": [
+   "review:TF-22"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-22",
+  "statement": "**TF-22 \u2014 Review checkpoints and evidence.** Step reports are under 15 lines each and name commits,\nrequirements -> red/green or measurement evidence, every assertion replacement, and open issues. Owner subsequently set the next review stop after step 3 (step-1 review r1). Apply that stop before proceeding to steps 4\u20135. Use only own worktrees/branches; never push, install outside the authorized temporary test environment, or modify the\ncontrol project or 0.3.3. Step 2 is authorized; step 3 rebases the existing merge\nbranch only after step 2 is committed. Acceptance includes macOS and Linux / Python 3.11 evidence or an\nexplicit outstanding platform gate; this Mac run alone cannot prove portability."
+ },
+ "TF-23": {
+  "checks": [
+   "root:test_test_framework_r3.RoundThree.test_TF23_declared_fixes_require_red_green_and_positive_control",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_exact_primary_restoration_matches_installed_release"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-23",
+  "statement": "**TF-23 \u2014 Review witnesses need falsifiable evidence.** Every new or changed review-fix witness must name its requirement, positive control, an old-code red run at the reviewed base revision (round 3: `9c18c4a3`) with the intended failure diagnostic, and its green run after the fix. For a witness-only repair, the red must show that the old witness accepts a deliberately invalid result; the repaired witness must reject that same result and accept the valid control. A small committed evidence manifest declares each fix and its witnesses. A framework check rejects a declared fix without a requirement, positive control, reviewed base, red-run evidence/diagnostic, or green-run evidence. Referenced evidence files must exist and record the stated outcome. Human review verifies that the diagnostic and control prove the requirement; mechanical presence checks do not replace that judgment. No changed assertion may be omitted from the assertion ledger."
+ },
+ "TF-24": {
+  "checks": [
+   "root:test_test_framework_integration.ReleaseIntegration.test_discovery_imports_framework_and_preserves_package_names",
+   "root:test_test_framework_integration.ReleaseIntegration.test_existing_resource_modules_have_correct_layers_and_reasons",
+   "root:test_test_framework_integration.ReleaseIntegration.test_exclusive_campaigns_wait_for_empty_pool_and_block_other_launches",
+   "root:test_test_framework_integration.ReleaseIntegration.test_release_overlay_is_immutable_and_candidate_changes_are_rejected",
+   "root:test_test_framework_integration.ReleaseIntegration.test_versioned_debt_has_measured_ceilings_and_cannot_grow",
+   "root:test_test_framework_integration.ReleaseIntegration.test_explicit_base_is_documented_and_missing_base_stops_before_discovery",
+   "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-24",
+  "statement": "**TF-24 \u2014 Integrate the reviewed release without relaxing isolation or coverage.** The release integration base is `b531844030fa619c1f62ddd6c092ebc2ea4fca38`. Discovery uses the same framework import path as workers and preserves qualified failed-import module names. Existing thread-wait tests use component; real socket/process tests use scenario, with catalogue reasons; their assertions and guards remain unchanged. Release baseline versions may admit only tests and fixture sources from the reviewed release integration, with committed provenance and immutable introduction checks; old baseline files remain intact and subsequent changes still require migration. Local full-run instructions and CI explicitly supply a trusted base; missing base fails concisely before discovery. Decision 86's versioned budget debt admits the existing billing, ledger-startup and session-guard modules at the first full run's measured ceilings, retires completed under-budget entries, and never admits new merge-library modules. New crash campaigns run without competing workers, retaining every test and persistence point; queue waiting is excluded but all worker time and fragments count against the unchanged layer budget. Regression witnesses prove discovery, layer assignments, trusted release baseline rejection of candidate changes, shrink-only versioned debt, and exclusive scheduling with ordinary parallel controls. TF-23 evidence applies to each integration fix."
+ },
+ "TF-25": {
+  "checks": [
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_exact_primary_restoration_matches_installed_release",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_correct_append_passes_and_every_unrelated_edit_is_rejected",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebinding_retains_retirement_and_catches_later_fingerprint_edits",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebind_command_rejects_invalid_source_and_overwrite",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_claimed_pre_bump_commit_cannot_hide_old_record_edits",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_later_edits_to_each_admitted_file_still_fail_metadata",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_next_release_uses_the_same_narrow_procedure",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_immutable_binding_tampering_is_rejected"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-25",
+  "statement": "**TF-25 \u2014 Narrow release bookkeeping may rebind its existing proof.** The only eligible files are `packages/claude-agents/previous-releases.json`, `packages/claude-agents/src/claude_agents/packaging.py`, and `packages/claude-agents/tests/test_previous_release_catalogue.py`. Accept exactly one appended catalogue record for the explicitly named previous installed release, whose version and compiled bundle/files match its trusted Git source revision; preserve every existing record and the catalogue schema. In the test file permit only the two existing catalogue-size assertions (`test_the_shipped_catalogue_is_accepted`, `test_cl1_a_catalogue_up_to_2_mib_is_accepted`) to increase from N to N+1 and their mechanically derived release-list comment. Preserve all other assertion operands, limits, test bodies, helpers, imports and comments. In packaging.py permit only the corresponding canonical release/source annotation on its existing pinned digest; a previously unpinned digest or any executable change requires ordinary proof review, not this routine path. This covers routine version bumps sharing an already reviewed bundle; new bundle/pin semantics remain subject to normal review. Reject removed/reordered/modified existing records, extra records, mismatched source/version/bundle, unpaired or excessive count changes, and every other edit in these files.\n\nAn explicit `scripts/rebind_release_bookkeeping.py` command verifies a trusted pre-bookkeeping revision against the existing discovered catalogue-test bindings before admitting any replacement. Compute the before and after bindings in isolated temporary snapshots using the same fingerprint implementation and pinned interpreter, and require identical test IDs. Restrict rebinding to those already-grandfathered catalogue tests; never restore retired tests or admit new tests. Publish a new immutable release-named binding file with before/after source hashes and Git provenance, refusing overwrite. At run time verify immutable introduction, the permitted source transition and the binding chain, then compare the current test/helper/value fingerprints normally. Changing an admitted file later must still fail. Prior immutable baselines, including 11d36a06, remain unchanged. The initial repair restores all three files exactly from primary 0ca9c36f/30bf1fa9 and advances both count assertions from 9 to 10 for installed 0.8.49. Positive and mutation controls, actual command/runner integration, and TF-23 red/green evidence are required."
+ },
+ "TF-3": {
+  "checks": [
+   "root:test_test_framework.MetadataTests.test_decorator_inheritance_and_override_follow_the_actual_implementation",
+   "root:test_test_framework.MetadataTests.test_unknown_empty_and_untagged_proofs_and_missing_rationale_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
+   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_untagged_new_test_fails_the_actual_runner"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-3",
+  "statement": "**TF-3 \u2014 Every new or migrated test names its requirements.** Use one stdlib test-only decorator\n`@requirements(\"TF-3\", ...)` (method or class, resolved to a concrete set for each discovered test) and the\nexisting lifecycle `@check(...)`. Empty, malformed, unknown or stale requirement IDs fail preflight. A subclass\noverride cannot accidentally inherit a method's old proof: it must redeclare its IDs or inherit an explicit\nclass declaration. Every generated state-machine TestCase names its ML/TF IDs. Witness: new untagged test,\nunknown ID, empty tag, untagged override and untagged generated case fail with their stable IDs; tagged\ninherited and generated cases pass. Existing exceptions are solely TF-7."
+ },
+ "TF-4": {
+  "checks": [
+   "root:test_test_framework.MetadataTests.test_requirement_and_check_links_are_checked_in_both_directions",
+   "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
+   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
+   "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
+   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
+   "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
+   "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
+   "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
+   "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
+   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_untagged_new_test_fails_the_actual_runner",
+   "root:test_test_framework_review.ReviewTests.test_catalogue_statement_must_equal_its_exact_cited_source",
+   "root:test_test_framework_review.ReviewTests.test_registered_future_check_and_review_record_are_not_passing_evidence"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-4",
+  "statement": "**TF-4 \u2014 Requirements have text and a real check.** Maintain a checked-in catalogue of active requirements\n(unique ID, exact statement, source document/section, check IDs, check kind and evidence records). Check kinds are executable checks or registered review\nchecks. The semantic review clauses of TF-5/6/19/21/22 require review-record checks with a source revision,\nreview outcome and an immutable evidence record; executable checks alone do not discharge those clauses.\nFuture-step checks (TF-19 step 3, TF-20 step 4) stay `not_run` until executed. Neither planned status nor\nmissing review evidence makes the full gate pass. Import all TF requirements and all 80\n`tests/e2e/requirements.json` requirements without paraphrasing; import ML-1..ML-30 when the merge-library\nbranch is integrated; other existing requirements are added with their source as legacy tests migrate.\nReject an active requirement with no discoverable check and a check naming no known requirement, in both\ndirections. A requirement cannot be removed or marked inactive just to clear this gate. Witness: absent\ncheck, missing reverse mapping, duplicate requirement ID, unknown check, empty statement, a catalogue\nstatement differing from its cited source, and a missing or mismatched review evidence record each fail.\nThe 80 missing lifecycle checks remain failures until step 4 supplies them; they receive no coverage waiver."
+ },
+ "TF-5": {
+  "checks": [
+   "review:TF-5",
+   "root:test_test_framework.MetadataTests.test_a_requirement_passes_only_when_all_checks_passed_and_actually_ran",
+   "root:test_test_framework.MetadataTests.test_shards_preserve_metadata_failures_and_reject_duplicate_tests_and_invalid_time",
+   "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
+   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
+   "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
+   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
+   "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
+   "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
+   "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
+   "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
+   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework.ReviewLifecycleTests.test_A12_unknown_registry_id_is_a_diagnostic_not_a_key_error",
+   "root:test_test_framework.ReviewLifecycleTests.test_A1_relocated_worktrees_keep_equal_fixture_hashes_without_hiding_constant_edits",
+   "root:test_test_framework.ReviewLifecycleTests.test_B6_complete_shard_labels_cannot_hide_a_missing_worker",
+   "root:test_test_framework.ReviewLifecycleTests.test_B6_stage_records_must_share_source_and_layer_plans",
+   "root:test_test_framework.ReviewLifecycleTests.test_C3_C13_cross_module_helper_is_found_by_source_path",
+   "root:test_test_framework.ReviewLifecycleTests.test_C9_assertion_free_lifecycle_check_fails_the_real_gate",
+   "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B5_workflow_has_validated_merge_base_and_no_parent_fallback",
+   "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B6_full_gate_rejects_not_run_and_incomplete_stage_evidence",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_a_worker_exiting_zero_without_a_result_is_not_a_passing_check",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_C9_executed_expected_failure_and_unexpected_success_do_not_pass_gate",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_skipped_only_requirement_is_not_a_passing_run",
+   "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error",
+   "root:test_test_framework_r2.RoundTwo.test_M4_caller_cannot_accept_failure_bearing_combiner_result",
+   "root:test_test_framework_r2.RoundTwo.test_M4_real_gate_rejects_not_run_failed_and_incomplete_evidence",
+   "root:test_test_framework_r3.RoundThree.test_p05_CI_selects_trusted_bases_for_supported_events"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-5",
+  "statement": "**TF-5 \u2014 Coverage metadata is not a passing outcome.** A full gate reports a requirement passing only when\nevery registered required check has run and passed. Skipped, missing, errored, assertion-free lifecycle checks,\nand unexpected successes cannot establish a passing requirement. Partial runs report unselected requirements\nas not run, never green; global structural validation still runs, and the selected checks determine runtime\nresults. Expected failures also cannot count as a passing proof. Preserve `Phase.expect` assertion counting and requirement-level AND across all scenario parts,\nincluding G1\u2013G9 checks selected for every affected flow. Witness: two checks for one ID, one failing or\nmissing from a shard result, cannot aggregate to pass; skipped-only and expected-failure-only proofs are\nnot coverage. An assertion-free lifecycle proof and an unexpected success both fail the coverage gate. Assertion counting\nis not proof of semantic correctness: review against the statement and fault sensitivity are also required."
+ },
+ "TF-6": {
+  "checks": [
+   "review:TF-6",
+   "root:test_test_framework.MetadataTests.test_unknown_empty_and_untagged_proofs_and_missing_rationale_are_rejected"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-6",
+  "statement": "**TF-6 \u2014 Make duplicate slow proof reviewable.** Every non-unit new or migrated test declares a nonempty\n`why_not_scenario` rationale (class-level rationale may cover inherited cases) naming the boundary, fault,\nconcurrency or edge condition a named lifecycle check cannot prove, or records that it IS the canonical\nscenario check. Enforce presence; review truth against the requirement. Witness: a tagged non-unit test (including a fast one) without\nthe rationale fails and names its ID. Existing tests in TF-7 are temporarily exempt from this metadata only.\nRationale alone never authorizes deleting another proof."
+ },
+ "TF-7": {
+  "checks": [
+   "root:test_test_framework.MetadataTests.test_legacy_list_cannot_grow_restore_entries_change_fingerprints_or_rename_tests",
+   "root:test_test_framework.MetadataTests.test_migration_removes_legacy_entry_and_new_tagged_proof_is_required",
+   "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
+   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
+   "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
+   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
+   "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
+   "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
+   "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
+   "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
+   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework.ReviewLifecycleTests.test_A12_unknown_registry_id_is_a_diagnostic_not_a_key_error",
+   "root:test_test_framework.ReviewLifecycleTests.test_A1_relocated_worktrees_keep_equal_fixture_hashes_without_hiding_constant_edits",
+   "root:test_test_framework.ReviewLifecycleTests.test_B6_complete_shard_labels_cannot_hide_a_missing_worker",
+   "root:test_test_framework.ReviewLifecycleTests.test_B6_stage_records_must_share_source_and_layer_plans",
+   "root:test_test_framework.ReviewLifecycleTests.test_C3_C13_cross_module_helper_is_found_by_source_path",
+   "root:test_test_framework.ReviewLifecycleTests.test_C9_assertion_free_lifecycle_check_fails_the_real_gate",
+   "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards",
+   "root:test_test_framework_r2.RoundTwo.test_M1_unrelated_source_cannot_resolve_a_specific_dependency",
+   "root:test_test_framework_r2.RoundTwo.test_N1_same_basename_dependencies_both_contribute",
+   "root:test_test_framework_r3.RoundThree.test_p01_closure_fixture_state_invalidates_metadata",
+   "root:test_test_framework_r3.RoundThree.test_p01_positional_and_keyword_defaults_are_dependencies",
+   "root:test_test_framework_review.ReviewTests.test_fixture_and_transitive_helper_changes_change_dependency_fingerprint",
+   "root:test_test_framework_review.ReviewTests.test_missing_trusted_base_fails_closed_without_using_candidate_head",
+   "root:test_test_framework_integration.ReleaseIntegration.test_release_overlay_is_immutable_and_candidate_changes_are_rejected",
+   "root:test_test_framework_integration.ReleaseIntegration.test_explicit_base_is_documented_and_missing_base_stops_before_discovery",
+   "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebinding_retains_retirement_and_catches_later_fingerprint_edits",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_claimed_pre_bump_commit_cannot_hide_old_record_edits",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_later_edits_to_each_admitted_file_still_fail_metadata",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_immutable_binding_tampering_is_rejected"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-7",
+  "statement": "**TF-7 \u2014 Grandfather only the unchanged baseline, and only shrink it.** Generate and commit the initial\nlegacy list from discovery on `a1d25560`, recording full suite/test IDs, baseline commit and a SHA-256 source\nfingerprint of the test implementation (including an inherited implementation's defining source and class\nsetup/teardown sources). Include the effective setUp/tearDown/setUpClass/tearDownClass definitions across\nthe MRO, module setUpModule/tearDownModule, and repository-local functions/classes transitively referenced\nby those fixtures or the test body (including imported shared fixture helpers). External stdlib/test-tool\nimplementations are excluded; their versions are independently pinned. Resolve dependencies by module\nand qualified name with cycle detection; unresolved dynamic helper dependencies need an explicit declared\nsource dependency, otherwise fail closed for grandfather eligibility. Keep deterministic sorted output and the generator command. The list exempts only\nmissing requirement/rationale metadata. Compare later lists against an immutable initial ceiling AND the\nreview base version: reject additions, restored removed entries, changed fingerprints or a replaced baseline.\nRenamed, overridden or changed tests must be tagged and removed from the list; missing/stale IDs must be\nremoved. Duplicate IDs are rejected. Witness: add a new test, rename a legacy test, edit its assertion or a shared fixture/helper, grow\nthe list, re-add a migrated entry, or replace its fingerprint; each fails. A tagged migration removes the entry\nand passes. The checker must fail closed if the review-base comparison cannot be made; use an explicit base\ncommit argument locally and a trusted CI merge-base; never trust a base supplied by the candidate manifest itself\nor silently substitute candidate HEAD. Missing or unavailable trusted base fails closed."
+ },
+ "TF-8": {
+  "checks": [
+   "root:test_test_framework.BudgetDebtTests.test_baseline_debt_warns_even_unselected_and_only_regression_fails",
+   "root:test_test_framework.BudgetDebtTests.test_debt_can_only_shrink_and_does_not_exempt_new_modules",
+   "root:test_test_framework.BudgetDebtTests.test_shards_use_combined_debt_ceiling_and_preserve_preflight_time",
+   "root:test_test_framework.MetadataTests.test_module_budgets_sum_fragments_and_name_every_offender",
+   "root:test_test_framework.MetadataTests.test_shards_preserve_metadata_failures_and_reject_duplicate_tests_and_invalid_time",
+   "root:test_test_framework.MetadataTests.test_shards_require_complete_disjoint_evidence_before_aggregate_budget_can_pass",
+   "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
+   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
+   "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
+   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
+   "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
+   "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
+   "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
+   "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards",
+   "root:test_test_framework_r2.RoundTwo.test_M3_no_report_or_empty_plan_cannot_authorize_retirement",
+   "root:test_test_framework_r3.RoundThree.test_p02_retirement_witness_rejects_each_status_blind_mutant",
+   "root:test_test_framework_integration.ReleaseIntegration.test_exclusive_campaigns_wait_for_empty_pool_and_block_other_launches",
+   "root:test_test_framework_integration.ReleaseIntegration.test_versioned_debt_has_measured_ceilings_and_cannot_grow",
+   "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-8",
+  "statement": "**TF-8 \u2014 Enforce module budgets, not worker-fragment budgets.** For each module sum actual elapsed seconds\nof every executed fragment (including import/setup/body/teardown), compare with the layer budget above, and\nname EVERY over-budget module with stage, layer, measured seconds, limit and fragment count. Apply\nowner-selected option A: generate and commit `scripts/test-budget-debt.json` from a1d25560's recorded\nmodule job-seconds, recording each module and its baseline ceiling. Every run names EVERY remaining debt\nentry as a warning (including unselected modules, explicitly marked not measured). A debt module fails if\nits complete measured total exceeds its unchanged recorded ceiling. A complete measurement at or below\nits layer budget requires removal from the debt file; afterward any excess over that budget fails. The\nfile may only shrink: no added/restored modules, increased ceilings, or baseline replacement. Validate\nagainst the immutable generated baseline and the explicit trusted review base. Partial shards cannot\nretire debt or certify a complete module. All new modules and modules absent from the debt file fail\nabove their layer budget. Do not bail out after the first offender.\nSeparate shards produce mergeable records; the combined gate enforces the aggregate module budget and\ndebt ceiling. A shard labels its measurement partial. Witness: two 20s component fragments fail its 30s\nbudget unless authorized baseline debt covers 40s; equality passes and a value just above fails; two\noffenders are both printed. A baseline debt warning appears even when unselected; ceiling regression,\nrestored debt, edited ceiling and debt retained after a complete under-budget result are rejected. Use an\ninjected clock for these tests, not real sleeps. Overall wall time has no five-minute failure threshold."
+ },
+ "TF-9": {
+  "checks": [
+   "root:test_test_framework.BudgetDebtTests.test_shards_use_combined_debt_ceiling_and_preserve_preflight_time",
+   "root:test_test_framework.MetadataTests.test_module_budgets_sum_fragments_and_name_every_offender",
+   "root:test_test_framework.MetadataTests.test_shards_preserve_metadata_failures_and_reject_duplicate_tests_and_invalid_time",
+   "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
+   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
+   "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
+   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
+   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
+   "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
+   "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
+   "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
+   "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
+   "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
+   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
+   "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework.ReviewLifecycleTests.test_A12_unknown_registry_id_is_a_diagnostic_not_a_key_error",
+   "root:test_test_framework.ReviewLifecycleTests.test_A1_relocated_worktrees_keep_equal_fixture_hashes_without_hiding_constant_edits",
+   "root:test_test_framework.ReviewLifecycleTests.test_B6_complete_shard_labels_cannot_hide_a_missing_worker",
+   "root:test_test_framework.ReviewLifecycleTests.test_B6_stage_records_must_share_source_and_layer_plans",
+   "root:test_test_framework.ReviewLifecycleTests.test_C3_C13_cross_module_helper_is_found_by_source_path",
+   "root:test_test_framework.ReviewLifecycleTests.test_C9_assertion_free_lifecycle_check_fails_the_real_gate",
+   "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B5_workflow_has_validated_merge_base_and_no_parent_fallback",
+   "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B6_full_gate_rejects_not_run_and_incomplete_stage_evidence",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_C13_failing_and_timed_out_workers_keep_both_logs",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_a_worker_exiting_zero_without_a_result_is_not_a_passing_check",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_owned_descendants_are_reaped_when_a_worker_finishes",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_preflight_failure_writes_zero_job_seconds_and_discovery_time",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_r2_M7_real_runner_shards_and_import_failure",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B3_runner_reaps_disabled_watchdog_with_diagnostics",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B4_preflight_retains_default_run_record",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B8_preflight_preserves_estimates",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_runner_counts_structured_results_and_saves_only_current_job_seconds",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_worker_timeout_retains_measurements_and_names_its_module",
+   "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error",
+   "root:test_test_framework_r2.RoundTwo.test_M3_no_report_or_empty_plan_cannot_authorize_retirement",
+   "root:test_test_framework_r2.RoundTwo.test_M4_caller_cannot_accept_failure_bearing_combiner_result",
+   "root:test_test_framework_r2.RoundTwo.test_M4_real_gate_rejects_not_run_failed_and_incomplete_evidence",
+   "root:test_test_framework_r3.RoundThree.test_p02_retirement_witness_rejects_each_status_blind_mutant",
+   "root:test_test_framework_r3.RoundThree.test_p04_shard_witness_rejects_duplicate_original_worker_records"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-9",
+  "statement": "**TF-9 \u2014 Preserve honest timing and timeout evidence.** Save per-worker elapsed values and run identity,\nselected tests, actual jobs, platform/interpreter, completion/timeout status and module totals. Sum only\ncurrent-run workers for job-seconds (never stale seed timings, module totals plus per-test estimates, or CPU).\nKeep wall time separate; report discovery and preflight seconds separately from worker job-seconds,\nincluding on preflight failure. Always write available measurements on test failure and timeout. Name timed-out\nworkers and keep their diagnostic log. The scheduler's historical estimates are not measurements. Witness:\nseed timings with obsolete entries, fail one worker and time out another; current totals and diagnostics remain\ncorrect. Hard worker timeout is a safety bound separate from the module's budget. Overall elapsed time is\nreported without a five-minute failure threshold."
+ }
+}

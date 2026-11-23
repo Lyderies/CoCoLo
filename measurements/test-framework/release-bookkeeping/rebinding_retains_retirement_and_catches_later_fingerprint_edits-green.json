@@ -1,0 +1,8 @@
+{
+ "status": "green",
+ "witness": "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebinding_retains_retirement_and_catches_later_fingerprint_edits",
+ "positive_control": "Admitted fingerprints pass; retired IDs stay absent; a later fingerprint edit fails the normal gate.",
+ "source_run": "green.run.json",
+ "job_seconds": 10.371961709053721,
+ "jobs": 16
+}

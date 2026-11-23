@@ -1,0 +1,50 @@
+import ast,contextlib,inspect,io,json,sys,unittest
+from pathlib import Path
+from unittest import mock
+root=Path('<cocolo-mergelib>');sys.path[:0]=[str(root/'scripts'),str(root/'packages/codex-agents'),str(root/'packages/codex-agents/native-package/.codex/orchestration')]
+from codex_agents import merge_library as ml
+from tests import merge_library_support as support
+from tests.test_merge_library_states import EndStates
+from tests.test_merge_library_r2 import RoundTwo
+from tests.test_merge_library_review import ReviewSeams
+records=[]
+def check(label,case,patch,needle):
+ result=unittest.TestResult()
+ with patch,contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):case.run(result)
+ text='\n'.join(detail for _,detail in result.failures+result.errors)
+ assert needle in text,(label,'wrong/no failure',text)
+ records.append({'finding':label,'test':case.id(),'expected_diagnostic':needle,'failure':text});print(label,'caught:',needle,flush=True)
+original=support._check_end_state
+def allow_owner_deletion(test,f,batch,report,**kwargs):
+ if 'owner-empty' not in support.observed_tree(f):
+  before=f.operation_start(batch,kwargs.get('kind','forward'));before.pop('owner-empty',None)
+  with mock.patch.object(f,'operation_start',return_value=before):return original(test,f,batch,report,**kwargs)
+ return original(test,f,batch,report,**kwargs)
+check('M2',EndStates('test_E1_unlisted_empty_folder_is_never_removed'),mock.patch.object(support,'_check_end_state',allow_owner_deletion),'AssertionError not raised')
+# A real handler mutation: remove only the direct unknown/io catch bodies.
+def without_read_guards(function):
+ tree=ast.parse(inspect.getsource(function))
+ for handler in (n for n in ast.walk(tree) if isinstance(n,ast.ExceptHandler)):
+  direct=[s for s in handler.body if isinstance(s,(ast.Return,ast.Expr))]
+  if any(isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='Report' and n.args and isinstance(n.args[0],ast.Constant) and n.args[0].value=='unknown' for s in direct for n in ast.walk(s)):
+   handler.body=[ast.Raise()]
+ ns=vars(ml);exec(compile(ast.fix_missing_locations(tree),'<M6 removed read guard>','exec'),ns)
+ changed=ns[function.__name__];ns[function.__name__]=function
+ return changed
+for name,method,needle in [
+ ('rollback','test_M6_rollback_initial_read_guard','M6 rollback initial rows'),
+ ('undo','test_M6_undo_initial_read_guard','M6 undo initial rows'),
+ ('cleanup','test_M6_cleanup_initial_read_guard','M6 cleanup initial rows'),
+ ('land','test_M6_land_IO_handler_read_guard','M6 land handler rows'),
+ ('land','test_M6_land_cancel_validation_read_guard','M6 validation rows'),
+ ('cleanup','test_M6_cleanup_durable_reread_guard_continues_later_rows','M6 cleanup reread')]:
+ check('M6 '+name+' '+method,RoundTwo(method),mock.patch.object(ml,name,without_read_guards(getattr(ml,name))),needle)
+check('M6 cancel',RoundTwo('test_M6_applying_cancel_enters_putback_and_terminal_retry_refuses'),mock.patch.object(ml,'cancel',return_value=ml.Report('cancelled','cancelled')),'M6 applying cancel did not reach putback')
+check('M6 terminal retry',RoundTwo('test_M6_applying_cancel_enters_putback_and_terminal_retry_refuses'),mock.patch.object(ml,'retry',return_value=ml.Report('reverted')),'refused')
+# The machine witness's dedicated nested test runs both omission mutants and
+# checks the exact failure, fired operation, EIO and landed own report.
+case=ReviewSeams('test_r2_M4_each_missing_provenance_field_breaks_generated_EIO_proof');result=unittest.TestResult();case.run(result)
+assert result.wasSuccessful(),str(result.failures)+str(result.errors)
+records.append({'finding':'M4','test':case.id(),'status':'both call/fault omissions produced exactly AssertionError not raised with landed/exchange/EIO evidence'})
+Path('/private/tmp/cocolo-review-r2/merge-sensitivity.json').write_text(json.dumps(records,indent=1))
+print('M4 both provenance omission mutants caught')

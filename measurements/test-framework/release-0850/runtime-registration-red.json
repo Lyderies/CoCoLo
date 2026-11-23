@@ -1,0 +1,10 @@
+{
+ "status": "red",
+ "base": "f69da048",
+ "diagnostic": "codex_agents/merge_library.py",
+ "witness": "root:test_attest.ProjectRuntimeTests.test_the_project_file_list_matches_the_runtime",
+ "source_run": "integrated-full.run.json",
+ "worker_log": "runtime-registration-old-worker.log",
+ "jobs": 16,
+ "job_seconds": 4535.410044784832
+}

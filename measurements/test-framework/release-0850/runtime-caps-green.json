@@ -1,0 +1,8 @@
+{
+ "status": "green",
+ "witness": "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end",
+ "positive_control": "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_new_limit_is_caught",
+ "source_run": "runtime-final-green.run.json",
+ "jobs": 16,
+ "job_seconds": 159.4208272920223
+}

@@ -1,0 +1,12 @@
+{
+ "status": "green",
+ "base": "9c18c4a3",
+ "witnesses": [
+  "test_p08_V2_unresolved_row_needs_recovery_or_status_evidence"
+ ],
+ "source_run": "ml-r3-final.json.run.json",
+ "source_sha256": "f27db4076dc10c92b0e57266ff302b03d59340cde216fe8838b1daaf20b8c174",
+ "job_seconds": 112.91237787512364,
+ "jobs": 16,
+ "positive_control": "Recovery-report and fallback-status controls each invoke the oracle; both empty must fail."
+}

@@ -1,0 +1,9 @@
+{
+ "status": "red",
+ "base": "c75eba51",
+ "diagnostic": "missing narrow release-bookkeeping validator",
+ "witness": "root:test_release_bookkeeping.ReleaseBookkeeping.test_later_edits_to_each_admitted_file_still_fail_metadata",
+ "source_run": "old.run.json",
+ "job_seconds": 0.1650093750213273,
+ "jobs": 16
+}

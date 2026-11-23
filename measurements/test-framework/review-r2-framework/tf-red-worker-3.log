@@ -1,0 +1,69 @@
+.....F...............................
+======================================================================
+FAIL: test_decision_100_allowlist_applies_to_local_and_CI_workers (test_test_framework_guards.RunnerIntegrationTests.test_decision_100_allowlist_applies_to_local_and_CI_workers)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<cocolo-testfw>/tests/test_test_framework_guards.py", line 572, in test_decision_100_allowlist_applies_to_local_and_CI_workers
+    self.assertEqual(0,code,output)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+AssertionError: 0 != 1 : METADATA: root:unittest.loader._FailedTest.test_probe: test import failed
+METADATA: TF-1: missing or unlinked check root:test_probe.Probe.test_value
+FAILED root:test_probe (exit 1) -> /private/tmp/ptx72y_3uc/1.log
+Traceback (most recent call last):
+  File "<cocolo-testfw>/scripts/test_worker.py", line 212, in main
+    suite = unittest.defaultTestLoader.loadTestsFromNames(names)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/loader.py", line 214, in loadTestsFromNames
+    suites = [self.loadTestsFromName(name, module) for name in names]
+              ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/loader.py", line 141, in loadTestsFromName
+    module = __import__(module_name)
+  File "/private/tmp/pt8ijbaodm/3/tf-run-ub0tlaii/tests/test_probe.py", line 3, in <module>
+    assert key not in os.environ, 'D100 leaked ' + key
+           ^^^^^^^^^^^^^^^^^^^^^
+AssertionError: D100 leaked GITHUB_TOKEN
+
+RUN RECORD: /private/tmp/pt8ijbaodm/3/tf-run-ub0tlaii/timings.json.run.json
+{
+ "elapsed_seconds": 0.1,
+ "jobs": 16,
+ "stages": [
+  "e2e",
+  "integration",
+  "unit"
+ ],
+ "job_seconds": 0.104,
+ "over_budget": [],
+ "budget_failures": [],
+ "budget_warnings": [],
+ "debt_retirement_required": [],
+ "discovery_seconds": 0.0983909170026891,
+ "preflight_seconds": 0.0009355830261483788,
+ "metadata_errors": [
+  "root:unittest.loader._FailedTest.test_probe: test import failed",
+  "TF-1: missing or unlinked check root:test_probe.Probe.test_value"
+ ],
+ "partial": false,
+ "profile": "ci",
+ "requirement_failures": [],
+ "units": 1,
+ "tests": {
+  "root": 0
+ },
+ "failed_units": [
+  "root:test_probe"
+ ],
+ "slowest_units": [
+  [
+   "root:test_probe",
+   0.1
+  ]
+ ],
+ "logs": "/private/tmp/ptx72y_3uc"
+}
+
+
+----------------------------------------------------------------------
+Ran 37 tests in 18.713s
+
+FAILED (failures=1)
+not_run: darwin lacks selectors.EpollSelector

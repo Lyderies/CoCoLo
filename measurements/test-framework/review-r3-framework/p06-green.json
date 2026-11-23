@@ -1,0 +1,12 @@
+{
+ "status": "green",
+ "base": "9c18c4a3",
+ "witnesses": [
+  "test_p06_matching_golden_requires_provenance_and_update_repairs_it"
+ ],
+ "source_run": "tf-r3-final.json.run.json",
+ "source_sha256": "ea0db69d2d20dac246a7a425ea015ac2a81b9c6afdf0270b5ef5dcdf7156870a",
+ "job_seconds": 26.99471895804163,
+ "jobs": 16,
+ "positive_control": "Explicit update writes the required sidecar, still raises GoldenUpdated, then normal comparison passes."
+}

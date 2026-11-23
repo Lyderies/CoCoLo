@@ -1,0 +1,76 @@
+{
+  "packages/claude-agents/src/claude_agents/job_read_tool.py": {
+    "checks": [
+      "root:test_entrypoint_inventory.EntryPointTests.test_job_reader_process_refuses_unbound_invocation_without_output"
+    ]
+  },
+  "packages/codex-agents/native-package/.codex/orchestration/cli.py": {
+    "checks": [
+      "root:test_entrypoint_inventory.EntryPointTests.test_argparse_entrypoints_start_in_real_stdlib_only_processes"
+    ],
+    "probe": "help"
+  },
+  "packages/codex-agents/native-package/.codex/orchestration/codex_agents/core_api.py": {
+    "checks": [
+      "root:test_entrypoint_inventory.EntryPointTests.test_argparse_entrypoints_start_in_real_stdlib_only_processes"
+    ],
+    "module": "codex_agents.core_api",
+    "probe": "help"
+  },
+  "packages/codex-agents/native-package/.codex/orchestration/codex_agents/egress_proxy.py": {
+    "checks": [
+      "root:test_entrypoint_inventory.EntryPointTests.test_argparse_entrypoints_start_in_real_stdlib_only_processes"
+    ],
+    "module": "codex_agents.egress_proxy",
+    "probe": "help"
+  },
+  "packages/codex-agents/native-package/.codex/orchestration/codex_agents/process_tree.py": {
+    "checks": [
+      "codex:tests.test_container_stop.RealContainerStopTests.test_real_watchdog_stops_the_container_once_its_service_is_killed"
+    ]
+  },
+  "packages/codex-agents/native-package/.codex/orchestration/codex_agents/signature_process.py": {
+    "checks": [
+      "codex:tests.test_signature_process.SignatureProcessExecutionTests.test_restricted_prepare_has_same_owned_pid_and_exact_bound_response"
+    ]
+  },
+  "packages/codex-agents/native-package/.codex/orchestration/collector_host.py": {
+    "checks": [
+      "codex:tests.test_collector_exit.CollectorExitProcessTests.test_C10_a_shutdown_request_is_recorded"
+    ]
+  },
+  "packages/codex-agents/native-package/.codex/orchestration/learning_hook.py": {
+    "checks": [
+      "root:test_entrypoint_inventory.EntryPointTests.test_argparse_entrypoints_start_in_real_stdlib_only_processes"
+    ],
+    "probe": "help"
+  },
+  "packages/codex-agents/native-package/.codex/orchestration/project_host.py": {
+    "checks": [
+      "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_cli_starts_one_host_reuses_it_and_recovers_after_it_stops"
+    ]
+  },
+  "packages/codex-agents/scripts/install.py": {
+    "checks": [
+      "root:test_entrypoint_inventory.EntryPointTests.test_argparse_entrypoints_start_in_real_stdlib_only_processes"
+    ],
+    "probe": "help"
+  },
+  "scripts/install.py": {
+    "checks": [
+      "root:test_entrypoint_inventory.EntryPointTests.test_argparse_entrypoints_start_in_real_stdlib_only_processes"
+    ],
+    "probe": "help"
+  },
+  "scripts/setup-wizard.py": {
+    "checks": [
+      "root:test_entrypoint_inventory.EntryPointTests.test_argparse_entrypoints_start_in_real_stdlib_only_processes"
+    ],
+    "probe": "help"
+  },
+  "setup.sh": {
+    "checks": [
+      "root:test_setup_sh.SetupScriptTests.test_provider_routing_matches_the_router_validator"
+    ]
+  }
+}

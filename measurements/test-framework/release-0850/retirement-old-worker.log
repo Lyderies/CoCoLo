@@ -1,0 +1,55 @@
+....{
+ "schema": 1,
+ "run_id": "6785a8820d514b998c933f60f8d25da3",
+ "invocation_id": "81f4936abf5045259de10b06f382b349",
+ "python": "3.14.7",
+ "platform": "Darwin",
+ "jobs": 16,
+ "elapsed_seconds": 0.0439376249560155,
+ "job_seconds": 0,
+ "workers": [],
+ "modules": {},
+ "budget_failures": [],
+ "budget_warnings": [],
+ "debt_retirement_required": [],
+ "discovery_seconds": 0.0,
+ "preflight_seconds": 0.0439376249560155,
+ "over_budget": [],
+ "partial": false,
+ "shard": [
+  1,
+  1
+ ],
+ "plan": {
+  "expected_fragments": {},
+  "budget_debt": {},
+  "layers": {},
+  "stages": {},
+  "selection": [],
+  "profile": "ci",
+  "catalogue": {},
+  "fingerprints": {}
+ },
+ "plan_digest": "734736406c398ccfa88ca7b9c9cc1af96207cd565d8b9295957fc029c6920f50",
+ "metadata_errors": [
+  "legacy list requires an explicit trusted --base"
+ ],
+ "failed_units": [],
+ "tests": {},
+ "requirements": {},
+ "units": 0
+}
+..E
+======================================================================
+ERROR: test_versioned_debt_has_measured_ceilings_and_cannot_grow (test_test_framework_integration.ReleaseIntegration.test_versioned_debt_has_measured_ceilings_and_cannot_grow)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<cocolo-testfw>/tests/test_test_framework_integration.py", line 90, in test_versioned_debt_has_measured_ceilings_and_cannot_grow
+    self.assertGreater(debt['modules']['codex:tests.test_'+name],fw.BUDGETS['unit' if name in ('ledger_startup','session_guard') else 'scenario'])
+                       ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyError: 'codex:tests.test_billing_gate'
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.421s
+
+FAILED (errors=1)

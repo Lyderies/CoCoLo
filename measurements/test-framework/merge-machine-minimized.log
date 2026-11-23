@@ -1,0 +1,74 @@
+F
+======================================================================
+FAIL: runTest (tests.test_merge_library_machine.TestMergeMachine.runTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<test-environment>/lib/python3.14/site-packages/hypothesis/stateful.py", line 558, in runTest
+    run_state_machine_as_test(cls, settings=self.settings)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<test-environment>/lib/python3.14/site-packages/hypothesis/stateful.py", line 308, in run_state_machine_as_test
+    state_machine_test()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "<test-environment>/lib/python3.14/site-packages/hypothesis/stateful.py", line 154, in run_state_machine
+    @given(st.data())
+               ^^^
+  File "<test-environment>/lib/python3.14/site-packages/hypothesis/core.py", line 2334, in wrapped_test
+    raise the_error_hypothesis_found
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_machine.py", line 101, in durable_history_and_tree_obey_the_single_checker
+    check_end_state(self.test, self.f, self.batch, report,
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                    kind='undoing' if latest.kind == 'undo' else 'forward')
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 664, in check_end_state
+    test.assertEqual(expected, actual, 'cleanup changed paths outside listed empty folders; landed/reverted direction mismatch')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'removed': (16384, 493, None), 'z.txt': (3[158 chars]\n')} != {'a.txt': (32768, 420, b'generated child'),[156 chars]\n')}
+- {'a.txt': (32768, 420, b'one\ntwo\nthree\n'),
++ {'a.txt': (32768, 420, b'generated child'),
+   'removed': (16384, 493, None),
+   'removed/old.txt': (32768, 420, b'deleted\n'),
+   'tool': (32768, 493, b'#!/bin/sh\necho old\n'),
+   'z.txt': (32768, 420, b'old z\n')} : cleanup changed paths outside listed empty folders; landed/reverted direction mismatch
+Failing test case: <state machine>
+state = MergeMachine()
+state.durable_history_and_tree_obey_the_single_checker()
+state.crash()
+state.durable_history_and_tree_obey_the_single_checker()
+state.crash()
+state.durable_history_and_tree_obey_the_single_checker()
+state.land(checks=True, data=data(...), mode='normal')
+state.durable_history_and_tree_obey_the_single_checker()
+state.cancel()
+state.durable_history_and_tree_obey_the_single_checker()
+state.cancel()
+state.durable_history_and_tree_obey_the_single_checker()
+Draw 1 (persistence_boundary): ((('mkdir',
+   'staging',
+   'before',
+   'project/.cocolo/staging/child-1',
+   None,
+   None,
+   None),
+  1),
+ IOCall(operation='mkdir',
+  when='before',
+  phase='staging',
+  path='<temporary-run>',
+  other=None,
+  detail={'mutating': True, 'scope': 'staging'},
+  result=None))
+state.undo(data=data(...), mode='EIO')
+state.durable_history_and_tree_obey_the_single_checker()
+state.cancel()
+state.durable_history_and_tree_obey_the_single_checker()
+state.land(checks=False, data=data(...), mode='normal')
+state.durable_history_and_tree_obey_the_single_checker()
+state.teardown()
+
+----------------------------------------------------------------------
+Ran 1 test in 315.737s
+
+FAILED (failures=1)
+WARNING: Hypothesis has spent more than five minutes working to shrink a failing test case, and stopped because it is making very slow progress.  When you re-run your tests, shrinking will resume and may take this long before aborting again.
+
+PLEASE REPORT THIS if you can provide a reproducing example, so that we can improve shrinking performance for everyone.

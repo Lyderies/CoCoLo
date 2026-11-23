@@ -1,0 +1,30 @@
+[
+  {
+    "run": "states-red",
+    "job_seconds": 0.6420638749841601,
+    "tests": 10,
+    "failed_workers": [
+      "tests.test_merge_library_states"
+    ]
+  },
+  {
+    "run": "states-first",
+    "job_seconds": 1.509999957983382,
+    "tests": 21,
+    "failed_workers": []
+  },
+  {
+    "run": "contract-first",
+    "job_seconds": 31.586898251029197,
+    "tests": 148,
+    "failed_workers": []
+  },
+  {
+    "run": "adversarial-first",
+    "job_seconds": 380.17822054197313,
+    "tests": 78,
+    "failed_workers": [
+      "tests.test_merge_library_adversarial"
+    ]
+  }
+]

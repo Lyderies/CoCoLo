@@ -1,0 +1,8 @@
+{
+ "status": "green",
+ "witness": "root:test_release_bookkeeping.ReleaseBookkeeping.test_correct_append_passes_and_every_unrelated_edit_is_rejected",
+ "positive_control": "Exact primary transition passes before and after fourteen independent catalogue, count, helper and packaging mutations are rejected.",
+ "source_run": "green.run.json",
+ "job_seconds": 10.371961709053721,
+ "jobs": 16
+}

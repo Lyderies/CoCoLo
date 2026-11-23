@@ -1,0 +1,197 @@
+....FFFFFFFFFFFFFFFF
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('open', 'cleanup', 'before', 'project/.cocolo/staging/child-1/.gitignore', None, None, None), 1), failure=5)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('open', 'cleanup', 'before', 'project/.cocolo/staging/child-1/.gitignore', None, None, None), 1), failure=28)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('open', 'cleanup', 'after', 'project/.cocolo/staging/child-1/.gitignore', None, None, None), 1), failure=5)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('open', 'cleanup', 'after', 'project/.cocolo/staging/child-1/.gitignore', None, None, None), 1), failure=28)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('unlink', 'cleanup', 'before', 'project/.cocolo/staging/child-1/.gitignore', None, None, None), 1), failure=5)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('unlink', 'cleanup', 'before', 'project/.cocolo/staging/child-1/.gitignore', None, None, None), 1), failure=28)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('unlink', 'cleanup', 'after', 'project/.cocolo/staging/child-1/.gitignore', None, None, None), 1), failure=5)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('unlink', 'cleanup', 'after', 'project/.cocolo/staging/child-1/.gitignore', None, None, None), 1), failure=28)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('fullfsync', 'cleanup', 'before', 'project/.cocolo/staging/child-1', None, None, None), 1), failure=5)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('fullfsync', 'cleanup', 'before', 'project/.cocolo/staging/child-1', None, None, None), 1), failure=28)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('fullfsync', 'cleanup', 'after', 'project/.cocolo/staging/child-1', None, None, None), 1), failure=5)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('fullfsync', 'cleanup', 'after', 'project/.cocolo/staging/child-1', None, None, None), 1), failure=28)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('rmdir', 'cleanup', 'before', 'project/.cocolo/staging/child-1', None, None, None), 1), failure=5)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('rmdir', 'cleanup', 'before', 'project/.cocolo/staging/child-1', None, None, None), 1), failure=28)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('rmdir', 'cleanup', 'after', 'project/.cocolo/staging/child-1', None, None, None), 1), failure=5)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+======================================================================
+FAIL: test_undoing_persistence_samples (tests.test_merge_library_model_sweep.PersistenceSamples.test_undoing_persistence_samples) (boundary=(('rmdir', 'cleanup', 'after', 'project/.cocolo/staging/child-1', None, None, None), 1), failure=28)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/packages/codex-agents/tests/test_merge_library_model_sweep.py", line 78, in exercise
+    check_end_state(self, f, batch, report, kind=kind, call=call, fault=failure)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/packages/codex-agents/tests/merge_library_support.py", line 683, in check_end_state
+    test.assertFalse(any(p.startswith(name + '/') for p in actual), name)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : new
+
+----------------------------------------------------------------------
+Ran 5 tests in 9.553s
+
+FAILED (failures=16)
