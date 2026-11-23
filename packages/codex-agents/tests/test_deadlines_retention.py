@@ -86,6 +86,15 @@ class LeaseBackedFixture(unittest.TestCase):
         self.assertTrue(project_holds_schema.custody_consistent(self.store._connection, leases.fixtures.KEY))
         self.assertTrue(project_holds_schema.register_consistent(self.store._connection))
 
+    def settle(self, kind, number=1):
+        """What B4's `record_account_settlement` will write: the settlement row and the obligation released with it."""
+        target = binding(number)
+        self.store._connection.execute(
+            "INSERT INTO project_account_settlements VALUES(?,?,?,?,?,?,?)",
+            (target.project_id, target.run_handle, target.attempt, target.claim_id, kind, b'{}', self.now))
+        project_holds_schema.release_hold(self.store._connection, target.project_id, 'reservation', target.claim_id,
+                                          kind, now_ms=self.now)
+
     def record(self, digest, number=1):
         with self.store._transaction():
             project_result_contexts.record_outcome(self.store, binding(number), digest)
@@ -170,16 +179,18 @@ class PreCommitDeadlineTests(LeaseBackedFixture):
         self.assertEqual(counts, self.store._result_counts())
         self.assertEqual('bound', self.context_state())
         self.assertEqual(1, len(rc.context_files(self.fixture.directory)))
-        self.publish()  # the prepared body is still publishable (a replay would do the same, D4 slice)
-        self.assertEqual('committed', self.reservation().state)
+        delivery = self.publish()  # the prepared body is still publishable (a replay would do the same, D4 slice)
+        self.assertEqual('committed', self.row_state())  # committed late: due at the next pass, never revived
+        self.assertEqual((delivery,), self.store.pending_terminals())
+        self.assertEqual(1, self.store.expire_results())
+        self.assertEqual(('released', 'retention'), self.release_kind())
 
     def test_X9_the_obligation_released_lost_retires_the_reserved_row_at_the_next_pass(self):
         self.bound(1)
         reserved = self.reservation()
         self.now = reserved.reserved_until_ms + 1
         self.assertEqual(0, self.store.expire_results())
-        project_holds_schema.release_hold(self.store._connection, binding(1).project_id, 'reservation',
-                                          binding(1).claim_id, 'lost', now_ms=self.now)
+        self.settle('lost')
         self.assertEqual(1, self.store.expire_results())
         self.assertEqual(('expired', 'expired'), (self.row_state(), self.context_state()))
         self.assertEqual(('released', 'lost_with_reservation'), self.release_kind())
@@ -190,8 +201,7 @@ class PreCommitDeadlineTests(LeaseBackedFixture):
 
     def test_X9_a_lost_release_before_the_deadline_retires_it_too_without_waiting_for_the_deadline(self):
         self.bound(1)
-        project_holds_schema.release_hold(self.store._connection, binding(1).project_id, 'reservation',
-                                          binding(1).claim_id, 'crashed', now_ms=self.now)
+        self.settle('crashed')
         self.assertEqual(1, self.store.expire_results())
         self.assertEqual(('expired', 'expired'), (self.row_state(), self.context_state()))
         self.assertEqual(('released', 'lost_with_reservation'), self.release_kind())

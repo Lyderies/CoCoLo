@@ -947,10 +947,59 @@ class ProjectHistory:
 
     def _live_result(self, binding: AttemptBinding, now: int):
         row, value = self._result_row(binding)
-        if value.state in {"retiring", "expired"} or now >= value.expires_at_ms:
+        if self._retire_due(value, now):
             self._retire_result(binding)
             raise HistoryError("history_result_expired")
         return row, value
+
+    def _obligation_state(self, value):
+        """D2 (SH-4): the state of a lease-born reservation's RS-B obligation row, or None for a reservation that has
+        none to wait for: the test-only `reserve_result` path (no lease, no context) and a missing row keep the
+        deadline rules they always had."""
+        if value.state != "reserved" or self._connection.execute(
+                "SELECT 1 FROM result_leases WHERE project_id=? AND claim_id=?",
+                (self.project_id, value.binding.claim_id)).fetchone() is None:
+            return None
+        row = self._connection.execute(
+            "SELECT state FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=?",
+            (self.project_id, value.binding.claim_id)).fetchone()
+        return None if row is None else row[0]
+
+    def _retire_due(self, value, now: int) -> bool:
+        """D2 (SH-4): whether a reservation is to be retired. No deadline before the commit retires anything: a
+        reserved row whose obligation is held (or being released) is kept and charged however late it is, and is
+        retired once RS-B has released the obligation. A committed row is due at `retained_until_ms`."""
+        if value.state in {"retiring", "expired"}:
+            return True
+        obligation = self._obligation_state(value)
+        if obligation is not None:
+            return obligation == "released"
+        return now >= value.expires_at_ms
+
+    def _unattended_close(self, binding: AttemptBinding) -> bool:
+        """D2 (RS-D draft 3 s8, owner decision 90.8 A): the orchestration was released `interrupted_unattended`. That
+        close does not end custody: results stay readable until they expire. An orchestration with no register row
+        (every one until B6 writes them, and any closed before schema 18) keeps today's behaviour."""
+        row = self._connection.execute(
+            "SELECT release_kind FROM project_holds WHERE project_id=? AND kind='orchestration' AND identity=? "
+            "AND state='released'", (self.project_id, binding.orchestration_handle)).fetchone()
+        return row is not None and row[0] == "interrupted_unattended"
+
+    def _custody_ended_by_close(self, binding: AttemptBinding) -> bool:
+        return self._orchestration_owner().closed_for(binding) and not self._unattended_close(binding)
+
+    def _expiry_now(self) -> int:
+        """D2 (RS-D-7): the clock of the expiry pass is max(wall, floor). A wall clock moved back below the persisted
+        floor delays nothing and revives nothing: the pass judges at the floor. Results and reads still refuse then."""
+        try:
+            return self._result_now()
+        except HistoryError as error:
+            if error.reason_code != "history_result_unavailable":
+                raise
+        floor = self._hold_now()
+        if not valid_integer(floor) or floor <= 0:
+            raise HistoryError("history_result_unavailable")
+        return floor
 
     def _lease_binding(self, binding):
         if type(binding) is not ResultLeaseBinding:
@@ -1150,6 +1199,8 @@ class ProjectHistory:
                 raise HistoryError("history_conflict")
             self._check_result_capacity()
             until = now + self._result_capacity.reservation_ms
+            if record_context is not None:
+                project_result_contexts.check_verifier_margin(self, record_context.task, until)  # D2 (RS-D-5)
             value = ResultLease(binding, digest, now, until, "reserved", self._lease_digest(binding, digest, now, until))
             self._connection.execute("INSERT INTO result_leases VALUES(?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,?,?)",
                                      (self.project_id, binding.run_handle, binding.attempt, binding.claim_request_id,
@@ -2231,11 +2282,16 @@ class ProjectHistory:
                 # Retention begins before the first possible private body write,
                 # even if publication/metadata commit fails. Retry and changed
                 # deployment policy cannot extend these original timestamps.
+                # D2 (SH-4): a lease-born row keeps its deadline until the commit; the retention deadline
+                # (`retained_until_ms`, written once here) applies from the commit on.
+                kept = self._obligation_state(value) is not None
                 self._connection.execute(
                     "UPDATE result_reservations SET prepared_digest=?,prepared_at_ms=?,retained_until_ms=?,"
-                    "expires_at_ms=MIN(reserved_until_ms,?) WHERE project_id=? AND claim_id=?",
+                    "expires_at_ms=" + ("expires_at_ms" if kept else "MIN(reserved_until_ms,?)") +
+                    " WHERE project_id=? AND claim_id=?",
                     (prepared, now, now + self._result_capacity.retention_ms,
-                     now + self._result_capacity.retention_ms, self.project_id, binding.claim_id),
+                     *(() if kept else (now + self._result_capacity.retention_ms,)),
+                     self.project_id, binding.claim_id),
                 )
         self._write_result_file(binding, body, digest)
         now = self._result_now()
@@ -2312,7 +2368,7 @@ class ProjectHistory:
     @_operation
     def read_result(self, binding: AttemptBinding) -> bytes:
         binding = self._result_binding(binding)
-        if self._orchestration_owner().closed_for(binding):
+        if self._custody_ended_by_close(binding):
             raise HistoryError("history_orchestration_state")
         _, value = self._live_result(binding, self._result_now())
         if value.state != "committed":
@@ -2328,7 +2384,7 @@ class ProjectHistory:
         binding = self._result_binding(binding)
         now = self._result_now()
         _, value = self._result_row(binding)
-        if value.state == "retiring" or (value.state != "expired" and now >= value.expires_at_ms):
+        if value.state != "expired" and self._retire_due(value, now):
             self._retire_result(binding)
             _, value = self._result_row(binding)
         return value
@@ -2338,14 +2394,22 @@ class ProjectHistory:
         if value.state == "expired":
             return
         # D1 (SH-3): the body and its context retire together; custody is released first, by why it ends.
-        try:
-            kind = "orchestration_closed" if self._orchestration_owner().closed_for(binding) else "retention"
-        except HistoryError:
-            kind = "retention"
+        evidence = None
+        released = self._connection.execute(
+            "SELECT release_kind FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=? "
+            "AND state='released'", (self.project_id, binding.claim_id)).fetchone()
+        if value.state == "reserved" and released is not None and released[0] in project_holds_schema.CUSTODY_RESERVATION_CAUSES:
+            # D2 (SH-3): an attempt that never committed ends with its reservation: RS-B released the obligation.
+            kind, evidence = "lost_with_reservation", project_holds_schema.evidence_json(cause=released[0])
+        else:
+            try:
+                kind = "orchestration_closed" if self._custody_ended_by_close(binding) else "retention"
+            except HistoryError:
+                kind = "retention"
         with self._transaction():
             self._connection.execute("UPDATE result_reservations SET state='retiring' WHERE project_id=? AND claim_id=?",
                                      (self.project_id, binding.claim_id))
-            project_result_contexts.begin_retirement(self, binding, kind)
+            project_result_contexts.begin_retirement(self, binding, kind, evidence)
         self._recover_result_link(binding)
         for name in self._result_names(binding):
             try:
@@ -2369,7 +2433,7 @@ class ProjectHistory:
         capacity, never an account claim or an opportunity to execute again.
         """
         binding = self._result_binding(binding)
-        self._result_now()
+        self._expiry_now()
         self._retire_result(binding)
 
     @_operation
@@ -2380,15 +2444,22 @@ class ProjectHistory:
         business identity. Durable retiring/expired state still controls reads
         and capacity. A restart can repeat cleanup, never revive an identity.
         """
-        now = self._result_now()
+        now = self._expiry_now()  # D2 (RS-D-7): max(wall, floor); a moved-back clock does not stop the pass
         if not valid_integer(limit, minimum=1, maximum=100):
             raise HistoryError("history_invalid_input")
         def candidates(after):
+            # D2 (SH-4): a lease-born reserved row is a candidate only once its obligation is released (RS-B); a
+            # deadline alone selects nothing before the commit. Every other row keeps its deadline and close rules.
             statement = (
-                "SELECT rowid FROM result_reservations WHERE project_id=? AND state!='expired' "
-                "AND (expires_at_ms<=? OR state='retiring' OR EXISTS(SELECT 1 FROM project_orchestrations AS owned "
+                "SELECT rowid FROM result_reservations WHERE project_id=? AND state!='expired' AND CASE "
+                "WHEN state='reserved' AND EXISTS(SELECT 1 FROM result_leases AS born "
+                "WHERE born.project_id=result_reservations.project_id AND born.claim_id=result_reservations.claim_id) "
+                "THEN EXISTS(SELECT 1 FROM project_holds AS obligation "
+                "WHERE obligation.project_id=result_reservations.project_id AND obligation.kind='reservation' "
+                "AND obligation.identity=result_reservations.claim_id AND obligation.state='released') "
+                "ELSE (expires_at_ms<=? OR state='retiring' OR EXISTS(SELECT 1 FROM project_orchestrations AS owned "
                 "WHERE owned.project_id=result_reservations.project_id "
-                "AND owned.orchestration_handle=result_reservations.orchestration_handle))"
+                "AND owned.orchestration_handle=result_reservations.orchestration_handle)) END"
             )
             arguments = [self.project_id, now]
             if after is not None:
@@ -2418,8 +2489,9 @@ class ProjectHistory:
                 value = self._reservation(row)
                 # SQL membership selects candidates only. The sealed current
                 # lifecycle must prove closure before early body retirement.
-                if (value.state != 'retiring' and now < value.expires_at_ms
-                        and not self._orchestration_owner().closed_for(value.binding)):
+                if (not self._retire_due(value, now)
+                        and (self._obligation_state(value) is not None
+                             or not self._custody_ended_by_close(value.binding))):
                     continue
                 self._retire_result(value.binding)
                 retired += 1

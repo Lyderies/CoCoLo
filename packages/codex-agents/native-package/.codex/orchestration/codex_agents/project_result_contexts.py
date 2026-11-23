@@ -37,6 +37,9 @@ from .project_holds_schema import attempt_identity, evidence_json
 MAX_RECORD_CONTEXT_BYTES = MAX_HOST_RESULT_CONTEXT_BYTES - 8_192
 # RS-D-8 (owner question: 256 MiB proposed): what the live contexts of one project may hold together.
 MAX_LIVE_CONTEXT_BYTES = 256 * 1_048_576
+# RS-D-5 (owner decision 90.4 A): a verifier opens only when its worker's retention outlasts the verifier's lease deadline
+# by this much. Checked once, at open; nothing is extended.
+QA_MARGIN_MS = 3_600_000
 # The states whose context file exists (or is being removed); `legacy_no_context` never had one.
 FILE_STATES = ("leased", "opened", "bound", "committed", "recorded", "retiring", "repair_required")
 _GONE = ("retiring", "expired", "ended", "repair_required")
@@ -182,6 +185,24 @@ def insert(history, run_handle: str, attempt: int, digest: str, size: int, host_
                                    attempt_identity(run_handle, attempt), now_ms=now_ms, due_at_ms=lease_deadline_ms)
 
 
+def check_verifier_margin(history, task: dict, lease_until_ms: int) -> None:
+    """In the lease transaction, for a verifier (RS-D-5, owner decision 90.4 A): the worker it verifies, found by its
+    outcome digest, must be kept at least `QA_MARGIN_MS` past the verifier lease's deadline; otherwise the verifier
+    is refused (`history_worker_result_expiring`) and nothing is stored. An admission check, not a lifetime promise:
+    an early close or a forward clock jump can still end either custody sooner. A worker with no stored deadline
+    yet, or already gone, is left to the readers that refuse it."""
+    digest = task.get("verification_for_outcome")
+    if not matches(digest, _DIGEST):
+        return
+    row = history._connection.execute(
+        "SELECT state,retained_until_ms FROM project_result_contexts INDEXED BY project_result_contexts_outcome "
+        "WHERE project_id=? AND outcome_digest=?", (history.project_id, digest)).fetchone()
+    if row is None or row["retained_until_ms"] is None or row["state"] in _GONE:
+        return
+    if row["retained_until_ms"] < lease_until_ms + QA_MARGIN_MS:
+        raise HistoryError("history_worker_result_expiring")
+
+
 def discard(history, run_handle: str, attempt: int) -> None:
     """A lease transaction that did not commit leaves no file (a failed allocation charges nothing)."""
     if _row(history, run_handle, attempt) is None:
@@ -312,13 +333,13 @@ def finish_quietly(history, run_handle: str, attempt: int) -> None:
         pass  # Left `retiring` and charged; the next open finishes it.
 
 
-def begin_retirement(history, binding: AttemptBinding, kind: str) -> None:
+def begin_retirement(history, binding: AttemptBinding, kind: str, evidence=None) -> None:
     """In `_retire_result`'s `retiring` transaction: custody released (`retention` or `orchestration_closed`) and
     no reader gets the context from here on."""
     row = _row(history, binding.run_handle, binding.attempt)
     if row is None or row["state"] in ("ended", "expired"):
         return
-    _release_custody(history, binding.run_handle, binding.attempt, kind, history._hold_now())
+    _release_custody(history, binding.run_handle, binding.attempt, kind, history._hold_now(), evidence)
     history._connection.execute(
         "UPDATE project_result_contexts SET state='retiring' WHERE project_id=? AND run_handle=? AND attempt=?",
         (history.project_id, binding.run_handle, binding.attempt))

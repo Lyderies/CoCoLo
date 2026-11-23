@@ -38,3 +38,18 @@ assertions in test_project_results.py pin them (e.g. `test_expired_reservation_s
 ## Not in D2 (later slices)
 Replay (RS-D R3', D4 slice), arbitration (B4), `record_account_settlement` (B4: a `lost` release is planted directly in tests),
 orchestration register rows (B6: `interrupted_unattended` is planted directly in tests), the context sweep (D3).
+
+## As built (D2 production)
+- PH `_retire_due`, `_obligation_state`, `_unattended_close`, `_custody_ended_by_close`, `_expiry_now` (new, after `_live_result`); `_live_result`,
+  `result_reservation`, `read_result`, prepare UPDATE, `_retire_result` (kind `lost_with_reservation` + cause for a reserved row whose obligation
+  was released lost/crashed/released_unacknowledged), `retire_result`, `expire_results` (selector CASE + loop) changed.
+- PRC `QA_MARGIN_MS`, `check_verifier_margin` (called from PH `_reserve_result_lease_locked`), `begin_retirement(evidence)`.
+- history_contracts.py: new fixed reason `history_worker_result_expiring`.
+- result_contracts.py `ResultReservation.__post_init__`: the lease deadline no longer bounds `prepared_at_ms` / `committed_at_ms`, and a prepared
+  unpublished row may keep `expires_at_ms == reserved_until_ms` (SH-4; the old contract made a late publication `history_incompatible`).
+  Only adds accepted states; no existing assertion changed.
+- No schema step (18 -> 19 stays), no new account operation.
+- Test fixes after the red commit (new tests only): X9 plants the `project_account_settlements` row the register validator requires (as B4 will);
+  X8's last step asserts the late commit is `committed` and due at the next pass (RS-D draft 4 s2: "commits, and is due at the next pass").
+- Known limits: V3/V4 are store-level (two committed lease-born attempts) not a driven verifier run; C2's verifier refusal is OrchestrationOwner.active_for
+  (existing, not mocked here); `interrupted_unattended` register rows are planted (B6 writes them); replay (R3') is the D4 slice.
