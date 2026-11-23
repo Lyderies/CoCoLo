@@ -1028,6 +1028,7 @@
    "root:test_test_framework_guards.RunnerIntegrationTests.test_B5_missing_base_fails_and_advanced_PR_base_uses_merge_base",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_a_worker_exiting_zero_without_a_result_is_not_a_passing_check",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_owned_descendants_are_reaped_when_a_worker_finishes",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_r2_M7_real_runner_shards_and_import_failure",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_review_C13_unpatched_runner_fails_closed_without_trusted_base",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_runner_counts_structured_results_and_saves_only_current_job_seconds",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_worker_secrets_are_stripped_and_temporary_roots_are_isolated",
@@ -1039,6 +1040,7 @@
  },
  "TF-10": {
   "checks": [
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_decision_100_allowlist_applies_to_local_and_CI_workers",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_discovery_cannot_run_a_restricted_module_import_side_effect",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B7_discovery_filters_secrets",
    "root:test_test_framework_guards.WorkerTests.test_import_time_and_caught_denials_still_fail_the_worker",
@@ -1046,7 +1048,7 @@
    "root:test_test_framework_guards.WorkerTests.test_review_A9_discovery_hooks_keep_the_declared_guard"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-10",
-  "statement": "**TF-10 \u2014 Refuse real processes and git in unit/component.** Extend the existing audit guard, installed before\ntest-module imports, to both restricted layers. Deny subprocess starts, spawn, exec, fork/forkpty and system\nshell calls; a real git invocation is denied regardless of executable spelling or wrapper. Fakes/in-process\nfunctions remain allowed. Guard violations name layer, module, operation and test ID if known, and cannot be\nturned into green by catching the exception (worker records the violation and fails at completion). Witness:\ntry each available process API, git under an absolute path, an import-time spawn and a caught denial; verify\nno child-side marker is created. Run platform-specific API witnesses on their supported OS; the matrix must\ncontain evidence for both macOS and Linux."
+  "statement": "**TF-10 \u2014 Refuse real processes and git in unit/component.** Extend the existing audit guard, installed before\ntest-module imports, to both restricted layers. Deny subprocess starts, spawn, exec, fork/forkpty and system\nshell calls; a real git invocation is denied regardless of executable spelling or wrapper. Fakes/in-process\nfunctions remain allowed. Guard violations name layer, module, operation and test ID if known, and cannot be\nturned into green by catching the exception (worker records the violation and fails at completion). Witness:\ntry each available process API, git under an absolute path, an import-time spawn and a caught denial; verify\nno child-side marker is created. Run platform-specific API witnesses on their supported OS; the matrix must\ncontain evidence for both macOS and Linux.\n\nDecision 100 A (2026-11-23): discovery and test workers, locally and in CI, inherit only an explicit environment allowlist: PATH, HOME, temporary-directory variables, locale variables, COCOLO_TEST_* and named framework necessities. Every other variable is dropped, including GITHUB_TOKEN, AWS_SESSION_TOKEN and arbitrary *_PASSWORD variables. TF-10 witnesses must verify the actual worker boundary and permitted-variable controls."
  },
  "TF-11": {
   "checks": [
@@ -1099,6 +1101,9 @@
    "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
    "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework_r2.RoundTwo.test_M2_function_local_import_keeps_golden_provenance",
+   "root:test_test_framework_r2.RoundTwo.test_M2_package_import_keeps_golden_provenance",
+   "root:test_test_framework_r2.RoundTwo.test_M2_qualified_and_renamed_imports_retain_golden_provenance",
    "root:test_test_framework_review.ReviewTests.test_direct_golden_read_and_assert_bypass_is_rejected",
    "root:test_test_framework_review.ReviewTests.test_temporary_helper_output_and_unrelated_owner_files_are_not_repository_goldens"
   ],
@@ -1405,7 +1410,9 @@
    "root:test_test_framework_guards.RunnerIntegrationTests.test_a_worker_exiting_zero_without_a_result_is_not_a_passing_check",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_review_C9_executed_expected_failure_and_unexpected_success_do_not_pass_gate",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_skipped_only_requirement_is_not_a_passing_run",
-   "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error"
+   "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error",
+   "root:test_test_framework_r2.RoundTwo.test_M4_caller_cannot_accept_failure_bearing_combiner_result",
+   "root:test_test_framework_r2.RoundTwo.test_M4_real_gate_rejects_not_run_failed_and_incomplete_evidence"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-5",
   "statement": "**TF-5 \u2014 Coverage metadata is not a passing outcome.** A full gate reports a requirement passing only when\nevery registered required check has run and passed. Skipped, missing, errored, assertion-free lifecycle checks,\nand unexpected successes cannot establish a passing requirement. Partial runs report unselected requirements\nas not run, never green; global structural validation still runs, and the selected checks determine runtime\nresults. Expected failures also cannot count as a passing proof. Preserve `Phase.expect` assertion counting and requirement-level AND across all scenario parts,\nincluding G1\u2013G9 checks selected for every affected flow. Witness: two checks for one ID, one failing or\nmissing from a shard result, cannot aggregate to pass; skipped-only and expected-failure-only proofs are\nnot coverage. An assertion-free lifecycle proof and an unexpected success both fail the coverage gate. Assertion counting\nis not proof of semantic correctness: review against the statement and fault sensitivity are also required."
@@ -1443,6 +1450,8 @@
    "root:test_test_framework.ReviewLifecycleTests.test_C3_C13_cross_module_helper_is_found_by_source_path",
    "root:test_test_framework.ReviewLifecycleTests.test_C9_assertion_free_lifecycle_check_fails_the_real_gate",
    "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards",
+   "root:test_test_framework_r2.RoundTwo.test_M1_unrelated_source_cannot_resolve_a_specific_dependency",
+   "root:test_test_framework_r2.RoundTwo.test_N1_same_basename_dependencies_both_contribute",
    "root:test_test_framework_review.ReviewTests.test_fixture_and_transitive_helper_changes_change_dependency_fingerprint",
    "root:test_test_framework_review.ReviewTests.test_missing_trusted_base_fails_closed_without_using_candidate_head"
   ],
@@ -1466,7 +1475,8 @@
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
-   "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards"
+   "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards",
+   "root:test_test_framework_r2.RoundTwo.test_M3_no_report_or_empty_plan_cannot_authorize_retirement"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-8",
   "statement": "**TF-8 \u2014 Enforce module budgets, not worker-fragment budgets.** For each module sum actual elapsed seconds\nof every executed fragment (including import/setup/body/teardown), compare with the layer budget above, and\nname EVERY over-budget module with stage, layer, measured seconds, limit and fragment count. Apply\nowner-selected option A: generate and commit `scripts/test-budget-debt.json` from a1d25560's recorded\nmodule job-seconds, recording each module and its baseline ceiling. Every run names EVERY remaining debt\nentry as a warning (including unselected modules, explicitly marked not measured). A debt module fails if\nits complete measured total exceeds its unchanged recorded ceiling. A complete measurement at or below\nits layer budget requires removal from the debt file; afterward any excess over that budget fails. The\nfile may only shrink: no added/restored modules, increased ceilings, or baseline replacement. Validate\nagainst the immutable generated baseline and the explicit trusted review base. Partial shards cannot\nretire debt or certify a complete module. All new modules and modules absent from the debt file fail\nabove their layer budget. Do not bail out after the first offender.\nSeparate shards produce mergeable records; the combined gate enforces the aggregate module budget and\ndebt ceiling. A shard labels its measurement partial. Witness: two 20s component fragments fail its 30s\nbudget unless authorized baseline debt covers 40s; equality passes and a value just above fails; two\noffenders are both printed. A baseline debt warning appears even when unselected; ceiling regression,\nrestored debt, edited ceiling and debt retained after a complete under-budget result are rejected. Use an\ninjected clock for these tests, not real sleeps. Overall wall time has no five-minute failure threshold."
@@ -1502,12 +1512,16 @@
    "root:test_test_framework_guards.RunnerIntegrationTests.test_a_worker_exiting_zero_without_a_result_is_not_a_passing_check",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_owned_descendants_are_reaped_when_a_worker_finishes",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_preflight_failure_writes_zero_job_seconds_and_discovery_time",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_r2_M7_real_runner_shards_and_import_failure",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B3_runner_reaps_disabled_watchdog_with_diagnostics",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B4_preflight_retains_default_run_record",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B8_preflight_preserves_estimates",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_runner_counts_structured_results_and_saves_only_current_job_seconds",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_worker_timeout_retains_measurements_and_names_its_module",
-   "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error"
+   "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error",
+   "root:test_test_framework_r2.RoundTwo.test_M3_no_report_or_empty_plan_cannot_authorize_retirement",
+   "root:test_test_framework_r2.RoundTwo.test_M4_caller_cannot_accept_failure_bearing_combiner_result",
+   "root:test_test_framework_r2.RoundTwo.test_M4_real_gate_rejects_not_run_failed_and_incomplete_evidence"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-9",
   "statement": "**TF-9 \u2014 Preserve honest timing and timeout evidence.** Save per-worker elapsed values and run identity,\nselected tests, actual jobs, platform/interpreter, completion/timeout status and module totals. Sum only\ncurrent-run workers for job-seconds (never stale seed timings, module totals plus per-test estimates, or CPU).\nKeep wall time separate; report discovery and preflight seconds separately from worker job-seconds,\nincluding on preflight failure. Always write available measurements on test failure and timeout. Name timed-out\nworkers and keep their diagnostic log. The scheduler's historical estimates are not measurements. Witness:\nseed timings with obsolete entries, fail one worker and time out another; current totals and diagnostics remain\ncorrect. Hard worker timeout is a safety bound separate from the module's budget. Overall elapsed time is\nreported without a five-minute failure threshold."

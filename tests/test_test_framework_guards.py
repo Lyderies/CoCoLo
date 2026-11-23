@@ -28,7 +28,7 @@ class WorkerTests(unittest.TestCase):
                                        cwd=root, env=environment, capture_output=True, text=True, timeout=15)
             result = json.loads((root / 'results.json').read_text()) if (root / 'results.json').exists() else None
             if result is not None:
-                result['markers'] = {name: (root / name).exists() for name in ('child', 'reached', 'fixture.sock')}
+                result['markers'] = {name: (root / name).exists() for name in ('child', 'reached', 'fixture.sock', 'async-reached', 'elapsed-ok')}
             return completed.returncode, completed.stdout + completed.stderr, result
 
     @requirements('TF-10', why_not_scenario='Verify process apis are denied in unit and component before os effects using isolated framework fixtures.')
@@ -192,9 +192,7 @@ class WorkerTests(unittest.TestCase):
                   "socket.create_connection(('127.0.0.1',9))", "socket.create_server(('127.0.0.1',0))",
                   "socket.fromfd(builtins.TF_SOCKET.fileno(),socket.AF_UNIX,socket.SOCK_STREAM)",
                   "socket.gethostbyname('localhost')", "socket.gethostbyaddr('127.0.0.1')",
-                  "socket.getnameinfo(('127.0.0.1',9),0)",
-                  "asyncio.run(asyncio.open_connection('127.0.0.1',9))",
-                  "asyncio.run(asyncio.start_server(lambda a,b: None,'127.0.0.1',0))"]
+                  "socket.getnameinfo(('127.0.0.1',9),0)"]
         for layer in ('unit', 'component'):
             for body in bodies:
                 with self.subTest(layer=layer, body=body):
@@ -202,6 +200,15 @@ class WorkerTests(unittest.TestCase):
                     self.assertNotEqual(0, code, output)
                     self.assertTrue(result['violations'])
                     self.assertFalse(result['markers']['fixture.sock'])
+            for api in ("asyncio.open_connection('127.0.0.1',9)", "asyncio.start_server(lambda a,b: None,'127.0.0.1',0)"):
+                loop = 'import asyncio,builtins; builtins.TF_LOOP=asyncio.new_event_loop()'
+                body = ("import asyncio,builtins\nfrom pathlib import Path\nasync def exercise():\n    Path('async-reached').write_text('reached')\n    await " + api +
+                        "\ntry:\n    builtins.TF_LOOP.run_until_complete(exercise())\nexcept Exception:\n    pass\nfinally:\n    builtins.TF_LOOP.close()")
+                code, output, result = self.probe(body, layer, bootstrap=loop)
+                self.assertTrue(result['markers']['async-reached'], 'M6 coroutine was never reached: ' + api)
+                self.assertNotEqual(0, code, 'M6 prohibited asyncio API completed: ' + api)
+                self.assertTrue(result['violations'], 'M6 expected network denial: ' + api)
+                self.assertFalse(any('socketpair' in v['operation'] for v in result['violations']), 'M6 loop construction confounded the API probe')
             code, output, result = self.probe('import io\nfake=io.BytesIO()\nfake.write(b"ok")\nself.assertEqual(b"ok", fake.getvalue())', layer)
             self.assertEqual(0, code, output)
             code, output, result = self.probe('pass', layer, before='import socket; socket.socket()')
@@ -243,7 +250,7 @@ class WorkerTests(unittest.TestCase):
 
 
 class RunnerIntegrationTests(unittest.TestCase):
-    def run_fixture(self, body='self.assertEqual(2, 1 + 1)', tagged=True, timeout='600', extra_module=False, malformed=False, layer='scenario', extra_args=(), siblings=False, module_import='', interrupt=False, trusted=True):
+    def run_fixture(self, body='self.assertEqual(2, 1 + 1)', tagged=True, timeout='600', extra_module=False, malformed=False, layer='scenario', extra_args=(), siblings=False, module_import='', interrupt=False, trusted=True, fixture_source=None, fixture_checks=None, estimates=None):
         with tempfile.TemporaryDirectory(prefix='tf-run-') as folder:
             root = Path(folder)
             (root / 'tests').mkdir()
@@ -252,6 +259,8 @@ class RunnerIntegrationTests(unittest.TestCase):
             (root / 'tests/test_probe.py').write_text(
                 module_import + "\nimport unittest\nfrom test_framework import requirements\nclass Probe(unittest.TestCase):\n    " + tag +
                 "def test_value(self):\n" + textwrap.indent(body, '        ') + '\n')
+            if fixture_source is not None:
+                (root / 'tests/test_probe.py').write_text(fixture_source)
             stages = {'root:test_probe': 'integration'}
             layers = {'root:test_probe': layer}
             if extra_module:
@@ -265,9 +274,11 @@ class RunnerIntegrationTests(unittest.TestCase):
                 layers['root:test_sibling'] = layer
                 catalogue['TF-1']['checks'].append('root:test_sibling.Probe.test_value')
                 extra_args = (*extra_args, '--module', 'root:test_sibling')
+            if fixture_checks is not None:
+                catalogue['TF-1']['checks'] = fixture_checks
             (root / 'source.json').write_text(json.dumps({'requirements': [{'id': 'TF-1', 'statement': 'Retain isolated worker execution.'}]}))
             for name, data in [('test-legacy-dependencies.json', {}), ('test-stages.json', stages), ('test-layers.json', layers),
-                               ('test-requirements.json', catalogue), ('test-timings.json', {'obsolete': 99999}),
+                               ('test-requirements.json', catalogue), ('test-timings.json', estimates or {'obsolete': 99999}),
                                ('test-budget-debt.json', {'baseline': 'fixture', 'modules': {}}),
                                ('test-legacy.json', {'baseline': 'fixture', 'tests': {}}),
                                ('test-legacy-ceiling.json', {'baseline': 'fixture', 'tests': {}})]:
@@ -379,10 +390,15 @@ class RunnerIntegrationTests(unittest.TestCase):
                 f"subprocess.Popen([sys.executable,'-c',{child!r}])\n"
                 "end=time.monotonic()+2\nwhile not Path('child-ready').exists() and time.monotonic()<end:\n    time.sleep(.01)\n"
                 "self.assertTrue(Path('child-ready').exists())")
+        import time
+        began = time.monotonic()
         code, output, report = self.run_fixture(body)
+        self.assertLess(time.monotonic() - began, 5., 'M7 normal descendant cleanup exceeded bound')
         self.assertEqual(0, code, output)
         self.assertTrue(report['fixture_child_stopped'], 'worker completion must reap owned descendants')
+        began = time.monotonic()
         code, output, report = self.run_fixture(body + '\nimport time; time.sleep(10)', interrupt=True)
+        self.assertLess(time.monotonic() - began, 5., 'M7 interrupted descendant cleanup exceeded bound')
         self.assertNotEqual(0, code, output)
         self.assertTrue(report['fixture_child_stopped'], 'runner interrupt must reap owned descendants')
         self.assertIn('KeyboardInterrupt', ' '.join(report['metadata_errors']))
@@ -448,7 +464,11 @@ class RunnerIntegrationTests(unittest.TestCase):
             code, output, result = WorkerTests().probe('pass', 'component', before)
             from test_framework import coverage
             statuses = result['outcomes']
-            self.assertNotEqual('passed', coverage({'TF-5': {'checks': ['test_probe.Expected.test_expected']}}, statuses)['TF-5'])
+            name = 'test_probe.Expected.test_expected'
+            self.assertIn(name, statuses, 'M8 expected case absent from worker outcomes')
+            expected = 'expected_failure' if assertion == 'self.assertEqual(1, 2)' else 'unexpected_success'
+            self.assertEqual(expected, statuses[name], 'M8 wrong executed outcome')
+            self.assertNotEqual('passed', coverage({'TF-5': {'checks': [name]}}, statuses)['TF-5'])
 
     @requirements('TF-1', why_not_scenario='Verify review C13 unpatched runner fails closed without trusted base using isolated framework fixtures.')
     def test_review_C13_unpatched_runner_fails_closed_without_trusted_base(self):
@@ -494,11 +514,13 @@ class RunnerIntegrationTests(unittest.TestCase):
         code, output, _ = WorkerTests().probe(body, 'unit', bootstrap=bootstrap)
         self.assertEqual(0, code, output)
         bootstrap = 'import threading,time,builtins; real_sleep=time.sleep; builtins.LIVE=threading.Thread(target=lambda: real_sleep(10),daemon=True); builtins.LIVE.start()'
-        code, output, result = WorkerTests().probe('import builtins,time\nstarted=time.monotonic()\ntry:\n    builtins.LIVE.join(1)\nexcept Exception:\n    pass\nself.assertLess(time.monotonic()-started,.5)', 'unit', bootstrap=bootstrap)
+        code, output, result = WorkerTests().probe('import builtins,time\nstarted=time.monotonic()\ntry:\n    builtins.LIVE.join(1)\nexcept Exception:\n    pass\nself.assertLess(time.monotonic()-started,.5)\nfrom pathlib import Path\nPath("elapsed-ok").write_text("passed")', 'unit', bootstrap=bootstrap)
         self.assertNotEqual(0, code, output); self.assertTrue(result['violations'])
+        self.assertTrue(result['markers']['elapsed-ok'], 'N3 join elapsed assertion did not complete')
         if hasattr(__import__('select'), 'poll'):
-            code, output, result = WorkerTests().probe('import select,time\nstarted=time.monotonic()\ntry:\n    select.poll().poll(1000)\nexcept Exception:\n    pass\nself.assertLess(time.monotonic()-started,.5)', 'unit')
+            code, output, result = WorkerTests().probe('import select,time\nstarted=time.monotonic()\ntry:\n    select.poll().poll(1000)\nexcept Exception:\n    pass\nself.assertLess(time.monotonic()-started,.5)\nfrom pathlib import Path\nPath("elapsed-ok").write_text("passed")', 'unit')
             self.assertNotEqual(0, code, output); self.assertTrue(result['violations'])
+            self.assertTrue(result['markers']['elapsed-ok'], 'N3 poll elapsed assertion did not complete')
         else:
             print('not_run: ' + sys.platform + ' lacks select.poll')
 
@@ -513,6 +535,42 @@ class RunnerIntegrationTests(unittest.TestCase):
             self.assertNotEqual(0, worker['returncode'])
             self.assertTrue(Path(worker['log']).exists())
             self.assertTrue(worker['log_tail'])
+
+
+    @requirements('TF-1', 'TF-9', why_not_scenario='Real worker shards must execute exactly the inherited and generated checks selected by load_tests.')
+    def test_r2_M7_real_runner_shards_and_import_failure(self):
+        source = "import unittest\nfrom test_framework import requirements\n@requirements('TF-1', why_not_scenario='discovery fixture')\nclass Parent(unittest.TestCase):\n    def test_inherited(self): self.assertEqual(1,1)\nclass Child(Parent): pass\n@requirements('TF-1', why_not_scenario='generated fixture')\nclass Generated(unittest.TestCase): pass\nsetattr(Generated,'test_generated',lambda self: self.assertEqual(2,2))\ndef load_tests(loader, tests, pattern):\n    return unittest.TestSuite([Child('test_inherited'),Generated('test_generated')])\n"
+        expected = {'root:test_probe.Child.test_inherited','root:test_probe.Generated.test_generated'}
+        runs=[]
+        for repeat in range(2):
+            observed=[]; partitions=[]
+            for part in ('1/2','2/2'):
+                code, output, report = self.run_fixture(fixture_source=source, fixture_checks=sorted(expected), estimates={'root:test_probe':40}, extra_args=('--shard',part))
+                self.assertEqual(0, code, output)
+                outcomes={name:status for w in report['workers'] for name,status in w['outcomes'].items()}
+                self.assertTrue(outcomes, 'M7 shard did not execute a worker')
+                self.assertEqual({'passed'}, set(outcomes.values()))
+                observed.extend(outcomes); partitions.append(sorted(outcomes))
+            self.assertEqual(expected,set(observed), 'M7 shard union differs from discovered checks')
+            self.assertEqual(len(expected),len(observed), 'M7 duplicate shard execution')
+            runs.append(partitions)
+        self.assertEqual(runs[0],runs[1], 'M7 shard assignment is unstable')
+        code, output, report = self.run_fixture(module_import='raise ImportError("M7 import boundary")')
+        self.assertNotEqual(0,code)
+        self.assertIn('root:test_probe',output)
+        self.assertIn('M7 import boundary', output, 'M7 import failed for the wrong reason')
+        self.assertTrue(any('test import failed' in error for error in report['metadata_errors']))
+
+    @requirements('TF-10', why_not_scenario='Decision 100 requires the actual discovery and worker processes to receive only permitted variables.')
+    def test_decision_100_allowlist_applies_to_local_and_CI_workers(self):
+        from unittest.mock import patch
+        names=('GITHUB_TOKEN','AWS_SESSION_TOKEN','DATABASE_PASSWORD','UNLISTED_PLAIN_VALUE')
+        code_text = "import os\nfor key in " + repr(names) + ":\n    assert key not in os.environ, 'D100 leaked ' + key\nassert os.environ['COCOLO_TEST_ALLOWED'] == 'yes'\nassert os.environ.get('PATH')\nassert os.environ.get('HOME')\n"
+        for ci in ('','true'):
+            with patch.dict(os.environ,{**dict.fromkeys(names,'synthetic'), 'COCOLO_TEST_ALLOWED':'yes', 'CI':ci}):
+                code, output, report=self.run_fixture(module_import=code_text,body=code_text+'self.assertTrue(True)')
+            self.assertEqual(0,code,output)
+            self.assertEqual(1,report['workers'][0]['tests'])
 
 
 if __name__ == '__main__':

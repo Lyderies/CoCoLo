@@ -68,9 +68,18 @@ _RUNNER = (
 )
 
 
+WORKER_ENVIRONMENT = frozenset({
+    'PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LANGUAGE', 'TZ',
+    'LC_ALL', 'LC_CTYPE', 'LC_COLLATE', 'LC_MESSAGES', 'LC_MONETARY', 'LC_NUMERIC', 'LC_TIME',
+    'PYTHONIOENCODING', 'PYTHONUTF8', 'PYTHONHASHSEED', 'PYTHONDONTWRITEBYTECODE',
+    'COCOLO_WORKER_TIMEOUT', 'HYPOTHESIS_STORAGE_DIRECTORY',
+})
+
+
 def worker_environment():
-    return {k: v for k, v in os.environ.items()
-            if not any(marker in k.upper() for marker in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
+    """Decision 100: shared local/CI discovery and worker allowlist."""
+    return {key: value for key, value in os.environ.items()
+            if key in WORKER_ENVIRONMENT or key.startswith('COCOLO_TEST_')}
 
 
 def run_record_path(save=None):
@@ -193,7 +202,7 @@ def legacy_versions(root, current, ceiling):
         dep_commits = git('log', '--reverse', '--format=%H', 'HEAD', '--', 'scripts/test-legacy-dependencies.json').split()
         if not dep_commits or framework.decode_json((root / 'scripts/test-legacy-dependencies.json').read_text()) != version(dep_commits[0], 'test-legacy-dependencies.json'):
             errors.append('legacy fixture/helper baseline changed or is uncommitted')
-        for value_name in ('test-legacy-values.json', 'test-legacy-portable-values.json'):
+        for value_name in ('test-legacy-values.json', 'test-legacy-portable-values.json', 'test-legacy-bound-values.json'):
             value_commits = git('log', '--reverse', '--format=%H', 'HEAD', '--', 'scripts/' + value_name).split()
             if not value_commits or framework.decode_json((root / 'scripts' / value_name).read_text()) != version(value_commits[0], value_name):
                 errors.append(value_name + ': legacy constants/source baseline changed or is uncommitted')
@@ -300,7 +309,7 @@ def metadata():
         suite, name = module.split(':', 1)
         source = SUITES[suite] / (('tests/' if suite == 'root' else '') + name.replace('.', '/') + '.py')
         if source.exists():
-            errors += [module + ': ' + error for error in framework.golden_bypasses(source.read_text())]
+            errors += [module + ': ' + error for error in framework.golden_bypasses(source.read_text(), filename=source)]
     dependency_file = ROOT / 'scripts/test-legacy-dependencies.json'
     if dependency_file.exists():
         dependencies = framework.decode_json(dependency_file.read_text())
@@ -310,7 +319,7 @@ def metadata():
                     errors.append(name + ': legacy fixture/helper dependency changed; migrate its requirement proof')
     else:
         errors.append('missing legacy fixture/helper dependency baseline')
-    value_file = ROOT / 'scripts/test-legacy-portable-values.json'
+    value_file = ROOT / 'scripts/test-legacy-bound-values.json'
     values = framework.decode_json(value_file.read_text()) if value_file.exists() else {}
     errors += framework.validate_legacy_values({key: rec for cases in discovered.values() for key, rec in cases.items()}, legacy, values)
     entrypoints = ROOT / 'scripts/test-entrypoints.json'
@@ -602,7 +611,7 @@ def main(argv: list[str] | None = None) -> int:
             print(str(error), file=sys.stderr)
             return 1
         print(json.dumps(report, indent=1))
-        return 0
+        return int(not report.get('requirements') or any(value != 'passed' for value in report['requirements'].values()))
     if args.combine_timings:
         report = framework.combine_measurements([framework.decode_json(path.read_text()) for path in args.combine_timings])
         print(json.dumps(report, indent=1))
