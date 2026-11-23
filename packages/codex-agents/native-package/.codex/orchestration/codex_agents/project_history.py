@@ -954,8 +954,11 @@ class ProjectHistory:
 
     def _obligation_state(self, value):
         """D2 (SH-4): the state of a lease-born reservation's RS-B obligation row, or None for a reservation that has
-        none to wait for: the test-only `reserve_result` path (no lease, no context) and a missing row keep the
-        deadline rules they always had."""
+        none to wait for: the test-only `reserve_result` path (no lease, no context), which keeps the deadline rules
+        it always had (no product code reaches it). A lease-born reserved row never lacks its hold (taken in the
+        claim's own transaction; `register_consistent` refuses a store without it), but if one does, recovery is
+        'missing': kept and charged, never retired by a deadline, and reported by the register validator for repair.
+        The expire selector matches this: it selects a lease-born reserved row only for a released obligation."""
         if value.state != "reserved" or self._connection.execute(
                 "SELECT 1 FROM result_leases WHERE project_id=? AND claim_id=?",
                 (self.project_id, value.binding.claim_id)).fetchone() is None:
@@ -963,7 +966,7 @@ class ProjectHistory:
         row = self._connection.execute(
             "SELECT state FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=?",
             (self.project_id, value.binding.claim_id)).fetchone()
-        return None if row is None else row[0]
+        return "missing" if row is None else row[0]
 
     def _retire_due(self, value, now: int) -> bool:
         """D2 (SH-4): whether a reservation is to be retired. No deadline before the commit retires anything: a

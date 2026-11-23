@@ -334,8 +334,10 @@ def finish_quietly(history, run_handle: str, attempt: int) -> None:
 
 
 def begin_retirement(history, binding: AttemptBinding, kind: str, evidence=None) -> None:
-    """In `_retire_result`'s `retiring` transaction: custody released (`retention` or `orchestration_closed`) and
-    no reader gets the context from here on."""
+    """In `_retire_result`'s `retiring` transaction: custody released with `kind` (`retention`,
+    `orchestration_closed`, or `lost_with_reservation` for a reserved row whose obligation RS-B released lost,
+    crashed or unacknowledged; that kind carries `evidence`, the settlement cause) and no reader gets the context
+    from here on."""
     row = _row(history, binding.run_handle, binding.attempt)
     if row is None or row["state"] in ("ended", "expired"):
         return

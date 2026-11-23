@@ -27,13 +27,18 @@ Owner numbers (decision 90): 90.3 A 256 MiB contexts, 90.4 A 1 h verifier margin
 | RS-4 (project store) | no deadline authorizes loss of a body whose obligation is held | D2', X8 | same as D2' |
 | 90.3 | 256 MiB live-context budget | already `MAX_LIVE_CONTEXT_BYTES` (PRC:31); covered by D1's LeaseContextTests O5 | none |
 | 90.5 | 7-day retention | service value project_service.py:85 (7 * 86_400_000); tests pass it explicitly | none |
-| SH-7 | both validators stay consistent | every X/D test ends with `custody_consistent` and `register_consistent` | project_holds_schema.py:225-262 unchanged |
+| SH-7 | both validators stay consistent | the lease-backed X/D/V tests and the V3/V4/C3 tests end with `custody_consistent` and `register_consistent` (`consistent()`); C1, C2 and V2 do not | project_holds_schema.py:225-262 unchanged |
 
 ## Scope decision (reported)
-SH-4's "no pre-commit deadline retires" is applied to reservations born from a lease (`result_leases` row for the claim: the real
-driver path). The test-only legacy path `reserve_result` (no lease, no context) keeps today's deadline rules, because ~10 existing
-assertions in test_project_results.py pin them (e.g. `test_expired_reservation_still_blocks_metadata_identity_reuse`: reserve, now=61 000,
-`expire_results() == 1`; prepared-then-expired commit refused `history_result_expired`). Editing those needs owner approval.
+SH-4's "no pre-commit deadline retires" is applied to reservations born from a lease (a `result_leases` row for the claim).
+The product path is always lease-born: the driver calls `prepare_lease` (project_driver.py), never the non-lease
+`ResultPersistence.prepare(binding, handle, hard_deadline_at_ms=...)`, whose branch (`reserve_result`, no lease, no context)
+has no product caller. `NativeProductCallerTests` (test_deadlines_retention.py) pins that by AST over the native package: only
+tests may call it. That branch keeps today's deadline rules because ~10 existing assertions in test_project_results.py pin
+them (e.g. `test_expired_reservation_still_blocks_metadata_identity_reuse`: reserve, now=61 000, `expire_results() == 1`);
+editing those needs owner approval. A lease-born reserved row never lacks its obligation hold (taken in the claim's own
+transaction; `register_consistent` refuses a store without it). If one did, `_obligation_state` returns `missing`: kept and
+charged, never retired by a deadline, and reported by the register validator; the expire selector agrees.
 
 ## Not in D2 (later slices)
 Replay (RS-D R3', D4 slice), arbitration (B4), `record_account_settlement` (B4: a `lost` release is planted directly in tests),
