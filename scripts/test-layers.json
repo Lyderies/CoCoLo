@@ -293,6 +293,7 @@
  "root:test_measure_test_behaviour": "unit",
  "root:test_measure_test_behaviour_probe": "scenario",
  "root:test_owner_tool_bounds": "scenario",
+ "root:test_release_bookkeeping": "scenario",
  "root:test_setup_sh": "scenario",
  "root:test_setup_straight": "scenario",
  "root:test_setup_update": "scenario",

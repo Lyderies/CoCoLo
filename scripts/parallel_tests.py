@@ -359,8 +359,13 @@ def metadata():
                     if bindings != original_bindings or bindings['source_revision'] != framework.RELEASE_BASE:
                         raise ValueError('immutable release source bindings changed')
                     release = {**release, 'tests': {**release['tests'], **bindings['tests']}}
+            from rebind_release_bookkeeping import checked_bindings, apply_fingerprints
+            bookkeeping = checked_bindings(ROOT)
+            if bookkeeping:
+                release = {**release, 'tests': {**release['tests'], **bookkeeping}}
             legacy, ceiling, previous = framework.release_legacy(legacy, ceiling, previous, release,
                 release_current, release_ceiling, release_previous)
+            apply_fingerprints((legacy, ceiling, previous), bookkeeping)
         except (subprocess.CalledProcessError, ValueError, KeyError, IndexError) as error:
             errors.append('cannot verify release legacy baseline: '+str(error))
     if 'legacy list requires an explicit trusted --base' in errors:

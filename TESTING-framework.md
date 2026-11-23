@@ -30,3 +30,29 @@ A full gate cannot pass missing or unexecuted required evidence. Entry-point lin
 
 Owner's next checkpoint is after merge-library step 3. Assertion migrations are in ASSERTIONS-test-framework.md;
 requirements and per-step evidence are in REQUIREMENTS-test-framework.md and REPORT-test-framework.md.
+
+## Routine previous-release catalogue bookkeeping (TF-25)
+
+Keep the installed previous release in `packages/claude-agents/previous-releases.json` when advancing the product version. Before editing, record the trusted pre-bookkeeping commit (`git rev-parse HEAD`) and the trusted source commit whose `native-package/VERSION` names the previous installed release.
+
+Only these changes qualify for automatic rebinding:
+
+1. Append one record to `packages/claude-agents/previous-releases.json`: its release, source commit, package version, compiled files and digest must exactly match that trusted source. Preserve every older record and schema. Use the existing canonical JSON formatting (indent 1, sorted keys, final newline).
+2. In `packages/claude-agents/tests/test_previous_release_catalogue.py`, raise only the two `len(released_bundles(self.source))` expectations from N to N+1. Extend the release-list comment on the first assertion, including the matching trailing same-bundle count. Keep the 2 MiB boundaries, all refusals and all other text unchanged.
+3. In `packages/claude-agents/src/claude_agents/packaging.py`, extend only the existing digest's annotation with `and VERSION (source COMMIT8)`, turning its previous final `and` into a comma. A new executable pin or changed bundle semantics require normal proof review; this command does not authorize them.
+
+Use the prepared hash-pinned interpreter to verify and create a **new** immutable binding file:
+
+```
+python -B scripts/rebind_release_bookkeeping.py --from <trusted-pre-bookkeeping-commit> --source <trusted-previous-release-source> --previous-release <previous-installed-version>
+```
+
+The initial 0.8.49 repair used `--from c75eba51 --source b531844030fa619c1f62ddd6c092ebc2ea4fca38 --previous-release 0.8.49`. It creates `scripts/test-release-bindings/0.8.49.json`; never overwrite it or any older snapshot. For the next release, use its own prior commit/source/version and commit the new release-named file together with the three bookkeeping files. The command rejects unrelated edits and stale pre-bump proofs. Before-source hashes must match the last admitted state, including across worktrees; merely naming another Git commit cannot authorize changes to older records.
+
+Run the affected modules at default job count, then the authorized full run with the same trusted base:
+
+```
+python -B scripts/parallel_tests.py --base b531844030fa619c1f62ddd6c092ebc2ea4fca38 --module root:test_release_bookkeeping --module claude:tests.test_previous_release_catalogue --save-timings /tmp/cocolo-release-bookkeeping.json
+```
+
+The runner checks every binding's immutable introduction and permitted source transition, then verifies the current files and test fingerprints. Retired grandfather entries stay retired. The binding is a narrow permission for the recorded bookkeeping transition, not a waiver for later edits or changed helpers.
