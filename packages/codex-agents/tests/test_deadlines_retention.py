@@ -14,6 +14,7 @@ from unittest import mock
 import tests.support  # noqa: F401
 from tests import support
 from tests import test_record_context as rc
+from tests import test_project_runtime as project_runtime_tests
 from tests import test_result_leases as leases
 from tests.learning_support import assignment
 from tests.test_project_history import binding
@@ -228,6 +229,11 @@ class PreCommitDeadlineTests(LeaseBackedFixture):
 
     def test_a_reserved_row_that_somehow_lacks_its_hold_is_kept_and_reported_by_both_paths_never_deleted(self):
         self.bound(1)
+        body, content = self.fixture.payload(1)
+        with mock.patch.object(self.store, '_insert_terminal', side_effect=RuntimeError('metadata cut')):
+            with self.assertRaises(RuntimeError):
+                self.store.commit_result(content, binding(1), assignment(), body)  # a prepared body is on disk
+        self.assertEqual(1, len(self.fixture.files()))
         self.drop_hold()
         reserved = self.reservation()
         self.now = reserved.reserved_until_ms + 10 * 3_600_000
@@ -245,7 +251,12 @@ class PreCommitDeadlineTests(LeaseBackedFixture):
 
 @__import__('test_framework').requirements('RS-D-D2', why_not_scenario='D2 checks real project stores in temporary folders (leases, contexts, holds, files); the clock, close and settlement controls expose the deadline boundary.')
 class NativeProductCallerTests(unittest.TestCase):
-    """The scope note of measurements/d2/requirements.md rests on this: only tests reach the non-lease `prepare`."""
+    """The scope note of measurements/d2/requirements.md rests on this: only tests reach the non-lease `prepare`.
+
+    The runtime test below is the enforcement (a service lane refuses it). The AST scans are a regression gate only:
+    they read `codex_agents/*.py` for direct `.prepare(..., hard_deadline_at_ms=...)` and `.reserve_result(...)` calls
+    and do not cover aliases, `**kwargs` spellings, `getattr`, or code outside this package.
+    """
 
     PACKAGE = support.ORCHESTRATION_ROOT / 'codex_agents'
 
@@ -265,6 +276,20 @@ class NativeProductCallerTests(unittest.TestCase):
         self.assertEqual({'result_persistence.py'}, {name for name, _ in self.calls('reserve_result')})
         self.assertEqual([('project_driver.py', mock.ANY)], [c for c in self.calls('prepare_lease')
                                                               if c[0] == 'project_driver.py'])
+
+    def test_a_product_runtime_lane_refuses_the_non_lease_prepare_at_runtime(self):
+        # The runtime boundary: ProjectRuntime builds the lane without the local-reference allowance, so the
+        # non-lease reservation cannot be reached from a service, whatever the caller spells.
+        base = project_runtime_tests.ProjectRuntimeTests(methodName='setUp')
+        base.setUp()
+        self.addCleanup(base.doCleanups)
+        runtime = base.start()
+        for call in (lambda: runtime.persistence.prepare(binding(1), object(), hard_deadline_at_ms=2000),
+                     lambda: runtime.persistence.prepare(binding(1), object(), **{'hard_deadline_at_ms': 2000}),
+                     lambda: getattr(runtime.persistence, 'prepare')(binding(1), object(), hard_deadline_at_ms=2000)):
+            with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
+                call()
+        runtime.request_close()
 
     def test_only_result_persistence_defines_the_no_lease_branch(self):
         text = (self.PACKAGE / 'result_persistence.py').read_text()
@@ -570,42 +595,74 @@ class OrchestrationCloseTests(rc.RecordedContextFixture):
             self.store.admit_host_result(self.reference, assignment=original.assignment, task=original.task,
                                          route=original.route, client_capability=original.client_capability,
                                          before_commit=expire)
-        self.assertNotEqual('recorded', rc.context_row(self.store, *self.attempt)[0])
+        self.assertEqual('expired', rc.context_row(self.store, *self.attempt)[0])
+        self.assertEqual('expired', self.store.result_reservation(self.binding).state)
+        self.assertIsNone(rc.context_row(self.store, *self.attempt)[4])  # no outcome association was written
         self.consistent()
 
-    def test_C3_a_retiring_row_refuses_body_context_and_admission_whether_expiry_or_a_close_started_it(self):
-        digest = self.recorded()
-        original = self.store.stored_result_context(self.binding, host_class=self.host_class)
-        with self.closed(), mock.patch.object(project_history.os, 'unlink', side_effect=OSError('stop before unlink')):
+    def start_retirement(self, how):
+        """Leave the row `retiring`: the close or the expiry starts it and the unlink fails (patch stays active)."""
+        patch = mock.patch.object(project_history.os, 'unlink', side_effect=OSError('stop before unlink'))
+        patch.start()
+        self.addCleanup(patch.stop)
+        if how == 'close':
+            with self.closed(), self.assertRaises(HistoryError):
+                self.store.expire_results()
+            self.assertEqual(('released', 'orchestration_closed'), rc.custody(self.store, *self.attempt)[:2])
+        else:
+            self.fixture.base.stamp = self.retained_until()
             with self.assertRaises(HistoryError):
-                self.store.expire_results()  # the close starts the retirement; the unlink fails: left `retiring`
+                self.store.expire_results()
+            self.assertEqual(('released', 'retention'), rc.custody(self.store, *self.attempt)[:2])
         self.assertEqual('retiring', self.store._connection.execute(
             "SELECT state FROM result_reservations WHERE run_handle=?", (self.binding.run_handle,)).fetchone()[0])
         self.assertEqual('retiring', rc.context_row(self.store, *self.attempt)[0])
-        self.assertEqual(('released', 'orchestration_closed'), rc.custody(self.store, *self.attempt)[:2])
-        with self.assertRaisesRegex(HistoryError, 'history_result_expired'):
+
+    def assert_still_retiring(self):
+        self.assertEqual('retiring', self.store._connection.execute(
+            "SELECT state FROM result_reservations WHERE run_handle=?", (self.binding.run_handle,)).fetchone()[0])
+        self.assertEqual('retiring', rc.context_row(self.store, *self.attempt)[0])
+
+    def check_retiring_body_and_context(self, how):
+        digest = self.recorded()
+        self.start_retirement(how)
+        # Refused, no bytes: fail-closed `expired`, or `unavailable` when the probe's own retirement retry meets the
+        # still-failing unlink.
+        with self.assertRaisesRegex(HistoryError, 'history_result_expired|history_unavailable'):
             self.store.read_result(self.binding)
-        with self.assertRaisesRegex(HistoryError, 'history_result_expired'):
+        self.assert_still_retiring()  # the failed unlink is still active: the probe retired nothing
+        with self.assertRaisesRegex(HistoryError, 'history_result_expired|history_unavailable'):
             self.store.stored_result_context(self.binding, host_class=self.host_class)
-        with self.assertRaisesRegex(HistoryError, 'history_not_authorized|history_result_expired'):
+        self.assert_still_retiring()
+        with self.assertRaisesRegex(HistoryError, 'history_not_authorized|history_result_expired|history_unavailable'):
             self.store.stored_worker_context(digest, host_class=self.host_class)
+        self.assert_still_retiring()
         self.consistent()
 
-    def test_C3_an_admission_of_a_retiring_unrecorded_row_is_refused_and_records_nothing(self):
+    def check_retiring_admission(self, how):
         self.open_and_consume()
         self.publish()
         original = self.store.stored_result_context(self.binding, host_class=self.host_class)
-        with self.closed(), mock.patch.object(project_history.os, 'unlink', side_effect=OSError('stop before unlink')):
-            with self.assertRaises(HistoryError):
-                self.store.expire_results()
-        self.assertEqual('retiring', rc.context_row(self.store, *self.attempt)[0])
+        self.start_retirement(how)
         with self.assertRaisesRegex(HistoryError, 'history_result_expired|history_result_not_ready'):
             self.store.admit_host_result(self.reference, assignment=original.assignment, task=original.task,
                                          route=original.route, client_capability=original.client_capability,
                                          before_commit=lambda: None)
-        self.assertEqual('retiring', rc.context_row(self.store, *self.attempt)[0])
+        self.assert_still_retiring()
         self.assertIsNone(rc.context_row(self.store, *self.attempt)[4])  # no outcome association was written
         self.consistent()
+
+    def test_C3_a_close_started_retiring_row_refuses_body_and_context_reads(self):
+        self.check_retiring_body_and_context('close')
+
+    def test_C3_an_expiry_started_retiring_row_refuses_body_and_context_reads(self):
+        self.check_retiring_body_and_context('expiry')
+
+    def test_C3_a_close_started_retiring_unrecorded_row_refuses_the_admission_and_records_nothing(self):
+        self.check_retiring_admission('close')
+
+    def test_C3_an_expiry_started_retiring_unrecorded_row_refuses_the_admission_and_records_nothing(self):
+        self.check_retiring_admission('expiry')
 
     def test_C3_a_close_or_expiry_racing_a_read_returns_no_bytes_and_later_context_reads_are_refused(self):
         digest = self.recorded()
