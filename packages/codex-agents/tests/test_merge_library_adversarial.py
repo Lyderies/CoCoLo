@@ -179,6 +179,8 @@ class Adversarial(unittest.TestCase):
                         if data not in versions:
                             errors.append((name, data))
                     observations.append(True)
+                except BaseException as error:
+                    errors.append((type(error).__name__, str(error)))
                 finally:
                     sampled.set()
         worker = threading.Thread(target=reader, daemon=True)

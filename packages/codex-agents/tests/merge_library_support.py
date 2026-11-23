@@ -85,7 +85,9 @@ def put(path, data, mode=0o644):
 def tree(root, *, metadata=False, control=False):
     """No-follow independent map. FIFOs/devices are NEVER opened by the oracle."""
     result = {}
-    for directory, dirs, files in os.walk(root, followlinks=False):
+    def unreadable(error):
+        raise error
+    for directory, dirs, files in os.walk(root, followlinks=False, onerror=unreadable):
         if not control and Path(directory) == root:
             dirs[:] = [d for d in dirs if d not in (".git", ".cocolo")]
         for name in dirs + files:
@@ -947,6 +949,10 @@ def recover_checked(test, f, batch, kind):
         if relevant:
             latest = max(relevant, key=lambda r: r.batch_no)
             reports = tuple(r for r in statuses if r.batch_no == latest.batch_no)
+    unresolved = [r for r in rows if r.batch == batch and r.state in ('applying', 'needs_owner')]
+    for row in unresolved:
+        test.assertTrue(any(report.batch_no == row.batch_no for report in reports),
+                        'unresolved row has no recovery or status evidence: ' + str(row.batch_no))
     for report in reports:
         row = next((r for r in rows if r.batch_no == report.batch_no), None)
         report_kind = "undoing" if row and row.kind == "undo" else "forward" if row and kind == "undoing" else kind

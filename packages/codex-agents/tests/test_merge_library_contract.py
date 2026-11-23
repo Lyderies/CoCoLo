@@ -14,6 +14,10 @@ import sqlite3
 import shutil
 import subprocess
 import threading
+import signal
+import tempfile
+import time
+import traceback
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -26,6 +30,41 @@ from tests.merge_library_support import (
     Fixture, Trace, assert_trace, checkpoint, child_run, content, fresh_queue, git, put,
     report_oracle, tree, assert_no_git_writes, location_refusal_oracle,
 )
+
+
+def bounded_concurrency(action, timeout=30):
+    """Contain blocked sealer threads; always terminate/reap this owned child."""
+    with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
+        error_path = Path(directory) / 'error'
+        pid = os.fork()
+        if pid == 0:
+            try:
+                action()
+            except BaseException:
+                error_path.write_text(traceback.format_exc())
+                os._exit(73)
+            os._exit(0)
+        reaped = False
+        try:
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                found, status = os.waitpid(pid, os.WNOHANG)
+                if found:
+                    reaped = True
+                    if error_path.exists():
+                        raise AssertionError(error_path.read_text())
+                    if status:
+                        raise AssertionError('sealer child failed: ' + str(status))
+                    return
+                time.sleep(.001)
+            raise AssertionError('sealer child exceeded bounded deadline')
+        finally:
+            if not reaped:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                os.waitpid(pid, 0)
 
 
 class Contract(unittest.TestCase):
@@ -211,6 +250,9 @@ class Contract(unittest.TestCase):
 
     def test_ml_17_concurrent_sealers_fifo_restart(self):
         """ML-17: concurrent sealers get durable ordered tickets, preserved across restart."""
+        bounded_concurrency(self._concurrent_sealers_fifo_restart)
+
+    def _concurrent_sealers_fifo_restart(self):
         batches = [self.f.batch({f"q{i}": str(i).encode()}, f"q{i}") for i in range(3)]
         barrier = threading.Barrier(3)
         tickets, errors = [], []
