@@ -127,7 +127,7 @@ class UnsafeFileRetirementTests(RetirementFixture):
         body, context = self.names(1)
         self.damage(kind, self.path((body if target == 'body' else context)[1]))
         # Reads refuse and the charge stays until retirement.
-        if target == 'body':
+        if target == 'body' and kind != 'link_pair':  # a clean pair is recovered by a read, not refused
             with self.assertRaises(HistoryError):
                 self.store.read_result(binding(1))
         self.assertEqual(2, self.charged())

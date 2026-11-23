@@ -2413,20 +2413,24 @@ class ProjectHistory:
             self._connection.execute("UPDATE result_reservations SET state='retiring' WHERE project_id=? AND claim_id=?",
                                      (self.project_id, binding.claim_id))
             project_result_contexts.begin_retirement(self, binding, kind, evidence)
-        self._recover_result_link(binding)
-        for name in self._result_names(binding):
-            try:
-                info = os.stat(name, dir_fd=self._directory_fd, follow_symlinks=False)
-            except FileNotFoundError:
-                continue
-            self._result_file_info(info)
-            os.unlink(name, dir_fd=self._directory_fd)
-        project_result_contexts.unlink_for_retirement(self, binding)
-        os.fsync(self._directory_fd)
+        try:
+            self._recover_result_link(binding)  # a clean interrupted pair loses its partial name; unsafe ones are
+        except (HistoryError, OSError):  # unlinked as entries below (D3, RS-D draft 3 §4), never opened
+            pass
+        reason = project_result_contexts.retire_names(self, project_result_contexts.body_and_context_names(self, binding))
+        if reason is not None:  # a directory: `repair_required`, charged, shown and retried; else `retiring`, retried
+            raise project_result_contexts.refuse_retirement(self, binding.run_handle, binding.attempt, reason)
         with self._transaction():
             self._connection.execute("UPDATE result_reservations SET state='expired' WHERE project_id=? AND claim_id=?",
                                      (self.project_id, binding.claim_id))
             project_result_contexts.end_retirement(self, binding)
+
+    @_operation
+    def result_retirement_repairs(self, limit: int = 20) -> list[dict]:
+        """D3 (RS-D draft 3 §4): the retirements that wait for an operator, for status. Each stays charged."""
+        if not valid_integer(limit, minimum=1, maximum=100):
+            raise HistoryError("history_invalid_input")
+        return project_result_contexts.repairs(self, limit)
 
     @_operation
     def retire_result(self, binding: AttemptBinding) -> None:
@@ -2507,7 +2511,8 @@ class ProjectHistory:
         from .project_learning_owner import LEARNING_PURGE_BATCH, purge_old_learning
         from .project_qa_checks import purge_old_qa
         # Each removal has its turn whatever another one meets (0.3.4 R1g).
-        for purge in (self._purge_finished_results, self._orchestration_owner().purge_closed,
+        for purge in (lambda now, limit: project_result_contexts.sweep(self, limit),  # D3: context-only custody
+                      self._purge_finished_results, self._orchestration_owner().purge_closed,
                       lambda now, limit: purge_old_qa(self, now, limit),
                       # Cases and candidates past the learning retention, in batches of their own (O0c P7).
                       lambda now, limit: purge_old_learning(self, now, LEARNING_PURGE_BATCH)):

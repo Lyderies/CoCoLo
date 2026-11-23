@@ -1456,10 +1456,20 @@
    "ends": "D1 (RS-D-8, SH-6): live context bytes are summed from the rows not `ended` or `expired`; a context ends with its lease when the attempt ends unfinished (custody `lost_with_reservation`) or retires with its result (`retention`, `orchestration_closed`), so only live custody is ever charged",
    "test": "test_O5_the_live_context_budget_admits_exactly_what_fits_and_a_refusal_leaves_nothing"
   },
+  "project_result_contexts.py::_sweep_candidates": {
+   "checks": 1,
+   "ends": "D3 (RS-D draft 4 \u00a71): a per-pass batch bound over the live partial index (rows not `ended` or `expired`); a selected context ends `ended` when its files are gone, so only unfinished custody is ever scanned and tombstones cost nothing",
+   "test": "test_U8_the_context_sweep_is_bounded_and_fair_across_passes"
+  },
   "project_result_contexts.py::prepare": {
    "checks": 1,
    "ends": "D1 (RS-D-8): a size check of one context's bytes, not a count; nothing accumulates",
    "test": "test_O5_a_context_at_its_size_limit_is_kept_and_one_byte_over_is_refused_before_the_arm"
+  },
+  "project_result_contexts.py::repairs": {
+   "checks": 1,
+   "ends": "D3 (RS-D draft 3 \u00a74): a report bound over contexts in `repair_required`; each ends `ended` or `expired` once an operator removes the directory under its fixed name",
+   "test": "test_U6_a_directory_under_the_body_name_is_repair_required_charged_shown_and_retried"
   },
   "project_runtime.py::__post_init__": {
    "checks": 1,
