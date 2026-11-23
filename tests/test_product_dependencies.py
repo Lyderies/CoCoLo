@@ -114,6 +114,23 @@ class ProductDependencies(unittest.TestCase):
         self.assertEqual(later,combine(later,translated),'TF-26 stale policy baseline replaced a later release proof')
         self.assertEqual(later,combine(later,{}))
 
+    @requirements('TF-26','TF-7')
+    def test_fileless_generated_helpers_keep_owned_namespace_and_external_identity(self):
+        def record(expected=1, product_result=10):
+            product=types.ModuleType('external_generated_product')
+            exec(f'def operation(): return {product_result}\n',vars(product))
+            module=types.ModuleType('generated_test_owner')
+            sys.modules[module.__name__]=module
+            self.addCleanup(sys.modules.pop,module.__name__,None)
+            module.product=product
+            source='import unittest\ndef helper(): return VALUE\nclass Case(unittest.TestCase):\n    def setUp(self): self.value=helper()\n    def test_value(self):\n        self.assertEqual(1,self.value)\n        self.assertTrue(callable(product.operation))\n'
+            exec(source.replace('VALUE',str(expected)),vars(module))
+            self.assertNotIn('__file__',vars(module))
+            return fw.dependency_fingerprint(module.Case('test_value'))
+        before=record();self.assertIsNotNone(before);self.assertEqual(before,record())
+        self.assertNotEqual(before,record(expected=2),'TF-26 generated test helper edit was hidden')
+        self.assertEqual(before,record(product_result=20),'TF-26 external generated product became a test helper')
+
     @requirements('TF-26','TF-7','TF-23')
     def test_migration_rejects_wrong_provenance_and_changed_test_identity(self):
         try: policy=importlib.import_module('test_owned_baseline')

@@ -1360,6 +1360,7 @@
  "TF-26": {
   "checks": [
    "root:test_product_dependencies.ProductDependencies.test_assertion_edit_and_rename_still_fail_legacy_gate",
+   "root:test_product_dependencies.ProductDependencies.test_fileless_generated_helpers_keep_owned_namespace_and_external_identity",
    "root:test_product_dependencies.ProductDependencies.test_imported_product_defaults_use_identity_but_owned_defaults_keep_values",
    "root:test_product_dependencies.ProductDependencies.test_later_bookkeeping_proof_takes_precedence_over_older_policy_record",
    "root:test_product_dependencies.ProductDependencies.test_migration_rejects_wrong_provenance_and_changed_test_identity",
@@ -1458,6 +1459,7 @@
  "TF-7": {
   "checks": [
    "root:test_product_dependencies.ProductDependencies.test_assertion_edit_and_rename_still_fail_legacy_gate",
+   "root:test_product_dependencies.ProductDependencies.test_fileless_generated_helpers_keep_owned_namespace_and_external_identity",
    "root:test_product_dependencies.ProductDependencies.test_imported_product_defaults_use_identity_but_owned_defaults_keep_values",
    "root:test_product_dependencies.ProductDependencies.test_migration_rejects_wrong_provenance_and_changed_test_identity",
    "root:test_product_dependencies.ProductDependencies.test_product_only_constant_and_implementation_changes_keep_legacy_proof",
