@@ -78,5 +78,15 @@
   "red": "measurements/test-framework/release-bookkeeping/immutable_binding_tampering_is_rejected-red.json",
   "diagnostic": "missing narrow release-bookkeeping validator",
   "green": "measurements/test-framework/release-bookkeeping/immutable_binding_tampering_is_rejected-green.json"
+ },
+ {
+  "fix": "release-fullrun-watchdog-diagnostic-only",
+  "requirement": "TF-9",
+  "witness": "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B3_runner_reaps_disabled_watchdog_with_diagnostics",
+  "positive_control": "The real timeout returns one worker and satisfies every original timed-out/log-content/retained-log assertion. This additional diagnostic assertion does not establish that the original zero-worker incident is fixed.",
+  "base": "65ca8c20",
+  "red": "measurements/test-framework/release-bookkeeping/watchdog-red.json",
+  "diagnostic": "IndexError: list index out of range",
+  "green": "measurements/test-framework/release-bookkeeping/watchdog-green.json"
  }
 ]

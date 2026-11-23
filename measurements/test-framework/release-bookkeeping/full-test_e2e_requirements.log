@@ -1,0 +1,725 @@
+...FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L1.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L1.2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L2.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L2.2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L3.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L3.2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L3.3]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L4.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L4.2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L5.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L5.2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L5.3]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L6.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L6.2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L7.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L7.2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L7.3]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L8.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L8.2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L8.3]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L9.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L9.2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L9.3]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L10.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L10.2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L10.3]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L11.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L11.2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L12.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L12.2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L12.3]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L12.4]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L12.5]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L12.6]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L12.7]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L13.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L13.2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L14.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [L15.1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [G1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [G2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [G3]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [G4]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [G5]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [G6]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [G7]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [G8]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [G9]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-1]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-2]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-3]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-4]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-5]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-6]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-7]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-8]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-9]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-10]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-11]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-12]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-13]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-14]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-15]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-16]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-17]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-18]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-19]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-20]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-21]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-22]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-23]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-24]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-25]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-26]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [API-27]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [TERM-5]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [TERM-6]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [TERM-7]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [TERM-13]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+======================================================================
+FAIL: test_every_requirement_is_proved_by_a_check_that_exists (test_e2e_requirements.E2ERequirementsTests.test_every_requirement_is_proved_by_a_check_that_exists) [TERM-17]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/tests/test_e2e_requirements.py", line 53, in test_every_requirement_is_proved_by_a_check_that_exists
+    self.assertTrue(item["checks"], "no check proves this requirement")
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: [] is not true : no check proves this requirement
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.010s
+
+FAILED (failures=80)
