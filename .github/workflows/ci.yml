@@ -62,7 +62,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_REF: ${{ github.ref }}
-          TRUSTED_BASE: a1d25560c7748680387a542fb7d047c32205dad8
+          TRUSTED_BASE: b531844030fa619c1f62ddd6c092ebc2ea4fca38
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BASE: ${{ github.event.before }}
         run: |
@@ -119,7 +119,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_REF: ${{ github.ref }}
-          TRUSTED_BASE: a1d25560c7748680387a542fb7d047c32205dad8
+          TRUSTED_BASE: b531844030fa619c1f62ddd6c092ebc2ea4fca38
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BASE: ${{ github.event.before }}
         run: |
@@ -209,7 +209,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_REF: ${{ github.ref }}
-          TRUSTED_BASE: a1d25560c7748680387a542fb7d047c32205dad8
+          TRUSTED_BASE: b531844030fa619c1f62ddd6c092ebc2ea4fca38
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BASE: ${{ github.event.before }}
         run: |
@@ -282,7 +282,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_REF: ${{ github.ref }}
-          TRUSTED_BASE: a1d25560c7748680387a542fb7d047c32205dad8
+          TRUSTED_BASE: b531844030fa619c1f62ddd6c092ebc2ea4fca38
           PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           test -n "$PR_BASE" || exit 1

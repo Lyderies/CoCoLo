@@ -4,8 +4,8 @@ Use the prepared, hash-checked test-only environment. Shipped programs need no t
 Full runs use the runner's default jobs. Pass a trusted review base explicitly (the candidate cannot choose its own grandfather baseline):
 
 ```
-python -B scripts/parallel_tests.py --base <trusted-commit> --save-timings /tmp/cocolo-timings.json
-python -B scripts/parallel_tests.py --base <trusted-commit> --module root:test_test_framework --save-timings /tmp/cocolo-affected.json
+python -B scripts/parallel_tests.py --base b531844030fa619c1f62ddd6c092ebc2ea4fca38 --save-timings /tmp/cocolo-timings.json
+python -B scripts/parallel_tests.py --base b531844030fa619c1f62ddd6c092ebc2ea4fca38 --module root:test_test_framework --save-timings /tmp/cocolo-affected.json
 ```
 
 The flat timing file remains scheduling input. Its `.run.json` companion records current worker job-seconds,
