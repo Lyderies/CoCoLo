@@ -173,6 +173,7 @@
  "codex:tests.test_merge_library_model_sweep": "integration",
  "codex:tests.test_merge_library_mutations": "integration",
  "codex:tests.test_merge_library_owners": "integration",
+ "codex:tests.test_merge_library_r2": "integration",
  "codex:tests.test_merge_library_recovery": "integration",
  "codex:tests.test_merge_library_recovery_faults": "integration",
  "codex:tests.test_merge_library_review": "integration",

@@ -173,6 +173,7 @@
  "codex:tests.test_merge_library_model_sweep": "crash",
  "codex:tests.test_merge_library_mutations": "crash",
  "codex:tests.test_merge_library_owners": "crash",
+ "codex:tests.test_merge_library_r2": "crash",
  "codex:tests.test_merge_library_recovery": "crash",
  "codex:tests.test_merge_library_recovery_faults": "crash",
  "codex:tests.test_merge_library_review": "crash",

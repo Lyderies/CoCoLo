@@ -101,8 +101,8 @@ class EndStates(unittest.TestCase):
         self.f.operation_before = self.f.before = tree(self.f.project)
         self.check(call=ml.IOCall('unlink', 'before', 'cleanup'), fault=errno.EIO, terminal_before='reverted')
         (self.f.project / 'owner-empty').rmdir()
-        with self.assertRaises(AssertionError):
-            self.check(call=ml.IOCall('unlink', 'before', 'cleanup'), fault=errno.EIO)
+        with self.assertRaisesRegex(AssertionError, 'cleanup changed paths outside listed empty folders'):
+            self.check(call=ml.IOCall('unlink', 'before', 'cleanup'), fault=errno.EIO, terminal_before='reverted')
 
     def test_B1_io_cannot_end_landed_unless_commit_uncertainty(self):
         put(self.f.project / 'a.txt', b'child')
