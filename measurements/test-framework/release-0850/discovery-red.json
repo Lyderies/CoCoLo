@@ -1,0 +1,10 @@
+{
+ "status": "red",
+ "base": "9bbf1582",
+ "diagnostic": "framework import failed during discovery",
+ "witness": "root:test_test_framework_integration.ReleaseIntegration.test_discovery_imports_framework_and_preserves_package_names",
+ "positive_control": "A plain package test is discovered; broken import keeps tests.test_broken.",
+ "jobs": 16,
+ "job_seconds": 0.17127020901534706,
+ "worker_log": "final-old-worker.log"
+}

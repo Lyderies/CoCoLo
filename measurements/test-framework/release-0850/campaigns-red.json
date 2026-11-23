@@ -1,0 +1,10 @@
+{
+ "status": "red",
+ "base": "9bbf1582",
+ "diagnostic": "missing exclusive campaign scheduling",
+ "witness": "root:test_test_framework_integration.ReleaseIntegration.test_exclusive_campaigns_wait_for_empty_pool_and_block_other_launches",
+ "positive_control": "Ordinary workers can overlap up to default capacity; exclusive campaign runs with an empty pool.",
+ "jobs": 16,
+ "job_seconds": 0.17127020901534706,
+ "worker_log": "final-old-worker.log"
+}

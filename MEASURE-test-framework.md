@@ -284,3 +284,9 @@ Saved `--save-timings` `.run.json` records, DEFAULT jobs throughout; only affect
 | Separate real crash campaign | 49 checks; 44.652967874950264 job-seconds; DEFAULT 16 jobs |
 
 Green workers pass with no budget failures; real campaign retains three image opt-in skips. Overall exit remains 1 for 80 lifecycle metadata errors. Concurrent real-campaign performance remains open. The immutable dependency migration changes 4,419 fingerprints with zero unresolved entries and unchanged 5,683 legacy IDs.
+
+## First integrated full-run corrections
+
+Primary's supplied report: 410.8 s wall, 6217.4 job-seconds, default 16 jobs, 394 units / 6186 tests; no timing file was saved. Exact supplied module totals are preserved in `measurements/test-framework/release-0850/primary-full-summary.json`. Do not treat these as a newly measured local run.
+
+Affected framework: 31.580453 job-seconds; final source binding and integration witnesses: 0.794242. Affected merge campaigns: 161.515750 s wall / 161.490655 job-seconds, 16 jobs, every module below 60 s. Details and unchanged-assertion accounting: REVIEW-test-framework-fullrun-fixes.md. Full integrated measurement follows after the single full run.

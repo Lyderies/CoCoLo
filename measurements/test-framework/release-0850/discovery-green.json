@@ -1,0 +1,8 @@
+{
+ "status": "green",
+ "witness": "root:test_test_framework_integration.ReleaseIntegration.test_discovery_imports_framework_and_preserves_package_names",
+ "positive_control": "A plain package test is discovered; broken import keeps tests.test_broken.",
+ "jobs": 16,
+ "job_seconds": 0.7942419989849441,
+ "source_run": "testfw-integration-bindings-green.run.json"
+}

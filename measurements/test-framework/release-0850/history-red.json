@@ -1,0 +1,10 @@
+{
+ "status": "red",
+ "base": "9bbf1582",
+ "diagnostic": "missing committed release version validation",
+ "witness": "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration",
+ "positive_control": "Real Git introduction and retirement pass; immutable tamper, raised ceiling and historical restoration fail.",
+ "jobs": 16,
+ "job_seconds": 0.17127020901534706,
+ "worker_log": "final-old-worker.log"
+}
