@@ -164,7 +164,7 @@ class LearningOutcomePageUpgradeTests(unittest.TestCase):
             connection.close()
             store = ProjectHistory(directory, PROJECT, allow_schema_upgrade=True)
             try:
-                self.assertEqual(18, store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) SB: schema 18
+                self.assertEqual(19, store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) SB: schema 19
                 self.assertEqual(original, tuple(store._connection.execute('SELECT * FROM records').fetchone()))
                 self.assertEqual(1, store.learning_outcome_revision())
                 self.assertEqual(raw, store.learning_outcome_page(1)[0][3])

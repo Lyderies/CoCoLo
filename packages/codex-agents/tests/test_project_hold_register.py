@@ -354,7 +354,7 @@ class RegisterAdoptionTests(unittest.TestCase):
     def test_the_step_adopts_every_lease_and_reservation_by_class(self):
         self.format_17()
         db = self.upgrade()
-        self.assertEqual(18, db.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(19, db.execute('PRAGMA user_version').fetchone()[0])
         self.assertEqual(('held', 'unarmed', None), hold_row(db, 'lease', identity(1)))
         self.assertEqual(('held', 'armed', None), hold_row(db, 'lease', identity(2)))
         self.assertEqual('released', hold_row(db, 'lease', identity(3))[0])

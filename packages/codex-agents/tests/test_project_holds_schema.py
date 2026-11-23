@@ -136,7 +136,7 @@ class SchemaStepTests(unittest.TestCase):
         from codex_agents import project_holds_schema
         before = self.format_17_store()
         db = self.upgrade()._connection
-        self.assertEqual(18, db.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(19, db.execute('PRAGMA user_version').fetchone()[0])
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertLessEqual(set(SCHEMA_18_TABLES), tables)
         for name in SCHEMA_18_TABLES:
@@ -230,7 +230,7 @@ class SchemaStepTests(unittest.TestCase):
             for allowed in (False, True):
                 with self.assertRaisesRegex(HistoryError, '^history_incompatible$'):
                     self.fixture.open(allow_schema_upgrade=allowed)
-        self.assertEqual(18, self.version())
+        self.assertEqual(19, self.version())
         self.assertEqual(before, self.rows())
         self.assertEqual([], self.copies())
 
@@ -253,7 +253,7 @@ class SchemaStepTests(unittest.TestCase):
             self.upgrade(Cut)
         self.assert_left_at_17(before)
         self.upgrade()
-        self.assertEqual(18, self.version())
+        self.assertEqual(19, self.version())
         self.assertEqual(1, len(self.copies()))
 
     def test_M2_a_failed_backup_refuses_the_step(self):
@@ -285,13 +285,13 @@ class SchemaStepTests(unittest.TestCase):
         self.assert_left_at_17(before)
         fcntl.flock(lock, fcntl.LOCK_UN)
         self.upgrade()
-        self.assertEqual(18, self.version())
+        self.assertEqual(19, self.version())
 
     def test_M2_the_copy_keeps_the_17_store_as_it_was(self):
         before = self.format_17_store()
         self.upgrade()
         (copy,) = self.copies()
-        self.assertTrue(copy.name.startswith('history.sqlite3.before-18.'))
+        self.assertTrue(copy.name.startswith('history.sqlite3.before-19.'))
         self.assertEqual(0o600, stat.S_IMODE(os.stat(copy).st_mode))
         self.assertEqual(17, self.version(copy))
         self.assertEqual(before, self.rows(copy))
