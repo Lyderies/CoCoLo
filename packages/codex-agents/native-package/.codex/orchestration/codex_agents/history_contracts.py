@@ -34,6 +34,8 @@ HISTORY_REASON_CODES = frozenset({
     "history_learning_capacity", "history_learning_incomplete", "history_learning_reconciliation",
     # D1 (RS-D M1): a result kept from before format 18, whose record context only an earlier service's memory held.
     "history_worker_context_unavailable",
+    # D2 (RS-D-5): a verifier is not opened on a worker that will not outlast it by the QA margin.
+    "history_worker_result_expiring",
 })
 
 

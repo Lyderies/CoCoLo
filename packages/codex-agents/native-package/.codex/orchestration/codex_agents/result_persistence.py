@@ -235,8 +235,15 @@ class ResultPersistenceLane:
         return self._jobs[handle]
 
     def prepare(self, binding, worker_handle, *, hard_deadline_at_ms):
-        """Known-claim reference only; services use prepare_lease before claiming."""
+        """Known-claim reference only; services use prepare_lease before claiming.
+
+        D2 (RS-D-D2): product results are lease-born. A lane built without `allow_local_execution_reference`
+        (the service runtime's lane) refuses this non-lease reservation; only the explicit local-reference fixtures
+        of the tests construct a lane that permits it.
+        """
         self._check_owner()
+        if not self._allow_local_reference:
+            raise HistoryError("history_not_authorized")
         binding = _capture_binding(binding)
         self._owner._monitor._entry(binding)
         if not valid_integer(hard_deadline_at_ms, minimum=1):
