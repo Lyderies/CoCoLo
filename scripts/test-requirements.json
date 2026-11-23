@@ -312,7 +312,16 @@
    "codex:tests.test_b2_service_outcome_sweep.SweepLimitTests.test_a_reduced_window_and_attempt_cap_still_records_every_eligible_run_with_real_state_changes",
    "codex:tests.test_b2_service_outcome_sweep.SweepLimitTests.test_the_attempt_cap_holds_whatever_the_caller_asks_for",
    "codex:tests.test_b2_service_outcome_sweep.SweepLimitTests.test_the_selection_does_not_grow_with_expired_rows",
-   "codex:tests.test_b2_service_outcome_sweep.SweepLimitTests.test_the_window_follows_the_limit"
+   "codex:tests.test_b2_service_outcome_sweep.SweepLimitTests.test_the_window_follows_the_limit",
+   "codex:tests.test_bridge.BridgeCliLifecycleTests.test_codex_primary_bridges_a_codex_child_through_the_cli",
+   "codex:tests.test_cli_open_client_runtime.CliOpenClientRuntimeTests.test_claude_primary_records_exact_original_codex_terminal_through_project_api",
+   "codex:tests.test_cli_open_client_runtime.CliOpenClientRuntimeTests.test_codex_primary_records_exact_original_terminal_through_project_api",
+   "codex:tests.test_lost_run_settlement.LostRunAfterStopTests.test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next",
+   "codex:tests.test_project_driver.ClaudePrimaryDriverTests.test_the_host_prepares_claims_dispatches_and_releases_a_bridged_codex_run",
+   "codex:tests.test_project_driver.LifecycleBoundaryTests.test_an_invalid_result_is_fenced_with_its_reason_and_recorded_exactly_once",
+   "codex:tests.test_project_driver.ProjectDriverTests.test_the_host_prepares_claims_dispatches_and_releases_a_bridged_codex_run",
+   "codex:tests.test_project_driver.StoredContextRestartTests.test_D1_a_result_on_disk_before_its_record_is_recorded_by_the_next_service_from_the_stored_context"
   ],
   "source": "REQUIREMENTS-b2-outcome.md#B2-OUTCOME",
   "statement": "**B2-OUTCOME \u2014 The project service records a finished child's outcome itself.**\nA committed terminal whose orchestration is still open (active or paused), whose reservation is live, whose context is\n`committed` and whose run belongs to the writer's own runtime and host class is recorded by the service on its own\nwriter, right after the result is safely stored and again by a bounded, fair sweep after a restart. The outcome is a\npure function of the store: the service's and the primary's records are byte-identical. One final predicate\n(`ServiceRecordAuthority`, a required typed check) runs as the first statement of the admission transaction at the\nservice entry and at the primary's, so admission, close, interruption, the 24 h idle end and expiry meet at one\nboundary; after any of those nothing new is recorded and \"unrecorded\" is final (owner decision 92.1 A). The primary's\nlater call on a recorded run is a read-only retrieval that writes nothing, works after a normal close, and never\nchanges who recorded it; its refusals are named and write nothing. Who recorded (`service` or `primary`) lives in a\nsmall separate table keyed by the receipt id with no foreign key (schema step 19 -> 20, owner decision 92.3 A);\nreceipts, records and the enrolled operation set are unchanged; the service entry has no socket entry; the service\nwrites no QA and never sets `accepted`.\nSource: DESIGN-0.4.0-B2-outcome.md draft 2 with the s2 corrections, rows B2-1 to B2-18; owner decision 92; measurements/b2/requirements.md."
@@ -650,6 +659,27 @@
   "checks": [],
   "source": "PLAN-0.4.0.md T7",
   "statement": "Two projects share one collector, each with its own runs and capacity."
+ },
+ "LEGACY-H1B": {
+  "checks": [
+   "codex:tests.test_refusal_steps.RefusalStepTests.test_H1b_2_every_listed_code_has_its_own_or_its_familys_step"
+  ],
+  "source": "packages/codex-agents/tests/test_refusal_steps.py#LEGACY-H1B",
+  "statement": "**LEGACY-H1B \u2014 Listed refusal codes have a plain next step.**\nEvery code in the union of OPEN_REASON_CODES, DISPATCH_REASONS, START_REASONS, SERVICE_REFUSALS and\nHISTORY_REASON_CODES resolves to a non-default next step that starts with an uppercase ASCII letter, contains no\nforward or backward slash, is 11 to 241 characters long, and ends with a full stop or closing parenthesis."
+ },
+ "LEGACY-HOLD-LIFECYCLE": {
+  "checks": [
+   "codex:tests.test_hold_lifecycle.ContainerRunHoldTests.test_C3_a_cancelled_run_frees_its_slot_once_its_container_is_gone",
+   "codex:tests.test_hold_lifecycle.ContainerRunHoldTests.test_C3_a_container_that_does_not_stop_keeps_its_slot_until_a_retried_stop_proves_it_gone",
+   "codex:tests.test_hold_lifecycle.HoldLifecycleTests.test_B0_6_a_completed_run_frees_every_hold",
+   "codex:tests.test_hold_lifecycle.HoldLifecycleTests.test_B0_6_baseline_is_empty",
+   "codex:tests.test_hold_lifecycle.HoldLifecycleTests.test_B0_narrowed_status_shows_a_held_binding",
+   "codex:tests.test_hold_lifecycle.HoldLifecycleTests.test_RS_A_F14_status_shows_the_account_holds_by_kind",
+   "codex:tests.test_hold_lifecycle.LostServiceHoldTests.test_B0_2_a_reservation_left_by_a_service_that_stopped_gets_its_lost_terminal",
+   "codex:tests.test_hold_lifecycle.LostSlotReleaseTests.test_RS_A_2_a_lost_run_s_slot_is_released_as_lost_by_its_settlement"
+  ],
+  "source": "packages/codex-agents/tests/test_hold_lifecycle.py#LEGACY-HOLD-LIFECYCLE",
+  "statement": "**LEGACY-HOLD-LIFECYCLE \u2014 Existing hold lifecycle boundary checks.**\nWith real in-process account and project services, the baseline has zero live results, account slots and pending\nbindings; opening a run increments pending bindings by one with limit 4096; account-hold status reports the binding\nincrement, exactly the run_slot, binding and probe kinds, and an Account holds summary naming binding. Recording a\ncompleted run eventually leaves zero account slots and at most one live result. Settling a lost run writes exactly\none released slot with release kind lost. Cancelling a container run removes its container, eventually releases its\nslot and leaves no failed stop. A container that cannot stop reports cancel_requested and an attention message,\nkeeps its slot across repeated stop attempts, then releases it after a retried stop succeeds. The deferred B0-2\ncheck asserts that a reservation left by a stopped service exists and eventually receives its lost terminal; that\ncheck remains skipped and supplies no passing coverage while skipped."
  },
  "ML-1": {
   "checks": [
@@ -1244,6 +1274,8 @@
  },
  "RS-B-5": {
   "checks": [
+   "codex:tests.test_hold_lifecycle.HoldLifecycleTests.test_B0_1_a_run_refused_before_launch_frees_its_account_binding_by_itself",
+   "codex:tests.test_lost_run_settlement.LostRunAfterStopTests.test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_L2_a_failed_deferral_submission_keeps_the_batch_and_the_failed_rows_duty",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M1_a_withdrawal_the_account_keeps_refusing_does_not_block_a_later_one",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M7_a_registration_refused_after_the_binding_exists_withdraws_the_open",

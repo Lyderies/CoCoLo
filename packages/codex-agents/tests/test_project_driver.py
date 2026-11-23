@@ -125,6 +125,7 @@ class DriverHarness(ServiceHarness, CliTestCase):
 
 
 class ProjectDriverTests(DriverHarness):
+    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
     def test_the_host_prepares_claims_dispatches_and_releases_a_bridged_codex_run(self):
         # 0.3.3 requirement C1, carried here (PLAN T8 driver slice 2): a busy day of readings, about ten
         # times a live project's, still opens and dispatches. 4,096 records and 2 MiB fit, at the open
@@ -816,6 +817,7 @@ class ProjectDriverTests(DriverHarness):
 class LifecycleBoundaryTests(DriverHarness):
     """End-to-end checks of boundaries that are otherwise only tested below the project service."""
 
+    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
     def test_an_invalid_result_is_fenced_with_its_reason_and_recorded_exactly_once(self):
         context, route_path, orchestration, run_handle = self.open_run()
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
@@ -1876,6 +1878,7 @@ class StoredContextRestartTests(DriverHarness):
                 connection.close()
         return None
 
+    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
     def test_D1_a_result_on_disk_before_its_record_is_recorded_by_the_next_service_from_the_stored_context(self):
         context, route_path, orchestration, run_handle = self.open_run()
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])

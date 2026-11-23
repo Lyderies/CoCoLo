@@ -318,6 +318,7 @@ class LostRunAfterStopTests(LostRunHarness):
         finally:
             connection.close()
 
+    @__import__('test_framework').requirements('B2-OUTCOME', 'RS-B-5', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
     def test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next(self):
         # 0.3.3 requirement C3 (owner): on 0.8.22, a live project's refused claim could
         # not be fenced (C2), so its run kept its lease, and with it one of the project's places for

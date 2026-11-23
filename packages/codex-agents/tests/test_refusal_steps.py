@@ -1,6 +1,19 @@
-"""S1-H1b: every refusal names its next step (PLAN H1b-1 to H1b-3)."""
+"""S1-H1b: every refusal names its next step (PLAN H1b-1 to H1b-3).
+
+**LEGACY-H1B — Listed refusal codes have a plain next step.**
+Every code in the union of OPEN_REASON_CODES, DISPATCH_REASONS, START_REASONS, SERVICE_REFUSALS and
+HISTORY_REASON_CODES resolves to a non-default next step that starts with an uppercase ASCII letter, contains no
+forward or backward slash, is 11 to 241 characters long, and ends with a full stop or closing parenthesis.
+
+## Test implementation
+
+"""
 import re
+import sys
+from pathlib import Path
 import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'scripts'))
 
 import tests.support  # noqa: F401
 from codex_agents import refusal_steps
@@ -15,6 +28,7 @@ CODES = sorted(set(OPEN_REASON_CODES) | set(DISPATCH_REASONS) | set(START_REASON
 
 
 class RefusalStepTests(unittest.TestCase):
+    @__import__('test_framework').requirements('LEGACY-H1B', why_not_scenario='Exhaustive reason-code union and text-shape checks cover refusal families beyond one lifecycle scenario.')
     def test_H1b_2_every_listed_code_has_its_own_or_its_familys_step(self):
         for code in CODES:
             with self.subTest(code=code):

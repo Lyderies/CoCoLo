@@ -266,10 +266,12 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
     def test_codex_primary_fresh_open_and_dispatch_use_original_apis_without_database_or_collector_takeover(self):
         self.run_original_workflow('codex')
 
+    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
     def test_codex_primary_records_exact_original_terminal_through_project_api(self):
         self.record_results = True
         self.run_original_workflow('codex')
 
+    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
     def test_claude_primary_records_exact_original_codex_terminal_through_project_api(self):
         self.record_results = True
         self.run_original_workflow('claude')

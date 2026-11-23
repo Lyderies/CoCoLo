@@ -8,6 +8,20 @@ teardown. Closing the orchestration stays the primary's step: scenarios check "c
 
 This module is written before any B0 code: each failure exit here fails on 0.8.37, by design, and is
 listed with the B0 step that makes it pass.
+
+**LEGACY-HOLD-LIFECYCLE — Existing hold lifecycle boundary checks.**
+With real in-process account and project services, the baseline has zero live results, account slots and pending
+bindings; opening a run increments pending bindings by one with limit 4096; account-hold status reports the binding
+increment, exactly the run_slot, binding and probe kinds, and an Account holds summary naming binding. Recording a
+completed run eventually leaves zero account slots and at most one live result. Settling a lost run writes exactly
+one released slot with release kind lost. Cancelling a container run removes its container, eventually releases its
+slot and leaves no failed stop. A container that cannot stop reports cancel_requested and an attention message,
+keeps its slot across repeated stop attempts, then releases it after a retried stop succeeds. The deferred B0-2
+check asserts that a reservation left by a stopped service exists and eventually receives its lost terminal; that
+check remains skipped and supplies no passing coverage while skipped.
+
+## Test implementation
+
 """
 import json
 import os
@@ -46,9 +60,11 @@ class HoldLifecycleTests(ResultLifetimeTests):
         import time
         return time.time_ns() // 1_000_000
 
+    @__import__('test_framework').requirements('LEGACY-HOLD-LIFECYCLE', why_not_scenario='Real service timers, lost-run restart and container stop faults expose hold release boundaries beyond a single lifecycle check.')
     def test_B0_6_baseline_is_empty(self):
         self.assertEqual({'live_results': 0, 'account_slots': 0, 'pending_bindings': 0}, self.held())
 
+    @__import__('test_framework').requirements('RS-B-5', why_not_scenario='Real service timers, lost-run restart and container stop faults expose hold release boundaries beyond a single lifecycle check.')
     def test_B0_1_a_run_refused_before_launch_frees_its_account_binding_by_itself(self):
         """B0-1 (fails on 0.8.37): the binding stays pending for 24 h, held against the cap and every drain.
         Un-skipped by slice B3 (RS-B W5, the B0-6 "never-armed binding" exit): the project withdraws the open."""
@@ -60,6 +76,7 @@ class HoldLifecycleTests(ResultLifetimeTests):
         self.wait_for(lambda: self.held()['pending_bindings'] == 0, seconds=30)
         self.assertEqual({'live_results': 0, 'account_slots': 0, 'pending_bindings': 0}, self.held())
 
+    @__import__('test_framework').requirements('LEGACY-HOLD-LIFECYCLE', why_not_scenario='Real service timers, lost-run restart and container stop faults expose hold release boundaries beyond a single lifecycle check.')
     def test_B0_narrowed_status_shows_a_held_binding(self):
         """O0b B0 (narrowed): learning-status shows each binding still held, so the hold is never invisible."""
         before = self.cli('learning-status')['account_capacity']['pending_bindings']
@@ -68,6 +85,7 @@ class HoldLifecycleTests(ResultLifetimeTests):
         self.assertEqual(before['live'] + 1, after['live'])
         self.assertEqual(4096, after['limit'])
 
+    @__import__('test_framework').requirements('LEGACY-HOLD-LIFECYCLE', why_not_scenario='Real service timers, lost-run restart and container stop faults expose hold release boundaries beyond a single lifecycle check.')
     def test_RS_A_F14_status_shows_the_account_holds_by_kind(self):
         """O0b RS-A round 1 F14 (RS-A-6): learning-status shows this project's account holds by kind, with
         one plain line for the owner."""
@@ -80,6 +98,7 @@ class HoldLifecycleTests(ResultLifetimeTests):
         self.assertTrue(after['summary'].startswith('Account holds: '), after['summary'])
         self.assertIn('binding', after['summary'])
 
+    @__import__('test_framework').requirements('LEGACY-HOLD-LIFECYCLE', why_not_scenario='Real service timers, lost-run restart and container stop faults expose hold release boundaries beyond a single lifecycle check.')
     def test_B0_6_a_completed_run_frees_every_hold(self):
         """Control: today's successful lifecycle already frees what it took (once recorded)."""
         context, route_path, orchestration, run_handle = self.open_run()
@@ -105,6 +124,7 @@ class LostServiceHoldTests(LostRunAfterStopTests):
             connection.close()
         return None if row is None else (row[0], bool(row[1]))
 
+    @__import__('test_framework').requirements('LEGACY-HOLD-LIFECYCLE', why_not_scenario='Real service timers, lost-run restart and container stop faults expose hold release boundaries beyond a single lifecycle check.')
     @unittest.skip("gates the run supervisor: the owner narrowed B0 on 2026-11-20 (stranded reservations)")
     def test_B0_2_a_reservation_left_by_a_service_that_stopped_gets_its_lost_terminal(self):
         """B0-2 (fails on 0.8.37): the next service settles the lost run at the account, but its result
@@ -119,6 +139,7 @@ class LostServiceHoldTests(LostRunAfterStopTests):
 class LostSlotReleaseTests(LostRunAfterStopTests):
     """O0b RS-A-2: a lost settlement releases the run's slot itself, written once with its kind."""
 
+    @__import__('test_framework').requirements('LEGACY-HOLD-LIFECYCLE', why_not_scenario='Real service timers, lost-run restart and container stop faults expose hold release boundaries beyond a single lifecycle check.')
     def test_RS_A_2_a_lost_run_s_slot_is_released_as_lost_by_its_settlement(self):
         orchestration, run_handle = self.stopped_in('ready', [
             {'type': 'thread.started', 'thread_id': 'orphan'}, {'sleep': 30},
@@ -181,6 +202,7 @@ class ContainerRunHoldTests(HoldLifecycleTests):
     def container_holds(self):
         return self.cli('learning-status')['container_holds']
 
+    @__import__('test_framework').requirements('LEGACY-HOLD-LIFECYCLE', why_not_scenario='Real service timers, lost-run restart and container stop faults expose hold release boundaries beyond a single lifecycle check.')
     def test_C3_a_cancelled_run_frees_its_slot_once_its_container_is_gone(self):
         context, route_path, orchestration, run_handle, process = self.running_run()
         self.cli('learning-cancel-run', '--orchestration-handle', orchestration, '--run-handle', run_handle)
@@ -190,6 +212,7 @@ class ContainerRunHoldTests(HoldLifecycleTests):
         self.wait_for(lambda: self.held()['account_slots'] == 0, seconds=30)
         self.assertEqual(0, self.container_holds()['counts']['stop_failed'])
 
+    @__import__('test_framework').requirements('LEGACY-HOLD-LIFECYCLE', why_not_scenario='Real service timers, lost-run restart and container stop faults expose hold release boundaries beyond a single lifecycle check.')
     def test_C3_a_container_that_does_not_stop_keeps_its_slot_until_a_retried_stop_proves_it_gone(self):
         context, route_path, orchestration, run_handle, process = self.running_run()
         self.podman.stop_does_nothing = self.podman.rm_fails = True

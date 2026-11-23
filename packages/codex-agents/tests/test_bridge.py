@@ -22,6 +22,9 @@ from copy import deepcopy
 from pathlib import Path
 from unittest import mock
 
+# Subprocess fixtures import this module outside the parallel runner.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'scripts'))
+
 from tests.support import FIXTURES_ROOT, ORCHESTRATION_ROOT, TEMP_ROOT
 from tests.service_harness import ServiceHarness
 
@@ -2351,6 +2354,7 @@ class BridgeCliLifecycleTests(ServiceHarness, CliTestCase):
             recorded["dispatch_diagnostics"]["client_diagnostics"],
         )
 
+    @__import__('test_framework').requirements('B2-OUTCOME', why_not_scenario='Real CLI and service boundaries check stored-result recheck refusals, immediate recording or orchestration counts after recovery (B2, decision 119 A).')
     def test_codex_primary_bridges_a_codex_child_through_the_cli(self) -> None:
         # A native Codex child would share the primary's session and command
         # rule, so a Codex primary dispatches its Codex children like Claude's.
