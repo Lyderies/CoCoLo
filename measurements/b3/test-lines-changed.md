@@ -42,3 +42,11 @@ withdrawal lands first and the observation is refused (`observation_not_authoriz
 a lease and the test's own comment ("the run's own lease was armed ... released `fenced`") can never hold. At
 `recording_open` the lease is armed and the claim is then refused, which is the scenario the test describes and the
 design row W3 ("withdrawal first: the claim refused"). All assertions are unchanged.
+
+## 4. Added test (condition of the group 3 approval)
+
+`DriverWithdrawalTests.test_W3_withdrawal_while_the_provider_observation_is_in_flight_fails_the_run_before_any_claim`
+(new; the moved W3 test is untouched). It holds the run at `observing`, withdraws the open (with the reason the driver
+would send, so the driver's own duty is an exact replay), then releases it. Asserts: the dispatch fails; the run's first
+failure is `('observing', 'observation_not_authorized')`; no model execution; no lease row (so no claim was sent); the
+open is withdrawn exactly once (one non-`known` transition); the project row ends `released`/`withdrawn`. Passes.

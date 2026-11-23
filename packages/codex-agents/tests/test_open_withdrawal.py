@@ -570,6 +570,38 @@ class DriverWithdrawalTests(WithdrawHarness):
             self.withdrawn(run_handle)
         self.assertEqual([False, True], calls)
 
+    def test_W3_withdrawal_while_the_provider_observation_is_in_flight_fails_the_run_before_any_claim(self):
+        release, original, seen, reasons = threading.Event(), project_driver.RunDriver._advance, [], []
+        fail = project_driver.RunDriver._fail
+
+        def held(driver, run):
+            if not release.is_set() and run.state == 'observing':
+                seen.append(run.state)
+                return None
+            return original(driver, run)
+
+        def failed(driver, run, reason):
+            reasons.append((run.state, reason))
+            return fail(driver, run, reason)
+        with mock.patch.object(project_driver.RunDriver, '_advance', held), \
+                mock.patch.object(project_driver.RunDriver, '_fail', failed):
+            context, route_path, _, run_handle = self.opened()
+            dispatch = self.separate_dispatch(context, route_path, run_handle)
+            self.wait_for(lambda: seen, seconds=30)
+            # The observation is still in flight: it is refused. The reason is the one the driver will send, so
+            # its own duty is an exact replay of this transition.
+            self.withdraw_as(self.payload(run_handle, reason='failed_before_claim'))
+            release.set()
+            output, _ = dispatch.communicate(timeout=60)
+            self.assertNotEqual(0, dispatch.returncode, output)
+            self.withdrawn(run_handle)
+        self.assertEqual(('observing', 'observation_not_authorized'), reasons[0])
+        self.assertEqual([], self.executions())  # no model start
+        with self.project_db() as db:  # no lease was ever taken, so no claim was sent
+            self.assertEqual([], db.execute("SELECT identity FROM project_holds WHERE kind='lease'").fetchall())
+        # Withdrawn exactly once: the test's own transition; the driver's duty only replays it.
+        self.assertEqual([(run_handle, False)], [t for t in self.transitions if t[0] == run_handle and not t[1]])
+
     def test_M7_a_registration_refused_after_the_binding_exists_withdraws_the_open(self):
         from codex_agents import project_history
         for code in ('history_conflict', 'history_service_unavailable'):
