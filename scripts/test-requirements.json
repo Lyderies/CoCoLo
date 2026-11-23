@@ -988,6 +988,22 @@
   "source": "measurements/rsa-step3/requirements.md#RSA3-3",
   "statement": "**RSA3-3 \u2014 Late-completion comparison, test only.** Decision 87 F2: compare ledger-local _release_active_capacity after a decision with release_capacity refusal; mark expectedFailure if the ledger-local path accepts. The owner decides any fix."
  },
+ "RSA3-4": {
+  "checks": [
+   "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_account_holds_due_plans",
+   "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_additive_index_reopen_preserves_limited_batches_and_due_rows",
+   "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_close_expired_reserved_plans"
+  ],
+  "source": "measurements/rsa-step3/requirements.md#RSA3-4",
+  "statement": "**RSA3-4 \u2014 Release-batch query cost.** Every SQL statement run per release batch by account_holds_due and close_expired_reserved uses an index for its WHERE/ORDER; EXPLAIN QUERY PLAN on a real ledger shows no table scans."
+ },
+ "RSA3-5": {
+  "checks": [
+   "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_additive_index_reopen_preserves_limited_batches_and_due_rows"
+  ],
+  "source": "measurements/rsa-step3/requirements.md#RSA3-5",
+  "statement": "**RSA3-5 \u2014 Release-batch rows unchanged.** The same seeded ledger selects the same due rows before and after the query-cost fix; account_holds_due agrees with _release_due_locked."
+ },
  "TERM-13": {
   "checks": [],
   "source": "PLAN-0.4.0-terminal.md section 4",

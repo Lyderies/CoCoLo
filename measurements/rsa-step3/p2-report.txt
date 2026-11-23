@@ -1,0 +1,9 @@
+account_holds_due EXISTS: before/after SEARCH run_holds_due(state=?) plus PK indexes on active_run_capacity, probe requests, and bindings (only SCAN CONSTANT ROW is scalar).
+account_holds_due admitted fallback: before/after SEARCH billing_probe_active_machine(state=?).
+close_expired_reserved SELECT: before SCAN account_billing_probe_requests; after SEARCH USING INDEX billing_probe_reserved(state=?).
+close_expired_reserved hold UPDATE: before/after SEARCH sqlite_autoindex_run_holds_1(project_id,kind,identity).
+close_expired_reserved request UPDATE: before/after SEARCH sqlite_autoindex_account_billing_probe_requests_1(project_id,request_key).
+Files: packages/codex-agents/{native-package/.codex/orchestration/codex_agents/learning_store.py,tests/test_release_batch_queries.py}; scripts/{test-stages,test-layers,test-requirements}.json; measurements/rsa-step3/{requirements.md,p2-*}.
+Schema version change: no (16); existing additive install-on-open path. Existing test lines changed: none. No commit.
+Tests: baseline 7783a899 red shows the intended scan failure (p2-red.log); new 3/3 pass including 27 rows-equal cases; six completed worker units: 90 pass, 1 existing expected failure; two direct expiry regressions pass.
+Targeted six-module runner (trusted --base, no full suite): RSA3-4/RSA3-5 pass; gate exit 1: 1,132 metadata errors already present before fix and billing-admission timeout at 600s/over budget; representative signature/cleanup timeout also reproduced on baseline (p2-baseline-diagnostic.log).

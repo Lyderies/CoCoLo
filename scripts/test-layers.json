@@ -228,6 +228,7 @@
  "codex:tests.test_rate_limit_contracts": "unit",
  "codex:tests.test_record_context": "scenario",
  "codex:tests.test_refusal_steps": "unit",
+ "codex:tests.test_release_batch_queries": "unit",
  "codex:tests.test_required_host_open": "scenario",
  "codex:tests.test_result_commit_busy": "scenario",
  "codex:tests.test_result_denial_lane": "scenario",
