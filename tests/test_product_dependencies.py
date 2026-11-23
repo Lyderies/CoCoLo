@@ -101,6 +101,19 @@ class ProductDependencies(unittest.TestCase):
         self.assertEqual(before,record(digest='after'),'TF-26 imported product default invalidated legacy proof')
         self.assertNotEqual(before['dependency_values'],record(expected=2)['dependency_values'],'TF-26 test-owned default edit was hidden')
 
+    @requirements('TF-26','TF-25')
+    def test_later_bookkeeping_proof_takes_precedence_over_older_policy_record(self):
+        try: policy=importlib.import_module('test_owned_baseline')
+        except ModuleNotFoundError:self.fail('TF-26 missing release/policy dependency precedence')
+        combine=getattr(policy,'effective_records',None)
+        self.assertTrue(callable(combine),'TF-26 missing release/policy dependency precedence')
+        old={'case':{'fingerprint':'same-test','dependencies':'old','dependency_values':'old'}}
+        translated={'case':{'fingerprint':'same-test','dependencies':'translated','dependency_values':'translated'}}
+        self.assertEqual(translated,combine(old,translated),'historical bookkeeping must receive the new interpretation')
+        later={'case':{'fingerprint':'same-test','dependencies':'later-release','dependency_values':'later-release','dependency_policy':'test-owned'}}
+        self.assertEqual(later,combine(later,translated),'TF-26 stale policy baseline replaced a later release proof')
+        self.assertEqual(later,combine(later,{}))
+
     @requirements('TF-26','TF-7','TF-23')
     def test_migration_rejects_wrong_provenance_and_changed_test_identity(self):
         try: policy=importlib.import_module('test_owned_baseline')
