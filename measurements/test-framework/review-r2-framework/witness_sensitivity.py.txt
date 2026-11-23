@@ -1,0 +1,59 @@
+import contextlib,copy,importlib,io,json,sys,unittest
+from pathlib import Path
+from unittest import mock
+root=Path('<cocolo-testfw>');sys.path[:0]=[str(root/'tests'),str(root/'scripts')]
+import test_framework as fw
+import test_test_framework as core
+import test_test_framework_review as review
+import test_test_framework_guards as guards
+records=[]
+def check(label,case,patch,needle):
+ result=unittest.TestResult()
+ with patch,contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):case.run(result)
+ details='\n'.join(text for _,text in result.failures+result.errors)
+ assert needle in details, (label,'wrong/no failure',details)
+ records.append({'finding':label,'test':case.id(),'expected_diagnostic':needle,'failure':details})
+ print(label,'caught:',needle,flush=True)
+original=fw.validate_dependencies
+def ignore_pins(root):return [e for e in original(root) if e!='test dependency is not exactly pinned and hashed']
+check('M5',core.ReviewCoreTests('test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins'),mock.patch.object(fw,'validate_dependencies',ignore_pins),'M5 invalid pin/hash escaped')
+original_evidence=fw.registered_outcomes
+def ignore_revision(checks,evidence):
+ evidence=copy.deepcopy(evidence)
+ for name,row in evidence.items():row['revision']=checks[name].get('revision')
+ return original_evidence(checks,evidence)
+check('N2',review.ReviewTests('test_registered_future_check_and_review_record_are_not_passing_evidence'),mock.patch.object(fw,'registered_outcomes',ignore_revision),'N2 wrong revision was accepted')
+probe=guards.WorkerTests.probe
+def omit_outcome(self,*args,**kwargs):
+ code,output,result=probe(self,*args,**kwargs)
+ if result:result['outcomes'].pop('test_probe.Expected.test_expected',None)
+ return code,output,result
+check('M8 absent',guards.RunnerIntegrationTests('test_review_C9_executed_expected_failure_and_unexpected_success_do_not_pass_gate'),mock.patch.object(guards.WorkerTests,'probe',omit_outcome),'M8 expected case absent')
+def wrong_outcome(self,*args,**kwargs):
+ code,output,result=probe(self,*args,**kwargs)
+ if result and 'test_probe.Expected.test_expected' in result['outcomes']:result['outcomes']['test_probe.Expected.test_expected']='failed'
+ return code,output,result
+check('M8 wrong status',guards.RunnerIntegrationTests('test_review_C9_executed_expected_failure_and_unexpected_success_do_not_pass_gate'),mock.patch.object(guards.WorkerTests,'probe',wrong_outcome),'M8 wrong executed outcome')
+def permit_async(self,body,layer,before='',bootstrap=''):
+ if 'async def exercise' in body:
+  bootstrap+='\nasync def allowed(*args,**kwargs): return None\nasyncio.open_connection=allowed\nasyncio.start_server=allowed'
+ return probe(self,body,layer,before,bootstrap)
+check('M6',guards.WorkerTests('test_review_C5_inherited_and_convenience_socket_apis_in_both_layers'),mock.patch.object(guards.WorkerTests,'probe',permit_async),'M6 prohibited asyncio API completed')
+def slow_deny(self,body,layer,before='',bootstrap=''):
+ bootstrap+='\nimport sys; sys.path.insert(0,'+repr(str(root/'scripts'))+')\nfrom test_worker import Guard\nimport time\noriginal_deny=Guard.deny\nreal_sleep=time.sleep\ndef delayed(self,operation):\n    real_sleep(.6)\n    return original_deny(self,operation)\nGuard.deny=delayed'
+ return probe(self,body,layer,before,bootstrap)
+check('N3',guards.RunnerIntegrationTests('test_C13_ready_join_fake_clock_poll_and_elapsed_bound'),mock.patch.object(guards.WorkerTests,'probe',slow_deny),'N3 join elapsed assertion did not complete')
+fixture=guards.RunnerIntegrationTests.run_fixture
+def unsharded(self,*args,**kwargs):
+ extra=list(kwargs.get('extra_args',()))
+ if '--shard' in extra:
+  at=extra.index('--shard'); del extra[at:at+2];kwargs['extra_args']=extra
+ return fixture(self,*args,**kwargs)
+check('M7 shard',guards.RunnerIntegrationTests('test_r2_M7_real_runner_shards_and_import_failure'),mock.patch.object(guards.RunnerIntegrationTests,'run_fixture',unsharded),'M7 duplicate shard execution')
+import time
+clock=time.monotonic; offset=[0.]
+def late_cleanup(self,*args,**kwargs):
+ result=fixture(self,*args,**kwargs);offset[0]=6.;return result
+with mock.patch.object(time,'monotonic',side_effect=lambda:clock()+offset[0]):
+ check('M7 bound',guards.RunnerIntegrationTests('test_owned_descendants_are_reaped_when_a_worker_finishes'),mock.patch.object(guards.RunnerIntegrationTests,'run_fixture',late_cleanup),'M7 normal descendant cleanup exceeded bound')
+Path('/private/tmp/cocolo-review-r2/framework-sensitivity.json').write_text(json.dumps(records,indent=1))

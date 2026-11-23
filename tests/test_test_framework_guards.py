@@ -208,6 +208,7 @@ class WorkerTests(unittest.TestCase):
                 self.assertTrue(result['markers']['async-reached'], 'M6 coroutine was never reached: ' + api)
                 self.assertNotEqual(0, code, 'M6 prohibited asyncio API completed: ' + api)
                 self.assertTrue(result['violations'], 'M6 expected network denial: ' + api)
+                self.assertFalse(result['markers']['fixture.sock'])
                 self.assertFalse(any('socketpair' in v['operation'] for v in result['violations']), 'M6 loop construction confounded the API probe')
             code, output, result = self.probe('import io\nfake=io.BytesIO()\nfake.write(b"ok")\nself.assertEqual(b"ok", fake.getvalue())', layer)
             self.assertEqual(0, code, output)
