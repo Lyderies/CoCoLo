@@ -299,3 +299,6 @@ No legacy coverage waivers,
 test expectation changes, new dependencies beyond Hypothesis's required dependency closure, or total-run
 time target are proposed. Existing slow-module and lifecycle-coverage failures are visible debt, not reasons
 to claim the framework implementation is green overall.
+
+
+**TF-20 — Review witnesses need falsifiable evidence.** Every new or changed review-fix witness must name its requirement, positive control, an old-code red run at the reviewed base revision (round 3: `9c18c4a3`) with the intended failure diagnostic, and its green run after the fix. For a witness-only repair, the red must show that the old witness accepts a deliberately invalid result; the repaired witness must reject that same result and accept the valid control. A small committed evidence manifest declares each fix and its witnesses. A framework check rejects a declared fix without a requirement, positive control, reviewed base, red-run evidence/diagnostic, or green-run evidence. Referenced evidence files must exist and record the stated outcome. Human review verifies that the diagnostic and control prove the requirement; mechanical presence checks do not replace that judgment. No changed assertion may be omitted from the assertion ledger.
