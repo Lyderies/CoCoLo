@@ -2188,7 +2188,8 @@ class LearningLedger:
                 "WHERE state<>'committed'"
             )
             # RSA3-4 (F9): each release batch seeks reserved probes, never their committed history.
-            # Index state alone preserves rowid order within reserved rows, including LIMIT selection.
+            # The SELECT has no ORDER BY (as before); in practice equal-state rows are visited in rowid order,
+            # as the former table scan did, so LIMIT picks the same rows (RSA3-5 tests it).
             self._connection.execute(
                 "CREATE INDEX IF NOT EXISTS billing_probe_reserved ON account_billing_probe_requests(state) "
                 "WHERE state='reserved'"
