@@ -303,13 +303,19 @@ class CrashSafeRetirementTests(RetirementFixture):
         elif point == 'after_body_unlink':
             body, context = self.names(1)
             patch = self.failing_unlink(Stop(), only={context[1]})
-        elif point == 'body_unlinked_only':  # the body's names went, the context's did not
+        elif point == 'body_unlinked_only':  # the body's names went (a partial too), the context's final name stays
             body, context = self.names(1)
-            patch = self.failing_unlink(Stop(), only={context[1]})
-        elif point == 'context_unlinked_only':  # the context's names went, the body's did not
+            for name in body:
+                self.path(name).unlink(missing_ok=True)
+            self.path(body[0]).write_bytes(b'LEFTOVER-BODY-PARTIAL')  # a partial name of a stopped writer is present
+            self.assertEqual({body[0], context[1]}, set(self.attempt_files()))
+            patch = self.failing_unlink(Stop(), only={body[0]})
+        elif point == 'context_unlinked_only':  # the context's names went, the body's final name stays
             body, context = self.names(1)
             for name in context:
                 self.path(name).unlink(missing_ok=True)
+            self.path(context[0]).write_bytes(b'LEFTOVER-CONTEXT-PARTIAL')
+            self.assertEqual({body[1], context[0]}, set(self.attempt_files()))
             patch = self.failing_unlink(Stop(), only={body[1]})
         elif point == 'after_context_unlink':
             patch = self.failing_fsync(error=Stop())
@@ -326,6 +332,10 @@ class CrashSafeRetirementTests(RetirementFixture):
         self.assertEqual('retiring', self.row_state())  # the retirement is recorded, not finished
         self.assertEqual(('released', 'retention'), self.release_kind())
         self.assertEqual(1, self.charged())  # the charge is kept until `expired`
+        body, context = self.names(1)
+        remaining = {'body_unlinked_only': {body[0], context[1]}, 'context_unlinked_only': {body[1], context[0]}}
+        if point in remaining:  # the distinct on-disk state the stop left is the one the next pass starts from
+            self.assertEqual(remaining[point], set(self.attempt_files()))
         if point in ('after_retiring', 'after_body_unlink', 'body_unlinked_only', 'context_unlinked_only'):
             with self.failing_unlink(OSError('still failing')):  # a file remains: no read returns it in between
                 for read in (lambda: self.store.read_result(binding(1)),
@@ -628,14 +638,15 @@ class StartupReconcileTests(RetirementFixture):
             'SELECT state FROM project_result_contexts')))
 
     def traced_start_up(self):
-        """The whole start-up (a fresh open of the store, its reconcile included) with every route a body or context
-        file's bytes could take watched: open by name (builtins, io, os), and a read, pread or readv of any
-        descriptor opened on such a name, which covers an inherited descriptor too."""
+        """The whole start-up (a fresh open of the store, its reconcile included) with these routes watched: an open by
+        a str or bytes path name (builtins, io, os), and a read, pread or readv of a descriptor that this trace saw
+        opened on such a name. A descriptor inherited from outside the trace is not covered."""
         import io
         opened, tracked, read = [], set(), []
 
         def matches(name):
-            return str(name).rsplit('/', 1)[-1].startswith(('.context-', '.result-'))
+            return os.fsdecode(name).rsplit('/', 1)[-1].startswith(('.context-', '.result-')) \
+                if isinstance(name, (str, bytes, os.PathLike)) else False
 
         def wrap_open(real):
             def traced(name, *args, **kwargs):
@@ -722,7 +733,8 @@ class StartupReconcileTests(RetirementFixture):
         self.assertGreater(min(few_runs), 0)
         # Measured: the same litter costs 480 steps on every run but one of 490 (the handler counts in ticks of 10),
         # with and without 100 000 tombstones. Two ticks of margin over the worst quiet run; one statement per
-        # tombstone would add at least 100 000 steps, so this bound still fails for any growth with the tombstones.
+        # tombstone would add at least 100 000 steps, so this bound fails for growth with the tombstones; growth of
+        # up to 20 steps (two ticks) is tolerated, as it is within the run-to-run difference.
         self.assertLessEqual(many, few + 20, (few_runs, many_runs))
         self.assertEqual(self.LIVE, len([name for name in self.attempt_files() if name.startswith('.context-')]))
 
@@ -850,6 +862,71 @@ class ReservationOnlyAndVisibilityTests(RetirementFixture):
         results = [self.pass_(limit=1) for _ in range(4)]
         self.assertIn('history_unsafe_path', results)
         self.assertEqual(['repair_required', 'ended', 'ended'], [self.context_state(n) for n in (1, 2, 3)])
+
+    def retrying_then_directory(self, retries):
+        """`retries` contexts that keep failing to unlink (earlier rows), then one directory repair (a later row)."""
+        numbers = list(range(1, retries + 1))
+        self.committed(*numbers, retries + 1)
+        later = retries + 1
+        directory = self.path(self.names(later)[0][1])
+        directory.unlink()
+        directory.mkdir()
+        self.now = max(self.due(n) for n in numbers + [later])
+        failing = set()
+        for number in numbers:
+            body, context = self.names(number)
+            failing |= {body[1], context[1]}
+        with self.failing_unlink(PermissionError('CANARY-persistent'), only=failing):
+            self.assertIn(self.pass_(), ('history_unavailable', 'history_unsafe_path'))
+        return numbers, later
+
+    def test_R2_earlier_persistent_retries_do_not_hide_a_later_directory_repair_in_the_bounded_report(self):
+        numbers, later = self.retrying_then_directory(4)
+        self.assertEqual('repair_required', self.context_state(later))
+        report = self.store.result_retirement_repairs(3)
+        self.assertEqual(3, len(report))
+        self.assertEqual((self.attempt(later)[0], 'directory'), (report[0]['run_handle'], report[0]['reason']))
+        self.assertEqual(['retrying', 'retrying'], [row['reason'] for row in report[1:]])
+
+    def test_R2_a_truncated_report_says_so_and_its_continuation_reaches_every_remaining_entry(self):
+        numbers, later = self.retrying_then_directory(4)
+        seen, cursor, pages = [], None, 0
+        while True:
+            report = self.store.result_retirement_repairs(2, cursor)
+            pages += 1
+            self.assertLessEqual(len(report), 2)
+            seen += [(row['run_handle'], row['reason']) for row in report]
+            if not report.truncated:
+                self.assertIsNone(report.cursor)
+                break
+            self.assertIsNotNone(report.cursor)
+            cursor = report.cursor
+            self.assertLess(pages, 10)
+        expected = {(self.attempt(n)[0], 'retrying') for n in numbers} | {(self.attempt(later)[0], 'directory')}
+        self.assertEqual(expected, set(seen))
+        self.assertEqual(len(expected), len(seen))  # none twice
+        self.assertEqual((self.attempt(later)[0], 'directory'), seen[0])  # the operator-needed entry comes first
+
+    def test_R2_a_report_that_fits_the_limit_is_not_truncated(self):
+        self.retrying_then_directory(2)
+        report = self.store.result_retirement_repairs(5)
+        self.assertEqual(3, len(report))
+        self.assertFalse(report.truncated)
+        self.assertIsNone(report.cursor)
+
+    def test_R2_a_reservation_only_directory_is_listed_before_earlier_retrying_contexts(self):
+        self.committed(1, 2)
+        self.direct(7)
+        directory = self.path(self.reservation_only_names(7)[1])
+        directory.unlink()
+        directory.mkdir()
+        self.now = max(self.due(1), self.due(2), self.due(7))
+        failing = {name for n in (1, 2) for name in (self.names(n)[0][1], self.names(n)[1][1])}
+        with self.failing_unlink(PermissionError('CANARY-persistent'), only=failing):
+            self.pass_()
+        report = self.store.result_retirement_repairs(2)
+        self.assertEqual((self.attempt(7)[0], 'directory'), (report[0]['run_handle'], report[0]['reason']))
+        self.assertTrue(report.truncated)
 
 
 def project_result_contexts_live(store):
