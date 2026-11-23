@@ -33,12 +33,25 @@ Owner numbers (decision 90): 90.3 A 256 MiB contexts, 90.4 A 1 h verifier margin
 SH-4's "no pre-commit deadline retires" is applied to reservations born from a lease (a `result_leases` row for the claim).
 The product path is always lease-born: the driver calls `prepare_lease` (project_driver.py), never the non-lease
 `ResultPersistence.prepare(binding, handle, hard_deadline_at_ms=...)`, whose branch (`reserve_result`, no lease, no context)
-has no product caller. `NativeProductCallerTests` (test_deadlines_retention.py) pins that by AST over the native package: only
-tests may call it. That branch keeps today's deadline rules because ~10 existing assertions in test_project_results.py pin
+has no product caller. Enforcement is at runtime: `ResultPersistenceLane.prepare` refuses (`history_not_authorized`) unless the lane
+was built with `allow_local_execution_reference`; `ProjectRuntime` (the service entry point) does not pass it, and only the tests'
+explicit local-reference fixtures do. `NativeProductCallerTests` checks that on a real `ProjectRuntime` lane, and keeps an AST scan of the
+native package as a regression gate only (direct `.prepare(..., hard_deadline_at_ms=...)` and `.reserve_result(...)` calls; it does not
+cover aliases, `**kwargs` spellings, `getattr`, or code outside the package). That branch keeps today's deadline rules because ~10 existing assertions in test_project_results.py pin
 them (e.g. `test_expired_reservation_still_blocks_metadata_identity_reuse`: reserve, now=61 000, `expire_results() == 1`);
 editing those needs owner approval. A lease-born reserved row never lacks its obligation hold (taken in the claim's own
 transaction; `register_consistent` refuses a store without it). If one did, `_obligation_state` returns `missing`: kept and
 charged, never retired by a deadline, and reported by the register validator; the expire selector agrees.
+
+Recovery of a `missing` hold (a defect state; none is produced by the product path). The validator is the library function
+`project_holds_schema.register_consistent(connection) -> bool`; in D2 it has no owner-facing command and its only callers are the
+tests: it reports a bare False for the whole store (no row detail), and an owner-facing report is a later RS-B slice (not built here).
+Until then custody stays conservative: the reserved row, its prepared body and its context stay charged and are never deleted by a
+deadline or by the selector. A safe repair, by an operator, is: stop the service; copy the whole project history folder aside;
+find the reserved `result_reservations` row with no matching `project_holds` row (kind `reservation`, identity = its `claim_id`) and
+re-take that one hold with `project_holds_schema.take_hold` in a single transaction; run `register_consistent` again and require True;
+never delete the row or its files to make the validator pass. If the claim's real settlement is already known, record it through the
+RS-B settlement path (B4, later) instead of re-taking.
 
 ## Not in D2 (later slices)
 Replay (RS-D R3', D4 slice), arbitration (B4), `record_account_settlement` (B4: a `lost` release is planted directly in tests),

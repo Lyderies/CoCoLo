@@ -1046,14 +1046,17 @@
    "codex:tests.test_deadlines_retention.CommittedRetentionTests.test_D3_with_no_verifier_ever_the_active_orchestration_does_not_extend_it",
    "codex:tests.test_deadlines_retention.ContextSweepTests.test_X6_a_bound_attempt_keeps_context_body_and_charge_while_reserved_committed_and_recorded",
    "codex:tests.test_deadlines_retention.ContextSweepTests.test_X7_a_lease_released_without_a_reservation_retires_its_context",
+   "codex:tests.test_deadlines_retention.NativeProductCallerTests.test_a_product_runtime_lane_refuses_the_non_lease_prepare_at_runtime",
    "codex:tests.test_deadlines_retention.NativeProductCallerTests.test_no_product_code_calls_the_non_lease_prepare_and_the_driver_uses_prepare_lease",
    "codex:tests.test_deadlines_retention.NativeProductCallerTests.test_only_result_persistence_defines_the_no_lease_branch",
    "codex:tests.test_deadlines_retention.OrchestrationCloseTests.test_C1_a_closed_orchestration_releases_committed_custody_orchestration_closed_at_the_next_pass",
    "codex:tests.test_deadlines_retention.OrchestrationCloseTests.test_C2_a_closed_orchestration_without_an_unattended_release_still_reads_as_refused",
    "codex:tests.test_deadlines_retention.OrchestrationCloseTests.test_C2_an_unattended_close_keeps_custody_readable_and_recordable_to_its_deadline",
    "codex:tests.test_deadlines_retention.OrchestrationCloseTests.test_C3_a_close_or_expiry_racing_a_read_returns_no_bytes_and_later_context_reads_are_refused",
-   "codex:tests.test_deadlines_retention.OrchestrationCloseTests.test_C3_a_retiring_row_refuses_body_context_and_admission_whether_expiry_or_a_close_started_it",
-   "codex:tests.test_deadlines_retention.OrchestrationCloseTests.test_C3_an_admission_of_a_retiring_unrecorded_row_is_refused_and_records_nothing",
+   "codex:tests.test_deadlines_retention.OrchestrationCloseTests.test_C3_a_close_started_retiring_row_refuses_body_and_context_reads",
+   "codex:tests.test_deadlines_retention.OrchestrationCloseTests.test_C3_a_close_started_retiring_unrecorded_row_refuses_the_admission_and_records_nothing",
+   "codex:tests.test_deadlines_retention.OrchestrationCloseTests.test_C3_an_expiry_started_retiring_row_refuses_body_and_context_reads",
+   "codex:tests.test_deadlines_retention.OrchestrationCloseTests.test_C3_an_expiry_started_retiring_unrecorded_row_refuses_the_admission_and_records_nothing",
    "codex:tests.test_deadlines_retention.OrchestrationCloseTests.test_V2_expiry_during_the_verifier_preparation_refuses_it_and_nothing_is_launched",
    "codex:tests.test_deadlines_retention.OrchestrationCloseTests.test_V3_the_pair_reference_is_refused_while_its_orchestration_stays_active_after_the_worker_expired",
    "codex:tests.test_deadlines_retention.OrchestrationCloseTests.test_V4_an_expiry_inside_the_admission_refuses_it_and_records_nothing",
@@ -1073,7 +1076,7 @@
    "codex:tests.test_deadlines_retention.VerifierMarginTests.test_V4_a_forward_jump_past_both_deadlines_releases_both_and_the_verifier_result_is_refused"
   ],
   "source": "REQUIREMENTS-deadlines-retention.md#RS-D-D2",
-  "statement": "**RS-D-D2 \u2014 Deadlines and retention of result custody.**\nNo deadline before the commit retires a lease-born reservation: a reserved row past its lease deadline stays charged and\npublishable while its RS-B obligation is held, and is retired only after RS-B releases that obligation (SH-4, RS-4);\na row that lacks its hold is kept and reported, never retired by a deadline. Committed custody is released `retention`\nexactly at `retained_until_ms`, judged at max(wall, persisted floor), so a moved-back clock revives nothing and blocks no\npass (RS-D-7). A closed orchestration releases committed custody `orchestration_closed`, but an unattended close does not\nend custody (owner decision 90.8). A verifier opens only when its worker outlasts the verifier's lease by one hour (owner\ndecision 90.4); a worker expiring while the verifier runs leaves the verifier's custody live, and a record on an expired\nattempt is refused. A retiring row refuses body, context and admission reads. Only the lease path (`prepare_lease`) is\nreachable from product code.\nSource: DESIGN-0.4.0-RS-D.md draft 2 s1, s8, s9, draft 3 s8, rows D1-D4, C1-C3, V1-V4; DESIGN-0.4.0-RS-BD-shared.md SH-3, SH-4; measurements/d2/requirements.md."
+  "statement": "**RS-D-D2 \u2014 Deadlines and retention of result custody.**\nNo deadline before the commit retires a lease-born reservation: a reserved row past its lease deadline stays charged and\npublishable while its RS-B obligation is held, and is retired only after RS-B releases that obligation (SH-4, RS-4);\na row that lacks its hold is kept and reported, never retired by a deadline. Committed custody is released `retention`\nexactly at `retained_until_ms`, judged at max(wall, persisted floor), so a moved-back clock revives nothing and blocks no\npass (RS-D-7). A closed orchestration releases committed custody `orchestration_closed`, but an unattended close does not\nend custody (owner decision 90.8). A verifier opens only when its worker outlasts the verifier's lease by one hour (owner\ndecision 90.4); a worker expiring while the verifier runs leaves the verifier's custody live, and a record on an expired\nattempt is refused. A retiring row refuses body, context and admission reads. Only the lease path (`prepare_lease`) is\nreachable from product code: the non-lease `prepare` is refused at runtime on any lane built without the local-reference allowance (the service runtime's lane).\nSource: DESIGN-0.4.0-RS-D.md draft 2 s1, s8, s9, draft 3 s8, rows D1-D4, C1-C3, V1-V4; DESIGN-0.4.0-RS-BD-shared.md SH-3, SH-4; measurements/d2/requirements.md."
  },
  "TERM-13": {
   "checks": [],

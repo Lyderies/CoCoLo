@@ -9,5 +9,5 @@ pass (RS-D-7). A closed orchestration releases committed custody `orchestration_
 end custody (owner decision 90.8). A verifier opens only when its worker outlasts the verifier's lease by one hour (owner
 decision 90.4); a worker expiring while the verifier runs leaves the verifier's custody live, and a record on an expired
 attempt is refused. A retiring row refuses body, context and admission reads. Only the lease path (`prepare_lease`) is
-reachable from product code.
+reachable from product code: the non-lease `prepare` is refused at runtime on any lane built without the local-reference allowance (the service runtime's lane).
 Source: DESIGN-0.4.0-RS-D.md draft 2 s1, s8, s9, draft 3 s8, rows D1-D4, C1-C3, V1-V4; DESIGN-0.4.0-RS-BD-shared.md SH-3, SH-4; measurements/d2/requirements.md.
