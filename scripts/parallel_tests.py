@@ -350,14 +350,15 @@ def metadata():
             committed = framework.decode_json(subprocess.check_output(['git','show',commits[0]+':scripts/test-legacy-release-0850.json'],cwd=ROOT,text=True))
             if committed != release or release['source_revision'] != framework.RELEASE_BASE:
                 raise ValueError('immutable release dependency baseline changed')
-            binding_name = 'scripts/test-legacy-release-0850-bindings.json'
-            if (ROOT/binding_name).exists():
-                binding_commits = subprocess.check_output(['git','log','--reverse','--format=%H','HEAD','--',binding_name],cwd=ROOT,text=True).split()
-                bindings = framework.decode_json((ROOT/binding_name).read_text())
-                original_bindings = framework.decode_json(subprocess.check_output(['git','show',binding_commits[0]+':'+binding_name],cwd=ROOT,text=True))
-                if bindings != original_bindings or bindings['source_revision'] != framework.RELEASE_BASE:
-                    raise ValueError('immutable release source bindings changed')
-                release = {**release, 'tests': {**release['tests'], **bindings['tests']}}
+            for binding_name in ('scripts/test-legacy-release-0850-bindings.json',
+                                 'scripts/test-legacy-release-0850-runtime.json'):
+                if (ROOT/binding_name).exists():
+                    binding_commits = subprocess.check_output(['git','log','--reverse','--format=%H','HEAD','--',binding_name],cwd=ROOT,text=True).split()
+                    bindings = framework.decode_json((ROOT/binding_name).read_text())
+                    original_bindings = framework.decode_json(subprocess.check_output(['git','show',binding_commits[0]+':'+binding_name],cwd=ROOT,text=True))
+                    if bindings != original_bindings or bindings['source_revision'] != framework.RELEASE_BASE:
+                        raise ValueError('immutable release source bindings changed')
+                    release = {**release, 'tests': {**release['tests'], **bindings['tests']}}
             legacy, ceiling, previous = framework.release_legacy(legacy, ceiling, previous, release,
                 release_current, release_ceiling, release_previous)
         except (subprocess.CalledProcessError, ValueError, KeyError, IndexError) as error:

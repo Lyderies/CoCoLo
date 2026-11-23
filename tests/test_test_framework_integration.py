@@ -83,9 +83,11 @@ class ReleaseIntegration(unittest.TestCase):
 
     @requirements('TF-24','TF-8')
     def test_versioned_debt_has_measured_ceilings_and_cannot_grow(self):
-        path=ROOT/'scripts/test-budget-debt-0850.json'
+        path=ROOT/'scripts/test-budget-debt-0850-ceiling.json'
         self.assertTrue(path.exists(),'missing measured release debt version')
         debt=json.loads(path.read_text())
+        current=json.loads((ROOT/'scripts/test-budget-debt-0850.json').read_text())
+        self.assertEqual([],fw.validate_budget_debt(current,debt,debt))
         for name in ('billing_gate','billing_rejudge','ledger_startup','session_guard'):
             self.assertGreater(debt['modules']['codex:tests.test_'+name],fw.BUDGETS['unit' if name in ('ledger_startup','session_guard') else 'scenario'])
         self.assertFalse(any('merge_library' in name for name in debt['modules']))
