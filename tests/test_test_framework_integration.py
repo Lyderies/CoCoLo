@@ -104,5 +104,36 @@ class ReleaseIntegration(unittest.TestCase):
         bases=[line.split('TRUSTED_BASE: ',1)[1] for line in (ROOT/'.github/workflows/ci.yml').read_text().splitlines() if 'TRUSTED_BASE: ' in line]
         self.assertTrue(bases)
         self.assertTrue(all(value == base for value in bases),'CI release base is stale')
-        with mock.patch.object(runner,'metadata',side_effect=AssertionError('discovery ran without trusted base')), mock.patch.object(runner,'persist_record'):
+        with mock.patch.object(runner,'inventory',side_effect=AssertionError('discovery ran without trusted base')), mock.patch.object(runner,'persist_record'):
             self.assertEqual(1,runner.main([]))
+
+    @requirements('TF-24','TF-7','TF-8')
+    def test_committed_release_versions_reject_tamper_growth_and_restoration(self):
+        validate=getattr(runner,'release_versions',None)
+        self.assertTrue(callable(validate),'missing committed release version validation')
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/'scripts').mkdir()
+            def git(*args):
+                return subprocess.check_output(['git',*args],cwd=root,text=True,stderr=subprocess.DEVNULL).strip()
+            def write(name,value):
+                (root/'scripts'/name).write_text(json.dumps(value))
+            git('init','-b','main');git('config','user.name','Fixture');git('config','user.email','fixture@example.invalid')
+            git('commit','--allow-empty','-m','release');base=git('rev-parse','HEAD')
+            initial={'baseline':base,'modules':{'existing':12.}}
+            write('ceiling.json',initial);write('current.json',initial)
+            git('add','.');git('commit','-m','immutable introduction')
+            with mock.patch.object(runner,'REVIEW_BASE',base),mock.patch.object(fw,'RELEASE_BASE',base):
+                self.assertEqual((initial,initial),validate(root,initial,'ceiling.json','current.json'))
+                changed=copy.deepcopy(initial);changed['modules']['existing']=13.
+                write('ceiling.json',changed)
+                with self.assertRaisesRegex(ValueError,'immutable release baseline changed'):
+                    validate(root,initial,'ceiling.json','current.json')
+                write('ceiling.json',initial)
+                with self.assertRaisesRegex(ValueError,'release list grew or ceiling changed'):
+                    validate(root,changed,'ceiling.json','current.json')
+                retired={'baseline':base,'modules':{}}
+                write('current.json',retired);git('add','.');git('commit','-m','retire')
+                self.assertEqual((initial,initial),validate(root,retired,'ceiling.json','current.json'))
+                write('current.json',initial);git('add','.');git('commit','-m','forbidden restore')
+                with self.assertRaisesRegex(ValueError,'release history grew'):
+                    validate(root,initial,'ceiling.json','current.json')

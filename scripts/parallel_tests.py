@@ -331,11 +331,7 @@ DISCOVERY_SECONDS = 0.
 
 def metadata():
     global DISCOVERY_SECONDS
-    discovery_started = time.monotonic()
-    try:
-        discovered = inventory()
-    finally:
-        DISCOVERY_SECONDS = time.monotonic() - discovery_started
+    DISCOVERY_SECONDS = 0.
     def read(name):
         return framework.decode_json((ROOT / 'scripts' / name).read_text())
     stages, layers = read('test-stages.json'), read('test-layers.json')
@@ -358,6 +354,13 @@ def metadata():
                 release_current, release_ceiling, release_previous)
         except (subprocess.CalledProcessError, ValueError, KeyError, IndexError) as error:
             errors.append('cannot verify release legacy baseline: '+str(error))
+    if 'legacy list requires an explicit trusted --base' in errors:
+        raise ValueError('legacy list requires an explicit trusted --base')
+    discovery_started = time.monotonic()
+    try:
+        discovered = inventory()
+    finally:
+        DISCOVERY_SECONDS = time.monotonic() - discovery_started
     # Lifecycle checks use the same catalogue and remain required even in a module-only run.
     lifecycle = ROOT / 'scripts/e2e_lifecycle.py'
     checked = {}
@@ -721,8 +724,6 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error(f"--module wants SUITE:MODULE, got {item!r}")
             modules[suite].add(module)
         suites = [suite for suite in suites if modules[suite]]
-    if not REVIEW_BASE:
-        return preflight_failure('legacy list requires an explicit trusted --base', args.jobs, args.save_timings, time.monotonic())
     return run(args.jobs, suites, args.save_timings, args.keep, set(args.stage or STAGE_NAMES), modules, args.shard, args.profile)
 
 
