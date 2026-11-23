@@ -90,6 +90,17 @@ class ProductDependencies(unittest.TestCase):
         before=record('return 1');self.assertEqual(before,record('return 1'))
         self.assertEqual(before,record('return 2'),'TF-26 product source followed a test-looking alias')
 
+    @requirements('TF-26','TF-7')
+    def test_imported_product_defaults_use_identity_but_owned_defaults_keep_values(self):
+        def record(digest='before', expected=1):
+            self.load('product_contract', f'DIGEST={digest!r}\n', False)
+            self.load('shared_contract', f'from product_contract import DIGEST\nEXPECTED={expected}\ndef fixture(positional=DIGEST, *, keyword=DIGEST, expected=EXPECTED):\n    return positional, keyword, expected\n')
+            case=self.load('test_contract_owner','import unittest\nfrom shared_contract import fixture\nclass Case(unittest.TestCase):\n    def test_value(self): self.assertEqual(1,fixture()[-1])\n').Case('test_value')
+            return fw.describe_test(case)
+        before=record();self.assertEqual(before,record())
+        self.assertEqual(before,record(digest='after'),'TF-26 imported product default invalidated legacy proof')
+        self.assertNotEqual(before['dependency_values'],record(expected=2)['dependency_values'],'TF-26 test-owned default edit was hidden')
+
     @requirements('TF-26','TF-7','TF-23')
     def test_migration_rejects_wrong_provenance_and_changed_test_identity(self):
         try: policy=importlib.import_module('test_owned_baseline')
