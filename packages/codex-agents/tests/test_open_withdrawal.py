@@ -38,7 +38,7 @@ from codex_agents.account_api import (
 )
 from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST
 from codex_agents.history_contracts import HistoryError
-from codex_agents.hosts import OWNER_CLIENT
+from codex_agents.hosts import CLAUDE_HOST_CLIENT, CODEX_HOST_CLIENT, OWNER_CLIENT
 from codex_agents.learning_contracts import canonical_json, keyed_digest
 from codex_agents.learning_store import LearningLedger
 from codex_agents.open_withdrawal import (
@@ -311,7 +311,7 @@ class WithdrawReads:
         values.update(changes)
         return WithdrawOpenInput(**values)
 
-    def withdraw_as(self, value, *, role='project', host_client='codex', root=None, project_id=None,
+    def withdraw_as(self, value, *, role='project', host_client=CODEX_HOST_CLIENT, root=None, project_id=None,
                     custody=b'same', request_id=None):
         """One withdraw_open through the real client, enrollment, ingress and dispatch, as `role` for `root`."""
         root = root or self.project
@@ -395,8 +395,8 @@ class WithdrawAccountTests(WithdrawHarness):
         cases = {
             'another project as itself': dict(root=self.second, project_id=self.second_id),
             'another project as this one': dict(root=self.second),
-            "another host class's service": dict(host_client='claude'),
-            "another host class's primary": dict(role='account', host_client='claude'),
+            "another host class's service": dict(host_client=CLAUDE_HOST_CLIENT),
+            "another host class's primary": dict(role='account', host_client=CLAUDE_HOST_CLIENT),
             "the owner's terminal": dict(role='account', host_client=OWNER_CLIENT),
             'no custody': dict(custody=None),
             'custody for another attempt': dict(custody=withdrawal_custody(self.payload(run_handle, attempt=2))),
@@ -447,8 +447,8 @@ class WithdrawAccountTests(WithdrawHarness):
         *_, run_handle = self.opened()
         value = self.payload(run_handle)
         self.withdraw_as(value)
-        self.assertEqual('account_not_authorized', self.refused(value, host_client='claude'))
-        self.assertEqual('account_not_authorized', self.refused(value, role='account', host_client='claude'))
+        self.assertEqual('account_not_authorized', self.refused(value, host_client=CLAUDE_HOST_CLIENT))
+        self.assertEqual('account_not_authorized', self.refused(value, role='account', host_client=CLAUDE_HOST_CLIENT))
         self.assertIn(self.refused(value, root=self.second, project_id=self.second_id),
                       {'account_not_authorized', 'withdraw_unavailable'})
 
