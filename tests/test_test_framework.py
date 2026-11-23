@@ -458,9 +458,16 @@ class ReviewCoreTests(unittest.TestCase):
         (self.root / 'packages/claude-agents/src/planted.py').unlink()
         (self.root / 'packages/claude-agents/src').rmdir()
         self.assertTrue(self.fw.validate_dependencies(self.root))
-        for invalid in ('hypothesis==6.170.17', 'hypothesis>=6', valid.replace(' --hash=sha256:' + 'b' * 64, '')):
+        (self.root / 'packages/claude-agents/src').mkdir()
+        requirements.write_text(valid)
+        self.assertEqual([], self.fw.validate_dependencies(self.root), 'M5 valid fixture must have no unrelated error')
+        for invalid in (valid.replace(' --hash=sha256:' + 'a' * 64, ''), valid.replace('hypothesis==6.170.17', 'hypothesis>=6'), valid.replace(' --hash=sha256:' + 'b' * 64, '')):
             requirements.write_text(invalid)
-            self.assertTrue(self.fw.validate_dependencies(self.root))
+            errors = self.fw.validate_dependencies(self.root)
+            self.assertIn('test dependency is not exactly pinned and hashed', errors, 'M5 invalid pin/hash escaped')
+            self.assertFalse(any('missing shipped root' in e for e in errors))
+            requirements.write_text(valid)
+            self.assertEqual([], self.fw.validate_dependencies(self.root))
 
 
 class ReviewRunnerPolicyTests(unittest.TestCase):

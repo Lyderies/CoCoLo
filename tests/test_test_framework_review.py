@@ -63,15 +63,16 @@ class Fixture:
         checks = {'future': {'kind': 'executable', 'step': 3},
                   'review': {'kind': 'review', 'revision': 'abc', 'evidence': None}}
         self.assertEqual({'future': 'not_run', 'review': 'not_run'}, self.fw.registered_outcomes(checks, {}))
-        evidence = {'review': {'revision': 'wrong', 'outcome': 'passed', 'record': 'reviews/r1.json'}}
-        self.assertEqual('failed', self.fw.registered_outcomes(checks, evidence)['review'])
-        evidence['review']['revision'] = 'abc'
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         record = Path(temporary.name) / 'review.json'
         record.write_text(json.dumps({'revision': 'abc', 'outcome': 'passed'}))
-        evidence['review']['record'] = str(record)
-        evidence['review']['sha256'] = __import__('hashlib').sha256(record.read_bytes()).hexdigest()
+        evidence = {'review': {'revision': 'abc', 'outcome': 'passed', 'record': str(record),
+                              'sha256': __import__('hashlib').sha256(record.read_bytes()).hexdigest()}}
+        self.assertEqual('passed', self.fw.registered_outcomes(checks, evidence)['review'])
+        evidence['review']['revision'] = 'wrong'
+        self.assertEqual('failed', self.fw.registered_outcomes(checks, evidence)['review'], 'N2 wrong revision was accepted')
+        evidence['review']['revision'] = 'abc'
         self.assertEqual('passed', self.fw.registered_outcomes(checks, evidence)['review'])
         evidence['review'].pop('record')
         self.assertEqual('failed', self.fw.registered_outcomes(checks, evidence)['review'])
