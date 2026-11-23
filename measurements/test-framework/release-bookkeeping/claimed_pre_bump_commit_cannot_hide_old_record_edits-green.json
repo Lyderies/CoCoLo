@@ -1,0 +1,8 @@
+{
+ "status": "green",
+ "witness": "root:test_release_bookkeeping.ReleaseBookkeeping.test_claimed_pre_bump_commit_cannot_hide_old_record_edits",
+ "positive_control": "Unchanged admitted source/proof passes; a forged old record in both claimed revisions is rejected.",
+ "source_run": "green.run.json",
+ "job_seconds": 10.371961709053721,
+ "jobs": 16
+}
