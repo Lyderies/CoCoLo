@@ -32,12 +32,18 @@ class RoundTwo(unittest.TestCase):
         return module
 
     def test_M1_unrelated_source_cannot_resolve_a_specific_dependency(self):
-        module = self.module('test_binding', 'import unittest\nOPAQUE = object()\nclass Case(unittest.TestCase):\n    def helper(self): return 1\n    def test_value(self): self.assertTrue(OPAQUE); self.assertEqual(1, getattr(self,"helper")())\n')
         unrelated = self.root / 'unrelated.py'; unrelated.write_text('VALUE = 1\n')
-        case = module.Case('test_value')
-        self.assertIsNone(fw.dependency_fingerprint(case))
-        self.assertIsNone(fw.dependency_fingerprint(case, source_dependencies=(unrelated,)), 'unrelated source restored unresolved dependency eligibility')
-        self.assertIsNotNone(fw.dependency_fingerprint(case, source_dependencies=(module.__file__,)))
+        sources = {
+            'values': 'import unittest\nOPAQUE = object()\nclass Case(unittest.TestCase):\n    def test_value(self): self.assertTrue(OPAQUE)\n',
+            'helpers': 'import unittest\nclass Case(unittest.TestCase):\n    def helper(self): return 1\n    def test_value(self): self.assertEqual(1, getattr(self,"helper")())\n',
+        }
+        for kind, source in sources.items():
+            with self.subTest(dependency=kind):
+                module = self.module('test_binding_' + kind, source)
+                case = module.Case('test_value')
+                self.assertIsNone(fw.dependency_fingerprint(case))
+                self.assertIsNone(fw.dependency_fingerprint(case, source_dependencies=(unrelated,)), 'unrelated source restored ' + kind + ' eligibility')
+                self.assertIsNotNone(fw.dependency_fingerprint(case, source_dependencies=(module.__file__,)))
 
     def test_N1_same_basename_dependencies_both_contribute(self):
         module = self.module('test_files', 'import unittest\nclass Case(unittest.TestCase):\n    def test_value(self): self.assertEqual(1,1)\n')

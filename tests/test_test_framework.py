@@ -286,7 +286,7 @@ class BudgetDebtTests(unittest.TestCase):
     def measure(self, seconds, **kw):
         rows = [dict(suite='root', unit='old', seconds=seconds, names=['test'], returncode=0)]
         return self.fw.measurements(rows, self.layers, self.stages, jobs=16, elapsed=seconds,
-                                    selection=['root:old'], budget_debt=self.debt, **kw)
+                                    selection=['root:old'], budget_debt=self.debt, expected_fragments={'root:old':['old']}, **kw)
 
     @requirements('TF-8', why_not_scenario='Verify baseline debt warns even unselected and only regression fails using isolated framework fixtures.')
     def test_baseline_debt_warns_even_unselected_and_only_regression_fails(self):
