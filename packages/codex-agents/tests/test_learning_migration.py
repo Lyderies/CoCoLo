@@ -43,7 +43,7 @@ class LearningMigrationTests(unittest.TestCase):
 
     def partition(self):
         body = learning_store._snapshot_project_partition(
-            self.source._connection, self.project, ledger_schema_version=13)
+            self.source._connection, self.project, ledger_schema_version=16)
         body["tables"].pop("stored_files")  # The migration's own sealed backup is registered here.
         body["counts"].pop("stored_files")
         return body

@@ -308,6 +308,19 @@ for row in json.loads((root / "frames.json").read_text()):
             self.pool.withdraw_prepared(prepared[3])
         self.assertGreater(self.pool._charged, 0)
 
+    def test_or4_safe_report_keeps_every_readable_diagnostic_reason_and_refuses_others(self):
+        """OR-4: the bridge reports `contract_validation_failed` for an untyped validator error."""
+        from codex_agents.codex_worker import _safe_report
+        from codex_agents.contracts import RESULT_DIAGNOSTIC_REASON_CODES
+        report = {'provider': 'codex', 'requested_model': 'gpt-6.1-sol', 'effort': 'high', 'wall_seconds': 1,
+                  'read_containment': 'advisory', 'rerouted': False, 'outcome': 'invalid_result', 'usage': None}
+        for code in sorted(RESULT_DIAGNOSTIC_REASON_CODES):
+            with self.subTest(code=code):
+                body = json.loads(_safe_report({**report, 'result_validation_reason_code': code}, 'codex'))
+                self.assertEqual(code, body['result_validation_reason_code'])
+        with self.assertRaises(CodexWorkerError):
+            _safe_report({**report, 'result_validation_reason_code': 'free text from a child'}, 'codex')
+
     def test_safe_validator_reason_survives_worker_and_owner_delivery_without_rejected_content(self):
         invalid = {**fixtures.result(), "evidence": [], "summary": "PRIVATE-REJECTED-RESULT"}
         prepared = self.prepare(value=invalid)

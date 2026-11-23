@@ -2499,8 +2499,8 @@ def build_verified_qa_records(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Derive verified QA from a durable host run and closed check contracts."""
 
-    host = validate_outcome(host_outcome)
-    verifier_host = validate_outcome(verifier_host_outcome)
+    host = validate_outcome(host_outcome, stored=True)
+    verifier_host = validate_outcome(verifier_host_outcome, stored=True)
     assignment_record = validate_evaluation_assignment(evaluation_assignment)
     case = validate_evaluation_case(evaluation_case)
     evaluator = validate_assignment_shape(evaluator_assignment)
@@ -2809,8 +2809,8 @@ def build_operational_qa_records(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Derive routine automatic QA without granting release authority."""
 
-    host = validate_outcome(host_outcome)
-    verifier_host = validate_outcome(verifier_host_outcome)
+    host = validate_outcome(host_outcome, stored=True)
+    verifier_host = validate_outcome(verifier_host_outcome, stored=True)
     evaluator = validate_assignment_shape(evaluator_assignment)
     evaluator_output = validate_result(evaluator_result, assignment=evaluator)
     verifier = validate_assignment_shape(verifier_assignment)
@@ -3032,7 +3032,7 @@ def mine_evaluation_case(
     criteria_digest: str,
     lineage_digest: str,
 ) -> dict[str, Any]:
-    checked = validate_outcome(outcome)
+    checked = validate_outcome(outcome, stored=True)
     record = {
         "schema_version": 1,
         "record_type": "evaluation_case",
@@ -3242,7 +3242,7 @@ def candidate_matches_outcome(
 
     checked_candidate = validate_candidate(candidate)
     checked_outcome = validate_outcome(
-        {key: value for key, value in outcome.items() if not key.startswith("_")}
+        {key: value for key, value in outcome.items() if not key.startswith("_")}, stored=True
     )
     if cohort not in {"champion", "candidate"}:
         return False
@@ -3360,7 +3360,7 @@ def build_evaluation_trial(
     """Derive one immutable comparison trial from a persisted outcome."""
 
     checked_case = validate_evaluation_case(case)
-    checked_outcome = validate_outcome(outcome)
+    checked_outcome = validate_outcome(outcome, stored=True)
     checked_assignment = validate_evaluation_assignment(assignment)
     planned = [
         item for item in checked_assignment["trial_plan"]
@@ -3748,8 +3748,8 @@ def build_canary_report(
             "case_digest", "champion_outcome", "candidate_outcome"
         }:
             raise ContractError("canary case result must use the closed field set")
-        champion = validate_outcome(item["champion_outcome"])
-        candidate = validate_outcome(item["candidate_outcome"])
+        champion = validate_outcome(item["champion_outcome"], stored=True)
+        candidate = validate_outcome(item["candidate_outcome"], stored=True)
         case_digest = item["case_digest"]
         if (
             champion["evaluation_candidate_digest"] != champion_digest

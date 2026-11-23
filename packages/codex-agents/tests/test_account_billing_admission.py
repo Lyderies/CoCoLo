@@ -1,5 +1,6 @@
 """Real registered signature returns; model launch/native enrollment remain gated."""
 import json
+import secrets
 from copy import copy
 from pathlib import Path
 import sys
@@ -355,7 +356,8 @@ class AccountBillingAdmissionTests(unittest.TestCase):
     def test_recent_billing_reuses_original_records_without_probe_admission_and_known_retry_needs_no_worker(self):
         records = claude_rate_limit_records({'status': 'allowed', 'isUsingOverage': False,
             'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'},
-            account_fingerprint=self.identity['account_fingerprint'], observed_at_ms=self.clock)
+            account_fingerprint=self.identity['account_fingerprint'], observed_at_ms=self.clock,
+            probe_id=secrets.token_hex(32))
         self.ledger._store_provider_observations(self.fixture.project_id, records, timestamp=self.clock)
         original = self.reserve()
         self.prepared(original)
@@ -373,7 +375,8 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         fingerprint = self.identity['account_fingerprint']
         favourable = {'status': 'allowed', 'isUsingOverage': False,
             'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'}
-        probe = claude_rate_limit_records(favourable, account_fingerprint=fingerprint, observed_at_ms=self.clock-probe_age)
+        probe = claude_rate_limit_records(favourable, account_fingerprint=fingerprint,
+                                         observed_at_ms=self.clock-probe_age, probe_id=secrets.token_hex(32))
         run = claude_rate_limit_records(run_info, account_fingerprint=fingerprint, observed_at_ms=self.clock-run_age,
                                         run_id='run-finished-1')
         self.ledger._store_provider_observations(self.fixture.project_id, probe, timestamp=self.clock-probe_age)
@@ -472,7 +475,7 @@ class AccountBillingAdmissionTests(unittest.TestCase):
     def store_probe_only(self, info, *, age=2000):
         """A probe's own records (no run), inside the reuse window."""
         records = claude_rate_limit_records(info, account_fingerprint=self.identity['account_fingerprint'],
-                                            observed_at_ms=self.clock-age)
+                                            observed_at_ms=self.clock-age, probe_id=secrets.token_hex(32))
         self.ledger._store_provider_observations(self.fixture.project_id, records, timestamp=self.clock-age)
         return records
 
@@ -612,6 +615,110 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertEqual('denied', denied['probe'], denied)
         self.assertEqual({**denied, 'known': True}, self.reserve('probe-replay-deny'))
 
+    def test_PC6_cooldown_reply_names_latest_pass_retry_and_replays_it(self):
+        from datetime import datetime, timezone
+        first = self.reserve('pc6-first')
+        self.prepared(first)
+        self.assertIs(type(self.owner.admit(first)), ProbeAdmission)
+        passed_at = self.clock
+        self.clock += 10_000
+        self.fixture.observe('claude', now_ms=self.clock)
+        second = self.reserve('pc6-second')
+        self.prepared(second)
+        reply = self.owner.admit(second)
+        self.assertEqual('probe_cooldown', reply['reason_code'])
+        expected = datetime.fromtimestamp((passed_at + 300_000)/1000, timezone.utc).isoformat().replace('+00:00', 'Z')
+        self.assertEqual(expected, reply['retry_at'])
+        self.assertEqual({**reply, 'known': True}, self.reserve('pc6-second'))
+
+    # ---- PC-1..PC-2 (2026-11-22 probe reuse): a run record as constrained as the probe's own reading ----------
+    CONSTRAINED = {'status': 'allowed_warning', 'isUsingOverage': False, 'overageStatus': 'rejected',
+                   'overageDisabledReason': 'org_level_disabled',
+                   'unifiedWindows': {'five_hour': {'utilization': 0.38, 'status': 'allowed'},
+                                      'seven_day': {'utilization': 0.74, 'status': 'allowed_warning'}}}
+
+    def store_probe_info_then_run(self, probe_info, run_info, *, probe_age, run_age):
+        fingerprint = self.identity['account_fingerprint']
+        probe = claude_rate_limit_records(probe_info, account_fingerprint=fingerprint,
+                                          observed_at_ms=self.clock-probe_age, probe_id='a'*64)
+        self.ledger._store_provider_observations(self.fixture.project_id, probe, timestamp=self.clock-probe_age)
+        if run_info is not None:
+            run = claude_rate_limit_records(run_info, account_fingerprint=fingerprint,
+                                            observed_at_ms=self.clock-run_age, run_id='run-finished-1')
+            self.ledger._store_provider_observations(self.fixture.project_id, run, timestamp=self.clock-run_age)
+        return probe
+
+    def test_PC1_a_run_record_as_constrained_as_the_probe_does_not_block_reuse(self):
+        """PC-1: probe allowed_warning (5h 38%, weekly 74%), the child's record the same state at +30 s, the
+        request at +78 s: the reuse proceeds (re-evaluated and gated) instead of a fresh probe and a cooldown."""
+        probe = self.store_probe_info_then_run(self.CONSTRAINED, self.CONSTRAINED, probe_age=78_000, run_age=48_000)
+        original = self.reserve('probe-pc1')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), dict, result)
+        self.assertEqual('reused', result['probe'], result)
+        self.assertEqual([self.identity, *probe], result['records'])
+
+    def test_PC2_an_ample_probe_and_a_constrained_run_record_still_blocks_reuse(self):
+        self.store_probe_info_then_run(self.FAVOURABLE, self.CONSTRAINED, probe_age=78_000, run_age=48_000)
+        original = self.reserve('probe-pc2-a')
+        self.prepared(original)
+        self.assertIs(type(self.owner.admit(original)), ProbeAdmission)
+
+    def test_PC2_a_constrained_probe_and_an_exhausted_run_record_still_blocks_reuse(self):
+        exhausted = {**self.CONSTRAINED, 'status': 'rejected'}
+        self.store_probe_info_then_run(self.CONSTRAINED, exhausted, probe_age=78_000, run_age=48_000)
+        original = self.reserve('probe-pc2-b')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), dict, result)
+        self.assertEqual(('denied', 'provider_exhausted'), (result['probe'], result['reason_code']), result)
+
+    def test_PC2_a_constrained_probe_and_a_paid_usage_run_record_still_blocks_reuse(self):
+        paid = {**self.CONSTRAINED, 'isUsingOverage': True, 'overageStatus': 'allowed'}
+        self.store_probe_info_then_run(self.CONSTRAINED, paid, probe_age=78_000, run_age=48_000)
+        original = self.reserve('probe-pc2-c')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), dict, result)
+        self.assertEqual(('denied', 'paid_usage_usable'), (result['probe'], result['reason_code']), result)
+
+    def test_PC2_an_equal_state_does_not_reuse_a_stale_or_future_stamped_probe(self):
+        for name, age in (('stale', 300_001), ('future', -5_000)):
+            with self.subTest(name):
+                self.tearDown_probe_state()
+                self.store_probe_info_then_run(self.CONSTRAINED, self.CONSTRAINED, probe_age=age, run_age=age-30_000)
+                original = self.reserve(f'probe-pc2-{name}')
+                self.prepared(original)
+                result = self.owner.admit(original)
+                self.assertNotEqual('reused', result['probe'] if type(result) is dict else None, result)
+
+    # ---- MED-1 (fix round 1): the baseline is the headroom the SAME probe wrote as the reused billing ---------
+    def store_head_only(self, info, *, age):
+        """One headroom record (no billing) of another probe, stamped `age` before the clock (negative: later)."""
+        head = claude_rate_limit_records(info, account_fingerprint=self.identity['account_fingerprint'],
+                                         observed_at_ms=self.clock-age)[0]
+        self.ledger._store_provider_observations(self.fixture.project_id, [head], timestamp=self.clock-age)
+
+    def test_MED1_a_constrained_headroom_of_another_probe_is_not_the_baseline_of_an_ample_probe(self):
+        """An ample probe P at 0, a constrained headroom of another probe Q, a constrained run record at +40 s,
+        the request after: the run is worse than P, so the reuse is stopped whatever Q's stamp is."""
+        cases = (  # name, Q's age, run age, request age (all ages are before the clock; the request is `request`)
+            ('q-at-plus-30', 48_000, 38_000, 78_000),
+            ('q-at-exactly-60-s', 18_000, 8_000, 78_000),
+            ('q-stamped-after-the-request', -5_000, 5_000, 45_000),
+            ('q-with-the-probes-own-stamp', 78_000, 38_000, 78_000),
+        )
+        for name, q_age, run_age, probe_age in cases:
+            with self.subTest(name):
+                self.tearDown_probe_state()
+                self.store_probe_info_then_run(self.FAVOURABLE, self.CONSTRAINED, probe_age=probe_age, run_age=run_age)
+                self.store_head_only(self.CONSTRAINED, age=q_age)
+                original = self.reserve(f'probe-med1-{name}')
+                self.prepared(original)
+                result = self.owner.admit(original)
+                self.assertNotEqual('reused', result['probe'] if type(result) is dict else None, result)
+
     def tearDown_probe_state(self):
         connection = self.ledger._connection
         with self.ledger._lock, connection:
@@ -673,7 +780,7 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         path = self.ledger.create_sanitized_backup(self.fixture.project_id, file_id='original_probe',
             expires_at_ms=time.time_ns()//1_000_000+60_000)
         body = backup_body(path, self.fixture.project_id)
-        self.assertEqual(15, body['ledger_schema_version'])  # O0b RS-A (requirement)
+        self.assertEqual(16, body['ledger_schema_version'])  # O0b RS-A (requirement)
         self.assertTrue(self.ledger.verify_sanitized_backup(self.fixture.project_id, file_id='original_probe')['verified'])
         broken = deepcopy(body)
         broken['tables']['account_billing_probe_requests'] = []

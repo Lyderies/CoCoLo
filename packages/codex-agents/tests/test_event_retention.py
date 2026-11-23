@@ -252,7 +252,7 @@ class EventRetentionTests(unittest.TestCase):
         sequence = self.connection.execute("SELECT COALESCE(MAX(source_sequence),0)+1 FROM records "
                                            "WHERE project_id=?", (self.project,)).fetchone()[0]
         self.connection.execute(
-            "INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (self.project, "early", "event", "app_server", sequence, now, now, now + DAY, b"not json",
              "0" * 64, 0)).close()
         for number in range(5):

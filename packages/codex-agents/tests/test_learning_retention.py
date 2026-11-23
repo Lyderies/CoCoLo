@@ -269,7 +269,7 @@ class LegacyLearningWindowTests(unittest.TestCase):
         sequence = self.connection.execute(
             "SELECT MAX(source_sequence)+1 FROM records WHERE project_id=?", (self.project,)).fetchone()[0]
         self.connection.execute(
-            "INSERT INTO records VALUES(?,?,?,?,?,?,?,NULL,?,?,0)",
+            "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,NULL,?,?,0)",
             (self.project, record["record_id"], "candidate", "evaluator", sequence, 0, 0, content,
              record["candidate_digest"])).close()
         return record

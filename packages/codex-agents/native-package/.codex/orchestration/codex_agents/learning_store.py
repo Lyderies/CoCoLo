@@ -104,6 +104,7 @@ from .contracts import (
     validate_task,
 )
 from .learning_contracts import (
+    validate_outcome,
     PRODUCER_AUTHORITY as PRODUCER_AUTHORITY,
     PROVIDER_OBSERVATION_TYPES as PROVIDER_OBSERVATION_TYPES,
     DISPATCH_RESULT_SCHEMA_VERSION,
@@ -399,7 +400,7 @@ _BACKUP_TABLE_COLUMNS = {
     ),
     "records": (
         "record_id", "record_type", "source", "source_sequence", "observed_at_ms",
-        "ingested_at_ms", "expires_at_ms", "content", "content_digest", "late",
+        "ingested_at_ms", "expires_at_ms", "content", "content_digest", "late", "probe_id",
     ),
     "record_links": ("from_record_id", "to_record_id", "relation"),
     "stored_files": (
@@ -534,6 +535,8 @@ def _backup_decode_value(value: Any) -> Any:
 
 
 def _backup_expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 16 and table == "records":
+        return _BACKUP_TABLE_COLUMNS[table][:-1]
     if schema_version < 15 and table == "run_holds":
         return ()
     if schema_version < 13 and table in {"account_billing_probe_origins", "account_billing_probe_requests"}:
@@ -768,7 +771,7 @@ CREATE TABLE run_provenance(project_id TEXT NOT NULL,run_id TEXT NOT NULL,produc
 CREATE TABLE records(project_id TEXT NOT NULL,record_id TEXT NOT NULL,record_type TEXT NOT NULL,
  source TEXT NOT NULL,source_sequence INTEGER NOT NULL,observed_at_ms INTEGER NOT NULL,
  ingested_at_ms INTEGER NOT NULL,expires_at_ms INTEGER,content BLOB NOT NULL,
- content_digest TEXT NOT NULL,late INTEGER NOT NULL CHECK(late IN (0,1)),
+ content_digest TEXT NOT NULL,late INTEGER NOT NULL CHECK(late IN (0,1)),probe_id TEXT,
  PRIMARY KEY(project_id,record_id),UNIQUE(project_id,source_sequence),
  FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE);
 CREATE TABLE record_links(project_id TEXT NOT NULL,from_record_id TEXT NOT NULL,to_record_id TEXT NOT NULL,
@@ -889,7 +892,7 @@ def _verify_project_backup_body(
     }:
         raise LedgerError("project backup body is invalid")
     schema_version = body["ledger_schema_version"]
-    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}:
+    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}:
         raise LedgerError("project backup body is invalid")
     if (
         expected_ledger_schema_version is not None
@@ -939,7 +942,7 @@ def _verify_project_backup_body(
                 decoded_rows.append(decoded)
                 if table == "records":
                     try:
-                        content = validate_learning_record(json.loads(bytes(decoded["content"])))
+                        content = validate_learning_record(json.loads(bytes(decoded["content"])), stored=True)
                     except (ContractError, json.JSONDecodeError, TypeError, ValueError) as exc:
                         raise LedgerError("project backup contains a corrupt learning record") from exc
                     if content_digest(content) != decoded["content_digest"]:
@@ -3025,6 +3028,7 @@ class LearningLedger:
             self._initialize_billing_probes_locked()
             self._initialize_admission_evidence_locked()
             self._initialize_run_holds_locked()  # O0b RS-A
+            self._initialize_probe_ids_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
@@ -3129,6 +3133,7 @@ class LearningLedger:
             self._initialize_billing_probes_locked()
             self._initialize_admission_evidence_locked()
             self._initialize_run_holds_locked()  # O0b RS-A
+            self._initialize_probe_ids_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
@@ -3136,6 +3141,12 @@ class LearningLedger:
             with contextlib.suppress(sqlite3.Error):
                 self._connection.execute("ROLLBACK")
             raise
+
+    def _initialize_probe_ids_locked(self):
+        columns = {row[1] for row in self._connection.execute("PRAGMA table_info(records)")}
+        if "probe_id" not in columns:
+            # No backfill: old signed bytes carry no common probe provenance.
+            self._connection.execute("ALTER TABLE records ADD COLUMN probe_id TEXT")
 
     def _migrate(self) -> None:
         current = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
@@ -3171,6 +3182,7 @@ class LearningLedger:
                 self._initialize_billing_probes_locked()
                 self._initialize_admission_evidence_locked()
                 self._initialize_run_holds_locked()  # O0b RS-A
+                self._initialize_probe_ids_locked()
                 self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             return
         if current >= 9:
@@ -3204,6 +3216,7 @@ class LearningLedger:
                     self._initialize_billing_probes_locked()
                     self._initialize_admission_evidence_locked()
                     self._initialize_run_holds_locked()  # O0b RS-A
+                    self._initialize_probe_ids_locked()
                     self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
                 return
             if current == 10:
@@ -3214,6 +3227,7 @@ class LearningLedger:
                     self._initialize_billing_probes_locked()
                     self._initialize_admission_evidence_locked()
                     self._initialize_run_holds_locked()  # O0b RS-A
+                    self._initialize_probe_ids_locked()
                     self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
                 return
             if current >= 11:
@@ -3228,6 +3242,7 @@ class LearningLedger:
                     self._initialize_billing_probes_locked()
                     self._initialize_admission_evidence_locked()
                     self._initialize_run_holds_locked()  # O0b RS-A
+                    self._initialize_probe_ids_locked()
                     self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
                 return
             if current >= 13 and not check_billing_probe_coverage(self._connection):
@@ -3238,6 +3253,7 @@ class LearningLedger:
                     self._initialize_billing_probes_locked()
                     self._initialize_admission_evidence_locked()
                     self._initialize_run_holds_locked()  # O0b RS-A
+                    self._initialize_probe_ids_locked()
                     self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
                 return
             if current >= 14 and not check_admission_evidence_coverage(self._connection):
@@ -3247,6 +3263,7 @@ class LearningLedger:
                 with self._account_transaction():
                     self._initialize_admission_evidence_locked()
                     self._initialize_run_holds_locked()  # O0b RS-A
+                    self._initialize_probe_ids_locked()
                     self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
                 return
             # O0b RS-A: schema 15 adds the hold register, through the same authorized path.
@@ -3256,6 +3273,13 @@ class LearningLedger:
                 self._require_project_migration_backups(14, LEDGER_SCHEMA_VERSION)
                 with self._account_transaction():
                     self._initialize_run_holds_locked()
+                    self._initialize_probe_ids_locked()
+                    self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+                return
+            if current == 15:
+                self._require_project_migration_backups(15, LEDGER_SCHEMA_VERSION)
+                with self._account_transaction():
+                    self._initialize_probe_ids_locked()
                     self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
                 return
         with self._account_transaction():
@@ -3853,6 +3877,7 @@ class LearningLedger:
                 self._initialize_billing_probes_locked()
                 self._initialize_admission_evidence_locked()
                 self._initialize_run_holds_locked()  # O0b RS-A
+            self._initialize_probe_ids_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
         self.state.harden_database_files()
 
@@ -6030,7 +6055,7 @@ class LearningLedger:
         from . import admission_metadata
         from .bridge import BridgeRefused, claude_billing_probe
         from .claude_host import ClaudeHostDenied, check_backend
-        from .providers import AdmissionDenied, _headroom_state, claude_rate_limit_records
+        from .providers import AdmissionDenied, _headroom_state, claude_rate_limit_records, probe_records
 
         environ = os.environ if environ is None else environ
         # Decision 50 (BR-21): a provider API key in the caller's environment or in the process's own refuses,
@@ -6091,7 +6116,7 @@ class LearningLedger:
                 # B1: fresh evidence bounds the spend when children open back to back,
                 # but never without a judgment: paid usage, a client version or an
                 # attestation problem is refused below with its own reason.
-                head = admission_metadata.probe_head(account_headroom, fingerprint)
+                head = admission_metadata.probe_head(account_headroom, fingerprint, latest)
                 # Decision 50 (BR-21): the yes is built here and nowhere else, by the shared gate, after the
                 # last read and with nothing external after it.
                 refusal = admission_metadata.reuse_gate(
@@ -6114,17 +6139,20 @@ class LearningLedger:
             # Owner decision 40 (a): the real problem is reported first; the cooldown
             # names itself only when nothing else refuses. billing_unverified is the
             # gap the cooling probe itself fills, so it does not count as a real problem.
-            if not reuse and (
-                decision["decision"] == "pass"
-                or decision["reason_code"] == "billing_unverified"
-            ) and self._connection.execute(
-                "SELECT 1 FROM records WHERE record_type='probe_admission' "
+            cooldown = self._connection.execute(
+                "SELECT MAX(observed_at_ms) FROM records WHERE record_type='probe_admission' "
                 "AND source='lifecycle' "
                 "AND json_extract(CAST(content AS TEXT),'$.decision')='pass' "
                 "AND json_extract(CAST(content AS TEXT),'$.account_fingerprint')=? "
                 "AND observed_at_ms>?",
                 (fingerprint, timestamp - PROBE_COOLDOWN_SECONDS * 1000),
-            ).fetchone() is not None:
+            ).fetchone()[0]
+            retry_at = None
+            if not reuse and (
+                decision["decision"] == "pass"
+                or decision["reason_code"] == "billing_unverified"
+            ) and cooldown is not None:
+                retry_at = admission_metadata.probe_retry_at(cooldown)
                 # The reservation is durable and account-wide; a probe stamped
                 # after now also counts, so a clock step never reopens it.
                 decision = {
@@ -6141,8 +6169,10 @@ class LearningLedger:
                 )
         if decision["decision"] != "pass":
             deny(decision["reason_code"], timestamp, decision)
-            raise AdmissionDenied(decision["reason_code"])
+            raise AdmissionDenied(decision["reason_code"], retry_at=retry_at)
         self.state.harden_database_files()
+        import secrets
+        probe_id = secrets.token_hex(32)
         infos, failure = claude_billing_probe(
             environ, project_root=project_root,
             untrusted=self._registered_roots(project_id),
@@ -6188,6 +6218,7 @@ class LearningLedger:
                     *([merged_billing] if merged_billing["paid_usage_usable"] is not False
                       else []),
                 ]
+            records = probe_records(records, probe_id)
             if records:
                 self._store_provider_observations(project_id, records, timestamp=observed)
         if failure is not None:
@@ -10339,6 +10370,8 @@ class LearningLedger:
             raise LedgerError(LEARNING_MOVED_ERROR)
         if checked["record_type"] == "candidate":
             self._validate_candidate_eligibility_locked(project_id, checked)
+        if checked.get("record_type") == "outcome":
+            validate_outcome(checked)  # a new row never takes the stored-read leniency, whoever built it
         source = SOURCE_BY_PRODUCER[producer]
         content = canonical_json(checked)
         digest = content_digest(checked)
@@ -10382,7 +10415,7 @@ class LearningLedger:
         sequence = int(row[0]) + 1
         late = int(checked.get("observed_at_ms", timestamp) < int(row[1]))
         self._connection.execute(
-            "INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,ingested_at_ms,expires_at_ms,content,content_digest,late,probe_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 project_id,
                 checked["record_id"],
@@ -10395,6 +10428,7 @@ class LearningLedger:
                 content,
                 digest,
                 late,
+                checked.get("probe_id"),
             ),
         )
         self._auto_link_locked(project_id, checked)

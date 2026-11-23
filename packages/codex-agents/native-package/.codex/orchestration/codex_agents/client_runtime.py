@@ -861,10 +861,11 @@ class RuntimeObservationError(RuntimeError):
 
 
 class RuntimeBillingProbeError(RuntimeError):
-    def __init__(self, reason, *, request_id=None):
+    def __init__(self, reason, *, request_id=None, retry_at=None):
         allowed = (ACCOUNT_REASON_CODES | BILLING_PROBE_REASONS | PROBE_COMPLETION_REASONS | ADMISSION_REASON_CODES
                    | {'collector_code_stale'})
         self.reason_code = reason if type(reason) is str and reason in allowed else 'probe_unavailable'
+        self.retry_at = retry_at if self.reason_code == 'probe_cooldown' else None
         self.request_id = request_id if matches(request_id, _ACCOUNT_ID) else None
         super().__init__(self.reason_code)
 
@@ -901,7 +902,7 @@ def billing_probe_client(state_root, project_root, *, request_id=None):
     except AccountError as error:
         raise RuntimeBillingProbeError(error.reason_code, request_id=identity) from None
     if result['probe'] == 'denied' or result['reason_code'] is not None:
-        raise RuntimeBillingProbeError(result['reason_code'], request_id=identity)
+        raise RuntimeBillingProbeError(result['reason_code'], request_id=identity, retry_at=result.get('retry_at'))
     return {'ready': True, **result, 'request_id': identity,
         'probe': 'launched' if result['probe'] == 'completed' else result['probe'],
         'records': [{**{k: v for k, v in record.items() if k != 'client_path'},

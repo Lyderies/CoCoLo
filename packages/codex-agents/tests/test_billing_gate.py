@@ -1061,6 +1061,121 @@ class BR21LedgerReuse(LedgerReuseBase):
         self.store(warning, run_id='run-z', phase='during')
         self.assertNotEqual('reused', self.probe()['probe'])
 
+    def test_PC4_launched_ledger_probe_persists_common_id(self):
+        self.ready_account(probe_records=False)
+        reply = self.probe()
+        records = [r for r in reply['records'] if r['record_type'] != 'provider_identity']
+        self.assertEqual(2, len(records))
+        ids = {r['probe_id'] for r in records}
+        self.assertEqual(1, len(ids))
+        for record in records:
+            stored = self.ledger._connection.execute('SELECT probe_id FROM records WHERE record_id=?',
+                                                     (record['record_id'],)).fetchone()[0]
+            self.assertEqual(record['probe_id'], stored)
+        from tests.learning_support import backup_body
+        path = self.ledger.create_sanitized_backup(self.project_id, file_id='pc4_provenance',
+            expires_at_ms=time.time_ns()//1_000_000+600_000)
+        body = backup_body(path, self.project_id)
+        for record in records:
+            row = next(r for r in body['tables']['records'] if r['record_id'] == record['record_id'])
+            self.assertEqual(record['probe_id'], row['probe_id'])
+
+    def test_PC5_ledger_complementary_half_failed_probes_with_equal_stamps_are_not_reused(self):
+        self.ready_account(probe_records=False)
+        p = claude_rate_limit_records(self.CONSTRAINED, account_fingerprint=self.fingerprint,
+                                     observed_at_ms=self.clock, probe_id='a'*64)[1]
+        q = claude_rate_limit_records(self.CONSTRAINED, account_fingerprint=self.fingerprint,
+                                     observed_at_ms=self.clock, probe_id='b'*64)[0]
+        self.ledger._store_provider_observations(self.project_id, [p, q], timestamp=self.clock)
+        self.clock += 30_000
+        self.store(self.CONSTRAINED, run_id='run-half', phase='during')
+        self.assertNotEqual('reused', self.probe(plus=48_000)['probe'])
+
+    def test_PC5_ledger_legacy_null_id_rows_remain_strict(self):
+        self.ready_account(probe_records=False)
+        self.store(self.CONSTRAINED)
+        self.clock += 30_000
+        self.store(self.CONSTRAINED, run_id='run-legacy', phase='during')
+        self.assertNotEqual('reused', self.probe(plus=48_000)['probe'])
+
+    def test_PC6_ledger_cooldown_retry_uses_latest_qualifying_pass(self):
+        from datetime import datetime, timezone
+        self.ready_account(probe_records=False)
+        for offset in (-10_000, 20_000):
+            decision = {'provider': 'claude', 'decision': 'pass', 'reason_code': 'admitted',
+                        'admission_basis': 'bootstrap', 'account_fingerprint': self.fingerprint,
+                        'evidence_digests': ['a'*64], 'observed_at_ms': self.clock + offset}
+            with self.ledger._connection:
+                self.ledger._store_probe_admission_locked(self.project_id, decision, timestamp=self.clock + offset)
+        with self.assertRaises(AdmissionDenied) as raised:
+            self.probe()
+        self.assertEqual('probe_cooldown', raised.exception.reason_code)
+        expected = datetime.fromtimestamp((self.clock+320_000)/1000, timezone.utc).isoformat().replace('+00:00', 'Z')
+        self.assertEqual(expected, raised.exception.retry_at)
+
+    # ---- PC-1..PC-2 (2026-11-22 probe reuse): the same rule on the ledger path -----------------------------
+    CONSTRAINED = {**FAVOURABLE, 'status': 'allowed_warning',
+                   'unifiedWindows': {'five_hour': {'utilization': 0.38, 'status': 'allowed'},
+                                      'seven_day': {'utilization': 0.74, 'status': 'allowed_warning'}}}
+
+    def probe_then_run(self, probe_info, run_info, *, between=30_000):
+        self.ready_account(probe_records=False)
+        self.store(probe_info, probe_id='a'*64)
+        self.clock += between
+        self.store(run_info, run_id='run-pc', phase='during')
+
+    def test_PC1_a_run_record_as_constrained_as_the_probe_does_not_block_the_ledger_reuse(self):
+        self.probe_then_run(self.CONSTRAINED, self.CONSTRAINED)
+        answer = self.probe(plus=48_000)
+        self.assertEqual('reused', answer['probe'], answer)
+
+    def test_PC2_an_ample_probe_and_a_constrained_run_record_still_stop_the_ledger_reuse(self):
+        self.probe_then_run(FAVOURABLE, self.CONSTRAINED)
+        self.assertNotEqual('reused', self.probe(plus=48_000)['probe'])
+
+    def test_PC2_a_constrained_probe_and_an_exhausted_run_record_still_stop_the_ledger_reuse(self):
+        self.probe_then_run(self.CONSTRAINED, {**self.CONSTRAINED, 'status': 'rejected'})
+        with self.assertRaises(AdmissionDenied) as raised:
+            self.probe(plus=48_000)
+        self.assertEqual('provider_exhausted', raised.exception.reason_code)
+
+    def test_PC2_a_constrained_probe_and_a_paid_usage_run_record_still_stop_the_ledger_reuse(self):
+        self.probe_then_run(self.CONSTRAINED, {**self.CONSTRAINED, 'isUsingOverage': True, 'overageStatus': 'allowed'})
+        with self.assertRaises(AdmissionDenied) as raised:
+            self.probe(plus=48_000)
+        self.assertEqual('paid_usage_usable', raised.exception.reason_code)
+
+    def test_PC2_an_equal_state_does_not_reuse_a_stale_probe_on_the_ledger_path(self):
+        self.probe_then_run(self.CONSTRAINED, self.CONSTRAINED)
+        self.assertNotEqual('reused', self.probe(plus=PROBE_REUSE_MS + 1_000)['probe'])
+
+    # ---- MED-1 (fix round 1): the baseline is the headroom the SAME probe wrote as the reused billing -------
+    def med1_case(self, q_at, run_at, request_at):
+        """Ample probe P at 0; the constrained headroom of another probe Q at `q_at`, a constrained run record at
+        `run_at`, the request at `request_at` (ms after P). Q's billing is not stored: P's stays the reused one."""
+        self.ready_account(probe_records=False)
+        self.store(FAVOURABLE)
+        start = self.clock
+        head = claude_rate_limit_records(self.CONSTRAINED, account_fingerprint=self.fingerprint,
+                                         observed_at_ms=start + q_at)[0]
+        self.ledger._store_provider_observations(self.project_id, [head], timestamp=start + q_at)
+        self.clock = start + run_at
+        self.store(self.CONSTRAINED, run_id='run-med1', phase='during')
+        self.clock = start
+        self.assertNotEqual('reused', self.probe(plus=request_at)['probe'])
+
+    def test_MED1_ledger_another_probe_s_constrained_headroom_at_plus_30_s_is_not_the_baseline(self):
+        self.med1_case(30_000, 40_000, 78_000)
+
+    def test_MED1_ledger_another_probe_s_constrained_headroom_at_exactly_60_s_is_not_the_baseline(self):
+        self.med1_case(60_000, 70_000, 78_000)
+
+    def test_MED1_ledger_another_probe_s_headroom_stamped_after_the_request_is_not_the_baseline(self):
+        self.med1_case(50_000, 40_000, 45_000)
+
+    def test_MED1_ledger_another_probe_s_headroom_with_the_probes_own_stamp_is_not_the_baseline(self):
+        self.med1_case(0, 40_000, 78_000)
+
     # ---- the shared gate function itself (G4): a reason code, or None when the yes may be built ----------
     def gate(self, **changes):
         arguments = dict(environ={}, process_environ={}, identity_at=1_000_000, reuse_at=1_000_000,

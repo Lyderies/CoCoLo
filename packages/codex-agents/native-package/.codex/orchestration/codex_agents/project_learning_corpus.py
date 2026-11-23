@@ -133,7 +133,7 @@ def _prepare_chunk(records, attestations):
             if (type(record) is not dict or record.get("record_type") not in _RECORD_TYPES
                     or type(record.get("schema_version")) is not int):
                 raise HistoryError("history_invalid_input")
-            checked = validate_learning_record(record)
+            checked = validate_learning_record(record, stored=True)
             if (canonical_json(checked) != entry["content"]
                     or ("observed_at_ms" in checked and checked["observed_at_ms"] != entry["observed_at_ms"])):
                 raise HistoryError("history_invalid_input")

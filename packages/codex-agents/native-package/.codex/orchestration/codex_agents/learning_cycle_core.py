@@ -62,7 +62,7 @@ def _snapshot(outcomes, cases, invalidated, checkpoint=_no_checkpoint):
     if any(type(item) is not str or not 1 <= len(item) <= 256 for item in invalidated):
         raise ContractError("learning cycle invalidation identifier is invalid")
     size = sum(len(item.encode("utf-8")) for item in invalidated)
-    for records, validate in ((outcomes, validate_outcome), (cases, validate_evaluation_case)):
+    for records, validate in ((outcomes, lambda value: validate_outcome(value, stored=True)), (cases, validate_evaluation_case)):
         identifiers = set()
         for record in records:
             checkpoint()

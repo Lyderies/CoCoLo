@@ -29,6 +29,24 @@ class AccountObservationSchemaTests(unittest.TestCase):
                 self.ledger.append(project, event_record('preserved_legacy_' + str(index), observed_at_ms=stamp),
                                    producer='hook', now_ms=stamp)
 
+    def add_legacy_outcome(self):
+        """OR-3: an outcome a 0.8.42 host wrote, with the since-split `inconsistent_axes` repair code.
+        Inserted as stored cells, the way an older build left it (today's writer is not asked to make it)."""
+        from codex_agents.learning_contracts import canonical_json, content_digest
+        from tests.learning_support import verification_outcome
+        record = verification_outcome('legacy_outcome')
+        record['repairs'] = 1
+        record['repair_reason_codes'] = ['inconsistent_axes']
+        db = self.ledger._connection
+        project = self.fixture.projects[0]
+        sequence = db.execute('SELECT MAX(source_sequence) FROM records WHERE project_id=?', (project,)).fetchone()[0] + 1
+        content = canonical_json(record)
+        row = (project, record['record_id'], 'outcome', 'host', sequence, 1, 1, None, content, content_digest(record), 0)
+        db.execute('INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,'
+                   'ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,?)', row)
+        db.commit()
+        return project, content
+
     def eleven(self, *, backups=True):
         db = self.ledger._connection
         drop_admission_evidence_for_legacy_fixture(db)
@@ -71,7 +89,11 @@ class AccountObservationSchemaTests(unittest.TestCase):
 
     def assert_old_rows(self, ledger):
         for name, rows in self.before.items():
-            self.assertEqual(rows, [tuple(row) for row in ledger._connection.execute('SELECT * FROM ' + name)], name)
+            columns = [r[1] for r in ledger._connection.execute('PRAGMA table_info(' + name + ')')
+                       if not (name == 'records' and r[1] == 'probe_id')]
+            self.assertEqual(rows, [tuple(row) for row in ledger._connection.execute(
+                'SELECT ' + ','.join(columns) + ' FROM ' + name)], name)
+        self.assertIsNone(ledger._connection.execute('SELECT 1 FROM records WHERE probe_id IS NOT NULL').fetchone())
 
     def test_default_refuses_without_writes_and_explicit_upgrade_keeps_all_original_cells(self):
         self.eleven()
@@ -81,17 +103,35 @@ class AccountObservationSchemaTests(unittest.TestCase):
         self.assertEqual(original, hashlib.sha256(self.state.database.read_bytes()).hexdigest())
         upgraded = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = upgraded
-        self.assertEqual(15, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(16, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(upgraded)
         for name in ('account_observation_origins', 'account_observation_requests'):
             self.assertEqual(0, upgraded._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0])
         project = self.fixture.projects[0]
         upgraded.create_sanitized_backup(project, file_id='schema13', expires_at_ms=time.time_ns() // 1_000_000 + 600_000)
         verified = upgraded.verify_sanitized_backup(project, file_id='schema13')
-        self.assertEqual(15, verified['ledger_schema_version'])  # O0b RS-A (requirement)
+        self.assertEqual(16, verified['ledger_schema_version'])  # O0b RS-A (requirement)
         self.assertEqual(0, verified['counts']['account_observation_requests'])
         self.assertEqual(0, verified['counts']['account_billing_probe_origins'])
         self.assertEqual(0, verified['counts']['account_billing_probe_requests'])
+
+    def test_or3_upgrade_backup_verify_keep_a_legacy_inconsistent_axes_outcome_byte_identical(self):
+        """OR-3: the owner's real ledger held outcomes with the old `inconsistent_axes` repair code; the
+        15 -> 16 upgrade refused with 'project backup contains a corrupt learning record'."""
+        project, content = self.add_legacy_outcome()
+        self.eleven()
+        upgraded = LearningLedger(self.state, allow_schema_upgrade=True)
+        self.fixture.ledger = upgraded
+        self.assertEqual(16, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assert_old_rows(upgraded)
+        kept = upgraded._connection.execute(
+            'SELECT content FROM records WHERE project_id=? AND record_id=?', (project, 'legacy_outcome')).fetchone()[0]
+        self.assertEqual(content, bytes(kept))
+        upgraded.create_sanitized_backup(project, file_id='after_upgrade', expires_at_ms=time.time_ns() // 1_000_000 + 600_000)
+        verified = upgraded.verify_sanitized_backup(project, file_id='after_upgrade')
+        self.assertEqual(16, verified['ledger_schema_version'])
+        self.assertEqual(content, bytes(upgraded._connection.execute(
+            'SELECT content FROM records WHERE project_id=? AND record_id=?', (project, 'legacy_outcome')).fetchone()[0]))
 
     def test_upgrade_requires_each_projects_current_verified_backup(self):
         self.eleven(backups=False)
@@ -112,7 +152,7 @@ class AccountObservationSchemaTests(unittest.TestCase):
             Cut(self.state, allow_schema_upgrade=True)
         recovered = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = recovered
-        self.assertEqual(15, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(16, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(recovered)
 
     def twelve(self, *, backups=True):
@@ -142,7 +182,7 @@ class AccountObservationSchemaTests(unittest.TestCase):
         self.assertEqual(original, self.state.database.read_bytes())
         upgraded = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = upgraded
-        self.assertEqual(15, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(16, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(upgraded)
         for name in ('account_billing_probe_origins', 'account_billing_probe_requests'):
             self.assertEqual(0, upgraded._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0])
@@ -173,5 +213,5 @@ class AccountObservationSchemaTests(unittest.TestCase):
                 "'billing_probe_active_machine','billing_probe_active_account')").fetchall())
         recovered = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = recovered
-        self.assertEqual(15, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(16, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(recovered)

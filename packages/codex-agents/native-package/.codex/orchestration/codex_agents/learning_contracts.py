@@ -708,7 +708,13 @@ OUTCOME_FIELDS = {
 }
 
 
-def validate_outcome(data: Any) -> dict[str, Any]:
+# Repair codes a released version wrote into stored outcomes and later dropped from the result
+# validation vocabulary: 4b49660c (0.8.43) split `inconsistent_axes` by branch. Stored records stay
+# readable with it (`stored=True`); a new outcome never carries it.
+LEGACY_OUTCOME_REPAIR_CODES = frozenset({"inconsistent_axes"})
+
+
+def validate_outcome(data: Any, *, stored: bool = False) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ContractError("outcome must be an object")
     axis_fields = {
@@ -806,7 +812,10 @@ def validate_outcome(data: Any) -> dict[str, Any]:
         not isinstance(reason_codes, list)
         or len(reason_codes) != data["repairs"]
         or any(
-            not isinstance(code, str) or code not in RESULT_VALIDATION_REASON_CODES
+            not isinstance(code, str) or (
+                code not in RESULT_VALIDATION_REASON_CODES
+                and (not stored or code not in LEGACY_OUTCOME_REPAIR_CODES)
+            )
             for code in reason_codes
         )
     ):
@@ -1709,10 +1718,11 @@ PROVIDER_IDENTITY_FIELDS = {
     "logged_in", "auth_method", "subscription_type", "plan_type", "client_path",
     "client_sha256", "client_version", "observed_at_ms",
 }
-PROVIDER_HEADROOM_FIELDS = {
+PROVIDER_HEADROOM_REQUIRED_FIELDS = {
     "schema_version", "record_type", "record_id", "provider", "account_fingerprint",
     "windows", "status", "run_id", "phase", "observed_at_ms",
 }
+PROVIDER_HEADROOM_FIELDS = PROVIDER_HEADROOM_REQUIRED_FIELDS | {"probe_id"}
 # When an observation was taken relative to the run it belongs to.
 OBSERVATION_PHASES = {"before", "during", "after"}
 HEADROOM_WINDOW_FIELDS = {"window_minutes", "scope", "used_percent", "resets_at"}
@@ -1724,7 +1734,7 @@ PROVIDER_BILLING_REQUIRED_FIELDS = {
     "ordinary_usage_allowed", "is_using_overage", "overage_status",
     "overage_disabled_reason", "run_id", "phase", "observed_at_ms",
 }
-PROVIDER_BILLING_FIELDS = PROVIDER_BILLING_REQUIRED_FIELDS | {"spend_control_reached"}
+PROVIDER_BILLING_FIELDS = PROVIDER_BILLING_REQUIRED_FIELDS | {"spend_control_reached", "probe_id"}
 # The owner's optional statement that Codex credit spending is disabled on the
 # account. The observation cannot show it, so only a signed grant carries it.
 CODEX_CREDITS_DISABLED_FIELD = "codex_credits_spending_disabled"
@@ -1815,6 +1825,10 @@ def _observation_base(data: dict[str, Any], record_type: str) -> None:
 
 
 def _run_phase(data: dict[str, Any]) -> None:
+    if "probe_id" in data:
+        _digest(data["probe_id"], "probe_id", nullable=True)
+        if data["probe_id"] is not None and (data["provider"] != "claude" or data["run_id"] is not None):
+            raise ContractError("probe provenance belongs only to a Claude probe")
     _identifier(data["run_id"], "run_id", nullable=True)
     _enum(data["phase"], OBSERVATION_PHASES, "phase", nullable=True)
     if (data["run_id"] is None) != (data["phase"] is None):
@@ -1846,7 +1860,7 @@ def validate_provider_identity(data: Any) -> dict[str, Any]:
 
 
 def validate_provider_headroom(data: Any) -> dict[str, Any]:
-    data = _closed(data, PROVIDER_HEADROOM_FIELDS, "provider_headroom")
+    data = _closed_optional(data, PROVIDER_HEADROOM_REQUIRED_FIELDS, PROVIDER_HEADROOM_FIELDS, "provider_headroom")
     _observation_base(data, "provider_headroom")
     windows = data["windows"]
     if not isinstance(windows, list) or len(windows) > 16:
@@ -2382,14 +2396,19 @@ VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
 }
 
 
-def validate_learning_record(data: Any) -> dict[str, Any]:
+_STORED_READABLE = frozenset({"outcome"})
+
+
+def validate_learning_record(data: Any, *, stored: bool = False) -> dict[str, Any]:
+    """Validate one record. The default is for a record being written now. `stored=True` is only for
+    reading bytes that already exist: they may hold a value an earlier release wrote and no writer does."""
     if not isinstance(data, dict):
         raise ContractError("learning record must be an object")
     record_type = data.get("record_type")
     validator = VALIDATORS.get(record_type)
     if validator is None:
         raise ContractError("unsupported learning record type")
-    checked = validator(data)
+    checked = validator(data, stored=stored) if record_type in _STORED_READABLE else validator(data)
     if len(canonical_json(checked)) > MAX_RECORD_BYTES:
         raise ContractError("learning record is oversized")
     return checked
