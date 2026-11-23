@@ -967,6 +967,9 @@
  },
  "RS-B-5": {
   "checks": [
+   "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M7_a_registration_refused_after_the_binding_exists_withdraws_the_open",
+   "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M7_a_writer_faulted_at_record_open_binding_gets_one_memory_withdrawal",
+   "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W3_withdrawal_while_the_provider_observation_is_in_flight_fails_the_run_before_any_claim",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_a_failure_before_preparation_withdraws_its_open_once",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_a_lost_reply_is_asked_again_and_withdraws_once",
    "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_W5_a_never_leased_cancel_withdraws_its_open_once",

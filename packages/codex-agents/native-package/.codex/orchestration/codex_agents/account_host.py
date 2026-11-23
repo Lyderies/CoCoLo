@@ -14,6 +14,7 @@ import threading
 import time
 
 from .account_api import account_request_digest
+from .open_withdrawal import custody_matches, decode_withdraw_open
 from .account_billing_jobs import AccountBillingJobs, BillingJobLimits
 from .account_claim_jobs import AccountClaimJobs
 from .account_ingress import AccountIngress, AccountIngressLimits
@@ -46,6 +47,7 @@ HOST_OPERATIONS = frozenset({
     'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
     'account.observe_provider', 'account.record_observation_unavailable', 'account.billing_probe',
     'account.open_host_run', 'account.claim_launch',
+    'account.withdraw_open',  # B3: the host that opened a run may withdraw it before its claim
 })
 # A project host's custody calls for one admitted run, each bound to its lease.
 PROJECT_OPERATIONS = frozenset({
@@ -53,6 +55,7 @@ PROJECT_OPERATIONS = frozenset({
     'account.open_provenance', 'account.register_execution', 'account.run_provenance',
     'account.submit_terminal', 'account.release_capacity', 'account.close_denied_attempt',
     'account.fence_claim', 'account.settle_lost_run', 'account.record_rate_limit_event',
+    'account.withdraw_open',  # B3: a run that ends before its claim withdraws its open (it has no lease)
 })
 # The owner's terminal (setup, status, attestation): reads that spend nothing, and
 # never an open, a claim or a probe. Its provider observation is the standalone kind
@@ -204,6 +207,15 @@ class AccountServiceHost:
         if request.operation == 'account.open_host_run':
             opening = self._open_context(entry.enrolled.context)
             if opening is None:
+                return None
+        elif request.operation == 'account.withdraw_open':
+            # B3 (RS-B draft 2 §8, draft 3 §4): a never-leased run has no lease custody. Its custody names the run,
+            # and must equal the payload; the authority is this root's project and the caller scope of its host
+            # class, which the ledger checks against the open's own stored receipt.
+            try:
+                if not custody_matches(entry.enrolled.context, decode_withdraw_open(request.payload)):
+                    return None
+            except Exception:
                 return None
         elif role == 'project' or request.operation == 'account.claim_launch':
             custody = self._run_custody(entry.enrolled.context, request.project_id)

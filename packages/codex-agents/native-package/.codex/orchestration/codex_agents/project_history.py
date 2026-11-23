@@ -13,6 +13,8 @@ import contextlib
 import fcntl
 import functools
 import hashlib
+import json
+import re
 import os
 import secrets
 import sqlite3
@@ -1258,6 +1260,7 @@ class ProjectHistory:
                 project_holds_schema.release_hold(
                     self._connection, self.project_id, 'lease', attempt_identity(binding.run_handle, binding.attempt),
                     'fenced' if fenced else 'denied', now_ms=self._hold_now(), receipt=closure['receipt_digest'])
+                self._release_claimed_open(binding.run_handle, binding.attempt, 'fenced', closure['receipt_digest'])
                 # D1 (SH-3): the attempt ended unfinished, so its custody goes with the lease (O3).
                 ending = project_result_contexts.release_unfinished(
                     self, binding.run_handle, binding.attempt, 'fenced' if fenced else 'denied', self._hold_now())
@@ -1586,6 +1589,116 @@ class ProjectHistory:
             raise HistoryError('history_incompatible') from None
 
     @_operation
+    def record_open_binding(self, run_handle, attempt, run_id, inputs_digest, host_client, *, instance, now_ms):
+        """B3 §7: the withdrawal duty commits before registration can be refused."""
+        if (not matches(run_handle, re.compile(r'hrn_[0-9a-f]{48}'))
+                or not valid_integer(attempt, minimum=1) or type(run_id) is not str
+                or not matches(inputs_digest, _DIGEST) or not matches(host_client, re.compile(r'[a-z][a-z0-9-]{0,63}'))
+                or type(instance) is not str or not valid_integer(now_ms)):
+            raise HistoryError('history_invalid_input')
+        identity = attempt_identity(run_handle, attempt)
+        evidence = project_holds_schema.evidence_json(run_handle=run_handle, attempt=attempt, run_id=run_id,
+                    inputs_digest=inputs_digest, host_client=host_client, instance=instance)
+        with self._transaction():
+            row = self._open_binding(identity)
+            if row is not None:
+                if row['state'] == 'released' or row['evidence'] != evidence:
+                    raise HistoryError('history_conflict')
+                return
+            # A run id cannot acquire a second registration identity.
+            if self._connection.execute('SELECT 1 FROM project_registered_runs WHERE project_id=? AND run_id=? '
+                    'AND (run_handle<>? OR attempt<>?)', (self.project_id, run_id, run_handle, attempt)).fetchone():
+                raise HistoryError('history_conflict')
+            for held in self._connection.execute("SELECT evidence FROM project_holds WHERE project_id=? "
+                    "AND kind='open_binding' AND state<>'released'", (self.project_id,)):
+                if json.loads(held['evidence'])['run_id'] == run_id:
+                    raise HistoryError('history_conflict')
+            project_holds_schema.take_hold(self._connection, self.project_id, 'open_binding', identity,
+                                           now_ms=now_ms, evidence=evidence)
+
+    def _open_binding(self, identity):
+        return self._connection.execute("SELECT * FROM project_holds WHERE project_id=? AND kind='open_binding' "
+                                        "AND identity=?", (self.project_id, identity)).fetchone()
+
+    @_operation
+    def mark_open_withdrawing(self, run_handle, attempt, reason, *, project_id, runtime_digest):
+        from .account_api import AccountRequest, ACCOUNT_PROTOCOL_VERSION, account_request_digest
+        from .open_withdrawal import WithdrawOpenInput, withdrawal_request_id
+        identity = attempt_identity(run_handle, attempt)
+        with self._transaction():
+            row = self._open_binding(identity)
+            if row is None or row['state'] == 'released':
+                raise HistoryError('history_conflict')
+            if row['state'] == 'releasing':
+                return dict(row)  # Preserve the first complete envelope on every retry.
+            lease = self._connection.execute("SELECT state,release_kind FROM project_holds WHERE project_id=? "
+                    "AND kind='lease' AND identity=?", (self.project_id, identity)).fetchone()
+            if lease is not None and (lease['state'] != 'released' or lease['release_kind'] != 'withdrawn_unsent'):
+                raise HistoryError('history_conflict')
+            evidence = json.loads(row['evidence'])
+            value = WithdrawOpenInput(run_handle, attempt, evidence['run_id'], evidence['inputs_digest'], 1, reason)
+            request_id = withdrawal_request_id(run_handle, attempt)
+            request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.withdraw_open', request_id,
+                                     project_id, runtime_digest, value.payload())
+            evidence.update(reason=reason, payload=value.payload(), project_id=project_id, runtime_digest=runtime_digest)
+            self._connection.execute("UPDATE project_holds SET state='releasing',request_id=?,request_digest=?,"
+                    "evidence=? WHERE project_id=? AND kind='open_binding' AND identity=?",
+                    (request_id, account_request_digest(request), project_holds_schema.evidence_json(**evidence),
+                     self.project_id, identity))
+            return dict(self._open_binding(identity))
+
+    @_operation
+    def open_withdrawals(self, *, limit=10):
+        return [dict(row) for row in self._connection.execute("SELECT * FROM project_holds WHERE project_id=? "
+                "AND kind='open_binding' AND state='releasing' ORDER BY next_check_ms,identity LIMIT ?",
+                (self.project_id, limit))]
+
+    @_operation
+    def release_open_binding(self, run_handle, attempt, release_kind, *, receipt=None, request_digest=None):
+        with self._transaction():
+            row = self._open_binding(attempt_identity(run_handle, attempt))
+            if row is None or release_kind not in project_holds_schema.RELEASE_KINDS['open_binding']:
+                raise HistoryError('history_conflict')
+            if request_digest is not None and row['request_digest'] != request_digest:
+                raise HistoryError('history_conflict')
+            if row['state'] == 'released':
+                if row['release_kind'] != release_kind or row['receipt'] != receipt:
+                    raise HistoryError('history_conflict')
+                return
+            if release_kind in {'withdrawn', 'account_final'} and row['state'] != 'releasing':
+                raise HistoryError('history_conflict')
+            project_holds_schema.release_hold(self._connection, self.project_id, 'open_binding', row['identity'],
+                                              release_kind, now_ms=self._hold_now(), receipt=receipt)
+
+    @_operation
+    def withdraw_earlier_open_bindings(self, instance, *, project_id, runtime_digest, limit=10):
+        rows = self._connection.execute("SELECT identity,evidence FROM project_holds WHERE project_id=? "
+                "AND kind='open_binding' AND state='held' ORDER BY identity", (self.project_id,)).fetchall()
+        count = 0
+        for row in rows:
+            evidence = json.loads(row['evidence'])
+            if evidence['instance'] == instance:
+                continue
+            try:
+                self.mark_open_withdrawing(evidence['run_handle'], evidence['attempt'], 'service_stopped',
+                                            project_id=project_id, runtime_digest=runtime_digest)
+            except HistoryError as error:
+                if error.reason_code != 'history_conflict':
+                    raise
+                continue  # An armed lease belongs to the fence, never withdrawal.
+            count += 1
+            if count >= limit:
+                break
+        return count
+
+    def _release_claimed_open(self, run_handle, attempt, kind, receipt):
+        # Called only inside the verified bind/fence transaction; old runs may predate B3.
+        row = self._open_binding(attempt_identity(run_handle, attempt))
+        if row is not None and row['state'] != 'released':
+            project_holds_schema.release_hold(self._connection, self.project_id, 'open_binding', row['identity'],
+                                              kind, now_ms=self._hold_now(), receipt=receipt)
+
+    @_operation
     def arm_result_lease(self, binding: ResultLeaseBinding) -> ResultLease:
         """Durably mark claim-send uncertainty before sending the account request.
 
@@ -1644,6 +1757,7 @@ class ProjectHistory:
                                          binding.attempt, binding.claim_digest)).fetchone() is not None:
                 raise HistoryError("history_conflict")
             self._insert_result_reservation(actual)
+            self._release_claimed_open(binding.run_handle, binding.attempt, 'claimed', digest)
             project_result_contexts.bind(self, binding)  # D1: the context's claim association
             # B1 (RS-B draft 3 §6): the reservation is the attempt's obligation from here on, taken in this
             # transaction; the lease is released `bound` in it (SH-2).

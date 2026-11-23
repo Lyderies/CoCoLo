@@ -50,6 +50,7 @@ EXACT = {
 }
 
 FAMILY = {
+    'withdraw': "The open could not be withdrawn: check learning-run-status; use a new run after it ends.",
     'history': "The project's records refused this: run learning-status; if it repeats and no run is active, "
                "restart the project's service (learning-start-project-service).",
     'claim': "The account refused the launch claim: run learning-status for held slots, then dispatch again with a "

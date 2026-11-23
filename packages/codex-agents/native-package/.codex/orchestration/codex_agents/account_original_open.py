@@ -191,9 +191,7 @@ def _capture(ledger, project_id, runtime_digest, caller_scope, request_id, reque
             raise ValueError()
     except Exception:
         raise OpenError('open_not_authorized') from None
-    scope = keyed_digest(key, b'account-original-open-scope-v1\0'+canonical_json({
-        'scope': request.scope.as_data(), 'orchestration_digest': keyed_digest(key, request.orchestration_handle),
-        'caller_scope': caller_scope}))
+    scope = open_scope_digest(key, request.scope.as_data(), keyed_digest(key, request.orchestration_handle), caller_scope)
     request_key = keyed_digest(key, b'account-original-open-id-v1\0'+canonical_json({'scope_digest': scope, 'request_id': request_id}))
     original_key = keyed_digest(key, b'account-original-open-assignment-v1\0'+canonical_json({
         'scope_digest': scope, 'task_id': task['id'], 'stage': route['stage'], 'attempt': assignment['attempt']}))
@@ -209,6 +207,38 @@ def _capture(ledger, project_id, runtime_digest, caller_scope, request_id, reque
         min(route['bounds']['timeout_seconds'], assignment['bounds']['timeout_seconds']))
     return OriginalOpenRequest(ledger._attestation_origin, project_id, runtime_digest, caller_scope, request_id,
         request, raw, scope, request_key, original_key, parameters, handle, keyed_digest(key, handle), external_id(key, 'run', handle), seconds, execution)
+
+
+def open_scope_digest(key, scope_data, orchestration_digest, caller_scope):
+    """The open's scope digest: its project scope, orchestration and the caller scope of the host class that opened it."""
+    return keyed_digest(key, b'account-original-open-scope-v1\0'+canonical_json({
+        'scope': scope_data, 'orchestration_digest': orchestration_digest, 'caller_scope': caller_scope}))
+
+
+def opened_by(ledger, project_id, handle_digest, *, caller_scope, run_id, inputs_digest):
+    """B3 (RS-B draft 3 §4 step 3): whether this binding's open was made by `caller_scope` for exactly this run id and
+    inputs digest, from the open's own sealed receipt (written in the open's transaction, purged only with its binding).
+    A binding with no such receipt (one an earlier version opened in the ledger) is never matched."""
+    import secrets
+    key = ledger.state.digest_key()
+    binding = ledger._connection.execute('SELECT run_id FROM host_run_bindings WHERE project_id=? AND handle_digest=?',
+                                         (project_id, handle_digest)).fetchone()
+    receipt = ledger._connection.execute('SELECT run_id,scope_digest,content,content_seal FROM account_open_receipts '
+                                         'WHERE project_id=? AND handle_digest=?', (project_id, handle_digest)).fetchone()
+    if binding is None or receipt is None or binding['run_id'] != run_id or receipt['run_id'] != run_id:
+        return False
+    try:
+        raw = bytes(receipt['content'])
+        if not secrets.compare_digest(keyed_digest(key, _RECEIPT_DOMAIN+raw), receipt['content_seal']):
+            return False
+        data = parse_bounded_json(raw, max_bytes=16_384)
+        scope = open_scope_digest(key, data['scope'], data['orchestration_digest'], caller_scope)
+        return (data['view']['state'] == 'opened' and data['view']['run_id'] == run_id
+                and secrets.compare_digest(data['view']['inputs_digest'], inputs_digest)
+                and secrets.compare_digest(data['scope_digest'], scope)
+                and secrets.compare_digest(receipt['scope_digest'], scope))
+    except Exception:
+        return False
 
 
 def _provider(request):

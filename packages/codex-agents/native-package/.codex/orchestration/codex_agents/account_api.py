@@ -43,6 +43,9 @@ from .rate_limit_contracts import (
 from .billing_probe_contracts import (
     BILLING_PROBE_REASONS, BillingProbeError, checked_billing_probe_reply, decode_billing_probe_input,
 )
+from .open_withdrawal import (
+    WITHDRAW_ERROR_CODES, WithdrawError, WithdrawOpenInput, checked_withdraw_reply, decode_withdraw_open,
+)
 
 ACCOUNT_PROTOCOL_VERSION = 1
 MAX_ACCOUNT_FRAME_BYTES = 16_384
@@ -56,6 +59,8 @@ ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
     'account.open_host_run', 'account.observe_provider',
     'account.record_observation_unavailable', 'account.record_rate_limit_event',
     'account.billing_probe',
+    # B3 (RS-B draft 2 §8): a never-claimed run's open, withdrawn by its project's service or its opening host.
+    'account.withdraw_open',
 }
 ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
@@ -65,7 +70,7 @@ ACCOUNT_REASON_CODES = frozenset({
     "account_closed_without_reply",
     # The account's connection limit is reached (an attach refusal, said as service_refused_busy on the wire).
     "account_busy",
-}) | SERVICE_REFUSALS | CLAIM_ERROR_CODES | OPEN_REASON_CODES | OBSERVATION_REASONS | BILLING_PROBE_REASONS | ADMISSION_CAPTURE_PUBLIC_REASONS
+}) | SERVICE_REFUSALS | CLAIM_ERROR_CODES | OPEN_REASON_CODES | OBSERVATION_REASONS | BILLING_PROBE_REASONS | ADMISSION_CAPTURE_PUBLIC_REASONS | WITHDRAW_ERROR_CODES
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}")
 _PROJECT = re.compile(r"prj_[0-9a-f]{32}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
@@ -186,6 +191,11 @@ def _checked_request(data: object) -> None:
         try:
             decode_settle_lost(data['payload'])
         except ClaimError:
+            raise AccountError('account_invalid_request') from None
+    elif data['operation'] == 'account.withdraw_open':
+        try:
+            decode_withdraw_open(data['payload'])
+        except WithdrawError:
             raise AccountError('account_invalid_request') from None
     elif data["payload"]:
         raise AccountError("account_invalid_request")
@@ -309,6 +319,11 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
         try:
             return checked_lost_reply(result, decode_settle_lost(request.payload))
         except ClaimError:
+            raise AccountError('account_invalid_response') from None
+    elif request.operation == 'account.withdraw_open':
+        try:
+            return checked_withdraw_reply(result, decode_withdraw_open(request.payload))
+        except WithdrawError:
             raise AccountError('account_invalid_response') from None
     elif request.operation == 'account.close_denied_attempt':
         try:
@@ -659,6 +674,25 @@ class AccountClient:
             request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.settle_lost_run', request_id,
                                      self._project, self._runtime, settle.payload())
         except ClaimError:
+            raise AccountError('account_invalid_request') from None
+        failed = False
+        try:
+            raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
+                                 response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else 'account_unavailable'
+        if failed:
+            raise AccountError(failed)
+        return decode_account_response(raw, request)
+
+    def withdraw_open(self, withdrawal, *, request_id):
+        """End a never-claimed run's open at the account (B3); an identical retry gets the stored receipt."""
+        if type(withdrawal) is not WithdrawOpenInput:
+            raise AccountError('account_invalid_request')
+        try:
+            request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.withdraw_open', request_id,
+                                     self._project, self._runtime, withdrawal.payload())
+        except WithdrawError:
             raise AccountError('account_invalid_request') from None
         failed = False
         try:

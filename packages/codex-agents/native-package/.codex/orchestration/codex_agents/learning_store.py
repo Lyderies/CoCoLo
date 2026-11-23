@@ -7135,7 +7135,8 @@ class LearningLedger:
                                or prior['content_digest'] != content_digest(record)
                                or any(record[n] != value for n, value in facts.items())
                                or (binding is not None and (binding['run_id'] != expected.run_id
-                                   or binding['binding_state'] != 'abandoned' or binding['abandoned_reason'] != 'claim_denied'
+                                   or binding['binding_state'] != 'abandoned'
+                                   or binding['abandoned_reason'] not in {'claim_denied', 'withdrawn'}
                                    or binding['assignment_digest'] != record['assignment_digest']
                                    or binding['native_assignment_id'] is not None or binding['consumed_at_ms'] is not None)))
                 except Exception:
@@ -7148,7 +7149,11 @@ class LearningLedger:
                 raise ClaimError('claim_denial_unavailable')  # Never reconstruct a vanished known settlement.
             now = self._clock_ms()
             if (binding is None or binding['run_id'] != expected.run_id or binding['client_version'] != 'bridge-v1'
-                    or binding['provider'] not in {'codex', 'claude'} or binding['binding_state'] != 'pending'
+                    or binding['provider'] not in {'codex', 'claude'}
+                    # B3: a claim refused because its open was withdrawn is closed like any refused claim (the
+                    # binding is already ended; the update below leaves it as it is).
+                    or (binding['binding_state'], binding['abandoned_reason']) not in {('pending', None),
+                                                                                       ('abandoned', 'withdrawn')}
                     or binding['consumed_at_ms'] is not None or binding['native_assignment_id'] is not None
                     or binding['usage_complete'] is not None
                     or binding['assignment_digest'] != lease.assignment_digest or lease.lease_digest != closure.lease_digest
@@ -11904,7 +11909,7 @@ class LearningLedger:
         return max(wall, now - (-remaining_ns // 1_000_000)) if remaining_ns > 0 else wall
 
     def withdraw_open(self, project_id: str, *, run_handle: str, request_digest: str,
-                      generation: int | None) -> dict[str, Any]:
+                      generation: int | None, owner: dict | None = None) -> dict[str, Any]:
         """O0b RS-A-2: withdraw a run opened but never claimed, so its binding ends now, not at its expiry.
 
         In one account transaction, serialized with claim admission (both take the ledger's write lock): the
@@ -11917,7 +11922,20 @@ class LearningLedger:
         digest and the generation it named. A request whose digest matches the stored receipt gets it back,
         `known`, whatever the row's generation is now (through restart and pruning: the tombstone answers). A
         new transition must name the row's current generation (else `stale`); one naming none (an older
-        client) is refused `generation_required`."""
+        client) is refused `generation_required`.
+
+        B3 (RS-B draft 3 §4): `owner` is the account route's authenticated caller, `{caller_scope, run_id,
+        inputs_digest, attempt, reason}` (the project is the enrolled root's). An exact replay is answered only to the
+        caller scope that made it; the same digest from any other is `not authorized`, revealing no receipt. A new
+        transition must name the open's own run id and inputs digest and come from the caller scope of the host class
+        that opened it (all from the open's sealed receipt); and its receipt evidence keeps those facts for good. With
+        no `owner` this is the ledger-level primitive RS-A defined (no account caller)."""
+        if owner is not None and (type(owner) is not dict
+                                  or set(owner) != {'caller_scope', 'run_id', 'inputs_digest', 'attempt', 'reason'}
+                                  or any(type(owner[n]) is not str for n in ('caller_scope', 'run_id', 'inputs_digest',
+                                                                             'reason'))
+                                  or type(owner['attempt']) is not int):
+            raise LedgerError("withdrawal is unavailable")
         if (type(run_handle) is not str or not re.fullmatch(r"hrn_[0-9a-f]{48}", run_handle)
                 or type(request_digest) is not str or not re.fullmatch(r"[0-9a-f]{64}", request_digest)
                 or (generation is not None and (type(generation) is not int or generation < 1))):
@@ -11928,11 +11946,25 @@ class LearningLedger:
                 "SELECT state,release_kind,generation,receipt,evidence FROM run_holds "
                 "WHERE project_id=? AND kind='binding' AND identity=?", (project_id, handle)).fetchone()
             if hold is None:
-                raise LedgerError("withdrawal is unavailable")
+                raise LedgerError("withdrawal is not authorized" if owner is not None else "withdrawal is unavailable")
             if hold["release_kind"] == "withdrawn" and hold["evidence"] is not None:
                 stored = json.loads(hold["evidence"])
+                if owner is not None and any(stored.get(name) != owner[name]
+                                             for name in ('caller_scope', 'run_id', 'inputs_digest')):
+                    # W4c: another caller scope, or a request for another run, learns nothing about this handle's
+                    # receipt, whether its request is the stored one or an altered one.
+                    raise LedgerError("withdrawal is not authorized")
                 if stored.get("request_digest") == request_digest:
+                    if owner is not None and any(stored.get(name) != owner[name] for name in ('attempt', 'reason')):
+                        raise LedgerError("withdrawal is not authorized")
                     return {**stored["answer"], "run_handle": run_handle, "receipt": hold["receipt"], "known": True}
+            if owner is not None:
+                # A new transition: the open's own sealed receipt must name this caller scope, run id and inputs
+                # digest. A binding with no such receipt (pruned, or opened by an earlier version) never matches.
+                from .account_original_open import opened_by
+                if not opened_by(self, project_id, handle, caller_scope=owner["caller_scope"],
+                                 run_id=owner["run_id"], inputs_digest=owner["inputs_digest"]):
+                    raise LedgerError("withdrawal is not authorized")
             if generation is None:
                 raise LedgerError("generation_required")
             if generation != hold["generation"]:
@@ -11956,6 +11988,11 @@ class LearningLedger:
             evidence = {"decision": "binding-withdrawal-v1", "project_id": project_id, "handle_digest": handle,
                         "request_digest": request_digest, "generation": generation, "release_kind": "withdrawn",
                         "released_at_ms": released, "answer": answer}
+            if owner is not None:
+                # B3: the ownership an exact replay is answered against, kept with the receipt for the row's life.
+                evidence = {**evidence, "decision": "binding-withdrawal-v2", "caller_scope": owner["caller_scope"],
+                            "run_id": owner["run_id"], "inputs_digest": owner["inputs_digest"],
+                            "attempt": owner["attempt"], "reason": owner["reason"]}
             receipt = content_digest(evidence)
             # F13: written with the release, so a lost reply's retry finds it.
             self._connection.execute(
