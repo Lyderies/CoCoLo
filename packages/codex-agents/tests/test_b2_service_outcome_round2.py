@@ -257,7 +257,6 @@ class PublishTimeReportTests(LaneFixture):
     """N2: the publication stands, and an unexpected error of the record that follows it is reported, not silent."""
 
     def test_an_unexpected_error_after_the_publication_is_reported_and_the_publication_stands(self):
-        run = f'{self.binding.run_handle}:{self.binding.attempt}'
         for error in (RuntimeError('boom'), ValueError('v'), sqlite3.OperationalError('database is locked')):
             with self.subTest(error=repr(error)):
                 fresh = Fresh.make(self, LaneFixture)
@@ -268,6 +267,7 @@ class PublishTimeReportTests(LaneFixture):
                 self.assertEqual('committed', pending.state)
                 self.assertFalse(lane._fault)
                 project, signals = lane.recording_notes.snapshot()
+                run = f'{fresh.binding.run_handle}:{fresh.binding.attempt}'
                 self.assertEqual((fresh.binding.project_id, [f'error:{run}']), (project, signals))
 
     def test_a_refusal_is_a_normal_outcome_and_is_not_reported(self):

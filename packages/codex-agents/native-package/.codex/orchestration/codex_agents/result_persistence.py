@@ -1021,8 +1021,13 @@ class ResultPersistenceLane:
         """B2 (decision 92.2 A): right after the result is safely stored, the writer records its outcome itself. A
         refusal is a normal outcome (the status names it) and the restart/backstop sweep tries again; nothing here
         can fail the publication, which is already committed."""
-        with contextlib.suppress(Exception):  # any failure: the sweep tries again and the status names what is left
+        try:
             self._history().admit_service_result(binding, final_check=self._record_authority())
+        except HistoryError:
+            pass  # a refusal is a normal outcome: the status names it, and the sweep decides about a retry
+        except Exception:  # not a refusal: the sweep tries again, and the health check is told (never raised here)
+            with contextlib.suppress(Exception):
+                service_record.report_unexpected(self._history(), binding, self.recording_notes)
 
     def _acknowledge_terminal(self, pending):
         self._history().acknowledge_account_terminal(pending.binding, pending.acknowledgement)

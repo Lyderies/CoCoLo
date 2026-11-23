@@ -66,3 +66,29 @@ interruption and idle end instead (the account's release of the run, `_account_r
 (8) The host-authorization tests call the host's own `_authorize_history` and the history service directly, with the
 transport replaced by a direct call (no sockets, no collector); the record command's orchestration status and result
 read are answered by the same store.
+
+## Fix round 2 (re-check rev040b2r2ca / r2cb1 / r2cb2)
+
+Production LOWs: N1 the whole candidate operation of `record_pass` (fingerprint reads and refusal handling included) is
+isolated; a fingerprint failure is an `unexpected_error` with backoff and an `error` signal, the cursor is kept and the
+notes are still published (test_N1_*). N2 `ResultPersistenceLane._record_published` swallows only a refusal; any other
+error is reported through `service_record.report_unexpected` (an `error` signal in the notes, cleared when the sweep
+records the run) while the publication stands (PublishTimeReportTests); a non-history error inside the admission
+transaction leaves no open transaction and no partial write, in the connection and in a reopened store
+(FailedAdmissionLeavesNothingTests). N3 the sweep documentation says a selected permanent candidate costs one fingerprint
+query. N4 the expiry guidance says the recording window has ended, not that the result was removed. N5 a permanent
+refusal clears the candidate's backoff and its transient and error signals (an integrity signal stays).
+
+Tests added in `test_b2_service_outcome_round2.py` with `tests/b2_extra_runs.py` (further real, context-backed runs in the
+one store, built through the QA tests' verifier-pair operations): two distinct valid runs and every swap between them,
+real window/attempt persistence with a spy on the effective query limit and persisted receipts and recorders, the real
+close request seen by the lane's backstop, altered rows by exact reason and status, the retired run, authorized
+requests (the authorizer's calls asserted), ownership passed to a successor at the barrier, receipt versions 1 and 2 with
+matching and mismatching expected values, the order of the predicate in the transaction (decision 114.2 stays open), and
+a real verifier pair and QA scope over a service-recorded worker.
+
+Observations kept (not changed here): the status skips a run whose own terminal delivery no longer verifies (the sweep's
+`history_incompatible` and the integrity signal name it); the predicate is not literally the first statement of the
+admission transaction, one read of the writer's own precedes it and nothing is written before it. Known gap: real
+sockets for the authorized request (the disposable host fixture opens a fresh history and has no run builder; a run
+fixture for the host process is new infrastructure).

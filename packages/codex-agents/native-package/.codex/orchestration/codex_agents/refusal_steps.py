@@ -61,7 +61,8 @@ EXACT = {
                                           "learning-status, and open the run again if it never finished.",
     'history_unrecordable_legacy_no_context': "This run was stored by an older version without its inputs, so only "
                                               "its primary can record it: record it with the original inputs.",
-    'history_result_expired': "This result passed its retention time and was removed: dispatch the work again.",
+    'history_result_expired': "This result's recording window has ended, so it can no longer be recorded: dispatch the "
+                              "work again.",
     'service_refused_busy': "The service is busy with other connections: wait a moment, then try again.",
 }
 

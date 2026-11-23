@@ -192,9 +192,11 @@ def record_pass(history, authority: ServiceRecordAuthority, *, limit: int = SWEE
     Each candidate is isolated: a refusal is counted by its reason, and any other error is a transient `unexpected_error`
     (backoff, a health signal) that never stops the pass or loses its progress. The in-memory `permanent` set replaces
     the design 4.6 orchestration prefilter: a candidate refused for a reason that cannot change (a closed orchestration,
-    another runtime, ...) is skipped without another read until its own state changes (its fingerprint: context,
-    reservation and orchestration checkpoint), which also frees a refusal that later heals. Transient refusals back off
-    1 min doubling to 30 min. Returns counts and the refusals met."""
+    another runtime, ...) is not tried again until its own state changes (its fingerprint: context, reservation and
+    orchestration checkpoint), which also frees a refusal that later heals. A selected permanent candidate costs one
+    fingerprint query and no admission work. A candidate that turns permanent loses its retry wait and its transient and
+    error signals (an integrity signal stays). Transient refusals back off 1 min doubling to 30 min. Returns counts and
+    the refusals met."""
     from . import project_result_contexts as contexts
 
     history._require_owner()
@@ -223,38 +225,47 @@ def record_pass(history, authority: ServiceRecordAuthority, *, limit: int = SWEE
         key = (run_handle, attempt)
         last = position
         history._purge_cursors["record"] = position  # progress is kept whatever happens to this candidate
-        if key in state["permanent"]:
-            if state["permanent"][key][1] == _fingerprint(history, run_handle, attempt):
+        counted = False
+        try:  # the whole candidate operation, its fingerprint reads and refusal handling included, is isolated
+            waiting = state["backoff"].get(key)
+            if waiting is not None and now_ms < waiting[0]:
                 continue
-            _forget_permanent(state, key)  # its state changed: it may be recordable now
-        waiting = state["backoff"].get(key)
-        if waiting is not None and now_ms < waiting[0]:
-            continue
-        result["attempted"] += 1
-        try:
-            row = contexts._row(history, run_handle, attempt)
-            binding = contexts._lease_binding(history, row)
-            history.admit_service_result(binding, final_check=authority)
-        except HistoryError as error:
-            reason = error.reason_code
-            result["refused"][reason] = result["refused"].get(reason, 0) + 1
-            if reason in PERMANENT_REASONS:
-                while len(state["permanent"]) >= BACKOFF_MAP_LIMIT:
-                    _forget_permanent(state, next(iter(state["permanent"])))
-                state["permanent"][key] = (reason, _fingerprint(history, run_handle, attempt))
-                if reason in {"history_conflict", "history_incompatible"}:
-                    _signal(state, ("integrity", key))
-            else:
-                _backoff(state, key, now_ms)
-            continue
+            if key in state["permanent"]:
+                if state["permanent"][key][1] == _fingerprint(history, run_handle, attempt):
+                    continue
+                _forget_permanent(state, key)  # its state changed: it may be recordable now
+            result["attempted"] += 1
+            counted = True
+            try:
+                row = contexts._row(history, run_handle, attempt)
+                binding = contexts._lease_binding(history, row)
+                history.admit_service_result(binding, final_check=authority)
+            except HistoryError as error:
+                reason = error.reason_code
+                if reason in PERMANENT_REASONS:
+                    fingerprint = _fingerprint(history, run_handle, attempt)  # read first: a failure here is no refusal
+                    result["refused"][reason] = result["refused"].get(reason, 0) + 1
+                    while len(state["permanent"]) >= BACKOFF_MAP_LIMIT:
+                        _forget_permanent(state, next(iter(state["permanent"])))
+                    state["permanent"][key] = (reason, fingerprint)
+                    # It will not be retried as it is: its retry state and transient signals end with the change.
+                    state["backoff"].pop(key, None)
+                    state["health"].difference_update({("transient", key), ("error", key)})
+                    if reason in {"history_conflict", "history_incompatible"}:
+                        _signal(state, ("integrity", key))
+                else:
+                    result["refused"][reason] = result["refused"].get(reason, 0) + 1
+                    _backoff(state, key, now_ms)
+                continue
+            state["backoff"].pop(key, None)
+            state["health"].difference_update({("transient", key), ("error", key)})  # it recovered
+            result["recorded"] += 1
         except Exception:  # any other failure of one candidate: a signal and a later retry, never the pass's end
+            if not counted:
+                result["attempted"] += 1
             result["refused"]["unexpected_error"] = result["refused"].get("unexpected_error", 0) + 1
             _backoff(state, key, now_ms)
             _signal(state, ("error", key))
-            continue
-        state["backoff"].pop(key, None)
-        state["health"].difference_update({("transient", key), ("error", key)})  # it recovered
-        result["recorded"] += 1
     if notes is not None:
         notes.publish(history.project_id, health_signals(history))
     if last is not None:
@@ -262,6 +273,14 @@ def record_pass(history, authority: ServiceRecordAuthority, *, limit: int = SWEE
     elif not window and not wrapped:
         history._purge_cursors["record"] = None
     return result
+
+
+def report_unexpected(history, binding, notes) -> None:
+    """The publish-time record failed in a way that is not a refusal: keep the run's `error` signal (cleared when the
+    sweep records it) and publish the notes, so the health check names it. The publication already stands."""
+    _signal(history._record_sweep, ("error", (binding.run_handle, binding.attempt)))
+    if notes is not None:
+        notes.publish(history.project_id, health_signals(history))
 
 
 def _fingerprint(history, run_handle, attempt):
