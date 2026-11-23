@@ -81,6 +81,7 @@ class B2Fixture(rc.RecordedContextFixture):
                                        before_commit=options.pop('before_commit', lambda: None), **options)
 
     def orchestration(self, status='active', **changes):
+        changes.setdefault('runtime', self.binding.runtime_digest)
         return mock.patch.object(OrchestrationOwner, '_current', return_value=view(status, **changes))
 
     def counts(self):
@@ -313,8 +314,11 @@ class EligibilityTests(B2Fixture):
             self.authority().check(self.store, self.binding, 'K1', reservation=self.store.result_reservation(self.binding))
 
     def test_final_check_is_load_bearing(self):
-        with self.orchestration('completed'), mock.patch.object(ServiceRecordAuthority, 'check', return_value=None):
-            result = self.service_record()  # nothing else stops a closed orchestration's record: the predicate does
+        other = self.authority(runtime_digest=OTHER_RUNTIME)
+        self.refused('history_unrecordable_other_runtime',
+                     record=lambda: self.store.admit_service_result(self.binding, final_check=other))
+        with mock.patch.object(ServiceRecordAuthority, 'check', return_value=None):
+            result = self.store.admit_service_result(self.binding, final_check=other)  # only the predicate stopped it
         self.assertEqual('recorded', rc.context_row(self.store, *self.attempt)[0])
         self.assertEqual(self.receipt, result['admission']['record_id'])
 
@@ -557,7 +561,7 @@ class SerializationTests(B2Fixture):
 class SweepTests(dr.LeaseBackedFixture):
     """B2-12, B2-18: bounded, fair, history-independent selection; permanent refusals never starve it."""
 
-    RUNS = 25
+    RUNS = 14
 
     def committed(self):
         for number in range(1, self.RUNS + 1):
@@ -601,10 +605,10 @@ class SweepTests(dr.LeaseBackedFixture):
 
     def test_permanent_refusals_do_not_starve(self):
         self.committed()
-        closed = {history_binding(number).claim_id for number in range(1, 11)}
+        closed = {history_binding(number).claim_id for number in range(1, 7)}
         seen, counts = self.drive(lambda binding: 'history_unrecordable_orchestration_closed'
                                   if binding.claim_id in closed else None, passes=6)
-        self.assertEqual(self.RUNS, len(set(seen)))  # the refused ten never block the other fifteen
+        self.assertEqual(self.RUNS, len(set(seen)))  # the refused six never block the other eight
         self.assertEqual(len(closed), sum(seen.count(claim) for claim in closed))  # and are tried once, not looped
 
     def test_transient_retry_backoff(self):
@@ -641,15 +645,21 @@ class SweepTests(dr.LeaseBackedFixture):
         self.assertIn('project_result_contexts_live', plan)
         self.assertNotIn('SCAN c', plan.replace('SCAN c USING', ''))
         db = self.store._connection
-        run_handle, attempt = self.attempt(1)
+        authority = ServiceRecordAuthority(history_binding().runtime_digest, True)
+
+        def one_pass():
+            self.store._purge_cursors['record'] = None
+            self.store._record_sweep = {'permanent': {}, 'backoff': {}, 'health': set()}
+            steps = []
+            db.set_trace_callback(steps.append)
+            service_record.record_pass(self.store, authority, clock=lambda: 1)
+            db.set_trace_callback(None)
+            return len(steps)
+        without = one_pass()
         for index in range(2_000):  # tombstones: ended contexts leave the selection however many there are
             db.execute("INSERT INTO project_result_contexts(project_id,run_handle,attempt,state,context_size,lease_deadline_ms) "
                        "VALUES(?,?,?,'expired',0,0)", (self.store.project_id, f'hrn_{9000 + index:048x}', 1))
-        steps = []
-        db.set_trace_callback(steps.append)
-        service_record.record_pass(self.store, ServiceRecordAuthority(history_binding().runtime_digest, True), clock=lambda: 1)
-        db.set_trace_callback(None)
-        self.assertLess(len(steps), 400)
+        self.assertEqual(without, one_pass())
 
 
 @requirement

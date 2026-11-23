@@ -1,0 +1,309 @@
+"""B2 (decision 92 A): the project service records a finished child's outcome itself.
+
+DESIGN-0.4.0-B2-outcome.md draft 2 with the s2 corrections. Three parts:
+
+- `ServiceRecordAuthority`: the one final predicate that gates every first admission (K1) and every association
+  repair (K3) of a result, at the service's own entry and at the primary's. It reads only the store, inside the
+  admission transaction, so the admission, the orchestration's close, its interruption, the 24 h idle end and the
+  result's expiry meet at one serialization point (the writer's `BEGIN IMMEDIATE`). K2 is the primary's read-only
+  retrieval of what is already recorded: typing and the receipt/context association only.
+- `project_result_recorders` (schema step 19 -> 20): who recorded a run's outcome, `service` or `primary`, keyed by the
+  receipt's record id with no foreign key, kept for the receipt's lifetime. Receipts and records are unchanged.
+- `record_pass`: the bounded, fair backstop sweep that finds committed results nobody has recorded (a restart, or a
+  record the first try could not make) and records them, and `recording_status` for the status report.
+
+Nothing here is reachable over a socket: the entry points are methods of the project's own writer.
+"""
+from __future__ import annotations
+
+import re
+import time
+from dataclasses import dataclass
+
+from .history_contracts import HistoryError, matches
+
+RECORDERS = ("service", "primary")
+PHASES = ("K1", "K2", "K3")
+_RECORD_ID = re.compile(r"host_result_admission:[0-9a-f]{64}")
+
+# Step 19 -> 20 (owner decision 92.3 A): a small separate table; the receipt (versions 1 and 2) is unchanged. Keyed by
+# the receipt's record id, no foreign key: attribution survives the reservation's retirement.
+RECORDER_SCHEMA = """
+CREATE TABLE project_result_recorders(
+ project_id TEXT NOT NULL,record_id TEXT NOT NULL,
+ recorded_by TEXT NOT NULL CHECK(recorded_by IN ('service','primary')),
+ recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>=0),
+ PRIMARY KEY(project_id,record_id),
+ FOREIGN KEY(project_id) REFERENCES history_identity(project_id));
+"""
+RECORDER_COLUMNS = {"project_result_recorders": ("project_id", "record_id", "recorded_by", "recorded_at_ms")}
+
+# Refusals the status names `unrecordable:<reason>`; each is a plain reason code of its own.
+UNRECORDABLE = {
+    "orchestration_closed": "history_unrecordable_orchestration_closed",
+    "other_runtime": "history_unrecordable_other_runtime",
+    "host_class": "history_unrecordable_host_class",
+    "context_state": "history_unrecordable_context_state",
+    "legacy_no_context": "history_unrecordable_legacy_no_context",
+    "expired": "history_result_expired",
+}
+REASON_CODES = frozenset(code for code in UNRECORDABLE.values() if code.startswith("history_unrecordable_"))
+# A sweep refusal that cannot change until a restart or a state change; the others are retried with backoff.
+PERMANENT_REASONS = frozenset(UNRECORDABLE.values()) | {"history_conflict", "history_incompatible",
+                                                        "history_not_authorized"}
+BACKOFF_FIRST_MS, BACKOFF_LAST_MS, BACKOFF_MAP_LIMIT = 60_000, 1_800_000, 1_000
+SWEEP_ATTEMPTS = 10
+SWEEP_WINDOW = SWEEP_ATTEMPTS * 16
+HEALTH_TRANSIENT_FAILURES = 5
+
+
+def recorders_consistent(connection) -> bool:
+    """The step's own validator: every row names a receipt record id and a supported recorder."""
+    for record_id, recorded_by in connection.execute("SELECT record_id,recorded_by FROM project_result_recorders"):
+        if not matches(record_id, _RECORD_ID) or recorded_by not in RECORDERS:
+            return False
+    return True
+
+
+def insert_recorder(history, record_id: str, recorded_by: str, now_ms: int) -> None:
+    """In the first admission's transaction; a plain INSERT, so a second row for one receipt cannot exist."""
+    if recorded_by not in RECORDERS or not matches(record_id, _RECORD_ID):
+        raise HistoryError("history_invalid_input")
+    history._connection.execute("INSERT INTO project_result_recorders VALUES(?,?,?,?)",
+                                (history.project_id, record_id, recorded_by, now_ms))
+
+
+def recorder_of(history, record_id: str) -> str | None:
+    """`service`, `primary`, or None (a receipt from before step 20, or none at all)."""
+    row = history._connection.execute(
+        "SELECT recorded_by FROM project_result_recorders WHERE project_id=? AND record_id=?",
+        (history.project_id, record_id)).fetchone()
+    return None if row is None else row[0]
+
+
+@dataclass(frozen=True)
+class ServiceRecordAuthority:
+    """The final predicate (4.3). `runtime_digest` is the writer's own runtime (None only for a store tested alone);
+    `service` is True at the service's own entry, where a run with no stored context cannot be recorded."""
+
+    runtime_digest: str | None = None
+    service: bool = False
+
+    def __post_init__(self):
+        if ((self.runtime_digest is not None and not matches(self.runtime_digest, re.compile(r"[0-9a-f]{64}")))
+                or type(self.service) is not bool):
+            raise HistoryError("history_invalid_input")
+
+    def check(self, history, binding, phase: str, *, reservation=None, receipt=None) -> None:
+        """Raise a named HistoryError unless this admission may write (K1, K3) or may be read back (K2)."""
+        from . import project_result_contexts as contexts
+
+        if type(self) is not ServiceRecordAuthority or phase not in PHASES:
+            raise HistoryError("history_invalid_input")
+        history._require_owner()
+        row = contexts._row(history, binding.run_handle, binding.attempt)
+        if phase == "K2":
+            # Authenticated read-only retrieval: typing and association only, never orchestration state or expiry.
+            if row is not None and row["state"] == "recorded":
+                if (not contexts._associated(row, binding) or receipt is None
+                        or row["outcome_digest"] != receipt.get("host_outcome_digest")):
+                    raise HistoryError("history_conflict")
+            return
+        state = None if row is None else row["state"]
+        if row is None:
+            if self.service:
+                raise HistoryError(UNRECORDABLE["legacy_no_context"])
+        elif state == "legacy_no_context":
+            raise HistoryError(UNRECORDABLE["legacy_no_context"])
+        elif state in ("retiring", "expired", "ended"):
+            raise HistoryError(UNRECORDABLE["expired"])
+        elif state != "committed" or not contexts._associated(row, binding):
+            raise HistoryError(UNRECORDABLE["context_state"])
+        if self.runtime_digest is not None and binding.runtime_digest != self.runtime_digest:
+            raise HistoryError(UNRECORDABLE["other_runtime"])
+        self._orchestration(history, binding, row)
+        self._reservation(history, binding, phase, reservation)
+
+    def _orchestration(self, history, binding, row) -> None:
+        from .orchestration_api import HOST_CLIENT_VERSIONS, OrchestrationScope, SCOPE_FIELDS
+
+        scope = OrchestrationScope(**{name: getattr(binding, name) for name in SCOPE_FIELDS})
+        try:
+            view = history._orchestration_owner()._current(scope, binding.orchestration_handle, missing_reference=True)
+        except HistoryError as error:
+            if error.reason_code in {"history_wrong_owner", "history_unavailable", "history_result_unavailable"}:
+                raise
+            view = False  # not verifiable: refused like a closed one (4.3d)
+        if view is None:
+            return  # a reference from before orchestrations were kept in the store (legacy, only when allowed)
+        if view is False or view["snapshot"]["status"] not in ("active", "paused"):
+            raise HistoryError(UNRECORDABLE["orchestration_closed"])
+        snapshot = view["snapshot"]
+        if (snapshot["client_version"] not in HOST_CLIENT_VERSIONS
+                or (row is not None and row["host_class"] != snapshot["client_version"])
+                or (self.runtime_digest is not None and snapshot["scope"]["runtime_digest"] != self.runtime_digest)):
+            raise HistoryError(UNRECORDABLE["host_class"] if (row is not None and row["host_class"]
+                                                              != snapshot["client_version"])
+                               else UNRECORDABLE["other_runtime"])
+
+    @staticmethod
+    def _reservation(history, binding, phase, before) -> None:
+        """Re-read inside the transaction (4.2 item 3): committed, the same terminal and result as before the body I/O,
+        and `now`, sampled here once, before its deadline and not before the terminal was observed."""
+        _, current = history._result_row(binding)
+        if current.state == "expired":
+            raise HistoryError(UNRECORDABLE["expired"])
+        if current.state != "committed" or (before is not None and (
+                current.terminal_record_id != before.terminal_record_id or current.result_digest != before.result_digest)):
+            raise HistoryError("history_conflict")
+        now = history._result_now()
+        if now >= current.expires_at_ms:
+            raise HistoryError(UNRECORDABLE["expired"])
+
+
+# The sweep ---------------------------------------------------------------------------------------------------------
+
+# The selection window: this project's contexts still `committed` whose reservation is committed and live, in row
+# order from a cursor, through the live-state index (an ended or expired context is never visited).
+WINDOW_SQL = (
+    "SELECT c.rowid,c.run_handle,c.attempt FROM project_result_contexts c INDEXED BY project_result_contexts_live "
+    "JOIN result_reservations s ON s.project_id=c.project_id AND s.run_handle=c.run_handle AND s.attempt=c.attempt "
+    "WHERE c.state='committed' AND c.state NOT IN ('ended','expired') AND c.project_id=? AND c.rowid>? AND s.state='committed' AND s.expires_at_ms>? "
+    "ORDER BY c.rowid LIMIT ?")
+
+
+def record_pass(history, authority: ServiceRecordAuthority, *, limit: int = SWEEP_ATTEMPTS, clock=None) -> dict:
+    """One bounded pass: at most `limit` recording attempts over a window of `limit*16` committed contexts, from a
+    cursor that advances on every attempt (refusals too) and wraps. Selection input is only this project's contexts
+    still `committed` with a live reservation; the binding comes only from the sealed lease, the reference only from the
+    stored terminal (4.6). Permanent refusals are not retried until a restart; transient ones back off 1 min doubling
+    to 30 min. Returns counts and the refusals met."""
+    from . import project_result_contexts as contexts
+
+    history._require_owner()
+    if type(authority) is not ServiceRecordAuthority or not authority.service:
+        raise HistoryError("history_invalid_input")
+    now_ms = (clock or (lambda: time.time_ns() // 1_000_000))()
+    state = history._record_sweep
+    after = history._purge_cursors.get("record") or 0
+    result = {"attempted": 0, "recorded": 0, "refused": {}, "already": 0}
+    window = history._connection.execute(WINDOW_SQL, (history.project_id, after, history._result_now(),
+                                                      SWEEP_WINDOW)).fetchall()
+    wrapped = False
+    if not window and after:
+        wrapped = True
+        history._purge_cursors["record"] = None
+        window = history._connection.execute(WINDOW_SQL, (history.project_id, 0, history._result_now(),
+                                                          SWEEP_WINDOW)).fetchall()
+    last = None
+    for position, run_handle, attempt in window:
+        if result["attempted"] >= limit:
+            break
+        key = (run_handle, attempt)
+        last = position
+        if key in state["permanent"]:
+            continue
+        waiting = state["backoff"].get(key)
+        if waiting is not None and now_ms < waiting[0]:
+            continue
+        result["attempted"] += 1
+        try:
+            row = contexts._row(history, run_handle, attempt)
+            binding = contexts._lease_binding(history, row)
+            history.admit_service_result(binding, final_check=authority)
+        except HistoryError as error:
+            reason = error.reason_code
+            result["refused"][reason] = result["refused"].get(reason, 0) + 1
+            if reason in PERMANENT_REASONS:
+                if len(state["permanent"]) >= BACKOFF_MAP_LIMIT:
+                    state["permanent"].pop(next(iter(state["permanent"])))
+                state["permanent"][key] = reason
+                if reason in {"history_conflict", "history_incompatible"}:
+                    state["health"].add(("integrity", key))
+            else:
+                _backoff(state, key, now_ms)
+            continue
+        state["backoff"].pop(key, None)
+        result["recorded"] += 1
+    if last is not None:
+        history._purge_cursors["record"] = last
+    elif not window and not wrapped:
+        history._purge_cursors["record"] = None
+    return result
+
+
+def _backoff(state, key, now_ms) -> None:
+    previous = state["backoff"].get(key)
+    count = 1 if previous is None else previous[1] + 1
+    delay = min(BACKOFF_LAST_MS, BACKOFF_FIRST_MS * (2 ** (count - 1)))
+    if previous is None and len(state["backoff"]) >= BACKOFF_MAP_LIMIT:
+        state["backoff"].pop(next(iter(state["backoff"])))
+    state["backoff"][key] = (now_ms + delay, count)
+    if count >= HEALTH_TRANSIENT_FAILURES:
+        state["health"].add(("transient", key))
+
+
+def health_signals(history) -> list:
+    """HM-S8 inputs (proposal): an integrity refusal once per claim, a transient failure after five in a row."""
+    return sorted(f"{kind}:{key[0]}:{key[1]}" for kind, key in history._record_sweep["health"])
+
+
+# Status ------------------------------------------------------------------------------------------------------------
+
+def recording_status(history, authority: ServiceRecordAuthority, orchestration_handle: str | None = None) -> dict:
+    """Who recorded each committed run, and what awaits a record: `recorded` rows with their recorder (`service`,
+    `primary`, or `unknown` for a post-step receipt with no row), `awaiting_record` (committed, none yet) and
+    `unrecordable:<reason>` counts. Receipts from before step 20 read `primary (before B2)`. Read-only; bounded by
+    the project's contexts that are still held."""
+    from . import project_result_contexts as contexts
+
+    history._require_owner()
+    status = {"recorded": [], "awaiting_record": 0, "unrecordable": {}}
+    rows = history._connection.execute(
+        "SELECT run_handle,attempt,state,outcome_digest FROM project_result_contexts INDEXED BY "
+        "project_result_contexts_live WHERE project_id=? AND state IN ('committed','recorded') "
+        "AND state NOT IN ('ended','expired') LIMIT 1025",
+        (history.project_id,)).fetchall()
+    if len(rows) > 1024:
+        raise HistoryError("history_result_capacity")
+    for run_handle, attempt, state, outcome_digest in rows:
+        row = contexts._row(history, run_handle, attempt)
+        try:
+            binding = contexts._lease_binding(history, row)
+        except HistoryError:
+            continue
+        if orchestration_handle is not None and binding.orchestration_handle != orchestration_handle:
+            continue
+        identity = _receipt_id(history, binding)
+        if state == "recorded":
+            who = recorder_of(history, identity)
+            status["recorded"].append({
+                "run_handle": run_handle, "attempt": attempt, "outcome_digest": outcome_digest,
+                "recorded_by": who if who is not None else _legacy_label(history, identity),
+                "automatic": who == "service"})
+            continue
+        try:
+            authority.check(history, binding, "K1", reservation=history._result_row(binding)[1])
+            status["awaiting_record"] += 1
+        except HistoryError as error:
+            label = next((name for name, code in UNRECORDABLE.items() if code == error.reason_code), error.reason_code)
+            status["unrecordable"][label] = status["unrecordable"].get(label, 0) + 1
+    return status
+
+
+def _receipt_id(history, binding) -> str:
+    from .learning_contracts import canonical_json, keyed_digest
+
+    return "host_result_admission:" + keyed_digest(history._result_key, b"project-host-result-v1\0"
+                                                   + canonical_json(binding.as_data()))
+
+
+def _legacy_label(history, identity: str) -> str:
+    """`primary (before B2)` only for a receipt older than step 20; one written since with no row is `unknown`."""
+    row = history._connection.execute(
+        "SELECT ingested_at_ms FROM records WHERE project_id=? AND record_id=?", (history.project_id, identity)).fetchone()
+    stamp = history._connection.execute(
+        "SELECT MIN(recorded_at_ms) FROM project_result_recorders WHERE project_id=?", (history.project_id,)).fetchone()[0]
+    if row is not None and stamp is not None and row[0] >= stamp:
+        return "unknown"
+    return "primary (before B2)"

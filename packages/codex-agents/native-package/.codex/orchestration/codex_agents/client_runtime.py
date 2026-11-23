@@ -937,9 +937,15 @@ def observe_provider_client(state_root, project_root, provider, *, request_id=No
                         for record in result['records']]}
 
 
+# B2 (4.4, B2-5): the primary's recheck of a recorded result still compares the body it holds with the stored one and
+# the original inputs it opened with; each refusal is named and writes nothing.
+RECHECK_REASONS = frozenset({'recheck_result_mismatch', 'recheck_inputs_mismatch'})
+
+
 class RuntimeResultError(RuntimeError):
     def __init__(self, reason):
-        allowed = HISTORY_REASON_CODES | DISPATCH_REASONS | {'result_client_unavailable', 'host_client_mismatch'}
+        allowed = (HISTORY_REASON_CODES | DISPATCH_REASONS | RECHECK_REASONS
+                   | {'result_client_unavailable', 'host_client_mismatch'})
         self.reason_code = reason if type(reason) is str and reason in allowed else 'result_client_unavailable'
         super().__init__(self.reason_code)
 
@@ -1153,7 +1159,7 @@ def record_codex_result_client(state_root, project_root, task, route, assignment
             if missing.reason_code == 'history_not_found':
                 raise DispatchError('dispatch_not_found') from None
             if missing.reason_code == 'history_conflict':
-                raise DispatchError('dispatch_conflict') from None
+                raise RuntimeResultError('recheck_inputs_mismatch') from None  # B2-5: said by name
             raise
         binding = AttemptBinding(**found['binding'])
         current = OrchestrationClient(result_endpoint, OrchestrationScope(**vars(scope)), timeout=10).call(
@@ -1171,7 +1177,7 @@ def record_codex_result_client(state_root, project_root, task, route, assignment
             raise HistoryError('history_conflict')
         body = ResultReadClient(result_endpoint, timeout=10).read_result(binding, reference.result_digest)
         if submitted != canonical_json(parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)):
-            raise HistoryError('history_conflict')
+            raise RuntimeResultError('recheck_result_mismatch')  # B2-5: the handed body is not the stored one
         # Only this durable reference crosses the mutation boundary. The writer
         # rechecks original inputs, result, current authority and expiry itself.
         admitted = history.admit_host_result(reference)
@@ -1199,6 +1205,8 @@ def record_codex_result_client(state_root, project_root, task, route, assignment
         return {'ready': True, **admitted, **records,
                 'host_outcome_digest': admitted['admission']['host_outcome_digest'], 'capacity_state': 'retained',
                 **({'dispatch_diagnostics': diagnostics} if diagnostics else {})}
+    except RuntimeResultError:
+        raise
     except (DispatchError, HistoryError, HostClientMismatch) as error:
         raise RuntimeResultError(error.reason_code) from None
     except Exception:

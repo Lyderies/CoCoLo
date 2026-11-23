@@ -46,6 +46,12 @@ EXACT = {
                            "project), context, objective, verify_objective, expected_output and evidence.",
     'review_no_verdict': "The child gave no verdict: run that review stage again (a recorded result without one "
                          "cannot pass operational QA).",
+    'recheck_result_mismatch': "The result you handed is not the one the service stored: read the stored result "
+                               "(learning-record-host-result shows it) and record again with that body.",
+    'recheck_inputs_mismatch': "This run was opened with other original inputs than the ones you gave: record it "
+                               "with the inputs of its own open.",
+    'history_unrecordable_orchestration_closed': "This orchestration has ended, so this run's result can no longer "
+                                                 "be recorded; its report stays as it was (unrecorded).",
     'service_refused_busy': "The service is busy with other connections: wait a moment, then try again.",
 }
 

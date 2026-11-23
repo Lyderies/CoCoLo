@@ -53,6 +53,7 @@ from .learning_contracts import (
     DISPATCH_RESULT_SCHEMA_VERSION, MAX_RECORD_BYTES, SOURCES, canonical_json, content_digest,
     keyed_digest, parse_bounded_json, validate_execution_configuration, validate_learning_record,
 )
+from . import service_record
 from .result_contracts import (
     MAX_ASSIGNMENT_CANONICAL_BYTES, MAX_RESULT_BODY_BYTES, MAX_RESULT_RETENTION_MS,
     CodexUsageObservation, ResultCapacity, ResultLease, ResultLeaseBinding, ResultObservation, ResultReservation,
@@ -60,7 +61,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 19
+_SCHEMA_VERSION = 20
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
@@ -197,9 +198,12 @@ CREATE INDEX project_holds_open_held ON project_holds(project_id,json_extract(ev
  WHERE kind='open_binding' AND state='held';
 CREATE INDEX project_registered_runs_run ON project_registered_runs(project_id,run_id);
 """
-_SCHEMA = _SCHEMA_V18 + OPEN_BINDING_INDEX_SCHEMA
+_SCHEMA_V19 = _SCHEMA_V18 + OPEN_BINDING_INDEX_SCHEMA
+# B2 (decision 92.3 A), step 19 -> 20: who recorded a result's outcome (service_record.RECORDER_SCHEMA).
+_SCHEMA = _SCHEMA_V19 + service_record.RECORDER_SCHEMA
 _COLUMNS = {
     **PROJECT_HOLDS_COLUMNS,
+    **service_record.RECORDER_COLUMNS,
     **ACTIVATION_COLUMNS,
     **REGISTERED_RUN_COLUMNS,
     **LEARNING_SOURCE_COLUMNS,
@@ -288,7 +292,12 @@ class ProjectHistory:
         self._learning_purge_cursor = 0  # Scheduling only, like the cursor above; a restart starts over.
         self._lease_expiry_cursor: int | None = None
         # Where the finished-row purge goes on from (0.3.4 R1g): scheduling state only, like the above.
-        self._purge_cursors: dict[str, int | None] = {"reservations": None, "leases": None, "orchestrations": None, "earlier": None}
+        self._purge_cursors: dict[str, int | None] = {"reservations": None, "leases": None, "orchestrations": None, "earlier": None,
+                                                          "record": None}
+        # B2: the recording sweep's in-memory state (a restart starts over) and the test-only barrier between an
+        # admission's body I/O and its transaction.
+        self._record_sweep = {"permanent": {}, "backoff": {}, "health": set()}
+        self._after_body_io: Callable[[], None] | None = None
         self._result_clock = result_clock_ms if result_clock_ms is not None else (lambda: time.time_ns() // 1_000_000)
         if (
             type(allow_schema_upgrade) is not bool
@@ -455,19 +464,20 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18} and application == _APPLICATION_ID
+        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19} and application == _APPLICATION_ID
               and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4,
                                                5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7, 8: _SCHEMA_V8,
                                                9: _SCHEMA_V9, 10: _SCHEMA_V10, 11: _SCHEMA_V11,
                                                12: _SCHEMA_V12, 13: _SCHEMA_V13, 14: _SCHEMA_V14,
-                                               15: _SCHEMA_V15, 16: _SCHEMA_V16, 17: _SCHEMA_V17, 18: _SCHEMA_V18}[version])):
+                                               15: _SCHEMA_V15, 16: _SCHEMA_V16, 17: _SCHEMA_V17, 18: _SCHEMA_V18,
+                                               19: _SCHEMA_V19}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {*(PROJECT_HOLDS_COLUMNS if version < 18 else set()), *(REGISTERED_RUN_COLUMNS if version < 17 else set()), *(ACTIVATION_COLUMNS if version < 16 else set()), *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
+            omitted = {*(service_record.RECORDER_COLUMNS if version < 20 else set()), *(PROJECT_HOLDS_COLUMNS if version < 18 else set()), *(REGISTERED_RUN_COLUMNS if version < 17 else set()), *(ACTIVATION_COLUMNS if version < 16 else set()), *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
             old_columns = {name: (columns[:-1] if ((name == 'result_leases' and version < 9)
                                                  or (name == 'project_cleanup_reservations' and version == 9)) else columns)
@@ -495,7 +505,8 @@ class ProjectHistory:
     def _check_project_holds(self) -> None:
         """SH-7: RS-B's register validator and RS-D's custody validator (project_holds_schema)."""
         if not (project_holds_schema.register_consistent(self._connection)
-                and project_holds_schema.custody_consistent(self._connection, self._result_key)):
+                and project_holds_schema.custody_consistent(self._connection, self._result_key)
+                and service_record.recorders_consistent(self._connection)):  # B2: step 20's validator
             raise HistoryError("history_incompatible")
 
     def _upgrade(self, connection, version) -> None:
@@ -523,7 +534,9 @@ class ProjectHistory:
                               # SH-1: the four tables (each slice adopts its own holds into them).
                               + (PROJECT_HOLDS_SCHEMA if version < 18 else '')
                               # B3: the open-binding indexes (step 18 -> 19).
-                              + OPEN_BINDING_INDEX_SCHEMA).split(';'):
+                              + (OPEN_BINDING_INDEX_SCHEMA if version < 19 else '')
+                              # B2: the recorder table (step 19 -> 20).
+                              + (service_record.RECORDER_SCHEMA if version < 20 else '')).split(';'):
                 if statement.strip():
                     connection.execute(statement)
             # B1: every lease and reservation gets its register row by class, idempotently, before the validators.
@@ -2650,18 +2663,58 @@ class ProjectHistory:
 
     @_operation
     def admit_host_result(self, reference: HostResultReference, *, assignment: dict, task: dict,
-                          route: dict, client_capability: dict, before_commit: Callable[[], None]) -> dict:
+                          route: dict, client_capability: dict, before_commit: Callable[[], None],
+                          final_check=None) -> dict:
         """Derive one non-accepted outcome from this writer's exact durable return.
 
         Original input and current primary authority are server-side obligations.
         The callback rechecks current authority after artifact I/O, before any
         mutation (and on known retries). No account store, new ticket, admission
         acceptance, repair, QA decision or cleanup release is created here.
+
+        B2: `final_check` is the one final predicate (`ServiceRecordAuthority`), run inside the admission
+        transaction. Only that type is accepted; omitted, the store's own default instance runs, so no caller can
+        skip it. The primary path records as `primary`.
         """
+        if not callable(before_commit):
+            raise HistoryError("history_invalid_input")
+        return self._admit_host_result(reference, assignment=assignment, task=task, route=route,
+                                       client_capability=client_capability, before_commit=before_commit,
+                                       final_check=service_record.ServiceRecordAuthority() if final_check is None
+                                       else final_check, recorder="primary")
+
+    @_operation
+    def admit_service_result(self, binding: AttemptBinding, *, final_check) -> dict | None:
+        """B2 (decision 92): the writer records this committed attempt's outcome itself, from the store alone.
+
+        Writer-internal: no HistoryRequest, no socket entry. The inputs are the stored context (checked against the
+        consumed grant), the reference is the stored terminal, the host class is the stored row's. Returns the receipt
+        view, or None when the outcome is already recorded (the service never retrieves; K2 is the primary's).
+        """
+        binding = self._result_binding(binding)
+        if type(final_check) is not service_record.ServiceRecordAuthority or not final_check.service:
+            raise HistoryError("history_invalid_input")
+        row = project_result_contexts._row(self, binding.run_handle, binding.attempt)
+        if row is not None and row["state"] == "recorded":
+            return None  # already recorded (by either): the service stops, it never retrieves
+        # Before any body I/O, the same named predicate (also re-run inside the transaction).
+        _, before = self._result_row(binding)
+        final_check.check(self, binding, "K1", reservation=before)
+        context = project_result_contexts.stored_result_context(self, binding, host_class=row["host_class"])
+        _, inputs = context.snapshot()
+        delivery = project_result_contexts.committed_reference(self, binding)["delivery"]
+        reference = HostResultReference(binding, delivery["record_id"], delivery["record_content_digest"],
+                                        delivery["result_digest"])
+        return self._admit_host_result(reference, assignment=inputs["assignment"], task=inputs["task"],
+                                       route=inputs["route"], client_capability=inputs["client_capability"],
+                                       before_commit=None, final_check=final_check, recorder="service")
+
+    def _admit_host_result(self, reference: HostResultReference, *, assignment: dict, task: dict,
+                           route: dict, client_capability: dict, before_commit, final_check, recorder: str) -> dict | None:
         from .host_result_contracts import HostResultContext
         from .learning_engine import build_host_result_records
 
-        if type(reference) is not HostResultReference or not callable(before_commit):
+        if type(reference) is not HostResultReference or type(final_check) is not service_record.ServiceRecordAuthority:
             raise HistoryError("history_invalid_input")
         reference = decode_host_result_reference(reference.as_data())
         binding = self._result_binding(reference.binding)
@@ -2749,12 +2802,10 @@ class ProjectHistory:
             receipt = parse_bounded_json(entry.content)
             if entry.source != "host" or any(receipt.get(name) != value for name, value in expected.items()):
                 raise HistoryError("history_conflict")
-            result = self._host_result_receipt(entry)
-            before_commit()
-            with self._transaction():
-                # D1 (RS-D draft 2 §4): a repeat writes the outcome association if it is missing, idempotently.
-                project_result_contexts.record_outcome(self, binding, receipt["host_outcome_digest"])
-            return result
+            return self._known_receipt(entry, receipt, binding, reservation, before_commit, final_check, recorder)
+        # B2: the same named predicate before the body is read (a closed orchestration or another runtime is named
+        # here, not by the read); it is decided again inside the transaction below.
+        final_check.check(self, binding, "K1", reservation=reservation)
         body = self.read_result(binding)
         checked_result_body(body, assignment, terminal)
         checked_result = parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)
@@ -2777,17 +2828,58 @@ class ProjectHistory:
                    "outcome_record_id": outcome["record_id"], "host_outcome_digest": content_digest(outcome)}
         encoded = [canonical_json(value) for value in (event, outcome, receipt)]
         checked = [self._checked_record(value, "host", terminal["observed_at_ms"]) for value in encoded]
-        before_commit()
+        if before_commit is not None:
+            before_commit()
         now = self._result_now()
         if (self.result_reservation(binding) != reservation or now >= reservation.expires_at_ms
                 or now < terminal["observed_at_ms"]):
             raise HistoryError("history_result_expired")
+        if self._after_body_io is not None:  # test-only barrier (B2-15): between the body I/O and the transaction
+            self._after_body_io()
+        lost = False
         with self._transaction():
-            for value, content in zip(checked, encoded):
-                entry = self._append_locked(value, content, "host", now)
-            # D1 (RS-D draft 2 §4): the outcome association, in the admission's own transaction.
-            project_result_contexts.record_outcome(self, binding, receipt["host_outcome_digest"])
+            if self._connection.execute("SELECT 1 FROM records WHERE project_id=? AND record_id=?",
+                                        (self.project_id, identity)).fetchone() is not None:
+                lost = True  # the other recorder committed first: this one writes nothing
+            else:
+                # B2 (4.2): eligibility is decided from rows read here, inside the transaction, before any write.
+                final_check.check(self, binding, "K1", reservation=reservation)
+                now = self._result_now()
+                if now < terminal["observed_at_ms"]:
+                    raise HistoryError("history_result_expired")
+                for value, content in zip(checked, encoded):
+                    entry = self._append_locked(value, content, "host", now)
+                # D1 (RS-D draft 2 §4): the outcome association, in the admission's own transaction.
+                project_result_contexts.record_outcome(self, binding, receipt["host_outcome_digest"])
+                # B2 (4.5): who recorded, set by code from which entry ran; the first winner is immutable.
+                service_record.insert_recorder(self, identity, recorder, now)
+        if lost:
+            prior = self._connection.execute("SELECT * FROM records WHERE project_id=? AND record_id=?",
+                                             (self.project_id, identity)).fetchone()
+            known = self._entry(prior)
+            return self._known_receipt(known, parse_bounded_json(known.content), binding, reservation, before_commit,
+                                       final_check, recorder)
         return self._host_result_receipt(entry)
+
+    def _known_receipt(self, entry, receipt, binding, reservation, before_commit, final_check, recorder):
+        """A receipt exists (B2 4.4). K2: the outcome is associated: authenticated read-only retrieval, no write, no
+        orchestration state or expiry. K3: the association is missing (a pre-D1 admission): a mutation, only while
+        the full predicate passes, writing the association alone (never the recorder). The service never retrieves."""
+        result = self._host_result_receipt(entry)
+        row = project_result_contexts._row(self, binding.run_handle, binding.attempt)
+        if row is not None and row["state"] == "committed":  # K3
+            if before_commit is not None:
+                before_commit()
+            with self._transaction():
+                final_check.check(self, binding, "K3", reservation=reservation)
+                project_result_contexts.record_outcome(self, binding, receipt["host_outcome_digest"])
+            return result if recorder == "primary" else None
+        final_check.check(self, binding, "K2", receipt=receipt)  # K2
+        if recorder == "service":
+            return None  # already recorded: the service stops with no write
+        if before_commit is not None:
+            before_commit()
+        return result
 
     # D1 (RS-D-2, RS-D-10): every reader of a run's record context reads it here, from the store.
     @_operation
