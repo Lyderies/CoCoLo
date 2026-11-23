@@ -120,7 +120,7 @@ class ApprovedEdits(unittest.TestCase):
     def test_recorded_owner_transitions_match_current_bytes(self):
         p = self.policy()
         manifests = p.read_manifests(ROOT, require_committed=False)
-        self.assertEqual({'107', '109', '114.1'}, {m['decision'] for m in manifests})
+        self.assertEqual({'107', '109', '112', '114.1', '119'}, {m['decision'] for m in manifests})
         before, after = p.sources(ROOT, manifests)
         p.exact_current(after, {name: (ROOT / name).read_bytes() for name in after})
         self.assertNotIn('packages/codex-agents/tests/test_hold_lifecycle.py', after)
@@ -159,7 +159,10 @@ class ApprovedEditsR1(unittest.TestCase):
             'import unittest\nclass Other(unittest.TestCase):\n    def test_unrelated(self):\n        self.assertTrue(True)\n')
         for name, value in (('test-layers.json', 'unit'), ('test-stages.json', 'unit')):
             self.write_json(root / 'scripts' / name, {'root:test_case': value, 'root:test_other': value})
-        return {'root:test_case.Case.test_changed': {}, 'root:test_other.Other.test_unrelated': {}}
+        ids = {'root:test_case.Case.test_changed': {}, 'root:test_other.Other.test_unrelated': {}}
+        for name in ('test-legacy.json', 'test-legacy-0850.json'):
+            self.write_json(root / 'scripts' / name, {'baseline': 'fixture', 'tests': dict.fromkeys(ids, '')})
+        return ids
 
     def fixture(self, root, p, invalid=None):
         """Only immutable baseline inputs are substituted; replay and Git checks are real."""
@@ -351,3 +354,120 @@ class ApprovedEditsR1(unittest.TestCase):
                         self.assertEqual({('root:test_case.Case.test_changed', f) for f in p.FIELDS}, changed)
                         self.assertEqual({n + suffixes[f] for n, f in changed}, set(red) - set(errors), repr(red))
                         self.assertTrue(expected <= set(red))
+
+
+@requirements('TF-27', 'TF-23', why_not_scenario='Disposable committed repositories replay a normal migration and verify its ordinary metadata checks.')
+class ApprovedEditsMigration(unittest.TestCase):
+    policy = ApprovedEdits.policy
+    commit = ApprovedEditsR1.commit
+    write_json = ApprovedEditsR1.write_json
+    snapshot = ApprovedEditsR1.snapshot
+
+    def migration(self, root, p, fault=None):
+        import hashlib
+        subprocess.run(['git', 'init', '-q', str(root)], check=True)
+        ids = self.snapshot(root)
+        path = root / 'tests/test_case.py'
+        path.write_text(path.read_text() + '    def test_active(self):\n        self.assertEqual(1, 1)\n')
+        ids['root:test_case.Case.test_active'] = {}
+        seed = p.inventory(root, root, ids)
+        baseline = {'baseline': 'fixture', 'tests': {n: r['fingerprint'] for n, r in seed.items()}}
+        for name in ('test-legacy.json', 'test-legacy-0850.json', 'test-legacy-ceiling.json'):
+            self.write_json(root / 'scripts' / name, baseline)
+        self.write_json(root / 'scripts/test-legacy-dependencies.json', {n: r['dependencies'] for n, r in seed.items()})
+        self.write_json(root / 'scripts/test-legacy-captured-values.json',
+                        {n: {'fingerprint': r['dependency_values']} for n, r in seed.items()})
+        self.write_json(root / 'scripts/test-entrypoints.json', {})
+        base = self.commit(root, 'trusted legacy source')
+        migrated = 'root:test_case.Case.test_changed'
+        old = path.read_text()
+        new = old.replace('self.assertEqual(1, 1)', 'self.assertEqual(2, 1)')
+        edits = [dict(line=4, old='        self.assertEqual(1, 1)\n', new='        self.assertEqual(2, 1)\n'),
+                 dict(line=6, old='        self.assertEqual(1, 1)\n', new='        self.assertEqual(2, 1)\n')]
+        if fault != 'undecorated':
+            new = 'from test_framework import requirements\n' + new.replace(
+                '    def test_changed(self):', '    @requirements("TF-27")\n    def test_changed(self):')
+            edits = [dict(line=1, old='', new='from test_framework import requirements\n'),
+                     dict(line=4, old='', new='    @requirements("TF-27")\n'),
+                     *[{**e, 'line': e['line'] + 2} for e in edits]]
+        path.write_text(new)
+        active = copy.deepcopy(baseline)
+        del active['tests'][migrated]
+        for name in ('test-legacy.json', 'test-legacy-0850.json'):
+            self.write_json(root / 'scripts' / name, baseline if fault == name else active)
+        self.write_json(root / 'scripts/test-requirements.json', {'TF-27': {
+            'statement': 'Normal migration', 'source': 'fixture', 'checks': [migrated]}})
+        edit = self.commit(root, 'approved assertions and normal requirement migration')
+        manifest = dict(schema=1, decision='1', transitions=[dict(file='tests/test_case.py',
+            before_commit=base, edit_commit=edit, edits=edits)])
+        self.write_json(root / p.MANIFESTS / '1.json', manifest)
+        digest = hashlib.sha256((root / p.MANIFESTS / '1.json').read_bytes()).hexdigest()
+        self.write_json(root / p.APPROVALS, {'schema': 1, 'decisions': {
+            '1': {'manifest_sha256': digest, 'binding': '1'}}})
+        self.commit(root, 'owner manifest and approval')
+        self.enterContext(mock.patch.object(p, 'SOURCE_REVISION', base))
+        self.enterContext(mock.patch.object(p, 'seed_records', return_value=seed))
+        def active_ids(repo, at=None):
+            import json
+            return set().union(*(json.loads(p.git(repo, 'show', (at or 'HEAD') + ':scripts/' + name))['tests']
+                                 for name in ('test-legacy.json', 'test-legacy-0850.json')))
+        self.enterContext(mock.patch.object(p, 'active_ids', side_effect=active_ids))
+        return manifest, seed, active, migrated
+
+    def test_normal_migration_skips_binding_and_uses_requirement_gate(self):
+        import parallel_tests as runner
+        import test_owned_baseline as owned
+        import rebind_approved_edits as live_policy
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); p = self.policy()
+            manifest, seed, active, migrated = self.migration(root, p)
+            data = p.build(root, [manifest])
+            self.assertEqual({'root:test_case.Case.test_active'}, set(data['tests']))
+            self.assertNotIn(migrated, data['tests'])
+            for field in p.FIELDS:
+                stale = copy.deepcopy(seed); stale[migrated][field] = 'stale'
+                with self.subTest(field=field), mock.patch.object(p, 'seed_records', return_value=stale), \
+                     self.assertRaisesRegex(ValueError, 'trusted old proof'):
+                    p.build(root, [manifest])
+            self.write_json(root / p.BINDINGS / '1.json', data)
+            self.commit(root, 'binding introduction')
+            self.assertEqual(data['tests'], p.checked_bindings(root))
+            current = p.inventory(root, root, seed)
+            discovered = {module: {n: r for n, r in current.items() if n.rsplit('.', 2)[0] == module}
+                          for module in ('root:test_case', 'root:test_other')}
+            with mock.patch.object(runner, 'ROOT', root), \
+                 mock.patch.object(runner, 'SUITES', {'root': root}), \
+                 mock.patch.object(runner, 'inventory', return_value=discovered), \
+                 mock.patch.object(runner, 'legacy_versions', side_effect=lambda *args: (copy.deepcopy(active), copy.deepcopy(active), [])), \
+                 mock.patch.object(runner.framework, 'validate_sources', return_value=[]), \
+                 mock.patch.object(owned, 'checked', return_value=seed), \
+                 mock.patch.object(live_policy, 'checked_bindings', side_effect=p.checked_bindings):
+                self.assertEqual([], runner.metadata()[-1])
+                catalogue = root / 'scripts/test-requirements.json'
+                self.write_json(catalogue, {})
+                self.assertEqual([migrated + ": unknown requirement 'TF-27'"], runner.metadata()[-1])
+            # Later retirement filters application, but must not rederive the
+            # immutable binding using today's lists instead of introduction's.
+            for name in ('test-legacy.json', 'test-legacy-0850.json'):
+                self.write_json(root / 'scripts' / name, {**active, 'tests': {
+                    n: f for n, f in active['tests'].items() if n not in data['tests']}})
+            self.commit(root, 'later eligibility shrink')
+            self.assertEqual({}, p.checked_bindings(root))
+
+    def test_retired_undecorated_changed_proof_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); p = self.policy()
+            manifest, _, _, _ = self.migration(root, p, 'undecorated')
+            with self.assertRaisesRegex(ValueError, 'retired.*requirement'):
+                p.build(root, [manifest])
+
+    def test_decorated_proof_in_either_legacy_list_is_refused(self):
+        for name in ('test-legacy.json', 'test-legacy-0850.json'):
+            with self.subTest(legacy=name), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); p = self.policy()
+                manifest, seed, _, migrated = self.migration(root, p, name)
+                # Effective eligibility may already exclude a superseded ID;
+                # presence in either raw list must still reject its decorator.
+                with mock.patch.object(p, 'active_ids', return_value=set(seed) - {migrated}), \
+                     self.assertRaisesRegex(ValueError, 'changed legacy identity/metadata'):
+                    p.build(root, [manifest])

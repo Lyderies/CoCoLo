@@ -148,5 +148,25 @@
   "red": "measurements/test-framework/approved-edits/r1/gate-witness-coverage-red.json",
   "requirement": "TF-27",
   "witness": "root:test_approved_edits.ApprovedEditsR1.test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions"
+ },
+ {
+  "base": "6c2a6446ed3a422c74ea2901fd4776d9120c335a",
+  "diagnostic": "root:test_case.Case.test_changed: changed legacy identity/metadata",
+  "fix": "TF27-normal-migration",
+  "green": "measurements/test-framework/approved-edits/migration/normal-migration-green.json",
+  "positive_control": "A decorated proof retired from both lists is absent from the binding; the active approved proof remains bound. Committed metadata passes, then removing the requirement catalogue entry fails. Stale old I/D/V rows still fail, and later retirement does not change immutable derivation. The decorated-in-either-list refusal control passes on both revisions.",
+  "red": "measurements/test-framework/approved-edits/migration/normal-migration-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsMigration.test_normal_migration_skips_binding_and_uses_requirement_gate"
+ },
+ {
+  "base": "6c2a6446ed3a422c74ea2901fd4776d9120c335a",
+  "diagnostic": "ValueError not raised",
+  "fix": "TF27-undecorated-retirement",
+  "green": "measurements/test-framework/approved-edits/migration/undecorated-retirement-green.json",
+  "positive_control": "The changed retired proof without a decorator must fail binding generation; the normal migrated control passes and still-listed decorated proofs fail for either legacy list.",
+  "red": "measurements/test-framework/approved-edits/migration/undecorated-retirement-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsMigration.test_retired_undecorated_changed_proof_is_refused"
  }
 ]

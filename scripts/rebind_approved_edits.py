@@ -150,7 +150,7 @@ def sources(root, manifests):
     return original, state
 
 
-def changed_proofs(before, after, seed):
+def changed_proofs(before, after, seed, retired=()):
     result = {}
     for name, expected in seed.items():
         if name not in before or name not in after:
@@ -159,10 +159,16 @@ def changed_proofs(before, after, seed):
         if any(old.get(f) != expected[f] for f in FIELDS):
             raise ValueError(name + ': trusted old proof differs from admitted baseline')
         if new.get('requirements'):
+            if name in retired:
+                # A normal migration is checked by requirement metadata, never
+                # admitted as an approved-edit legacy proof.
+                continue
             raise ValueError(name + ': changed legacy identity/metadata')
         if not all(new.get(f) for f in FIELDS):
             raise ValueError(name + ': unresolved approved-edit proof')
         if any(old.get(f) != new.get(f) for f in FIELDS):
+            if name in retired:
+                raise ValueError(name + ': retired changed legacy proof has no requirement')
             result[name] = {f: new[f] for f in FIELDS}
     for name in after.keys() - before.keys():
         if not after[name].get('requirements'):
@@ -267,7 +273,17 @@ def active_ids(root, at=None):
     return (documents[0] - base_bindings(root).keys()) | documents[1]
 
 
-def build(root, manifests, active=None):
+def listed_ids(root, at=None):
+    """Retirement requires absence from both lists, before release supersession."""
+    result = set()
+    for name in ('test-legacy.json', 'test-legacy-0850.json'):
+        path = 'scripts/' + name
+        content = git(root, 'show', at + ':' + path).decode() if at else (root / path).read_text()
+        result.update(fw.decode_json(content)['tests'])
+    return result
+
+
+def build(root, manifests, active=None, *, at=None):
     active = active_ids(root) if active is None else active
     before_sources, after_sources = sources(root, manifests)
     seed = seed_records(root)
@@ -285,7 +301,7 @@ def build(root, manifests, active=None):
                 continue
             path = snapshot / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(content)
         after = inventory(root, snapshot, seed)
-    tests = changed_proofs(before, after, seed)
+    tests = changed_proofs(before, after, seed, retired=seed.keys() - listed_ids(root, at))
     tests = {name: row for name, row in tests.items() if name in active}
     return dict(schema=1, source_revision=SOURCE_REVISION,
                 algorithm_sha256=hashlib.sha256((root / 'scripts/test_framework.py').read_bytes()).hexdigest(),
@@ -344,7 +360,7 @@ def checked_bindings(root):
         # Eligibility is frozen at introduction; later shrink-only retirement
         # filters application, never changes the immutable derivation.
         introduced_active = active_ids(root, introduction)
-        rebuilt = build(root, selected, introduced_active)
+        rebuilt = build(root, selected, introduced_active, at=introduction)
         if rebuilt != data:
             raise ValueError('immutable approved-edit binding does not match replayed proofs')
         covered.update(data['manifests']); admitted.update(data['tests'])

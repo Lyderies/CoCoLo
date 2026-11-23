@@ -1,0 +1,11 @@
+{
+ "base": "6c2a6446ed3a422c74ea2901fd4776d9120c335a",
+ "diagnostic": "ValueError not raised",
+ "log": "measurements/test-framework/approved-edits/migration/red.log",
+ "selection": [
+  "root:test_approved_edits"
+ ],
+ "status": "red",
+ "test_source_sha256": "b651f7d2c735ab41b768a2486d9868b9b53c77fba728dfad17d57a6e6d109817",
+ "witness": "root:test_approved_edits.ApprovedEditsMigration.test_retired_undecorated_changed_proof_is_refused"
+}

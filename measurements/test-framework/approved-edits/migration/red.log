@@ -1,0 +1,60 @@
+test_exact_transition_and_extra_unlisted_edits (test_approved_edits.ApprovedEdits.test_exact_transition_and_extra_unlisted_edits) ... ok
+test_immutable_introduction_tampering_and_overwrite (test_approved_edits.ApprovedEdits.test_immutable_introduction_tampering_and_overwrite) ... ok
+test_only_changed_active_proofs_rebind_all_three_kinds (test_approved_edits.ApprovedEdits.test_only_changed_active_proofs_rebind_all_three_kinds) ... ok
+test_recorded_owner_transitions_match_current_bytes (test_approved_edits.ApprovedEdits.test_recorded_owner_transitions_match_current_bytes) ... ok
+test_renamed_restored_and_unresolved_proofs_are_refused (test_approved_edits.ApprovedEdits.test_renamed_restored_and_unresolved_proofs_are_refused) ... ok
+test_unrelated_legacy_proof_still_flags_and_retired_stays_retired (test_approved_edits.ApprovedEdits.test_unrelated_legacy_proof_still_flags_and_retired_stays_retired) ... ok
+test_wrong_text_line_endings_and_stale_base (test_approved_edits.ApprovedEdits.test_wrong_text_line_endings_and_stale_base) ... ok
+test_decorated_proof_in_either_legacy_list_is_refused (test_approved_edits.ApprovedEditsMigration.test_decorated_proof_in_either_legacy_list_is_refused) ... ok
+test_normal_migration_skips_binding_and_uses_requirement_gate (test_approved_edits.ApprovedEditsMigration.test_normal_migration_skips_binding_and_uses_requirement_gate) ... ERROR
+test_retired_undecorated_changed_proof_is_refused (test_approved_edits.ApprovedEditsMigration.test_retired_undecorated_changed_proof_is_refused) ... FAIL
+test_r1_deleted_admission_documents_are_refused (test_approved_edits.ApprovedEditsR1.test_r1_deleted_admission_documents_are_refused) ... ok
+test_r1_introduction_requires_ancestry_sources_and_algorithm (test_approved_edits.ApprovedEditsR1.test_r1_introduction_requires_ancestry_sources_and_algorithm) ... ok
+test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions (test_approved_edits.ApprovedEditsR1.test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions) ... ok
+test_r1_owner_record_authenticates_first_introduction (test_approved_edits.ApprovedEditsR1.test_r1_owner_record_authenticates_first_introduction) ... ok
+test_r1_replay_uses_guarded_discovery_and_rejects_duplicate_ids (test_approved_edits.ApprovedEditsR1.test_r1_replay_uses_guarded_discovery_and_rejects_duplicate_ids) ... Traceback (most recent call last):
+  File "<string>", line 25, in <module>
+    found=fw.inventory_suite('root',layers)
+  File "/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/tmp_buq96sq/scripts/test_framework.py", line 120, in inventory_suite
+    walk(Loader().discover('tests', top_level_dir=top))
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/tmp_buq96sq/scripts/test_framework.py", line 92, in walk
+    walk(test)
+    ~~~~^^^^^^
+  File "/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/tmp_buq96sq/scripts/test_framework.py", line 101, in walk
+    raise ValueError(f'duplicate discovered test: {key}')
+ValueError: duplicate discovered test: root:test_case.Case.test_changed
+Traceback (most recent call last):
+  File "<string>", line 28, in <module>
+    if row.get('import_error'):raise ValueError('trusted snapshot import/discovery guard failed: '+key)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: trusted snapshot import/discovery guard failed: root:test_case.__import_guard__
+ok
+test_r1_unanchored_files_never_generate_proofs (test_approved_edits.ApprovedEditsR1.test_r1_unanchored_files_never_generate_proofs) ... ok
+test_r1_unchanged_stale_old_proofs_are_refused (test_approved_edits.ApprovedEditsR1.test_r1_unchanged_stale_old_proofs_are_refused) ... ok
+
+======================================================================
+ERROR: test_normal_migration_skips_binding_and_uses_requirement_gate (test_approved_edits.ApprovedEditsMigration.test_normal_migration_skips_binding_and_uses_requirement_gate)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/tf27-migration-red-ileatu7w/tests/test_approved_edits.py", line 424, in test_normal_migration_skips_binding_and_uses_requirement_gate
+    data = p.build(root, [manifest])
+  File "/private/tmp/tf27-migration-red-ileatu7w/scripts/rebind_approved_edits.py", line 288, in build
+    tests = changed_proofs(before, after, seed)
+  File "/private/tmp/tf27-migration-red-ileatu7w/scripts/rebind_approved_edits.py", line 162, in changed_proofs
+    raise ValueError(name + ': changed legacy identity/metadata')
+ValueError: root:test_case.Case.test_changed: changed legacy identity/metadata
+
+======================================================================
+FAIL: test_retired_undecorated_changed_proof_is_refused (test_approved_edits.ApprovedEditsMigration.test_retired_undecorated_changed_proof_is_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/tf27-migration-red-ileatu7w/tests/test_approved_edits.py", line 461, in test_retired_undecorated_changed_proof_is_refused
+    with self.assertRaisesRegex(ValueError, 'retired.*requirement'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+----------------------------------------------------------------------
+Ran 17 tests in 14.662s
+
+FAILED (failures=1, errors=1)
