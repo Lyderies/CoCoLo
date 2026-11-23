@@ -76,3 +76,45 @@ Golden positive fixture at `tests/test_test_framework.py:196` adds only required
 No existing assertion is removed, changed or weakened, and no test is deleted. `tests/test_product_dependencies.py` adds eight tests covering the product boundary, shared-helper/constant and assertion/rename protection, source ownership, symbolic defaults, immutable migration and release precedence. The protection controls pass on the old implementation as expected; six repair witnesses have intended exact-5ab0a9d3 reds and green evidence. Temporary RSA product edits and historical source replay are restored in `finally`; they change no product test assertion. All 5,739 baseline test IDs and implementation fingerprints remain identical across the new immutable dependency versions. See REVIEW-test-framework-product-dependencies-fixes.md for the enforcing/witness line table and evidence.
 
 TF-26 full-run follow-up: `tests/test_test_framework_review.py:100` and its second helper assertion remain byte-identical to 5ab0a9d3. A ninth test, `ProductDependencies.test_fileless_generated_helpers_keep_owned_namespace_and_external_identity`, adds explicit generated-fixture and external-product controls. No original assertion is changed, removed or replaced. The generated-helper regression is corrected in code; its red base is 93624f19, with separate red/green evidence in the TF-26 report. RSA overlay tests, including the owner's expected-failure probe, are executed unchanged and then removed only from our temporary overlay; no RSA branch file is edited.
+
+## TF-25b — Release-agnostic bookkeeping witnesses
+
+Scope: `tests/test_release_bookkeeping.py` on `fix/tf25b-next-release`, based on `74f4d84ec5cfdba963ba0869fe0ea377cc1be01d` (the real 0.8.51 bookkeeping). No test is deleted. The rebind validator, three product bookkeeping files and all immutable binding files are unchanged. Synthetic release commits and CLI writes occur only in a disposable repository under the worker's temporary directory; the real worktree is never rebound by these witnesses.
+
+Every replaced assertion instance below refers to `tests/test_release_bookkeeping.py` at `74f4d84e`. Method names identify the corresponding current assertion without depending on future line movement.
+
+| Before | Replacement (TF-25b) |
+|---|---|
+| `test_exact_primary_restoration_matches_installed_release`, :27: last release equals literal `0.8.49` | Same equality against each admitted binding's `previous_release`; separately require binding filename/version agreement. |
+| Same method, :29: exact bytes for each of the three files equal `30bf1fa9` | Same three byte equalities against the latest binding's immutable introduction; additionally verify every admission's before/after source hashes, chain continuity and compiled source record, and run `checked_bindings` over the entire chain. |
+| `test_correct_append_passes_and_every_unrelated_edit_is_rejected`, :35: valid transition returns `[]` | Identical zero-error assertion in `check_transition_mutations`, called independently for every admitted transition. |
+| Same method, :49: each executable/comment/size/count/helper mutation operand exists | Identical `assertIn` for each of the six operands, for every admission; the two count operands derive from that transition's catalogue size. |
+| Same method, :51: every hostile mutation is rejected | Identical truthy-error assertion for all 14 named mutations, for every admission. Wrong-release mutation derives a distinct future version; old-record edit/removal/reordering, extra record, source/bundle/schema forgery, executable/comment/size/count/helper controls all remain. |
+| Same method, :52: clean transition still returns `[]` after mutations | Identical post-mutation zero-error assertion for every admission. |
+| `test_rebind_command_rejects_invalid_source_and_overwrite`, :73: wrong source version raises `source version` | Same exception type and exact diagnostic fragment in the temporary repo, using the latest admitted trusted source with a deliberately different version. |
+| Same method, :76: trusted compiled record equals the installed `0.8.49` record | Same full-record equality for the latest admission and its trusted source. |
+| Same method, :77: `write_new` rejects an existing immutable file | Same exception type/diagnostic and same existing baseline filename in the temporary repo. |
+| Same method, :82 first assertion: overwrite CLI return code is 1 | Same return-code equality for the latest binding in the temporary repo. |
+| Same method, :82 second assertion: overwrite diagnostic contains `immutable binding already exists` | Identical diagnostic assertion in the temporary repo. |
+| Same method, :83: overwritten binding bytes remain unchanged | Identical original-bytes equality in the temporary repo. |
+| Same method, :86 first assertion: invalid-source CLI return code is 1 | Same return-code equality against the latest admitted pre-bump files in the temporary repo. |
+| Same method, :86 second assertion: invalid-source diagnostic contains `source version` | Identical diagnostic assertion; the fixture's pre-bump anchor matches its binding chain regardless of the real tree's release count. |
+| Same method, :87: no invalid-version binding is written | Same no-file assertion for the fixture's deliberately invalid version. |
+| `test_claimed_pre_bump_commit_cannot_hide_old_record_edits`, :101: forged before/after old-record edit raises `pre-bump bookkeeping sources` | Identical refusal type/diagnostic, replayed for each admission against its recorded before-source hashes and preceding binding state. |
+| Same method, :104: clean build has 14 tests | Identical cardinality assertion for each admission, plus exact equality of the rebuilt immutable record (including translated policy when present). |
+| `test_next_release_uses_the_same_narrow_procedure`, :129: next transition returns `[]` | Identical zero-error assertion for a synthesized next release from the latest admitted snapshot, with a real temporary Git source/commit. |
+| Same method, :135: resulting test-ID set equals current admitted set | Identical set equality against the temporary repo's latest checked admission. |
+| Same method, :136: shipped-catalogue fingerprint changes | Identical inequality for that same test ID across the next transition. |
+| `test_immutable_binding_tampering_is_rejected`, :150: forged fingerprint raises `immutable bookkeeping binding` | Identical exception type/diagnostic applied independently to **every** admitted binding, including both `0.8.49.json` and `0.8.50.json`. |
+
+All other existing assertions are retained: validator existence; retirement and later-fingerprint checks; all three later-source-edit refusals and their before/after 14-test controls; immutable-tamper before/after 14-test controls. Added next-release CLI controls independently reject a tampered latest admitted record (0.8.50 on this base) and an unrelated packaging edit with exit 1, the permitted-change diagnostic and no new binding, then accept the clean transition. Its output must equal the independently built record; after a temporary commit the entire extended immutable chain must verify.
+
+### TF-23 red / green evidence
+
+Interpreter: `the hash-pinned test venv (requirements-test.txt)`.
+Both runs use `-B scripts/parallel_tests.py --base b531844030fa619c1f62ddd6c092ebc2ea4fca38 --module root:test_release_bookkeeping --module claude:tests.test_previous_release_catalogue`, default jobs, and `--save-timings /private/tmp/tf25b-{red,green}.json`. No other modules and no full gate are run.
+
+- Red, original `74f4d84e`: root worker FAIL (8 tests, 4 failures and 1 error: three stale restoration subtests, the stale CLI anchor diagnostic, and the stale next-release proof); catalogue worker PASS (14 tests). Aggregate exit 1 also contains 1,497 pre-existing metadata errors on the untouched base; evidence `/private/tmp/tf25b-red.log`, `/private/tmp/tf25b-red.json.run.json`.
+- Green selected workers, `74f4d84e` plus this test/document change: root PASS (8/8, return code 0, 17.992s); catalogue PASS (14/14, return code 0, 0.476s). Both workers have zero guard violations. The aggregate runner still exits 1: its 1,497 metadata errors are list-identical to red (zero added or removed), so aggregate green is not claimed; evidence `/private/tmp/tf25b-green.log`, `/private/tmp/tf25b-green.json.run.json`.
+- Positive controls: PASS in `test_next_release_uses_the_same_narrow_procedure`: tampering the admitted 0.8.50 record and appending an unrelated packaging comment each produce CLI exit 1, `change outside permitted release bookkeeping`, and no 0.8.51 binding. The clean synthetic 0.8.51 append succeeds and its committed fixture chain verifies. Existing `0.8.49.json` and `0.8.50.json` both rebuild exactly and each independently rejects fingerprint tampering. The real validator and immutable binding bytes remain unchanged.
+- Commits: none; changes are intentionally left uncommitted for the primary's line review (decision 117 A).
