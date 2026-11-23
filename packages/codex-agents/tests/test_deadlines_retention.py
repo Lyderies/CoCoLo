@@ -7,10 +7,12 @@ while its obligation is held, and is retired only after RS-B releases that oblig
 (owner decisions 90.3 A, 90.4 A, 90.5 A, 90.8 A). A verifier opens only when its worker outlasts it by a 1 h margin.
 Integration stage: real stores in temporary folders, the fixtures of the lease and context tests.
 """
+import ast
 import unittest
 from unittest import mock
 
 import tests.support  # noqa: F401
+from tests import support
 from tests import test_record_context as rc
 from tests import test_result_leases as leases
 from tests.learning_support import assignment
@@ -147,6 +149,7 @@ class PreCommitDeadlineTests(LeaseBackedFixture):
             self.store.read_result(binding(1))  # not committed: refused, but nothing is retired
         self.assertEqual('reserved', self.row_state())
         self.assertEqual('bound', self.context_state())
+        self.consistent()
 
     def test_D2prime_publication_past_the_lease_deadline_is_still_permitted_and_commits(self):
         self.bound(1)
@@ -156,7 +159,8 @@ class PreCommitDeadlineTests(LeaseBackedFixture):
         committed = self.reservation()
         self.assertEqual('committed', committed.state)
         self.assertEqual(delivery.record_id, committed.terminal_record_id)
-        # From the commit on, the retention deadline applies, counted from the commit.
+        # Retention is counted from the first preparation of the body; here that is the commit itself (the body was
+        # first prepared at the late publication), so the deadline is `now + retention`.
         self.assertEqual(self.now + 120_000, committed.retained_until_ms)
         self.assertEqual(committed.retained_until_ms, committed.expires_at_ms)
         self.assertEqual(('committed', committed.retained_until_ms),
@@ -184,6 +188,7 @@ class PreCommitDeadlineTests(LeaseBackedFixture):
         self.assertEqual((delivery,), self.store.pending_terminals())
         self.assertEqual(1, self.store.expire_results())
         self.assertEqual(('released', 'retention'), self.release_kind())
+        self.consistent()
 
     def test_X9_the_obligation_released_lost_retires_the_reserved_row_at_the_next_pass(self):
         self.bound(1)
@@ -206,6 +211,62 @@ class PreCommitDeadlineTests(LeaseBackedFixture):
         self.assertEqual(('expired', 'expired'), (self.row_state(), self.context_state()))
         self.assertEqual(('released', 'lost_with_reservation'), self.release_kind())
         self.consistent()
+
+
+    def drop_hold(self, number=1):
+        self.store._connection.execute("DELETE FROM project_holds WHERE kind='reservation' AND identity=?",
+                                       (binding(number).claim_id,))
+
+    def test_a_lease_born_reserved_row_never_lacks_its_obligation_hold_and_the_register_validator_refuses_one_that_does(self):
+        self.bound(1)
+        count = "SELECT COUNT(*) FROM project_holds WHERE kind='reservation' AND identity=?"
+        self.assertEqual(1, self.store._connection.execute(count, (binding(1).claim_id,)).fetchone()[0])
+        self.consistent()  # taken with the row, in the claim's own transaction
+        self.drop_hold()
+        self.assertFalse(project_holds_schema.register_consistent(self.store._connection))  # SH-7 refuses the state
+
+    def test_a_reserved_row_that_somehow_lacks_its_hold_is_kept_and_reported_by_both_paths_never_deleted(self):
+        self.bound(1)
+        self.drop_hold()
+        reserved = self.reservation()
+        self.now = reserved.reserved_until_ms + 10 * 3_600_000
+        counts = self.store._result_counts()
+        value = self.store._result_row(binding(1))[1]
+        self.assertEqual('missing', self.store._obligation_state(value))  # the predicate: kept, named
+        self.assertFalse(self.store._retire_due(value, self.now))
+        self.assertEqual(0, self.store.expire_results())  # the selector agrees: nothing selected
+        self.assertEqual(reserved, self.reservation())  # and a read retires nothing
+        self.assertEqual(('reserved', 'bound'), (self.row_state(), self.context_state()))
+        self.assertEqual(counts, self.store._result_counts())
+        self.assertEqual(1, len(self.fixture.files()))
+        self.assertFalse(project_holds_schema.register_consistent(self.store._connection))  # reported (repair)
+
+
+class NativeProductCallerTests(unittest.TestCase):
+    """The scope note of measurements/d2/requirements.md rests on this: only tests reach the non-lease `prepare`."""
+
+    PACKAGE = support.ORCHESTRATION_ROOT / 'codex_agents'
+
+    def calls(self, name, keyword=None):
+        found = []
+        for path in sorted(self.PACKAGE.glob('*.py')):
+            for node in ast.walk(ast.parse(path.read_text(), str(path))):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == name
+                        and (keyword is None or any(k.arg == keyword for k in node.keywords))):
+                    found.append((path.name, node.lineno))
+        return found
+
+    def test_no_product_code_calls_the_non_lease_prepare_and_the_driver_uses_prepare_lease(self):
+        # The non-lease `prepare(binding, handle, hard_deadline_at_ms=...)` is the only caller of the no-lease branch.
+        self.assertEqual([], self.calls('prepare', 'hard_deadline_at_ms'))
+        # `reserve_result` is reached from product code only by that unreachable branch of result_persistence.py
+        self.assertEqual({'result_persistence.py'}, {name for name, _ in self.calls('reserve_result')})
+        self.assertEqual([('project_driver.py', mock.ANY)], [c for c in self.calls('prepare_lease')
+                                                              if c[0] == 'project_driver.py'])
+
+    def test_only_result_persistence_defines_the_no_lease_branch(self):
+        text = (self.PACKAGE / 'result_persistence.py').read_text()
+        self.assertEqual(1, text.count('self._prepare_entry(binding, worker_handle, hard_deadline_at_ms)'))
 
 
 class ContextSweepTests(LeaseBackedFixture):
@@ -263,6 +324,7 @@ class CommittedRetentionTests(LeaseBackedFixture):
         self.now = due + 1
         self.assertEqual(1, self.store.expire_results())  # no verifier, no QA, orchestration still active
         self.assertEqual(('released', 'retention'), self.release_kind())
+        self.consistent()
 
 
 class ClockFloorTests(LeaseBackedFixture):
@@ -285,13 +347,29 @@ class ClockFloorTests(LeaseBackedFixture):
         self.assertEqual(('released', 'retention'), self.release_kind())
         self.consistent()
 
+    def test_D4_a_committed_row_is_selected_by_the_expire_pass_at_the_floor_when_the_wall_is_below_its_deadline(self):
+        self.bound(1)
+        self.publish()
+        due = self.reservation().retained_until_ms
+        self.now = due + 5
+        self.store._result_now()  # the floor is persisted past the deadline
+        self.now = due - 1_000  # wall < due <= floor, and the row is committed (not retiring)
+        self.assertEqual('committed', self.row_state())
+        self.assertEqual(1, self.store.expire_results())  # selected at the floor, not at the wall
+        self.assertEqual(('expired', 'expired'), (self.row_state(), self.context_state()))
+        self.assertEqual(('released', 'retention'), self.release_kind())
+        self.assertEqual([], self.fixture.files())
+        self.consistent()
+
     def test_D4_repeated_jumps_revive_nothing_and_block_no_pass(self):
         self.bound(1)
         self.publish()
         due = self.reservation().retained_until_ms
+        passes = []
         for wall in (due + 10 * DAY_MS, 1_000, due + 20 * DAY_MS, 500, due + 30 * DAY_MS, 2):
             self.now = wall
-            self.assertIn(self.store.expire_results(), (0, 1))  # never raises on a moved-back clock
+            passes.append(self.store.expire_results())  # never raises on a moved-back clock
+        self.assertEqual([1, 0, 0, 0, 0, 0], passes)  # the first jump retires it; nothing is left to revive
         self.assertEqual(('expired', 'expired'), (self.row_state(), self.context_state()))
         self.assertEqual((0, 0, 0), self.store._result_counts())
         self.consistent()
@@ -304,6 +382,7 @@ class ClockFloorTests(LeaseBackedFixture):
         self.store.expire_results()
         floor = self.store._connection.execute("SELECT last_observed_at_ms FROM result_identity").fetchone()[0]
         self.assertEqual(50_000, floor)
+        self.consistent()
 
 
 class VerifierMarginTests(LeaseBackedFixture):
@@ -364,6 +443,13 @@ class VerifierMarginTests(LeaseBackedFixture):
         self.assertEqual(self.fixture.payload(2)[0], self.store.read_result(binding(2)))
         with self.assertRaisesRegex(HistoryError, 'history_result_expired'):
             self.store.read_result(binding(1))  # the pair's QA reads the worker: refused
+        # The verifier's orchestration is active (no close ends its custody) and it records its outcome.
+        self.assertFalse(self.store._custody_ended_by_close(binding(2)))
+        self.record('cd' * 32, 2)
+        self.assertEqual('recorded', self.context_state(2))
+        self.assertEqual('cd' * 32, rc.context_row(self.store, *self.attempt(2))[4])  # its outcome association
+        self.assertEqual('held', rc.custody(self.store, *self.attempt(2))[0])
+        self.assertEqual(self.fixture.payload(2)[0], self.store.read_result(binding(2)))  # still readable after
         self.consistent()
 
     def test_V4_a_forward_jump_past_both_deadlines_releases_both_and_the_verifier_result_is_refused(self):
@@ -378,6 +464,10 @@ class VerifierMarginTests(LeaseBackedFixture):
                          (self.release_kind(1), self.release_kind(2)))
         with self.assertRaisesRegex(HistoryError, 'history_result_expired'):
             self.store.read_result(binding(2))
+        # The verifier's record is refused: nothing is associated with the expired attempt.
+        self.record('cd' * 32, 2)
+        self.assertEqual('expired', self.context_state(2))
+        self.assertIsNone(rc.context_row(self.store, *self.attempt(2))[4])
         self.assertEqual((0, 0, 0), self.store._result_counts())
         self.consistent()
 
@@ -431,6 +521,84 @@ class OrchestrationCloseTests(rc.RecordedContextFixture):
         self.recorded()
         with self.closed(), self.assertRaisesRegex(HistoryError, 'history_orchestration_state'):
             self.store.read_result(self.binding)
+
+    def consistent(self):
+        self.assertTrue(project_holds_schema.custody_consistent(self.store._connection, self.fixture.key))
+        self.assertTrue(project_holds_schema.register_consistent(self.store._connection))
+
+    def test_V3_the_pair_reference_is_refused_while_its_orchestration_stays_active_after_the_worker_expired(self):
+        digest = self.recorded()
+        due = self.retained_until()
+        task = {**self.task, 'id': 'verify-original-worker', 'family': 'verification',
+                'verification_for_family': self.task['family'], 'verification_for_provider': 'codex',
+                'verification_for_outcome': digest}
+        self.fixture.base.stamp = due
+        self.assertEqual(1, self.store.expire_results())
+        self.assertFalse(self.store._custody_ended_by_close(self.binding))  # the orchestration is active
+        with self.assertRaisesRegex(HistoryError, 'history_result_expired'):
+            self.store.verification_worker_reference(WorkerResultContext(self.binding, task), digest,
+                                                     before_reply=lambda: None)
+        self.consistent()
+
+    def test_V4_the_record_of_an_expired_attempt_is_refused_by_the_admission(self):
+        self.open_and_consume()
+        self.publish()
+        self.fixture.base.stamp = self.retained_until() + 10 * DAY_MS  # forward jump past the deadline
+        self.assertEqual(1, self.store.expire_results())
+        with self.assertRaisesRegex(HistoryError, 'history_result_expired'):
+            self.admit_from_store()
+        self.assertEqual('expired', rc.context_row(self.store, *self.attempt)[0])
+        self.assertEqual([], rc.context_files(self.directory))
+        self.consistent()
+
+    def test_V4_an_expiry_inside_the_admission_refuses_it_and_records_nothing(self):
+        self.open_and_consume()
+        self.publish()
+        due = self.retained_until()
+        original = self.store.stored_result_context(self.binding, host_class=self.host_class)
+
+        def expire():
+            self.fixture.base.stamp = due
+        with self.assertRaisesRegex(HistoryError, 'history_result_expired'):
+            self.store.admit_host_result(self.reference, assignment=original.assignment, task=original.task,
+                                         route=original.route, client_capability=original.client_capability,
+                                         before_commit=expire)
+        self.assertNotEqual('recorded', rc.context_row(self.store, *self.attempt)[0])
+        self.consistent()
+
+    def test_C3_a_retiring_row_refuses_body_context_and_admission_whether_expiry_or_a_close_started_it(self):
+        digest = self.recorded()
+        original = self.store.stored_result_context(self.binding, host_class=self.host_class)
+        with self.closed(), mock.patch.object(project_history.os, 'unlink', side_effect=OSError('stop before unlink')):
+            with self.assertRaises(HistoryError):
+                self.store.expire_results()  # the close starts the retirement; the unlink fails: left `retiring`
+        self.assertEqual('retiring', self.store._connection.execute(
+            "SELECT state FROM result_reservations WHERE run_handle=?", (self.binding.run_handle,)).fetchone()[0])
+        self.assertEqual('retiring', rc.context_row(self.store, *self.attempt)[0])
+        self.assertEqual(('released', 'orchestration_closed'), rc.custody(self.store, *self.attempt)[:2])
+        with self.assertRaisesRegex(HistoryError, 'history_result_expired'):
+            self.store.read_result(self.binding)
+        with self.assertRaisesRegex(HistoryError, 'history_result_expired'):
+            self.store.stored_result_context(self.binding, host_class=self.host_class)
+        with self.assertRaisesRegex(HistoryError, 'history_not_authorized|history_result_expired'):
+            self.store.stored_worker_context(digest, host_class=self.host_class)
+        self.consistent()
+
+    def test_C3_an_admission_of_a_retiring_unrecorded_row_is_refused_and_records_nothing(self):
+        self.open_and_consume()
+        self.publish()
+        original = self.store.stored_result_context(self.binding, host_class=self.host_class)
+        with self.closed(), mock.patch.object(project_history.os, 'unlink', side_effect=OSError('stop before unlink')):
+            with self.assertRaises(HistoryError):
+                self.store.expire_results()
+        self.assertEqual('retiring', rc.context_row(self.store, *self.attempt)[0])
+        with self.assertRaisesRegex(HistoryError, 'history_result_expired|history_result_not_ready'):
+            self.store.admit_host_result(self.reference, assignment=original.assignment, task=original.task,
+                                         route=original.route, client_capability=original.client_capability,
+                                         before_commit=lambda: None)
+        self.assertEqual('retiring', rc.context_row(self.store, *self.attempt)[0])
+        self.assertIsNone(rc.context_row(self.store, *self.attempt)[4])  # no outcome association was written
+        self.consistent()
 
     def test_C3_a_close_or_expiry_racing_a_read_returns_no_bytes_and_later_context_reads_are_refused(self):
         digest = self.recorded()
