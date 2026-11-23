@@ -1710,21 +1710,30 @@ class ProjectHistory:
             project_holds_schema.release_hold(self._connection, self.project_id, 'open_binding', row['identity'],
                                               release_kind, now_ms=self._hold_now(), receipt=receipt)
 
+    # Each seek is one index range on the owner (one bound, or an equality and then the identity), never a row-value
+    # comparison, which does not bound the seek: so the work is the window, not the rows held or the rows passed.
     _HELD_WINDOW = ("SELECT identity,evidence,json_extract(evidence,'$.instance') AS owner FROM project_holds "
                     "INDEXED BY project_holds_open_held WHERE project_id=? AND kind='open_binding' AND state='held' "
-                    "AND json_extract(evidence,'$.instance') {side} ? "
-                    "AND (json_extract(evidence,'$.instance'),identity) > (?,?) "
-                    "ORDER BY json_extract(evidence,'$.instance'),identity LIMIT ?")
+                    "AND {condition} ORDER BY {order} LIMIT ?")
+    _OWNER = "json_extract(evidence,'$.instance')"
 
     def _held_window(self, instance, after, limit):
         """At most `limit` held duties of other services, in index order, after the position `after`: the index
-        holds only held rows, split around the live service's own so those are never read, and gives the order, so
-        nothing is sorted and the work is the window, not the rows held."""
+        holds only held rows, and gives the order, so nothing is sorted. The live service's own rows are never
+        read: the order is split around them into the position's own owner after its identity, the owners between
+        it and the live service, and the owners after the live service."""
+        owner, identity = after
+        seeks = []
+        if owner and owner != instance:
+            seeks.append((f"{self._OWNER} = ? AND identity > ?", "identity", (owner, identity)))
+        if owner < instance:
+            seeks.append((f"{self._OWNER} > ? AND {self._OWNER} < ?", f"{self._OWNER},identity", (owner, instance)))
+        seeks.append((f"{self._OWNER} > ?", f"{self._OWNER},identity", (max(owner, instance),)))
         rows = []
-        for side in ('<', '>'):
+        for condition, order, binds in seeks:  # (the equality seek is ordered by identity alone: the owner is fixed)
             if len(rows) < limit:
-                rows += self._connection.execute(self._HELD_WINDOW.format(side=side),
-                    (self.project_id, instance, *after, limit - len(rows))).fetchall()
+                rows += self._connection.execute(self._HELD_WINDOW.format(condition=condition, order=order),
+                    (self.project_id, *binds, limit - len(rows))).fetchall()
         return rows
 
     @_operation

@@ -108,7 +108,7 @@ All in `tests/test_open_withdrawal.py` (helpers `fill`, `steps`, `plans`, `sweep
 `DROP INDEX IF EXISTS project_registered_runs_run`. Without it the "format 17" fixtures keep the new index on a table
 older formats keep, and fail to open as `history_incompatible`.
 
-### 7c. Existing tests that pin the project-history schema version 18: NOT edited, fail on 19 (owner approval needed)
+### 7c. Existing tests that pin the project-history schema version 18: edited under owner decision 109 A (commit 830c47b7)
 
 All fail with `18 != 19` unless noted. Each pins `PRAGMA user_version` (or a `before-18` copy name) after an upgrade:
 test_project_host_open (explicit_schema5_upgrade), test_project_qa_check_receipts (schema6), test_project_hold_register
@@ -121,3 +121,14 @@ test_project_results (schema1 and process_death, two tests), test_learning_qa_up
 (`test_X5_M2_a_17_binary_refuses_an_18_store...`, `test_X5_M3_one_step_creates_the_four_tables...`),
 test_project_orchestration (R6 schema 16), test_learning_chunk_upgrade. Total 20 tests in 16 modules. Also pinned at
 `PRAGMA user_version` == 18 but not failing in the runs above only because they do not upgrade to current: none found.
+
+Status: these pins were edited under decision 109 (option A) in commit 830c47b7 (26 lines, 16 modules): each now pins 19.
+They are listed above as the tests that failed on 19 before that edit.
+
+New tests of the decision 111 A round (new methods only; no existing assertion edited or removed):
+- test_open_withdrawal.OpenBindingStoreTests.test_D111_the_successor_window_work_does_not_grow_with_the_rows_before_its_position
+  (red on 830c47b7: 740 vs 22,728 SQLite steps for 50 vs 2,050 rows before the position)
+- test_open_withdrawal.OpenBindingStoreTests.test_D111_the_windows_plans_name_the_open_binding_indexes_exactly
+  (project_holds_open_run, project_registered_runs_run and project_holds_open_held, by name; the older plan test is unchanged)
+- test_open_withdrawal.OpenBindingStoreTests.test_D111_a_row_with_a_real_armed_lease_is_refused_and_the_window_moves_on
+- test_project_holds_schema.SchemaStepTests.test_D111_a_failing_validator_in_the_18_to_19_step_leaves_18_and_removes_its_copy
