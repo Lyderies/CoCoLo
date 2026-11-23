@@ -4,6 +4,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.51: B3 withdraws unclaimed opens (schema 19); D2 applies deadlines and retention;
+  B2 lets CoCoLo record a finished helper's result (schema 20), with D3's retirement sweep clearing
+  retired run state. E1 offers start at login during Set up. TF-26 keeps product fixes independent
+  of test-owned legacy proof fingerprints. RS-A step 3 handles late owner preparation after a sweep,
+  restores crashed slots, verifies the intended late-completion behavior, and indexes release-batch queries.
 - Package 0.8.47 (container_stop, owner decision 49): the container stop tool owns all cleanup and the detached
   watchdog is a thin dead man's switch. The stop tool (`container_runtime`, used by the supervisor's stop action,
   C4's recovery, the HM-1 health check and the watchdog) now guarantees: every podman command runs in a process

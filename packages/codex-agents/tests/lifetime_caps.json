@@ -1690,6 +1690,26 @@
    "checks": 3,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "service_record.py::<module>": {
+   "checks": 1,
+   "ends": "WINDOW_SQL bounds one pass's candidate window; the cursor advances and wraps, while recorded or expired contexts leave the live selection; no lifetime admission cap",
+   "test": "test_a_reduced_window_and_attempt_cap_still_records_every_eligible_run_with_real_state_changes"
+  },
+  "service_record.py::_backoff": {
+   "checks": 2,
+   "ends": "retry waits are evicted at BACKOFF_MAP_LIMIT and removed on recovery or permanent refusal; the failure count only triggers a health signal, never a lifetime refusal; all retry state ends with the writer",
+   "test": "test_the_backoff_doubles_from_one_minute_and_stops_at_half_an_hour"
+  },
+  "service_record.py::_signal": {
+   "checks": 1,
+   "ends": "health signals are evicted at BACKOFF_MAP_LIMIT and cleared when a run recovers; this in-memory state ends with the writer",
+   "test": "test_health_signals_never_exceed_the_map_limit"
+  },
+  "service_record.py::record_pass": {
+   "checks": 1,
+   "ends": "the attempt count belongs to one sweep pass and resets on the next; the cursor advances on refusals and errors so later runs still get recorded",
+   "test": "test_a_request_above_the_attempt_cap_is_held_to_the_cap_and_the_window_follows_it"
+  },
   "service_transport.py::exchange_frame": {
    "checks": 3,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
