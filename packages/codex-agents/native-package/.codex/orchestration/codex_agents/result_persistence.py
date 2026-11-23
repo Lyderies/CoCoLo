@@ -30,7 +30,9 @@ from .codex_worker import CodexWorkerError, CodexWorkerHandle, CodexWorkerPacket
 from .contracts import ContractError
 from .history_contracts import AttemptBinding, HistoryError, TerminalDelivery, valid_integer
 from .learning_contracts import parse_bounded_json
+from . import service_record
 from .project_history import ProjectHistory, _ExecutionProvenanceRejected
+from .service_record import ServiceRecordAuthority
 from .history_service import HistoryService
 from .project_request_queue import ProjectRequestLimits, ProjectRequestQueue
 from .project_monitor import _capture_binding
@@ -156,6 +158,8 @@ class ResultPersistenceLane:
         # This service process's own instance, new at every start (O10 D2). The scope's supervisor id is
         # durable per project, so it cannot tell a restarted service's rows from its predecessor's.
         self._service_instance = 'svc-' + secrets.token_hex(16)
+        # B2-18: what the recording sweep last published, for the health check (read without any store or lock).
+        self.recording_notes = service_record.RecordingNotes()
         self._runtime = owner._monitor.scope().runtime_digest
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._maximum = max_entries
@@ -1008,6 +1012,22 @@ class ResultPersistenceLane:
             pending.delivery, pending.state, pending.reason = delivery, "committed", None
             pending.terminal_evidence = evidence
             pending.selected = None
+        self._record_published(pending.binding)
+
+    def _record_authority(self):
+        return ServiceRecordAuthority(runtime_digest=self._runtime, service=True)
+
+    def _record_published(self, binding):
+        """B2 (decision 92.2 A): right after the result is safely stored, the writer records its outcome itself. A
+        refusal is a normal outcome (the status names it) and the restart/backstop sweep tries again; nothing here
+        can fail the publication, which is already committed."""
+        try:
+            self._history().admit_service_result(binding, final_check=self._record_authority())
+        except HistoryError:
+            pass  # a refusal is a normal outcome: the status names it, and the sweep decides about a retry
+        except Exception:  # not a refusal: the sweep tries again, and the health check is told (never raised here)
+            with contextlib.suppress(Exception):
+                service_record.report_unexpected(self._history(), binding, self.recording_notes)
 
     def _acknowledge_terminal(self, pending):
         self._history().acknowledge_account_terminal(pending.binding, pending.acknowledgement)
@@ -1139,6 +1159,11 @@ class ResultPersistenceLane:
                 # with no client action (O10 D1). Armed leases are never expired by time.
                 with contextlib.suppress(HistoryError, sqlite3.Error):
                     history.expire_result_leases(limit=10)
+                # B2 (decision 92.2 A): the backstop and the check after a restart: record what is committed and
+                # unrecorded. A refusal never stops the result cleanup below.
+                with contextlib.suppress(Exception):  # each candidate is isolated inside; this is the pass's own limit
+                    service_record.record_pass(history, self._record_authority(), clock=history._result_now,
+                                               notes=self.recording_notes)
                 result = history.expire_results(limit=10)
             elif request.kind == 'register':
                 handle, run_handle, run_id, attempt, instance = request.arguments

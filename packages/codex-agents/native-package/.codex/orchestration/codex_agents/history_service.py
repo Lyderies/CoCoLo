@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
+from .service_record import ServiceRecordAuthority
 from .history_api import (
     HISTORY_OPERATIONS, HISTORY_PROTOCOL_VERSION, LARGE_REPLY_OPERATIONS, MAX_HISTORY_REPLY_BYTES,
     HistoryRequest, decode_history_request, decode_history_response, history_request_digest,
@@ -411,7 +412,8 @@ class HistoryService:
             elif request.operation == 'history.orchestration_report':
                 from .project_orchestration_report import orchestration_report
                 self._history()
-                result = orchestration_report(self._store, request.payload['orchestration_id'])
+                result = orchestration_report(self._store, request.payload['orchestration_id'],
+                                             runtime_digest=self._runtime)
             elif request.operation == 'history.routing_evidence':
                 if authorization.host_result_context is None:
                     raise HistoryError('history_not_authorized')
@@ -468,7 +470,10 @@ class HistoryService:
                         raise HistoryError("history_not_authorized")
                     self._history()._require_owner()
 
-                result = self._store.admit_host_result(reference, **captured, before_commit=reauthorize)
+                # B2: the primary's admission runs the same final predicate, with this writer's own runtime.
+                result = self._store.admit_host_result(
+                    reference, **captured, before_commit=reauthorize,
+                    final_check=ServiceRecordAuthority(runtime_digest=self._runtime))
             else:
                 self._history()
                 result = self._execute(request, authorization)
