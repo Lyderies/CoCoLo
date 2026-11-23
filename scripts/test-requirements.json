@@ -468,6 +468,7 @@
    "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_r2_M4_each_missing_provenance_field_breaks_generated_EIO_proof",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples",
@@ -523,6 +524,7 @@
    "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_r2_M4_each_missing_provenance_field_breaks_generated_EIO_proof",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples",
@@ -608,7 +610,8 @@
    "codex:tests.test_merge_library_review.ReviewSeams.test_C3_owner_empty_descendant_keeps_ancestor_out_of_emptied",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
-   "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned"
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_r2_M4_each_missing_provenance_field_breaks_generated_EIO_proof"
   ],
   "source": "tests/requirements/merge-library.json#ML-17",
   "statement": "the \"busy\" answer is replaced by a durable per-project FIFO. Cancel and unresolved landings (d) block the queue until retried or accepted. Test: concurrent sealers land in order; cancel at each phase; an unresolved landing blocks admission; a restart keeps the queue."
@@ -676,6 +679,7 @@
    "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_r2_M4_each_missing_provenance_field_breaks_generated_EIO_proof",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples",
@@ -746,7 +750,8 @@
    "codex:tests.test_merge_library_review.ReviewSeams.test_C3_owner_empty_descendant_keeps_ancestor_out_of_emptied",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
-   "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned"
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_r2_M4_each_missing_provenance_field_breaks_generated_EIO_proof"
   ],
   "source": "tests/requirements/merge-library.json#ML-20",
   "statement": "a created folder is removed on reverse only if empty and matching its recorded identity. Test: substituted, unrecorded and non-empty folders are kept."
@@ -796,7 +801,8 @@
    "codex:tests.test_merge_library_review.ReviewSeams.test_C3_owner_empty_descendant_keeps_ancestor_out_of_emptied",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
-   "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned"
+   "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_r2_M4_each_missing_provenance_field_breaks_generated_EIO_proof"
   ],
   "source": "tests/requirements/merge-library.json#ML-23",
   "statement": "the cleanup job removes an emptied folder only if it is on the commit-A list, still empty, identity-matching and not owner-created after the landing; it walks upward only through listed folders. Test: owner adds a file, creates an empty folder, or swaps the folder; each is kept."
@@ -1174,6 +1180,7 @@
    "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_r2_M4_each_missing_provenance_field_breaks_generated_EIO_proof",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples",
@@ -1224,6 +1231,7 @@
    "codex:tests.test_merge_library_review.ReviewSeams.test_C4_land_and_undo_flush_all_staging_before_commit_A",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C6_unreadable_cleanup_reread_does_not_skip_later_rows",
    "codex:tests.test_merge_library_review.ReviewSeams.test_C7_unrecorded_undo_parent_is_kept_empty_named_and_pinned",
+   "codex:tests.test_merge_library_review.ReviewSeams.test_r2_M4_each_missing_provenance_field_breaks_generated_EIO_proof",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_cleaning_persistence_samples",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_forward_persistence_samples",
    "codex:tests.test_merge_library_soak.CompleteModelCampaign.test_recovering_persistence_samples",

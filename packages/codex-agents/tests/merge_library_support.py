@@ -777,6 +777,7 @@ def _check_end_state(test, f, batch, report, *, kind='forward', read_history=Non
             if state != 'landed' or any(p.startswith(name + '/') and p not in row.emptied_folders for p in required_tree):
                 continue
             if name in actual:
+                test.assertEqual(stat.S_IFDIR, actual[name][0], 'EL must be a directory: ' + name)
                 permitted_folder = expected.get(name, start.get(name))
                 test.assertIsNotNone(permitted_folder, 'EL must belong to the independent start/target tree')
                 test.assertEqual(permitted_folder, actual[name], 'EL full directory mode changed: ' + name)
@@ -967,8 +968,8 @@ def sample_boundaries(points, *, lane='real', reproducer='forward'):
         missing = [row for row in expected if canonical(row['key']) not in by_key]
         if missing:
             raise AssertionError('stale persistence sample: ' + repr(missing))
-        observed_kinds = {(('full_flush' if c.operation in ('fsync', 'fullfsync') else c.operation), c.phase, c.when, c.detail.get('commit')) for _, c in points}
-        sampled_kinds = {(('full_flush' if c.operation in ('fsync', 'fullfsync') else c.operation), c.phase, c.when, c.detail.get('commit')) for _, c in selected}
+        observed_kinds = {(c.operation, c.phase, c.when, c.detail.get('commit')) for _, c in points}
+        sampled_kinds = {(c.operation, c.phase, c.when, c.detail.get('commit')) for _, c in selected}
         if observed_kinds != sampled_kinds:
             raise AssertionError('new persistence boundary needs a sample: ' + repr(observed_kinds - sampled_kinds))
     if points and not selected:

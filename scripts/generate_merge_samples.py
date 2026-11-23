@@ -19,10 +19,10 @@ def choose(points, lane):
     for key, call in points:
         if call.operation not in FAULTABLE | {'sqlite_read'}:
             continue
-        signature = (key[0][0], call.phase, call.when, call.detail.get('commit'))
+        signature = (call.operation, call.phase, call.when, call.detail.get('commit'))
         if signature not in groups:
             groups[signature] = key, call
-    return [dict(operation=key[0][0], phase=call.phase, side=call.when,
+    return [dict(operation=call.operation, phase=call.phase, side=call.when,
                  commit=call.detail.get('commit'), occurrence=key[1], key=key)
             for key, call in groups.values()]
 

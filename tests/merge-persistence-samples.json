@@ -95,7 +95,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "before"
     },
@@ -114,7 +114,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "after"
     },
@@ -247,7 +247,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "retirement",
      "side": "before"
     },
@@ -266,7 +266,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "retirement",
      "side": "after"
     },
@@ -439,7 +439,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "intake",
      "side": "before"
     },
@@ -458,7 +458,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "intake",
      "side": "after"
     },
@@ -781,7 +781,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "staging",
      "side": "before"
     },
@@ -800,7 +800,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "staging",
      "side": "after"
     },
@@ -933,7 +933,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "history",
      "side": "before"
     },
@@ -952,7 +952,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "history",
      "side": "after"
     },
@@ -1123,7 +1123,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "forward",
      "side": "before"
     },
@@ -1142,7 +1142,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "forward",
      "side": "after"
     },
@@ -1313,7 +1313,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "validation",
      "side": "before"
     },
@@ -1332,7 +1332,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "validation",
      "side": "after"
     },
@@ -1465,7 +1465,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "before"
     },
@@ -1484,7 +1484,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "after"
     },
@@ -1733,7 +1733,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "recovery",
      "side": "before"
     },
@@ -1752,7 +1752,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "recovery",
      "side": "after"
     },
@@ -1961,7 +1961,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "before"
     },
@@ -1980,7 +1980,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "after"
     },
@@ -2191,7 +2191,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "reverse",
      "side": "before"
     },
@@ -2210,7 +2210,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "reverse",
      "side": "after"
     },
@@ -2419,7 +2419,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "before"
     },
@@ -2438,7 +2438,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "after"
     },
@@ -2687,7 +2687,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "staging",
      "side": "before"
     },
@@ -2706,7 +2706,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "staging",
      "side": "after"
     },
@@ -2839,7 +2839,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "validation",
      "side": "before"
     },
@@ -2858,7 +2858,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "validation",
      "side": "after"
     },
@@ -3029,7 +3029,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "forward",
      "side": "before"
     },
@@ -3048,7 +3048,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "forward",
      "side": "after"
     },
@@ -3257,7 +3257,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "before"
     },
@@ -3276,7 +3276,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "after"
     },
@@ -3451,7 +3451,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "before"
     },
@@ -3470,7 +3470,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "after"
     },
@@ -3603,7 +3603,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "retirement",
      "side": "before"
     },
@@ -3622,7 +3622,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "retirement",
      "side": "after"
     },
@@ -3911,7 +3911,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "intake",
      "side": "before"
     },
@@ -3930,7 +3930,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "intake",
      "side": "after"
     },
@@ -4253,7 +4253,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "staging",
      "side": "before"
     },
@@ -4272,7 +4272,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "staging",
      "side": "after"
     },
@@ -4443,7 +4443,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "history",
      "side": "before"
     },
@@ -4462,7 +4462,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "history",
      "side": "after"
     },
@@ -4671,7 +4671,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "forward",
      "side": "before"
     },
@@ -4690,7 +4690,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "forward",
      "side": "after"
     },
@@ -4899,7 +4899,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "validation",
      "side": "before"
     },
@@ -4918,7 +4918,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "validation",
      "side": "after"
     },
@@ -5051,7 +5051,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "before"
     },
@@ -5070,7 +5070,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "after"
     },
@@ -5281,7 +5281,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "before"
     },
@@ -5300,7 +5300,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "after"
     },
@@ -5781,7 +5781,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "recovery",
      "side": "before"
     },
@@ -5800,7 +5800,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "recovery",
      "side": "after"
     },
@@ -5973,7 +5973,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "reverse",
      "side": "before"
     },
@@ -5992,7 +5992,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "reverse",
      "side": "after"
     },
@@ -6203,7 +6203,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "recovery",
      "side": "before"
     },
@@ -6222,7 +6222,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "recovery",
      "side": "after"
     },
@@ -6431,7 +6431,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "before"
     },
@@ -6450,7 +6450,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "after"
     },
@@ -6623,7 +6623,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "retirement",
      "side": "before"
     },
@@ -6642,7 +6642,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "retirement",
      "side": "after"
     },
@@ -6853,7 +6853,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "reverse",
      "side": "before"
     },
@@ -6872,7 +6872,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "reverse",
      "side": "after"
     },
@@ -7081,7 +7081,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "before"
     },
@@ -7100,7 +7100,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "after"
     },
@@ -7387,7 +7387,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "staging",
      "side": "before"
     },
@@ -7406,7 +7406,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "staging",
      "side": "after"
     },
@@ -7539,7 +7539,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "validation",
      "side": "before"
     },
@@ -7558,7 +7558,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "validation",
      "side": "after"
     },
@@ -7729,7 +7729,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "forward",
      "side": "before"
     },
@@ -7748,7 +7748,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "forward",
      "side": "after"
     },
@@ -7995,7 +7995,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "before"
     },
@@ -8014,7 +8014,7 @@
       1
      ],
      "occurrence": 1,
-     "operation": "full_flush",
+     "operation": "fullfsync",
      "phase": "cleanup",
      "side": "after"
     },

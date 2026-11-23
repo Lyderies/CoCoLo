@@ -445,17 +445,18 @@ class _Store:
             self.close_fd(a, src.parent)
 
     def close_fd(self, fd, path):
-        closed = False
+        attempted = False
         def close():
-            nonlocal closed
+            nonlocal attempted
+            attempted = True
             os.close(fd)
-            closed = True
         try:
             self.io('close', close, path, fd=fd)
         except BaseException:
             # A hook may fail before the close. Release the real resource even
-            # while another parent's close is unwinding; never double-close.
-            if not closed:
+            # while another parent's close is unwinding. Once os.close starts,
+            # an error may still mean the descriptor was released and reused.
+            if not attempted:
                 try:
                     os.close(fd)
                 except OSError as error:
