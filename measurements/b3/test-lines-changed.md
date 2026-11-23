@@ -50,3 +50,15 @@ design row W3 ("withdrawal first: the claim refused"). All assertions are unchan
 would send, so the driver's own duty is an exact replay), then releases it. Asserts: the dispatch fails; the run's first
 failure is `('observing', 'observation_not_authorized')`; no model execution; no lease row (so no claim was sent); the
 open is withdrawn exactly once (one non-`known` transition); the project row ends `released`/`withdrawn`. Passes.
+
+## 5. Fixes after the two security reviews (branch fix/b3-withdraw-2)
+
+### 5a. Moved, no assertion change (item 5, test time)
+
+`SuccessorWithdrawalTests` (class body, decorator, docstring and its one test unchanged, `LostRunAfterStopTests` still
+its base) moved from `tests/test_open_withdrawal.py` to the new `tests/test_open_withdrawal_successor.py`. In
+`test_open_withdrawal.py` only these lines changed: the import of `LostRunAfterStopTests` was removed, the class was
+removed, and `load_tests` no longer lists it. The new module has its own `load_tests` (this class only) and imports
+`WithdrawReads` from `tests.test_open_withdrawal`. Registered in `scripts/test-stages.json` (integration),
+`scripts/test-layers.json` (scenario) and `scripts/test-requirements.json` (RS-B-5 check ids renamed to the new module,
+regenerated with `generate_test_metadata.py --catalogue`).

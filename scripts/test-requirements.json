@@ -982,25 +982,6 @@
    "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_marking_writes_the_request_before_it_is_sent",
    "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_the_answer_releases_the_row_once",
    "codex:tests.test_open_withdrawal.OpenBindingStoreTests.test_the_row_is_taken_held_and_a_replay_is_a_no_op",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_C3_the_next_service_never_fences_a_claim_request_its_run_was_not_observed_for",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_C3a_a_failed_history_request_is_asked_again",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_C3b_every_earlier_lease_is_found_whatever_the_next_services_capacity",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_C3c_an_unreachable_account_does_not_use_up_the_refusal_retries",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_C3d_a_run_still_being_closed_says_so",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_C3e_a_lease_the_sweep_cannot_read_never_stops_the_others",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_C3f_a_lease_an_earlier_version_left_is_closed_by_the_next_version",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_O10_E1_an_account_that_stops_mid_fence_does_not_use_up_the_refusal_retries",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_O10_E2_a_lease_the_listing_could_not_read_yet_is_listed_again_and_fenced",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_W5_a_stopped_services_never_claimed_open_is_withdrawn_by_the_next_service",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_a_claimed_run_not_yet_launched_when_its_host_stops_is_settled",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_a_finished_child_not_yet_reported_when_its_host_stops_is_settled",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_a_lost_reply_and_repeated_restarts_settle_the_run_exactly_once",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_a_released_run_leaves_no_launch_evidence_behind",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_a_run_preparing_when_its_host_stops_holds_nothing_afterwards",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_a_run_releasing_when_its_host_stops_is_released_once",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_a_run_whose_terminal_was_sent_when_its_host_stops_is_settled",
-   "codex:tests.test_open_withdrawal.SuccessorWithdrawalTests.test_a_running_child_when_its_host_stops_is_settled",
    "codex:tests.test_open_withdrawal.WithdrawAccountTests.test_W1_the_host_that_opened_it_withdraws_it",
    "codex:tests.test_open_withdrawal.WithdrawAccountTests.test_W1_the_project_service_withdraws_a_never_claimed_open",
    "codex:tests.test_open_withdrawal.WithdrawAccountTests.test_W2_every_other_caller_or_run_is_refused_and_nothing_changes",
@@ -1017,7 +998,26 @@
    "codex:tests.test_open_withdrawal.WithdrawWireTests.test_each_refusal_has_a_reason_code_and_a_next_step",
    "codex:tests.test_open_withdrawal.WithdrawWireTests.test_the_custody_names_exactly_the_payloads_run",
    "codex:tests.test_open_withdrawal.WithdrawWireTests.test_the_reasons_are_a_fixed_set",
-   "codex:tests.test_open_withdrawal.WithdrawWireTests.test_the_request_id_is_fixed_per_attempt"
+   "codex:tests.test_open_withdrawal.WithdrawWireTests.test_the_request_id_is_fixed_per_attempt",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_C3_the_next_service_never_fences_a_claim_request_its_run_was_not_observed_for",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_C3a_a_failed_history_request_is_asked_again",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_C3b_every_earlier_lease_is_found_whatever_the_next_services_capacity",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_C3c_an_unreachable_account_does_not_use_up_the_refusal_retries",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_C3d_a_run_still_being_closed_says_so",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_C3e_a_lease_the_sweep_cannot_read_never_stops_the_others",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_C3f_a_lease_an_earlier_version_left_is_closed_by_the_next_version",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_O10_E1_an_account_that_stops_mid_fence_does_not_use_up_the_refusal_retries",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_O10_E2_a_lease_the_listing_could_not_read_yet_is_listed_again_and_fenced",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_W5_a_stopped_services_never_claimed_open_is_withdrawn_by_the_next_service",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_a_claimed_run_not_yet_launched_when_its_host_stops_is_settled",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_a_finished_child_not_yet_reported_when_its_host_stops_is_settled",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_a_lost_reply_and_repeated_restarts_settle_the_run_exactly_once",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_a_released_run_leaves_no_launch_evidence_behind",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_a_run_preparing_when_its_host_stops_holds_nothing_afterwards",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_a_run_releasing_when_its_host_stops_is_released_once",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_a_run_whose_terminal_was_sent_when_its_host_stops_is_settled",
+   "codex:tests.test_open_withdrawal_successor.SuccessorWithdrawalTests.test_a_running_child_when_its_host_stops_is_settled"
   ],
   "source": "REQUIREMENTS-open-withdrawal.md#RS-B-5",
   "statement": "**RS-B-5 \u2014 Authenticated withdrawal of an unclaimed open.**\nThe project service and the opening host class may withdraw an unclaimed open with matching enrolled project,\ncaller scope, run id, inputs digest, attempt custody and current binding generation. Authentication precedes\nimmutable receipt replay; an exact replay remains available after the binding is pruned. Different callers receive\nno receipt. New transitions refuse claimed, fenced, withdrawn or stale bindings; missing generations are refused.\nWithdrawal evidence is retained for the tombstone's life. The project records its withdrawal duty before registration,\nmarks the complete request releasing before dropping memory, retries identical requests after lost replies, and\nwithdraws never-claimed cancellations, pre-preparation failures, idle registrations (one hour, owner decision 90.7)\nand stopped-service registrations. A registration refusal preserves the duty; a faulted writer gets one memory\nwithdrawal, otherwise account expiry. Armed leases belong to the fence path.\nSource: DESIGN-0.4.0-RS-B.md draft 3 \u00a74, \u00a77 and rows W1-W5 (W4a-e), M7; PLAN-0.4.0-supervisor-slices.md B3."
@@ -1065,9 +1065,9 @@
    "root:test_test_framework_guards.RunnerIntegrationTests.test_worker_secrets_are_stripped_and_temporary_roots_are_isolated",
    "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error",
    "root:test_test_framework_guards.WorkerTests.test_review_C8_discovery_and_shards_have_a_stable_disjoint_union",
+   "root:test_test_framework_integration.ReleaseIntegration.test_discovery_imports_framework_and_preserves_package_names",
    "root:test_test_framework_r3.RoundThree.test_p04_shard_witness_rejects_duplicate_original_worker_records",
-   "root:test_test_framework_r3.RoundThree.test_p05_CI_selects_trusted_bases_for_supported_events",
-   "root:test_test_framework_integration.ReleaseIntegration.test_discovery_imports_framework_and_preserves_package_names"
+   "root:test_test_framework_r3.RoundThree.test_p05_CI_selects_trusted_bases_for_supported_events"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-1",
   "statement": "**TF-1 \u2014 Retain the supported runner and isolation.** Keep unittest and `scripts/parallel_tests.py`, the three\nsuites, module/stage/shard selection, separate worker processes and per-worker temporary directories, secret\nstripping, and bounded worker teardown. A full normal run uses the runner's DEFAULT job count (no fixed 6).\nSharding/module splitting must not omit or duplicate tests. Preserve existing `load_tests` discovery hooks.\nWitness: discovery and execution of inherited, ordinary, `load_tests`-filtered and generated unittest cases;\nstable shard partition; failing worker and import error both make the\nrunner nonzero; child environments omit fixture secrets; concurrent workers have distinct temporary roots\nand cannot see each other's fixture files; an intentionally stuck worker and its owned descendants are\nreaped within the configured teardown bound with diagnostics; default jobs remains `max(1, (os.cpu_count() or 2) - 2)`."
@@ -1379,35 +1379,35 @@
  },
  "TF-23": {
   "checks": [
-   "root:test_test_framework_r3.RoundThree.test_TF23_declared_fixes_require_red_green_and_positive_control",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_exact_primary_restoration_matches_installed_release"
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_exact_primary_restoration_matches_installed_release",
+   "root:test_test_framework_r3.RoundThree.test_TF23_declared_fixes_require_red_green_and_positive_control"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-23",
   "statement": "**TF-23 \u2014 Review witnesses need falsifiable evidence.** Every new or changed review-fix witness must name its requirement, positive control, an old-code red run at the reviewed base revision (round 3: `9c18c4a3`) with the intended failure diagnostic, and its green run after the fix. For a witness-only repair, the red must show that the old witness accepts a deliberately invalid result; the repaired witness must reject that same result and accept the valid control. A small committed evidence manifest declares each fix and its witnesses. A framework check rejects a declared fix without a requirement, positive control, reviewed base, red-run evidence/diagnostic, or green-run evidence. Referenced evidence files must exist and record the stated outcome. Human review verifies that the diagnostic and control prove the requirement; mechanical presence checks do not replace that judgment. No changed assertion may be omitted from the assertion ledger."
  },
  "TF-24": {
   "checks": [
+   "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration",
    "root:test_test_framework_integration.ReleaseIntegration.test_discovery_imports_framework_and_preserves_package_names",
-   "root:test_test_framework_integration.ReleaseIntegration.test_existing_resource_modules_have_correct_layers_and_reasons",
    "root:test_test_framework_integration.ReleaseIntegration.test_exclusive_campaigns_wait_for_empty_pool_and_block_other_launches",
-   "root:test_test_framework_integration.ReleaseIntegration.test_release_overlay_is_immutable_and_candidate_changes_are_rejected",
-   "root:test_test_framework_integration.ReleaseIntegration.test_versioned_debt_has_measured_ceilings_and_cannot_grow",
+   "root:test_test_framework_integration.ReleaseIntegration.test_existing_resource_modules_have_correct_layers_and_reasons",
    "root:test_test_framework_integration.ReleaseIntegration.test_explicit_base_is_documented_and_missing_base_stops_before_discovery",
-   "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration"
+   "root:test_test_framework_integration.ReleaseIntegration.test_release_overlay_is_immutable_and_candidate_changes_are_rejected",
+   "root:test_test_framework_integration.ReleaseIntegration.test_versioned_debt_has_measured_ceilings_and_cannot_grow"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-24",
   "statement": "**TF-24 \u2014 Integrate the reviewed release without relaxing isolation or coverage.** The release integration base is `b531844030fa619c1f62ddd6c092ebc2ea4fca38`. Discovery uses the same framework import path as workers and preserves qualified failed-import module names. Existing thread-wait tests use component; real socket/process tests use scenario, with catalogue reasons; their assertions and guards remain unchanged. Release baseline versions may admit only tests and fixture sources from the reviewed release integration, with committed provenance and immutable introduction checks; old baseline files remain intact and subsequent changes still require migration. Local full-run instructions and CI explicitly supply a trusted base; missing base fails concisely before discovery. Decision 86's versioned budget debt admits the existing billing, ledger-startup and session-guard modules at the first full run's measured ceilings, retires completed under-budget entries, and never admits new merge-library modules. New crash campaigns run without competing workers, retaining every test and persistence point; queue waiting is excluded but all worker time and fragments count against the unchanged layer budget. Regression witnesses prove discovery, layer assignments, trusted release baseline rejection of candidate changes, shrink-only versioned debt, and exclusive scheduling with ordinary parallel controls. TF-23 evidence applies to each integration fix."
  },
  "TF-25": {
   "checks": [
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_exact_primary_restoration_matches_installed_release",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_correct_append_passes_and_every_unrelated_edit_is_rejected",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebinding_retains_retirement_and_catches_later_fingerprint_edits",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebind_command_rejects_invalid_source_and_overwrite",
    "root:test_release_bookkeeping.ReleaseBookkeeping.test_claimed_pre_bump_commit_cannot_hide_old_record_edits",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_correct_append_passes_and_every_unrelated_edit_is_rejected",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_exact_primary_restoration_matches_installed_release",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_immutable_binding_tampering_is_rejected",
    "root:test_release_bookkeeping.ReleaseBookkeeping.test_later_edits_to_each_admitted_file_still_fail_metadata",
    "root:test_release_bookkeeping.ReleaseBookkeeping.test_next_release_uses_the_same_narrow_procedure",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_immutable_binding_tampering_is_rejected"
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebind_command_rejects_invalid_source_and_overwrite",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebinding_retains_retirement_and_catches_later_fingerprint_edits"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-25",
   "statement": "**TF-25 \u2014 Narrow release bookkeeping may rebind its existing proof.** The only eligible files are `packages/claude-agents/previous-releases.json`, `packages/claude-agents/src/claude_agents/packaging.py`, and `packages/claude-agents/tests/test_previous_release_catalogue.py`. Accept exactly one appended catalogue record for the explicitly named previous installed release, whose version and compiled bundle/files match its trusted Git source revision; preserve every existing record and the catalogue schema. In the test file permit only the two existing catalogue-size assertions (`test_the_shipped_catalogue_is_accepted`, `test_cl1_a_catalogue_up_to_2_mib_is_accepted`) to increase from N to N+1 and their mechanically derived release-list comment. Preserve all other assertion operands, limits, test bodies, helpers, imports and comments. In packaging.py permit only the corresponding canonical release/source annotation on its existing pinned digest; a previously unpinned digest or any executable change requires ordinary proof review, not this routine path. This covers routine version bumps sharing an already reviewed bundle; new bundle/pin semantics remain subject to normal review. Reject removed/reordered/modified existing records, extra records, mismatched source/version/bundle, unpaired or excessive count changes, and every other edit in these files.\n\nAn explicit `scripts/rebind_release_bookkeeping.py` command verifies a trusted pre-bookkeeping revision against the existing discovered catalogue-test bindings before admitting any replacement. Compute the before and after bindings in isolated temporary snapshots using the same fingerprint implementation and pinned interpreter, and require identical test IDs. Restrict rebinding to those already-grandfathered catalogue tests; never restore retired tests or admit new tests. Publish a new immutable release-named binding file with before/after source hashes and Git provenance, refusing overwrite. At run time verify immutable introduction, the permitted source transition and the binding chain, then compare the current test/helper/value fingerprints normally. Changing an admitted file later must still fail. Prior immutable baselines, including 11d36a06, remain unchanged. The initial repair restores all three files exactly from primary 0ca9c36f/30bf1fa9 and advances both count assertions from 9 to 10 for installed 0.8.49. Positive and mutation controls, actual command/runner integration, and TF-23 red/green evidence are required."
@@ -1498,6 +1498,10 @@
  },
  "TF-7": {
   "checks": [
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_claimed_pre_bump_commit_cannot_hide_old_record_edits",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_immutable_binding_tampering_is_rejected",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_later_edits_to_each_admitted_file_still_fail_metadata",
+   "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebinding_retains_retirement_and_catches_later_fingerprint_edits",
    "root:test_test_framework.MetadataTests.test_legacy_list_cannot_grow_restore_entries_change_fingerprints_or_rename_tests",
    "root:test_test_framework.MetadataTests.test_migration_removes_legacy_entry_and_new_tagged_proof_is_required",
    "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
@@ -1521,19 +1525,15 @@
    "root:test_test_framework.ReviewLifecycleTests.test_C3_C13_cross_module_helper_is_found_by_source_path",
    "root:test_test_framework.ReviewLifecycleTests.test_C9_assertion_free_lifecycle_check_fails_the_real_gate",
    "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards",
+   "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration",
+   "root:test_test_framework_integration.ReleaseIntegration.test_explicit_base_is_documented_and_missing_base_stops_before_discovery",
+   "root:test_test_framework_integration.ReleaseIntegration.test_release_overlay_is_immutable_and_candidate_changes_are_rejected",
    "root:test_test_framework_r2.RoundTwo.test_M1_unrelated_source_cannot_resolve_a_specific_dependency",
    "root:test_test_framework_r2.RoundTwo.test_N1_same_basename_dependencies_both_contribute",
    "root:test_test_framework_r3.RoundThree.test_p01_closure_fixture_state_invalidates_metadata",
    "root:test_test_framework_r3.RoundThree.test_p01_positional_and_keyword_defaults_are_dependencies",
    "root:test_test_framework_review.ReviewTests.test_fixture_and_transitive_helper_changes_change_dependency_fingerprint",
-   "root:test_test_framework_review.ReviewTests.test_missing_trusted_base_fails_closed_without_using_candidate_head",
-   "root:test_test_framework_integration.ReleaseIntegration.test_release_overlay_is_immutable_and_candidate_changes_are_rejected",
-   "root:test_test_framework_integration.ReleaseIntegration.test_explicit_base_is_documented_and_missing_base_stops_before_discovery",
-   "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebinding_retains_retirement_and_catches_later_fingerprint_edits",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_claimed_pre_bump_commit_cannot_hide_old_record_edits",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_later_edits_to_each_admitted_file_still_fail_metadata",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_immutable_binding_tampering_is_rejected"
+   "root:test_test_framework_review.ReviewTests.test_missing_trusted_base_fails_closed_without_using_candidate_head"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-7",
   "statement": "**TF-7 \u2014 Grandfather only the unchanged baseline, and only shrink it.** Generate and commit the initial\nlegacy list from discovery on `a1d25560`, recording full suite/test IDs, baseline commit and a SHA-256 source\nfingerprint of the test implementation (including an inherited implementation's defining source and class\nsetup/teardown sources). Include the effective setUp/tearDown/setUpClass/tearDownClass definitions across\nthe MRO, module setUpModule/tearDownModule, and repository-local functions/classes transitively referenced\nby those fixtures or the test body (including imported shared fixture helpers). External stdlib/test-tool\nimplementations are excluded; their versions are independently pinned. Resolve dependencies by module\nand qualified name with cycle detection; unresolved dynamic helper dependencies need an explicit declared\nsource dependency, otherwise fail closed for grandfather eligibility. Keep deterministic sorted output and the generator command. The list exempts only\nmissing requirement/rationale metadata. Compare later lists against an immutable initial ceiling AND the\nreview base version: reject additions, restored removed entries, changed fingerprints or a replaced baseline.\nRenamed, overridden or changed tests must be tagged and removed from the list; missing/stale IDs must be\nremoved. Duplicate IDs are rejected. Witness: add a new test, rename a legacy test, edit its assertion or a shared fixture/helper, grow\nthe list, re-add a migrated entry, or replace its fingerprint; each fails. A tagged migration removes the entry\nand passes. The checker must fail closed if the review-base comparison cannot be made; use an explicit base\ncommit argument locally and a trusted CI merge-base; never trust a base supplied by the candidate manifest itself\nor silently substitute candidate HEAD. Missing or unavailable trusted base fails closed."
@@ -1556,11 +1556,11 @@
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
    "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards",
-   "root:test_test_framework_r2.RoundTwo.test_M3_no_report_or_empty_plan_cannot_authorize_retirement",
-   "root:test_test_framework_r3.RoundThree.test_p02_retirement_witness_rejects_each_status_blind_mutant",
+   "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration",
    "root:test_test_framework_integration.ReleaseIntegration.test_exclusive_campaigns_wait_for_empty_pool_and_block_other_launches",
    "root:test_test_framework_integration.ReleaseIntegration.test_versioned_debt_has_measured_ceilings_and_cannot_grow",
-   "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration"
+   "root:test_test_framework_r2.RoundTwo.test_M3_no_report_or_empty_plan_cannot_authorize_retirement",
+   "root:test_test_framework_r3.RoundThree.test_p02_retirement_witness_rejects_each_status_blind_mutant"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-8",
   "statement": "**TF-8 \u2014 Enforce module budgets, not worker-fragment budgets.** For each module sum actual elapsed seconds\nof every executed fragment (including import/setup/body/teardown), compare with the layer budget above, and\nname EVERY over-budget module with stage, layer, measured seconds, limit and fragment count. Apply\nowner-selected option A: generate and commit `scripts/test-budget-debt.json` from a1d25560's recorded\nmodule job-seconds, recording each module and its baseline ceiling. Every run names EVERY remaining debt\nentry as a warning (including unselected modules, explicitly marked not measured). A debt module fails if\nits complete measured total exceeds its unchanged recorded ceiling. A complete measurement at or below\nits layer budget requires removal from the debt file; afterward any excess over that budget fails. The\nfile may only shrink: no added/restored modules, increased ceilings, or baseline replacement. Validate\nagainst the immutable generated baseline and the explicit trusted review base. Partial shards cannot\nretire debt or certify a complete module. All new modules and modules absent from the debt file fail\nabove their layer budget. Do not bail out after the first offender.\nSeparate shards produce mergeable records; the combined gate enforces the aggregate module budget and\ndebt ceiling. A shard labels its measurement partial. Witness: two 20s component fragments fail its 30s\nbudget unless authorized baseline debt covers 40s; equality passes and a value just above fails; two\noffenders are both printed. A baseline debt warning appears even when unselected; ceiling regression,\nrestored debt, edited ceiling and debt retained after a complete under-budget result are rejected. Use an\ninjected clock for these tests, not real sleeps. Overall wall time has no five-minute failure threshold."
