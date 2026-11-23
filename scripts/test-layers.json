@@ -230,6 +230,8 @@
  "codex:tests.test_rate_limit_contracts": "unit",
  "codex:tests.test_deadlines_retention": "scenario",
  "codex:tests.test_retirement_sweep": "scenario",
+ "codex:tests.test_publication_replay": "scenario",
+ "codex:tests.test_publication_replay_driver": "scenario",
  "codex:tests.test_record_context": "scenario",
  "codex:tests.test_refusal_steps": "unit",
  "codex:tests.test_required_host_open": "scenario",
