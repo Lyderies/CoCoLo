@@ -1,0 +1,6 @@
+{
+ "base": "5d4ab8607767ca67330afc32e47bd792bf7e562f",
+ "log": "measurements/test-framework/approved-edits/r1/green.log",
+ "status": "green",
+ "witness": "root:test_approved_edits.ApprovedEditsR1.test_r1_deleted_admission_documents_are_refused"
+}

@@ -1,0 +1,15 @@
+{
+ "baseline_algorithm_sha256": "763c28dce959b053adb9053f0a0719d0d49424562b6e2befd444d5dd7ba46a89",
+ "binding": "scripts/test-approved-edit-bindings/107-109-114.1.json",
+ "binding_algorithm_sha256": "09b8a514d3078baf834a018ec27ecb3c3379b9799bde4b802e4d97e1cbae25cd",
+ "binding_modified": false,
+ "diagnostic": "codex:tests.test_container_launch_journal.RealContainerLaunchTests.test_real_bridge_deadline_stops_the_container: trusted old proof differs from admitted baseline",
+ "expected_dependency_values": "66038f6d2e1f3cbc9c2b2601de2dd426320738cdb0094c8fecf02c861cd4ed07",
+ "format_changed": false,
+ "introduction_checks": "green: ancestral edit commits, exact source blobs and algorithm digest",
+ "log": "measurements/test-framework/approved-edits/r1/binding-replay.log",
+ "observed_dependency_values": "e429c3a9b928e2ec5636b02197b3deaa9fa435c3582475586a48fe0c851fa0c4",
+ "probe_log": "measurements/test-framework/approved-edits/r1/stale-probe-with-dependencies.log",
+ "scope": "Strict unchanged-old-proof verification now rejects this existing binding; both reviewed unguarded and guarded replay reproduce the mismatched row. No baseline or binding was rewritten.",
+ "status": "red"
+}

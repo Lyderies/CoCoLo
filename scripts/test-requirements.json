@@ -1811,6 +1811,20 @@
  },
  "TF-23": {
   "checks": [
+   "root:test_approved_edits.ApprovedEdits.test_exact_transition_and_extra_unlisted_edits",
+   "root:test_approved_edits.ApprovedEdits.test_immutable_introduction_tampering_and_overwrite",
+   "root:test_approved_edits.ApprovedEdits.test_only_changed_active_proofs_rebind_all_three_kinds",
+   "root:test_approved_edits.ApprovedEdits.test_recorded_owner_transitions_match_current_bytes",
+   "root:test_approved_edits.ApprovedEdits.test_renamed_restored_and_unresolved_proofs_are_refused",
+   "root:test_approved_edits.ApprovedEdits.test_unrelated_legacy_proof_still_flags_and_retired_stays_retired",
+   "root:test_approved_edits.ApprovedEdits.test_wrong_text_line_endings_and_stale_base",
+   "root:test_approved_edits.ApprovedEditsR1.test_r1_deleted_admission_documents_are_refused",
+   "root:test_approved_edits.ApprovedEditsR1.test_r1_introduction_requires_ancestry_sources_and_algorithm",
+   "root:test_approved_edits.ApprovedEditsR1.test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions",
+   "root:test_approved_edits.ApprovedEditsR1.test_r1_owner_record_authenticates_first_introduction",
+   "root:test_approved_edits.ApprovedEditsR1.test_r1_replay_uses_guarded_discovery_and_rejects_duplicate_ids",
+   "root:test_approved_edits.ApprovedEditsR1.test_r1_unanchored_files_never_generate_proofs",
+   "root:test_approved_edits.ApprovedEditsR1.test_r1_unchanged_stale_old_proofs_are_refused",
    "root:test_product_dependencies.ProductDependencies.test_migration_rejects_wrong_provenance_and_changed_test_identity",
    "root:test_release_bookkeeping.ReleaseBookkeeping.test_exact_primary_restoration_matches_installed_release",
    "root:test_test_framework_r3.RoundThree.test_TF23_declared_fixes_require_red_green_and_positive_control"
@@ -1860,6 +1874,26 @@
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-26",
   "statement": "**TF-26 \u2014 Legacy proof fingerprints describe test-owned code, not product implementation.** Refine TF-7: source, bytecode, captured state and constant values belong in a legacy fingerprint only when owned by the test module, its fixtures or its shared test helpers. Ownership follows the defining source file (including unwrapped decorators), not an imported alias or a product class's name. Test directories, helpers alongside the defining test module, and declared test fixture sources are test-owned; shipped product roots take precedence and are never test-owned. Product functions/classes and imported product constants, including source-derived runtime digests, are referenced by module and qualified attribute identity. Their implementation/source/value changes alone must not invalidate a legacy proof, including when reached transitively through shared fixtures. Changing which product symbol a test references still changes its proof. A changed test-owned helper, constant/default/closure, assertion or legacy ID must continue to fail the existing gate. Unresolved dynamic test-owned state remains fail-closed; this rule is not an exemption for arbitrary fixture changes.\n\nPublish an immutable `test-owned-v1` dependency baseline generated from trusted `5ab0a9d3`, with full source revision, generator/algorithm provenance, unchanged test IDs and unchanged implementation fingerprints. Compare the old discovery against its admitted baseline before translating dependencies; refuse a candidate test/helper edit, new or retired ID, or an overwritten baseline. Only dependency hashes are translated; retain the existing shrink-only lists and implementation checks. Runtime validation verifies immutable introduction, trusted provenance, and identity/fingerprint agreement before using a translated dependency record; later test/helper changes still face ordinary comparison. Existing release-bookkeeping records retain their original hashing interpretation; later records carry the new dependency interpretation as well so TF-25 remains usable without rewriting an old binding. TF-23 witnesses include the actual RSA product-only edit at old 5ab0a9d3, identity-preserving product changes, helper and test-edit/rename controls, migration tamper controls, and green results with the new version. No product test assertions are changed to accommodate this policy."
+ },
+ "TF-27": {
+  "checks": [
+   "root:test_approved_edits.ApprovedEdits.test_exact_transition_and_extra_unlisted_edits",
+   "root:test_approved_edits.ApprovedEdits.test_immutable_introduction_tampering_and_overwrite",
+   "root:test_approved_edits.ApprovedEdits.test_only_changed_active_proofs_rebind_all_three_kinds",
+   "root:test_approved_edits.ApprovedEdits.test_recorded_owner_transitions_match_current_bytes",
+   "root:test_approved_edits.ApprovedEdits.test_renamed_restored_and_unresolved_proofs_are_refused",
+   "root:test_approved_edits.ApprovedEdits.test_unrelated_legacy_proof_still_flags_and_retired_stays_retired",
+   "root:test_approved_edits.ApprovedEdits.test_wrong_text_line_endings_and_stale_base",
+   "root:test_approved_edits.ApprovedEditsR1.test_r1_deleted_admission_documents_are_refused",
+   "root:test_approved_edits.ApprovedEditsR1.test_r1_introduction_requires_ancestry_sources_and_algorithm",
+   "root:test_approved_edits.ApprovedEditsR1.test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions",
+   "root:test_approved_edits.ApprovedEditsR1.test_r1_owner_record_authenticates_first_introduction",
+   "root:test_approved_edits.ApprovedEditsR1.test_r1_replay_uses_guarded_discovery_and_rejects_duplicate_ids",
+   "root:test_approved_edits.ApprovedEditsR1.test_r1_unanchored_files_never_generate_proofs",
+   "root:test_approved_edits.ApprovedEditsR1.test_r1_unchanged_stale_old_proofs_are_refused"
+  ],
+  "source": "REQUIREMENTS-test-framework.md#TF-27",
+  "statement": "**TF-27 \u2014 Owner-approved test edits require exact immutable bindings.** Admit an owner-approved test edit only through a committed `scripts/test-approved-edits/<decision>.json` manifest recording the decision ID, file, trusted pre-edit commit, exact old and new line text (including line endings), and line number at the edit commit. Record insertions explicitly, including fixture lines and separately reviewed additions in existing modules. `scripts/rebind_approved_edits.py` verifies each historical transition byte for byte, chains it back to the trusted admitted pre-edit sources, and requires the current files to equal exactly the replayed transitions. Refuse stale bases and every unlisted literal, assertion, helper, test rename or restored legacy ID in those files.\n\nOwner authority comes from the committed, owner-review-protected `scripts/test-approved-edits/APPROVALS.json`: each decision authorizes an exact manifest SHA-256 and binding name. The gate verifies that record against HEAD; only owner decisions may change it. Numeric filenames and first introduction alone confer no authority. Every edit commit must be an ancestor of binding introduction, whose source blobs and fingerprint-algorithm SHA-256 must already match the replay; later working-tree bytes cannot repair invalid introduction. Discover admitted binding paths from reachable trusted Git history, including deleted paths, and reject a missing admitted binding or referenced manifest. Later-added files absent at the trusted source revision may undergo historical byte verification but must be excluded from both proof snapshots unless their complete creation is independently admitted; distinguish confirmed absence from Git errors and propagate unexpected failures.\n\nCompute old and new I (implementation), D (dependency) and V (test-owned values/source) proofs in isolated trusted snapshots using the same fingerprint algorithm and interpreter. The old proofs must equal their immutable admitted records; the after snapshot differs only by the listed edits. Write a NEW immutable binding containing only active legacy proofs whose changed fingerprints are fully explained by that replay. Never overwrite a binding, change an older baseline, admit a new/retired ID, or bypass ordinary comparisons for unrelated or later changes. The gate verifies committed manifest and binding introduction, immutable bytes, provenance, replay, exact changed-proof membership, and shrink-only eligibility with the same fail-closed rules as TF-25. TF-23 evidence must show the 1,381 existing approved-edit errors red and removed after binding, with positive controls and refusals for an extra unlisted edit, wrong listed text, tampered binding, stale base, renamed/restored ID, and an unrelated changed legacy proof. The 11 hold_lifecycle and one refusal_steps errors remain outside this admission. No assertion is replaced by this framework change.\n\nCompare every seeded old I/D/V tuple with its immutable admitted row even when unchanged. Each replay child uses ordinary guarded discovery, preserves load_tests hooks, and rejects duplicate IDs and sticky discovery violations. A committed Git fixture through metadata() must assert the exact changed (test ID, proof kind) diagnostic set, retain an unrelated failure, and reject invalid introduction and deleted admission documents; disabling gate verification or application must make that witness fail."
  },
  "TF-3": {
   "checks": [

@@ -1,0 +1,6 @@
+{
+ "base": "6fa05ecdd755f4a752935ef2c55ab9bd93701301",
+ "diagnostic": "TF-27 missing approved-edit validator",
+ "log": "measurements/test-framework/approved-edits/witness-red.log",
+ "status": "red"
+}

@@ -1,0 +1,12 @@
+test_r1_deleted_admission_documents_are_refused (test_approved_edits.ApprovedEditsR1.test_r1_deleted_admission_documents_are_refused) ... ok
+test_r1_introduction_requires_ancestry_sources_and_algorithm (test_approved_edits.ApprovedEditsR1.test_r1_introduction_requires_ancestry_sources_and_algorithm) ... ok
+test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions (test_approved_edits.ApprovedEditsR1.test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions) ... ok
+test_r1_owner_record_authenticates_first_introduction (test_approved_edits.ApprovedEditsR1.test_r1_owner_record_authenticates_first_introduction) ... ok
+test_r1_replay_uses_guarded_discovery_and_rejects_duplicate_ids (test_approved_edits.ApprovedEditsR1.test_r1_replay_uses_guarded_discovery_and_rejects_duplicate_ids) ... ok
+test_r1_unanchored_files_never_generate_proofs (test_approved_edits.ApprovedEditsR1.test_r1_unanchored_files_never_generate_proofs) ... ok
+test_r1_unchanged_stale_old_proofs_are_refused (test_approved_edits.ApprovedEditsR1.test_r1_unchanged_stale_old_proofs_are_refused) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 11.158s
+
+OK

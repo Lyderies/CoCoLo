@@ -1,0 +1,82 @@
+FFFFFFF
+======================================================================
+FAIL: test_exact_transition_and_extra_unlisted_edits (test_approved_edits.ApprovedEdits.test_exact_transition_and_extra_unlisted_edits)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<work>/cocolo-tf27/tests/test_approved_edits.py", line 27, in test_exact_transition_and_extra_unlisted_edits
+    p = self.policy()
+  File "<work>/cocolo-tf27/tests/test_approved_edits.py", line 20, in policy
+    self.assertTrue(path.exists(), 'TF-27 missing approved-edit validator')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : TF-27 missing approved-edit validator
+
+======================================================================
+FAIL: test_immutable_introduction_tampering_and_overwrite (test_approved_edits.ApprovedEdits.test_immutable_introduction_tampering_and_overwrite)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<work>/cocolo-tf27/tests/test_approved_edits.py", line 90, in test_immutable_introduction_tampering_and_overwrite
+    p = self.policy()
+  File "<work>/cocolo-tf27/tests/test_approved_edits.py", line 20, in policy
+    self.assertTrue(path.exists(), 'TF-27 missing approved-edit validator')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : TF-27 missing approved-edit validator
+
+======================================================================
+FAIL: test_only_changed_active_proofs_rebind_all_three_kinds (test_approved_edits.ApprovedEdits.test_only_changed_active_proofs_rebind_all_three_kinds)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<work>/cocolo-tf27/tests/test_approved_edits.py", line 51, in test_only_changed_active_proofs_rebind_all_three_kinds
+    p = self.policy()
+  File "<work>/cocolo-tf27/tests/test_approved_edits.py", line 20, in policy
+    self.assertTrue(path.exists(), 'TF-27 missing approved-edit validator')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : TF-27 missing approved-edit validator
+
+======================================================================
+FAIL: test_recorded_owner_transitions_match_current_bytes (test_approved_edits.ApprovedEdits.test_recorded_owner_transitions_match_current_bytes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<work>/cocolo-tf27/tests/test_approved_edits.py", line 116, in test_recorded_owner_transitions_match_current_bytes
+    p = self.policy()
+  File "<work>/cocolo-tf27/tests/test_approved_edits.py", line 20, in policy
+    self.assertTrue(path.exists(), 'TF-27 missing approved-edit validator')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : TF-27 missing approved-edit validator
+
+======================================================================
+FAIL: test_renamed_restored_and_unresolved_proofs_are_refused (test_approved_edits.ApprovedEdits.test_renamed_restored_and_unresolved_proofs_are_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<work>/cocolo-tf27/tests/test_approved_edits.py", line 67, in test_renamed_restored_and_unresolved_proofs_are_refused
+    p = self.policy()
+  File "<work>/cocolo-tf27/tests/test_approved_edits.py", line 20, in policy
+    self.assertTrue(path.exists(), 'TF-27 missing approved-edit validator')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : TF-27 missing approved-edit validator
+
+======================================================================
+FAIL: test_unrelated_legacy_proof_still_flags_and_retired_stays_retired (test_approved_edits.ApprovedEdits.test_unrelated_legacy_proof_still_flags_and_retired_stays_retired)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<work>/cocolo-tf27/tests/test_approved_edits.py", line 76, in test_unrelated_legacy_proof_still_flags_and_retired_stays_retired
+    p = self.policy()
+  File "<work>/cocolo-tf27/tests/test_approved_edits.py", line 20, in policy
+    self.assertTrue(path.exists(), 'TF-27 missing approved-edit validator')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : TF-27 missing approved-edit validator
+
+======================================================================
+FAIL: test_wrong_text_line_endings_and_stale_base (test_approved_edits.ApprovedEdits.test_wrong_text_line_endings_and_stale_base)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<work>/cocolo-tf27/tests/test_approved_edits.py", line 38, in test_wrong_text_line_endings_and_stale_base
+    p = self.policy()
+  File "<work>/cocolo-tf27/tests/test_approved_edits.py", line 20, in policy
+    self.assertTrue(path.exists(), 'TF-27 missing approved-edit validator')
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : TF-27 missing approved-edit validator
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.001s
+
+FAILED (failures=7)

@@ -1,0 +1,19 @@
+{
+ "aggregate_exit_code": 1,
+ "approval_diagnostic": "cannot verify approved test edits: owner approval record missing from HEAD (uncommitted)",
+ "budget_failures": [],
+ "command": "<test-venv>/bin/python -B scripts/parallel_tests.py --base b531844030fa619c1f62ddd6c092ebc2ea4fca38 --module root:test_approved_edits --save measurements/test-framework/approved-edits/r1/runner.json",
+ "discovery_seconds": 43.517288792005274,
+ "job_seconds": 12.198475583980326,
+ "jobs": 16,
+ "log": "measurements/test-framework/approved-edits/r1/runner.log",
+ "metadata_errors": 1529,
+ "platform": "Darwin",
+ "preflight_seconds": 403.35065766598564,
+ "python": "3.14.7",
+ "run_record": "measurements/test-framework/approved-edits/r1/runner.json.run.json",
+ "scope": "14 selected approved-edit tests only; aggregate gate is red",
+ "status": "green",
+ "tests": 14,
+ "worker_failures": 0
+}

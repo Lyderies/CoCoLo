@@ -291,6 +291,7 @@
  "codex:tests.test_validation_cli_client_boundary": "scenario",
  "codex:tests.test_watchdog_lifetime": "scenario",
  "codex:tests.test_write_merge": "scenario",
+ "root:test_approved_edits": "scenario",
  "root:test_attest": "scenario",
  "root:test_check_identifiers": "unit",
  "root:test_ci_stages": "unit",

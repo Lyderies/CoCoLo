@@ -1,0 +1,17 @@
+{
+ "decisions": {
+  "107": {
+   "binding": "107-109-114.1",
+   "manifest_sha256": "7683518d85b89e61cc4a7b443aed3da62184b177793de1b6d307d7caafa3ace7"
+  },
+  "109": {
+   "binding": "107-109-114.1",
+   "manifest_sha256": "49166fa37f20621e0465b79520cfa45cec69b3856ba9cfbf4555788dba031832"
+  },
+  "114.1": {
+   "binding": "107-109-114.1",
+   "manifest_sha256": "0b07aabea62c5bc4cb2b2d1dff5ca3f9ff20c052486300baabc2c133e41e3335"
+  }
+ },
+ "schema": 1
+}

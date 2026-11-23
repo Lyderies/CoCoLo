@@ -1,0 +1,42 @@
+{
+ "decision": "107",
+ "schema": 1,
+ "transitions": [
+  {
+   "before_commit": "84cd8e8e17ea53b17cac8d090385505d7a512965",
+   "edit_commit": "648d58fa4053af7c6e84c6cca54c77f803d58200",
+   "edits": [
+    {
+     "line": 139,
+     "new": "                          \"account.open_host_run\", \"account.claim_launch\", \"account.capacity_status\", \"account.register_execution\", \"account.submit_terminal\", \"account.release_capacity\", \"account.close_denied_attempt\", \"account.fence_claim\", \"account.settle_lost_run\", \"account.run_provenance\", \"account.open_provenance\", \"account.observe_provider\", \"account.record_observation_unavailable\", \"account.record_rate_limit_event\", \"account.billing_probe\", \"account.withdraw_open\"}, ACCOUNT_OPERATIONS)\n",
+     "old": "                          \"account.open_host_run\", \"account.claim_launch\", \"account.capacity_status\", \"account.register_execution\", \"account.submit_terminal\", \"account.release_capacity\", \"account.close_denied_attempt\", \"account.fence_claim\", \"account.settle_lost_run\", \"account.run_provenance\", \"account.open_provenance\", \"account.observe_provider\", \"account.record_observation_unavailable\", \"account.record_rate_limit_event\", \"account.billing_probe\"}, ACCOUNT_OPERATIONS)\n"
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_admission_inputs.py"
+  },
+  {
+   "before_commit": "84cd8e8e17ea53b17cac8d090385505d7a512965",
+   "edit_commit": "648d58fa4053af7c6e84c6cca54c77f803d58200",
+   "edits": [
+    {
+     "line": 146,
+     "new": "                          \"account.open_host_run\", \"account.claim_launch\", \"account.capacity_status\", \"account.register_execution\", \"account.submit_terminal\", \"account.release_capacity\", \"account.close_denied_attempt\", \"account.fence_claim\", \"account.settle_lost_run\", \"account.run_provenance\", \"account.open_provenance\", \"account.observe_provider\", \"account.record_observation_unavailable\", \"account.record_rate_limit_event\", \"account.billing_probe\", \"account.withdraw_open\"},\n",
+     "old": "                          \"account.open_host_run\", \"account.claim_launch\", \"account.capacity_status\", \"account.register_execution\", \"account.submit_terminal\", \"account.release_capacity\", \"account.close_denied_attempt\", \"account.fence_claim\", \"account.settle_lost_run\", \"account.run_provenance\", \"account.open_provenance\", \"account.observe_provider\", \"account.record_observation_unavailable\", \"account.record_rate_limit_event\", \"account.billing_probe\"},\n"
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_signature_inputs.py"
+  },
+  {
+   "before_commit": "84cd8e8e17ea53b17cac8d090385505d7a512965",
+   "edit_commit": "648d58fa4053af7c6e84c6cca54c77f803d58200",
+   "edits": [
+    {
+     "line": 96,
+     "new": "                          \"account.open_host_run\", \"account.claim_launch\", \"account.capacity_status\", \"account.register_execution\", \"account.submit_terminal\", \"account.release_capacity\", \"account.close_denied_attempt\", \"account.fence_claim\", \"account.settle_lost_run\", \"account.run_provenance\", \"account.open_provenance\", \"account.observe_provider\", \"account.record_observation_unavailable\", \"account.record_rate_limit_event\", \"account.billing_probe\", \"account.withdraw_open\"},\n",
+     "old": "                          \"account.open_host_run\", \"account.claim_launch\", \"account.capacity_status\", \"account.register_execution\", \"account.submit_terminal\", \"account.release_capacity\", \"account.close_denied_attempt\", \"account.fence_claim\", \"account.settle_lost_run\", \"account.run_provenance\", \"account.open_provenance\", \"account.observe_provider\", \"account.record_observation_unavailable\", \"account.record_rate_limit_event\", \"account.billing_probe\"},\n"
+    }
+   ],
+   "file": "packages/codex-agents/tests/test_signature_job_intake.py"
+  }
+ ]
+}
