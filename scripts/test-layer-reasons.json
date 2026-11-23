@@ -1,0 +1,22 @@
+{
+ "claude:tests.test_job_read_tool": {
+  "layer": "component",
+  "why_not_scenario": "Condition/event waits verify coordinated tool completion."
+ },
+ "claude:tests.test_journal": {
+  "layer": "component",
+  "why_not_scenario": "Thread barriers and bounded joins verify concurrent journal updates."
+ },
+ "codex:tests.test_control_loop": {
+  "layer": "scenario",
+  "why_not_scenario": "Real socketpair traffic verifies the control-loop entry boundary."
+ },
+ "codex:tests.test_service_queue": {
+  "layer": "component",
+  "why_not_scenario": "Producer/consumer barriers verify queue synchronization."
+ },
+ "root:test_setup_wizard_effects": {
+  "layer": "scenario",
+  "why_not_scenario": "Real subprocess effects verify wizard execution boundaries."
+ }
+}

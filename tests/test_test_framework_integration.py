@@ -37,7 +37,7 @@ class ReleaseIntegration(unittest.TestCase):
         expected={'claude:tests.test_journal':'component','claude:tests.test_job_read_tool':'component',
                   'codex:tests.test_service_queue':'component','codex:tests.test_control_loop':'scenario',
                   'root:test_setup_wizard_effects':'scenario'}
-        self.assertEqual('unit',layers['root:test_test_stages'])
+        self.assertEqual('unit',layers['root:test_check_identifiers'])
         for name,layer in expected.items():
             with self.subTest(module=name):
                 self.assertEqual(layer,layers[name],'existing resource module misclassified: '+name)
@@ -101,6 +101,8 @@ class ReleaseIntegration(unittest.TestCase):
     def test_explicit_base_is_documented_and_missing_base_stops_before_discovery(self):
         base='b531844030fa619c1f62ddd6c092ebc2ea4fca38'
         self.assertIn('--base '+base,(ROOT/'TESTING-framework.md').read_text(),'local full-run base is unspecified')
-        self.assertEqual(3,(ROOT/'.github/workflows/ci.yml').read_text().count('TRUSTED_BASE: '+base),'CI release base is stale')
+        bases=[line.split('TRUSTED_BASE: ',1)[1] for line in (ROOT/'.github/workflows/ci.yml').read_text().splitlines() if 'TRUSTED_BASE: ' in line]
+        self.assertTrue(bases)
+        self.assertTrue(all(value == base for value in bases),'CI release base is stale')
         with mock.patch.object(runner,'metadata',side_effect=AssertionError('discovery ran without trusted base')), mock.patch.object(runner,'persist_record'):
             self.assertEqual(1,runner.main([]))

@@ -106,6 +106,7 @@ def discover(suite: str) -> dict[str, list[str]]:
     cwd = SUITES[suite]
     code = (
         "import json, os, sys, unittest\n"
+        f"sys.path.insert(0, {str(FRAMEWORK_SCRIPTS)!r})\n"
         "sys.path.insert(0, '.')\n"
         "top = '.' if os.path.exists('tests/__init__.py') else 'tests'\n"
         "found = {}\n"
@@ -114,7 +115,7 @@ def discover(suite: str) -> dict[str, list[str]]:
         "        if isinstance(t, unittest.TestSuite):\n"
         "            walk(t)\n"
         "        elif type(t).__name__ == '_FailedTest':\n"
-        "            found.setdefault(t.id().split('.')[-1], [])\n"
+        "            found.setdefault(t._testMethodName, [])\n"
         "        else:\n"
         "            found.setdefault(type(t).__module__, []).append(t.id())\n"
         "walk(unittest.defaultTestLoader.discover('tests', top_level_dir=top))\n"
@@ -126,6 +127,17 @@ def discover(suite: str) -> dict[str, list[str]]:
     return json.loads(output)
 
 
+# Real persistence campaigns are I/O intensive. Preserve their entire module in one
+# worker and give it an empty pool; default job capacity remains available elsewhere.
+def exclusive(module):
+    return module.split('#')[0].startswith('codex:tests.test_merge_library_')
+
+
+def can_launch(module, running, jobs):
+    return len(running) < jobs and (not running or
+        not exclusive(module) and not any(exclusive(name) for name in running))
+
+
 def units(suite: str, timings: dict[str, float],
           only: set[str] | None = None) -> list[tuple[float, str, list[str]]]:
     """(expected seconds, unit name, unittest names) for one suite; with `only`, just those modules."""
@@ -134,7 +146,7 @@ def units(suite: str, timings: dict[str, float],
         if only is not None and module not in only:
             continue
         expected = timings.get(f"{suite}:{module}")
-        if expected is not None and expected > SPLIT_SECONDS and len(tests) > 1:
+        if not exclusive(suite + ":" + module) and expected is not None and expected > SPLIT_SECONDS and len(tests) > 1:
             # Split into groups of whole tests near SPLIT_SECONDS each, slowest packed first.
             per_test = expected / len(tests)
             sized = sorted(((timings.get(f"{suite}:{test}", per_test), test) for test in tests), reverse=True)
@@ -212,7 +224,8 @@ def legacy_versions(root, current, ceiling):
             previous = version(REVIEW_BASE, 'test-legacy.json')
         except subprocess.CalledProcessError:
             git('merge-base', '--is-ancestor', framework.BASELINE, REVIEW_BASE)
-            git('merge-base', '--is-ancestor', REVIEW_BASE, commits[0])
+            if REVIEW_BASE != framework.RELEASE_BASE:
+                git('merge-base', '--is-ancestor', REVIEW_BASE, commits[0])
             previous = original  # Explicit trusted base before the manifest was introduced.
         for commit in git('rev-list', 'HEAD', '--', 'scripts/test-legacy.json').split():
             this = version(commit, 'test-legacy.json')
@@ -231,7 +244,7 @@ def legacy_versions(root, current, ceiling):
 
 
 @measured_history
-def budget_versions(root, current):
+def original_budget_versions(root, current):
     """Baseline ceilings are derived from committed measurements, never candidate estimates."""
     def git(*args):
         return subprocess.check_output(['git', *args], cwd=root, text=True, stderr=subprocess.DEVNULL)
@@ -261,6 +274,59 @@ def budget_versions(root, current):
         return ['cannot verify budget debt baseline/trusted base']
 
 
+def release_versions(root, current, immutable_name, current_name):
+    """Read an immutable introduction plus every shrink transition, never HEAD as a waiver."""
+    def git(*args):
+        return subprocess.check_output(['git', *args], cwd=root, text=True, stderr=subprocess.DEVNULL)
+    def version(commit, name):
+        return framework.decode_json(git('show', commit + ':scripts/' + name))
+    origin = git('log', '--reverse', '--format=%H', 'HEAD', '--', 'scripts/' + immutable_name).split()[0]
+    ceiling = version(origin, immutable_name)
+    if framework.decode_json((root/'scripts'/immutable_name).read_text()) != ceiling:
+        raise ValueError(immutable_name + ': immutable release baseline changed')
+    git('merge-base', '--is-ancestor', framework.RELEASE_BASE, 'HEAD')
+    if not REVIEW_BASE:
+        raise ValueError('release baseline requires an explicit trusted --base')
+    git('rev-parse', '--verify', REVIEW_BASE + '^{commit}')
+    def previous(commit):
+        try:
+            return version(commit, current_name)
+        except subprocess.CalledProcessError:
+            git('merge-base', '--is-ancestor', commit, origin)
+            return ceiling
+    versions = [previous(REVIEW_BASE)]
+    for commit in git('rev-list', 'HEAD', '--', 'scripts/' + current_name).split():
+        this = version(commit, current_name)
+        for parent in git('rev-list', '--parents', '-n', '1', commit).split()[1:]:
+            before = previous(parent)
+            key = 'tests' if 'tests' in this else 'modules'
+            if this['baseline'] != before['baseline'] or any(
+                name not in before[key] or (value != before[key][name] if key == 'tests' else value > before[key][name])
+                for name, value in this[key].items()):
+                raise ValueError(current_name + ': release history grew at ' + commit[:12])
+    key = 'tests' if 'tests' in current else 'modules'
+    for prior in [ceiling, *versions]:
+        if current['baseline'] != prior['baseline'] or any(
+            name not in prior[key] or (value != prior[key][name] if key == 'tests' else value > prior[key][name])
+            for name, value in current[key].items()):
+            raise ValueError(current_name + ': release list grew or ceiling changed')
+    return ceiling, versions[0]
+
+
+def budget_versions(root, current):
+    original = framework.decode_json((root/'scripts/test-budget-debt.json').read_text())
+    errors = original_budget_versions(root, original)
+    if not (root/'scripts/test-budget-debt-0850-ceiling.json').exists():
+        return errors + framework.validate_budget_debt(current, original, original)
+    try:
+        ceiling, previous = release_versions(root, current, 'test-budget-debt-0850-ceiling.json', 'test-budget-debt-0850.json')
+        errors += framework.validate_budget_debt(current, ceiling, previous)
+    except (subprocess.CalledProcessError, ValueError, KeyError, IndexError) as error:
+        errors.append('cannot verify release budget debt: ' + str(error))
+    return errors
+
+
+
 DISCOVERY_SECONDS = 0.
 
 def metadata():
@@ -275,6 +341,23 @@ def metadata():
     stages, layers = read('test-stages.json'), read('test-layers.json')
     catalogue, legacy, ceiling = read('test-requirements.json'), read('test-legacy.json'), read('test-legacy-ceiling.json')
     ceiling, previous, errors = legacy_versions(ROOT, legacy, ceiling)
+    release = None
+    if (ROOT/'scripts/test-legacy-release-0850.json').exists():
+        release = read('test-legacy-release-0850.json')
+        release_current = read('test-legacy-0850.json')
+        try:
+            release_ceiling, release_previous = release_versions(ROOT, release_current,
+                'test-legacy-0850-ceiling.json', 'test-legacy-0850.json')
+            # The detailed dependency snapshot is separately immutable.
+            commits = subprocess.check_output(['git','log','--reverse','--format=%H','HEAD','--',
+                'scripts/test-legacy-release-0850.json'],cwd=ROOT,text=True).split()
+            committed = framework.decode_json(subprocess.check_output(['git','show',commits[0]+':scripts/test-legacy-release-0850.json'],cwd=ROOT,text=True))
+            if committed != release or release['source_revision'] != framework.RELEASE_BASE:
+                raise ValueError('immutable release dependency baseline changed')
+            legacy, ceiling, previous = framework.release_legacy(legacy, ceiling, previous, release,
+                release_current, release_ceiling, release_previous)
+        except (subprocess.CalledProcessError, ValueError, KeyError, IndexError) as error:
+            errors.append('cannot verify release legacy baseline: '+str(error))
     # Lifecycle checks use the same catalogue and remain required even in a module-only run.
     lifecycle = ROOT / 'scripts/e2e_lifecycle.py'
     checked = {}
@@ -313,6 +396,8 @@ def metadata():
     dependency_file = ROOT / 'scripts/test-legacy-dependencies.json'
     if dependency_file.exists():
         dependencies = framework.decode_json(dependency_file.read_text())
+        if release:
+            dependencies.update({name: record['dependencies'] for name, record in release['tests'].items()})
         for cases in discovered.values():
             for name, record in cases.items():
                 if name in legacy['tests'] and record.get('dependencies') != dependencies.get(name):
@@ -321,6 +406,8 @@ def metadata():
         errors.append('missing legacy fixture/helper dependency baseline')
     value_file = ROOT / 'scripts/test-legacy-captured-values.json'
     values = framework.decode_json(value_file.read_text()) if value_file.exists() else {}
+    if release:
+        values.update({name: {'fingerprint': record['dependency_values']} for name, record in release['tests'].items()})
     errors += framework.validate_legacy_values({key: rec for cases in discovered.values() for key, rec in cases.items()}, legacy, values)
     entrypoints = ROOT / 'scripts/test-entrypoints.json'
     entries = framework.decode_json(entrypoints.read_text()) if entrypoints.exists() else {}
@@ -401,7 +488,10 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
     preflight_started = time.monotonic()
     try:
         discovered, stages, layers, catalogue, metadata_errors = metadata()
-        budget_debt = framework.decode_json((ROOT / 'scripts/test-budget-debt.json').read_text())
+        debt_path = ROOT/'scripts/test-budget-debt-0850.json'
+        if not debt_path.exists():
+            debt_path = ROOT/'scripts/test-budget-debt.json'
+        budget_debt = framework.decode_json(debt_path.read_text())
         metadata_errors += budget_versions(ROOT, budget_debt)
     except (ValueError, OSError, KeyError, TypeError) as error:
         return preflight_failure(str(error), jobs, save, preflight_started)
@@ -445,7 +535,8 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
     counter, total, reported = 0, len(queue), time.monotonic()
     try:
         while queue or running:
-            while queue and len(running) < jobs:
+            while queue and can_launch(queue[0][1] + ':' + queue[0][2],
+                                      [entry[0] + ':' + entry[1] for entry in running.values()], jobs):
                 expected, suite, name, names = queue.pop(0)
                 counter += 1
                 # Short: Unix socket paths built under it must stay under the platform limit.
@@ -630,6 +721,8 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error(f"--module wants SUITE:MODULE, got {item!r}")
             modules[suite].add(module)
         suites = [suite for suite in suites if modules[suite]]
+    if not REVIEW_BASE:
+        return preflight_failure('legacy list requires an explicit trusted --base', args.jobs, args.save_timings, time.monotonic())
     return run(args.jobs, suites, args.save_timings, args.keep, set(args.stage or STAGE_NAMES), modules, args.shard, args.profile)
 
 

@@ -17,6 +17,7 @@ BUDGETS = {'unit': 5., 'component': 30., 'crash': 60., 'scenario': 60., 'soak': 
 STAGES = {'unit': {'unit'}, 'component': {'integration'}, 'crash': {'integration'},
           'scenario': {'integration', 'e2e'}, 'soak': {'integration', 'e2e'}}
 BASELINE = 'a1d25560c7748680387a542fb7d047c32205dad8'
+RELEASE_BASE = 'b531844030fa619c1f62ddd6c092ebc2ea4fca38'
 
 
 def requirements(*ids, why_not_scenario=''):
@@ -76,6 +77,9 @@ def inventory_suite(suite, layers=None):
     if not baseline_file.exists():
         baseline_file = root / 'scripts/test-legacy-values.json'
     baseline = decode_json(baseline_file.read_text()) if baseline_file.exists() else {}
+    release_file = root/'scripts/test-legacy-release-0850.json'
+    if release_file.exists():
+        baseline.update(decode_json(release_file.read_text())['tests'])
     def walk(tests):
         for test in tests:
             if isinstance(test, unittest.TestSuite):
@@ -112,6 +116,18 @@ def inventory_suite(suite, layers=None):
         name = violation['module']
         found.setdefault(name, {})[name + '.__import_guard__'] = {'import_error': True}
     return found
+
+
+def release_legacy(current, ceiling, previous, release, release_current=None,
+                   release_ceiling=None, release_previous=None):
+    """Overlay the reviewed version while retaining independent shrink-only manifests."""
+    original = {name: record['fingerprint'] for name, record in release['tests'].items()}
+    versions = []
+    for old, new in zip((current, ceiling, previous), (release_current, release_ceiling, release_previous)):
+        tests = {name: value for name, value in old['tests'].items() if name not in original}
+        tests.update(original if new is None else new['tests'])
+        versions.append({'baseline': old['baseline'], 'tests': tests})
+    return tuple(versions)
 
 
 def validate_metadata(*, inventory, stages, layers, catalogue, legacy, ceiling, previous):
