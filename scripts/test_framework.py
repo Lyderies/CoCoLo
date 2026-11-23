@@ -84,6 +84,8 @@ def inventory_suite(suite, layers=None):
         bindings_file = root/'scripts'/name
         if bindings_file.exists():
             baseline.update(decode_json(bindings_file.read_text())['tests'])
+    for binding in sorted((root/'scripts/test-release-bindings').glob('*.json')):
+        baseline.update(decode_json(binding.read_text())['tests'])
     def walk(tests):
         for test in tests:
             if isinstance(test, unittest.TestSuite):

@@ -1,0 +1,158 @@
+{
+ "after_sources": {
+  "packages/claude-agents/previous-releases.json": "45c8688e62c639ce2de339193bf2ec026c36aa982bac4324c44d402da20058fe",
+  "packages/claude-agents/src/claude_agents/packaging.py": "9618535c600bfc03212236fa429a2abf9d0850abe00696e780b79b7f5efcea89",
+  "packages/claude-agents/tests/test_previous_release_catalogue.py": "53725544765898a0c91b388083395c579b924840966cf89bc38b3ce1da936706"
+ },
+ "before_commit": "c75eba51bb690184e6e31692ffabb2a12467893e",
+ "before_sources": {
+  "packages/claude-agents/previous-releases.json": "6b575bd38376721d68a4306dd5a2cc597f24f0d0097de8e8f67db84d7d4da424",
+  "packages/claude-agents/src/claude_agents/packaging.py": "1d201b58fa92e90181878a48e5042aea50d3c77590aad1b205d0de97f1333841",
+  "packages/claude-agents/tests/test_previous_release_catalogue.py": "fadfb05817df37e0fc9f9d1399dad8238244892ce7aae623012231f619a63962"
+ },
+ "previous_release": "0.8.49",
+ "schema": 1,
+ "source_commit": "b531844030fa619c1f62ddd6c092ebc2ea4fca38",
+ "tests": {
+  "claude:tests.test_previous_release_catalogue.CatalogueTests.test_a_forged_record_cannot_make_an_update_delete_a_path_outside_the_package": {
+   "dependencies": "0e65baec8bf00d965dd24dc32a6e9e2aef0f7d4ad027421647290e8f5e441e30",
+   "dependency_values": "850f2137fc85b913a8fd25858ae95812eeade1f14896b4a1a1ee65ee65086fd7",
+   "fingerprint": "8c3f2ae86a40c2c9228a1d3724cf083a155d15c9d532d8f728e0115e4ad6a9ab",
+   "rationale": "",
+   "requirements": [],
+   "source_dependencies": [
+    "packages/claude-agents/tests/test_previous_release_catalogue.py"
+   ]
+  },
+  "claude:tests.test_previous_release_catalogue.CatalogueTests.test_a_forged_record_with_only_its_digest_pinned_is_stopped_by_the_path_check_end_to_end": {
+   "dependencies": "1ffa99be40f4aa86227232d78803bf9288068ba835ee0f8d8debe15fad5725d9",
+   "dependency_values": "729f17769a00733af2fd1018c4859b1eebb6cdb300eb5f8c56073aa2ed6c0a09",
+   "fingerprint": "8b2928d697e0c76f73fc29de1fe32266844701b17764ad5153e8c6956a8e2963",
+   "rationale": "",
+   "requirements": [],
+   "source_dependencies": [
+    "packages/claude-agents/tests/test_previous_release_catalogue.py"
+   ]
+  },
+  "claude:tests.test_previous_release_catalogue.CatalogueTests.test_a_fresh_install_is_refused_while_the_catalogue_holds_a_forged_record": {
+   "dependencies": "d5a9bb26b3b5ddad989b697f0fd30ece48ab35766850d5483f936c30ae5b47f5",
+   "dependency_values": "75d80db05da005617e5f26dff086183886cb4ec25b1d986a58658d75262c433c",
+   "fingerprint": "52e272e4aa185fcd6b196803673bff8493e369fd24d67b901e3498117c9bfce9",
+   "rationale": "",
+   "requirements": [],
+   "source_dependencies": [
+    "packages/claude-agents/tests/test_previous_release_catalogue.py"
+   ]
+  },
+  "claude:tests.test_previous_release_catalogue.CatalogueTests.test_a_record_naming_a_path_outside_the_fixed_set_is_refused": {
+   "dependencies": "1ad20c524f0eae626a2632e66761877663e65c51abd3405aadc953b9700cede5",
+   "dependency_values": "758ebe3f81003f5e3934829c8b4e63f4b9a16129cabc4e00c518bc8d5875338e",
+   "fingerprint": "b732f131a2ac0a0e536dea2677a8d1f1701221bb9e9dac4b3c34afce672dd454",
+   "rationale": "",
+   "requirements": [],
+   "source_dependencies": [
+    "packages/claude-agents/tests/test_previous_release_catalogue.py"
+   ]
+  },
+  "claude:tests.test_previous_release_catalogue.CatalogueTests.test_a_record_with_a_stale_digest_is_refused": {
+   "dependencies": "2739582f91aa491e4f98a1e7fda22a0361a324d420c6a0593bac13cf49eca35f",
+   "dependency_values": "ef891ed0acbeed169bac6f99967e482221d0c3ec3c5a712fbfecbcdb63214250",
+   "fingerprint": "762dd4306c25f4757c034d8d1fd52734dddda4daf09fce46a1112f6ff5275ae8",
+   "rationale": "",
+   "requirements": [],
+   "source_dependencies": [
+    "packages/claude-agents/tests/test_previous_release_catalogue.py"
+   ]
+  },
+  "claude:tests.test_previous_release_catalogue.CatalogueTests.test_an_appended_record_with_a_recomputed_digest_is_refused": {
+   "dependencies": "eb1107f174c18604b7e8d2213a73e8827fcb21f818d5c31bded9cbd05c1b72cc",
+   "dependency_values": "055c0475f20b193ace63a3c1b121935161d243b797ccf51f7a6b60a4bbd9ff28",
+   "fingerprint": "55b31b0839219be8bc8039acdb64a8e9101cb8d1e319d0874813ab585d3c083a",
+   "rationale": "",
+   "requirements": [],
+   "source_dependencies": [
+    "packages/claude-agents/tests/test_previous_release_catalogue.py"
+   ]
+  },
+  "claude:tests.test_previous_release_catalogue.CatalogueTests.test_cl1_a_catalogue_over_2_mib_is_refused": {
+   "dependencies": "7d6a96fc001c5376b296edefc8c6fbef93d636211c33620a19178f6974926f42",
+   "dependency_values": "8a33d4aa187ce16b5e1d50acdd7f9829b28ca5dd6f7ee4019223d1dfc94f0ab4",
+   "fingerprint": "1093e99e761963310aac662f2def4a86e0723b445284afa45458aeb903615b96",
+   "rationale": "",
+   "requirements": [],
+   "source_dependencies": [
+    "packages/claude-agents/tests/test_previous_release_catalogue.py"
+   ]
+  },
+  "claude:tests.test_previous_release_catalogue.CatalogueTests.test_cl1_a_catalogue_up_to_2_mib_is_accepted": {
+   "dependencies": "8e45089d455458169efb237b6cf3dfb91704c7718ee54a6fce42ed128cd0a68f",
+   "dependency_values": "6b461edd37829178a395d3e71a53e4ec8dc5ad97ac5664937c6f3e789db08066",
+   "fingerprint": "0b78189b3d91860118ba73e9f2c2af8f786aa89a9e9b262464b881743131d6cd",
+   "rationale": "",
+   "requirements": [],
+   "source_dependencies": [
+    "packages/claude-agents/tests/test_previous_release_catalogue.py"
+   ]
+  },
+  "claude:tests.test_previous_release_catalogue.CatalogueTests.test_cl2_every_other_file_keeps_the_256_kib_limit": {
+   "dependencies": "cab481ccfe8687e958e0d3f957980219f25bea293ffcaed5f050b57985e0cd73",
+   "dependency_values": "f207ddf36256e3dc74a1dfd0549f216d3fb2a3a9b27ec0a390b9d594aa90eef4",
+   "fingerprint": "7388c076425b131319c8630f3535b7a6c77edcd559d6c65b05c113b2d2aa66a1",
+   "rationale": "",
+   "requirements": [],
+   "source_dependencies": [
+    "packages/claude-agents/tests/test_previous_release_catalogue.py"
+   ]
+  },
+  "claude:tests.test_previous_release_catalogue.CatalogueTests.test_cl3_the_read_stays_bounded_when_the_file_grows_after_the_size_check": {
+   "dependencies": "ee42c408cf09bb8f8d27207134e9e84cd09bb539f7957ed6a885f3ba1fb6ddb1",
+   "dependency_values": "095ca1d487a0c36db25b76362e01ecd62885c4a16ced6ae94c412009c777ff2c",
+   "fingerprint": "c300faccc16936873aef6bebfd38e7e54fc1e62a6ec24b0fa7a83a58de600628",
+   "rationale": "",
+   "requirements": [],
+   "source_dependencies": [
+    "packages/claude-agents/tests/test_previous_release_catalogue.py"
+   ]
+  },
+  "claude:tests.test_previous_release_catalogue.CatalogueTests.test_the_accepted_digests_are_pinned_in_installer_code": {
+   "dependencies": "6ffdeefca92328aa0737a86349d287bb2daff79649db015af221c2ea6390a321",
+   "dependency_values": "8176d7accf4a361597f97f9906c331057406bad89daea6cf576c07a7beec033f",
+   "fingerprint": "5c73d26c4b9f221b0926d9f201a5d5c309143aa2f1a8f2b11bc9a8c19e87ce83",
+   "rationale": "",
+   "requirements": [],
+   "source_dependencies": [
+    "packages/claude-agents/tests/test_previous_release_catalogue.py"
+   ]
+  },
+  "claude:tests.test_previous_release_catalogue.CatalogueTests.test_the_fixed_paths_are_exactly_what_compile_bundle_produces": {
+   "dependencies": "e8f68caf16495076b0a7edbfdcce6555cd69c6b81d880a278f366b1f4830074d",
+   "dependency_values": "22ac102a5ef7b346494a8ae3d4ee72410874bbd1ea5b2ff0650e6989c7638f22",
+   "fingerprint": "c8dbdf45858c00b7a52eda975741cfa6091d99ee79ddc1730c4d485acde7be43",
+   "rationale": "",
+   "requirements": [],
+   "source_dependencies": [
+    "packages/claude-agents/tests/test_previous_release_catalogue.py"
+   ]
+  },
+  "claude:tests.test_previous_release_catalogue.CatalogueTests.test_the_released_record_edited_with_a_recomputed_digest_is_refused": {
+   "dependencies": "6b805452c1803cc2a56bffcb9252a949183b06d0ec7715c105b76ecbf6409cbe",
+   "dependency_values": "2cdc9ae97d5636abba5320138ccc3a40f896041c8f2fc6d995216cec4b0dabed",
+   "fingerprint": "49ab067cb5c0380b4c7a306090db8a7641ad469af5b485d1cf2bddd5605a4f9e",
+   "rationale": "",
+   "requirements": [],
+   "source_dependencies": [
+    "packages/claude-agents/tests/test_previous_release_catalogue.py"
+   ]
+  },
+  "claude:tests.test_previous_release_catalogue.CatalogueTests.test_the_shipped_catalogue_is_accepted": {
+   "dependencies": "34556f8051a3d2be081a69486add1aa5ea2ddcd576c82950f504813864b4b6e7",
+   "dependency_values": "157c50ad183a41c4475db33cf3cef44038b9ab77974a627b55f6b11ef0e5234a",
+   "fingerprint": "f6dd7544c8966affb918ad5ec846bfa07137ea3486ff2f92d4494dd5ee814a60",
+   "rationale": "",
+   "requirements": [],
+   "source_dependencies": [
+    "packages/claude-agents/tests/test_previous_release_catalogue.py"
+   ]
+  }
+ }
+}

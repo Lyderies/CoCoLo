@@ -76,3 +76,20 @@ class ReleaseBookkeeping(unittest.TestCase):
         self.assertEqual(json.loads(self.sources('30bf1fa9')[FILES[0]])['releases'][-1],record)
         with self.assertRaisesRegex(ValueError,'immutable binding already exists'):
             module.write_new(ROOT/'scripts/test-legacy-release-0850.json',{})
+
+    @requirements('TF-25','TF-7')
+    def test_claimed_pre_bump_commit_cannot_hide_old_record_edits(self):
+        from unittest import mock
+        module=self.policy();before=module.revision(ROOT,'c75eba51');after=module.revision(ROOT,'30bf1fa9')
+        original=module.texts
+        def forged(root,commit):
+            data=original(root,commit)
+            if commit in (before,after):
+                document=json.loads(data[FILES[0]]);document['releases'][0]['source_commit']='forged00'
+                data[FILES[0]]=json.dumps(document,indent=1,sort_keys=True)+'\n'
+            return data
+        with mock.patch.object(module,'texts',side_effect=forged):
+            with self.assertRaisesRegex(ValueError,'pre-bump bookkeeping sources'):
+                module.build(ROOT,before,'b5318440','0.8.49',module.base_bindings(ROOT),after)
+        result=module.build(ROOT,before,'b5318440','0.8.49',module.base_bindings(ROOT),after)
+        self.assertEqual(14,len(result['tests']))
