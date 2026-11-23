@@ -102,6 +102,7 @@ class LeaseBackedFixture(unittest.TestCase):
             project_result_contexts.record_outcome(self.store, binding(number), digest)
 
 
+@__import__('test_framework').requirements('RS-D-D2', why_not_scenario='D2 checks real project stores in temporary folders (leases, contexts, holds, files); the clock, close and settlement controls expose the deadline boundary.')
 class PreCommitDeadlineTests(LeaseBackedFixture):
     """D1, D2', X8, X9: no pre-commit deadline retires anything (SH-4)."""
 
@@ -242,6 +243,7 @@ class PreCommitDeadlineTests(LeaseBackedFixture):
         self.assertFalse(project_holds_schema.register_consistent(self.store._connection))  # reported (repair)
 
 
+@__import__('test_framework').requirements('RS-D-D2', why_not_scenario='D2 checks real project stores in temporary folders (leases, contexts, holds, files); the clock, close and settlement controls expose the deadline boundary.')
 class NativeProductCallerTests(unittest.TestCase):
     """The scope note of measurements/d2/requirements.md rests on this: only tests reach the non-lease `prepare`."""
 
@@ -269,6 +271,7 @@ class NativeProductCallerTests(unittest.TestCase):
         self.assertEqual(1, text.count('self._prepare_entry(binding, worker_handle, hard_deadline_at_ms)'))
 
 
+@__import__('test_framework').requirements('RS-D-D2', why_not_scenario='D2 checks real project stores in temporary folders (leases, contexts, holds, files); the clock, close and settlement controls expose the deadline boundary.')
 class ContextSweepTests(LeaseBackedFixture):
     """X6, X7 (SR-2): a context is retired on its own only with no reservation; a bound attempt keeps it."""
 
@@ -297,6 +300,7 @@ class ContextSweepTests(LeaseBackedFixture):
         self.consistent()
 
 
+@__import__('test_framework').requirements('RS-D-D2', why_not_scenario='D2 checks real project stores in temporary folders (leases, contexts, holds, files); the clock, close and settlement controls expose the deadline boundary.')
 class CommittedRetentionTests(LeaseBackedFixture):
     """D3: committed custody ends at retention, judged at max(wall, floor)."""
 
@@ -327,6 +331,7 @@ class CommittedRetentionTests(LeaseBackedFixture):
         self.consistent()
 
 
+@__import__('test_framework').requirements('RS-D-D2', why_not_scenario='D2 checks real project stores in temporary folders (leases, contexts, holds, files); the clock, close and settlement controls expose the deadline boundary.')
 class ClockFloorTests(LeaseBackedFixture):
     """D4 (RS-D-7, draft 2 s8): a clock moved back neither stops expiry nor revives anything."""
 
@@ -385,6 +390,7 @@ class ClockFloorTests(LeaseBackedFixture):
         self.consistent()
 
 
+@__import__('test_framework').requirements('RS-D-D2', why_not_scenario='D2 checks real project stores in temporary folders (leases, contexts, holds, files); the clock, close and settlement controls expose the deadline boundary.')
 class VerifierMarginTests(LeaseBackedFixture):
     """V1, V3, V4 (RS-D-5, draft 2 s9): the margin is an admission check at verifier open, not a lifetime promise."""
 
@@ -472,6 +478,7 @@ class VerifierMarginTests(LeaseBackedFixture):
         self.consistent()
 
 
+@__import__('test_framework').requirements('RS-D-D2', why_not_scenario='D2 checks real project stores in temporary folders (leases, contexts, holds, files); the clock, close and settlement controls expose the deadline boundary.')
 class OrchestrationCloseTests(rc.RecordedContextFixture):
     """C1-C3, V2 on a real run (RS-D-4 and draft 3 s8, owner decision 90.8 A)."""
 
