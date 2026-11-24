@@ -4019,8 +4019,11 @@ class LearningStoreTests(unittest.TestCase):
             acquire(CollectorError("collector rejected request: operation_invalid", code="operation_invalid"))
         self.assertEqual("operation_invalid", unknown.exception.code)
         # Only a collector of a release from before project services, which drives no
-        # runs, is stopped as before; this version with an older schema is not.
-        for reported, stopped in (("0.8.12", True), ("0.8.13", False), ("not-a-version", False)):
+        # runs, is stopped as before; UPG-1: one that drives runs but is older than this build gets the drained
+        # stop in its own bare shape; this build's version or newer, and an unreadable version, are not stopped.
+        from codex_agents.learning_store import PACKAGE_VERSION
+        for reported, stopped in (("0.8.12", True), ("0.8.13", False), (PACKAGE_VERSION, False),
+                                  ("not-a-version", False)):
             answers = iter([CollectorError("collector rejected request: operation_invalid",
                                            code="operation_invalid"), None])
             with self.subTest(reported=reported), \
@@ -4030,6 +4033,9 @@ class LearningStoreTests(unittest.TestCase):
                                return_value={"ok": True, "runtime_version": reported}):
                 if stopped:
                     self.assertEqual(([{"only_if_drained": True}, {}], 1),
+                                     acquire(lambda **_: _raise_or_return(next(answers)), health=False))
+                elif reported == "0.8.13":
+                    self.assertEqual(([{"only_if_drained": True}, {"only_if_drained": True, "earlier_collector": True}], 1),
                                      acquire(lambda **_: _raise_or_return(next(answers)), health=False))
                 else:
                     with self.assertRaises(CollectorError) as refused:

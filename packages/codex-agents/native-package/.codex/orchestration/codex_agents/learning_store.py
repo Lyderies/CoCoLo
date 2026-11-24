@@ -13155,7 +13155,17 @@ class CollectorServer:
 
     def _dispatch(self, request: dict[str, Any]) -> dict[str, Any]:
         try:
-            if request.get("op") in COLLECTOR_MUTATING_OPERATIONS:
+            drained_stop = False
+            if request.get("op") == "shutdown_if_drained":
+                # UPG-5: the drained stop is how a newer build hands over from this collector, so it is
+                # accepted from a caller of another runtime (any well-formed digest, or none). It still
+                # refuses while a run is active and changes nothing else; every other mutating
+                # operation keeps the exact digest gate below (decision 129.3).
+                offered = request.get("runtime_digest")
+                if offered is None or (type(offered) is str and re.fullmatch(r"[0-9a-f]{64}", offered)):
+                    request = {key: value for key, value in request.items() if key != "runtime_digest"}
+                    drained_stop = True
+            if request.get("op") in COLLECTOR_MUTATING_OPERATIONS and not drained_stop:
                 if request.get("runtime_digest") != COLLECTOR_RUNTIME_DIGEST:
                     return {"ok": False, "code": "runtime_upgrade_required",
                             "message": RUNTIME_UPGRADE_MESSAGE, "update_command": RUNTIME_UPDATE_COMMAND}
@@ -13549,11 +13559,13 @@ class CollectorMaintenance:
         transferred = False
         try:
             client = CollectorClient(state.socket)
+            earlier_health = None
             try:
                 client.health()
-            except CollectorUpgradeRequired:
+            except CollectorUpgradeRequired as health_error:
                 if not owner_registration:
                     raise
+                earlier_health = health_error
             except CollectorVersionError:
                 raise
             except CollectorError:
@@ -13569,22 +13581,63 @@ class CollectorMaintenance:
                         "a child run is active; nothing was changed, try again when none is running",
                         code="collector_busy",
                     ) from None
-                # Only a collector of a release from before project services may
-                # lack the drained stop: those drive no runs (their CLIs run
-                # children themselves and pause the collector for every command).
-                # Anything else, this version with an older schema included,
-                # fails closed.
-                if error.code != "operation_invalid" or not owner_registration:
-                    raise
-                try:
-                    reported = _version_tuple(client._request(
-                        {"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "health"}
-                    ).get("runtime_version"))
-                except CollectorError:
-                    reported = None
-                if reported is None or reported >= FIRST_RUN_DRIVING_VERSION:
-                    raise
-                client.shutdown()
+                if error.code == "runtime_upgrade_required" and owner_registration:
+                    # UPG-6: a 0.8.56-0.8.58 collector judges the stop by its own digest. Once, for a
+                    # collector older than this build that reported the digest it loaded, echo it; the
+                    # maintenance hand-over is the only caller. Otherwise it fails closed as before.
+                    loaded = getattr(earlier_health, "loaded_digest", None)
+                    try:
+                        reported = _version_tuple(client._request(
+                            {"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "health"}
+                        ).get("runtime_version"))
+                    except CollectorError:
+                        reported = None
+                    own = _version_tuple(PACKAGE_VERSION)
+                    if loaded is None or reported is None or own is None or reported >= own:
+                        raise
+                    try:
+                        client.shutdown(only_if_drained=True, echo_digest=loaded)
+                    except CollectorError as echoed:
+                        if echoed.code == "collector_busy":
+                            raise CollectorError(
+                                "a child run is active; nothing was changed, try again when none is running",
+                                code="collector_busy",
+                            ) from None
+                        raise
+                else:
+                    # Only a collector of a release from before project services may
+                    # lack the drained stop: those drive no runs (their CLIs run
+                    # children themselves and pause the collector for every command).
+                    # Anything else, this version with an older schema included,
+                    # fails closed.
+                    if error.code != "operation_invalid" or not owner_registration:
+                        raise
+                    try:
+                        reported = _version_tuple(client._request(
+                            {"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "health"}
+                        ).get("runtime_version"))
+                    except CollectorError:
+                        reported = None
+                    if reported is None:
+                        raise
+                    if reported >= FIRST_RUN_DRIVING_VERSION:
+                        # UPG-1: a release that drives runs but predates the runtime-identity key on its
+                        # stop (decision 129.3) takes the same drained stop in its own bare shape; a busy
+                        # one still refuses. A collector of this build or newer is never sent that shape.
+                        own = _version_tuple(PACKAGE_VERSION)
+                        if own is None or reported >= own:
+                            raise
+                        try:
+                            client.shutdown(only_if_drained=True, earlier_collector=True)
+                        except CollectorError as earlier_error:
+                            if earlier_error.code == "collector_busy":
+                                raise CollectorError(
+                                    "a child run is active; nothing was changed, try again when none is running",
+                                    code="collector_busy",
+                                ) from None
+                            raise
+                    else:
+                        client.shutdown()
             # The stop was accepted: a collector that is slow to go down is waited
             # for a little longer than the caller asked before this gives up.
             if (_wait_for_collector_shutdown(client, state, deadline)
