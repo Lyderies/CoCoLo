@@ -295,6 +295,7 @@
  "codex:tests.test_watchdog_lifetime": "integration",
  "codex:tests.test_write_merge": "integration",
  "root:test_approved_edits": "integration",
+ "root:test_approved_edits_generations": "integration",
  "root:test_attest": "integration",
  "root:test_check_identifiers": "unit",
  "root:test_ci_stages": "unit",
