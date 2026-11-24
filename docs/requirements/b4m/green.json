@@ -1,0 +1,26 @@
+{
+  "tests": 86,
+  "seconds": 6.5,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "selection": [
+    "tests.test_b4m_compatibility",
+    "tests.test_reply_shape_compatibility",
+    "tests.test_account_api",
+    "tests.test_history_api.HistoryApiTests",
+    "tests.test_service_transport.ServiceTransportTests",
+    "tests.test_service_transport.ServiceTransportSocketTests.test_collector_client_import_and_unavailability_do_not_load_persistence",
+    "tests.test_collector_stale.CollectorCodeStaleTests",
+    "tests.test_learning_store.LearningStoreTests.test_collector_authorization_is_owner_only_and_exact",
+    "tests.test_learning_store.LearningStoreTests.test_client_rejects_older_or_newer_schema_with_matching_runtime",
+    "tests.test_learning_store.LearningStoreTests.test_client_orders_collector_versions_without_downgrade",
+    "tests.test_learning_store.LearningStoreTests.test_newer_collector_is_never_replaced",
+    "tests.test_runtime_release.RuntimeReleaseTests.test_the_runtime_file_set_is_exactly_the_package_orchestration_files"
+  ],
+  "excluded_account_socket_methods": [
+    "test_dropped_or_partial_read_reply_is_not_automatically_retried",
+    "test_real_socket_public_owner_reads_use_explicit_retry_and_survive_restart",
+    "test_real_socket_reads_two_projects_one_owner_and_survive_restart"
+  ]
+}

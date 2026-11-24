@@ -25,6 +25,7 @@ try:  # AF_UNIX collector is currently supported on POSIX hosts.
 except ImportError:  # pragma: no cover - Windows has no supported collector transport yet.
     fcntl = None  # type: ignore[assignment]
 
+from .compatibility_message import compatibility_message
 from .collector_paths import (
     StateError as StateError,
     UNMOVED_STATE as UNMOVED_STATE,
@@ -1993,7 +1994,7 @@ def registered_project_roots() -> list[Path]:
 
 
 def authorize_collector_runtime(
-    state: LearningState, cli_path: Path
+    state: LearningState, cli_path: Path, *, project_root: Path | None = None
 ) -> dict[str, str | int]:
     """Authorize one validated runtime during explicit owner registration."""
 
@@ -2011,7 +2012,8 @@ def authorize_collector_runtime(
             raise CollectorAuthorizationError("collector runtime version is invalid")
         if current_version > requested_version:
             raise CollectorNewerVersionError(
-                "a newer collector runtime is already authorized",
+                compatibility_message(current["runtime_version"], project_root=project_root,
+                                      orchestration_root=cli_path.parent),
                 code="runtime_newer",
             )
         if current_version == requested_version:

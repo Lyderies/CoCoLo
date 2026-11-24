@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .compatibility_message import compatibility_message
 from .collector_contracts import (
     COLLECTOR_PROTOCOL_VERSION,
     COLLECTOR_MUTATING_OPERATIONS,
@@ -247,7 +248,7 @@ class CollectorClient:
             and server_schema > LEDGER_SCHEMA_VERSION
         ):
             raise CollectorNewerVersionError(
-                "a newer collector owns the shared learning state; update this project",
+                compatibility_message(response.get("runtime_version"), project_root=project_root),
                 code="runtime_newer",
             )
         if (
@@ -258,7 +259,7 @@ class CollectorClient:
             or server_version < client_version
         ):
             raise _with_loaded_digest(CollectorUpgradeRequired(
-                "collector runtime is older than the installed package",
+                compatibility_message(response.get("runtime_version"), project_root=project_root),
                 code="runtime_upgrade_required",
             ), response, identity_valid=(
                 isinstance(server_schema, int) and not isinstance(server_schema, bool)

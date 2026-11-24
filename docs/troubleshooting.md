@@ -3,6 +3,23 @@
 Your only command for COCOLO is `./setup.sh`, run from the root of this repository. Nearly every fix
 below is "run it again". See the [setup wizard](setup-wizard.md) for what each step does.
 
+## `status_collector_unavailable` or `runtime_newer` after another project was updated
+
+Another CoCoLo version holds the shared learning state. An already-installed 0.3.x client
+cannot show the new repair message, so it may show `status_collector_unavailable` or
+`runtime_newer` instead. New clients name the version holding the state and print the command
+using the clone and project paths from the local install record.
+
+In a plain terminal, use your actual CoCoLo clone and project paths in this command:
+
+```sh
+cd /path/to/CoCoLo && ./setup.sh /path/to/project
+```
+
+Choose Configure, then "Update the install and walk through every step". If a child run is
+still active or unsettled, let it finish and try again. If the local install record is missing,
+locate the clone you used to install CoCoLo; the message cannot supply its exact path.
+
 ## "That passphrase did not unlock the key."
 
 `attest.py` asks `Try again or Exit? [T/e]`; press Enter to try again. The line before the prompt names
