@@ -40,8 +40,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SETUP = ROOT / "setup.sh"
-ORCHESTRATION = ROOT / "packages" / "codex-agents" / "native-package" / ".codex" / "orchestration"
-CLI = ORCHESTRATION / "cli.py"
 PROVIDER_FIXTURES = ROOT / "packages" / "codex-agents" / "tests" / "fixtures" / "providers"
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B|\x1b[=>]")
 SETUP_TIMEOUT_SECONDS = 150
@@ -157,7 +155,8 @@ class World:
     passphrase: str = field(init=False)
     python: str = field(init=False)
     env: dict = field(init=False)
-    outputs: list = field(default_factory=list)  # every output a step produced, for G8
+    outputs: list = field(default_factory=list)  # every saved or AI-readable output a step produced, for G8
+    screens: list = field(default_factory=list)  # what an owner's terminal showed (setup, the owner's tools): G8's owner screens
     steps: list = field(default_factory=list)  # every step run: {"step": label, "code": exit status, "refuses": bool}
     known_passphrases: set = field(default_factory=set)  # every other passphrase a step typed (G8)
 
@@ -349,7 +348,7 @@ class World:
         text = strip_ansi(raw)
         code = os.waitstatus_to_exitcode(status) if status is not None else -1
         if record:
-            self.outputs.append(text)
+            self.screens.append(text)
             self.steps.append({"step": label, "code": code, "refuses": refuses, "timed_out": timed_out})
         self.register_private_values()
         return Run(code, text, round(time.monotonic() - started, 3), timed_out)
@@ -363,13 +362,22 @@ class World:
         """`./setup.sh --update PROJECT`: setup again on the installed project, no menu."""
         return self.terminal(["/bin/bash", str(SETUP), "--update", str(self.project)], label="setup_update")
 
+    @property
+    def installed_cli(self) -> Path:
+        """The orchestrator CLI the installer put in the project: the only CLI a check may run (decision 128d).
+        The source tree's own copy has no install manifest, which hid the 0.8.54 live-root defect."""
+        return self.project / ".codex" / "orchestration" / "cli.py"
+
     def cli(self, *args: str, timeout: float = 60, refuses: bool = False, program: Path | None = None,
             environment: dict | None = None, cwd: Path | None = None) -> tuple[int, dict | None, str]:
-        """An owner command of this clone's orchestrator CLI for the fake project; (exit, JSON reply, text).
+        """An owner command of the project's installed orchestrator CLI; (exit, JSON reply, text).
 
-        `refuses` marks a step whose refusal the check expects (G1); `program` and `environment` run another
-        copy of the CLI or add markers, as host_cli does."""
-        done = subprocess.run([str(self.shim), "-I", "-B", "-S", str(program or CLI), *args,
+        `refuses` marks a step whose refusal the check expects (G1); `program` may only name the installed CLI
+        again (anything else raises); `environment` adds markers, as host_cli does."""
+        program = program or self.installed_cli
+        if Path(os.path.realpath(program)) != Path(os.path.realpath(self.installed_cli)):
+            raise HarnessError("a check ran a CLI that is not the project's installed one (decision 128d)")
+        done = subprocess.run([str(self.shim), "-I", "-B", "-S", str(program), *args,
                                "--project-root", str(self.project)],
                               capture_output=True, text=True, env={**self.env, **(environment or {})},
                               stdin=subprocess.DEVNULL, timeout=timeout, cwd=str(cwd or self.base))
@@ -394,7 +402,7 @@ class World:
         its session guard, which needs a recorded Codex session (a later group)."""
         if host != "claude":
             raise HarnessError("only a Claude primary session is built by this harness so far")
-        return self.cli(*args, refuses=refuses, program=self.project / ".codex" / "orchestration" / "cli.py",
+        return self.cli(*args, refuses=refuses,
                         environment={**self.CLAUDE_HOST, **(environment or {})}, cwd=self.project, timeout=timeout)
 
     CODEX_HOST = {"CODEX_THREAD_ID": "e2e-codex-thread"}
@@ -405,14 +413,14 @@ class World:
 
         The marker is only what the product's host detection reads; the session guard and its recorded
         Codex session belong to a later group."""
-        return self.cli(*args, refuses=refuses, program=self.project / ".codex" / "orchestration" / "cli.py",
+        return self.cli(*args, refuses=refuses,
                         environment={**self.CODEX_HOST, **(environment or {})}, cwd=self.project, timeout=timeout)
 
     def validate_package(self, primary: str) -> tuple[int, dict | None, str]:
         """`validate --root PROJECT` as a primary session runs it (this command takes `--root`, not
         `--project-root`, so it cannot go through `cli`); (exit, JSON reply, text)."""
         marker = self.CLAUDE_HOST if primary == "claude" else self.CODEX_HOST
-        done = subprocess.run([str(self.shim), "-I", "-B", "-S", str(self.project / ".codex" / "orchestration" / "cli.py"),
+        done = subprocess.run([str(self.shim), "-I", "-B", "-S", str(self.installed_cli),
                                "validate", "--root", str(self.project)],
                               capture_output=True, text=True, env={**self.env, **marker},
                               stdin=subprocess.DEVNULL, timeout=90, cwd=str(self.project))
