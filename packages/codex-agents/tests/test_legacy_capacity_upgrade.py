@@ -68,20 +68,20 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
             "SELECT COUNT(*) FROM active_run_capacity a JOIN run_holds r ON r.kind='run_slot' "
             "AND r.identity=a.handle_digest WHERE a.kind='legacy_unknown' AND r.release_kind='crashed' "
             "AND a.release_digest=r.receipt").fetchone()[0]
-        self.assertEqual(3, rows)
+        self.assertEqual(0, rows)
         self.assertEqual(0, ledger._connection.execute(
             "SELECT COUNT(*) FROM capacity_completions WHERE released_at_ms IS NOT NULL").fetchone()[0])
-        self.assertEqual(0, self.counted(ledger))
-        self.assertTrue(ledger.drained())
+        self.assertEqual(3, self.counted(ledger))
+        self.assertFalse(ledger.drained())
 
     def test_a_recent_run_from_an_earlier_version_still_counts_until_it_cannot_be_running(self):
         ledger = self.upgrade_with_runs(30 * 24 * HOUR, HOUR)
-        self.assertEqual(1, self.counted(ledger))
+        self.assertEqual(2, self.counted(ledger))
         self.assertFalse(ledger.drained())
         later = ledger._clock_ms() + learning_store.LEGACY_RUN_MAX_MS
         ledger._clock_ms = lambda: later
-        self.assertEqual(0, self.counted(ledger))
-        self.assertTrue(ledger.drained())
+        self.assertEqual(2, self.counted(ledger))
+        self.assertFalse(ledger.drained())
 
     def test_RS_A_F8_a_recent_earlier_run_is_eligible_a_day_after_its_claim(self):
         ledger = self.upgrade_with_runs(learning_store.HOUR if hasattr(learning_store, "HOUR") else HOUR)
@@ -89,7 +89,7 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
             "SELECT claimed_at_ms FROM active_run_capacity WHERE kind='legacy_unknown' AND released_at_ms IS NULL"
         ).fetchone()[0]
         status = ledger.account_holds_status(self.project)["run_slot"]
-        self.assertEqual(claimed + learning_store.LEGACY_RUN_MAX_MS + 1, status["next_eligible"])
+        self.assertIsNone(status["next_eligible"])
 
     def test_the_bound_is_a_cautious_day(self):
         # Not a proof: a native 0.2.x child had no enforced deadline, and a bridged one
@@ -106,7 +106,7 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
                 self.assertEqual(1, self.counted(ledger))
                 later = ledger._clock_ms() + 3 * HOUR + 60_000
                 ledger._clock_ms = lambda: later
-                self.assertEqual(0, self.counted(ledger))
+                self.assertEqual(1, self.counted(ledger))
 
     def test_replacing_the_collector_does_not_wait_for_runs_an_earlier_version_left(self):
         # They ran inside their own 0.2.x commands, never under a collector or a
@@ -139,12 +139,12 @@ class EarlierVersionRunsStatusTests(LegacyRunsFixture, unittest.TestCase):
         ledger = self.upgrade_with_runs(30 * 24 * HOUR, HOUR, 3 * HOUR)
         claimed = sorted(row[0] for row in ledger._connection.execute(
             "SELECT claimed_at_ms FROM active_run_capacity WHERE kind='legacy_unknown'"))
-        self.assertEqual({"holding": 2, "finished_by_ms": claimed[-1] + learning_store.LEGACY_RUN_MAX_MS},
+        self.assertEqual({"holding": 3, "finished_by_ms": None},
                          ledger.earlier_version_runs())
 
     def test_with_no_earlier_runs_holding_a_slot_there_is_no_time(self):
         ledger = self.upgrade_with_runs(30 * 24 * HOUR)
-        self.assertEqual({"holding": 0, "finished_by_ms": None}, ledger.earlier_version_runs())
+        self.assertEqual({"holding": 1, "finished_by_ms": None}, ledger.earlier_version_runs())
 
     def test_the_collector_reports_it_with_the_learning_move_state(self):
         answer = {"ok": True, "moved": False, "has_learning": True, "drained": False, "activation_pending": False,
@@ -157,7 +157,11 @@ class EarlierVersionRunsStatusTests(LegacyRunsFixture, unittest.TestCase):
         with mock.patch.object(client, "_request", return_value=older):
             # A collector of an earlier release does not report it: unknown, not an error.
             self.assertIsNone(client.learning_migration(Path("/srv/project"))["earlier_version_runs"])
-        for bad in ({"holding": -1, "finished_by_ms": None}, {"holding": 1, "finished_by_ms": None},
+        with mock.patch.object(client, "_request", return_value={
+                **answer, "earlier_version_runs": {"holding": 1, "finished_by_ms": None}}):
+            self.assertEqual({"holding": 1, "finished_by_ms": None},
+                             client.learning_migration(Path("/srv/project"))["earlier_version_runs"])
+        for bad in ({"holding": -1, "finished_by_ms": None},
                     {"holding": True, "finished_by_ms": None}, {"holding": 0}, "two"):
             with self.subTest(bad=bad), mock.patch.object(
                     client, "_request", return_value={**answer, "earlier_version_runs": bad}), \

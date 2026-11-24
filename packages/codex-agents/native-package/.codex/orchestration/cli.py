@@ -1684,6 +1684,12 @@ def build_parser() -> argparse.ArgumentParser:
     provider_observe.add_argument('--run-handle', help='original opened run for a before/after observation')
     provider_observe.add_argument('--phase', choices=('before', 'after'))
 
+    confirm_slot = subparsers.add_parser(
+        "learning-confirm-run-slot", help="confirm release of exactly one historical slot with an owner signature")
+    _add_learning_project(confirm_slot)
+    confirm_slot.add_argument("--run-id", required=True)
+    confirm_slot.add_argument("--signature", type=Path)
+
     learning_billing_attestation = subparsers.add_parser(
         "learning-record-billing-attestation",
         help="record an owner-signed billing attestation for one provider account",
@@ -2761,6 +2767,30 @@ def main() -> int:
                 report = billing_probe_client(args.state_root, args.project_root, request_id=args.request_id)
             _print_command_report(args, report)
             return 0
+        elif args.command == "learning-confirm-run-slot":
+            from codex_agents.learning_contracts import run_slot_confirmation
+            record = run_slot_confirmation(args.run_id)
+            running = _compatible_collector(LearningState(args.state_root, create=False))
+            if running is not None:
+                if args.signature is None:
+                    report = {"ready": True, "requires_signature": True, "record": record,
+                              "signing_payload_b64": base64.b64encode(
+                                  running.owner_record_payload(args.project_root, record)).decode("ascii")}
+                else:
+                    report = {"ready": True, **running.confirm_legacy_slot(
+                        args.project_root, record, args.signature.read_bytes()), "record": record}
+            else:
+                ledger, project_id = _learning_ledger(args)
+                try:
+                    if args.signature is None:
+                        report = {"ready": True, "requires_signature": True, "record": record,
+                                  "signing_payload_b64": base64.b64encode(
+                                      OwnerGrantAuthority.owner_record_payload(project_id, record)).decode("ascii")}
+                    else:
+                        report = {"ready": True, **ledger.commit_owner_record(
+                            project_id, record=record, signature=args.signature.read_bytes()), "record": record}
+                finally:
+                    _close_ledger(ledger)
         elif args.command == "learning-record-billing-attestation" and _compatible_collector(
                 LearningState(args.state_root, create=False)) is not None:
             # The owner's signed attestation through the running collector; nothing pauses it.

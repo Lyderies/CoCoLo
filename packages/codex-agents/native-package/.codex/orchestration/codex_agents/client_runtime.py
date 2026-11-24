@@ -318,6 +318,16 @@ def _status_account_holds(value):
         return None
     for name, kind in holds.items():
         fields = _HOLD_FIELDS | ({'release_by_evidence'} if name == 'probe' else set())
+        if name == 'run_slot' and type(kind) is dict and 'reasons' in kind:
+            from .legacy_slots import DEADLINE_REASON, OWNER_REASON, MISSING_REASON
+            fields |= {'reasons', 'owner_confirmations'}
+            if (type(kind.get('reasons')) is not list
+                    or any(reason not in (DEADLINE_REASON, OWNER_REASON, MISSING_REASON) for reason in kind['reasons'])
+                    or type(kind.get('owner_confirmations')) is not list
+                    or any(type(item) is not dict or set(item) != {'reason', 'command'}
+                           or item['reason'] != OWNER_REASON or type(item['command']) is not str
+                           or '\n' in item['command'] for item in kind['owner_confirmations'])):
+                return None
         if (type(kind) is not dict or kind.keys() != fields
                 or not all(account_integer(kind[n]) for n in ('held', 'past_due'))
                 or kind['past_due'] > kind['held']
@@ -350,6 +360,8 @@ def _hold_words(name, kind):
         notes.append(f"next can be freed at {at(kind['next_eligible'])}")
     if name == 'run_slot' and kind['deadline'] is not None:  # draft 4 item 4: the execution deadline beside it
         notes.append(f"{'deadline' if held == 1 else 'nearest deadline'} {at(kind['deadline'])}")
+    notes.extend(kind.get('reasons', []))
+    notes.extend('Owner command: ' + item['command'] for item in kind.get('owner_confirmations', []))
     return f"{held} {noun} held" + (f" ({'; '.join(notes)})" if notes else '')
 
 

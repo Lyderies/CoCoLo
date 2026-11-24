@@ -109,3 +109,11 @@ Round 2 runs: `test_reply_shape_live` 4 tests OK in 545.5 s (loaded machine, oth
 running; it replays about 780 existing tests, so it is registered in the e2e stage, not for the per-edit loop);
 `test_b4m_compatibility` + `test_service_transport` 19 tests OK in 0.3 s. The runtime digest/VERSION bookkeeping for the
 collector_client.py change is left to the primary.
+
+## RSF S4 operation addition
+
+`confirm_legacy_slot` reuses signed owner-record admission. Its exact initial,
+retry and refusal reply shapes are listed in
+[RSF S4 validation](../rsf-s4/validation.md#new-owner-command-and-collector-operation)
+for the B4m reply-shape table. Direct dispatch is unit-tested; socket/CLI checks
+remain primary-only.

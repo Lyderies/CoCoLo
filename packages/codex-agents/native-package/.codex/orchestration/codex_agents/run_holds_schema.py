@@ -17,7 +17,8 @@ import json
 
 RUN_HOLD_KINDS = ("run_slot", "binding", "probe")
 RELEASE_KINDS = ("completed", "consumed", "lost", "crashed", "expired", "withdrawn", "unlaunched",
-                 "service_lost", "claim_denied", "upgrade_superseded", "abandoned", "removed")
+                 "service_lost", "claim_denied", "upgrade_superseded", "abandoned", "removed",
+                 "unsent", "process_gone", "owner_confirmed")
 
 RUN_HOLDS_SCHEMA = '''CREATE TABLE run_holds(
 kind TEXT NOT NULL CHECK(kind IN ('run_slot','binding','probe')),
@@ -156,7 +157,7 @@ def adopt_run_holds(connection) -> None:
 # time, with the slot's release digest as its receipt. Used by every completion coverage check (alias a).
 DECISION_RELEASED = (
     "EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=a.project_id AND r.kind='run_slot' "
-    "AND r.identity=a.handle_digest AND r.state='released' AND r.release_kind IN ('crashed','lost') "
+    "AND r.identity=a.handle_digest AND r.state='released' AND r.release_kind IN ('crashed','lost','unsent','process_gone','owner_confirmed') "
     "AND a.release_digest IS NOT NULL AND r.receipt=a.release_digest AND r.released_at_ms=a.released_at_ms)")
 
 # Round 1 F2: each check finds a row that breaks the register's agreement with its holds.
@@ -170,11 +171,11 @@ _SLOT_RULES = (
     # states agree: a slot is released exactly when its capacity row is
     "(r.state='released') <> (a.released_at_ms IS NOT NULL)",
     # a lost or crashed decision matches its slot exactly
-    "(r.release_kind IN ('crashed','lost') AND (r.state<>'released' OR r.receipt IS NULL "
+    "(r.release_kind IN ('crashed','lost','unsent','process_gone','owner_confirmed') AND (r.state<>'released' OR r.receipt IS NULL "
     "OR r.receipt IS NOT a.release_digest OR r.released_at_ms IS NOT a.released_at_ms))",
     # O0b RS-A round 2 G1: a released slot's kind is a slot's (an ordinary completion or a decision), and an
     # ordinary completion carries its slot's own release time and digest
-    "(r.state='released' AND (r.release_kind NOT IN ('completed','crashed','lost') "
+    "(r.state='released' AND (r.release_kind NOT IN ('completed','crashed','lost','unsent','process_gone','owner_confirmed') "
     "OR (r.release_kind='completed' AND (r.receipt IS NOT a.release_digest "
     "OR r.released_at_ms IS NOT a.released_at_ms))))",
 )
@@ -229,7 +230,7 @@ def _evidence_matches(connection) -> bool:
     for receipt, evidence in connection.execute(
             "SELECT receipt,evidence FROM run_holds WHERE (evidence IS NOT NULL "
             "AND (receipt IS NULL OR receipt IS NOT run_hold_raw_digest(evidence))) "
-            "OR (kind='run_slot' AND release_kind IN ('crashed','lost') AND evidence IS NULL)"):
+            "OR (kind='run_slot' AND release_kind IN ('crashed','lost','unsent','process_gone','owner_confirmed') AND evidence IS NULL)"):
         if evidence is None or type(evidence) is not str or receipt is None:
             return False  # G10: a decision without its evidence; round 3: evidence without its receipt
         try:

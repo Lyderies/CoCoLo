@@ -53,3 +53,11 @@ to change, stop and record old -> new in `assertions.md` before proceeding.
   old -> new is in [assertions.md](assertions.md). No existing assertion or
   existing test file was edited. Primary regression runs remain pending; the
   unchanged exact-frame assertion in `test_service_transport` is known to conflict.
+
+## RSF S4 mutating-gate addition
+
+`confirm_legacy_slot` is now in `COLLECTOR_MUTATING_OPERATIONS`; client stamping
+and the pre-write runtime gate therefore apply. Its missing/wrong-runtime
+zero-write test is in `tests.test_rsf_s4_slots`. Exact wire shapes and the
+primary-only socket/CLI command are in
+[RSF S4 validation](../rsf-s4/validation.md#new-owner-command-and-collector-operation).

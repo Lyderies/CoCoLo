@@ -30,7 +30,7 @@ PRODUCER_AUTHORITY = {
     },
     "verifier": {"outcome", "qa_evidence", "evidence_review"},
     "owner": {
-        "feedback", "owner_grant", "grader_calibration", "billing_attestation",
+        "feedback", "owner_grant", "grader_calibration", "billing_attestation", "run_slot_confirmation",
     },
     "lifecycle": {"promotion"},
 }
@@ -79,6 +79,7 @@ RECORD_TYPES = {
     "provider_headroom",
     "provider_billing",
     "billing_attestation",
+    "run_slot_confirmation",
     "admission_decision",
     "dispatch_intent",
     "dispatch_result",
@@ -1995,6 +1996,21 @@ def validate_admission_decision(data: Any) -> dict[str, Any]:
     return data
 
 
+def run_slot_confirmation(run_id):
+    material = {"schema_version": 1, "record_type": "run_slot_confirmation", "run_id": run_id,
+                "record_id": "run_slot_confirmation:" + content_digest({"run_id": run_id})}
+    return validate_run_slot_confirmation(material)
+
+
+def validate_run_slot_confirmation(data):
+    data = _closed(data, {"schema_version", "record_type", "record_id", "run_id"}, "run_slot_confirmation")
+    _base(data, "run_slot_confirmation")
+    _identifier(data["run_id"], "run_id")
+    if data["record_id"] != "run_slot_confirmation:" + content_digest({"run_id": data["run_id"]}):
+        raise ContractError("slot confirmation identity is invalid")
+    return data
+
+
 DISPATCH_INTENT_FIELDS = {
     "schema_version", "record_type", "record_id", "run_id", "bridge_run_id",
     "provider", "model", "effort", "deadline_at_ms", "observed_at_ms",
@@ -2418,6 +2434,7 @@ VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "provider_headroom": validate_provider_headroom,
     "provider_billing": validate_provider_billing,
     "billing_attestation": validate_billing_attestation,
+    "run_slot_confirmation": validate_run_slot_confirmation,
     "admission_decision": validate_admission_decision,
     "dispatch_intent": validate_dispatch_intent,
     "dispatch_result": validate_dispatch_result,

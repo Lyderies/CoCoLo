@@ -12,7 +12,7 @@ MAX_REQUEST_BYTES = MAX_RECORD_BYTES + 16_384
 
 # Owner decision 129.3: pre-1.0 callers must use the serving runtime's identity.
 COLLECTOR_MUTATING_OPERATIONS = frozenset({
-    "bind", "ingest", "issue_result_repair", "register", "commit_owner_record",
+    "bind", "ingest", "issue_result_repair", "register", "commit_owner_record", "confirm_legacy_slot",
     "learning_moved_if_empty", "shutdown", "shutdown_if_drained",
 })
 RUNTIME_UPDATE_COMMAND = "./setup.sh --update"
