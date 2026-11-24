@@ -240,3 +240,9 @@ Requirement/decision: RT-RX-18 / 124f (the two learning-route calls compare by r
 Old line: `"    content_digest,"`
 New line (45): `"    content_digest, route_identity,"`
 Requirement/decision: RT-RX-18 / 124f (import of route_identity for the comparison at line 3796).
+
+## 41. packages/codex-agents/tests/test_signature_job_intake.py:96
+
+Old line: `t_event", "account.billing_probe", "account.withdraw_open"},`
+New line (96): adds `"account.provider_state_snapshot"` to the expected ACCOUNT_OPERATIONS set, nothing else.
+Requirement/decision: RT-RX-1/6/13 / 124f (found by the 0.8.53 full run; same pin as entries 36-38).
