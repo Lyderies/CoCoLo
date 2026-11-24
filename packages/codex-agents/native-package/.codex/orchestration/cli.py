@@ -1142,7 +1142,12 @@ def _validated_assignment_route(
         finally:
             _close_ledger(ledger)
     elif project_root is not None:
-        route = _installed_route(args, task)
+        # The caller's effective policy, with the service's advisory snapshot when one is running (124f).
+        snapshot = (provider_state_snapshot_client(args.state_root, project_root, host_client=_host_client())
+                    if getattr(args, "state_root", None) is not None else None)
+        route = _available_route(task, policy, provider_snapshot=snapshot,
+                                 project_id=snapshot.project_id if snapshot else None,
+                                 primary_provider=_host_primary_provider())
     else:
         route = _available_route(task, policy, primary_provider=_host_primary_provider())
     assigned = validate_assignment(

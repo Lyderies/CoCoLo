@@ -42,7 +42,7 @@ from codex_agents.learning_adapters import load_client_capabilities
 from codex_agents.learning_contracts import (
     DISPATCH_RESULT_V3_FIELDS,
     canonical_json,
-    content_digest,
+    content_digest, route_identity,
     validate_learning_record,
 )
 from codex_agents.learning_engine import installed_execution_configuration
@@ -3793,7 +3793,7 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
         for flag in ("--client-version", "--host-client"):
             with self.subTest(flag=flag):
                 explicit = self.cli("learning-route", "--task", task, flag, "claude-host-v1")
-                self.assertEqual(implicit, explicit)
+                self.assertEqual(route_identity(implicit), route_identity(explicit))
         refused = self.cli(
             "learning-route", "--task", task, "--client-version", "codex-host-v1",
             expected=2,

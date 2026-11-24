@@ -110,7 +110,7 @@ from .learning_contracts import (
     DISPATCH_RESULT_SCHEMA_VERSION,
     MAX_RECORD_BYTES,
     RECORD_TYPES,
-    canonical_json,
+    canonical_json, route_identity,
     content_digest,
     external_id,
     keyed_digest,
@@ -4989,7 +4989,7 @@ class LearningLedger:
             self.state.digest_key(), canonical_json(checked_task)
         )
         route_digest = keyed_digest(
-            self.state.digest_key(), canonical_json(primary_route)
+            self.state.digest_key(), canonical_json(route_identity(primary_route))
         )
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
         with self._held(), self._connection:
@@ -5474,7 +5474,7 @@ class LearningLedger:
         task_digest = keyed_digest(
             self.state.digest_key(), canonical_json(checked_task)
         )
-        route_digest = keyed_digest(self.state.digest_key(), canonical_json(route))
+        route_digest = keyed_digest(self.state.digest_key(), canonical_json(route_identity(route)))
         configuration_digest = content_digest(checked_configuration)
         task_slice = routing_task_slice(checked_task)
         event = validate_event(
@@ -8076,7 +8076,7 @@ class LearningLedger:
                 raise LedgerError("host run is no longer open for dispatch")
             key = self.state.digest_key()
             if (
-                str(binding["route_digest"]) != keyed_digest(key, canonical_json(route))
+                str(binding["route_digest"]) != keyed_digest(key, canonical_json(route_identity(route)))
                 or str(binding["assignment_digest"]) != keyed_digest(
                     key, canonical_json(validate_assignment_shape(assignment))
                 )
@@ -8412,7 +8412,7 @@ class LearningLedger:
                     self.state.digest_key(), canonical_json(validate_task(task))
                 )
                 or str(binding["route_digest"]) != keyed_digest(
-                    self.state.digest_key(), canonical_json(route)
+                    self.state.digest_key(), canonical_json(route_identity(route))
                 )
                 or str(binding["configuration_digest"])
                 != content_digest(validate_execution_configuration(execution_configuration))

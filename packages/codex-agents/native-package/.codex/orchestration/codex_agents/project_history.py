@@ -50,7 +50,7 @@ from . import project_holds_schema, project_result_contexts
 from .project_holds_schema import PROJECT_HOLDS_COLUMNS, PROJECT_HOLDS_SCHEMA, attempt_identity
 from .learning_contracts import (
     validate_outcome,
-    DISPATCH_RESULT_SCHEMA_VERSION, MAX_RECORD_BYTES, SOURCES, canonical_json, content_digest,
+    DISPATCH_RESULT_SCHEMA_VERSION, MAX_RECORD_BYTES, SOURCES, canonical_json, route_identity, content_digest,
     keyed_digest, parse_bounded_json, validate_execution_configuration, validate_learning_record,
 )
 from . import service_record
@@ -1410,7 +1410,7 @@ class ProjectHistory:
         invalid = False
         try:
             invalid = (type(route) is not dict or grant.task_digest != keyed_digest(self._result_key, canonical_json(validate_task(task)))
-                       or grant.route_digest != keyed_digest(self._result_key, canonical_json(route))
+                       or grant.route_digest != keyed_digest(self._result_key, canonical_json(route_identity(route)))
                        or grant.configuration_digest != content_digest(validate_execution_configuration(route["execution_configuration"])))
         except Exception:
             invalid = True
@@ -2980,7 +2980,7 @@ class ProjectHistory:
                                      maximum=grant.deadline_at_ms - 1)
                 or grant.assignment_digest != keyed_digest(self._result_key, assignment_bytes(assignment, binding))
                 or grant.task_digest != keyed_digest(self._result_key, canonical_json(validate_task(task)))
-                or grant.route_digest != keyed_digest(self._result_key, canonical_json(route))
+                or grant.route_digest != keyed_digest(self._result_key, canonical_json(route_identity(route)))
                 or grant.configuration_digest != content_digest(configuration)
                 or configuration["client_digest"] != content_digest(client_capability)
             )

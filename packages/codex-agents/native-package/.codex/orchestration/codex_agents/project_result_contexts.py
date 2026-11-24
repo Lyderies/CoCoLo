@@ -33,7 +33,7 @@ import stat
 
 from .history_contracts import AttemptBinding, HistoryError, _DIGEST, matches
 from .host_result_contracts import MAX_HOST_RESULT_CONTEXT_BYTES, HostResultContext, RecordContext
-from .learning_contracts import canonical_json, content_digest, keyed_digest, parse_bounded_json
+from .learning_contracts import canonical_json, route_identity, content_digest, keyed_digest, parse_bounded_json
 from . import project_holds_schema
 from .project_holds_schema import attempt_identity, evidence_json
 
@@ -698,7 +698,7 @@ def _checked(history, row, binding: AttemptBinding, host_class: str) -> HostResu
             reservation.assignment_digest != keyed_digest(key, assignment_bytes(assignment, binding))
             or grant.assignment_digest != reservation.assignment_digest
             or grant.task_digest != keyed_digest(key, canonical_json(validate_task(task)))
-            or grant.route_digest != keyed_digest(key, canonical_json(route))
+            or grant.route_digest != keyed_digest(key, canonical_json(route_identity(route)))
             or grant.configuration_digest != content_digest(configuration)
             or configuration["client_digest"] != content_digest(capability)
         )

@@ -1056,10 +1056,10 @@ def provider_state_snapshot_client(state_root, project_root, *, host_client):
             return None
         enroll_clients(state, project_root, scope, endpoints[:2], account=endpoints[2], host_client=host_client)
         return AccountClient(endpoints[2], scope.project_id, scope.runtime_digest, timeout=10).provider_state_snapshot()
-    except (DispatchError, StateError, OSError):
+    except (DispatchError, StateError, OSError, AccountError):
+        # Advisory only (decision 124f): an unavailable or refused snapshot routes as not_checked and never
+        # replaces the refusal the real admission or project path gives.
         return None
-    except AccountError as error:
-        raise RuntimeOpenError(error.reason_code) from None
 
 
 def routing_evidence_client(state_root, project_root, task, *, host_client):

@@ -11,7 +11,7 @@ import secrets
 from .account_claim_contracts import ClaimError, _DIGEST, _HANDLE, matches
 from .contracts import TASK_FAMILIES, validate_task
 from .history_contracts import HistoryError, _ID, valid_integer
-from .learning_contracts import canonical_json, content_digest, external_id, keyed_digest, parse_bounded_json, validate_execution_configuration
+from .learning_contracts import canonical_json, route_identity, content_digest, external_id, keyed_digest, parse_bounded_json, validate_execution_configuration
 from .result_contracts import MAX_ASSIGNMENT_CANONICAL_BYTES, ResultLease, ResultLeaseBinding
 
 MAX_OPEN_PROVENANCE_BYTES = 8192
@@ -177,7 +177,7 @@ def verify_open_provenance(key, request, lease, value, *, assignment, task, rout
                 or not 0 < len(raw_assignment) <= MAX_ASSIGNMENT_CANONICAL_BYTES
                 or keyed_digest(key, raw_assignment) != facts['assignment_digest']
                 or keyed_digest(key, canonical_json(original_task)) != facts['task_digest']
-                or keyed_digest(key, canonical_json(route)) != facts['route_digest']
+                or keyed_digest(key, canonical_json(route_identity(route))) != facts['route_digest']
                 or content_digest(validate_execution_configuration(route['execution_configuration'])) != facts['configuration_digest']
                 or assignment['assignment_id'] != request.assignment_id or assignment['attempt'] != lease.binding.attempt
                 or original_task['family'] != facts['task_family'] or route.get('provider', 'codex') != facts['provider']

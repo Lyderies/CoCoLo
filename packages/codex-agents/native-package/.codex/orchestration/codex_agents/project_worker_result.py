@@ -8,7 +8,7 @@ from .contracts import ContractError, validate_task
 from .execution_grant import MAX_EXECUTION_GRANT_BYTES, verify_execution_grant
 from .history_contracts import AttemptBinding, HistoryError, _DIGEST, matches, valid_integer
 from .host_result_contracts import HostResultContext, WorkerResultContext
-from .learning_contracts import canonical_json, content_digest, keyed_digest, parse_bounded_json, provider_for_model, validate_execution_configuration
+from .learning_contracts import canonical_json, route_identity, content_digest, keyed_digest, parse_bounded_json, provider_for_model, validate_execution_configuration
 from .project_host_open import read_host_open
 from .result_contracts import assignment_bytes
 
@@ -132,7 +132,7 @@ def current_input_reference(history, context, outcome_digest, *, live=True):
         configuration = validate_execution_configuration(route['execution_configuration'])
         if (grant.assignment_digest != keyed_digest(history._result_key, assignment_bytes(assignment, binding))
                 or grant.task_digest != keyed_digest(history._result_key, canonical_json(task))
-                or grant.route_digest != keyed_digest(history._result_key, canonical_json(route))
+                or grant.route_digest != keyed_digest(history._result_key, canonical_json(route_identity(route)))
                 or grant.configuration_digest != content_digest(configuration)
                 or configuration['client_digest'] != content_digest(original['client_capability'])
                 or any(outcome[field] != assignment[field] for field in ('assignment_id', 'model', 'effort', 'role'))

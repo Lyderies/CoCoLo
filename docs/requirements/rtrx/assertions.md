@@ -210,3 +210,33 @@ New line (102): `"                    arguments['headroom'] = [[headroom, '9' * 
 Requirement/decision: RT-RX-3/4/5 / 124e (boundary setup uses only the appended restrictive record; boundary assertions and expected-value lines unchanged).
 
 (Entry 35 withdrawn by the primary: the billing line is back to its original append so the fixture keeps its fresh billing record; only the headroom list is isolated under 124e.)
+
+## 36. packages/codex-agents/tests/test_signature_inputs.py:146
+
+Old line: `"                          \"account.open_host_run\", \"account.claim_launch\", \"account.capacity_status\", \"account.register_execution\", \"account.submit_terminal\", \"account.release_capacity\", \"account.close_denied_attempt\", \"account.fence_claim\", \"account.settle_lost_run\", \"account.run_provenance\", \"account.open_provenance\", \"account.observe_provider\", \"account.record_observation_unavailable\", \"account.record_rate_limit_event\", \"account.billing_probe\", \"account.withdraw_open\"},"`
+New line (146): `"                          \"account.open_host_run\", \"account.claim_launch\", \"account.capacity_status\", \"account.register_execution\", \"account.submit_terminal\", \"account.release_capacity\", \"account.close_denied_attempt\", \"account.fence_claim\", \"account.settle_lost_run\", \"account.run_provenance\", \"account.open_provenance\", \"account.observe_provider\", \"account.record_observation_unavailable\", \"account.record_rate_limit_event\", \"account.billing_probe\", \"account.withdraw_open\", \"account.provider_state_snapshot\"},"`
+Requirement/decision: RT-RX-13/14/18 / 124f (exact operation pin gains the advisory account.provider_state_snapshot read; nothing else on the line changed).
+
+## 37. packages/codex-agents/tests/test_admission_inputs.py:139
+
+Old line: `"                          \"account.open_host_run\", \"account.claim_launch\", \"account.capacity_status\", \"account.register_execution\", \"account.submit_terminal\", \"account.release_capacity\", \"account.close_denied_attempt\", \"account.fence_claim\", \"account.settle_lost_run\", \"account.run_provenance\", \"account.open_provenance\", \"account.observe_provider\", \"account.record_observation_unavailable\", \"account.record_rate_limit_event\", \"account.billing_probe\", \"account.withdraw_open\"}, ACCOUNT_OPERATIONS)"`
+New line (139): `"                          \"account.open_host_run\", \"account.claim_launch\", \"account.capacity_status\", \"account.register_execution\", \"account.submit_terminal\", \"account.release_capacity\", \"account.close_denied_attempt\", \"account.fence_claim\", \"account.settle_lost_run\", \"account.run_provenance\", \"account.open_provenance\", \"account.observe_provider\", \"account.record_observation_unavailable\", \"account.record_rate_limit_event\", \"account.billing_probe\", \"account.withdraw_open\", \"account.provider_state_snapshot\"}, ACCOUNT_OPERATIONS)"`
+Requirement/decision: RT-RX-13/14/18 / 124f (exact operation pin gains the advisory account.provider_state_snapshot read; nothing else on the line changed).
+
+## 38. packages/codex-agents/tests/test_account_host.py:188
+
+Old line: `"                          'account.observe_provider'}, set(account_host.OWNER_OPERATIONS))"`
+New line (188): `"                          'account.observe_provider', 'account.provider_state_snapshot'}, set(account_host.OWNER_OPERATIONS))"`
+Requirement/decision: RT-RX-13/14/18 / 124f (owner terminal's read-only set gains the advisory account.provider_state_snapshot read; nothing else on the line changed).
+
+## 39. packages/codex-agents/tests/test_bridge.py:3796
+
+Old line: `"                self.assertEqual(implicit, explicit)"`
+New line (3796): `"                self.assertEqual(route_identity(implicit), route_identity(explicit))"`
+Requirement/decision: RT-RX-18 / 124f (the two learning-route calls compare by route_identity: the advisory availability audit is timestamped per call).
+
+## 40. packages/codex-agents/tests/test_bridge.py:45
+
+Old line: `"    content_digest,"`
+New line (45): `"    content_digest, route_identity,"`
+Requirement/decision: RT-RX-18 / 124f (import of route_identity for the comparison at line 3796).

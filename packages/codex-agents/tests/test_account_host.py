@@ -185,7 +185,7 @@ class AccountHostTests(unittest.TestCase):
         self.assertEqual('ok', decode_account_response(reply, request)['state'])
         # The terminal label cannot open, claim or probe: those stay with an enrolled primary.
         self.assertEqual({'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
-                          'account.observe_provider'}, set(account_host.OWNER_OPERATIONS))
+                          'account.observe_provider', 'account.provider_state_snapshot'}, set(account_host.OWNER_OPERATIONS))
         for operation in ('account.billing_probe', 'account.owner_public_key'):
             with self.subTest(operation=operation):
                 self.assertEqual('account_not_authorized', self.refusal(

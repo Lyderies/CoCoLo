@@ -15,7 +15,7 @@ from .history_contracts import _DIGEST, _ID, matches, valid_integer
 from .history_contracts import AttemptBinding
 from .result_contracts import ResultLeaseBinding
 from .orchestration_api import OrchestrationScope, SCOPE_FIELDS
-from .learning_contracts import (canonical_json, content_digest, external_id, keyed_digest, parse_bounded_json,
+from .learning_contracts import (canonical_json, content_digest, route_identity, external_id, keyed_digest, parse_bounded_json,
                                   provider_for_model, validate_execution_configuration, validate_learning_record)
 from .learning_adapters import empty_usage
 from .open_scope_contracts import open_inputs_digest, verify_open_scope
@@ -173,7 +173,8 @@ def _capture(ledger, project_id, runtime_digest, caller_scope, request_id, reque
                 or assignment['permissions']['mcps'] or facts['assignment_id'] != assignment['assignment_id']
                 or facts['attempt'] != assignment['attempt'] or facts['task_family'] != task['family']
                 or facts['configuration_digest'] != content_digest(configuration)
-                or any(facts[name+'_digest'] != keyed_digest(key, canonical_json(original[name]))
+                or any(facts[name+'_digest'] != keyed_digest(key, canonical_json(
+                       route_identity(original[name]) if name == 'route' else original[name]))
                        for name in ('assignment', 'task', 'route', 'parent_grant'))
                 or any(configuration[n] != assignment[n] for n in ('model', 'effort', 'role', 'verification_required'))):
             raise ValueError()

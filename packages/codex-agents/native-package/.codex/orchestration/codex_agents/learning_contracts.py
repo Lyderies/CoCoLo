@@ -339,6 +339,17 @@ def parse_bounded_json_value(
     return value
 
 
+def route_identity(route: Any) -> Any:
+    """A route as bound by open, dispatch and results: without its advisory, timestamped availability audit.
+
+    RT-RX-18: availability data lives outside the selection identity. Routes stored before RT-ROUTE-EXHAUSTED
+    have no availability field, so their digests are unchanged.
+    """
+    if isinstance(route, dict) and "availability" in route:
+        return {key: value for key, value in route.items() if key != "availability"}
+    return route
+
+
 def canonical_json(data: Any) -> bytes:
     return json.dumps(
         data, sort_keys=True, separators=(",", ":"), ensure_ascii=True

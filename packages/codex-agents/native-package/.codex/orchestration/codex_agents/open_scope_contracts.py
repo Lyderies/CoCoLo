@@ -12,7 +12,7 @@ import secrets
 from .contracts import TASK_FAMILIES
 from .history_contracts import AttemptBinding, HistoryError, _DIGEST, _ID, _ORCHESTRATION, matches, valid_integer
 from .host_result_contracts import HostResultContext, MAX_HOST_RESULT_CONTEXT_BYTES
-from .learning_contracts import canonical_json, external_id, keyed_digest, parse_bounded_json
+from .learning_contracts import canonical_json, route_identity, external_id, keyed_digest, parse_bounded_json
 from .orchestration_api import HOST_CLIENT_VERSIONS, OrchestrationScope
 from .result_contracts import MAX_RESULT_BODY_BYTES
 
@@ -28,7 +28,7 @@ _WORKER_FIELDS = {'binding', 'host_outcome_digest', 'provider', 'task_family', '
 
 
 def open_inputs_digest(assignment, task, route, parent_grant):
-    return hashlib.sha256(canonical_json({'assignment': assignment, 'task': task, 'route': route,
+    return hashlib.sha256(canonical_json({'assignment': assignment, 'task': task, 'route': route_identity(route),
                                          'parent_grant': parent_grant})).hexdigest()
 
 
