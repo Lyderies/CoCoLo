@@ -621,17 +621,19 @@ class LaunchJournal:
         except OSError:
             return []
 
-    def prune(self, *, now_ms=None):
+    def prune(self, *, now_ms=None, keep=frozenset()):
         """Drop tombstones older than TOMBSTONE_MS, and lock temporaries whose creator is gone.
 
         Tombstones are looked at MAX_ENTRIES at a time, going round every file over
-        successive calls.
+        successive calls. B4s r1: the entries named in `keep` (their project settlement is not
+        recovered yet) stay.
         """
         now_ms = int(time.time() * 1000) if now_ms is None else now_ms
         if self._released:
             return
         for entry in self._window('prune'):
-            if entry['state'] == 'settled' and now_ms - entry['settled_at_ms'] > TOMBSTONE_MS:
+            if (entry['state'] == 'settled' and now_ms - entry['settled_at_ms'] > TOMBSTONE_MS
+                    and entry_key(entry) not in keep):
                 with contextlib.suppress(JournalError):
                     self.remove(entry_key(entry))
         self.remove_lock_temporaries()

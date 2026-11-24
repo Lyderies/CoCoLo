@@ -2609,11 +2609,20 @@ class ProjectHistory:
             if hold is None:
                 raise HistoryError("history_result_not_reserved")
             settled = self._settlement_row(run_handle, attempt) is not None
+            lease_row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND run_handle=? "
+                                                 "AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
             if settled or hold["state"] == "released":
                 ended = (RELEASE_KINDS.values() if kind == "reservation" else (self._SETTLED_LEASE_KIND,))
                 if not settled and hold["release_kind"] not in ended:
                     raise HistoryError("history_result_not_reserved")  # released some other way: nothing to settle
-                return {"state": "settled", "request_id": hold["request_id"], "request_digest": hold["request_digest"]}
+                # B4s r1 (MED 3): `settled` only for this attempt's verified closure with its hold released by it;
+                # with no settlement row, only the tombstone of a purged attempt (no lease row left) says so.
+                verified = (lease_row is not None and self._attempt_settled(self._lease(lease_row)) if settled
+                            else lease_row is None)
+                if not verified:
+                    raise HistoryError("history_conflict")
+                return {"state": "settled", "request_id": hold["request_id"], "request_digest": hold["request_digest"],
+                        "release_kind": hold["release_kind"]}
             if hold["state"] == "held":
                 if kind == "reservation" and reservation["state"] == "reserved":
                     raise HistoryError("history_conflict")  # publishable: D4's arbitration decides first
@@ -2637,7 +2646,7 @@ class ProjectHistory:
         written to the terminal outbox, execution consumptions, cleanup receipts or records. The closure must name the
         outbox request the register row holds (RS-B-B4-2). An identical closure again is answered from the settlement
         row, or after the purge from the register tombstone (`known`); any other is refused with nothing written."""
-        from .lost_run_closure import verify_lost_run_closure
+        from .lost_run_closure import MAX_LOST_RUN_CLOSURE_BYTES, verify_lost_run_closure
 
         lease_binding = self._lease_binding(lease_binding)
         if self._result_key is None:
@@ -2658,7 +2667,7 @@ class ProjectHistory:
         with self._transaction():
             stored = self._settlement_row(run_handle, attempt)
             if stored is not None:
-                if bytes(stored["closure"]) != raw:
+                if self._stored_blob(stored["closure"], maximum=MAX_LOST_RUN_CLOSURE_BYTES) != raw:
                     raise HistoryError("history_conflict")
                 return answer
             reservation, hold_kind, hold = self._settlement_hold(run_handle, attempt)
@@ -2703,6 +2712,9 @@ class ProjectHistory:
                     raise HistoryError("history_conflict")
                 claim_id = None
                 self._set_lease(replace(lease, state="expired"))
+                # B4s r1 (HIGH 2): the claim was admitted, so the run's open binding ends as claimed here; with the
+                # lease never bound, no bind will ever release it.
+                self._release_claimed_open(run_handle, attempt, "claimed", receipt)
                 ending = project_result_contexts.release_unfinished(self, run_handle, attempt,
                                                                     self._SETTLED_LEASE_KIND, now)
             self._connection.execute(
@@ -2716,19 +2728,29 @@ class ProjectHistory:
 
     def _attempt_settled(self, lease) -> bool:
         """RS-B-B4-5: whether this attempt's settlement row holds a closure that verifies with this store's key, for
-        this lease. Only such a row ends the attempt for `_unfinished` and the purge; it is never a success."""
-        from .lost_run_closure import verify_lost_run_closure
+        this lease, and the register row it released is this attempt's, released by it (B4s r1 MED 3: the readers
+        and the validator agree). Only such a row ends the attempt for `_unfinished` and the purge; never a success."""
+        from .lost_run_closure import MAX_LOST_RUN_CLOSURE_BYTES, verify_lost_run_closure
 
         row = self._settlement_row(lease.binding.run_handle, lease.binding.attempt)
         if row is None or self._result_key is None:
             return False
         try:
-            closure = verify_lost_run_closure(self._result_key, bytes(row["closure"]), project_id=self.project_id)
+            raw = self._stored_blob(row["closure"], maximum=MAX_LOST_RUN_CLOSURE_BYTES)  # never coerced (MED 4)
+            closure = verify_lost_run_closure(self._result_key, raw, project_id=self.project_id)
         except Exception:
             return False
-        return (closure["binding"] == lease.binding.as_data() and closure["lease_digest"] == lease.lease_digest
-                and closure["release_kind"] == row["release_kind"]
-                and (row["claim_id"] is None or closure["bridge_run_id"] == row["claim_id"]))
+        if (closure["binding"] != lease.binding.as_data() or closure["lease_digest"] != lease.lease_digest
+                or closure["release_kind"] != row["release_kind"] or row["claim_id"] != lease.claim_id
+                or (row["claim_id"] is not None and closure["bridge_run_id"] != row["claim_id"])):
+            return False
+        kind, identity, released = (("lease", attempt_identity(lease.binding.run_handle, lease.binding.attempt),
+                                     self._SETTLED_LEASE_KIND) if row["claim_id"] is None
+                                    else ("reservation", row["claim_id"], row["release_kind"]))
+        hold = self._connection.execute("SELECT state,release_kind,receipt FROM project_holds WHERE project_id=? "
+                                        "AND kind=? AND identity=?", (self.project_id, kind, identity)).fetchone()
+        return (hold is not None and hold["state"] == "released" and hold["release_kind"] == released
+                and hold["receipt"] == closure["receipt_digest"])
 
     def _client_usage_id(self, binding):
         return "client_usage:" + keyed_digest(self._result_key, b"project-client-usage-v1\0" + canonical_json(binding.as_data()))

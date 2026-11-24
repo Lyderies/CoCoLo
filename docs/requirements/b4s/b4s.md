@@ -14,7 +14,8 @@ Red: de132086 (docs/requirements/b4s/red.md). No schema step (20 stays). Changed
 | RS-B-B4-6 RS-13 retry/tombstone | project_history.py:2632 (stored receipt from the tombstone row; purge removes the settlement with the attempt) | S test_B4_6 x2 |
 | RS-B-B4-7 validator | project_holds_schema.py:140-160 | S ValidatorTests (4) |
 | RS-B-B4-8 P2-P4 | (combined path above, bounds 2) | D LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes |
-| RS-B-B4-9 RC-3 | not met in B4s: still skipped, reason corrected (assertions.md): B3 open-withdrawal gap for a lease-refused run | tests/test_result_lifetime.py:105 (skipped) |
+| RS-B-B4-9 RC-3 | result_persistence.py retire_refused; project_driver.py 'leasing' (lease refused for result space -> job retired -> open withdrawn) | tests/test_result_lifetime.py RC-3 (un-skipped, r1) |
+| Review r1 (HIGH 1-3, MED 1-4) | account_lost_run.py _known_claim/_run_state/_tombstone_evidence; project_history.py open_account_settlement, record_account_settlement, _attempt_settled; project_holds_schema.py B4-7 LEFT JOINs; project_driver.py _settle_entry (local receipt), _recover_settled, _settle_own_ended, _remove_workspace; container_recovery.py _settle_gone; launch_journal.py prune(keep) | S ReviewRoundOneStoreTests (5); D ReviewRoundOneDriverTests (9, process-mode HIGH 3 skipped: primary decision), A2 |
 | O0c lifetime caps | lifetime_caps.json: lost_run_closure.py::checked_lost_run_closure, ::verify_lost_run_closure (BOUNDED, one message) | test_lifetime_cap_guard |
 
 B0-2 (tests/test_hold_lifecycle.py:131) stays skipped by spec (no lost terminal is written, oracle S3).

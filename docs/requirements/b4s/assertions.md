@@ -39,3 +39,23 @@ three exact `ACCOUNT_OPERATIONS` pins gain it. Nothing else in the sets changes.
 
 ## Stays skipped by spec
 - B0-2 (tests/test_hold_lifecycle.py:131) expects a lost terminal; B4s writes none by design (oracle S3).
+
+## Review r1 fix round (Codex security review NOT-READY on e57f84a5)
+No existing assertion was weakened or removed. Changes, old -> new:
+
+| Test | Old | New | Reason |
+|---|---|---|---|
+| tests/test_account_settlement_driver.py test_A2 (B4s's own) | lease `expired`, lease hold `released lost_unbound` | the same, plus the run's `open_binding` hold `released claimed` | added assertion: review HIGH 2 (A2 missed the open-binding leak) |
+| tests/test_account_settlement_driver.py test_B4_4_the_container_recovery_writes_its_journal_only_after_the_settlement_returned | setup: `remove_workspace` mock returns None | the mock returns True (the workspace is gone) | setup only: MED 2 makes `remove_workspace`'s answer gate the journal; assertions unchanged (`'settled'`, order settled -> workspace -> journal) |
+| tests/test_account_settlement_driver.py `call_as` | a helper of ClosureAuthorityTests | moved unchanged to SettlementHarness | helper move, so the r1 MED 1 test can use it; no test body changed |
+| tests/test_result_lifetime.py RC-3 (RS-B-B4-9) | `@unittest.skip(...)` | skip removed, test body unchanged, passes | B4-9 requires it (the primary's earlier split reversed): the lease-refused job is retired so the open is withdrawn |
+| tests/test_project_holds_schema.py test_SB_a_copy_of_an_18_store_carries_the_new_tables_and_a_restore_opens_validated | setup: settlement row `lost` for claim 2 while claim 2's reservation row stays `held` | setup also writes claim 2's reservation row `released lost` (replaces the held row; the `1 + 5` row count is unchanged) | already failing at e57f84a5 (history_incompatible at open): RS-B-B4-7 refuses a held reservation with a settlement row; assertions unchanged |
+| tests/test_project_holds_schema.py test_X5_M3_a_settlement_row_is_written_and_read_back | setup: settlement row for claim 2, its reservation row `held` | the same transaction releases claim 2's reservation row `lost` | as above (already failing at e57f84a5); assertion (row read back after a validated reopen) unchanged |
+
+New tests (red first, docs/requirements/b4s/red.md): tests/test_account_settlement.py ReviewRoundOneStoreTests (5),
+tests/test_account_settlement_driver.py ReviewRoundOneDriverTests (9; the process-mode HIGH 3 test stays skipped with
+its cause). test_r1_H1_a_recorded_settlement... was edited before it went green (its own, new in this round): the
+account's tombstone evidence is cleared after the purge (a run settled before the tombstone kept it), and its
+"no account call after the purge" check became "the stopping service settled it at the account first": RS-B-B4-4's
+replay (StepBoundaryTests: every later sweep re-sends the identical request, answer `known`) is kept, and the local
+receipt finishes the journal when the account can no longer answer.

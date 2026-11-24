@@ -176,6 +176,10 @@ class SchemaStepTests(unittest.TestCase):
         with self.store._transaction():
             self.store._connection.execute(f'INSERT INTO project_account_settlements({columns}) VALUES(?,?,?,?,?,?,?)',
                                            row)
+            # Setup corrected for RS-B-B4-7 (B4s): the settlement row's reservation register row is released by it,
+            # with its kind (a held one with a settlement row is refused at open).
+            self.store._connection.execute("UPDATE project_holds SET state='released',release_kind='lost' "
+                                           "WHERE kind='reservation' AND identity=?", (binding(2).claim_id,))
         self.reopen()  # an ordinary open runs both validators over it
         self.assertEqual([row], [tuple(r) for r in self.store._connection.execute(
             f'SELECT {columns} FROM project_account_settlements')])
@@ -386,7 +390,10 @@ class SchemaStepTests(unittest.TestCase):
         self.write(self.hold('lease', self.identity(1)),
                    self.hold('lease', project_holds_schema.attempt_identity('hrn_' + 'e' * 48, 1), 'released',
                              'withdrawn_unsent'),
-                   self.settlement(2, 'lost'))
+                   self.settlement(2, 'lost'),
+                   # Setup corrected for RS-B-B4-7 (B4s): a settlement row releases its reservation's register row
+                   # with its kind; this replaces claim 2's held row (the row count is unchanged).
+                   self.hold('reservation', binding(2).claim_id, 'released', 'lost'))
         self.reopen()
         copy = self.store._keep_copy_before_upgrade(18)
         self.store.close()

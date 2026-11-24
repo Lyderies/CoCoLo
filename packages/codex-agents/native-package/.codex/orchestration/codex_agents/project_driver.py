@@ -72,6 +72,7 @@ from pathlib import Path
 import stat
 from threading import Lock, local
 import time
+import types
 
 from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountClient, AccountError, AccountRequest, account_request_digest
 from .account_claim_contracts import CLAIM_DENIAL_CODES, LaunchClaimInput
@@ -270,6 +271,8 @@ class _Run:
     own_settled: bool = False
     own_settle_failures: int = 0
     own_settle_at: float | None = None
+    own_reply: dict | None = None  # B4s r1: the account's answer, kept until the workspace is confirmed gone
+    own_workspace: str | None = None
 
 
 class _Call(local):
@@ -350,6 +353,10 @@ class RunDriver:
     _containers = None
     # C4: the recovery of earlier instances' container entries, made on its first use (containers only).
     _recovery = None
+    # B4s r1 (HIGH 3): `settled` journal entries checked against the project store (once each, by this service), and
+    # those whose recovery failed (failures, next try), kept from the prune until recovered. Replaced, never mutated.
+    _settled_checked = frozenset()
+    _settled_retry = types.MappingProxyType({})
     # O0c M7: retired runs' monitor attempts the monitor still refused after MAX_FORGET_ATTEMPTS
     # (rebound, never mutated, so the class default stays empty).
     _stuck_monitor = frozenset()
@@ -1284,6 +1291,14 @@ class RunDriver:
             snapshot = lane.snapshot(run.persistence)
             state = snapshot['state']
             if state == 'failed' and snapshot['reason_code'] in _CAPACITY_REASONS:
+                # B4s r1 (RS-B-B4-9, RC-3): the store refused the lease for result space, so nothing of it was
+                # stored; the job's input goes and the run fails as one that never took a lease, so its open
+                # binding is marked for withdrawal at once (`_retire_unclaimed`), not left held for 24 h.
+                try:
+                    lane.retire_refused(run.persistence)
+                    run.persistence = None
+                except HistoryError:
+                    pass  # Not provably refused: it keeps its job, as before.
                 self._fail(run, _CAPACITY_REASONS[snapshot['reason_code']])  # 0.3.4 R3, O10 RC-1
                 return
             if state != 'preparing':
@@ -1737,15 +1752,26 @@ class RunDriver:
                     continue
                 future, run.own_settle = run.own_settle, None
                 try:
-                    reply = future.result()
+                    run.own_reply, run.own_settle_at = future.result(), None
                 except Exception:
                     run.own_settle_failures += 1
                     run.own_settle_at = now + container_launch.stop_retry_delay(run.own_settle_failures)
                     continue
+            if run.own_reply is not None:
+                if run.own_settle_at is not None and now < run.own_settle_at:
+                    continue
+                # B4s r1 (MED 2): the preparation goes back, then the journal is `settled` only once the run's
+                # workspace is confirmed gone; otherwise both are tried again later (the account's answer is kept).
+                self._give_back_own(run)
+                if not self._remove_workspace(run.own_workspace):
+                    run.own_settle_failures += 1
+                    run.own_settle_at = now + container_launch.stop_retry_delay(run.own_settle_failures)
+                    continue
                 try:
-                    self._journal.settled(run.launch_token, reply['state'])
+                    self._journal.settled(run.launch_token, run.own_reply['state'])
                 except JournalError:
                     pass  # The account settled it; a later service asks again and gets the same answer.
+                run.own_reply = None
                 self._settled_own(run)
                 continue
             if run.own_settle_at is not None and now < run.own_settle_at:
@@ -1760,11 +1786,15 @@ class RunDriver:
                 continue
             if entry['state'] != 'gone' or entry['instance'] != self._journal.instance:
                 continue
+            run.own_workspace = entry['workspace']
             run.own_settle = self._sweeper.submit(self._settle_entry, entry)
 
     def _settled_own(self, run):
         """The account no longer holds the run: its preparation goes back, as a run never admitted's does."""
         run.own_settled, run.own_settle_at = True, None
+        self._give_back_own(run)
+
+    def _give_back_own(self, run):
         if run.prepared is None:
             return
         try:
@@ -1803,6 +1833,7 @@ class RunDriver:
             handle, host_client = entry['run_handle'], entry['host_client']
             if entry['state'] == 'settled':
                 lost[handle] = (host_client, 'released')
+                self._recover_settled(entry)
                 continue
             instance = entry['instance']
             adopted = entry.get('version') == 2 and recovery is not None and recovery.owns(entry['token'])
@@ -1827,7 +1858,8 @@ class RunDriver:
                 reply = self._settle_entry(entry)
             except Exception:
                 continue  # The account is unreachable or refused: asked again on the next sweep.
-            self._remove_workspace(entry['workspace'])
+            if not self._remove_workspace(entry['workspace']):
+                continue  # B4s r1 (MED 2): not confirmed gone; the next sweep replays the identical settlement
             try:
                 journal.settled(launch_journal_key(entry), reply['state'])
             except JournalError:
@@ -1841,11 +1873,45 @@ class RunDriver:
             for entry in recovering:
                 if entry['token'] in recovered:
                     lost[entry['run_handle']] = (entry['host_client'], 'released')
-        journal.prune()
+        journal.prune(keep=frozenset(self._settled_retry))
         for instance in journal.instances():
             if instance != journal.instance:
                 journal.forget_instance(instance)
         return lost
+
+    def _recover_settled(self, entry):
+        """Sweep thread, B4s r1 (HIGH 3): a journal entry written `settled` before project settlement existed (0.8.54
+        and earlier: the account settled the run, its reservation hold stayed `releasing`) is recovered from the
+        project store before it can be pruned: an outstanding hold of its attempt is settled through the one
+        sequence (`_settle_entry`; the account answers `known`). Checked once per entry by each service; a failed
+        recovery is tried again later, with backoff, and keeps the entry from the prune."""
+        key = launch_journal_key(entry)
+        if key in self._settled_checked or entry.get('lease') is None or entry.get('bridge_run_id') is None:
+            return
+        failures, at = self._settled_retry.get(key, (0, 0.0))
+        if self._clock() < at:
+            return
+        try:
+            lease = ResultLeaseBinding(**entry['lease'])
+            try:
+                opened = self._settlement_step('open_account_settlement', lease.run_handle, lease.attempt,
+                    'lost-' + hashlib.sha256(entry['bridge_run_id'].encode()).hexdigest()[:32],
+                    SettleLostInput(entry['run_handle'], entry['identity_digest'], entry['claim_request_id'],
+                                    entry['bridge_run_id'], parse_bounded_json(bytes.fromhex(
+                                        entry['storage_evidence']))['lease']['lease_digest']).payload(),
+                    runtime_digest=COLLECTOR_RUNTIME_DIGEST)['state']
+            except HistoryError as error:
+                if error.reason_code != 'history_result_not_reserved':
+                    raise
+                opened = None  # nothing of this attempt is outstanding in the store
+            if opened == 'releasing':
+                self._settle_entry(entry)
+        except Exception:
+            self._settled_retry = {**self._settled_retry, key: (failures + 1, self._clock() + min(
+                FENCE_RETRY_MAX_SECONDS, FENCE_RETRY_SECONDS * 2 ** failures))}
+            return
+        self._settled_retry = {k: v for k, v in self._settled_retry.items() if k != key}
+        self._settled_checked = self._settled_checked | {key}
 
     def _container_recovery(self):
         """C4: this service's container recovery, or None while containers are switched off."""
@@ -1929,12 +1995,13 @@ class RunDriver:
                                  entry['bridge_run_id'], parse_bounded_json(evidence)['lease']['lease_digest'])
         request_id = 'lost-' + hashlib.sha256(entry['bridge_run_id'].encode()).hexdigest()[:32]
         try:
-            outbox = self._settlement_step('open_account_settlement', lease.run_handle, lease.attempt, request_id,
-                                           settle.payload(), runtime_digest=COLLECTOR_RUNTIME_DIGEST)['state']
+            opened = self._settlement_step('open_account_settlement', lease.run_handle, lease.attempt, request_id,
+                                           settle.payload(), runtime_digest=COLLECTOR_RUNTIME_DIGEST)
         except HistoryError as error:
             if error.reason_code != 'history_result_not_reserved':
                 raise
-            outbox = None  # Nothing of this attempt is left to settle in the store: the account settles it alone.
+            opened = {'state': None}  # Nothing of this attempt is left to settle in the store: the account alone.
+        outbox = opened['state']
         custody = canonical_json({'purpose': 'run', 'lease': entry['lease'], 'storage_evidence': entry['storage_evidence'],
                                   'terminal_evidence': None, 'cleanup_evidence': None})
         call = self._call
@@ -1942,7 +2009,16 @@ class RunDriver:
         try:
             client = AccountClient(self._account, self._scope.project_id, COLLECTOR_RUNTIME_DIGEST,
                                    timeout=SETTLE_TIMEOUT_SECONDS)
-            reply = client.settle_lost_run(settle, request_id=request_id)
+            try:
+                reply = client.settle_lost_run(settle, request_id=request_id)
+            except Exception:
+                if outbox != 'settled':
+                    raise
+                # B4s r1 (HIGH 1): the store holds this attempt's verified settlement (the account only closes a run
+                # it settled or released), so its local receipt finishes the journal even when the account cannot
+                # answer any more (its open purged, the run settled before its tombstone kept the replay evidence).
+                return {'state': 'released' if opened['release_kind'] == 'released_unacknowledged' else 'settled',
+                        'known': True}
             closure = None if outbox != 'releasing' else client.lost_run_closure(settle, request_id=request_id)
         finally:
             call.role = call.host_client = call.context = None
@@ -1973,9 +2049,11 @@ class RunDriver:
 
     @staticmethod
     def _remove_workspace(workspace):
-        """The settled run's private workspace, only if it is one of the host scratch folder's."""
+        """The settled run's private workspace, only if it is one of the host scratch folder's. B4s r1 (MED 2):
+        whether it is confirmed gone afterwards (True too for no workspace, or a path that is not one of this
+        host's workspaces, which is never removed); a removal that failed or could not be checked is False."""
         if workspace is None:
-            return
+            return True
         from .bridge import SCRATCH_CONTAINER, scratch_base
         from .host_paths import remove_private_directory
         try:
@@ -1984,12 +2062,17 @@ class RunDriver:
             path = Path(workspace)
             if (os.path.realpath(container) != str(container) or os.path.realpath(path) != str(path)
                     or path.parent != container or not path.name.startswith('prepare-')):
-                return
-            info = os.lstat(path)
-            if stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid():
-                remove_private_directory(path)
+                return True
+            try:
+                info = os.lstat(path)
+            except FileNotFoundError:
+                return True
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+                return True
+            remove_private_directory(path)
+            return not os.path.lexists(path)
         except Exception:
-            pass
+            return False
 
     def settle_on_exit(self, *, settle=True):
         """After every thread of this host stopped: settle its own runs, then let later hosts settle the rest.

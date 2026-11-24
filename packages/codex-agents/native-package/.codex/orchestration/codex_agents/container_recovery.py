@@ -63,7 +63,7 @@ class ContainerRecovery:
     """One project service's recovery of the container entries earlier instances left (see the module notes).
 
     `fence(entry)` and `settle(entry)` are the account's `fence_claim` and `settle_lost_run` for the
-    entry, sent with its custody; `remove_workspace(path)` removes the settled run's workspace. All
+    entry, sent with its custody; `remove_workspace(path)` removes the settled run's workspace and says whether it is gone. All
     run on the caller's thread (the driver's sweep thread), never on its foreground account thread.
     """
 
@@ -156,7 +156,9 @@ class ContainerRecovery:
         except Exception:
             self._back_off(token)  # The account is unreachable or refused: asked again later.
             return None
-        self._remove_workspace(entry['workspace'])
+        if not self._remove_workspace(entry['workspace']):
+            self._back_off(token)  # B4s r1 (MED 2): not confirmed gone; the settlement is replayed later
+            return None
         try:
             self.journal.settled(token, outcome)
         except JournalError:

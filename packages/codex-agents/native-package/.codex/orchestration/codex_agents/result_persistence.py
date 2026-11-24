@@ -466,6 +466,25 @@ class ResultPersistenceLane:
             pending.state, pending.reason = 'withdrawing', None
             self._incoming.put_nowait(('withdraw_unsent', handle))
 
+    def retire_refused(self, handle):
+        """B4s r1 (RS-B-B4-9, RC-3): drop the input of a job whose lease the store refused for result space. That
+        refusal is raised inside the lease's own transaction before anything is written, so no lease of it exists
+        and none can be armed: the run is then one that never took a lease, and its open binding is withdrawn."""
+        pending = self._job(handle)
+        with self._lock:
+            if (pending.state != 'failed' or pending.reason not in {'history_result_capacity',
+                                                                     'history_result_capacity_busy'}
+                    or pending.lease_binding is None or pending.lease is not None or pending.execution_issued):
+                raise HistoryError('history_result_not_ready')
+        with self._pool._registry._lock:
+            original = self._pool._job(pending.worker_handle)
+            if original is not pending.original_job or original.state != 'prepared':
+                raise HistoryError('history_not_authorized')
+        self._pool.withdraw_prepared(pending.worker_handle)
+        with self._lock:
+            self._jobs.pop(handle)
+            self._by_worker.pop(pending.worker_handle)
+
     def retire_denied(self, handle):
         """Drop a closed lease's input: denied by the account, or withdrawn before its claim."""
         pending = self._job(handle)

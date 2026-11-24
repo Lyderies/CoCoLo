@@ -158,12 +158,14 @@ _REGISTER_INCONSISTENT = (
     # B4s (RS-B-B4-7): a settlement row's register row, where there is one, is released by it: the reservation's (by
     # its claim id) with the settlement's kind, or, for a claim never bound (no claim id), the lease's `lost_unbound`.
     # A held or `releasing` row with a settlement row is refused; `releasing` without one is the open outbox (legal).
-    "SELECT 1 FROM project_account_settlements t JOIN project_holds r ON r.project_id=t.project_id "
+    # B4s r1 (MED 3): a settlement row naming no register row at all is refused too (the readers require one).
+    "SELECT 1 FROM project_account_settlements t LEFT JOIN project_holds r ON r.project_id=t.project_id "
     "AND r.kind='reservation' AND r.identity=t.claim_id "
-    "WHERE t.claim_id IS NOT NULL AND (r.state<>'released' OR r.release_kind<>t.release_kind) LIMIT 1",
-    "SELECT 1 FROM project_account_settlements t JOIN project_holds r ON r.project_id=t.project_id "
+    "WHERE t.claim_id IS NOT NULL AND (r.kind IS NULL OR r.state<>'released' OR r.release_kind<>t.release_kind) "
+    "LIMIT 1",
+    "SELECT 1 FROM project_account_settlements t LEFT JOIN project_holds r ON r.project_id=t.project_id "
     "AND r.kind='lease' AND r.identity=t.run_handle||':'||t.attempt "
-    "WHERE t.claim_id IS NULL AND (r.state<>'released' OR r.release_kind<>'lost_unbound') LIMIT 1",
+    "WHERE t.claim_id IS NULL AND (r.kind IS NULL OR r.state<>'released' OR r.release_kind<>'lost_unbound') LIMIT 1",
 )
 
 

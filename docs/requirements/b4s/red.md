@@ -44,3 +44,26 @@ FAILED (failures=4, errors=27)
   17 AttributeError: 'ProjectHistory' object has no attribute 'open_account_settlement'
    4 ModuleNotFoundError: No module named 'codex_agents.lost_run_closure'
 ```
+
+## Review r1 (Codex security review NOT-READY, e57f84a5): red before each fix (2026-11-24)
+Store (tests.test_account_settlement.ReviewRoundOneStoreTests, 5 tests, all FAILED on e57f84a5 code):
+- test_r1_H2_an_admitted_unbound_settlement_releases_the_open_binding_as_claimed: ('released','claimed') != ('held', None)
+- test_r1_M3_a_settlement_row_that_does_not_verify_is_never_answered_settled: HistoryError not raised (answered settled)
+- test_r1_M3_a_verified_closure_whose_hold_is_not_released_does_not_end_the_attempt: True is not false
+- test_r1_M3_the_validator_refuses_a_settlement_naming_an_absent_hold: True is not false
+- test_r1_M4_a_stored_closure_that_is_not_bytes_is_refused_before_any_coercion: 'history_incompatible' != 'history_conflict'
+Driver/account (tests.test_account_settlement_driver, 9 tests, 130 s, all FAILED):
+- ReviewRoundOneDriverTests.test_r1_H1_a_settlement_the_account_purged_before_the_project_recorded_it_still_finishes:
+  timed out waiting for the settlement row (account answered claim_storage_invalid / unavailable after the purge)
+- test_r1_H1_a_recorded_settlement_finishes_its_journal_from_the_local_receipt_without_the_account: journal never settled
+- test_r1_M1_a_slot_released_as_crashed_has_no_released_unacknowledged_closure: AccountError not raised
+- test_r1_M2_a_workspace_that_could_not_be_removed_keeps_the_journal_unsettled: workspace never removed (timed out)
+- test_r1_M2_the_container_recovery_writes_no_journal_while_the_workspace_remains: 'settled' is not None
+- test_r1_M2_the_live_container_path_settles_its_journal_only_after_the_workspace_is_gone: no _remove_workspace call
+- test_r1_H3_an_old_settled_journal_with_an_outstanding_project_hold_is_recovered: timed out (no settlement row)
+- test_r1_H3_a_claim_admitted_before_its_first_journal_write_is_settled_from_the_store: timed out; STAYS RED -> skipped
+  with its cause (see STATUS.md)
+- SettlementThroughTheDriverTests.test_A2 (new assertion): [('released','claimed')] != [('held', None)]
+RC-3 (tests.test_result_lifetime, skip removed): timed out waiting for the abandoned binding (31 s).
+Already red at e57f84a5, found in this round: tests.test_project_holds_schema test_SB_a_copy_of_an_18_store... and
+test_X5_M3_a_settlement_row_is_written_and_read_back (history_incompatible: their planted settlement rows break B4-7).

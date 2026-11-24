@@ -12,6 +12,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import tests.support  # noqa: F401
@@ -395,6 +396,81 @@ class ValidatorTests(SettlementFixture):
         with self.store._transaction():
             self.plant('lost', hold_kind='lost', number=2)
         self.assertTrue(project_holds_schema.register_consistent(self.store._connection))
+
+
+@requirements('RS-B-B4')
+class ReviewRoundOneStoreTests(SettlementFixture):
+    """B4s security review r1 (Codex, NOT-READY): the store findings, each red before its fix."""
+
+    def plant_row(self, number=1, *, closure, claim=True, kind='lost'):
+        target = claim_binding(number)
+        self.store._connection.execute(
+            'INSERT INTO project_account_settlements VALUES(?,?,?,?,?,?,?)',
+            (target.project_id, target.run_handle, target.attempt, target.claim_id if claim else None, kind,
+             closure, self.now))
+
+    def test_r1_H2_an_admitted_unbound_settlement_releases_the_open_binding_as_claimed(self):
+        """HIGH 2: the lease never bound, so only the settlement can release the run's open binding."""
+        lease = self.lease(1)
+        self.store.record_open_binding(lease.run_handle, lease.attempt, lease.run_id, 'e' * 64, 'codex',
+                                       instance='earlier', now_ms=self.now)
+        self.armed(1)
+        self.open(1)
+        self.record_settlement(1)
+        identity = project_holds_schema.attempt_identity(*self.attempt(1))
+        self.assertEqual(('released', 'claimed'), self.hold('open_binding', identity)[:2])
+        self.consistent()
+
+    def test_r1_M3_a_settlement_row_that_does_not_verify_is_never_answered_settled(self):
+        """MED 3: the outbox answers `settled` only for a verified closure of this attempt with its hold released."""
+        self.bound(1)
+        self.open(1)
+        with self.store._transaction():
+            self.plant_row(1, closure=b'{}')
+        with self.assertRaises(HistoryError) as caught:
+            self.open(1, arbitrate=False)
+        self.assertEqual('history_conflict', caught.exception.reason_code)
+
+    def test_r1_M3_a_verified_closure_whose_hold_is_not_released_does_not_end_the_attempt(self):
+        """MED 3: readers and validator agree; a row whose reservation hold is still `releasing` ends nothing."""
+        self.bound(1)
+        self.open(1)
+        raw = self.closure(1)
+        with self.store._transaction():
+            self.plant_row(1, closure=raw)
+        self.assertFalse(self.store._attempt_settled(self.store.result_lease(self.lease(1))))
+        self.assertFalse(project_holds_schema.register_consistent(self.store._connection))
+
+    def test_r1_M3_the_validator_refuses_a_settlement_naming_an_absent_hold(self):
+        """MED 3: a settlement row with no register row at all (claim id or attempt of no hold) is refused."""
+        self.bound(1)
+        target = claim_binding(1)
+        with self.store._transaction():
+            self.store._connection.execute(
+                'INSERT INTO project_account_settlements VALUES(?,?,?,?,?,?,?)',
+                (target.project_id, target.run_handle, target.attempt, 'brg_' + 'f' * 32, 'lost', b'{}', self.now))
+        self.assertFalse(project_holds_schema.register_consistent(self.store._connection))
+        with self.store._transaction():
+            self.store._connection.execute('DELETE FROM project_account_settlements')
+            self.store._connection.execute(
+                'INSERT INTO project_account_settlements VALUES(?,?,?,?,?,?,?)',
+                (target.project_id, 'hrn_' + '9' * 48, 1, None, 'lost', b'{}', self.now))
+        self.assertFalse(project_holds_schema.register_consistent(self.store._connection))
+
+    def test_r1_M4_a_stored_closure_that_is_not_bytes_is_refused_before_any_coercion(self):
+        """MED 4: `_stored_blob` guards both readers of the stored closure (bytes(INTEGER) allocates)."""
+        self.bound(1)
+        self.open(1)
+        raw = self.closure(1)
+        with self.store._transaction():
+            self.plant_row(1, closure=3)
+        with self.assertRaises(HistoryError) as caught:
+            self.store.record_account_settlement(self.lease(1), raw)
+        self.assertEqual('history_incompatible', caught.exception.reason_code)
+        from codex_agents import project_history
+        lease = self.store.result_lease(self.lease(1))
+        with mock.patch.object(project_history, 'bytes', side_effect=AssertionError('coerced'), create=True):
+            self.assertFalse(self.store._attempt_settled(lease))
 
 
 @requirements('RS-B-B4')
