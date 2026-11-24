@@ -343,7 +343,7 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         def crashing(argv, *args, **kwargs):
             return real([sys.executable, "-I", "-c", "import sys; sys.stderr.write('boom in the child'); sys.exit(3)"],
                         *args, **kwargs)
-        with mock.patch.object(subprocess, "Popen", crashing), self.assertRaisesRegex(RuntimeError, "boom in the child"):
+        with mock.patch.object(subprocess, "Popen", crashing), self.assertRaisesRegex(RuntimeError, r"could not be written or checked \(exit 3\)"):
             self.owner_backup("crashed")
         self.assert_nothing_left("crashed")
 
@@ -419,7 +419,9 @@ class OwnerBackupStreamedTests(unittest.TestCase):
                 mock.patch.object(os, "unlink", unlink), self.assertRaises(Exception) as caught:
             self.owner_backup("stuck")
         self.assertIn("could not be removed", str(caught.exception))
-        self.assertIn(str(self.source.state.backups / self.project / ".stuck.partial"), str(caught.exception))
+        self.assertNotIn(str(self.source.state.backups), str(caught.exception))  # decisions 36, 192
+        self.assertNotIn(str(self.source.state.root), str(caught.exception))
+        self.assertIn("1 partial file(s)", str(caught.exception))
         self.assertIsNone(self.registered("stuck"))
 
 
@@ -518,7 +520,8 @@ class OwnerBackupStreamedTests(unittest.TestCase):
                 mock.patch.object(Path, "unlink", unlink), \
                 self.assertRaises(SCRIPT_GLOBALS["QuiesceLeftStopped"]) as caught:
             TOOL["_quiesce_collector_authorization"](path)
-        self.assertIn("temporary file stuck", str(caught.exception))
+        self.assertNotIn("temporary file stuck", str(caught.exception))  # decisions 36, 192: fixed reason
+        self.assertIn("a temporary copy remains", str(caught.exception))
 
     def test_F3_16_an_interrupt_while_closing_still_restarts_the_collector(self):
         resumed = []

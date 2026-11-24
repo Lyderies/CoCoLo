@@ -2536,6 +2536,7 @@ def main() -> int:
                 report = {
                     "ready": True,
                     "project_id": project_id,
+                    "file_id": args.file_id,
                     "backup_name": Path(path).name,
                     **verified,
                 }

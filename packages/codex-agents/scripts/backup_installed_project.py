@@ -37,6 +37,14 @@ CHILD_SECONDS = 4 * 3600
 _FILE_ID = re.compile(r"[A-Za-z0-9_]{1,160}")
 
 
+def _reason(error: BaseException) -> str:
+    """A fixed reason for a reply (decisions 36, 192): our own RuntimeError texts name no path; anything else
+    (filesystem, ledger, child or parser text) can, so it is reduced to one fixed sentence."""
+    if isinstance(error, RuntimeError):  # incl. QuiesceLeftStopped: raised only with fixed texts
+        return str(error)
+    return f"the backup could not be completed ({type(error).__name__})"
+
+
 class QuiesceLeftStopped(RuntimeError):
     """Quiescing failed after the authorization file was replaced, and the earlier one could not be put
     back: the collector stays stopped (F3-12)."""
@@ -104,11 +112,11 @@ def _write_authorization(path: Path, content: bytes) -> None:
                 restore.chmod(0o600)
                 os.replace(restore, path)
             except BaseException as failed:
-                outcome = QuiesceLeftStopped(f"{error}; the earlier authorization could not be put back: {failed}")
+                outcome = QuiesceLeftStopped("the earlier authorization could not be put back")
                 try:
                     restore.unlink(missing_ok=True)
                 except OSError as stuck:
-                    outcome = QuiesceLeftStopped(f"{outcome}; {stuck}: {restore} remains")
+                    outcome = QuiesceLeftStopped("the earlier authorization could not be put back; a temporary copy remains")
                 raise outcome from error
             try:
                 restore.unlink(missing_ok=True)  # F3-17: no temporary copy left behind
@@ -298,9 +306,9 @@ class _Stopped(BaseException):
 def _private_folder(path: Path, *, owner_only: bool) -> None:
     info = os.lstat(path)
     if stat.S_ISLNK(info.st_mode):
-        raise RuntimeError(f"a folder on the way to the backup is a link: {path}")
+        raise RuntimeError("a folder on the way to the backup is a link")
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or (owner_only and info.st_mode & 0o077):
-        raise RuntimeError(f"a folder on the way to the backup is not a private folder of this account: {path}")
+        raise RuntimeError("a folder on the way to the backup is not a private folder of this account")
 
 
 def _identity(info: os.stat_result) -> list[int]:
@@ -391,10 +399,8 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
             report = None
         if child.returncode != 0:
             if isinstance(report, dict) and report.get("error"):
-                raise RuntimeError(str(report["error"]))
-            last = [line for line in (err or "").splitlines() if line.strip()][-1:]
-            raise RuntimeError("the backup copy could not be written or checked"
-                               + (f": {last[0][:300]}" if last else f" (exit {child.returncode})"))
+                raise RuntimeError(_reason(RuntimeError(str(report["error"]))))  # the child's own fixed reason
+            raise RuntimeError(f"the backup copy could not be written or checked (exit {child.returncode})")
         report = _checked_report(report)
         # The copy has exactly the columns this script checked against the installed schema (F3-6).
         expected = {table: list(_expected_columns(schema_version, table)) for table in _tables(schema_version)}
@@ -458,10 +464,10 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
             except FileNotFoundError:
                 pass
             except OSError:
-                remaining.append(str(partition / name))
+                remaining.append(name)
         if remaining:  # F3-14: say what is left rather than claim nothing was kept.
-            raise RuntimeError(f"{'stopped by a signal' if isinstance(error, _Stopped) else error}; these files "
-                               f"could not be removed: {', '.join(remaining)}") from None
+            raise RuntimeError(f"{'stopped by a signal' if isinstance(error, _Stopped) else _reason(error)}; "
+                               f"{len(remaining)} partial file(s) in the backup folder could not be removed") from None
         if isinstance(error, _Stopped):
             raise RuntimeError("the backup was stopped by a signal; nothing was kept") from None
         raise
@@ -488,9 +494,9 @@ def finish_backup(report: dict[str, object], *, leave_quiesced: bool, quiesce) -
     try:
         quiesce()
     except QuiesceLeftStopped as exc:  # F3-12: replaced and not put back, so it is stopped
-        return {**report, "collector_quiesced": True, "quiesce_error": str(exc)}, 3
+        return {**report, "collector_quiesced": True, "quiesce_error": _reason(exc)}, 3
     except Exception as exc:
-        return {**report, "collector_quiesced": False, "quiesce_error": str(exc)}, 3
+        return {**report, "collector_quiesced": False, "quiesce_error": _reason(exc)}, 3
     return {**report, "collector_quiesced": True}, 0
 
 
@@ -500,21 +506,21 @@ def conclude(*, report: dict[str, object] | None, code: int, error: BaseExceptio
     asked) whatever failed before; every later error goes into the one report. Exit 0 only when all
     succeeded; 3 when the backup was made but something after it failed; 2 when it was not made."""
     made = report is not None
-    final = dict(report) if made else {"ready": False, "error": str(error)}
+    final = dict(report) if made else {"ready": False, "error": _reason(error)}
     if made and error is not None:
-        final["error"], code = str(error), 3
+        final["error"], code = _reason(error), 3
     elif not made:
         code = 2
     try:
         close()
     except BaseException as exc:  # An interrupt here still lets the collector restart (F3-16).
-        final["close_error"] = str(exc) or type(exc).__name__
+        final["close_error"] = _reason(exc)
         code = code or 3
     if not final.get("collector_quiesced"):
         try:
             resume()
         except BaseException as exc:
-            final["restart_error"] = f"the installed collector did not restart: {exc}"
+            final["restart_error"] = f"the installed collector did not restart: {_reason(exc)}"
             code = code or 3
     return final, code
 
@@ -527,7 +533,7 @@ def settle_maintenance(final: dict[str, object], code: int, *, resume) -> tuple[
     try:
         resume()
     except Exception as exc:
-        return {**final, "restart_error": f"the installed collector did not restart: {exc}"}, 3
+        return {**final, "restart_error": f"the installed collector did not restart: {_reason(exc)}"}, 3
     return final, code
 
 
@@ -714,10 +720,10 @@ if __name__ == "__main__":
         try:
             raise SystemExit(_stream_child(sys.argv[2:]))
         except Exception as exc:
-            print(json.dumps({"error": str(exc)}))
+            print(json.dumps({"error": _reason(exc)}))
             raise SystemExit(2)
     try:
         raise SystemExit(_main())
     except Exception as exc:
-        print(json.dumps({"ready": False, "error": str(exc)}, indent=2))
+        print(json.dumps({"ready": False, "error": _reason(exc)}, indent=2))
         raise SystemExit(2)

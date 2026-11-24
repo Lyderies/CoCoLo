@@ -56,6 +56,38 @@ class BackupReplyPrivateTests(unittest.TestCase):
         self.assertNotIn("path", report)
         self.assertEqual("bk_owner.sqlite3", report["backup_name"])
 
+    def test_BK_4_the_cli_reply_carries_the_file_id_and_it_round_trips_to_verify(self):
+        report = json.loads(self.cli_reply("learning-backup-project", "bk_rt"))
+        self.assertEqual("bk_rt", report["file_id"])
+        again = json.loads(self.cli_reply("learning-verify-backup", report["file_id"]))
+        self.assertTrue(again["verified"])
+        self.assertEqual(report["backup_sha256"], again["backup_sha256"])
+
+    def test_BK_5_streamed_verification_refuses_a_file_with_an_extra_hard_link(self):
+        self.cli_reply("learning-backup-project", "bk_link")
+        path = self.source.state.backups / self.project / "bk_link.sqlite3"
+        extra = path.with_name("extra-link")
+        os.link(path, extra)
+        with self.assertRaises(Exception) as caught:
+            self.source.verify_sanitized_backup(self.project, file_id="bk_link")
+        self.assertNotIn(str(self.source.state.root), str(caught.exception))
+        os.unlink(extra)
+        self.assertTrue(self.source.verify_sanitized_backup(self.project, file_id="bk_link")["verified"])
+
+    def test_BK_6_error_replies_carry_fixed_reasons_without_paths_or_raw_text(self):
+        secret = str(self.source.state.root)
+        reason = TOOL["_reason"]
+        for error in (OSError(13, "denied", secret + "/x"), ValueError(secret),
+                      KeyError(secret), RuntimeError("fixed text")):
+            self.assertNotIn(secret, reason(error))
+        self.assertEqual("fixed text", reason(RuntimeError("fixed text")))
+        # the folder check and a stuck cleanup name no path
+        link = self.source.state.root / "a_link"
+        os.symlink(self.source.state.root, link)
+        with self.assertRaises(RuntimeError) as caught:
+            TOOL["_private_folder"](link, owner_only=True)
+        self.assertNotIn(secret, str(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

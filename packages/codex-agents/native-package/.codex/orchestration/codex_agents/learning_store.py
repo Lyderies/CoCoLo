@@ -2868,7 +2868,8 @@ class LearningLedger:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         try:
             before = os.fstat(descriptor)
-            if not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid() or before.st_mode & 0o077:
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid() or before.st_mode & 0o077
+                    or before.st_nlink != 1):
                 raise LedgerError("project backup file is not private")
             if project_backup.file_digest(descriptor) != expected_digest:
                 raise LedgerError("project backup file digest disagrees with its registry")
