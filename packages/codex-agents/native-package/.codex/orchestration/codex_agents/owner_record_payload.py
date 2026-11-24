@@ -12,7 +12,7 @@ from typing import Any
 from .contracts import ContractError
 from .learning_contracts import (
     canonical_json, content_digest, validate_billing_attestation, validate_feedback,
-    validate_grader_calibration,
+    validate_grader_calibration, validate_run_slot_confirmation,
 )
 
 
@@ -28,6 +28,8 @@ def owner_record_payload(project_id: str, record: dict[str, Any]) -> bytes:
         checked = validate_grader_calibration(record)
     elif record_type == "billing_attestation":
         checked = validate_billing_attestation(record)
+    elif record_type == "run_slot_confirmation":
+        checked = validate_run_slot_confirmation(record)
     else:
         raise ContractError("owner record type is unsupported")
     return canonical_json(

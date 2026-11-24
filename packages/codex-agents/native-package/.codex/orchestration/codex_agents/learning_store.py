@@ -2248,6 +2248,8 @@ class LearningLedger:
             connection.row_factory = sqlite3.Row
             # O0b RS-A (F5): the register's triggers record releases at the ledger's own clock.
             connection.create_function("ledger_now_ms", 0, lambda: self._clock_ms())
+            from .legacy_slots import dispatch_deadline
+            connection.create_function("legacy_dispatch_deadline", 4, dispatch_deadline, deterministic=True)
             version = connection.execute('PRAGMA user_version').fetchone()[0]
             if version > LEDGER_SCHEMA_VERSION:
                 raise LedgerError('ledger schema is newer than this package')
@@ -3962,22 +3964,16 @@ class LearningLedger:
             return True
 
     def earlier_version_runs(self) -> dict:
-        """Runs an earlier version left that still hold a slot, and when the last stops counting.
-
-        A 0.2.x run became a `legacy_unknown` reservation at the upgrade; it counts
-        as running until LEGACY_RUN_MAX_MS after it was claimed. Until then it holds
-        one of its account's slots and the learning move waits for it.
-        """
-
-        from .active_run_capacity import crashed_claim
-
+        """Held historical slots; evidence-only holds have no automatic finish time."""
+        from .legacy_slots import deadline_sql
         with self._held():
             crashed, parameters = crashed_claim("a", self._clock_ms(), self._capacity_clock_reference())
-            count, newest = self._connection.execute(
-                "SELECT COUNT(*),MAX(a.claimed_at_ms) FROM active_run_capacity a "
-                f"WHERE a.kind='legacy_unknown' AND a.released_at_ms IS NULL AND NOT {crashed}", parameters,
-            ).fetchone()
-        return {"holding": count, "finished_by_ms": None if not count else newest + LEGACY_RUN_MAX_MS}
+            rows = self._connection.execute(
+                f"SELECT {deadline_sql('a')} AS deadline FROM active_run_capacity a "
+                f"WHERE a.kind='legacy_unknown' AND a.released_at_ms IS NULL AND NOT {crashed}", parameters).fetchall()
+        deadlines = [row["deadline"] for row in rows]
+        return {"holding": len(rows), "finished_by_ms":
+                max(deadlines) + CRASHED_CLAIM_GRACE_MS + 1 if deadlines and None not in deadlines else None}
 
     def mark_learning_moved_if_empty(self, project_id: str) -> bool:
         """Retire the ledger for a project that has no learning history in it.
@@ -7541,7 +7537,7 @@ class LearningLedger:
             return None
         row = self._connection.execute(
             "SELECT release_kind FROM run_holds WHERE project_id=? AND kind='run_slot' AND identity=? "
-            "AND release_kind IN ('lost','crashed') AND receipt=?", (project_id, handle_digest, release_digest)).fetchone()
+            "AND release_kind IN ('lost','crashed','unsent','process_gone','owner_confirmed') AND receipt=?", (project_id, handle_digest, release_digest)).fetchone()
         return None if row is None else row[0]
 
     def _capacity_completion_locked(self, key):
@@ -9577,7 +9573,7 @@ class LearningLedger:
         except ContractError as exc:
             raise LedgerError("record admission rejected") from exc
         if checked["record_type"] not in {
-            "feedback", "grader_calibration", "billing_attestation"
+            "feedback", "grader_calibration", "billing_attestation", "run_slot_confirmation"
         }:
             raise LedgerError("authenticated owner record type is unsupported")
         from .learning_engine import OwnerGrantAuthority
@@ -9597,6 +9593,26 @@ class LearningLedger:
             ).fetchone()
             if not project or project["status"] != "active":
                 raise LedgerError("project binding is not active")
+            if checked["record_type"] == "run_slot_confirmation":
+                slots = self._connection.execute(
+                    "SELECT * FROM active_run_capacity WHERE project_id=? AND run_id=? AND kind='legacy_unknown'"
+                    + (" AND handle_digest=?" if "handle_digest" in checked else ""),
+                    (project_id, checked["run_id"], *((checked["handle_digest"],) if "handle_digest" in checked else ()))
+                ).fetchall()
+                # A record naming only a run id is honoured only when it names exactly one slot.
+                slot = slots[0] if len(slots) == 1 else None
+                if slot is None:
+                    raise LedgerError("slot confirmation is unavailable")
+                if slot["released_at_ms"] is None:
+                    self._release_slot_locked(project_id, slot["handle_digest"], "owner_confirmed",
+                                              self._clock_ms(), self._capacity_clock_reference(),
+                                              proof={"record_digest": content_digest(checked)})
+                else:
+                    release = self._connection.execute(
+                        "SELECT release_kind FROM run_holds WHERE project_id=? AND kind='run_slot' AND identity=?",
+                        (project_id, slot["handle_digest"])).fetchone()
+                    if release is None or release["release_kind"] != "owner_confirmed":
+                        raise LedgerError("slot confirmation is unavailable")
             self._validate_evidence_links_locked(project_id, checked)
             result = self._append_checked_locked(
                 project_id, checked, producer="owner", timestamp=timestamp
@@ -10443,7 +10459,7 @@ class LearningLedger:
             in {
                 "evaluation_case", "qa_evidence", "evidence_review", "evaluation_trial", "candidate", "comparison", "canary_report",
                 "grader_calibration", "owner_grant", "promotion", "learning_export",
-                "billing_attestation",
+                "billing_attestation", "run_slot_confirmation",
                 "claim_denial_settlement",
             }
             # A raw hook or app-server event is kept as long as its code's weight says;
@@ -11791,7 +11807,7 @@ class LearningLedger:
                 "SELECT DISTINCT a.project_id FROM active_run_capacity a WHERE (a.released_at_ms IS NULL "
                 "OR EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=a.project_id AND r.kind='run_slot' "
                 "AND r.identity=a.handle_digest AND r.release_kind IN ('lost','crashed'))) "
-                "AND (claimed_at_ms>=:legacy OR (deadline_at_ms IS NOT NULL AND NOT (deadline_at_ms+:grace<:now "
+                "AND (a.kind='legacy_unknown' OR claimed_at_ms>=:legacy OR (deadline_at_ms IS NOT NULL AND NOT (deadline_at_ms+:grace<:now "
                 "AND (execution_deadline_ns+:grace_ns<=:mono OR clock_reference_ns>:mono)))) ORDER BY a.project_id",
                 {"legacy": now_ms - LEGACY_RUN_MAX_MS, "now": now_ms, "mono": mono, "grace": CRASHED_CLAIM_GRACE_MS,
                  "grace_ns": CRASHED_CLAIM_GRACE_MS * 1_000_000}).fetchall()
@@ -11821,19 +11837,22 @@ class LearningLedger:
                 steps[0] += interval
                 return 1 if steps[0] >= SLOT_HEALTH_STEPS else 0
 
+            from .legacy_slots import deadline_sql
             now_ms, mono = time.time_ns() // 1_000_000, time.monotonic_ns()
             grace_ns = CRASHED_CLAIM_GRACE_MS * 1_000_000
             self._connection.set_progress_handler(budget, interval)
             try:
                 runs = self._connection.execute(
-                    "SELECT COALESCE(SUM(deadline_at_ms IS NOT NULL AND deadline_at_ms<:now "
-                    "AND (execution_deadline_ns<:mono OR clock_reference_ns>:mono) "
-                    "AND NOT (deadline_at_ms+:grace<:now AND (execution_deadline_ns+:grace_ns<=:mono "
-                    "OR clock_reference_ns>:mono))),0),"
-                    "COALESCE(SUM(deadline_at_ms IS NULL AND claimed_at_ms>=:legacy),0) FROM active_run_capacity "
-                    "WHERE project_id=:project AND released_at_ms IS NULL",
+                    "SELECT COALESCE(SUM(effective_deadline IS NOT NULL AND effective_deadline<:now "
+                    "AND ((kind='legacy_unknown' AND effective_deadline+:grace>=:now) OR "
+                    "(kind='claimed' AND (execution_deadline_ns<:mono OR clock_reference_ns>:mono) "
+                    "AND NOT (effective_deadline+:grace<:now AND (execution_deadline_ns+:grace_ns<=:mono "
+                    "OR clock_reference_ns>:mono))))),0),"
+                    "COALESCE(SUM(effective_deadline IS NULL),0) FROM (SELECT a.*,"
+                    f"CASE WHEN kind='legacy_unknown' THEN {deadline_sql('a')} ELSE deadline_at_ms END AS effective_deadline "
+                    "FROM active_run_capacity a WHERE project_id=:project AND released_at_ms IS NULL)",
                     {"now": now_ms, "mono": mono, "grace": CRASHED_CLAIM_GRACE_MS, "grace_ns": grace_ns,
-                     "legacy": now_ms - LEGACY_RUN_MAX_MS, "project": project_id}).fetchone()
+                     "project": project_id}).fetchone()
                 probes = self._connection.execute(
                     "SELECT COUNT(*),COALESCE(SUM(deadline_at_ms<?),0) FROM account_billing_probe_requests "
                     "WHERE project_id=? AND state='admitted'", (now_ms, project_id)).fetchone()
@@ -11878,12 +11897,12 @@ class LearningLedger:
                 "open_requests": {"live": int(opens), "limit": OPEN_REQUESTS_IN_FLIGHT},
                 "holds": holds}
 
-    def _release_slot_locked(self, project_id, handle_digest, kind, now, monotonic) -> bool:
+    def _release_slot_locked(self, project_id, handle_digest, kind, now, monotonic, *, proof=None) -> bool:
         """O0b RS-A: release one unreleased run slot as `lost` or `crashed`, for good, inside the caller's
         account transaction. The decision, with the clocks it was made on, is the release's own evidence: its
         digest is both the capacity row's release digest and the register row's receipt, so the coverage
         checks can match them. Its time is max(now, the claim's), so a wall clock set back never blocks it."""
-        if kind not in {"lost", "crashed"} or not self._connection.in_transaction:
+        if kind not in {"lost", "crashed", "unsent", "process_gone", "owner_confirmed"} or not self._connection.in_transaction:
             raise LedgerError("invalid slot release")
         row = self._connection.execute(
             "SELECT claimed_at_ms FROM active_run_capacity WHERE project_id=? AND handle_digest=? "
@@ -11894,6 +11913,8 @@ class LearningLedger:
         evidence = {"decision": "run-slot-release-v1", "kind": kind, "project_id": project_id,
                     "handle_digest": handle_digest, "released_at_ms": at, "observed_wall_ms": now,
                     "observed_monotonic_ns": monotonic}
+        if proof is not None:
+            evidence["proof"] = proof
         decision = content_digest(evidence)
         # F5: the evidence is kept next to its digest, so the decision can be checked again later.
         self._connection.execute(
@@ -11917,8 +11938,13 @@ class LearningLedger:
             crashed, parameters = crashed_claim("a", now, monotonic)
             # O0b RS-A round 2 G12: each kind is read from its held register rows (run_holds_due), so the status
             # costs what is held, never the project's released history.
+            from .legacy_slots import deadline_sql
             held = self._connection.execute(
-                "SELECT a.kind,a.claimed_at_ms,a.deadline_at_ms,a.execution_deadline_ns,a.clock_reference_ns,"
+                "SELECT a.kind,a.run_id,a.handle_digest,a.claimed_at_ms,"
+                f"CASE WHEN a.kind='legacy_unknown' THEN {deadline_sql('a')} ELSE a.deadline_at_ms END AS deadline_at_ms,"
+                "a.execution_deadline_ns,a.clock_reference_ns,"
+                "(SELECT h.client_version FROM host_run_bindings h WHERE h.project_id=a.project_id "
+                "AND h.handle_digest=a.handle_digest) AS client_version,"
                 "CASE WHEN " + crashed + " THEN 1 ELSE 0 END AS due "
                 "FROM run_holds r INDEXED BY run_holds_due CROSS JOIN active_run_capacity a "
                 "ON a.project_id=r.project_id AND a.handle_digest=r.identity WHERE r.state<>'released' "
@@ -11944,19 +11970,53 @@ class LearningLedger:
                          "next_eligible": None if row[2] is None else int(row[2]),
                          "deadline": None if row[3] is None else int(row[3])}
                   for name, row in (("run_slot", slot), ("binding", binding), ("probe", probe))}
+        from .legacy_slots import DEADLINE_REASON, OWNER_REASON, MISSING_REASON
+        import shlex
+        reasons, confirmations = set(), []
+        for row in held:
+            if row["due"]:
+                continue
+            if row["deadline_at_ms"] is not None:
+                reasons.add(DEADLINE_REASON)
+            else:
+                # Every held slot with no recorded deadline can be released by the owner's signed confirmation:
+                # a native slot waits on process evidence, any other (pruned intent, no binding row) lacks evidence.
+                reason = OWNER_REASON if row["client_version"] == "claude-host-v1" else MISSING_REASON
+                reasons.add(reason)
+                roots = self._registered_roots(project_id)
+                if not roots:
+                    continue
+                # The owner screen (decision 36) shows the project and state paths and the run id. The first command
+                # prints the payload to sign; the second repeats it with the signature file. A child of the slot may
+                # still run: confirming is the owner's call.
+                step = ("python3 " + shlex.quote(str(roots[0] / '.codex/orchestration/cli.py'))
+                        + " learning-confirm-run-slot --project-root " + shlex.quote(str(roots[0]))
+                        + " --state-root " + shlex.quote(str(self.state.root))
+                        + " --run-id " + shlex.quote(row["run_id"])
+                        + " --handle-digest " + shlex.quote(row["handle_digest"]))
+                confirmations.append({
+                    "reason": reason, "command": step,
+                    "signing_instruction": "Sign the payload printed above and save the signature as owner-signature.bin, then run:",
+                    "signed_command": step + " --signature owner-signature.bin"})
+        if any(not row["due"] and row["deadline_at_ms"] is None for row in held):
+            status["run_slot"]["next_eligible"] = None
+        if any(row["kind"] == "legacy_unknown" for row in held):
+            status["run_slot"]["reasons"] = sorted(reasons)
+            status["run_slot"]["owner_confirmations"] = confirmations
         status["probe"]["release_by_evidence"] = int(probe[4])  # admitted: no timer frees it in RS-A
         return status
 
     @staticmethod
     def _slot_eligible(row, now, monotonic):
         """Round 1 F8 (design draft 4 item 4): the earliest wall time the crash rule can hold on both clocks;
-        None while the wall clock is behind the claim. An earlier version's run uses its one-day rule."""
-        from .active_run_capacity import CRASHED_CLAIM_GRACE_MS, LEGACY_RUN_MAX_MS
+        None while the wall clock is behind the claim or a legacy slot needs evidence."""
+        from .active_run_capacity import CRASHED_CLAIM_GRACE_MS
 
         if now < row["claimed_at_ms"]:
             return None
         if row["kind"] == "legacy_unknown":
-            return row["claimed_at_ms"] + LEGACY_RUN_MAX_MS + 1
+            return (row["deadline_at_ms"] + CRASHED_CLAIM_GRACE_MS + 1
+                    if row["deadline_at_ms"] is not None else None)
         if row["deadline_at_ms"] is None or row["execution_deadline_ns"] is None:
             return None
         wall = row["deadline_at_ms"] + CRASHED_CLAIM_GRACE_MS + 1
@@ -12135,15 +12195,39 @@ class LearningLedger:
         released = 0
         crashed, parameters = crashed_claim("a", now, monotonic)
         slots = self._connection.execute(
-            "SELECT a.project_id,a.handle_digest,a.claimed_at_ms,EXISTS(SELECT 1 FROM host_run_bindings h "
+            "SELECT a.project_id,a.handle_digest,a.run_id,a.bridge_run_id,a.kind,a.claimed_at_ms,EXISTS(SELECT 1 FROM host_run_bindings h "
             "WHERE h.project_id=a.project_id AND h.handle_digest=a.handle_digest "
             f"AND h.binding_state='abandoned' AND h.abandoned_reason='{LOST_RUN_REASON}') AS lost "
             f"FROM active_run_capacity a WHERE a.released_at_ms IS NULL AND {crashed} LIMIT ?",
             (*parameters, limit)).fetchall()
+        # Process proof is read here and nowhere in a count: an earlier-version slot that is not yet past its
+        # deadline is examined too, and only a durable release changes what counts.
+        seen = {(row["project_id"], row["handle_digest"]) for row in slots}
+        slots = [*slots, *(row for row in self._connection.execute(
+            "SELECT a.project_id,a.handle_digest,a.run_id,a.bridge_run_id,a.kind,a.claimed_at_ms,0 AS lost "
+            "FROM active_run_capacity a WHERE a.released_at_ms IS NULL AND a.kind='legacy_unknown'").fetchall()
+            if (row["project_id"], row["handle_digest"]) not in seen)]
         for slot in slots:
+            from .legacy_slots import process_proof
+            proof = (process_proof(self.state, slot["project_id"], slot["handle_digest"], slot["run_id"],
+                                   slot["bridge_run_id"]) if slot["kind"] == "legacy_unknown" else None)
+            if slot["kind"] == "legacy_unknown" and not slot["lost"] and proof is None:
+                from .legacy_slots import dispatch_deadline
+                intents = self._connection.execute(
+                    "SELECT content,content_digest FROM records WHERE project_id=? AND record_type='dispatch_intent' "
+                    "AND source='lifecycle' AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
+                    (slot["project_id"], slot["run_id"])).fetchall()
+                deadline = (dispatch_deadline(intents[0]["content"], intents[0]["content_digest"],
+                                             slot["run_id"], slot["bridge_run_id"]) if len(intents) == 1 else None)
+                if deadline is None or now <= deadline + CRASHED_CLAIM_GRACE_MS:
+                    continue
+                proof = {"kind": "crashed", "dispatch_intent": json.loads(bytes(intents[0]["content"]))}
             self._release_slot_locked(slot["project_id"], slot["handle_digest"],
-                                      "lost" if slot["lost"] else "crashed", now, monotonic)
+                                      "lost" if slot["lost"] else proof["kind"] if proof else "crashed",
+                                      now, monotonic, proof=proof)
             released += 1
+            if released >= limit:
+                break
         if released < limit:
             # O0b RS-A-2: reserved probes past their deadline, closed as unlaunched denials.
             from .account_billing_admission import close_expired_reserved
@@ -12219,7 +12303,7 @@ class LearningLedger:
                 # O0b RS-A: a run is terminal from completion evidence, never from a written lost or crashed release.
                 "SUM(h.consumed_at_ms IS NOT NULL OR (c.released_at_ms IS NOT NULL AND NOT EXISTS(SELECT 1 "
                 "FROM run_holds r WHERE r.project_id=c.project_id AND r.kind='run_slot' AND r.identity=c.handle_digest "
-                "AND r.release_kind IN ('lost','crashed') AND r.receipt IS c.release_digest)) "
+                "AND r.release_kind IN ('lost','crashed','unsent','process_gone','owner_confirmed') AND r.receipt IS c.release_digest)) "
                 # round 1 F11: a late completion after a decision counts the run as terminal
                 "OR EXISTS(SELECT 1 FROM capacity_completions cc WHERE cc.project_id=h.project_id "
                 "AND cc.handle_digest=h.handle_digest AND cc.released_at_ms IS NOT NULL)) AS terminal,"
@@ -13055,7 +13139,7 @@ class CollectorServer:
                 # another project's running children keep their collector.
                 return {"ok": True, "project_id": self.ledger.register_project(Path(request["project_root"]))}
             if request.get("op") in {
-                "owner_record_payload", "commit_owner_record", "verify_owner_record",
+                "owner_record_payload", "commit_owner_record", "verify_owner_record", "confirm_legacy_slot",
             } and set(request) == {
                 "protocol", "op", "project_root", "record",
                 *({"signature_b64"} if request.get("op") != "owner_record_payload" else ()),
@@ -13076,6 +13160,8 @@ class CollectorServer:
                     return {"ok": True, "valid": checked["record_type"] == "feedback" and bool(
                         OwnerGrantAuthority.for_state(self.ledger.state).verify_owner_record(
                             project_id, checked, signature))}
+                if request["op"] == "confirm_legacy_slot" and record.get("record_type") != "run_slot_confirmation":
+                    return {"ok": False, "code": "operation_rejected"}
                 # The owner's signature is the authority; the ledger verifies it.
                 signature = base64.b64decode(request["signature_b64"], validate=True)
                 committed = self.ledger.commit_owner_record(project_id, record=record, signature=signature)

@@ -1071,6 +1071,10 @@
    "ends": "O0c P9: a batch per sweep; attestations a later signed one supersedes are deleted, the latest per provider and account stays",
    "test": "test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims"
   },
+  "legacy_slots.py::deadline_sql": {
+   "checks": 1,
+   "ends": "not a limit: COUNT(*)=1 only tests that a run has exactly one recorded dispatch intent (RSF-S4-3); no cap on any stored set"
+  },
   "liveness_clock.py::_integer": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"

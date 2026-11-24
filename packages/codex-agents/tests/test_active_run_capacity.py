@@ -295,15 +295,19 @@ class ActiveRunCapacityTests(unittest.TestCase):
         self.ledger.close()
 
     def test_C8_an_earlier_versions_slot_is_held_until_it_ages_out_by_the_capacity_rule(self):
-        from codex_agents.active_run_capacity import LEGACY_RUN_MAX_MS
+        from codex_agents.active_run_capacity import CRASHED_CLAIM_GRACE_MS
         self.schema_eight(backup=True)
         self.case.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         self.addCleanup(self.case.ledger.close)
-        row = self.rows()[0]
-        self.assertEqual(1, self.ledger.account_slot_health(self.project)['runs_held_without_deadline'])
-        aged = (row['claimed_at_ms'] + LEGACY_RUN_MAX_MS + 1) * 1_000_000
-        with mock.patch.object(learning_store.time, 'time_ns', return_value=aged):
-            self.assertEqual(0, self.ledger.account_slot_health(self.project)['runs_held_without_deadline'])
+        deadline = self.ledger._connection.execute(
+            "SELECT json_extract(CAST(content AS TEXT),'$.deadline_at_ms') FROM records "
+            "WHERE record_type='dispatch_intent'").fetchone()[0]
+        self.assertEqual(0, self.ledger.account_slot_health(self.project)['runs_held_without_deadline'])
+        boundary = deadline + CRASHED_CLAIM_GRACE_MS
+        for wall, holding in ((boundary - 1, 1), (boundary, 1), (boundary + 1, 0)):
+            with mock.patch.object(learning_store.time, 'time_ns', return_value=wall * 1_000_000):
+                self.assertEqual(0, self.ledger.account_slot_health(self.project)['runs_held_without_deadline'])
+                self.assertEqual(holding, self.ledger.earlier_version_runs()['holding'])
 
     def test_schema_eight_requires_verified_backup_and_stays_unmodified_on_refusal(self):
         self.schema_eight(backup=False)

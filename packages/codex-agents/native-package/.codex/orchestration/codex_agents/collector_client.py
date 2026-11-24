@@ -321,6 +321,15 @@ class CollectorClient:
             raise CollectorError("collector response is invalid", code="response_invalid")
         return committed
 
+    def confirm_legacy_slot(self, project_root: Path, record: dict, signature: bytes) -> dict:
+        response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "confirm_legacy_slot",
+                                  "project_root": str(project_root.resolve()), "record": record,
+                                  "signature_b64": base64.b64encode(signature).decode("ascii")})
+        committed = response.get("committed")
+        if type(committed) is not dict:
+            raise CollectorError("collector response is invalid", code="response_invalid")
+        return committed
+
     def learning_migration(self, project_root: Path) -> dict:
         """Whether this project's learning history still has to move, and whether a move could start now.
 
@@ -340,7 +349,8 @@ class CollectorClient:
         if (type(earlier) is not dict or set(earlier) != {"holding", "finished_by_ms"}
                 or type(earlier["holding"]) is not int or earlier["holding"] < 0
                 or (earlier["finished_by_ms"] is not None if earlier["holding"] == 0
-                    else type(earlier["finished_by_ms"]) is not int or earlier["finished_by_ms"] < 0)):
+                    else earlier["finished_by_ms"] is not None and
+                    (type(earlier["finished_by_ms"]) is not int or earlier["finished_by_ms"] < 0))):
             raise CollectorError("collector response is invalid", code="response_invalid")
         return {**{name: response[name] for name in names}, "earlier_version_runs": dict(earlier)}
 

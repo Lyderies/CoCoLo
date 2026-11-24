@@ -276,6 +276,8 @@
  "codex:tests.test_rsd_runtime_close": "integration",
  "codex:tests.test_rsf_s1_ingress": "integration",
  "codex:tests.test_rsf_s1_ingress_socket": "integration",
+ "codex:tests.test_rsf_s4_slots": "integration",
+ "codex:tests.test_rsf_s4_transport": "integration",
  "codex:tests.test_run_driver_retries": "unit",
  "codex:tests.test_run_holds": "integration",
  "codex:tests.test_run_network": "integration",
