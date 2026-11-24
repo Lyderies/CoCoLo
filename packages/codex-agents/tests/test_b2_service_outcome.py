@@ -417,7 +417,9 @@ class AuthorityTests(unittest.TestCase):
         'history.open_scope', 'history.worker_input', 'history.learning_cycle', 'history.learning_report',
         'history.routing_evidence', 'history.learning_feedback', 'history.learning_review_case',
         'history.orchestration_report', 'history.capacity_report', 'history.result_reference',
-        'history.holds_report'})
+        'history.holds_report',
+        # T7 S2 (L14.1): learning-status reads this project's orchestrations from its store (s2fix, assertions.md).
+        'history.orchestration_counts'})
 
     def test_operation_set_unchanged(self):
         self.assertEqual(self.OPERATIONS, history_api.HISTORY_OPERATIONS)

@@ -17,6 +17,8 @@ from .host_paths import PYTHON_ISOLATION_FLAGS
 
 START_TIMEOUT_SECONDS = 8.0
 WITHDRAW_TIMEOUT_SECONDS = 5.0
+# L15.1: how long a project's deletion waits for its idle service to stop (it checks its hint once a second).
+STOP_TIMEOUT_SECONDS = 10.0
 # R4: how long a start that lost to another start's host (see _spawn_and_wait) waits for that host.
 START_COLLISION_GRACE_SECONDS = 3.0
 START_COLLISION_REASONS = frozenset({'history_writer_busy', 'history_service_unavailable'})
@@ -164,6 +166,48 @@ def withdraw_project_host(state_root, project_root, directory, *, timeout=WITHDR
             return False
         time.sleep(0.05)
     return True
+
+
+def stop_project_host(state_root, project_root, *, timeout=STOP_TIMEOUT_SECONDS):
+    """T7 S2 (L15.1): stop this project's service, whatever version started it, by the withdrawal path above (its
+    hint removed under HINT_LOCK; the host stops once it holds no run). The caller has removed the project's
+    records, so no run is held. `not_running` when no live host serves it, `stopped` once its host lock is
+    released within `timeout`, else `still_running`. Another project's host is never touched: the hint and the
+    lock directory are this project root's own."""
+    try:
+        state = CollectorPaths(state_root)
+        root = _canonical_project_root(Path(project_root))
+        hinted = _hinted_host(state, root, any_runtime=True)
+    except (StateError, OSError, ValueError):
+        return 'not_running'
+    if hinted is None or hinted[2] is not True:
+        return 'not_running'
+    directory = hinted[1][0].parent
+    deadline = time.monotonic() + timeout
+    descriptor = None
+    try:
+        descriptor = os.open(directory / HINT_LOCK, os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    return 'still_running'
+                time.sleep(0.01)
+        current = _hinted_host(state, root, any_runtime=True, hint_locked=True)
+        if current is not None and current[1][0].parent == directory:
+            runtime_hint_path(state, root).unlink(missing_ok=True)
+    except (DispatchError, StateError, OSError):
+        return 'still_running'
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    while _host_alive(directory) is True:
+        if time.monotonic() >= deadline:
+            return 'still_running'
+        time.sleep(0.05)
+    return 'stopped'
 
 
 # O10 HS-4: the fixed reasons a project service reports when it ends at once (project_service.serve_project).

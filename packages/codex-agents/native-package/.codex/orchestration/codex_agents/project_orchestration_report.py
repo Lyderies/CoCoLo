@@ -56,6 +56,21 @@ def _orchestration(history, orchestration_id):
         after = handles[-1][0]
 
 
+def orchestration_counts(history):
+    """This project's orchestrations by state (T7 S2, L14.1): what learning-status shows, read as the open limit is."""
+    from .orchestration_store import OrchestrationOwner
+    history._require_owner()
+    return OrchestrationOwner(history).state_counts()
+
+
+def _settled(history, state, lease_row):
+    """Whether this attempt's lease is ended by a verified account settlement (the close's own reader)."""
+    if state is None or state == "expired":
+        return False
+    row = history._connection.execute("SELECT * FROM result_leases WHERE rowid=?", (lease_row,)).fetchone()
+    return row is not None and history._attempt_settled(history._lease(row))
+
+
 def orchestration_report(history, orchestration_id, runtime_digest=None):
     """Counts for one orchestration. The work in this process is bounded by the
     orchestration's own runs (at most `MAX_RUNS`): rows are selected by SQLite and
@@ -69,13 +84,17 @@ def orchestration_report(history, orchestration_id, runtime_digest=None):
         # With each run's result lease state: an expired lease with no result is a run that closed
         # without one (denied at its claim, fenced, or closed by the next service; 0.3.3, C7).
         opens = history._connection.execute(
-            "SELECT json_extract(CAST(o.binding AS TEXT),'$.run_id'),o.ingested_at_ms,o.source_sequence,l.state "
-            "FROM project_host_opens o LEFT JOIN result_leases l ON l.project_id=o.project_id "
+            "SELECT json_extract(CAST(o.binding AS TEXT),'$.run_id'),o.ingested_at_ms,o.source_sequence,l.state,"
+            "l.rowid FROM project_host_opens o LEFT JOIN result_leases l ON l.project_id=o.project_id "
             "AND l.run_handle=o.run_handle AND l.attempt=o.attempt WHERE o.project_id=? "
             "AND json_extract(CAST(o.binding AS TEXT),'$.orchestration_handle')=? ORDER BY o.source_sequence LIMIT ?",
             (history.project_id, handle, MAX_RUNS + 1)).fetchall()
         if len(opens) > MAX_RUNS:
             raise HistoryError("history_learning_capacity")
+        # T7 S2 finding 2 (L14.1): an attempt the account settled lost (B4s) has ended, as the close reads it
+        # (OrchestrationOwner._unfinished, ProjectHistory._attempt_settled): counted with the expired ones.
+        opens = [(run_id, opened_at, sequence, "expired" if _settled(history, state, lease_row) else state)
+                 for run_id, opened_at, sequence, state, lease_row in opens]
         runs = {run_id: opened_at for run_id, opened_at, _, _ in opens if type(run_id) is str}
         # S1-R6: runs the driver registered; one with no host open either failed before it (its fixed
         # reason) or is still unresolved. A run with a host open is counted by its open only.

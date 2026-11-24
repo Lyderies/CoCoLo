@@ -707,6 +707,47 @@ class ConfirmFixSweepTests(unittest.TestCase):
         self.assertTrue(project_driver.RunDriver._remove_workspace(str(container / 'prepare-gone')))
 
 
+class StatusAgreementTests(SettlementHarness):
+    """T7 S2 finding 2 (L14.1): learning-status, learning-run-status and learning-orchestration-report read the same
+    truth. The orchestrations are the project store's (its service), and a lost run the account settled is ended,
+    abandoned, in the report as in learning-status, never pending or active."""
+
+    def lifecycle_counts(self):
+        return self.cli_any('learning-status')['ingestion']['managed_lifecycle']
+
+    def orchestration_report(self, orchestration):
+        status = self.cli('learning-orchestration-status', '--orchestration-handle', orchestration)
+        identity = status['current']['snapshot']['orchestration_id']
+        return self.cli('learning-orchestration-report', '--orchestration-id', identity)
+
+    @__import__('test_framework').requirements('L14.1', why_not_scenario=WHY)
+    def test_L14_1_learning_status_counts_the_projects_orchestrations_by_state(self):
+        names = ('orchestrations_active', 'orchestrations_paused', 'orchestrations_closed')
+        self.assertEqual((0, 0, 0), tuple(self.lifecycle_counts()[name] for name in names))
+        first = self.cli('learning-open-orchestration')['orchestration_handle']
+        self.assertEqual((1, 0, 0), tuple(self.lifecycle_counts()[name] for name in names))
+        second = self.cli('learning-open-orchestration')['orchestration_handle']
+        self.cli('learning-pause-orchestration', '--orchestration-handle', second)
+        self.assertEqual((1, 1, 0), tuple(self.lifecycle_counts()[name] for name in names))
+        self.cli('learning-close-orchestration', '--orchestration-handle', first, '--status', 'completed')
+        self.assertEqual((0, 1, 1), tuple(self.lifecycle_counts()[name] for name in names))
+
+    @__import__('test_framework').requirements('L14.1', why_not_scenario=WHY)
+    def test_L14_1_a_settled_lost_run_reads_abandoned_in_the_report_as_in_learning_status(self):
+        context, route_path, orchestration, run_handle = self.lose('consuming')
+        self.wait_for(lambda: self.settlements() == [(run_handle, 1, 'lost')], seconds=30)
+        self.assert_lost_status(orchestration, run_handle, 'released')
+        managed = self.lifecycle_counts()
+        self.assertEqual((0, 1), (managed['host_runs_pending'], managed['host_runs_abandoned']))
+        runs = self.orchestration_report(orchestration)['runs']
+        self.assertEqual({'opened': 1, 'pending': 0, 'current_active': 0, 'abandoned': 1, 'terminal': 0},
+                         {name: runs[name] for name in ('opened', 'pending', 'current_active', 'abandoned', 'terminal')})
+        self.cli('learning-close-orchestration', '--orchestration-handle', orchestration, '--status', 'failed')
+        report = self.orchestration_report(orchestration)
+        self.assertEqual(('failed', 0, 0, 1), (report['status'], report['runs']['pending'],
+                                               report['runs']['current_active'], report['runs']['abandoned']))
+
+
 @requirements('RS-B-B4')
 class LostLifecycleLimitTests(SettlementHarness):
     """RS-B-B4-8 (O0c P2-P4, ANALYSIS-0.4.0-lifetime-caps.md:180-184), in the shape of 0.3.4's ResultLimitTests: every

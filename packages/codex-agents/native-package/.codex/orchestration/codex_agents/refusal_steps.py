@@ -36,6 +36,10 @@ EXACT = {
                                      "again.",
     'provider_exhausted': "The provider's usage window is used up: wait until its reset time (learning-status "
                           "shows it), then try again.",
+    # T7 S2 finding 1: a run not yet finished keeps the orchestration open; restarting the service changes nothing.
+    'history_orchestration_pending': "A run of this orchestration has not finished: check each run with "
+                                     "learning-run-status, wait for running children to end (the next service settles "
+                                     "a lost one), then run learning-close-orchestration again.",
     'history_orchestration_other_scope': "This orchestration belongs to an earlier service or version: open a new "
                                          "orchestration (learning-open-orchestration).",
     'preparation_managed_configuration': "A managed Codex configuration applies here and this child cannot run under "

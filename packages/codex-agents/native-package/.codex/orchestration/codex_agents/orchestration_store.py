@@ -126,12 +126,21 @@ class OrchestrationOwner:
     def _open_count(self):
         """Orchestrations not yet closed. One whose latest checkpoint cannot be verified counts as
         open, so a changed row never frees a place."""
-        count = 0
+        counts = self.state_counts()
+        return counts['active'] + counts['paused']
+
+    def state_counts(self):
+        """This project's orchestrations as active, paused and closed: the one reading behind the open limit
+        (`_open_count`) and learning-status (T7 S2, L14.1). One whose latest checkpoint cannot be verified counts
+        as active, so it is never shown, nor freed, as closed."""
+        counts = {'active': 0, 'paused': 0, 'closed': 0}
         for row in self._db.execute('SELECT orchestration_handle,sequence,checkpoint_digest FROM project_orchestrations '
                                     'WHERE project_id=?', (self._history.project_id,)).fetchall():
             snapshot = self._latest_snapshot(row)
-            count += snapshot is None or snapshot['status'] not in ORCHESTRATION_TERMINAL_STATES
-        return count
+            status = 'active' if snapshot is None else snapshot['status']
+            counts['closed' if status in ORCHESTRATION_TERMINAL_STATES else 'paused' if status == 'paused'
+                   else 'active'] += 1
+        return counts
 
     def end_earlier(self, current, limit):
         """End, as interrupted, the open or paused orchestrations an earlier runtime of this same service

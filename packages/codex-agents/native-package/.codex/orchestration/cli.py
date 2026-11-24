@@ -127,7 +127,7 @@ from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
     HostOutcomeUnknown, _host_pair, operational_checks_client, record_operational_qa_client, learning_cycle_client,
-    provider_state_snapshot_client, routing_evidence_client, owner_learning_client, orchestration_report_client, capacity_report_client, holds_report_client, runtime_hint_path,
+    provider_state_snapshot_client, routing_evidence_client, owner_learning_client, orchestration_report_client, orchestration_counts_client, capacity_report_client, holds_report_client, runtime_hint_path,
     run_control_client, bridged_run_owner, abandon_bridged_run,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
@@ -2486,6 +2486,15 @@ def main() -> int:
             holds = holds_report_client(args.state_root, args.project_root, host_client=label)
             for name in ('project_holds', 'result_custody', 'result_retirement_repairs'):
                 report[name] = None if holds is None else holds[name]
+            # T7 S2 (L14.1): orchestrations live in the project's own store, so its service's count replaces the
+            # ledger's (whose table holds only those of versions before the project store); while the service is
+            # not running the ledger's reading stands.
+            managed = (report.get('ingestion') or {}).get('managed_lifecycle')
+            if type(managed) is dict and 'orchestrations_active' in managed:
+                counts = orchestration_counts_client(args.state_root, args.project_root, host_client=label)
+                if counts is not None:
+                    for name in ('active', 'paused', 'closed'):
+                        managed['orchestrations_' + name] = counts[name]
             # O0c M1, M3: the run slots this project's service can no longer free, said plainly.
             slots = (report['project_capacity'] or {}).pop('run_slots', None)
             if slots is not None:
@@ -2542,6 +2551,13 @@ def main() -> int:
                 client_health_clear(ledger.state, args.project_root)
             finally:
                 _close_ledger(ledger)
+            # T7 S2 (L15.1): the project's records AND its service go; the deletion refused any project still
+            # holding a run, so its service is idle and stops by the ordinary withdrawal (bounded wait).
+            from codex_agents.project_host_client import stop_project_host
+            report["project_service"] = stop_project_host(args.state_root, args.project_root)
+            if report["project_service"] == "still_running":
+                report["project_service_note"] = ("the deleted project's service did not stop in time; it stops by "
+                                                  "itself once idle")
         elif args.command == "learning-normalize-app":
             state = CollectorPaths(args.state_root)
             clients = load_client_capabilities(
