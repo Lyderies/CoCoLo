@@ -1639,6 +1639,10 @@ def run_claude(
             }
     if outcome["abort"] is not None:
         return None, {**report, "outcome": outcome["abort"]}
+    if report["permission_denials"] and report["permission_denials"]["count"] > 0:
+        # L6.1: a call the client itself refused (outside the export, a write, the network) ends the run
+        # stopped with the same fixed reason as a call outside the run's tools; its result is not trusted.
+        return None, {**report, "outcome": "claude_tool_not_allowed"}
     if raw_answer is not None and isinstance(result_frame, dict):
         structured_answer = result_frame.get("structured_output")
         if type(structured_answer) is dict:

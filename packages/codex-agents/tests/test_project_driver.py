@@ -1553,6 +1553,8 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
         self.frames('claude', [init_frame(), frame])
         dispatched = self.dispatch_claude(context, route_path, run_handle)
         report = dispatched['bridge_report']
+        self.assertEqual(('claude_tool_not_allowed', 'failed'), (report['outcome'], report['terminal_state']))
+        self.assertIn('claude_tool_not_allowed', dispatched['result']['summary'])
         self.assertEqual({'count': 1, 'tools': ['Write']}, report['permission_denials'])
         self.assertNotIn('PRIVATE-CANARY', json.dumps(dispatched))
 
@@ -1570,6 +1572,9 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
         opened = self.cli_for(self.project, 'learning-open-host-run', *common, '--route', route_path,
                               '--orchestration-handle', orchestration, expected=2)
         self.assertEqual(preflight['reason'], opened['reason'])
+        connection = self.collector_ledger._connection
+        for table in ('host_run_bindings', 'active_run_capacity'):
+            self.assertEqual(0, connection.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0], table)
 
     def test_a_running_claude_child_reports_live_status_and_stops_on_cancellation(self):
         context, route_path, orchestration, run_handle = self.open_claude_run()
