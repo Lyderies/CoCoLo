@@ -33,3 +33,10 @@ Every one is listed with the requirement that decides it. No assertion was remov
      refused, which `ReviewFixTests.test_E1_9_a_rewrite_needs_the_collectors_active_identity_for_the_attested_runtime`
      pins. What each test checks (rewrite without asking, record kept, no rewrite when current, stale with the earlier
      entry kept, no private value shown) is unchanged.
+
+## Review closure (primary, decision 138, 2026-11-24)
+Codex review not-ready -> fix round 17e44b4a -> confirming check ready-with-corrections (no new HIGH, nothing weakened)
+-> primary fixed the systemd rollback MED + vanished-entry LOW in f644471d (tests red first; no assertion removed).
+ACCEPTED. LOW carried: answer/record reads apply O_NOFOLLOW only to the last path part (a linked ancestor inside the
+owner's private installer folder needs owner-level write); E1-10's new test also passes on the base (pins existing
+behaviour; a render mutation turns it red).
