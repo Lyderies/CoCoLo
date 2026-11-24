@@ -74,3 +74,23 @@ test_X5_M3_a_settlement_row_is_written_and_read_back (history_incompatible: thei
 - test_r1_H3_an_intent_whose_claim_never_reached_the_account_is_released_and_nothing_is_counted (new):
   [['intent']] != [[]] (no intent on disk when the claim is sent).
 Both green after the intent (2 tests, 32 s red / ~33 s green).
+
+## Confirming check fix (decision 154, one targeted round on cef20694): red before each fix (2026-11-25)
+Store (tests.test_account_settlement.ConfirmFixStoreTests, 2 tests, both FAILED before the fix):
+- test_c_M3_a_settlement_row_with_its_hold_absent_is_a_conflict_not_nothing_to_settle:
+  'history_conflict' != 'history_result_not_reserved'
+- test_c_M4_the_second_stored_size_guard_is_not_hidden_by_a_broad_handler: AssertionError not raised (swallowed)
+Sweep (tests.test_account_settlement_driver.ConfirmFixSweepTests, 6 tests, all red):
+- test_c_prune_removes_only_entries_recovery_inspected_in_the_same_pass: the uninspected aged entry was pruned
+- test_c_settled_checked_drops_pruned_keys_and_is_capped: pruned key kept, set not capped
+- test_c_a_long_failing_recovery_backs_off_at_the_cap_without_overflow: OverflowError: int too large to convert to float
+- test_c_one_entry_failing_never_aborts_the_sweep_for_later_entries: OverflowError escaped _settle_lost
+- test_c_M2_a_symlink_at_the_workspace_path_is_not_reported_removed: True is not false
+- test_c_M2_a_wrong_owner_or_non_folder_entry_is_not_reported_removed: True is not false
+HIGH 3 second stop (ReviewRoundOneDriverTests, with only the intent-fence request disabled; 66 s):
+- test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace: timed out (intent
+  never settled by the third service)
+- test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it: timed out (same)
+- test_c_H3_an_intent_whose_claimed_entry_exists_is_taken_over_by_that_entry: green before and after (coverage gap
+  the check named; no code change needed)
+All green after the fix.

@@ -683,22 +683,35 @@ class LaunchJournal:
         except OSError:
             return []
 
-    def prune(self, *, now_ms=None, keep=frozenset()):
-        """Drop tombstones older than TOMBSTONE_MS, and lock temporaries whose creator is gone.
+    def prune(self, *, now_ms=None, keep=frozenset(), only=None):
+        """Drop tombstones older than TOMBSTONE_MS, and lock temporaries whose creator is gone; return the keys
+        of the tombstones removed.
 
         Tombstones are looked at MAX_ENTRIES at a time, going round every file over
         successive calls. B4s r1: the entries named in `keep` (their project settlement is not
-        recovered yet) stay.
+        recovered yet) stay. B4s confirming check: with `only` (the keys the caller inspected in
+        its own pass, at most one listing's), just those are looked at, each read again here, so an
+        entry the caller never saw is never removed.
         """
         now_ms = int(time.time() * 1000) if now_ms is None else now_ms
         if self._released:
-            return
-        for entry in self._window('prune'):
+            return frozenset()
+        if only is None:
+            entries = self._window('prune')
+        else:
+            entries = []
+            for key in sorted(only)[:MAX_ENTRIES]:
+                if _entry_name(str(key) + '.json'):
+                    entries.append(self._entry_or_unknown(key + '.json'))
+        removed = set()
+        for entry in entries:
             if (entry['state'] == 'settled' and now_ms - entry['settled_at_ms'] > TOMBSTONE_MS
                     and entry_key(entry) not in keep):
                 with contextlib.suppress(JournalError):
                     self.remove(entry_key(entry))
+                    removed.add(entry_key(entry))
         self.remove_lock_temporaries()
+        return frozenset(removed)
 
     def remove_lock_temporaries(self):
         """Remove each `.<instance>.lock.tmp` whose creator is gone (O10 D6).

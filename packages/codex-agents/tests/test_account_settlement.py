@@ -474,6 +474,40 @@ class ReviewRoundOneStoreTests(SettlementFixture):
 
 
 @requirements('RS-B-B4')
+class ConfirmFixStoreTests(SettlementFixture):
+    """B4s confirming check (decision 154, one targeted fix): the store findings, each red before its fix."""
+
+    def test_c_M3_a_settlement_row_with_its_hold_absent_is_a_conflict_not_nothing_to_settle(self):
+        """MED 3: with the attempt's register row absent, the outbox looks for a settlement row before it answers
+        `history_result_not_reserved`, so the driver never completes the journal on the account's word alone."""
+        self.bound(1)
+        self.open(1)
+        self.record_settlement(1)
+        target = claim_binding(1)
+        with self.store._transaction():
+            self.store._connection.execute("DELETE FROM project_holds WHERE kind='reservation' AND identity=?",
+                                           (target.claim_id,))
+        with self.assertRaises(HistoryError) as caught:
+            self.open(1, arbitrate=False)
+        self.assertEqual('history_conflict', caught.exception.reason_code)
+
+    def test_c_M4_the_second_stored_size_guard_is_not_hidden_by_a_broad_handler(self):
+        """MED 4: `_attempt_settled` reads the stored closure through `_stored_blob` outside any broad handler, so
+        an unexpected failure of that read is seen (reverting the guard is detected), and a refused blob is False."""
+        from codex_agents import project_history
+        self.bound(1)
+        self.open(1)
+        self.record_settlement(1)
+        lease = self.store.result_lease(self.lease(1))
+        with mock.patch.object(project_history.ProjectHistory, '_stored_blob',
+                               side_effect=AssertionError('guard reached')) as guard:
+            with self.assertRaises(AssertionError):
+                self.store._attempt_settled(lease)
+        self.assertEqual(1, guard.call_count)
+        self.assertTrue(self.store._attempt_settled(lease))
+
+
+@requirements('RS-B-B4')
 class KeyIdentityTests(unittest.TestCase):
     """§9 (proved first): the account's digest key and the project writer's result key are one file in every install
     path: the project service (CollectorPaths), the offline owner tool (LearningState) and the account (the ledger's

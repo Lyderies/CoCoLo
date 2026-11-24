@@ -1240,6 +1240,11 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "project_driver.py::_settle_lost": {
+   "checks": 1,
+   "ends": "BOUNDED: MAX_SETTLED_CHECKED caps the remembered `settled` journal keys already checked against the project store; each pruned key is dropped at once, and past the cap only the current pass's (at most one MAX_ENTRIES listing) stay; a forgotten key is only checked once more (B4s confirming check)",
+   "test": "test_c_settled_checked_drops_pruned_keys_and_is_capped"
+  },
   "project_driver.py::exhausted": {
    "checks": 2,
    "ends": "O0c M3: MAX_RUNS and DISPATCH_SLOTS as audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); stuck_slots() >= PREPARATION_SLOTS is not a limit on new work but the trigger that replaces the host: the replacement ends every stuck hold (the stopping service settles its runs on kernel evidence, the next starts with all slots free)",

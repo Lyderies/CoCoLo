@@ -2606,9 +2606,11 @@ class ProjectHistory:
             raise HistoryError("history_invalid_input")
         with self._transaction():
             reservation, kind, hold = self._settlement_hold(run_handle, attempt)
-            if hold is None:
-                raise HistoryError("history_result_not_reserved")
             settled = self._settlement_row(run_handle, attempt) is not None
+            if hold is None:
+                # B4s confirming check (MED 3): a settlement row whose register row is absent is not "nothing to
+                # settle" (that answer lets the driver complete its journal on the account's word alone).
+                raise HistoryError("history_conflict" if settled else "history_result_not_reserved")
             lease_row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND run_handle=? "
                                                  "AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
             if settled or hold["state"] == "released":
@@ -2737,6 +2739,9 @@ class ProjectHistory:
             return False
         try:
             raw = self._stored_blob(row["closure"], maximum=MAX_LOST_RUN_CLOSURE_BYTES)  # never coerced (MED 4)
+        except HistoryError:
+            return False  # B4s confirming check (MED 4): only the guard's own refusal is caught here
+        try:
             closure = verify_lost_run_closure(self._result_key, raw, project_id=self.project_id)
         except Exception:
             return False

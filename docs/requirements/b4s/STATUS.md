@@ -1,4 +1,29 @@
-# B4s status (2026-11-24, review r1 fix round done: waiting for the primary)
+# B4s status (2026-11-25, confirming-check targeted fix done (decision 154): waiting for the primary)
+## Confirming check (static, NOT-READY at cef20694) -> one targeted fix of fixed scope (decision 154, no further round)
+- NEW HIGH pruning: `_settle_lost` collects the `settled` keys it inspected this pass (v3 settled; v1/v2 whose
+  `_recover_settled` returned True: recovered or nothing to recover); `journal.prune(only=...)` re-reads and prunes
+  only those (never an entry the pass did not see). `_settled_checked` drops pruned keys and is capped at
+  MAX_SETTLED_CHECKED (1024; lifetime_caps.json `project_driver.py::_settle_lost`).
+- NEW HIGH backoff: `_backoff()` caps the exponent before multiplying (`_recover_settled`, `_earlier_delay`); each
+  sweep entry is in its own try (one failure never aborts the later entries); prune/forget_instance guarded.
+- HIGH 3 second stop: `_settle_intent` with no decision known records the intent (`_intent_fences`); after the lease
+  listing the owner thread fences each such claim once (`_intent_asked`) with the identical `earlier-` request, so a
+  third service learns the closure (lease already expired: `settle_denied_result_lease` accepts `expired`) or the
+  admitted receipt again. Tests: two double-stop tests and the duplicate-entry takeover.
+- MED 3: `open_account_settlement` with the hold absent answers `history_conflict` when a settlement row exists.
+- MED 2: `_remove_workspace` returns False for a symlink, symlinked container, non-folder or wrong-owner entry at the
+  recorded path (left in place).
+- MED 4: `_attempt_settled` catches only HistoryError around `_stored_blob`; the verify step keeps its own handler.
+- No existing assertion changed. Red evidence: red.md (Confirming check section).
+- Runs (named modules, final code): settlement/journal/container set 253 tests 197 s (container_stop Mock fix, then
+  container_stop + sweep 61 tests 55 s OK); account_settlement_driver + lost_run_settlement 55 tests 113 s OK; holds/
+  leases/withdrawal set 383 tests 251 s OK; store/journal/replay/capacity set 303 tests 179 s OK; test_project_driver
+  alone 93 tests 356 s OK.
+- DEFERRED to RS-F S6 (upgrade classification), not fixed here: a legacy lost settlement purged before project
+  commit; a bound attempt's outbox lookup after project purge (selects the bound lease tombstone, misses the
+  reservation receipt); repairing an already-leaked open_binding on replay of a pre-fix settlement.
+
+## (earlier) review r1 fix round, 2026-11-24
 ## Review r1 (Codex NOT-READY on e57f84a5) -> fix round (one round; red evidence in red.md, changes in assertions.md)
 - HIGH 1 delayed replay after account purge: settle_lost_run writes replay evidence (run id, claim id, lease digest;
   receipt = its digest) on the binding's run_holds tombstone; after OP-2 purges the binding, settle_lost_run and

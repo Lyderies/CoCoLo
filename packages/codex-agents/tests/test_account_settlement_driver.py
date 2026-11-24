@@ -10,6 +10,7 @@ Integration stage: real services, sockets and stores; only the step boundaries a
 """
 import ast
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -544,6 +545,166 @@ class ReviewRoundOneDriverTests(SettlementHarness):
         self.assertEqual(0, self.account_claims())
         self.assertEqual([], self.settlements())
         self.assertEqual([], self.journal_states())
+
+    # B4s confirming check (decision 154): HIGH 3, a second stop before the intent's journal completion.
+    def test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace(self):
+        """HIGH 3: the successor fenced the intent's claim (the lease expired) and stopped before it could remove
+        the workspace and settle the intent; the third service no longer finds a `claim_pending` lease, so it
+        must fence from the outstanding intent itself (the identical request) and settle the intent `fenced`."""
+        from codex_agents.account_api import AccountClient as Client
+        attempts = []
+
+        def kept(workspace):
+            attempts.append(workspace)
+            return False
+        with mock.patch.object(Client, 'claim_launch', lambda client, *a, **o: {'state': 'unavailable'}), \
+                mock.patch.object(project_driver.RunDriver, '_remove_workspace', staticmethod(kept)):
+            _, _, _, run_handle = self.lose('claiming')
+            self.wait_for(lambda: self.store('SELECT state FROM result_leases') == [('expired',)], seconds=30)
+            seen = len(attempts)
+            self.wait_for(lambda: len(attempts) > seen, seconds=30)  # the successor reached the intent's workspace
+            self.stop_host()
+        self.assertEqual(['intent'], [(v or {}).get('state') for v in self.intents()])
+        workspace = self.intents()[0]['workspace']
+        self.assertIsNotNone(workspace)
+        Path(workspace).mkdir(mode=0o700, parents=True, exist_ok=True)  # still there after the second stop
+        self.start_host()
+        self.wait_for(lambda: [(v or {}).get('state') for v in self.intents()] == ['settled'], seconds=30)
+        self.assertEqual('fenced', self.intents()[0]['outcome'])
+        self.assertFalse(Path(workspace).exists())
+        self.assertEqual(0, self.account_claims())
+        self.assertEqual([], self.settlements())
+
+    def test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it(self):
+        """HIGH 3: the successor learned the claim was admitted and settled it (its lease expired with the
+        settlement), then stopped before the intent's journal completion; the third service settles the intent."""
+        import contextlib
+
+        @contextlib.contextmanager
+        def admitted():
+            self.wait_for(lambda: self.account_claims() == 1, seconds=30)
+            yield
+        with mock.patch.object(project_driver.RunDriver, '_remove_workspace', staticmethod(lambda workspace: False)):
+            _, _, _, run_handle = self.lose('claiming', between=admitted())
+            self.wait_for(lambda: self.settlements() == [(run_handle, 0, 'lost')], seconds=30)
+            self.wait_for(lambda: self.store('SELECT state FROM result_leases') == [('expired',)], seconds=30)
+            self.stop_host()
+        self.assertEqual(['intent'], [(v or {}).get('state') for v in self.intents()])
+        self.start_host()
+        self.wait_for(lambda: [(v or {}).get('state') for v in self.intents()] == ['settled'], seconds=30)
+        self.assertEqual([(run_handle, 0, 'lost')], self.settlements())
+
+    def test_c_H3_an_intent_whose_claimed_entry_exists_is_taken_over_by_that_entry(self):
+        """HIGH 3 (duplicate-entry takeover): a stop between the `claimed` entry and the intent's removal leaves
+        both; the successor removes the intent and settles the run once, through the `claimed` entry."""
+        with mock.patch.object(project_driver.RunDriver, '_forget_intent', lambda driver, run: None):
+            _, _, _, run_handle = self.lose('consuming')
+        self.wait_for(lambda: self.settlements() == [(run_handle, 1, 'lost')], seconds=30)
+        self.wait_for(lambda: self.intents() == [], seconds=30)
+        self.wait_for(lambda: self.journal_states() in ([], ['settled']), seconds=30)
+        self.assertEqual([(run_handle, 1, 'lost')], self.settlements())
+
+
+@requirements('RS-B-B4')
+class ConfirmFixSweepTests(unittest.TestCase):
+    """B4s confirming check (decision 154): the sweep's pruning, backoff and per-entry isolation, and the workspace
+    removal's answer, on a real launch journal with the driver's sweep alone (no services)."""
+
+    def setUp(self):
+        import tempfile
+        from codex_agents.launch_journal import LaunchJournal
+        from tests.support import TEMP_ROOT
+        temporary = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+        self.journal = LaunchJournal(self.base / 'launches')
+        self.addCleanup(self.journal.release)
+        driver = object.__new__(project_driver.RunDriver)
+        driver._journal, driver._clock = self.journal, lambda: 1000.0
+        driver._earlier_admitted, driver._fenced = {}, {}
+        self.driver = driver
+
+    def settled(self, number, *, aged=True):
+        from tests.test_launch_journal import claimed
+        bridge = 'brg_' + f'{number:032x}'
+        claimed(self.journal, bridge)
+        self.journal.settled(bridge, 'settled', now_ms=1 if aged else None)
+        return bridge
+
+    def files(self):
+        return sorted(path.name[:-5] for path in self.journal.directory.glob('brg_*.json'))
+
+    def test_c_prune_removes_only_entries_recovery_inspected_in_the_same_pass(self):
+        """NEW HIGH (pruning): an aged `settled` entry recovery did not see in this pass is never pruned."""
+        seen, unseen = self.settled(1), self.settled(2)
+        self.driver._settled_checked = frozenset({seen})
+        listed = [self.journal.entry(seen)]
+        with mock.patch.object(self.journal, 'entries', return_value=listed):
+            self.driver._settle_lost(False)
+        self.assertEqual([unseen], self.files())
+
+    def test_c_settled_checked_drops_pruned_keys_and_is_capped(self):
+        """NEW HIGH (pruning): `_settled_checked` loses each pruned key and never grows past its cap."""
+        seen = self.settled(1)
+        self.driver._settled_checked = frozenset({seen} | {'brg_' + f'{n:032x}' for n in range(100, 100 + 5000)})
+        with mock.patch.object(self.journal, 'entries', return_value=[self.journal.entry(seen)]):
+            self.driver._settle_lost(False)
+        self.assertEqual([], self.files())
+        self.assertNotIn(seen, self.driver._settled_checked)
+        self.assertLessEqual(len(self.driver._settled_checked), project_driver.MAX_SETTLED_CHECKED)
+
+    def test_c_a_long_failing_recovery_backs_off_at_the_cap_without_overflow(self):
+        """NEW HIGH (backoff): 1,024+ failures give the capped delay; the exponent is capped before multiplying."""
+        bridge = self.settled(1)
+        entry = self.journal.entry(bridge)
+        self.driver._settled_retry = {bridge: (1024, 0.0)}
+        self.driver._settled_checked = frozenset()
+        self.driver._recover_settled(entry)  # its lease cannot be read: a failure
+        self.assertEqual((1025, 1000.0 + project_driver.FENCE_RETRY_MAX_SECONDS), self.driver._settled_retry[bridge])
+        self.assertEqual(project_driver.FENCE_RETRY_MAX_SECONDS, project_driver.RunDriver._earlier_delay(5000))
+
+    def test_c_one_entry_failing_never_aborts_the_sweep_for_later_entries(self):
+        """NEW HIGH (backoff): per-entry isolation; an exception for one entry leaves the later ones swept."""
+        first, second = self.settled(1, aged=False), self.settled(2, aged=False)
+        calls = []
+
+        def recover(entry):
+            calls.append(entry['bridge_run_id'])
+            if entry['bridge_run_id'] == first:
+                raise OverflowError('one entry')
+            return True
+        self.driver._recover_settled = recover
+        lost = self.driver._settle_lost(False)
+        self.assertEqual([first, second], calls)
+        self.assertEqual({'released'}, {state for _, state in lost.values()})
+
+    def scratch(self):
+        from codex_agents import bridge
+        patcher = mock.patch.object(bridge, 'WORKSPACE_PARENT', str(self.base / 'scratch'))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        container = self.base / 'scratch' / bridge.SCRATCH_CONTAINER
+        container.mkdir(parents=True)
+        (self.base / 'outside' / 'prepare-kept').mkdir(parents=True)
+        return container
+
+    def test_c_M2_a_symlink_at_the_workspace_path_is_not_reported_removed(self):
+        """MED 2: an existing symlink at the recorded workspace path is left and reported not removed."""
+        container = self.scratch()
+        (container / 'prepare-link').symlink_to(self.base / 'outside' / 'prepare-kept')
+        self.assertFalse(project_driver.RunDriver._remove_workspace(str(container / 'prepare-link')))
+        self.assertTrue((container / 'prepare-link').is_symlink())
+
+    def test_c_M2_a_wrong_owner_or_non_folder_entry_is_not_reported_removed(self):
+        """MED 2: an entry of another owner, or one that is not a folder, is left and reported not removed."""
+        container = self.scratch()
+        (container / 'prepare-file').write_text('x')
+        self.assertFalse(project_driver.RunDriver._remove_workspace(str(container / 'prepare-file')))
+        (container / 'prepare-other').mkdir()
+        with mock.patch.object(project_driver.os, 'geteuid', return_value=os.geteuid() + 1):
+            self.assertFalse(project_driver.RunDriver._remove_workspace(str(container / 'prepare-other')))
+        self.assertTrue((container / 'prepare-other').is_dir())
+        self.assertTrue(project_driver.RunDriver._remove_workspace(str(container / 'prepare-gone')))
 
 
 @requirements('RS-B-B4')
