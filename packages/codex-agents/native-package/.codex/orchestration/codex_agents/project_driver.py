@@ -1932,6 +1932,12 @@ class RunDriver:
                         continue
                     if instance != journal.instance or not self._own_container_gone(entry):
                         continue
+                elif entry.get('version') == 1 and entry['state'] == 'watched':
+                    # Decision 221: the same two-sample proof, recorded once here; the settlement reads it back as `gone`.
+                    try:
+                        journal.process_gone(entry['bridge_run_id'])
+                    except JournalError:
+                        continue
                 elif tree_state(entry) != 'gone':
                     continue
                 try:

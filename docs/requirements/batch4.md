@@ -185,3 +185,9 @@ Assertion changes in sections 5-6: none (one fixture helper line, one new module
 - Rerun: test_host_commands, test_state_location, test_ledger_lock_limits, test_b6_unattended_close,
   test_backup_reply_private, test_owner_backup_streamed 189 tests 116 s OK; root test_login_start + test_test_stages
   57 tests 4 s OK; test_runtime_release + test_b4m_compatibility OK.
+
+## Decision 221: settlement proof runs once (test-time growth)
+- The B5a sweep checked `tree_state` for a watched process entry and `_settle_entry` -> `process_gone` checked it again,
+  each with the 0.2 s second kernel sample. The sweep now records the proof once through `journal.process_gone`
+  (identical two-sample check); the settlement reads the recorded `gone`. No assertion changed.
+- Measured alone: test_lost_run_settlement 110.1 -> 72.4 s; test_trial_run_driver_bugs 91.3 -> 48.5 s. Debts not raised.
