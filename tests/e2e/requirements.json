@@ -144,35 +144,46 @@
    "flow": "L6",
    "source": "PLAN-0.4.0.md T7",
    "statement": "A child that tries to read outside its export, write anywhere or use the network is stopped, and its result says so.",
-   "checks": []
+   "checks": [
+    "l6_1_child_calling_a_tool_the_run_does_not_allow_is_stopped_and_result_says_so",
+    "l6_1_tool_the_client_denied_is_reported_in_the_result"
+   ]
   },
   {
    "id": "L6.2",
    "flow": "L6",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Uncommitted read paths are refused before admission.",
-   "checks": []
+   "checks": [
+    "l6_2_uncommitted_read_path_refused_before_admission"
+   ]
   },
   {
    "id": "L7.1",
    "flow": "L7",
    "source": "PLAN-0.4.0.md T7",
    "statement": "learning-cancel-run stops a running child; it ends cancelled with its capacity released.",
-   "checks": []
+   "checks": [
+    "l7_1_cancel_run_stops_a_running_child_ends_cancelled_capacity_released"
+   ]
   },
   {
    "id": "L7.2",
    "flow": "L7",
    "source": "PLAN-0.4.0.md T7",
    "statement": "A child that goes silent is stopped at the cutoff (controllable clock) and ends with work_silence and its capacity released.",
-   "checks": []
+   "checks": [
+    "l7_2_silent_child_stopped_at_the_cutoff_ends_work_silence_capacity_released"
+   ]
   },
   {
    "id": "L7.3",
    "flow": "L7",
    "source": "PLAN-0.4.0.md T7",
    "statement": "A hard timeout stops a child and ends it with the right terminal state and released capacity.",
-   "checks": []
+   "checks": [
+    "l7_3_hard_timeout_stops_a_child_ends_timed_out_capacity_released"
+   ]
   },
   {
    "id": "L8.1",
@@ -199,22 +210,28 @@
    "id": "L9.1",
    "flow": "L9",
    "source": "PLAN-0.4.0.md T7",
-   "statement": "Two children at once run; a third is refused with claim_busy and the probe with probe_busy.",
-   "checks": []
+   "statement": "Children run at once up to the installed limits (3 per project, 6 per machine); one over a limit is refused with its reason (preparation_full in the project, claim_busy across projects) and the probe with probe_busy (decision 151).",
+   "checks": [
+    "l9_1_children_run_at_once_and_one_over_the_limit_is_refused_with_its_reason"
+   ]
   },
   {
    "id": "L9.2",
    "flow": "L9",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Capacity is released after each terminal, shown by a supported per-run read.",
-   "checks": []
+   "checks": [
+    "l9_2_capacity_released_after_each_terminal_shown_by_per_run_read"
+   ]
   },
   {
    "id": "L9.3",
    "flow": "L9",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Two projects share one collector, each with its own runs and capacity.",
-   "checks": []
+   "checks": [
+    "l9_3_two_projects_share_one_collector_each_with_its_own_runs_and_capacity"
+   ]
   },
   {
    "id": "L10.1",
@@ -374,7 +391,9 @@
    "flow": "all",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Capacity: after close, a supported per-run read shows every claimed run released, and the next billing probe gets a slot; final statistics show zero active or pending runs.",
-   "checks": []
+   "checks": [
+    "g5_after_close_every_claimed_run_released_next_probe_gets_a_slot_and_nothing_active"
+   ]
   },
   {
    "id": "G6",

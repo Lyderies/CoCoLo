@@ -63,6 +63,31 @@ def which(cmd, mode=os.F_OK | os.X_OK, path=None):
     return _which(cmd, mode, path)
 shutil.which = which
 sys.executable = %SHIM%
+# T7 S1 (test only, decision 128): source rewrites listed in HOME/.e2e-bin/patches.json, applied to the named
+# product module as it is imported (a scaled liveness limit, an injected fault). One that does not apply raises.
+import importlib.machinery, json as _json
+_patch_file = HOME + "/.e2e-bin/patches.json"
+if os.path.exists(_patch_file):
+    _patches = _json.load(open(_patch_file))
+    class _Patched(importlib.machinery.SourceFileLoader):
+        def get_code(self, fullname):
+            source = self.get_data(self.path).decode()
+            for item in _patches:
+                if item["module"] == fullname:
+                    if source.count(item["old"]) != 1:
+                        raise ImportError("e2e patch does not apply: " + fullname)
+                    source = source.replace(item["old"], item["new"])
+            return compile(source, self.path, "exec")
+    class _Finder:
+        @classmethod
+        def find_spec(cls, name, path=None, target=None):
+            if not any(item["module"] == name for item in _patches):
+                return None
+            spec = importlib.machinery.PathFinder.find_spec(name, path)
+            if spec is not None and isinstance(spec.loader, importlib.machinery.SourceFileLoader):
+                spec.loader = _Patched(spec.loader.name, spec.loader.path)
+            return spec
+    sys.meta_path.insert(0, _Finder)
 args = sys.argv[1:]
 if args[0] == "-c":
     code = args[1]
@@ -121,6 +146,12 @@ def capture_breaks(text: str, *, kind: str, private: dict, code: int, refuses: b
     if PRIVATE_KEY_BLOCK.search(text):
         found.add(f"g8_{kind}_leaks_private_key_material")
     return sorted(found)
+
+
+def child_environment(environ) -> dict:
+    """The environment a World's processes start from: never a harness variable (E2E_*), so no switch of the test
+    runner (a fault selection, for one) reaches the product or a child it starts (T7 S1 fault isolation)."""
+    return {key: value for key, value in environ.items() if not key.startswith("E2E_")}
 
 
 class HarnessError(Exception):
@@ -213,7 +244,7 @@ class World:
             (self.home / folder).mkdir(mode=0o700)
         (self.base / "tmp").mkdir()
         printed = subprocess.run(["/bin/bash", str(SETUP), "--print-python"], capture_output=True, text=True,
-                                 check=False, stdin=subprocess.DEVNULL).stdout.strip()
+                                 check=False, stdin=subprocess.DEVNULL, env=child_environment(os.environ)).stdout.strip()
         if not printed.startswith("/"):
             raise HarnessError("no trusted python3 (setup.sh --print-python refused)")
         self.python = printed
@@ -248,12 +279,13 @@ class World:
         """Every owner key the run has made (a replacement makes the next one): (fingerprint, public blob)."""
         found = []
         for pub in sorted((self.home / ".ssh").glob("codex-agents-owner*.pub")):
-            done = subprocess.run(["/usr/bin/ssh-keygen", "-lf", str(pub)], capture_output=True, text=True)
+            done = subprocess.run(["/usr/bin/ssh-keygen", "-lf", str(pub)], capture_output=True, text=True,
+                                  env=child_environment(os.environ))
             found.append(((done.stdout.split() or ["", ""])[1], pub.read_text().split()[1]))
         return found
 
     def _environment(self) -> dict:
-        env = {key: value for key, value in os.environ.items()
+        env = {key: value for key, value in child_environment(os.environ).items()
                if key not in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NO_COLOR", "PYTHONDONTWRITEBYTECODE",
                               "CODEX_HOME", "CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME",
                               "XDG_DATA_HOME", "XDG_CACHE_HOME", "CLAUDECODE") and not key.startswith(("CODEX_", "CLAUDE_"))}
@@ -269,7 +301,7 @@ class World:
 
     def git(self, *args: str, project: Path | None = None) -> subprocess.CompletedProcess:
         git = subprocess.run(["/bin/bash", str(SETUP), "--print-git"], capture_output=True, text=True,
-                             stdin=subprocess.DEVNULL).stdout.strip()
+                             stdin=subprocess.DEVNULL, env=child_environment(os.environ)).stdout.strip()
         if not git.startswith("/"):
             raise HarnessError("no trusted git")
         return subprocess.run([git, "-C", str(project or self.project), *args], capture_output=True, text=True,
@@ -591,7 +623,8 @@ class World:
         if base is None:
             return
         for _ in range(3):
-            listing = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
+            listing = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True,
+                                     env=child_environment(os.environ)).stdout
             pids = [int(line.split(None, 1)[0]) for line in listing.splitlines()
                     if str(base) in line and int(line.split(None, 1)[0]) != os.getpid()]
             if not pids:
