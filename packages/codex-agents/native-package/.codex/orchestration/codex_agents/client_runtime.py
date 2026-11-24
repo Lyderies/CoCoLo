@@ -1413,6 +1413,10 @@ def _lost_run(state_root, project_root, run_handle, host_client):
         reply = _run_driver(contexts, control, 'run.describe', run_handle, 1, '0' * 64, {}, timeout=5)
     except Exception:
         return None
+    if reply['state'] == 'failed' and reply['reason_code'] == 'run_settling':
+        # LRS-1: the new service has not finished learning what its predecessor left; no outcome is claimed.
+        return {'ready': False, 'reason_code': 'run_settling',
+                'error': "the project's service has just started and is still checking this run; ask again shortly"}
     if reply['state'] != 'failed' or reply['reason_code'] not in LOST_CAPACITY:
         return None
     return {'ready': False, 'reason_code': 'run_lost', 'terminal_state': 'abandoned', 'outcome': 'unknown',

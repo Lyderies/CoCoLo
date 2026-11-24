@@ -558,6 +558,10 @@ of the run can still be running:
   tombstone for 24 hours, through which `run.describe`, `learning-run-status`
   (`reason_code: run_lost`, `terminal_state: abandoned`, `outcome: unknown`,
   `capacity_state` `released` or `held`) and the abandonment command report the run.
+  While a new host is still warming up (its first listing of earlier leases or its first sweep is not
+  collected yet) it cannot tell a run of an earlier host from an unknown handle: `run.describe` and
+  `learning-run-status` then answer `run_settling` (`ready: false`, no `terminal_state`, no `outcome`;
+  "ask again shortly"), never the generic refusal (LRS-1). After warm-up an unknown handle is refused as before.
 - Graceful stop (SIGTERM, idle stop, update): `serve_project` closes the host, waits for
   its threads, and if they all stopped settles its own runs the same way before freeing
   its instance lock, so a run stopped in any state (claimed but not launched, running,

@@ -405,6 +405,8 @@ class RunDriver:
         runtime.pool._registry.container_launch = self._containers
         # Runs of earlier service instances, by run handle: (host class, 'released' or 'held').
         self._lost, self._sweep, self._next_sweep = {}, None, 0.0
+        # LRS-1: set once the first sweep was collected; until then the earlier runs are not known yet.
+        self._swept = False
         self._expiry, self._next_expiry = None, 0.0  # The first cleanup runs at start (0.3.4 R2).
         # Leases an earlier service left armed with no admitted claim, fenced here (0.3.3, C3).
         self._earlier, self._earlier_fences, self._fenced = None, {}, {}
@@ -519,7 +521,7 @@ class RunDriver:
             held = [run for run in self._runs.values() if run.key[0] == request['run_handle']]
             lost = self._lost.get(request['run_handle'])
             fenced = self._fenced.get(request['run_handle'])
-            settling = not self._earlier_listed or any(
+            settling = not self._earlier_listed or not self._swept or any(
                 entry['binding'].run_handle == request['run_handle'] for entry in self._earlier_fences.values())
             if not held and fenced is not None:
                 # An earlier service's run this one fenced: it never launched and holds nothing.
@@ -1784,6 +1786,7 @@ class RunDriver:
                 self._lost = self._sweep.result()
             except Exception:
                 pass
+            self._swept = True
             self._sweep, self._next_sweep = None, self._clock() + SWEEP_SECONDS
         if self._clock() >= self._next_sweep:
             self._sweep = self._sweeper.submit(self._settle_lost, False)
