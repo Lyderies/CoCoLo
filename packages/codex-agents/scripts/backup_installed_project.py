@@ -61,6 +61,7 @@ _FIXED_REASONS = frozenset({
     "backup expiry must be at least 60 seconds",
     "installed orchestration runtime is unavailable",
     "project backup cannot represent projects exactly",
+    "project backup cannot represent the ledger's tables exactly",
     "project binding is not active",
 })
 _FIXED_PATTERNS = tuple(re.compile(pattern) for pattern in (
@@ -177,6 +178,17 @@ def _write_authorization(path: Path, content: bytes) -> None:
 
 # E2a-1: the machine-local launch record columns (an installed 0.8.60+ ledger has both; older ones neither).
 LOCAL_PROJECT_COLUMNS = frozenset({"launch_copy", "launch_digest"})
+# 0.8.60 fix round (decision 247): the machine-local tables, by exact columns (the product's own
+# learning_store.LOCAL_TABLE_COLUMNS), and the other tables a ledger legitimately holds outside the backup.
+LOCAL_TABLE_COLUMNS = {
+    "project_wake": ("project_id", "allocated_epoch", "epoch", "seq", "state", "next_due_at_ms", "body_digest",
+                     "due_at_ms", "refused", "updated_at_ms"),
+    "project_wake_instances": ("project_id", "instance", "epoch"),
+    "project_starts": ("project_id", "attempt", "claimed_at_ms", "child_pid", "failures", "streak_first_ms",
+                       "next_start_at_ms", "parked_reason", "parked_digest", "outcome", "reason", "outcome_at_ms",
+                       "started_at_ms", "probation_attempt", "probation_pid", "probation_until_ms", "updated_at_ms"),
+}
+_OTHER_TABLES = frozenset({"additive_migrations", "owner_key_history", "admission_evidence"})
 _PROJECT_COLUMNS = (
     "project_id", "canonical_root", "root_digest", "status", "created_at_ms",
     "deleted_at_ms",
@@ -377,6 +389,42 @@ def _checked_report(child: object) -> dict[str, object]:
     return child
 
 
+def check_inventory(connection, schema_version: int, *, exact_columns: bool = True) -> None:
+    """Refuse a ledger the backup cannot represent exactly: every table it holds is a backed-up table, the
+    projects table, a known machine-local table or another known non-partition table (sqlite_ internal
+    tables aside), and each one that is backed up or local has exactly its columns, generated and hidden
+    columns included (table_xinfo). Nothing is written before this passes (0.8.60 fix round, decision 247)."""
+    def named(table):
+        return [(str(row[1]), int(row[6])) for row in sorted(
+            connection.execute(f"PRAGMA table_xinfo({table})").fetchall(), key=lambda row: row[0])]
+    backed = set(_TABLE_COLUMNS)  # any version's backed-up table is known; the exact ones are checked below
+    found = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+             if not str(row[0]).startswith("sqlite_")}
+    if found - backed - {"projects"} - set(LOCAL_TABLE_COLUMNS) - _OTHER_TABLES:
+        raise RuntimeError("project backup cannot represent the ledger's tables exactly")
+    for table in sorted(found & set(LOCAL_TABLE_COLUMNS)):
+        columns = named(table)
+        if tuple(name for name, _ in columns) != LOCAL_TABLE_COLUMNS[table] or any(hidden for _, hidden in columns):
+            raise RuntimeError(f"project backup cannot represent {table} exactly")
+    projects = named("projects")
+    names = {name for name, _ in projects}
+    if LOCAL_PROJECT_COLUMNS <= names:
+        names -= LOCAL_PROJECT_COLUMNS
+    if names != set(_PROJECT_COLUMNS) or any(hidden for _, hidden in projects):
+        raise RuntimeError("project backup cannot represent projects exactly")
+    for table in sorted(found & backed):
+        if any(hidden for _, hidden in named(table)):
+            raise RuntimeError(f"project backup cannot represent {table} exactly")
+    if not exact_columns:
+        return
+    for table in _tables(schema_version):
+        columns = _expected_columns(schema_version, table)
+        available = named(table) if table in found else []
+        if ({name for name, _ in available} != ({"project_id", *columns} if columns else set())
+                or any(hidden for _, hidden in available)):
+            raise RuntimeError(f"project backup cannot represent {table} exactly")
+
+
 def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: int,
                      expires_at_ms: int) -> dict[str, object]:
     """Write, check and register one partition's format-3 backup (PLAN F3-1 to F3-3).
@@ -391,6 +439,7 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
     """
     if not _FILE_ID.fullmatch(file_id):
         raise RuntimeError("backup file id must be 1 to 160 letters, digits or underscores")
+    check_inventory(ledger._connection, schema_version, exact_columns=False)  # before anything is created
     root = ledger.state.root
     backups = ledger.state.backups
     partition = backups / project_id
@@ -628,6 +677,7 @@ def _stream_child(argv: list[str]) -> int:
     try:
         connection.execute("BEGIN")  # One snapshot for the plan, the copy and the comparison (F3-8).
         schema_version = int(schema)
+        check_inventory(connection, schema_version, exact_columns=False)  # the same refusal, inside the one snapshot
         # Planned before anything is written, as the ledger plans its own backups (F3-7).
         planned = project_backup.estimate_bytes(connection, project_id, schema_version)
         if planned > int(limit):
@@ -712,16 +762,7 @@ def _main() -> int:
             schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}:
                 raise RuntimeError("installed ledger schema does not support this backup")
-            project_columns = {
-                str(row[1])
-                for row in connection.execute("PRAGMA table_info(projects)").fetchall()
-            }
-            # E2a-1 (0.8.60 full-run fixes): the launch record is machine-local and never in a backup; the
-            # backup keeps the six original columns exactly. Both launch columns or neither.
-            if LOCAL_PROJECT_COLUMNS <= project_columns:
-                project_columns -= LOCAL_PROJECT_COLUMNS
-            if project_columns != set(_PROJECT_COLUMNS):
-                raise RuntimeError("project backup cannot represent projects exactly")
+            check_inventory(connection, schema_version)
             project = connection.execute(
                 f"SELECT {','.join(_PROJECT_COLUMNS)} "
                 "FROM projects WHERE project_id=? AND status='active'",
@@ -729,24 +770,6 @@ def _main() -> int:
             ).fetchone()
             if project is None:
                 raise RuntimeError("project binding is not active")
-            # The installed ledger must hold exactly the tables and columns its schema has, so the
-            # copy (written by this clone's package for that schema) represents it exactly.
-            for table in _tables(schema_version):
-                exists = connection.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
-                ).fetchone()
-                available = (
-                    {str(row[1]) for row in connection.execute(
-                        f"PRAGMA table_info({table})"
-                    ).fetchall()}
-                    if exists is not None else set()
-                )
-                columns = list(_expected_columns(schema_version, table))
-                expected_available = {"project_id", *columns} if columns else set()
-                if available != expected_available:
-                    raise RuntimeError(
-                        f"project backup cannot represent {table} exactly"
-                    )
             expires_at_ms = (
                 time.time_ns() // 1_000_000 + args.expires_in_seconds * 1000
             )

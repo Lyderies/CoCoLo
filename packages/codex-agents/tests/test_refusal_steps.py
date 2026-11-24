@@ -91,6 +91,13 @@ class RefusalStepTests(unittest.TestCase):
         self.assertNotIn('only one', step)
         self.assertIn('A fresh billing probe is not allowed within five minutes of the last one that passed', step)
 
+    def test_E2a_6_the_wake_stale_step_does_not_claim_another_service_is_running(self):
+        """0.8.60 fix round (decision 247): the code also covers a conflicting body and an unallocated epoch."""
+        step = refusal_steps.next_step('wake_stale')
+        self.assertIn('out of date or conflicts', step)
+        for claim in ('newer', 'while that service runs', 'older'):
+            self.assertNotIn(claim, step)
+
     def test_PC3_a_printed_probe_cooldown_refusal_carries_the_cooldown_step(self):
         import contextlib
         import io

@@ -220,18 +220,18 @@ def _schema(connection, store):
                          "owner_key_history", "sqlite_sequence", "admission_evidence"}:
         raise HistoryError("history_incompatible")
     for table in sorted(local):
-        cursor = connection.execute("PRAGMA table_info(" + table + ")")
+        cursor = connection.execute("PRAGMA table_xinfo(" + table + ")")  # xinfo also lists generated columns
         try:
             rows = cursor.fetchmany(65)
         finally:
             cursor.close()
-        if tuple(r[1] for r in rows) != store.LOCAL_TABLE_COLUMNS[table]:
+        if tuple(r[1] for r in rows) != store.LOCAL_TABLE_COLUMNS[table] or any(r[6] for r in rows):
             raise HistoryError("history_incompatible")
     for table in ("projects", *_KEYS):
         row = _one(connection, "SELECT type FROM sqlite_master WHERE name=?", (table,))
         if row is None or row[0] != "table":
             raise HistoryError("history_incompatible")
-        cursor = connection.execute("PRAGMA table_info(" + table + ")")
+        cursor = connection.execute("PRAGMA table_xinfo(" + table + ")")
         try:
             rows = cursor.fetchmany(65)
         finally:
@@ -242,7 +242,7 @@ def _schema(connection, store):
         names = {r[1] for r in rows}
         if table == "projects" and store.LOCAL_PROJECT_COLUMNS <= names:
             names -= store.LOCAL_PROJECT_COLUMNS  # E2a-1: the machine-local launch record, never in the image
-        if (len(rows) > 64 or names != set(columns)
+        if (len(rows) > 64 or names != set(columns) or any(r[6] for r in rows)
                 or tuple(r[1] for r in sorted(rows, key=lambda r: r[5]) if r[5]) != keys):
             raise HistoryError("history_incompatible")
 

@@ -217,6 +217,18 @@ class LearningSourceImageTests(unittest.TestCase):
         self.connection.execute('ALTER TABLE sessions ADD COLUMN unexpected TEXT').close()
         self.refuse('history_incompatible')
 
+    def test_generated_columns_on_wake_and_projects_refuse(self):
+        """0.8.60 fix round (decision 247): table_info hides generated columns; table_xinfo does not."""
+        # A STORED column cannot be added in place: rebuild the (empty) wake table; projects takes a VIRTUAL one.
+        wake = self.connection.execute("SELECT sql FROM sqlite_master WHERE name='project_wake'").fetchone()[0]
+        self.connection.execute('DROP TABLE project_wake').close()
+        self.connection.execute(wake[:-1] + ',extra INTEGER GENERATED ALWAYS AS (allocated_epoch+1) STORED)').close()
+        self.refuse('history_incompatible')
+        self.connection.execute('DROP TABLE project_wake').close()
+        self.connection.execute(wake).close()
+        self.connection.execute('ALTER TABLE projects ADD COLUMN extra2 INTEGER GENERATED ALWAYS AS (created_at_ms+1) VIRTUAL').close()
+        self.refuse('history_incompatible')
+
     def test_changed_primary_key_is_not_inferred_from_columns(self):
         self.connection.execute('DROP TABLE sessions').close()
         self.connection.execute('CREATE TABLE sessions(project_id TEXT NOT NULL, session_digest TEXT NOT NULL,'

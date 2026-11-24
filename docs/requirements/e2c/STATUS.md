@@ -121,3 +121,8 @@ lifetime_cap_guard, learning_store, upgrade_handover, e2a_launch_record, rsf_s1_
 192 tests, 39.6 s, failed_units [], metadata_errors []; exit 1 only for OVER BUDGET test_project_start
 129.7 s > 60 s integration/scenario (already over at 85 s in round 1; needs a primary decision: budget debt or a
 split). test-timings 85 -> 130.
+
+## 0.8.60 fix round (decision 247, check reviews/040-0860-fix-r1)
+HIGH backup inventory (also pre-existing in 0.8.59), MED table_xinfo, LOW wake_stale text: see
+docs/requirements/e2a/assertions.md "round after the Codex check". 0.8.60 digest refreshed
+(6584d0171da272eddc16b09cf2e2b4849939155a39079f410789c333faae4130); 0.8.59 unchanged.

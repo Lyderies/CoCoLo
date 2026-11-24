@@ -91,3 +91,19 @@ New test: tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2a_1_a_relea
 starter rows; backup keeps the six project columns and no machine-local table, verifies (isolated restore, current
 records match), learning move completes, fresh layout == upgraded layout. Red without the source-image fix
 (`migration_incompatible`), green with it.
+
+### 0.8.60 full-run fixes: round after the Codex check reviews/040-0860-fix-r1 (decision 247)
+
+No existing assertion changed, removed or weakened. Added (each written red first, then green):
+- HIGH: `scripts/backup_installed_project.py` `check_inventory` (run by the preflight, by `backup_partition` before
+  anything is created, and inside the streamed child's snapshot) refuses any table that is not a backed-up table, projects,
+  a known machine-local table (`LOCAL_TABLE_COLUMNS`) or `additive_migrations`/`owner_key_history`/`admission_evidence`
+  (fixed reason "project backup cannot represent the ledger's tables exactly"), and any local table, `projects` or
+  backed-up table with other columns or a generated/hidden column. Tests: test_owner_backup_streamed
+  `test_F3_18_an_unknown_table_a_renamed_local_table_or_an_extra_column_is_refused` and
+  `test_F3_18_a_ledger_from_the_released_0_8_59_without_local_tables_backs_up` (fresh ledger backs up before and after).
+  The gap existed in 0.8.59 (pre-existing).
+- MED: `learning_source_image._schema` uses `PRAGMA table_xinfo` and rejects hidden/generated columns. Test:
+  test_learning_source_image `test_generated_columns_on_wake_and_projects_refuse` (STORED on project_wake, VIRTUAL on projects).
+- LOW: `refusal_steps.EXACT['wake_stale']` no longer claims another service runs. Test: test_refusal_steps
+  `test_E2a_6_the_wake_stale_step_does_not_claim_another_service_is_running`.

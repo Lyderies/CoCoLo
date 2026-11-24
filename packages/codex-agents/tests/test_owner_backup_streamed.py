@@ -319,6 +319,46 @@ class OwnerBackupStreamedTests(unittest.TestCase):
             self.owner_backup("drifted")
         self.assert_nothing_left("drifted")
 
+    def refused_inventory(self, file_id, pattern):
+        before = self.partition_files(all_files=True)
+        with self.assertRaisesRegex(RuntimeError, pattern):
+            self.owner_backup(file_id)
+        self.assertEqual(before, self.partition_files(all_files=True))
+
+    def test_F3_18_an_unknown_table_a_renamed_local_table_or_an_extra_column_is_refused(self):
+        """0.8.60 fix round (decision 247): the whole table inventory and each local table's columns."""
+        db = self.source._connection
+        self.owner_backup("fresh")  # a fresh ledger backs up (it holds the local tables)
+        db.execute("CREATE TABLE hidden_project_rows(project_id TEXT, content BLOB)")
+        self.refused_inventory("unknown", "ledger's tables")
+        db.execute("DROP TABLE hidden_project_rows")
+        db.execute("ALTER TABLE project_wake RENAME TO project_wake_renamed")
+        self.refused_inventory("renamed", "ledger's tables")
+        db.execute("ALTER TABLE project_wake_renamed RENAME TO project_wake")
+        db.execute("ALTER TABLE project_wake ADD COLUMN extra TEXT")
+        self.refused_inventory("extra", "project_wake exactly")
+        db.execute("ALTER TABLE project_wake DROP COLUMN extra")
+        # A STORED generated column cannot be added in place: rebuild the (empty) wake table with one.
+        wake = db.execute("SELECT sql FROM sqlite_master WHERE name='project_wake'").fetchone()[0]
+        self.assertEqual(0, db.execute("SELECT COUNT(*) FROM project_wake").fetchone()[0])
+        db.execute("DROP TABLE project_wake")
+        db.execute(wake[:-1] + ",gen INTEGER GENERATED ALWAYS AS (allocated_epoch+1) STORED)")
+        self.refused_inventory("generated", "project_wake exactly")
+        db.execute("DROP TABLE project_wake")
+        db.execute(wake)
+        db.execute("ALTER TABLE projects ADD COLUMN gen INTEGER GENERATED ALWAYS AS (created_at_ms+1) VIRTUAL")
+        self.refused_inventory("generatedp", "projects exactly")
+        db.execute("ALTER TABLE projects DROP COLUMN gen")
+        self.owner_backup("again")
+
+    def test_F3_18_a_ledger_from_the_released_0_8_59_without_local_tables_backs_up(self):
+        db = self.source._connection
+        for table in ("project_starts", "project_wake_instances", "project_wake"):
+            db.execute("DROP TABLE " + table)
+        for column in ("launch_digest", "launch_copy"):
+            db.execute("ALTER TABLE projects DROP COLUMN " + column)
+        self.owner_backup("released")
+
     def test_F3_7_a_partition_planned_over_the_limit_is_refused_before_it_is_written(self):
         add_events(self.source, self.project, 2_000)
         with mock.patch.dict(SCRIPT_GLOBALS, {"BACKUP_LIMIT_BYTES": 256 * 1024}), \
