@@ -127,7 +127,7 @@ from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
     HostOutcomeUnknown, _host_pair, operational_checks_client, record_operational_qa_client, learning_cycle_client,
-    provider_state_snapshot_client, routing_evidence_client, owner_learning_client, orchestration_report_client, capacity_report_client, runtime_hint_path,
+    provider_state_snapshot_client, routing_evidence_client, owner_learning_client, orchestration_report_client, capacity_report_client, holds_report_client, runtime_hint_path,
     run_control_client, bridged_run_owner, abandon_bridged_run,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
@@ -2482,6 +2482,9 @@ def main() -> int:
                 label = OWNER_CLIENT
             # How near each limit of this project's store is (0.3.4 R9); None while its service is not running.
             report['project_capacity'] = capacity_report_client(args.state_root, args.project_root, host_client=label)
+            holds = holds_report_client(args.state_root, args.project_root, host_client=label)
+            for name in ('project_holds', 'result_custody', 'result_retirement_repairs'):
+                report[name] = None if holds is None else holds[name]
             # O0c M1, M3: the run slots this project's service can no longer free, said plainly.
             slots = (report['project_capacity'] or {}).pop('run_slots', None)
             if slots is not None:

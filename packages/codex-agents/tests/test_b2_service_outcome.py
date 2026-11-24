@@ -416,7 +416,8 @@ class AuthorityTests(unittest.TestCase):
         'history.qa_scope', 'history.issue_qa_checks', 'history.commit_qa', 'history.qa_details',
         'history.open_scope', 'history.worker_input', 'history.learning_cycle', 'history.learning_report',
         'history.routing_evidence', 'history.learning_feedback', 'history.learning_review_case',
-        'history.orchestration_report', 'history.capacity_report', 'history.result_reference'})
+        'history.orchestration_report', 'history.capacity_report', 'history.result_reference',
+        'history.holds_report'})
 
     def test_operation_set_unchanged(self):
         self.assertEqual(self.OPERATIONS, history_api.HISTORY_OPERATIONS)
