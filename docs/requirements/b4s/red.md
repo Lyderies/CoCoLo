@@ -67,3 +67,10 @@ Driver/account (tests.test_account_settlement_driver, 9 tests, 130 s, all FAILED
 RC-3 (tests.test_result_lifetime, skip removed): timed out waiting for the abandoned binding (31 s).
 Already red at e57f84a5, found in this round: tests.test_project_holds_schema test_SB_a_copy_of_an_18_store... and
 test_X5_M3_a_settlement_row_is_written_and_read_back (history_incompatible: their planted settlement rows break B4-7).
+
+## HIGH 3 process mode (decision 146), red on ee4ee867 code with the new tests
+- test_r1_H3_a_claim_admitted_before_its_first_journal_write_is_settled_from_the_store (skip removed): timed out
+  waiting for the settlement row (30 s).
+- test_r1_H3_an_intent_whose_claim_never_reached_the_account_is_released_and_nothing_is_counted (new):
+  [['intent']] != [[]] (no intent on disk when the claim is sent).
+Both green after the intent (2 tests, 32 s red / ~33 s green).

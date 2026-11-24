@@ -59,3 +59,16 @@ account's tombstone evidence is cleared after the purge (a run settled before th
 "no account call after the purge" check became "the stopping service settled it at the account first": RS-B-B4-4's
 replay (StepBoundaryTests: every later sweep re-sends the identical request, answer `known`) is kept, and the local
 receipt finishes the journal when the account can no longer answer.
+
+## Pending primary (HIGH 3 process mode, decision 146): NOT changed
+tests/test_container_launch_journal.py IntentBeforeClaimTests.test_without_the_switch_no_intent_is_written_and_the_claim_goes_as_today
+- old: `self.assertEqual([], value._journal.entries())` after the claim is sent with containers off
+- proposed new: one entry, the process intent (`version 3`, state `intent`, the run's claim_request_id), and still
+  `run.launch_token is None` (no container intent). Reason: decision 146 requires an intent written before the
+  claim in process mode, which this assertion forbids. Left failing; the primary decides.
+
+## Setup change (HIGH 3 process mode round), no assertion value changed
+tests/test_account_settlement_driver.py test_r1_H3_a_claim_admitted_before_its_first_journal_write_is_settled_from_the_store:
+its wait read `self.ledger._connection` (the collector thread's connection) from the test thread, which raised
+sql_read_wrong_owner when the collector was mid-read (seen in a combined run, then cascading into 17 other
+failures). Now `account_claims()` reads the same COUNT(*) FROM launch_claims on a read-only connection of its own.

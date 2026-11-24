@@ -104,6 +104,15 @@ class SettlementHarness(LostRunHarness):
         finally:
             connection.close()
 
+    def account_claims(self):
+        """The account's admitted claims, read on a connection of the test's own (the collector thread owns its
+        ledger's connection: a read from here while it reads raises sql_read_wrong_owner)."""
+        connection = sqlite3.connect(f'file:{self.state.database}?mode=ro', uri=True, timeout=5)
+        try:
+            return connection.execute('SELECT COUNT(*) FROM launch_claims').fetchone()[0]
+        finally:
+            connection.close()
+
     def settlements(self):
         return self.store('SELECT run_handle,claim_id IS NOT NULL,release_kind FROM project_account_settlements')
 
@@ -492,13 +501,6 @@ class ReviewRoundOneDriverTests(SettlementHarness):
         self.wait_for(lambda: self.settlements() == [(run_handle, 1, 'lost')], seconds=30)
         self.assertEqual([('released', 'lost')], self.reservation_hold(run_handle))
 
-    @unittest.skip("B4s r1 HIGH 3 (process mode), red in B4s (timed out waiting for the settlement row; "
-                   "docs/requirements/b4s/red.md): larger than B4s. The successor's fence answers `claimed`, but "
-                   "`settle_lost_run` needs the run's identity digest, which in process mode exists only in the "
-                   "journal entry that was never written (the project store keeps no copy; the fence takes it from "
-                   "the account's launch observation and its reply shape is fixed). Needs a process-mode journal "
-                   "intent before the claim is sent (as containers write) or an account settlement taking the "
-                   "identity from the launch observation: a primary decision")
     def test_r1_H3_a_claim_admitted_before_its_first_journal_write_is_settled_from_the_store(self):
         """HIGH 3 (process mode): the service stopped after the account admitted the claim and before the
         journal entry was written; its successor's fence answers `claimed`, and the run must still settle."""
@@ -506,11 +508,42 @@ class ReviewRoundOneDriverTests(SettlementHarness):
 
         @contextlib.contextmanager
         def admitted():
-            self.wait_for(lambda: self.ledger._connection.execute(
-                'SELECT COUNT(*) FROM launch_claims').fetchone()[0] == 1, seconds=30)
+            self.wait_for(lambda: self.account_claims() == 1, seconds=30)
             yield
         _, _, _, run_handle = self.lose('claiming', between=admitted())
         self.wait_for(lambda: self.settlements() == [(run_handle, 0, 'lost')], seconds=30)
+
+    def intents(self):
+        values = []
+        for path in sorted(self.journal().glob('pit_*.json')):
+            try:
+                values.append(json.loads(path.read_text()))
+            except (OSError, ValueError):
+                values.append(None)
+        return values
+
+    def test_r1_H3_an_intent_whose_claim_never_reached_the_account_is_released_and_nothing_is_counted(self):
+        """HIGH 3 (process mode, decision 146): the service stopped after its write-ahead intent and before its
+        claim reached the account. The successor fences the intent's claim request (the account never admitted
+        it): the intent is settled `fenced`, the account counts nothing and the lease is released."""
+        from codex_agents.account_api import AccountClient as Client
+        sent = []
+
+        def never_sent(client, *arguments, **options):
+            sent.append([(v or {}).get('state') for v in self.intents()])  # on disk before the claim leaves
+            return {'state': 'unavailable'}
+        with mock.patch.object(Client, 'claim_launch', never_sent):
+            _, _, _, run_handle = self.lose('claiming')
+        self.assertEqual([['intent']], sent)
+        self.wait_for(lambda: [(v or {}).get('state') for v in self.intents()] == ['settled'], seconds=30)
+        self.assertEqual('fenced', self.intents()[0]['outcome'])
+        self.assertEqual(run_handle, self.intents()[0]['run_handle'])
+        self.wait_for(lambda: self.store('SELECT state FROM result_leases') == [('expired',)], seconds=30)
+        self.assertEqual({('lease', 'released', 'fenced'), ('open_binding', 'released', 'fenced')}, set(self.store(
+            "SELECT kind,state,release_kind FROM project_holds WHERE kind IN ('lease','open_binding')")))
+        self.assertEqual(0, self.account_claims())
+        self.assertEqual([], self.settlements())
+        self.assertEqual([], self.journal_states())
 
 
 @requirements('RS-B-B4')

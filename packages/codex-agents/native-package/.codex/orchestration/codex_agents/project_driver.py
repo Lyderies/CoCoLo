@@ -92,7 +92,7 @@ from .execution_grant import ExecutionRegistrationInput, checked_execution_grant
 from .history_contracts import AttemptBinding, HistoryError, _DIGEST, _ID, matches
 from .host_open_contracts import OpenProvenanceInput
 from .hosts import HOST_CLIENTS
-from .launch_journal import JournalError, LaunchJournal, tree_state
+from .launch_journal import JournalError, LaunchJournal, new_process_token, tree_state
 from .launch_journal import entry_key as launch_journal_key
 from .learning_contracts import canonical_json, content_digest, parse_bounded_json
 from .lost_run_contracts import SettleLostInput
@@ -265,6 +265,7 @@ class _Run:
     publish_attempts: int = 0  # Failed publications of the run's result retried (O10 D4).
     publish_at: float | None = None  # When the failed publication is retried.
     launch_token: str | None = None  # C2: its container intent's token (containers switched on only).
+    intent_token: str | None = None  # B4s r1 HIGH 3: its process intent's token (process mode only).
     # C3: a failed admitted run's own settlement once its container is gone: the account call under
     # way, whether it is done, and the refused ones (with when it is asked again).
     own_settle: object = None
@@ -399,6 +400,9 @@ class RunDriver:
         self._expiry, self._next_expiry = None, 0.0  # The first cleanup runs at start (0.3.4 R2).
         # Leases an earlier service left armed with no admitted claim, fenced here (0.3.3, C3).
         self._earlier, self._earlier_fences, self._fenced = None, {}, {}
+        # B4s r1 HIGH 3: the receipts of earlier leases the account admitted after all (`_fence_earlier`), by claim
+        # request id; read by the sweep for the process intents it settles. Replaced whole, never mutated.
+        self._earlier_admitted = {}
         # S1-R6: reporting writes for the orchestration report, in order, each retried a few times.
         self._reports = []
         self._earlier_failures, self._earlier_at, self._earlier_listed = 0, 0.0, False
@@ -892,6 +896,7 @@ class RunDriver:
                 self._journal.remove(run.launch_token)
             except JournalError:
                 pass  # Left for the container's recovery, which finds it never admitted.
+        self._forget_intent(run)
         self._give_back(run)
         run.closed = run.prepared is None
 
@@ -912,10 +917,22 @@ class RunDriver:
                                   lease={n: getattr(run.lease, n) for n in run.lease.__dataclass_fields__},
                                   identity_digest=run.identity_digest, claim_request_id=run.claim_request_id,
                                   storage_evidence=run.evidence, workspace=run.prepared_inputs.workspace)
+            self._forget_intent(run)  # Its `claimed` entry now holds everything the intent did.
         run.binding = AttemptBinding(**{n: getattr(run.lease, n) for n in LEASE_SCOPE_FIELDS},
                                      claim_id=receipt['bridge_run_id'], claim_digest=receipt['receipt_digest'])
         self._runtime.persistence.bind_claim(run.persistence, run.binding, hard_deadline_at_ms=receipt['deadline_at_ms'])
         run.state = 'binding'
+
+    def _forget_intent(self, run):
+        """B4s r1 HIGH 3: the run's process intent is done with (its admission is in its `claimed` entry, or its
+        claim was closed unadmitted). One left behind is fenced by a later service, which finds that out."""
+        if run.intent_token is None:
+            return
+        try:
+            self._journal.remove(run.intent_token)
+        except JournalError:
+            return
+        run.intent_token = None
 
     def _give_back(self, run):
         """A run that stopped before the account admitted its claim gives its preparation
@@ -1337,6 +1354,19 @@ class RunDriver:
                 except Exception:
                     self._fail(run, 'run_unavailable')
                     return
+            if self._containers is None and run.intent_token is None:
+                # B4s r1 HIGH 3 (decision 146): no intent, no claim, in process mode too. What a later service
+                # needs to fence the claim and settle the run is on disk before the account is asked.
+                run.intent_token = new_process_token()
+                try:
+                    self._journal.process_intent(
+                        run.intent_token, run_handle=run.key[0], attempt=run.key[1], host_client=run.host_client,
+                        lease={n: getattr(run.lease, n) for n in run.lease.__dataclass_fields__},
+                        identity_digest=run.identity_digest, claim_request_id=run.claim_request_id,
+                        storage_evidence=run.evidence, workspace=run.prepared_inputs.workspace)
+                except Exception:
+                    self._fail(run, 'run_unavailable')
+                    return
             run.claim_sent = True
             self._account_call(run, 'account', 'claim_launch', run.key[0], run.identity_digest,
                                request_id=run.claim_request_id, custody=self._custody(run, storage=run.evidence))
@@ -1672,6 +1702,7 @@ class RunDriver:
                 continue
             if reply['receipt']['state'] == 'claimed':
                 del self._earlier_fences[key]  # Admitted after all: the lost-run settlement's to settle.
+                self._earlier_admitted = {**self._earlier_admitted, key: reply['receipt']}  # (its process intent's)
                 continue
             entry['closure'] = canonical_json(reply['closure'])  # Kept until its lease is expired.
 
@@ -1827,10 +1858,22 @@ class RunDriver:
                 pass  # Asked again on the next sweep.
         recovery = self._container_recovery()
         journal, lost, stopped, recovering = self._journal, {}, {}, []
-        for entry in journal.entries():
+        entries = journal.entries()
+        claimed_requests = {entry['claim_request_id'] for entry in entries if entry.get('version') == 1}
+        for entry in entries:
             if entry['state'] is None:
                 continue
             handle, host_client = entry['run_handle'], entry['host_client']
+            if entry.get('version') == 3:
+                # B4s r1 HIGH 3: a process intent; only a stopped instance's is settled (`_settle_intent`).
+                if entry['state'] == 'settled':
+                    if entry['outcome'] != 'fenced':
+                        lost[handle] = (host_client, 'released')
+                elif entry['instance'] != journal.instance and stopped.setdefault(
+                        entry['instance'], journal.instance_stopped(entry['instance'])) is True:
+                    if self._settle_intent(entry, entry['claim_request_id'] in claimed_requests) == 'settled':
+                        lost[handle] = (host_client, 'released')
+                continue
             if entry['state'] == 'settled':
                 lost[handle] = (host_client, 'released')
                 self._recover_settled(entry)
@@ -1878,6 +1921,38 @@ class RunDriver:
             if instance != journal.instance:
                 journal.forget_instance(instance)
         return lost
+
+    def _settle_intent(self, entry, claimed):
+        """Sweep thread, B4s r1 HIGH 3 (decision 146): a stopped instance's process intent with no later entry.
+
+        Its claim request is not fenced here: the earlier service's armed lease is fenced by `_fence_earlier` (as
+        before). When the account answers there that it admitted the claim after all, the run is settled as lost
+        through the one sequence (`_settle_entry`) with the intent's own identity and that receipt's bridge run id:
+        nothing of it spawned, since a child is created only from a `claimed` entry. When `_fence_earlier` closed
+        the claim unadmitted (nothing was counted), the intent is `settled` as `fenced`. An intent whose `claimed`
+        entry exists (`claimed`: a stop between that write and the intent's removal), or one whose receipt names a
+        bridge run id with an entry, is only removed: the process rule settles that run. The workspace goes before
+        the intent is written `settled`. 'settled', 'fenced', 'removed' or None (nothing known yet, or a failure:
+        the next sweep asks again, identically)."""
+        journal, token = self._journal, entry['token']
+        try:
+            receipt = self._earlier_admitted.get(entry['claim_request_id'])
+            if claimed or (receipt is not None and journal.entry(receipt['bridge_run_id']) is not None):
+                journal.remove(token)
+                return 'removed'
+            if receipt is not None:
+                outcome = self._settle_entry({**entry, 'bridge_run_id': receipt['bridge_run_id']})['state']
+                answer = 'settled'
+            elif self._fenced.get(entry['run_handle']) is not None:
+                outcome = answer = 'fenced'
+            else:
+                return None
+            if not self._remove_workspace(entry['workspace']):
+                return None
+            journal.settled(token, outcome)
+        except Exception:
+            return None
+        return answer
 
     def _recover_settled(self, entry):
         """Sweep thread, B4s r1 (HIGH 3): a journal entry written `settled` before project settlement existed (0.8.54

@@ -8,10 +8,21 @@
 - HIGH 3 (upgrade) old pre-settlement `settled` journals: each `settled` entry is checked once per service against
   the store (`_recover_settled`); an outstanding (`releasing`) hold is settled through `_settle_entry`; unrecovered
   entries are kept from `journal.prune(keep=...)`. Test r1_H3 (old settled journal).
-- HIGH 3 (process mode) crash after claim admission before the first journal write: NOT FIXED, test written red and
-  skipped with the cause: settle_lost_run needs the identity digest, which only the never-written journal entry holds
-  (the store keeps none; the fence reply shape is fixed). Needs a process-mode journal intent before the claim or an
-  account settlement taking identity from the launch observation: PRIMARY DECISION.
+- HIGH 3 (process mode) crash after claim admission before the first journal write: FIXED in code (decision 146),
+  ONE EXISTING ASSERTION BLOCKS (see assertions.md, "pending primary"). A write-ahead process intent (launch_journal
+  version 3, `pit_<hex>.json`, file + folder fsync) is written before `claim_launch` is sent (no intent, no claim),
+  carrying identity digest, claim request, lease, storage evidence; removed once the `claimed` entry is written or
+  the claim closes unadmitted (`_forget_intent`). A stopped instance's intent (`_settle_intent`, sweep): the
+  earlier lease is fenced by the existing `_fence_earlier` (unchanged; it alone closes the request); its `claimed`
+  receipt is kept (`_earlier_admitted`) and the run settled via `_settle_entry` with the INTENT's identity and the
+  receipt's bridge run id; a lease `_fence_earlier` closed unadmitted -> intent `settled` outcome `fenced`; an
+  intent whose `claimed` entry exists is only removed. (A first version fenced from the intent itself and broke 4
+  C3 tests in test_lost_run_settlement: replaced.) Version 1/2 entries read unchanged; no new bound (tombstone
+  prune, MAX_ENTRY_BYTES). Tests: r1_H3 claim-admitted (un-skipped, red->green), r1_H3 intent never reached the
+  account (new, red->green), test_launch_journal.ProcessIntentTests.
+  Runs: test_lost_run_settlement + ReviewRoundOne (35, 79 s, OK); account_settlement_driver, container_launch_journal,
+  launch_journal, container_recovery, claim_denial_recovery, lifetime_cap_guard, open_withdrawal, container_stop
+  (246, 163 s: 1 FAIL = the pending assertion); test_project_driver alone (93, 222 s, OK).
 - MED crashed label: lost_run_closure reads the slot's run_holds release kind; `crashed` -> claim_cleanup_unavailable
   (B5). Test r1_M1.
 - MED workspace: _remove_workspace returns confirmed absence; `_settle_lost`, `_settle_own_ended` (keeps the reply in
