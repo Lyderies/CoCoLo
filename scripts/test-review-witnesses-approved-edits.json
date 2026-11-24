@@ -228,5 +228,45 @@
   "red": "measurements/test-framework/approved-edits/r2/candidate-tree-red.json",
   "requirement": "TF-27",
   "witness": "root:test_approved_edits.ApprovedEditsMigration.test_migration_outside_manifest_uses_candidate_and_introduction_requirements"
+ },
+ {
+  "base": "475958a0da881867db6115a0a0d6b95a79f4c3fa",
+  "diagnostic": "TF-27c second generation must bind only decision 2: 1: owner approval does not authorize manifest digest and binding name",
+  "fix": "TF27c-two-generations",
+  "green": "measurements/test-framework/approved-edits/tf27c/two-generations-green.json",
+  "positive_control": "Two generations on the same source produce current I/D/V proofs, only decision 2 is in the second binding, earlier bytes stay identical; no-new, unlisted-source and deleted-history refusals retain the valid gate control.",
+  "red": "measurements/test-framework/approved-edits/tf27c/two-generations-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsLaterBinding.test_two_generations_pass_gate_and_no_covered_manifest_is_rebound"
+ },
+ {
+  "base": "475958a0da881867db6115a0a0d6b95a79f4c3fa",
+  "diagnostic": "TF-27c second generation must bind only decision 2: 1: owner approval does not authorize manifest digest and binding name",
+  "fix": "TF27c-duplicate-decision",
+  "green": "measurements/test-framework/approved-edits/tf27c/duplicate-decision-green.json",
+  "positive_control": "A valid second binding passes first. Replacing its introduction with a duplicate decision is refused specifically as duplicate approved-edit binding, independently of byte immutability or wrong authority.",
+  "red": "measurements/test-framework/approved-edits/tf27c/duplicate-decision-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsLaterBinding.test_second_generation_relisting_first_decision_is_refused"
+ },
+ {
+  "base": "475958a0da881867db6115a0a0d6b95a79f4c3fa",
+  "diagnostic": "TF-27c second generation must bind only decision 2: 1: owner approval does not authorize manifest digest and binding name",
+  "fix": "TF27c-wrong-authority",
+  "green": "measurements/test-framework/approved-edits/tf27c/wrong-authority-green.json",
+  "positive_control": "A complete valid two-generation control passes. A fresh repository whose decision 2 approval names binding 99 refuses binding 0 with the decision-2 owner-approval diagnostic and writes no binding.",
+  "red": "measurements/test-framework/approved-edits/tf27c/wrong-authority-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsLaterBinding.test_new_decision_approval_naming_wrong_binding_is_refused"
+ },
+ {
+  "base": "475958a0da881867db6115a0a0d6b95a79f4c3fa",
+  "diagnostic": "TF-27c second generation must bind only decision 2: 1: owner approval does not authorize manifest digest and binding name",
+  "fix": "TF27c-earlier-tampering",
+  "green": "measurements/test-framework/approved-edits/tf27c/earlier-tampering-green.json",
+  "positive_control": "After a valid second generation, local and committed first-binding alterations fail, restoring only local bytes cannot conceal changed HEAD, and committing the original bytes restores the positive control.",
+  "red": "measurements/test-framework/approved-edits/tf27c/earlier-tampering-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsLaterBinding.test_first_binding_tampering_after_second_exists_is_refused"
  }
 ]

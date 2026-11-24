@@ -129,8 +129,11 @@ def exact_base(expected, before):
         raise ValueError('stale base: pre-edit sources differ from admitted state')
 
 
-def sources(root, manifests):
-    original = {}; state = {}
+def sources(root, manifests, *, prior=()):
+    # Earlier admissions establish the trusted input, but are never included
+    # in this generation's source hashes or changed-proof membership.
+    _, state = sources(root, prior) if prior else ({}, {})
+    original = {}
     for manifest in manifests:
         for transition in manifest['transitions']:
             if set(transition) != {'file', 'before_commit', 'edit_commit', 'edits'}:
@@ -142,8 +145,10 @@ def sources(root, manifests):
             if base != transition['before_commit'] or commit != transition['edit_commit'] or revision(root, commit + '^') != base:
                 raise ValueError('stale base: expected exact parent of edit commit')
             before = git(root, 'show', base + ':' + name)
-            if name not in state:
-                if trusted_file(root, name):
+            if name not in original:
+                if name in state:
+                    original[name] = state[name]
+                elif trusted_file(root, name):
                     original[name] = git(root, 'show', SOURCE_REVISION + ':' + name)
                 else:
                     # Historical verification only. build() never overlays an
@@ -155,7 +160,7 @@ def sources(root, manifests):
             if after != git(root, 'show', commit + ':' + name):
                 raise ValueError(name + ': manifest differs from historical edit commit')
             state[name] = after
-    return original, state
+    return original, {name: state[name] for name in original}
 
 
 def changed_proofs(before, after, seed, retired=(), *, candidate):
@@ -294,10 +299,12 @@ def listed_ids(root, at=None):
     return result
 
 
-def build(root, manifests, active=None, *, at=None):
+def build(root, manifests, active=None, *, at=None, prior=(), admitted=None):
     active = active_ids(root) if active is None else active
-    before_sources, after_sources = sources(root, manifests)
+    before_sources, after_sources = sources(root, manifests, prior=prior)
+    _, prior_sources = sources(root, prior)
     seed = seed_records(root)
+    seed = {name: {**row, **(admitted or {}).get(name, {})} for name, row in seed.items()}
     # Only suites owning an edited source can be affected; within them inspect
     # every historical legacy module, including transitive class/helper users.
     suites = {'codex' if name.startswith('packages/codex-agents/') else
@@ -306,6 +313,9 @@ def build(root, manifests, active=None, *, at=None):
     with tempfile.TemporaryDirectory(prefix='approved-edit-proof-') as folder:
         snapshot = Path(folder).resolve(); extract(root, SOURCE_REVISION, snapshot)
         shutil.copyfile(root / 'scripts/test_framework.py', snapshot / 'scripts/test_framework.py')
+        for name, content in prior_sources.items():
+            if trusted_file(root, name):
+                path = snapshot / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(content)
         before = inventory(root, snapshot, seed)
         for name, content in after_sources.items():
             if not trusted_file(root, name):
@@ -341,7 +351,7 @@ def admitted_paths(root, directory):
     return sorted(paths)
 
 
-def verify_introduction(root, manifests, data, introduction):
+def verify_introduction(root, manifests, data, introduction, *, prior=()):
     for manifest in manifests:
         _, commit = immutable(root, root / MANIFESTS / (manifest['decision'] + '.json'))
         for ancestor in [commit, *(t['edit_commit'] for t in manifest['transitions'])]:
@@ -349,7 +359,7 @@ def verify_introduction(root, manifests, data, introduction):
             if result.returncode == 1:
                 raise ValueError('approved-edit introduction lacks manifest/edit ancestry')
             result.check_returncode()
-    _, expected = sources(root, manifests)
+    _, expected = sources(root, manifests, prior=prior)
     try:
         introduced = {name: git(root, 'show', introduction + ':' + name) for name in expected}
         algorithm = git(root, 'show', introduction + ':scripts/test_framework.py')
@@ -359,7 +369,8 @@ def verify_introduction(root, manifests, data, introduction):
         raise ValueError('approved-edit introduction source/algorithm differs from replay')
 
 
-def checked_bindings(root):
+def binding_state(root, manifests=None):
+    """Fully verify immutable generations before comparing cumulative live bytes."""
     # Disposable runner fixtures have neither admission documents nor Git
     # metadata. Do not invoke Git there; an actual repository must still check
     # history even when every current admission document has been deleted.
@@ -368,32 +379,41 @@ def checked_bindings(root):
                   or os.environ.get('GIT_DIR') or os.environ.get('GIT_COMMON_DIR')
                   or ((root / 'HEAD').is_file() and (root / 'objects').is_dir()))
     if not documents and not repository:
-        return {}
+        return {}, []
     paths = admitted_paths(root, BINDINGS)
     admitted_paths(root, MANIFESTS)
     if not paths:
-        return {}
-    manifests = read_manifests(root)
-    admitted = {}; covered = set()
-    for path in paths:
-        data, introduction = immutable(root, path)
+        return {}, []
+    manifests = read_manifests(root) if manifests is None else manifests
+    # Binding names convey authority, not chronology. Reconstruct generations
+    # in introduction order even when a later name sorts before an earlier one.
+    order = {commit: index for index, commit in enumerate(
+        git(root, 'rev-list', '--reverse', '--topo-order', 'HEAD').decode().split())}
+    documents = [(path, *immutable(root, path)) for path in paths]
+    admitted = {}; covered = set(); prior = []
+    for path, data, introduction in sorted(documents, key=lambda row: (order[row[2]], row[0])):
         selected = [m for m in manifests if m['decision'] in data['manifests']]
         if {m['decision'] for m in selected} != set(data['manifests']):
             raise ValueError('missing admitted manifest')
-        authorize(root, selected, path.stem)
         if covered.intersection(data['manifests']):
             raise ValueError('duplicate approved-edit binding')
-        verify_introduction(root, selected, data, introduction)
-        _, expected = sources(root, selected)
-        exact_current(expected, {name: (root / name).read_bytes() for name in expected})
+        authorize(root, selected, path.stem)
+        verify_introduction(root, selected, data, introduction, prior=prior)
         # Eligibility is frozen at introduction; later shrink-only retirement
         # filters application, never changes the immutable derivation.
         introduced_active = active_ids(root, introduction)
-        rebuilt = build(root, selected, introduced_active, at=introduction)
+        rebuilt = build(root, selected, introduced_active, at=introduction, prior=prior, admitted=admitted)
         if rebuilt != data:
             raise ValueError('immutable approved-edit binding does not match replayed proofs')
-        covered.update(data['manifests']); admitted.update(data['tests'])
-    _, expected = sources(root, [m for m in manifests if m['decision'] in covered])
+        covered.update(data['manifests']); admitted.update(data['tests']); prior.extend(selected)
+    return admitted, prior
+
+
+def checked_bindings(root):
+    admitted, prior = binding_state(root)
+    if not prior:
+        return {}
+    _, expected = sources(root, prior)
     exact_current(expected, {name: (root / name).read_bytes() for name in expected})
     active = active_ids(root)
     check_later_retirements(root, {name: row for name, row in admitted.items() if name not in active})
@@ -446,10 +466,17 @@ def main():
         if path.exists():
             raise ValueError('immutable binding already exists')
         manifests = read_manifests(root, require_committed=not args.prepare)
+        admitted, prior = binding_state(root, manifests)
+        covered = {m['decision'] for m in prior}
+        manifests = [m for m in manifests if m['decision'] not in covered]
+        if not manifests:
+            raise ValueError('no new approved-edit manifest')
         authorize(root, manifests, args.binding, require_committed=not args.prepare)
-        _, expected = sources(root, manifests)
+        _, expected = sources(root, [*prior, *manifests])
         exact_current(expected, {name: (root / name).read_bytes() for name in expected})
-        data = build(root, manifests); write_new(path, data)
+        active = active_ids(root)
+        check_later_retirements(root, {name: row for name, row in admitted.items() if name not in active})
+        data = build(root, manifests, active, prior=prior, admitted=admitted); write_new(path, data)
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
         parser.exit(1, str(error) + '\n')
     print(f'{path.relative_to(root)}: {len(data["tests"])} existing proofs rebound; commit manifests and binding together')

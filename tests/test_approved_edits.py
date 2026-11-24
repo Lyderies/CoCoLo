@@ -120,7 +120,7 @@ class ApprovedEdits(unittest.TestCase):
     def test_recorded_owner_transitions_match_current_bytes(self):
         p = self.policy()
         manifests = p.read_manifests(ROOT, require_committed=False)
-        self.assertEqual({'107', '109', '112', '114.1', '119'}, {m['decision'] for m in manifests})
+        self.assertEqual({'107', '109', '112', '114.1', '119', '123'}, {m['decision'] for m in manifests})  # 123 A (owner 2026-11-24)
         before, after = p.sources(ROOT, manifests)
         p.exact_current(after, {name: (ROOT / name).read_bytes() for name in after})
         self.assertNotIn('packages/codex-agents/tests/test_hold_lifecycle.py', after)
@@ -677,3 +677,125 @@ class ApprovedEditsMigration(unittest.TestCase):
                 self.write_json(listed, data)
                 with self.assertRaisesRegex(ValueError, 'changed legacy identity/metadata'):
                     p.build(root, [manifest])
+
+
+@requirements('TF-27', 'TF-23', why_not_scenario='Two committed admission generations exercise the real rebinder, replay and gate in disposable Git repositories.')
+class ApprovedEditsLaterBinding(unittest.TestCase):
+    policy = ApprovedEdits.policy
+    commit = ApprovedEditsR1.commit
+    write_json = ApprovedEditsR1.write_json
+    snapshot = ApprovedEditsR1.snapshot
+    fixture = ApprovedEditsR1.fixture
+
+    def command(self, root, p, binding='0'):
+        import contextlib
+        import io
+        stderr = io.StringIO()
+        status = 0
+        with mock.patch.object(p, '__file__', str(root / 'scripts/rebind_approved_edits.py')), \
+             mock.patch.object(sys, 'argv', ['rebind_approved_edits.py', '--binding', binding]), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
+            try:
+                p.main()
+            except SystemExit as error:
+                status = error.code
+        return status, stderr.getvalue()
+
+    def second_manifest(self, root, p, *, wrong_binding=False):
+        import hashlib
+        seed, first, _ = self.fixture(root, p)
+        first_bytes = (root / p.BINDINGS / '1.json').read_bytes()
+        path = root / 'tests/test_case.py'
+        parent = p.revision(root, 'HEAD')
+        path.write_text(path.read_text().replace('self.assertEqual(2, 1)', 'self.assertEqual(3, 1)'))
+        edit = self.commit(root, 'second approved edit to the same source and proof')
+        manifest = dict(schema=1, decision='2', transitions=[dict(file='tests/test_case.py',
+            before_commit=parent, edit_commit=edit, edits=[dict(line=4,
+            old='        self.assertEqual(2, 1)\n', new='        self.assertEqual(3, 1)\n')])])
+        self.write_json(root / p.MANIFESTS / '2.json', manifest)
+        approval = p.fw.decode_json((root / p.APPROVALS).read_text())
+        approval['decisions']['2'] = dict(binding='99' if wrong_binding else '0',
+            manifest_sha256=hashlib.sha256((root / p.MANIFESTS / '2.json').read_bytes()).hexdigest())
+        self.write_json(root / p.APPROVALS, approval)
+        self.commit(root, 'second owner manifest and authority')
+        return seed, first, first_bytes
+
+    def two_generations(self, root, p):
+        seed, first, first_bytes = self.second_manifest(root, p)
+        status, diagnostic = self.command(root, p)
+        self.assertEqual(0, status, 'TF-27c second generation must bind only decision 2: ' + diagnostic)
+        second = p.fw.decode_json((root / p.BINDINGS / '0.json').read_text())
+        self.assertEqual({'2'}, set(second['manifests']))
+        self.assertEqual(first['after_sources'], second['before_sources'])
+        self.assertEqual(first_bytes, (root / p.BINDINGS / '1.json').read_bytes())
+        self.commit(root, 'second binding introduction (name sorts before first)')
+        current = p.inventory(root, root, seed)
+        expected = {name: {f: current[name][f] for f in p.FIELDS} for name in second['tests']}
+        self.assertTrue(expected, 'TF-27c positive control must change an existing proof')
+        self.assertEqual(expected, second['tests'])
+        self.assertNotEqual(first['tests'], second['tests'])
+        self.assertEqual(expected, p.checked_bindings(root))
+        return first, second, first_bytes
+
+    def test_two_generations_pass_gate_and_no_covered_manifest_is_rebound(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); p = self.policy()
+            _, second, first_bytes = self.two_generations(root, p)
+            status, diagnostic = self.command(root, p, '3')
+            self.assertEqual(1, status)
+            self.assertIn('no new approved-edit manifest', diagnostic)
+            self.assertFalse((root / p.BINDINGS / '3.json').exists())
+            self.assertEqual(first_bytes, (root / p.BINDINGS / '1.json').read_bytes())
+            # Current-source and admitted-history checks still fail closed.
+            path = root / 'tests/test_case.py'; content = path.read_bytes()
+            path.write_bytes(content + b'\nUNLISTED = 1\n')
+            with self.assertRaisesRegex(ValueError, 'unlisted change'):
+                p.checked_bindings(root)
+            path.write_bytes(content)
+            self.assertEqual(second['tests'], p.checked_bindings(root))
+            (root / p.BINDINGS / '1.json').unlink()
+            with self.assertRaisesRegex(ValueError, 'missing admitted'):
+                p.checked_bindings(root)
+
+    def test_second_generation_relisting_first_decision_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); p = self.policy()
+            first, second, _ = self.two_generations(root, p)
+            forged = copy.deepcopy(second)
+            forged['manifests'].update(first['manifests'])
+            # Replace the introduction, so duplicate detection is exercised
+            # independently of immutable-byte and owner-name rejection.
+            subprocess.run(['git', 'reset', '--soft', 'HEAD^'], cwd=root, check=True)
+            self.write_json(root / p.BINDINGS / '0.json', forged)
+            self.commit(root, 'invalid second introduction repeats decision 1')
+            with self.assertRaisesRegex(ValueError, 'duplicate approved-edit binding'):
+                p.checked_bindings(root)
+
+    def test_new_decision_approval_naming_wrong_binding_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); p = self.policy()
+            self.two_generations(root, p)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); p = self.policy()
+            self.second_manifest(root, p, wrong_binding=True)
+            status, diagnostic = self.command(root, p)
+            self.assertEqual(1, status)
+            self.assertIn('2: owner approval does not authorize manifest digest and binding name', diagnostic)
+            self.assertFalse((root / p.BINDINGS / '0.json').exists())
+
+    def test_first_binding_tampering_after_second_exists_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); p = self.policy()
+            _, second, first_bytes = self.two_generations(root, p)
+            path = root / p.BINDINGS / '1.json'
+            path.write_bytes(first_bytes + b'\n')
+            with self.assertRaisesRegex(ValueError, 'immutable approved-edit document'):
+                p.checked_bindings(root)
+            self.commit(root, 'tamper with earlier binding after second introduction')
+            with self.assertRaisesRegex(ValueError, 'immutable approved-edit document'):
+                p.checked_bindings(root)
+            path.write_bytes(first_bytes)
+            with self.assertRaisesRegex(ValueError, 'immutable approved-edit document'):
+                p.checked_bindings(root)
+            self.commit(root, 'restore original first binding bytes')
+            self.assertEqual(second['tests'], p.checked_bindings(root))

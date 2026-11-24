@@ -1,0 +1,13 @@
+{
+ "base": "475958a0da881867db6115a0a0d6b95a79f4c3fa",
+ "limitation": "Witness passed. The module remains 24/25 because the unchanged original manifest-set assertion excludes decision 123. The runner also reports metadata errors, including a trusted-old-proof mismatch in the earlier 0851 replay.",
+ "log": "measurements/test-framework/approved-edits/tf27c/green-approved-edits.log",
+ "outcome": "passed",
+ "policy_sha256": "3dba1c61e7db469c3e1b09a0dc37a804741cb347d3a9c47e1702a228dc521eb2",
+ "run_record": "measurements/test-framework/approved-edits/tf27c/green.json.run.json",
+ "runner_log": "measurements/test-framework/approved-edits/tf27c/green.log",
+ "runner_returncode": 1,
+ "status": "green",
+ "test_source_sha256": "f2f27cf40044e6d0e601950c7e73fde9257f414cdc51152f4b842cee917a3efb",
+ "witness": "root:test_approved_edits.ApprovedEditsLaterBinding.test_first_binding_tampering_after_second_exists_is_refused"
+}
