@@ -5,7 +5,8 @@ were running: the project host had published its runtime hint before the
 collector's account services listened, so the hint named no account endpoint and
 the CLI's snapshot read gave up without saying why. Here the services start in
 the order production starts them (the project host waits for the collector's
-health only), and nothing on the route, snapshot or account path is patched.
+health only), and nothing on the route, snapshot or account path is patched for the
+successful read (the refusal case patches only the snapshot reply).
 """
 import threading
 import unittest
@@ -27,11 +28,13 @@ class LiveSnapshotRouteTests(ClaudePrimaryCase):
     def start_services(self, *, project_host=True):
         real = service_harness.AccountServiceHost
         published = threading.Event()
+        gate_timed_out = []
 
         def account_after_hint(*arguments, **options):
             # Production: project_host.py starts the collector and waits for its health only;
             # the account services come up after the hint (the real install: 2 s apart).
-            published.wait(20)
+            if not published.wait(20):
+                gate_timed_out.append(True)  # the order under test was not reproduced
             return real(*arguments, **options)
 
         with mock.patch.object(service_harness, 'AccountServiceHost', account_after_hint), \
@@ -42,6 +45,7 @@ class LiveSnapshotRouteTests(ClaudePrimaryCase):
             self.assertTrue(runtime_hint_path(self.paths, self.project).exists())
             published.set()
             self.wait_for(lambda: capability_path(self.paths, None, 'account').exists())
+            self.assertEqual([], gate_timed_out, 'account services started before the hint was published')
 
     @requirements('RT-RX-7', 'RT-RX-18', 'RT-RX-19')
     def test_learning_route_reads_the_running_account_services_snapshot(self):
