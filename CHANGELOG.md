@@ -4,6 +4,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.54: routing reads the live provider state on a real install (0.8.53 always routed "not_checked":
+  the runtime hint is written before the account socket exists); a not_checked route says why.
 - Package 0.8.53: routes around a used-up provider (RT-ROUTE-EXHAUSTED, decision 124). Routing and admission share
   one availability classifier; a provider at 90% or exhausted is skipped for workers and verifiers, in policy order;
   a "rejected" reading with no reset time lasts five hours and a newer good reading clears it; a verifier on the
