@@ -253,7 +253,7 @@ class CollectorClient:
             or server_version < client_version
         ):
             raise _with_loaded_digest(CollectorUpgradeRequired(
-                "collector runtime is older than the installed package",
+                compatibility_message(response.get("runtime_version"), project_root=project_root),
                 code="runtime_upgrade_required",
             ), response, identity_valid=(
                 isinstance(server_schema, int) and not isinstance(server_schema, bool)

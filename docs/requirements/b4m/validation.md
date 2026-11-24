@@ -72,3 +72,40 @@ container_launch_journal: all pass (about 4 s + 28 s + 47 s). A first run expose
 the `account.provider_state_snapshot` reply table listed 3 fields, but the real reply is the full
 audit (classifier, evaluated_at_ms, format_version, project_id, providers, snapshot_ref, status).
 Table and fixture corrected to the real 7 fields. No existing assertion changed.
+
+## Round 2: reply tables proven against the real producers (cross-provider review, two MEDs)
+
+Live coverage (`tests/test_reply_shape_live.py`). The tables are hand-written, so a wrong entry would
+fail a live route closed. The new test wraps the real reply constructors of `AccountService` and
+`HistoryService` (the billing path included) and records the operation and field set of every reply
+that the existing driver modules make the real services produce (some over real sockets, most through
+`handle()`; 3 module groups, listed in the test). It asserts: each recorded reply satisfies
+`reply_fields_match`; every operation in both tables (all 21 account, all 25 history) produced at least
+one reply (`SOURCE_ONLY` is empty: none had to be derived from source); every optional field
+(billing_probe billing_waivers/client_version/retry_at, observe_provider billing_waivers,
+capacity_report run_slots) was seen on a real reply; no real reply has a field outside its entry.
+One deliberately fabricated reply (`account.project` canary in a refusal test) is excluded by name.
+Table entries fixed in this round: none (the live run found the 46 entries correct after the earlier
+`account.provider_state_snapshot` fix). Caveat: replies only come from what those modules exercise; a
+new variant needs a driver, and the test fails for any operation that has none.
+
+Fixture provenance. `tests/fixtures/reply-fields-8d4a7ce3.json` was cross-checked against the real
+8d4a7ce3 producers, not the table: a read-only worktree at 8d4a7ce3 (no reply guard exists there) ran
+the same driver modules with the same reply-constructor recorder, and the observed key sets per
+operation were compared with the fixture (required = fields on every reply; optional = fields on some).
+All 46 operations were observed and agree. Two optional fields were present on every reply the 8d4a7ce3
+tests produced (`observe_provider.billing_waivers`, `capacity_report.run_slots`); the 8d4a7ce3 source
+makes both conditional (`provider_observation_contracts.py` allows the key to be absent;
+`history_service.py` adds run_slots only when the authorization carries them), so the fixture keeps them
+optional. Recorder scripts were run from the scratchpad, not committed.
+
+LOW: `runtime_upgrade_required` (newer client, older collector) now carries the same plain message and
+exact update command as `runtime_newer` (`compatibility_message`), via `collector_client.health`.
+New test `test_b4m_compatibility.CompatibilityMessageTests.test_newer_client_older_collector_names_command`
+(red before the change: message was only "collector runtime is older than the installed package").
+No assertion changed (no existing test matched the old text).
+
+Round 2 runs: `test_reply_shape_live` 4 tests OK in 545.5 s (loaded machine, other units and a base-worktree recorder
+running; it replays about 780 existing tests, so it is registered in the e2e stage, not for the per-edit loop);
+`test_b4m_compatibility` + `test_service_transport` 19 tests OK in 0.3 s. The runtime digest/VERSION bookkeeping for the
+collector_client.py change is left to the primary.

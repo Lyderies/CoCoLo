@@ -242,6 +242,7 @@
  "codex:tests.test_refusal_steps": "unit",
  "codex:tests.test_release_batch_queries": "unit",
  "codex:tests.test_reply_shape_compatibility": "unit",
+ "codex:tests.test_reply_shape_live": "e2e",
  "codex:tests.test_required_host_open": "integration",
  "codex:tests.test_result_commit_busy": "integration",
  "codex:tests.test_result_denial_lane": "integration",

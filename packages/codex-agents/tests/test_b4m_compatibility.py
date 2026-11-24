@@ -70,6 +70,21 @@ class CompatibilityMessageTests(unittest.TestCase):
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertEqual(str(self.project), run.stdout)
 
+    def test_newer_client_older_collector_names_command(self):
+        # runtime_upgrade_required reaches the user with the same plain message and exact command.
+        reply = {'ok': True, 'runtime_version': '0.8.54', 'schema_version': learning_store.LEDGER_SCHEMA_VERSION,
+                 'runtime_digest': 'b' * 64, 'command': 'CANARY'}
+        with mock.patch.object(collector_client, 'PACKAGE_VERSION', '0.8.55'), \
+                mock.patch.object(host_commands, 'runtime_copy_root', return_value=self.copy), \
+                mock.patch.object(collector_client, 'exchange_frame', return_value=json.dumps(reply).encode()):
+            with self.assertRaises(collector_client.CollectorUpgradeRequired) as caught:
+                collector_client.CollectorClient(self.base / 'unused.sock').health(self.project)
+        self.assertEqual('runtime_upgrade_required', caught.exception.code)
+        message = str(caught.exception)
+        for text in ('0.8.54', 'plain terminal', self.command, 'Configure'):
+            self.assertIn(text, message)
+        self.assertNotIn('CANARY', message)
+
     def test_three_sites_share_the_command(self):
         state = mock.Mock()
         state.collector_authorization.exists.return_value = True

@@ -1358,6 +1358,7 @@
  "RS-B-B4m-1": {
   "checks": [
    "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_missing_local_record_does_not_guess_a_clone",
+   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_newer_client_older_collector_names_command",
    "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_old_client_newer_collector_names_command",
    "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_project_service_version_comes_from_local_hint_and_release_record",
    "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_registration_from_clone_keeps_the_project_in_the_command",
@@ -1370,7 +1371,11 @@
   "checks": [
    "codex:tests.test_reply_shape_compatibility.ReplyShapeCompatibilityTests.test_added_and_removed_fields_are_refused_for_every_operation",
    "codex:tests.test_reply_shape_compatibility.ReplyShapeCompatibilityTests.test_both_apis_apply_the_shape_guard_before_value_checks",
-   "codex:tests.test_reply_shape_compatibility.ReplyShapeCompatibilityTests.test_every_existing_reply_matches_previous_release_catalogue"
+   "codex:tests.test_reply_shape_compatibility.ReplyShapeCompatibilityTests.test_every_existing_reply_matches_previous_release_catalogue",
+   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_operation_in_both_tables_was_produced_live",
+   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_optional_field_was_seen_on_a_real_reply",
+   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_real_reply_matches_the_table",
+   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_real_replies_carry_no_field_outside_the_table"
   ],
   "source": "docs/requirements/b4m.md#RS-B-B4m-2",
   "statement": "**RS-B-B4m-2 \u2014 Preserve existing reply fields.** A newer collector/account never adds or removes\nfields of an existing account/history operation's reply. New data requires a new operation.\nThe guard compares every existing operation with the previous-release field catalogue, retaining\nthe optional field variants already allowed by that release."
