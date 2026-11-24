@@ -988,10 +988,11 @@ class LearningStoreTests(unittest.TestCase):
 
         self.ledger._connection.set_progress_handler(count_progress, 1000)
         try:
-            self.assertEqual(
-                row_count,
-                self.ledger.expire(self.project_b_id, now_ms=expires_at),
-            )
+            removed, more = 0, True
+            while more:  # Each call summarises a bounded batch (L10.3) and reports `more`.
+                report = self.ledger.expire_report(self.project_b_id, now_ms=expires_at)
+                removed, more = removed + report["removed"], report["more"]
+            self.assertEqual(row_count, removed)
         finally:
             self.ledger._connection.set_progress_handler(None, 0)
         self.assertLess(progress_calls, 1000)

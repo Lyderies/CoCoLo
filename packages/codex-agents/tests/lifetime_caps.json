@@ -179,13 +179,13 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
-  "account_service.py::runtime_upgrade_reply": {
-   "checks": 1,
-   "ends": "per-request frame-size check on one inbound request; stores nothing, so nothing accumulates (RS-F S1, integration 2026-11-24)"
-  },
   "account_service.py::_owner_key_view": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_service.py::runtime_upgrade_reply": {
+   "checks": 1,
+   "ends": "per-request frame-size check on one inbound request; stores nothing, so nothing accumulates (RS-F S1, integration 2026-11-24)"
   },
   "admission_input_decode.py::_preflight": {
    "checks": 3,
@@ -915,6 +915,11 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "learning_store.py::_expire_event_targets": {
+   "checks": 1,
+   "ends": "EXPIRE_SUMMARY_BATCH bounds the raw events one learning-expire call summarises under its exclusive lock; the call reports more and the rest wait for the next call, so each call ends and the backlog drains; BOUNDED",
+   "test": "test_one_expire_call_summarises_a_bounded_batch_and_reports_more"
+  },
   "learning_store.py::_expired_event_window": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
@@ -1293,10 +1298,6 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
-  "project_history.py::runtime_close_status": {
-   "checks": 1,
-   "ends": "RS-D S2 (2026-11-24): a read-only COUNT of update-closed orchestration tombstones (project_holds kind orchestration, release closed), not a limit; nothing is refused by it. The counted tombstones are bounded like every hold tombstone, one per orchestration ever closed; purge is RS-B's (B4s/B6, decision 131 index)"
-  },
   "project_history.py::_result_counts": {
    "checks": 2,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
@@ -1334,6 +1335,10 @@
    "checks": 1,
    "ends": "D4 (RS-D draft 3 \u00a76): one bounded page per replay pass (at most REPLAY_PASS_LIMIT = 4 publications tried, each one body of at most 1 MiB) over `project_result_publications`, which holds only unfinished publications: a row ends with its commit or with the transaction that records `retiring`, so nothing accumulates and tombstones cost nothing; a refused row stays for retirement and the cursor moves on, so it never holds later ones back",
    "test": "test_the_replay_pass_completes_at_most_four_publications_and_the_next_pass_the_rest"
+  },
+  "project_history.py::runtime_close_status": {
+   "checks": 1,
+   "ends": "RS-D S2 (2026-11-24): a read-only COUNT of update-closed orchestration tombstones (project_holds kind orchestration, release closed), not a limit; nothing is refused by it. The counted tombstones are bounded like every hold tombstone, one per orchestration ever closed; purge is RS-B's (B4s/B6, decision 131 index)"
   },
   "project_history.py::settle_earlier_registrations": {
    "checks": 1,

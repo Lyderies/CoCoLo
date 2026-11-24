@@ -219,6 +219,52 @@ class EventRetentionTests(unittest.TestCase):
         self.assertEqual(0, self.ledger.sweep_event_retention(now_ms=later))
         self.assertEqual(before, self._summaries())
 
+    def test_an_event_named_by_a_file_that_expire_removes_is_erased_with_no_summary(self):
+        # Decision 200: the file-name check comes before the file registration is removed.
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        self.append(event("named", "tool_started", observed_at_ms=start), now_ms=start)
+        self.append(event("plain", "tool_started", observed_at_ms=start + 1), now_ms=start + 1)
+        (self.ledger.state.artifacts / self.project).mkdir(parents=True, exist_ok=True)
+        (self.ledger.state.artifacts / self.project / "f1").write_bytes(b"x")
+        self.connection.execute(
+            "INSERT INTO stored_files(project_id,file_id,kind,relative_path,content_digest,source_record_id,"
+            "expires_at_ms) VALUES(?,?,?,?,?,?,?)",
+            (self.project, "f1", "artifact", f"artifacts/{self.project}/f1", "0" * 64, "named", start + DAY)).close()
+        self.ledger.expire(self.project, now_ms=start + 8 * DAY)
+        self.assertEqual(set(), self._raw_ids())
+        self.assertEqual([1], [summary["event_count"] for summary in self._summaries()])
+
+    def test_an_ordinary_record_cannot_take_an_event_summary_identifier(self):
+        start = 1_000_000_000_000
+        with self.assertRaisesRegex(LedgerError, "evsum-"):
+            self.append(event("evsum-" + "a" * 32, "tool_started", observed_at_ms=start), now_ms=start)
+
+    def test_a_reused_event_id_never_shares_a_summary_with_its_predecessor_and_a_taken_id_is_refused(self):
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        for round_ in range(2):
+            self.append(event("same", "tool_started", observed_at_ms=start + round_ * DAY * 20),
+                        now_ms=start + round_ * DAY * 20)
+            self.ledger.expire(self.project, now_ms=start + round_ * DAY * 20 + 8 * DAY)
+        self.assertEqual([1, 1], [summary["event_count"] for summary in self._summaries()])
+        record = self._summaries()[0]
+        with self.assertRaisesRegex(LedgerError, "already taken"):
+            self.ledger._write_event_summary(self.project, record, start)
+
+    def test_one_expire_call_summarises_a_bounded_batch_and_reports_more(self):
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        for number in range(5):
+            self.append(event(f"b{number}", "tool_started", observed_at_ms=start + number), now_ms=start + number)
+        later = start + 8 * DAY
+        with mock.patch.object(learning_store, "EXPIRE_SUMMARY_BATCH", 2):
+            first = self.ledger.expire_report(self.project, now_ms=later)
+            self.assertTrue(first["more"])
+            self.assertEqual(3, len(self._raw_ids()))
+            self.assertEqual(2, sum(s["event_count"] for s in self._summaries()))
+            while self.ledger.expire_report(self.project, now_ms=later)["more"]:
+                pass
+        self.assertEqual(set(), self._raw_ids())
+        self.assertEqual(5, sum(s["event_count"] for s in self._summaries()))
+
     def test_a_summary_is_only_written_with_the_removal_it_describes(self):
         now = 1_000_000_000_000
         for number in range(5):
