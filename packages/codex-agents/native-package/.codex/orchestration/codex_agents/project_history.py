@@ -2607,6 +2607,26 @@ class ProjectHistory:
         with self._transaction():
             reservation, kind, hold = self._settlement_hold(run_handle, attempt)
             settled = self._settlement_row(run_handle, attempt) is not None
+            if reservation is None and not settled:
+                # RS-13: a bound attempt's reservation payload may be gone. Its
+                # permanent hold keeps the verified closure, including the attempt
+                # and generation; locate it by the original request's claim id.
+                tombstone = self._connection.execute(
+                    "SELECT * FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=? "
+                    "AND state='released'", (self.project_id, payload.get("bridge_run_id"))).fetchone()
+                if tombstone is not None and tombstone["evidence"] is not None:
+                    from .lost_run_closure import verify_lost_run_closure
+                    try:
+                        closure = verify_lost_run_closure(self._result_key, tombstone["evidence"].encode('ascii'),
+                                                          project_id=self.project_id)
+                    except (ClaimError, AttributeError, UnicodeError):
+                        raise HistoryError("history_conflict") from None
+                    if (closure["binding"]["run_handle"] != run_handle or closure["binding"]["attempt"] != attempt
+                            or closure["receipt_digest"] != tombstone["receipt"]
+                            or closure["request_digest"] != tombstone["request_digest"]
+                            or closure["release_kind"] != tombstone["release_kind"]):
+                        raise HistoryError("history_conflict")
+                    kind, hold = "reservation", tombstone
             if hold is None:
                 # B4s confirming check (MED 3): a settlement row whose register row is absent is not "nothing to
                 # settle" (that answer lets the driver complete its journal on the account's word alone).
@@ -2622,6 +2642,8 @@ class ProjectHistory:
                 verified = (lease_row is not None and self._attempt_settled(self._lease(lease_row)) if settled
                             else lease_row is None)
                 if not verified:
+                    raise HistoryError("history_conflict")
+                if hold["request_id"] != request_id or hold["request_digest"] != digest:
                     raise HistoryError("history_conflict")
                 return {"state": "settled", "request_id": hold["request_id"], "request_digest": hold["request_digest"],
                         "release_kind": hold["release_kind"]}
@@ -2723,7 +2745,7 @@ class ProjectHistory:
                 "INSERT INTO project_account_settlements(project_id,run_handle,attempt,claim_id,release_kind,closure,"
                 "settled_at_ms) VALUES(?,?,?,?,?,?,?)", (self.project_id, run_handle, attempt, claim_id, kind, raw, now))
             project_holds_schema.release_hold(self._connection, self.project_id, hold_kind, hold["identity"],
-                                              expected_kind, now_ms=now, receipt=receipt)
+                                              expected_kind, now_ms=now, receipt=receipt, evidence=raw.decode('ascii'))
         if ending:
             project_result_contexts.finish_quietly(self, run_handle, attempt)
         return {**answer, "known": False}
@@ -3099,6 +3121,17 @@ class ProjectHistory:
     def _delete_attempt_rows(self, run_handle: str, attempt: int, claim_id: str | None) -> None:
         """One finished attempt's rows, children first (foreign keys are on)."""
         attempt_key = (self.project_id, run_handle, attempt)
+        # RS-13: older writers kept the authenticated reply only in the settlement
+        # row. Preserve it in the permanent hold before pruning that row, too.
+        lease_row = self._connection.execute(
+            "SELECT * FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?", attempt_key).fetchone()
+        if lease_row is not None and self._attempt_settled(self._lease(lease_row)):
+            settlement = self._settlement_row(run_handle, attempt)
+            kind, identity = (("reservation", settlement["claim_id"]) if settlement["claim_id"] is not None
+                              else ("lease", attempt_identity(run_handle, attempt)))
+            self._connection.execute(
+                "UPDATE project_holds SET evidence=? WHERE project_id=? AND kind=? AND identity=? AND state='released'",
+                (bytes(settlement["closure"]).decode('ascii'), self.project_id, kind, identity))
         for table in ("project_cleanup_acknowledgements", "project_cleanup_receipts", "project_cleanup_reservations",
                       "project_host_opens", "project_registered_runs",  # with its registration (R6-13)
                       "project_result_contexts",  # D1: only a finished one (`purgeable`); its custody stays
