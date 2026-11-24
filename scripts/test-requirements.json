@@ -1355,6 +1355,22 @@
   "source": "REQUIREMENTS-open-withdrawal.md#RS-B-5",
   "statement": "**RS-B-5 \u2014 Authenticated withdrawal of an unclaimed open.**\nThe project service and the opening host class may withdraw an unclaimed open with matching enrolled project,\ncaller scope, run id, inputs digest, attempt custody and current binding generation. Authentication precedes\nimmutable receipt replay; an exact replay remains available after the binding is pruned. Different callers receive\nno receipt. New transitions refuse claimed, fenced, withdrawn or stale bindings; missing generations are refused.\nWithdrawal evidence is retained for the tombstone's life. The project records its withdrawal duty before registration,\nmarks the complete request releasing before dropping memory, retries identical requests after lost replies, and\nwithdraws never-claimed cancellations, pre-preparation failures, idle registrations (one hour, owner decision 90.7)\nand stopped-service registrations. A registration refusal preserves the duty; a faulted writer gets one memory\nwithdrawal, otherwise account expiry. Armed leases belong to the fence path.\nSource: DESIGN-0.4.0-RS-B.md draft 3 \u00a74, \u00a77 and rows W1-W5 (W4a-e), M7; PLAN-0.4.0-supervisor-slices.md B3."
  },
+ "RS-D-2-N1": {
+  "checks": [
+   "codex:tests.test_rsd_runtime_close.RuntimeCloseServiceTests.test_N1_N2_real_release_then_update_counts_unrecorded_once_across_restart",
+   "codex:tests.test_rsd_runtime_close.RuntimeCloseTests.test_N1_recorded_closes_and_releases_custody_without_counting_unrecorded"
+  ],
+  "source": "docs/requirements/rsd-runtime-close.md#RS-D-2-N1",
+  "statement": "**RS-D-2-N1 \u2014 Eligible changed-runtime closure.**\nAfter a runtime change, the real `end_earlier` sweep closes an eligible orchestration as\ninterrupted. Recorded results and verified account releases permit closure. The ordinary\nexpiry pass releases committed custody `orchestration_closed`. Count each update-ended\norchestration with any unrecorded result once as `ended_by_update_unrecorded`, including\nafter restart and result retirement/purge. Expose only a count, never result content.\nSame-runtime and other-service sweeps do nothing. The close and its count commit atomically."
+ },
+ "RS-D-2-N2": {
+  "checks": [
+   "codex:tests.test_rsd_runtime_close.RuntimeCloseServiceTests.test_N1_N2_real_release_then_update_counts_unrecorded_once_across_restart",
+   "codex:tests.test_rsd_runtime_close.RuntimeCloseTests.test_N2_unrecorded_without_verified_release_stays_open_until_custody_deadline"
+  ],
+  "source": "docs/requirements/rsd-runtime-close.md#RS-D-2-N2",
+  "statement": "**RS-D-2-N2 \u2014 Unfinished changed-runtime custody.**\nWithout verified account release, an unrecorded result prevents close. Keep the orchestration\nopen and committed body/context custody charged until its retention deadline; at that deadline\nrelease custody `retention`, without inventing release evidence or counting an update closure.\nCorrupt release evidence cannot close it. No pre-commit deadline retires reserved custody (SH-4)."
+ },
  "RS-D-D2": {
   "checks": [
    "codex:tests.test_deadlines_retention.ClockFloorTests.test_D4_a_committed_row_is_selected_by_the_expire_pass_at_the_floor_when_the_wall_is_below_its_deadline",

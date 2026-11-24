@@ -15,6 +15,7 @@ from .orchestration_api import (
     orchestration_request_digest, HOST_CLIENT_VERSIONS, ORCHESTRATION_TERMINAL_STATES, SCOPE_FIELDS,
 )
 from .project_history import MAX_LEASE_ROWS, ProjectHistory, _operation
+from . import project_holds_schema
 
 MAX_JOURNAL_EVENTS = 65_536
 # A closed orchestration is kept this long for reports, then removed with its checkpoints (0.3.4 R6):
@@ -170,7 +171,8 @@ class OrchestrationOwner:
                 'orchestration_handle': row['orchestration_handle'], 'expected_sequence': snapshot['sequence'],
                 'status': 'interrupted', 'goal_tokens_used': None, 'goal_time_used_seconds': None})
             try:
-                self.apply(request, client_version=snapshot['client_version'], before_commit=lambda: None)
+                self.apply(request, client_version=snapshot['client_version'], before_commit=lambda: None,
+                           _runtime_update=True)
             except HistoryError:
                 continue  # A run not yet over, or anything else: it stays open for a later pass.
             ended += 1
@@ -314,7 +316,7 @@ class OrchestrationOwner:
             raise
         return True
 
-    def _unfinished(self, scope, handle):
+    def _unfinished(self, scope, handle, *, unrecorded=None):
         # A timeout, absent process or accepted terminal does not prove cleanup.
         for position in self._positions('result_leases'):
             row = self._db.execute('SELECT * FROM result_leases WHERE rowid=?', (position[0],)).fetchone()
@@ -360,6 +362,8 @@ class OrchestrationOwner:
                     raise
                 if not self._account_released(binding):
                     return True
+                if unrecorded is not None:
+                    unrecorded.append(True)
                 continue  # 0.3.4 R7: over, by the account's verified release; reported unrecorded.
 
             receipt = parse_bounded_json(entry.content)
@@ -373,7 +377,7 @@ class OrchestrationOwner:
         return False
 
     @_operation
-    def apply(self, request, *, client_version, before_commit):
+    def apply(self, request, *, client_version, before_commit, _runtime_update=False):
         if type(request) is not OrchestrationRequest or client_version not in HOST_CLIENT_VERSIONS or not callable(before_commit):
             raise HistoryError('history_invalid_input')
         request = decode_orchestration_request(encode_orchestration_request(request))
@@ -443,7 +447,8 @@ class OrchestrationOwner:
                                 raise HistoryError('history_orchestration_state')
                             snapshot[name] = value
                 if operation == 'orchestration.close':
-                    if self._unfinished(scope, handle):
+                    unrecorded = []
+                    if self._unfinished(scope, handle, unrecorded=unrecorded):
                         raise HistoryError('history_orchestration_pending')
                     snapshot['status'], snapshot['ended_at_ms'] = payload['status'], now
                 snapshot['sequence'] += 1
@@ -466,6 +471,17 @@ class OrchestrationOwner:
                              (scope.project_id, handle, snapshot['sequence'], raw, checkpoint_digest))
             self._db.execute('INSERT INTO project_orchestration_requests VALUES(?,?,?,?,?)',
                              (scope.project_id, request_key, digest, handle, snapshot['sequence']))
+            if _runtime_update:
+                # RS-D-2 N1: keep the classification with the close, before result retirement
+                # can remove the evidence used by _unfinished. One orchestration, one tombstone;
+                # no result content, and no marker if eligibility or the commit fails.
+                if self._db.execute("SELECT 1 FROM project_holds WHERE project_id=? AND kind='orchestration' "
+                                    "AND identity=?", (scope.project_id, handle)).fetchone() is None:
+                    project_holds_schema.take_hold(self._db, scope.project_id, 'orchestration', handle,
+                                                   now_ms=snapshot['started_at_ms'])
+                project_holds_schema.release_hold(self._db, scope.project_id, 'orchestration', handle, 'closed',
+                    now_ms=now, receipt=checkpoint_digest,
+                    evidence=project_holds_schema.evidence_json(ended_by_update_unrecorded=bool(unrecorded)))
             # Recheck independent current authority after the complete mutation,
             # inside the transaction and immediately before its actual commit.
             before_commit()

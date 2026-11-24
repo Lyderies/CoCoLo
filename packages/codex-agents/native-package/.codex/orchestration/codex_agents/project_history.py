@@ -2681,6 +2681,19 @@ class ProjectHistory:
         return project_result_contexts.repairs(self, limit, cursor)
 
     @_operation
+    def runtime_close_status(self) -> dict:
+        """RS-D-2 N1/N2: count update-ended unrecorded orchestrations, without result content.
+
+        The close writes this fact atomically to its register tombstone. Counting it never
+        opens a body/context or tries to infer recording from result rows that may be purged.
+        """
+        count = self._connection.execute(
+            "SELECT COUNT(*) FROM project_holds WHERE project_id=? AND kind='orchestration' "
+            "AND state='released' AND release_kind='closed' AND evidence=?",
+            (self.project_id, project_holds_schema.evidence_json(ended_by_update_unrecorded=True))).fetchone()[0]
+        return {"ended_by_update_unrecorded": count}
+
+    @_operation
     def retire_result(self, binding: AttemptBinding) -> None:
         """Trusted lifecycle owner only, including actual orchestration close.
 

@@ -264,6 +264,7 @@
  "codex:tests.test_routing_judgment": "unit",
  "codex:tests.test_routing_risk": "unit",
  "codex:tests.test_rsa_step3": "integration",
+ "codex:tests.test_rsd_runtime_close": "integration",
  "codex:tests.test_run_driver_retries": "unit",
  "codex:tests.test_run_holds": "integration",
  "codex:tests.test_run_network": "integration",
