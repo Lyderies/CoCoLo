@@ -525,6 +525,33 @@ class World:
         finally:
             connection.close()
 
+    # The project's own history, read-only (a path other than the commands' replies) ----------------
+
+    def history_records(self, record_type: str) -> list[dict]:
+        """The project history's records of one kind, oldest first, as the service stored them."""
+        found = sorted((self.home / ".local" / "state" / "codex-agents" / "projects").glob("*/history.sqlite3"))
+        if len(found) != 1:
+            raise HarnessError("the project history is not exactly one file")
+        connection = sqlite3.connect(f"file:{found[0]}?mode=ro", uri=True)
+        try:
+            rows = connection.execute("select content from records where record_type = ? order by source_sequence",
+                                      (record_type,)).fetchall()
+            return [json.loads(row[0]) for row in rows]
+        finally:
+            connection.close()
+
+    def history_qa(self) -> list[dict]:
+        """The operational QA rows of the project history (the QA record each row holds), oldest first."""
+        found = sorted((self.home / ".local" / "state" / "codex-agents" / "projects").glob("*/history.sqlite3"))
+        if len(found) != 1:
+            raise HarnessError("the project history is not exactly one file")
+        connection = sqlite3.connect(f"file:{found[0]}?mode=ro", uri=True)
+        try:
+            rows = connection.execute("select qa from project_operational_qa order by source_sequence").fetchall()
+            return [json.loads(row[0]) for row in rows]
+        finally:
+            connection.close()
+
     # Cleanup -------------------------------------------------------------------------------------
 
     def stop_processes(self) -> None:

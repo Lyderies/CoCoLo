@@ -298,6 +298,29 @@ jobs:
           path: ${{ runner.temp }}/e2e.json.run.json
           if-no-files-found: error
 
+  lifecycle-e2e:
+    # PLAN T7 (G9): the strict lifecycle end-to-end test on a fake project, real services, the installed CLI.
+    # Main, tags and the nightly run only. It does not gate the requirements job until a first CI run shows it
+    # stable on a runner; the flows grow with each slice and the last slice switches this to --all.
+    if: github.event_name != 'pull_request'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Lifecycle end-to-end test
+        run: python3 -I -B scripts/e2e_lifecycle.py --flows L1,L2,L3,L4,L5 --jobs 4 --report "$RUNNER_TEMP/lifecycle-e2e.json"
+      - name: Retain the lifecycle report
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: lifecycle-e2e-report
+          path: ${{ runner.temp }}/lifecycle-e2e.json
+          if-no-files-found: ignore
+
   requirements:
     needs: [unit, integration, full, pr-e2e]
     if: always()

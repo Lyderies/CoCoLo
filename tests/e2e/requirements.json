@@ -342,21 +342,32 @@
    "flow": "all",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Worker: every answer value matches the oracle; each required evidence outcome is pass or observed.",
-   "checks": []
+   "checks": [
+    "g2_claude_primary_worker_answers_match_oracle_in_history",
+    "g2_codex_primary_worker_answers_match_oracle_in_history"
+   ]
   },
   {
    "id": "G3",
    "flow": "all",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Verifier: opened for the worker's digest; each required evidence outcome is pass; no discrepancy; verdict pass or ready.",
-   "checks": []
+   "checks": [
+    "g3_claude_primary_verifier_passes_every_item_in_history",
+    "g3_claude_primary_verifier_ready_passes_every_item_in_history",
+    "g3_codex_primary_verifier_passes_every_item_in_history"
+   ]
   },
   {
    "id": "G4",
    "flow": "all",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Operational QA: accepted: true.",
-   "checks": []
+   "checks": [
+    "g4_claude_primary_qa_accepted_after_verifier_ready_in_history",
+    "g4_claude_primary_qa_accepted_in_history",
+    "g4_codex_primary_qa_accepted_in_history"
+   ]
   },
   {
    "id": "G5",

@@ -201,15 +201,17 @@ def metadata():
     finally:
         DISCOVERY_SECONDS = time.monotonic() - discovery_started
     # Lifecycle checks use the same catalogue and remain required even in a module-only run.
-    lifecycle = ROOT / 'scripts/e2e_lifecycle.py'
     checked = {}
-    if lifecycle.exists():
-        for node in ast.walk(ast.parse(lifecycle.read_text())):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                for tag in node.decorator_list:
-                    if isinstance(tag, ast.Call) and isinstance(tag.func, ast.Name) and tag.func.id == 'check':
-                        checked['lifecycle:' + node.name] = {'requirements': [arg.value for arg in tag.args],
-                                                           'rationale': 'Canonical lifecycle scenario'}
+    # The script and its scripts/e2e_checks_<group>.py modules declare the checks.
+    for lifecycle in (ROOT / 'scripts/e2e_lifecycle.py', *sorted((ROOT / 'scripts').glob('e2e_checks_*.py'))):
+        if lifecycle.exists():
+            for node in ast.walk(ast.parse(lifecycle.read_text())):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    for tag in node.decorator_list:
+                        if isinstance(tag, ast.Call) and isinstance(tag.func, ast.Name) and tag.func.id == 'check':
+                            checked['lifecycle:' + node.name] = {
+                                'requirements': [arg.value for arg in tag.args if isinstance(arg, ast.Constant)],
+                                'rationale': 'Canonical lifecycle scenario'}
     checked_inventory = dict(discovered)
     checked_stages, checked_layers = dict(stages), dict(layers)
     if checked:

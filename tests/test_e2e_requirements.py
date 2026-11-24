@@ -1,8 +1,8 @@
 """T7: the lifecycle end-to-end requirements and their checks stay in step.
 
 Every requirement in tests/e2e/requirements.json names its flow and its source and may link to checks in scripts/e2e_lifecycle.py; every check there names only known requirements, and
-every check a requirement lists exists. The script declares its checks with `@check(...)`, read here
-without running anything.
+every check a requirement lists exists. The script and its scripts/e2e_checks_<group>.py modules declare
+their checks with `@check(...)`, read here without running anything.
 """
 import ast
 import json
@@ -12,18 +12,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REQUIREMENTS = ROOT / "tests" / "e2e" / "requirements.json"
 SCRIPT = ROOT / "scripts" / "e2e_lifecycle.py"
+CHECK_SOURCES = [SCRIPT, *sorted((ROOT / "scripts").glob("e2e_checks_*.py"))]
 
 
 def declared_checks():
-    """{check name: requirement IDs} from the script's @check("ID", ...) decorators."""
-    tree = ast.parse(SCRIPT.read_text())
+    """{check name: requirement IDs} from the @check("ID", ...) decorators of the script and its checks modules."""
     found = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef):
-            for decorator in node.decorator_list:
-                if (isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Name)
-                        and decorator.func.id == "check"):
-                    found[node.name] = [arg.value for arg in decorator.args if isinstance(arg, ast.Constant)]
+    for source in CHECK_SOURCES:
+        for node in ast.walk(ast.parse(source.read_text())):
+            if isinstance(node, ast.FunctionDef):
+                for decorator in node.decorator_list:
+                    if (isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Name)
+                            and decorator.func.id == "check"):
+                        found[node.name] = [arg.value for arg in decorator.args if isinstance(arg, ast.Constant)]
     return found
 
 
