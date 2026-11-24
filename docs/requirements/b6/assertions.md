@@ -92,3 +92,17 @@ about behaviour was weakened; each line is a format pin, a copy-name pin, or a f
 - `tests/lifetime_caps.json`: two sites registered (`orchestration_store.py::<module>`, `::_open_count`); the
   end_earlier and runtime_close_status `ends` texts corrected (hold tombstones are never purged; decision 131's
   indexes purge nothing).
+
+## F. Final fix (decision 210; no existing assertion changed or removed)
+- Assertions: none changed, none removed. All new assertions are in the new Final* classes of
+  `test_b6_unattended_close.py`.
+- Fixture lines (B6's own, unreleased): `test_b6_unattended_close.retain`: the retained consumptions' grant
+  `x'00'` -> a JSON grant naming its owner orchestration. Reason: item 2's index reads the grant's orchestration; with
+  real-shaped grants the equal-work test measures the new index seek against 100,000 other orchestrations' rows
+  (with `x'00'` they would all index as NULL). The test's assertions are unchanged.
+- Fixture lines: `project_schema_fixtures.legacy_orchestration_state_layout` and `test_project_holds_schema.py` D111
+  also drop `project_execution_consumptions_orchestration` (step 21's sixth index). Reason: they build older
+  layouts from a format 21 store (sections B, E).
+- `tests/lifetime_caps.json` (registry, no test text): `orchestration_store.py::<module>` checks 1 -> 3 (the two
+  item-1 selects `_HELD_LEASES`, `_HELD_LEASE_ROWS`, LIMIT over live leases only) and new
+  `orchestration_store.py::_held_leases` (checks 1); both name the new cap test.

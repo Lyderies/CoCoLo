@@ -35,6 +35,14 @@ _TARGET_ROWS = {
     'result_reservations': ('SELECT rowid FROM result_reservations INDEXED BY result_reservations_orchestration '
                             'WHERE project_id=? AND orchestration_handle=?'),
 }
+# B6 final fix (decision 210, item 1): every held lease, found by verified identities (its live state, which its seal
+# covers, and its register row), never by the orchestration its unverified binding names. Bounded by the live leases.
+_HELD_LEASES = (
+    "SELECT rowid,run_handle||':'||attempt FROM result_leases INDEXED BY lease_expiry "
+    "WHERE project_id=? AND state IN ('reserved','claim_pending') LIMIT ?")
+_HELD_LEASE_ROWS = (
+    "SELECT identity FROM project_holds INDEXED BY project_holds_kind_due "
+    "WHERE kind='lease' AND state<>'released' AND project_id=? LIMIT ?")
 
 
 class OrchestrationOwner:
@@ -362,18 +370,59 @@ class OrchestrationOwner:
         lease = self._history._lease(row)
         return lease.claim_id == binding.claim_id and self._history._attempt_settled(lease)
 
+    # B6 final fix (decision 210, item 2): a consumption of this orchestration (named in its grant, step 21's
+    # index) with neither its reservation nor a lease of its claim. Bounded by the orchestration's own consumptions.
+    _ORPHAN_CONSUMPTION = (
+        'SELECT 1 FROM project_execution_consumptions c INDEXED BY project_execution_consumptions_orchestration '
+        f'WHERE c.project_id=? AND {project_holds_schema.CONSUMPTION_ORCHESTRATION}=? '
+        'AND NOT EXISTS(SELECT 1 FROM result_reservations s WHERE s.project_id=c.project_id AND s.claim_id=c.claim_id) '
+        'AND NOT EXISTS(SELECT 1 FROM result_leases l WHERE l.project_id=c.project_id AND l.claim_id=c.claim_id) '
+        'LIMIT 1')
+
+    def _held_leases(self):
+        """B6 final fix (decision 210, item 1): the row ids of every held lease, from the live-lease index and the
+        held lease register rows together (a held register row whose lease is not live is refused). Each is then read
+        and verified by its seal by the caller, so a changed binding can neither hide a lease nor be skipped."""
+        project, bound = self._history.project_id, MAX_LEASE_ROWS + 1
+        live = {identity: rowid for rowid, identity in self._db.execute(_HELD_LEASES, (project, bound)).fetchall()}
+        held = [row[0] for row in self._db.execute(_HELD_LEASE_ROWS, (project, bound)).fetchall()]
+        if len(live) > MAX_LEASE_ROWS or len(held) > MAX_LEASE_ROWS:
+            raise HistoryError('history_orchestration_unavailable')
+        if set(held) != set(live):
+            raise HistoryError('history_incompatible')  # SH-7: a held lease row is exactly a live lease
+        return list(live.values())
+
+    def _check_lease(self, scope, handle, lease):
+        """Whether a verified lease of this orchestration is still live; a claim it names whose consumption has no
+        reservation is refused (item 2: one the target's leases could own)."""
+        if lease.binding.orchestration_handle != handle:
+            return False
+        if not scope.matches_attempt(lease.binding):
+            raise HistoryError('history_conflict')
+        if lease.claim_id is not None and self._db.execute(
+                'SELECT 1 FROM project_execution_consumptions c WHERE c.project_id=? AND c.claim_id=? AND NOT EXISTS('
+                'SELECT 1 FROM result_reservations s WHERE s.project_id=c.project_id AND s.claim_id=c.claim_id)',
+                (scope.project_id, lease.claim_id)).fetchone() is not None:
+            raise HistoryError('history_incompatible')
+        return lease.state in {'reserved', 'claim_pending'}
+
     def _unfinished(self, scope, handle, *, unrecorded=None):
         # A timeout, absent process or accepted terminal does not prove cleanup.
+        # B6 final fix (item 1): every held lease is read and verified by its seal (one that does not verify refuses
+        # the close, history_incompatible), and only then is the orchestration it names compared.
+        for rowid in self._held_leases():
+            row = self._db.execute('SELECT * FROM result_leases WHERE rowid=?', (rowid,)).fetchone()
+            if self._check_lease(scope, handle, self._history._lease(row)):
+                return True
+        # Item 2: an orphan consumption of this orchestration refuses the close (the old project-wide check, by index).
+        if self._db.execute(self._ORPHAN_CONSUMPTION, (scope.project_id, handle)).fetchone() is not None:
+            raise HistoryError('history_incompatible')
         # B6 review r1 (HIGH retained history): only this orchestration's own leases and reservations (each still
         # verified by its seal), so no project-wide scan; its reservations' consumptions are verified below.
         for position in self._positions('result_leases', handle):
             row = self._db.execute('SELECT * FROM result_leases WHERE rowid=?', (position[0],)).fetchone()
-            lease = self._history._lease(row)
-            if lease.binding.orchestration_handle == handle:
-                if not scope.matches_attempt(lease.binding):
-                    raise HistoryError('history_conflict')
-                if lease.state in {'reserved', 'claim_pending'}:
-                    return True
+            if self._check_lease(scope, handle, self._history._lease(row)):
+                return True
         for position in self._positions('result_reservations', handle):
             row = self._db.execute('SELECT * FROM result_reservations WHERE rowid=?', (position[0],)).fetchone()
             reservation = self._history._reservation(row)

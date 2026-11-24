@@ -9,12 +9,13 @@ SCHEMA_18_TABLES = ('project_holds', 'project_result_contexts', 'project_result_
 
 
 def legacy_orchestration_state_layout(store):
-    """Remove only the schema21 layout additions (B6, decision 131) from a newer fixture: the five indexes (two added by the
-    B6 review r1) and the orchestration state column. B6's held orchestration rows are kept: the 20 -> 21 step adopts only the open
+    """Remove only the schema21 layout additions (B6, decision 131) from a newer fixture: the six indexes (two added by the
+    B6 review r1, one by the final fix) and the orchestration state column. B6's held orchestration rows are kept: the 20 -> 21 step adopts only the open
     orchestrations without one, so a fixture's rows come back unchanged (a real format 20 store, with none, is
     tests/fixtures/history_step20, test_b6_unattended_close)."""
     for name in ('project_orchestrations_state', 'result_reservations_live', 'project_holds_orchestration_check',
-                 'result_reservations_orchestration', 'result_leases_orchestration'):
+                 'result_reservations_orchestration', 'result_leases_orchestration',
+                 'project_execution_consumptions_orchestration'):  # the sixth: B6 final fix (decision 210)
         store._connection.execute('DROP INDEX IF EXISTS ' + name)
     if 'state' in {row[1] for row in store._connection.execute('PRAGMA table_info(project_orchestrations)')}:
         store._connection.execute('ALTER TABLE project_orchestrations DROP COLUMN state')

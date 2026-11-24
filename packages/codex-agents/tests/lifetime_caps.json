@@ -1139,9 +1139,14 @@
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
   "orchestration_store.py::<module>": {
+   "checks": 3,
+   "ends": "B6 (RS-B-B6-4): _UNATTENDED_SELECT's LIMIT is a per-pass batch (UNATTENDED_CLOSE_BATCH = 4), not a count of kept things; a row not selected (or refused and backed off) is selected by a later pass. B6 final fix (decision 210, item 1): _HELD_LEASES and _HELD_LEASE_ROWS read at most MAX_LEASE_ROWS + 1 LIVE leases and held lease rows only; a lease leaves both when it is released (withdrawn, bound, denied, fenced, lost), and released ones are never read",
+   "test": "test_B6_2_more_than_4096_valid_rows_of_another_orchestration_do_not_refuse_a_close"
+  },
+  "orchestration_store.py::_held_leases": {
    "checks": 1,
-   "ends": "B6 (RS-B-B6-4): _UNATTENDED_SELECT's LIMIT is a per-pass batch (UNATTENDED_CLOSE_BATCH = 4), not a count of kept things; a row not selected (or refused and backed off) is selected by a later pass",
-   "test": "test_B6_4_a_blocked_row_never_stops_a_later_due_row"
+   "ends": "B6 final fix (decision 210, item 1): the bound counts live leases and held lease register rows only (each ends at its lease's release); finished rows, however many are kept, never count",
+   "test": "test_B6_2_more_than_4096_valid_rows_of_another_orchestration_do_not_refuse_a_close"
   },
   "orchestration_store.py::_open_count": {
    "checks": 1,

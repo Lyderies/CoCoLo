@@ -1528,6 +1528,9 @@
    "codex:tests.test_b6_unattended_close.EligibilityTests.test_B6_2_the_unattended_close_waits_for_its_due_time_and_then_refuses_new_work",
    "codex:tests.test_b6_unattended_close.EligibilityWithRunsTests.test_B6_2_a_recorded_result_whose_reservation_is_still_held_blocks_the_unattended_close_not_the_primarys",
    "codex:tests.test_b6_unattended_close.EligibilityWithRunsTests.test_B6_2_an_unfinished_attempt_keeps_it_open",
+   "codex:tests.test_b6_unattended_close.FinalCapIsolationTests.test_B6_2_more_than_4096_valid_rows_of_another_orchestration_do_not_refuse_a_close",
+   "codex:tests.test_b6_unattended_close.FinalLeaseSelectionTests.test_B6_2_a_held_lease_whose_binding_handle_was_changed_refuses_the_close_and_stays_held",
+   "codex:tests.test_b6_unattended_close.FinalOrphanConsumptionTests.test_B6_2_an_orphan_consumption_of_the_target_refuses_both_closes",
    "codex:tests.test_b6_unattended_close.LeaseTests.test_B6_2_a_live_lease_keeps_it_open",
    "codex:tests.test_b6_unattended_close.LeaseTests.test_B6_2_taking_an_execution_hold_is_activity_releasing_one_is_not",
    "codex:tests.test_b6_unattended_close.ReviewAdoptionTests.test_B6_7_adoption_counts_the_latest_lease_and_reservation_take_and_dates_a_held_row_without_a_due_time",
@@ -1571,6 +1574,8 @@
  },
  "RS-B-B6-7": {
   "checks": [
+   "codex:tests.test_b6_unattended_close.FinalCrashCopyTests.test_B6_7_a_dead_attempts_copy_with_another_hard_link_is_left_alone",
+   "codex:tests.test_b6_unattended_close.FinalCrashCopyTests.test_B6_7_a_stale_marker_after_inode_reuse_leaves_a_copy_it_did_not_make_alone",
    "codex:tests.test_b6_unattended_close.ReviewAdoptionTests.test_B6_7_adoption_counts_the_latest_lease_and_reservation_take_and_dates_a_held_row_without_a_due_time",
    "codex:tests.test_b6_unattended_close.ReviewLayoutTests.test_B6_7_an_index_predicate_whose_literal_differs_only_in_case_is_refused",
    "codex:tests.test_b6_unattended_close.SchemaStepTests.test_B6_7_a_failure_inside_the_step_leaves_20_and_removes_its_copy_then_a_later_attempt_upgrades",
@@ -1584,6 +1589,8 @@
  },
  "RS-B-B6-8": {
   "checks": [
+   "codex:tests.test_b6_unattended_close.FinalUnverifiablePointerTests.test_B6_8_an_unverifiable_pointer_with_a_closed_state_refuses_at_open",
+   "codex:tests.test_b6_unattended_close.FinalUnverifiablePointerTests.test_B6_8_an_unverifiable_pointer_with_an_open_state_refuses_at_open",
    "codex:tests.test_b6_unattended_close.OrchestrationStateTests.test_B6_8_counting_open_orchestrations_reads_the_indexed_state_not_the_checkpoints",
    "codex:tests.test_b6_unattended_close.ReviewStateValidationTests.test_B6_8_a_closed_state_and_released_row_of_an_active_orchestration_is_refused_at_open"
   ],

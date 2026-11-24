@@ -6,6 +6,7 @@ model calls). docs/requirements/b6.md holds the acceptance text for every requir
 from contextlib import closing
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -780,8 +781,10 @@ def retain(store, count):
             "created_at_ms,reserved_until_ms,state,lease_digest,state_digest) VALUES(?,?,1,?,?,'a',0,1,'expired','d','s')",
             ((PROJECT_A, f'hrn-l-{n}', f'req-{n}', json.dumps({'orchestration_handle': owner}).encode())
              for n, owner in enumerate(owners)))
-        db.executemany('INSERT INTO project_execution_consumptions VALUES(?,?,?,x\'00\',0)',
-                       ((PROJECT_A, f'clm-r-{n}', f'reg-{n}') for n, owner in enumerate(owners)))
+        db.executemany('INSERT INTO project_execution_consumptions VALUES(?,?,?,?,0)',  # grants name their owner
+                       ((PROJECT_A, f'clm-r-{n}', f'reg-{n}', json.dumps(
+                           {'protocol_version': 1, 'grant': {'binding': {'orchestration_handle': owner}}}).encode())
+                        for n, owner in enumerate(owners)))
         db.executemany("INSERT INTO project_holds(project_id,kind,identity,state,taken_at_ms,released_at_ms,"
                        "release_kind) VALUES(?,'reservation',?,'released',0,0,'completed')",
                        ((PROJECT_A, f'clm-r-{n}') for n, owner in enumerate(owners)))
@@ -926,6 +929,210 @@ class ReviewBatchTests(OrchestrationStore):
         self.now = 1000 + ORCHESTRATION_IDLE_MS
         self.assertEqual(4, self.owner.end_idle(self.now, 10))
         self.assertEqual(2, sum(self.status(handle) == 'active' for handle in handles))
+
+
+
+# B6 final fix (decision 210, the Codex confirming check of 020e530d): each item with a behavioural test, red on 020e530d
+# (item 5's cap test is red on 700d41f8, the code before the target-scoped close).
+
+def corrupt_lease_handle(store, handle):
+    """Change the orchestration named inside a lease's binding (an unverified field) to another, valid-looking one."""
+    db = store._connection
+    run_handle, raw = db.execute('SELECT run_handle,binding FROM result_leases').fetchone()
+    data = json.loads(raw)
+    data['orchestration_handle'] = handle
+    db.execute('UPDATE result_leases SET binding=? WHERE run_handle=?',
+               (json.dumps(data, sort_keys=True, separators=(',', ':')).encode(), run_handle))
+    return run_handle
+
+
+def die_inside_step(test):
+    """Run the 20 -> 21 step in a child process that dies after the step's writes (copy published, not committed)."""
+    script = (
+        'import os, sys\n'
+        f'sys.path.insert(0, {str(ORCHESTRATION_ROOT)!r})\n'
+        'from pathlib import Path\n'
+        'from codex_agents import project_holds_schema\n'
+        'from codex_agents.project_history import ProjectHistory\n'
+        'from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity\n'
+        'original = project_holds_schema.adopt_orchestrations\n'
+        'def die(*a, **k):\n'
+        '    original(*a, **k)\n'
+        '    os._exit(9)\n'
+        'project_holds_schema.adopt_orchestrations = die\n'
+        f'ProjectHistory(Path({str(test.directory)!r}), {PROJECT_A!r}, result_key={KEY!r}, '
+        'result_capacity=ResultCapacity(8, 4 * MAX_RESULT_BODY_BYTES, 60_000, 120_000), '
+        'result_clock_ms=lambda: 4000, allow_schema_upgrade=True)\n')
+    completed = subprocess.run([sys.executable, '-I', '-B', '-c', script], capture_output=True, timeout=60)
+    test.assertEqual(9, completed.returncode, completed.stderr)
+    test.assertEqual(20, test.version())
+
+
+class FinalLeaseSelectionTests(OrchestrationStore):
+    """Item 1 (NEW HIGH): a held lease is found by a verified identity (its live state and register row), never by
+    the orchestration named in its unverified binding; one whose seal or handle does not verify refuses the close."""
+    lease = LeaseTests.lease
+
+    @requirements('RS-B-B6-2', why_not_scenario=WHY)
+    def test_B6_2_a_held_lease_whose_binding_handle_was_changed_refuses_the_close_and_stays_held(self):
+        opened = self.open()
+        handle = opened['orchestration_handle']
+        self.lease(handle)  # held, unarmed, never bound
+        run_handle = corrupt_lease_handle(self.store, OTHER)
+        self.now = 1000 + ORCHESTRATION_IDLE_MS
+        with self.assertRaises(HistoryError):
+            self.close(opened)
+        self.assertEqual(0, self.owner.end_idle(self.now))
+        db = self.store._connection
+        self.assertEqual(('active', 'held', 'reserved', 'held'), (
+            self.status(handle), hold(self.store, handle)[0],
+            db.execute('SELECT state FROM result_leases WHERE run_handle=?', (run_handle,)).fetchone()[0],
+            db.execute("SELECT state FROM project_holds WHERE kind='lease' AND identity=?",
+                       (f'{run_handle}:1',)).fetchone()[0]))
+
+
+class FinalOrphanConsumptionTests(OrchestrationStore):
+    """Item 2: a consumption of the target with neither reservation nor lease refuses the close, found by index."""
+
+    @requirements('RS-B-B6-2', why_not_scenario=WHY)
+    def test_B6_2_an_orphan_consumption_of_the_target_refuses_both_closes(self):
+        opened = self.open()
+        handle = opened['orchestration_handle']
+        db = self.store._connection
+        grant = json.dumps({'protocol_version': 1, 'grant': {'binding': {'orchestration_handle': handle}}},
+                           sort_keys=True, separators=(',', ':')).encode()
+        db.execute('PRAGMA foreign_keys=OFF')  # a pre-existing orphan (ordinary open checks no foreign keys)
+        db.execute('INSERT INTO project_execution_consumptions VALUES(?,?,?,?,?)',
+                   (PROJECT_A, 'clm-orphan', 'reg-orphan', grant, 1))
+        db.execute('PRAGMA foreign_keys=ON')
+        self.now = 1000 + ORCHESTRATION_IDLE_MS
+        with self.assertRaisesRegex(HistoryError, 'history_incompatible'):
+            self.close(opened)
+        self.assertEqual(0, self.owner.end_idle(self.now))
+        self.assertEqual(('active', 'held'), (self.status(handle), hold(self.store, handle)[0]))
+        plan = ' '.join(row[3] for row in db.execute(
+            'EXPLAIN QUERY PLAN ' + self.owner._ORPHAN_CONSUMPTION, (PROJECT_A, handle)))
+        self.assertIn('project_execution_consumptions_orchestration', plan)
+
+
+class FinalCrashCopyTests(Step20Store):
+    """Item 3: the attempt marker carries its copy's identity in its content (path, size, content digest), and
+    recovery removes a copy only when it matches that content exactly and has one link."""
+
+    @requirements('RS-B-B6-7', why_not_scenario=WHY)
+    def test_B6_7_a_stale_marker_after_inode_reuse_leaves_a_copy_it_did_not_make_alone(self):
+        kept = self.directory / 'history.sqlite3.before-21.1'
+        kept.write_bytes(b'a copy this attempt never made')
+        status = kept.stat()
+        # A dead attempt's marker, named for the inode now reused by `kept`, naming that path in its content with
+        # the size and digest of the copy the dead attempt made.
+        marker = self.directory / f'.history.sqlite3.upgrade-21.{status.st_dev}-{status.st_ino}.attempt'
+        marker.write_text(json.dumps({'copy': kept.name, 'partial': '.' + kept.name + '.0000000000000000.partial',
+                                      'size': 4096, 'sha256': hashlib.sha256(b'the dead copy').hexdigest()}))
+        self.assertEqual(21, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(b'a copy this attempt never made', kept.read_bytes())
+        self.assertFalse(marker.exists())
+
+    @requirements('RS-B-B6-7', why_not_scenario=WHY)
+    def test_B6_7_a_dead_attempts_copy_with_another_hard_link_is_left_alone(self):
+        die_inside_step(self)
+        (copy,) = self.copies()
+        (marker,) = self.directory.glob('.history.sqlite3.upgrade-21.*.attempt')
+        content = copy.read_bytes()
+        named = json.loads(marker.read_text())  # the identity is in the marker's content
+        self.assertEqual((copy.name, len(content), hashlib.sha256(content).hexdigest()),
+                         (named['copy'], named['size'], named['sha256']))
+        elsewhere = self.directory.parent / 'operator-link'
+        os.link(copy, elsewhere)
+        self.assertEqual(21, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual((content, content), (copy.read_bytes(), elsewhere.read_bytes()))
+        self.assertEqual(2, len(self.copies()))  # the linked dead copy and this attempt's own
+        self.assertEqual([], list(self.directory.glob('*.attempt')))
+
+
+class FinalUnverifiablePointerTests(OrchestrationStore):
+    """Item 4: an orchestration whose checkpoint pointer cannot be verified refuses the store at open (integrity)."""
+
+    def damage_pointer(self, state):
+        handle = self.open()['orchestration_handle']
+        self.store.close()
+        with closing(sqlite3.connect(self.directory / 'history.sqlite3')) as raw:
+            raw.execute('UPDATE project_orchestrations SET checkpoint_digest=?,state=? WHERE orchestration_handle=?',
+                        ('0' * 64, state, handle))
+            if state == 'closed':  # the row would escape the open count, and the register agrees with it
+                raw.execute("UPDATE project_holds SET state='released',release_kind='closed',released_at_ms=1 "
+                            "WHERE kind='orchestration' AND identity=?", (handle,))
+            raw.commit()
+        self.store = SimpleNamespace(close=lambda: None)
+        with self.assertRaisesRegex(HistoryError, 'history_incompatible'):
+            self.store = self.open_history()
+
+    @requirements('RS-B-B6-8', why_not_scenario=WHY)
+    def test_B6_8_an_unverifiable_pointer_with_a_closed_state_refuses_at_open(self):
+        self.damage_pointer('closed')
+
+    @requirements('RS-B-B6-8', why_not_scenario=WHY)
+    def test_B6_8_an_unverifiable_pointer_with_an_open_state_refuses_at_open(self):
+        self.damage_pointer('open')
+
+
+def valid_neighbours(store, handle, count):
+    """`count` expired leases and `count` expired reservations of orchestration `handle`, each with a VALID seal
+    under the store's key (so reading any of them would succeed: only a row bound can refuse a close)."""
+    from codex_agents.claim_storage import lease_receipt_digest, lease_state_seal
+    from codex_agents.history_contracts import AttemptBinding
+    from codex_agents.learning_contracts import canonical_json
+    from codex_agents.result_contracts import ResultLease, ResultLeaseBinding
+    key, assignment = store._result_key, 'b' * 64
+    leases, reservations = [], []
+    for n in range(count):
+        binding = ResultLeaseBinding(PROJECT_A, 'primary', 'a' * 64, 'supervisor', 1, handle, f'hrn_{n:048x}',
+                                     f'run-l-{n}', 1, f'req-{n}', '1' * 64)
+        digest = lease_receipt_digest(key, binding, assignment, 0, 2)
+        seal = lease_state_seal(key, ResultLease(binding, assignment, 0, 2, 'expired', digest))
+        leases.append((PROJECT_A, binding.run_handle, f'req-{n}', canonical_json(binding.as_data()), assignment,
+                       digest, seal))
+        attempt = AttemptBinding(PROJECT_A, 'primary', 'a' * 64, 'supervisor', 1, handle,
+                                 f'hrn_{n + 10 ** 6:048x}', f'run-r-{n}', 1, f'clm-v-{n}', f'{n:064x}')
+        reservations.append((PROJECT_A, attempt.claim_id, attempt.run_handle, attempt.claim_digest, handle,
+                             canonical_json(attempt.as_data()), assignment))
+    db = store._connection
+    with store._transaction():
+        db.executemany('INSERT INTO result_leases(project_id,run_handle,attempt,claim_request_id,binding,'
+                       "assignment_digest,created_at_ms,reserved_until_ms,state,lease_digest,state_digest) "
+                       "VALUES(?,?,1,?,?,?,0,2,'expired',?,?)", leases)
+        db.executemany('INSERT INTO result_reservations(project_id,claim_id,run_handle,attempt,claim_digest,'
+                       'orchestration_handle,binding,assignment_digest,created_at_ms,hard_deadline_at_ms,'
+                       "reserved_until_ms,expires_at_ms,state) VALUES(?,?,?,1,?,?,?,?,0,1,2,2,'expired')",
+                       reservations)
+        db.executemany("INSERT INTO project_holds(project_id,kind,identity,state,lease_case,taken_at_ms,"
+                       "released_at_ms,release_kind) VALUES(?,'lease',?,'released','unarmed',0,0,'withdrawn_unsent')",
+                       ((PROJECT_A, f'{row[1]}:1') for row in leases))
+        db.executemany("INSERT INTO project_holds(project_id,kind,identity,state,taken_at_ms,released_at_ms,"
+                       "release_kind) VALUES(?,'reservation',?,'released',0,0,'lost')",
+                       ((PROJECT_A, row[1]) for row in reservations))
+
+
+class FinalCapIsolationTests(OrchestrationStore):
+    """Item 5: the 4,096-row bound counts only the target's own rows. Its neighbours here have VALID seals, so the
+    only thing that could refuse either close is the bound itself (on 700d41f8 both closes were refused by it)."""
+
+    @requirements('RS-B-B6-2', why_not_scenario=WHY)
+    def test_B6_2_more_than_4096_valid_rows_of_another_orchestration_do_not_refuse_a_close(self):
+        from codex_agents.project_history import MAX_LEASE_ROWS
+        primary = self.open('open-primary')
+        unattended = self.open('open-unattended')['orchestration_handle']
+        valid_neighbours(self.store, OTHER, MAX_LEASE_ROWS + 1)
+        db = self.store._connection
+        for row in db.execute('SELECT * FROM result_leases ORDER BY rowid DESC LIMIT 2'):
+            self.assertEqual(OTHER, self.store._lease(row).binding.orchestration_handle)  # the seals verify
+        for row in db.execute('SELECT * FROM result_reservations ORDER BY rowid DESC LIMIT 2'):
+            self.assertEqual(OTHER, self.store._reservation(row).binding.orchestration_handle)
+        self.now = 1000 + ORCHESTRATION_IDLE_MS
+        self.close(primary)
+        self.assertEqual(1, self.owner.end_idle(self.now))
+        self.assertEqual(('completed', 'interrupted'),
+                         (self.status(primary['orchestration_handle']), self.status(unattended)))
 
 
 if __name__ == '__main__':

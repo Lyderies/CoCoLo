@@ -203,6 +203,10 @@ CREATE INDEX project_holds_orchestration_check ON project_holds(project_id,next_
 # The orchestration a lease belongs to, from its sealed binding (the expression of step 21's
 # result_leases_orchestration index; a lease row has no orchestration column).
 LEASE_ORCHESTRATION = "json_extract(CAST(binding AS TEXT),'$.orchestration_handle')"
+# B6 final fix (decision 210, item 2): the orchestration an execution consumption's grant names (step 21's
+# project_execution_consumptions_orchestration index); a grant that is not JSON names none (and is refused where read).
+CONSUMPTION_ORCHESTRATION = ("(CASE WHEN json_valid(CAST(\"grant\" AS TEXT)) THEN "
+                             "json_extract(CAST(\"grant\" AS TEXT),'$.grant.binding.orchestration_handle') END)")
 
 
 def _orchestration_of(connection, project_id: str, kind: str, identity: str):

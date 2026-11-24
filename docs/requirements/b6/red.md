@@ -32,3 +32,18 @@ Red = the round's final test text run against 700d41f8 (exported with `git archi
 | MED state (B6-8) | ReviewStateValidationTests.test_B6_8_a_closed_state_and_released_row_of_an_active_orchestration_is_refused_at_open | opened (`HistoryError not raised`) | pass |
 | LOW clamp (B6-4) | ReviewBatchTests.test_B6_4_an_explicit_limit_above_four_is_clamped_to_four | 6 closed | pass |
 | LOW cap registry | tests.test_lifetime_cap_guard (existing) | `<module>` and `_open_count` unlisted | pass |
+
+## Final fix (decision 210: one targeted fix of fixed scope after the Codex confirming check of 020e530d)
+
+Red = the new tests run on 020e530d's code (before any code change): 8 tests, failures=4, errors=2 (the cap test and
+the retained-history test pass there, as expected). Item 5's cap test is red on 700d41f8 (`git archive`, the final
+test file beside it): `history_orchestration_unavailable` from `_positions`, the bound itself. Green = the fix commit.
+
+| Item | Test (tests/test_b6_unattended_close.py) | Red | Green |
+|---|---|---|---|
+| 1 HIGH lease selection (B6-2) | FinalLeaseSelectionTests.test_B6_2_a_held_lease_whose_binding_handle_was_changed_refuses_the_close_and_stays_held | 020e530d: `HistoryError not raised` (the close skipped its held lease) | pass: close refused, lease and rows held |
+| 2 orphan consumption (B6-2) | FinalOrphanConsumptionTests.test_B6_2_an_orphan_consumption_of_the_target_refuses_both_closes | 020e530d: `HistoryError not raised` | pass; plan uses `project_execution_consumptions_orchestration`; ReviewRetainedHistoryTests equal VM steps still (its consumption grants now name their owners) |
+| 3 crash copy (B6-7) | FinalCrashCopyTests.test_B6_7_a_stale_marker_after_inode_reuse_leaves_a_copy_it_did_not_make_alone | 020e530d: the copy it never made was deleted (`FileNotFoundError`) | pass |
+| 3 crash copy (B6-7) | FinalCrashCopyTests.test_B6_7_a_dead_attempts_copy_with_another_hard_link_is_left_alone | 020e530d: empty marker content (`JSONDecodeError`) | pass: content names path/size/sha256; linked copy kept |
+| 4 unverifiable pointer (B6-8) | FinalUnverifiablePointerTests x2 (state `closed` with released row; state `open`) | 020e530d: both opened (`HistoryError not raised`) | pass: `history_incompatible` |
+| 5 cap isolation (B6-2) | FinalCapIsolationTests.test_B6_2_more_than_4096_valid_rows_of_another_orchestration_do_not_refuse_a_close | 700d41f8: `history_orchestration_unavailable` (4,097 VALID-seal neighbours); 020e530d: pass | pass |

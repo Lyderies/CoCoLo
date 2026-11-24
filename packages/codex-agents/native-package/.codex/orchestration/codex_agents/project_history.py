@@ -212,11 +212,14 @@ CREATE INDEX result_reservations_live ON result_reservations(project_id) WHERE s
 """
 # B6 review r1 (HIGH retained history): a close checks only its own orchestration's leases and reservations, each
 # found by its orchestration through an index (a lease names it only inside its sealed binding), so other
-# orchestrations' finished rows are never read and never count against the close's bound.
+# orchestrations' finished rows are never read and never count against the close's bound. B6 final fix (decision 210,
+# item 2): the consumptions too, by the orchestration their grant names, so an orphan of the target is found by index.
 LEASE_ORCHESTRATION = project_holds_schema.LEASE_ORCHESTRATION
 TARGET_INDEX_SCHEMA = f"""
 CREATE INDEX result_reservations_orchestration ON result_reservations(project_id,orchestration_handle);
 CREATE INDEX result_leases_orchestration ON result_leases(project_id,{LEASE_ORCHESTRATION});
+CREATE INDEX project_execution_consumptions_orchestration ON project_execution_consumptions(project_id,
+ {project_holds_schema.CONSUMPTION_ORCHESTRATION});
 """
 STEP_21_SCHEMA = (ORCHESTRATION_STATE_INDEX_SCHEMA + RESULT_LIVE_INDEX_SCHEMA
                   + project_holds_schema.ORCHESTRATION_CHECK_INDEX_SCHEMA + TARGET_INDEX_SCHEMA)
@@ -614,9 +617,10 @@ class ProjectHistory:
     def _check_orchestration_states(self) -> None:
         """B6 review r1 (MED state): at integrity validation (every open, so every restore, and inside the step)
         each orchestration's state column agrees with its latest sealed checkpoint, so a state and register row
-        changed together cannot undercount open ones. One whose checkpoint does not verify is left to the readers
-        (it counts as open, as before). Routine counts stay on the index. Without the result key nothing can be
-        verified or done with an orchestration; nothing is checked."""
+        changed together cannot undercount open ones. B6 final fix (decision 210, item 4): one whose checkpoint
+        pointer does not verify is refused (integrity), so no row can escape the open count as `closed` unproven.
+        Routine counts stay on the index. Without the result key nothing can be verified or done with an
+        orchestration; nothing is checked."""
         if self._result_key is None:
             return
         from .orchestration_api import ORCHESTRATION_TERMINAL_STATES
@@ -624,13 +628,14 @@ class ProjectHistory:
         for row in self._connection.execute("SELECT orchestration_handle,sequence,checkpoint_digest,state FROM "
                                             "project_orchestrations WHERE project_id=?", (self.project_id,)):
             snapshot = owner._latest_snapshot(row)
-            if snapshot is not None and row["state"] != (
+            if snapshot is None or row["state"] != (
                     "closed" if snapshot["status"] in ORCHESTRATION_TERMINAL_STATES else "open"):
                 raise HistoryError("history_incompatible")
 
     def _orchestrations_to_adopt(self) -> list:
         """B6 (step 20 -> 21): (handle, open, started_at_ms, last activity) of every orchestration, from its latest
-        checkpoint verified by its own keyed seal. One that does not verify is taken as open (it never frees a place,
+        checkpoint verified by its own keyed seal. One that does not verify is taken as open here (and the step's
+        state validator then refuses the store, decision 210 item 4; it never frees a place,
         as before), from now. A store with orchestrations and no result key cannot be classified: refused."""
         rows = self._connection.execute("SELECT orchestration_handle,sequence,checkpoint_digest FROM "
                                         "project_orchestrations WHERE project_id=?", (self.project_id,)).fetchall()
@@ -674,37 +679,91 @@ class ProjectHistory:
         if self._result_identity_refused(self._connection.execute("SELECT * FROM result_identity LIMIT 2").fetchall()):
             raise HistoryError("history_incompatible")
 
+    _MARKER_BYTES = 1024
+
     def _upgrade_markers(self):
-        """B6 review r1 (MED crash copy): each upgrade attempt's marker, an empty file named for the device and
-        inode of the copy it makes (the copy is a hard link of its temporary file), made before the copy is
-        published and removed when the attempt ends. A marker left behind is a dead attempt's."""
+        """B6 final fix (decision 210, item 3): each upgrade attempt's marker, `.history.sqlite3.upgrade-<format>.<random>
+        .attempt`, carries the identity of the copy it makes in its CONTENT: the copy's and its temporary file's names,
+        the copy's size and its content digest, written and synced before the copy is published, and removed when the
+        attempt ends. A marker left behind is a dead attempt's. Nothing is taken from a marker's name. Returns
+        (marker, identity or None when its content is not a valid identity)."""
         found = []
         for path in self._directory.glob(f".history.sqlite3.upgrade-{_SCHEMA_VERSION}.*.attempt"):
-            match = re.fullmatch(rf"\.history\.sqlite3\.upgrade-{_SCHEMA_VERSION}\.([0-9]+)-([0-9]+)\.attempt",
-                                 path.name)
-            if match is not None:
-                found.append((path, int(match.group(1)), int(match.group(2))))
+            identity = None
+            with contextlib.suppress(OSError, ValueError, UnicodeDecodeError, HistoryError, ContractError):
+                descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                try:
+                    if stat.S_ISREG(os.fstat(descriptor).st_mode):
+                        raw = os.read(descriptor, self._MARKER_BYTES + 1)
+                        data = parse_bounded_json(raw, max_bytes=self._MARKER_BYTES)
+                        copy = re.compile(rf"history\.sqlite3\.before-{_SCHEMA_VERSION}\.[0-9]+(\.[0-9a-f]{{8}})?")
+                        partial = re.compile(rf"\.history\.sqlite3\.before-{_SCHEMA_VERSION}\.[0-9]+\.[0-9a-f]{{16}}\.partial")
+                        if (type(data) is dict and data.keys() == {"copy", "partial", "size", "sha256"}
+                                and type(data["copy"]) is str and copy.fullmatch(data["copy"])
+                                and type(data["partial"]) is str and partial.fullmatch(data["partial"])
+                                and valid_integer(data["size"], minimum=1) and type(data["sha256"]) is str
+                                and re.fullmatch(r"[0-9a-f]{64}", data["sha256"])):
+                            identity = data
+                finally:
+                    os.close(descriptor)
+            found.append((path, identity))
         return found
 
+    @staticmethod
+    def _content_identity(path):
+        """(size, sha256, link count, device, inode) of a regular file, read through one descriptor without following
+        a link; None when it is not one."""
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            status = os.fstat(descriptor)
+            if not stat.S_ISREG(status.st_mode):
+                return None
+            digest, size = hashlib.sha256(), 0
+            while chunk := os.read(descriptor, 1 << 20):
+                digest.update(chunk)
+                size += len(chunk)
+            return size, digest.hexdigest(), status.st_nlink, status.st_dev, status.st_ino
+        finally:
+            os.close(descriptor)
+
     def _recover_interrupted_upgrade(self, *, remove_copy: bool) -> None:
-        """B6 review r1 (MED crash copy): a dead upgrade attempt (process death after its copy was published) left
-        its marker. Before another attempt of an unchanged store, that attempt's own copy and temporary file (same
-        device and inode as its marker names) are removed; no other copy is touched (HS-10/HS-16: an existing copy
-        is never reused, replaced or trusted). A store already at this format keeps its copy; only the marker goes."""
-        for marker, device, inode in self._upgrade_markers():
-            if remove_copy:
-                for path in self._directory.glob("history.sqlite3.before-*"):
+        """B6 final fix (decision 210, item 3): a dead upgrade attempt (process death after its copy was published)
+        left its marker. Before another attempt of an unchanged store, the copy (and temporary file) its content
+        names is removed only when each matches that content exactly (size and content digest) and has no link
+        outside those two names (one link, or the copy and its temporary file as one inode); a stale marker after
+        inode reuse, a changed file or one with another hard link is left alone (HS-10/HS-16: an existing copy is
+        never reused, replaced or trusted). A store already at this format keeps its copy; only the marker goes."""
+        for marker, identity in self._upgrade_markers():
+            if remove_copy and identity is not None:
+                named = {}
+                for name in (identity["copy"], identity["partial"]):
                     with contextlib.suppress(OSError):
-                        status = os.lstat(path)
-                        if stat.S_ISREG(status.st_mode) and (status.st_dev, status.st_ino) == (device, inode):
-                            path.unlink()
-                for path in self._directory.glob(".history.sqlite3.before-*.partial"):
+                        found = self._content_identity(self._directory / name)
+                        if found is not None:
+                            named[name] = found
+                inodes = {(found[3], found[4]) for found in named.values()}
+                if (named and len(inodes) == 1
+                        and all(found[:2] == (identity["size"], identity["sha256"]) for found in named.values())
+                        and all(found[2] == len(named) for found in named.values())):
+                    for name in named:
+                        with contextlib.suppress(OSError):
+                            (self._directory / name).unlink()
                     with contextlib.suppress(OSError):
-                        status = os.lstat(path)
-                        if stat.S_ISREG(status.st_mode) and (status.st_dev, status.st_ino) == (device, inode):
-                            path.unlink()
+                        os.fsync(self._directory_fd)
             with contextlib.suppress(OSError):
                 marker.unlink()
+
+    def _write_marker(self, marker, identity) -> None:
+        """Item 3: the attempt marker's content, written and synced (with its folder) before the copy is published."""
+        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        try:
+            payload = canonical_json(identity)
+            if os.write(descriptor, payload) != len(payload):
+                raise OSError("short marker write")
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.fsync(self._directory_fd)
 
     def _keep_copy_before_upgrade(self, version) -> None:
         """O10 HS-10: every upgrade attempt keeps its own copy of the store as it was,
@@ -718,13 +777,8 @@ class ProjectHistory:
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
             try:
                 os.fchmod(descriptor, 0o600)
-                identity = os.fstat(descriptor)
             finally:
                 os.close(descriptor)
-            # B6 review r1: this attempt's marker, before anything is published (synced with the folder below).
-            marker = self._directory / (f".history.sqlite3.upgrade-{_SCHEMA_VERSION}."
-                                        f"{identity.st_dev}-{identity.st_ino}.attempt")
-            os.close(os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600))
             target = sqlite3.connect(temporary)
             try:
                 self._connection.backup(target)
@@ -735,9 +789,16 @@ class ProjectHistory:
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
+            size, digest = self._content_identity(temporary)[:2]
+            # B6 final fix (item 3): this attempt's marker names its copy by content, synced before it is published.
+            marker = self._directory / f".history.sqlite3.upgrade-{_SCHEMA_VERSION}.{secrets.token_hex(16)}.attempt"
             # HS-16: published without replacing anything: a hard link fails if the name exists.
             for attempt in range(8):
                 candidate = self._directory / (name if attempt == 0 else f"{name}.{secrets.token_hex(4)}")
+                if os.path.lexists(candidate):
+                    continue
+                self._write_marker(marker, {"copy": candidate.name, "partial": temporary.name, "size": size,
+                                            "sha256": digest})
                 try:
                     os.link(temporary, candidate, follow_symlinks=False)
                 except FileExistsError:

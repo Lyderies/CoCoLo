@@ -3,7 +3,24 @@
 Worktree ~/Code/temp/cocolo-b6, branch feat/rsb-b6-close, base 6a1ea9da (0.8.57). Requirements: docs/requirements/b6.md.
 Evidence: docs/requirements/b6/red.md. Assertion ledger: docs/requirements/b6/assertions.md.
 
-## State: review round 1 fix COMPLETE, committed on feat/rsb-b6-close (on 700d41f8)
+## State: final fix (decision 210) COMPLETE, committed on feat/rsb-b6-close (on 020e530d). No further review round.
+
+### Final fix (decision 210; red evidence red.md "Final fix", ledger assertions.md F, acceptance b6.md "Final fix")
+- Item 1 HIGH: `_unfinished` reads every held lease by verified identity (`_held_leases`: live leases by `lease_expiry`
+  and held lease register rows, which must match), verifies each seal, then compares its orchestration; a lease that
+  does not verify refuses the close. The target-index loop stays (scope conflicts of finished leases).
+- Item 2: step 21 index `project_execution_consumptions_orchestration` (grant's orchestration, `json_valid` guarded);
+  `_ORPHAN_CONSUMPTION` refuses a consumption of the target with neither reservation nor lease; a target lease's
+  claim whose consumption has no reservation refuses too.
+- Item 3: marker `.history.sqlite3.upgrade-21.<random>.attempt` with content {copy, partial, size, sha256}, fsynced
+  with the folder before the link; recovery deletes only exact matches whose link count is only those names.
+- Item 4: `_check_orchestration_states` refuses an unverifiable pointer (`history_incompatible`).
+- Item 5: FinalCapIsolationTests (4,097 valid-seal leases + reservations of another orchestration; red on 700d41f8).
+- Runs (named modules, all green): batch A 28 store modules 728 tests 235 s; B1 14 service modules 226 tests 226 s;
+  B2 8 modules (backups, learning source, cap guard) 112 tests 54 s; test_project_driver alone 99 tests 247 s; root
+  tests.test_rsd_budget 2 s. Not run: full suite / --affected (primary). Digests not refreshed.
+
+## Earlier state: review round 1 fix COMPLETE (020e530d)
 
 ### Review round 1 (one fix round; red evidence in red.md, ledger section E in assertions.md, acceptance in b6.md)
 - HIGH adoption window: `_LAST_ATTEMPT_ACTIVITY` (project_history) = max of the orchestration's reservations'
