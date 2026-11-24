@@ -192,3 +192,109 @@ class HostClientUnknownStepTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ReservationFileSafetyTests(unittest.TestCase):
+    """Confirming check HIGH: the reservation files never follow links, trust foreign owners, hang or grow unbounded.
+    Any refusal means no re-check this route (no spend, route as today)."""
+    WHY = 'The CLI reservation step on a temporary state root; no service, ledger or provider is reached.'
+
+    def setUp(self):
+        import json, os, tempfile
+        from pathlib import Path
+        import cli
+        self.cli, self.os, self.json = cli, os, json
+        self.tmp = tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR'))
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.state = self.root / 'state'
+        self.state.mkdir(mode=0o700)
+        self.state.chmod(0o700)
+        self.root.chmod(0o700)
+        self.dir = cli._recheck_reservation_path(self.state, 'claude', ACCOUNT).parent
+        self.record = cli._recheck_reservation_path(self.state, 'claude', ACCOUNT)
+        self.target = self.root / 'victim'
+        self.target.write_text('keep')
+
+    def reserve(self):
+        return self.cli._reserve_usage_recheck(self.state, 'claude', ACCOUNT, NOW)
+
+    def private_dir(self):
+        self.dir.mkdir(mode=0o700)
+        self.dir.chmod(0o700)
+
+    @requirements('USAGE-RECHECK-5', why_not_scenario=WHY)
+    def test_a_fresh_reservation_is_taken_once_in_a_private_directory(self):
+        self.assertTrue(self.reserve())
+        self.assertFalse(self.reserve())
+        self.assertEqual(0o700, self.dir.stat().st_mode & 0o777)
+        self.assertEqual(0o600, self.record.stat().st_mode & 0o777)
+
+    @requirements('USAGE-RECHECK-5', why_not_scenario=WHY)
+    def test_a_planted_link_at_the_temporary_name_never_truncates_its_target(self):
+        self.private_dir()
+        self.record.with_name(self.record.name + '.tmp').symlink_to(self.target)
+        self.reserve()
+        self.assertEqual('keep', self.target.read_text())
+
+    @requirements('USAGE-RECHECK-5', why_not_scenario=WHY)
+    def test_a_link_at_the_record_path_is_refused(self):
+        self.private_dir()
+        self.record.symlink_to(self.target)
+        self.assertFalse(self.reserve())
+        self.assertEqual('keep', self.target.read_text())
+
+    @requirements('USAGE-RECHECK-5', why_not_scenario=WHY)
+    def test_a_link_as_the_directory_is_refused(self):
+        other = self.root / 'elsewhere'
+        other.mkdir(mode=0o700)
+        self.dir.symlink_to(other)
+        self.assertFalse(self.reserve())
+        self.assertEqual([], list(other.iterdir()))
+
+    @requirements('USAGE-RECHECK-5', why_not_scenario=WHY)
+    def test_a_fifo_at_the_record_path_refuses_without_hanging(self):
+        import threading
+        self.private_dir()
+        self.os.mkfifo(self.record)
+        result = []
+        thread = threading.Thread(target=lambda: result.append(self.reserve()), daemon=True)
+        thread.start()
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual([False], result)
+
+    @requirements('USAGE-RECHECK-5', why_not_scenario=WHY)
+    def test_a_foreign_owner_or_loose_mode_is_refused(self):
+        from unittest import mock
+        self.assertTrue(self.reserve())
+        later = NOW + 10 * 24 * 3_600_000
+        for loose in (0o620, 0o602):
+            with self.subTest(mode=oct(loose)):
+                self.record.chmod(loose)
+                self.assertFalse(self.cli._reserve_usage_recheck(self.state, 'claude', ACCOUNT, later))
+        self.record.chmod(0o600)
+        with mock.patch.object(self.os, 'geteuid', return_value=self.os.geteuid() + 1):
+            self.assertFalse(self.cli._reserve_usage_recheck(self.state, 'claude', ACCOUNT, later))
+        self.record.chmod(0o600)
+        self.dir.chmod(0o770)
+        self.assertFalse(self.cli._reserve_usage_recheck(self.state, 'claude', ACCOUNT, later))
+
+    @requirements('USAGE-RECHECK-5', why_not_scenario=WHY)
+    def test_an_oversized_record_is_refused(self):
+        self.private_dir()
+        self.record.write_text('{"reserved_at_ms": 1, "pad": "' + 'x' * 100_000 + '"}')
+        self.record.chmod(0o600)
+        self.assertFalse(self.reserve())
+
+    @requirements('USAGE-RECHECK-5', why_not_scenario=WHY)
+    def test_a_held_lock_gives_a_bounded_wait_then_no_recheck(self):
+        import fcntl, time
+        self.private_dir()
+        lock = self.os.open(self.dir / '.lock', self.os.O_RDWR | self.os.O_CREAT, 0o600)
+        self.addCleanup(self.os.close, lock)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        started = time.monotonic()
+        self.assertFalse(self.reserve())
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertFalse(self.record.exists())

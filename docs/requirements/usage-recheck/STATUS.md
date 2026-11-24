@@ -33,3 +33,7 @@ State: RECOMMENDATION BUILT (option A + bounded re-check), owner decision 134 pe
   `$PY -B -m unittest tests.test_usage_recheck tests.test_usage_recheck_live ...`
 - No existing assertion changed (assertions.md not needed). Option A narrowed to far resets (> 1 h) so test_providers.py:1171-1173 holds.
 - Green modules: usage_recheck(+live), admission_metadata, route_exhausted(+live,+open), route_live_root, provider_restrictions, providers, refusal_steps, billing_gate, billing_rejudge, account_billing_admission, billing_probe_worker, cli_billing_runtime, owner_terminal_flow, test_bridge.ClaudeHostReviewTests.
+- Confirming-check HIGH (reservation files): `cli._reserve_usage_recheck` now uses a 0700 checked directory fd,
+  O_NOFOLLOW|O_NONBLOCK opens, fstat regular/uid/mode/nlink/size(4 KiB) checks, LOCK_NB with 1 s deadline,
+  random O_EXCL tmp, fsync file + directory. Any refusal or held lock = no re-check this route. Tests:
+  tests.test_usage_recheck.ReservationFileSafetyTests (8). No existing assertion changed.

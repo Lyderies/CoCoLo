@@ -1334,16 +1334,77 @@ def _recheck_reservation_path(state_root, provider, fingerprint):
     return CollectorPaths(state_root).root / "usage-recheck" / f"{provider}-{fingerprint}.json"
 
 
+_RECHECK_RECORD_LIMIT = 4096
+_RECHECK_LOCK_WAIT_SECONDS = 1.0
+
+
+class _RecheckRefused(Exception):
+    """A reservation file is not what the route wrote: no re-check this route (no spend, route as today)."""
+
+
+def _recheck_check_file(descriptor, *, record):
+    import stat
+    info = os.fstat(descriptor)
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077
+            or info.st_nlink != 1 or (record and info.st_size > _RECHECK_RECORD_LIMIT)):
+        raise _RecheckRefused()
+
+
+def _recheck_open_directory(state_root, provider, fingerprint):
+    """The private reservation directory as a descriptor: created 0700, opened without following a link, and
+    owned by this user with no group or world access (else refused)."""
+    import stat
+    path = _recheck_reservation_path(state_root, provider, fingerprint).parent
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise _RecheckRefused() from error
+    info = os.fstat(descriptor)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        os.close(descriptor)
+        raise _RecheckRefused()
+    return descriptor
+
+
+def _recheck_read_record(directory, name):
+    """The reserved time, None when there is no record; a link, FIFO, foreign, loose or oversized one is refused."""
+    try:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise _RecheckRefused() from error
+    try:
+        _recheck_check_file(descriptor, record=True)
+        data = os.read(descriptor, _RECHECK_RECORD_LIMIT + 1)
+    finally:
+        os.close(descriptor)
+    if len(data) > _RECHECK_RECORD_LIMIT:
+        raise _RecheckRefused()
+    try:
+        value = json.loads(data)
+    except ValueError:
+        return None
+    at = value.get("reserved_at_ms") if type(value) is dict else None
+    return at if type(at) is int else None
+
+
 def _recheck_reserved_at(state_root, provider, fingerprint):
     """When the route last took this account's re-check attempt (USAGE-RECHECK-5), or None."""
     if type(fingerprint) is not str or not _RECHECK_FINGERPRINT.fullmatch(fingerprint):
         return None
     try:
-        value = json.loads(_recheck_reservation_path(state_root, provider, fingerprint).read_text())
-    except (OSError, ValueError, StateError):
+        directory = _recheck_open_directory(state_root, provider, fingerprint)
+        try:
+            return _recheck_read_record(directory, f"{provider}-{fingerprint}.json")
+        finally:
+            os.close(directory)
+    except (OSError, StateError, _RecheckRefused):
         return None
-    at = value.get("reserved_at_ms") if type(value) is dict else None
-    return at if type(at) is int else None
 
 
 def _reserve_usage_recheck(state_root, provider, fingerprint, now_ms):
@@ -1351,32 +1412,55 @@ def _reserve_usage_recheck(state_root, provider, fingerprint, now_ms):
 
     The attempt is spent whatever it yields (a reading, no reading, a failure), and it is kept on disk under the
     state root, so neither a failed read nor a restart lets the route try again within the interval. False: an
-    attempt was already taken inside it (or none can be recorded, so none is made)."""
+    attempt was already taken inside it, or none can be recorded safely (a link, FIFO, foreign owner, loose mode,
+    oversized file, or a lock held past a short deadline), so none is made. Never blocks the route."""
     import fcntl
+    import secrets
     from codex_agents.admission_metadata import USAGE_RECHECK_INTERVAL_MS
     if type(fingerprint) is not str or not _RECHECK_FINGERPRINT.fullmatch(fingerprint):
         return False
+    name = f"{provider}-{fingerprint}.json"
     try:
-        path = _recheck_reservation_path(state_root, provider, fingerprint)
-        path.parent.mkdir(mode=0o700, exist_ok=True)
-        lock = os.open(path.parent / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+        directory = _recheck_open_directory(state_root, provider, fingerprint)
+    except (OSError, StateError, _RecheckRefused):
+        return False
+    try:
+        lock = os.open(".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory)
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            last = _recheck_reserved_at(state_root, provider, fingerprint)
+            _recheck_check_file(lock, record=False)
+            deadline = time.monotonic() + _RECHECK_LOCK_WAIT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        return False
+                    time.sleep(0.02)
+            last = _recheck_read_record(directory, name)
             if last is not None and abs(now_ms - last) < USAGE_RECHECK_INTERVAL_MS:
                 return False
-            temporary = path.with_name(path.name + ".tmp")
-            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(descriptor, "w") as handle:
-                json.dump({"reserved_at_ms": now_ms}, handle)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
+            temporary = f".{name}.{secrets.token_hex(8)}.tmp"
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                                 dir_fd=directory)
+            try:
+                with os.fdopen(descriptor, "w") as handle:
+                    json.dump({"reserved_at_ms": now_ms}, handle)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(temporary, dir_fd=directory)
+                raise
+            os.fsync(directory)
             return True
         finally:
             os.close(lock)
-    except (OSError, StateError):
+    except (OSError, StateError, _RecheckRefused):
         return False
+    finally:
+        os.close(directory)
 
 
 def _usage_recheck(state_root, project_root, snapshot):
