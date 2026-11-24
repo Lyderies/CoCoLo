@@ -1784,9 +1784,9 @@ class RunDriver:
                 return
             try:
                 self._lost = self._sweep.result()
+                self._swept = True  # Only a collected result ends the warm-up.
             except Exception:
                 pass
-            self._swept = True
             self._sweep, self._next_sweep = None, self._clock() + SWEEP_SECONDS
         if self._clock() >= self._next_sweep:
             self._sweep = self._sweeper.submit(self._settle_lost, False)

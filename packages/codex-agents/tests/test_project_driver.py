@@ -980,6 +980,23 @@ class HostRestartTests(DriverHarness):
         self.assertEqual(('run_lost', 'abandoned', 'unknown'),
                          (after['reason_code'], after['terminal_state'], after['outcome']))
 
+    def test_LRS_5_a_failed_first_sweep_keeps_the_host_warming_up(self):
+        """Decision 228: only a collected sweep result ends the warm-up."""
+        from concurrent.futures import Future
+        driver = object.__new__(project_driver.RunDriver)
+        driver._clock, driver._next_sweep, driver._lost, driver._swept = (lambda: 0.0), 1e9, {}, False
+        failed = Future()
+        failed.set_exception(RuntimeError('sweep failed'))
+        driver._sweep = failed
+        driver._sweep_lost()
+        self.assertFalse(driver._swept)
+        done = Future()
+        done.set_result({'h': ('host', 'released')})
+        driver._sweep = done
+        driver._sweep_lost()
+        self.assertTrue(driver._swept)
+        self.assertEqual({'h': ('host', 'released')}, driver._lost)
+
     def restart_host(self):
         """Stop the running project host and start a fresh one for the same project."""
         host = [t for t in self.threads if t.name.startswith('test-project-host-')][0]
