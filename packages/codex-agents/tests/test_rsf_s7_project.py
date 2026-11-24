@@ -43,7 +43,7 @@ class ProjectReplayTests(ProjectFixture):
                     self.assertEqual({**before, 'evidence': expected}, after)
                     self.assertIsNone(case.settlement())
 
-    def test_permanent_hold_closure_has_an_inclusive_byte_ceiling_and_declared_growth(self):
+    def test_retained_hold_closure_has_an_inclusive_byte_ceiling_and_a_bounded_window(self):
         from codex_agents import lost_run_closure
 
         self.bound()
@@ -74,7 +74,7 @@ class ProjectReplayTests(ProjectFixture):
         registry = json.loads(Path(__file__).with_name('lifetime_caps.json').read_text())['sites']
         entry = registry.get('project_history.py::record_account_settlement', {})
         self.assertEqual(8192, entry.get('max_closure_bytes'))
-        self.assertIn('no total bound', entry['ends'])
+        self.assertIn('BOUNDED evidence', entry['ends'])
         self.assertEqual(self._testMethodName, entry['test'])
 
     def test_settled_request_refuses_an_altered_digest_before_pruning(self):
