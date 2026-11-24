@@ -1047,6 +1047,21 @@ def orchestration_report_client(state_root, project_root, orchestration_id, *, h
         return None
 
 
+def provider_state_snapshot_client(state_root, project_root, *, host_client):
+    """Advisory state built by the account owner; never supplied by task JSON."""
+    try:
+        state = CollectorPaths(state_root)
+        scope, endpoints = _read_runtime_endpoints(state, project_root, account=True)
+        if len(endpoints) != 3:
+            return None
+        enroll_clients(state, project_root, scope, endpoints[:2], account=endpoints[2], host_client=host_client)
+        return AccountClient(endpoints[2], scope.project_id, scope.runtime_digest, timeout=10).provider_state_snapshot()
+    except (DispatchError, StateError, OSError):
+        return None
+    except AccountError as error:
+        raise RuntimeOpenError(error.reason_code) from None
+
+
 def routing_evidence_client(state_root, project_root, task, *, host_client):
     """The task's routing evidence this project's service vouches for, or None.
 

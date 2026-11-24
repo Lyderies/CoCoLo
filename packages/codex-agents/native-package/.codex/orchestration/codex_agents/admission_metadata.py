@@ -54,6 +54,12 @@ def _latest(records: list[tuple[dict[str, Any], str]]) -> tuple[dict[str, Any], 
     return None if ranked is None else ranked[1]
 
 
+def select_provider_identity(provider, identities, now_ms):
+    """Open and advisory routing use the same freshness and ledger tie order."""
+    return _latest([item for item in identities if item[0]["provider"] == provider
+                    and 0 <= now_ms - item[0]["observed_at_ms"] <= IDENTITY_MAX_AGE_MS])
+
+
 def _window_live(window: dict[str, Any], observed_at_ms: int, now_ms: int) -> bool:
     # A window counts until it resets; one with no reset time counts for five hours.
     if window["resets_at"] is not None:
@@ -220,12 +226,7 @@ def evaluate_admission(
     if limits is None or prior_run_admissions is None or window_headroom is None:
         return decision("admission_policy_unavailable")
     minimum_version, maximum_version, run_cap = limits
-    current = [
-        item for item in identities
-        if item[0]["provider"] == provider
-        and 0 <= now_ms - item[0]["observed_at_ms"] <= IDENTITY_MAX_AGE_MS
-    ]
-    identity_item = _latest(current)
+    identity_item = select_provider_identity(provider, identities, now_ms)
     if identity_item is None:
         return decision("provider_identity_missing")
     identity, identity_digest = identity_item

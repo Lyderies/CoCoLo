@@ -52,6 +52,7 @@ MAX_ACCOUNT_FRAME_BYTES = 16_384
 MAX_ACCOUNT_INTEGER = (1 << 63) - 1
 ACCOUNT_READ_OPERATIONS = frozenset({
     "account.health", "account.project", "account.owner_key", "account.owner_public_key", "account.capacity_status",
+    "account.provider_state_snapshot",
 })
 ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
     "account.claim_launch", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt",
@@ -333,6 +334,18 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
             return checked
         except ClaimError:
             raise AccountError('account_invalid_response') from None
+    elif request.operation == "account.provider_state_snapshot":
+        from .admission_metadata import ProviderStateSnapshot
+        try:
+            checked = ProviderStateSnapshot(result["project_id"], result["evaluated_at_ms"], result["providers"])
+            if (result != checked.audit() or result["project_id"] != request.project_id
+                    or type(result["evaluated_at_ms"]) is not int
+                    or set(result["providers"]) != {"codex", "claude"}
+                    or any(v["state"] not in {"unknown", "ample", "constrained", "exhausted"}
+                           for v in result["providers"].values())):
+                raise ValueError()
+        except (KeyError, TypeError, ValueError):
+            raise AccountError("account_invalid_response") from None
     elif request.operation == "account.health":
         if set(result) != {"transport_alive", "database_checked"} or result["transport_alive"] is not True or result["database_checked"] is not False:
             raise AccountError("account_invalid_response")
@@ -436,6 +449,11 @@ class AccountClient:
 
     def health(self, *, request_id: str | None = None) -> dict:
         return self._read("account.health", request_id)
+
+    def provider_state_snapshot(self, *, request_id: str | None = None):
+        from .admission_metadata import ProviderStateSnapshot
+        value = self._read("account.provider_state_snapshot", request_id)
+        return ProviderStateSnapshot(value["project_id"], value["evaluated_at_ms"], value["providers"])
 
     def project(self, *, request_id: str | None = None) -> dict:
         return self._read("account.project", request_id)

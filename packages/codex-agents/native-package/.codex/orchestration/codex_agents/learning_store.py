@@ -4257,7 +4257,7 @@ class LearningLedger:
             raise LedgerError("verification evidence requires controlled admission")
         if checked["record_type"] in PROVIDER_OBSERVATION_TYPES | {
             "admission_decision", "billing_attestation", "dispatch_intent",
-            "dispatch_result", "host_run_profile", "probe_admission",
+            "dispatch_result", "host_run_profile", "route_availability", "probe_admission",
             "verification_binding", "claim_denial_settlement", "host_result_admission", "execution_provenance", "host_open_provenance",
         }:
             raise LedgerError("provider evidence requires ledger-run observation")
@@ -5629,6 +5629,7 @@ class LearningLedger:
                 self._store_admission_locked(
                     project_id, admission, run_id=run_id, timestamp=admitted_at
                 )
+                self._store_route_availability_locked(project_id, run_id, route, admitted_at)
                 if worker_outcome_digest is not None:
                     material = {
                         "schema_version": 1,
@@ -5670,11 +5671,14 @@ class LearningLedger:
         except _RecheckDenied as denied:
             # The denial is stored like any other, after the open is abandoned.
             with self._account_transaction():
-                self._store_admission_locked(
+                record = self._store_admission_locked(
                     project_id, denied.decision, run_id=None,
                     timestamp=denied.decision["observed_at_ms"],
                 )
-            raise AdmissionDenied(denied.decision["reason_code"]) from None
+            denial = AdmissionDenied(denied.decision["reason_code"])
+            denial.open_reference = {"project_id": project_id, "admission_record_id": record["record_id"],
+                                     "admission_content_digest": content_digest(record)}
+            raise denial from None
         return {
             "run_handle": run_handle,
             "admission": admission["reason_code"],
@@ -6646,9 +6650,19 @@ class LearningLedger:
             if row[0] is not None
         }
 
+    def _store_route_availability_locked(self, project_id, run_id, route, timestamp):
+        """Bind the logical open's bounded attempt history to its admitted run."""
+        availability = route.get("availability", {})
+        if not availability.get("open_attempts"):
+            return  # Earlier callers without logical route/open recovery.
+        material = {"schema_version": 1, "record_type": "route_availability", "run_id": run_id,
+                    "availability": availability, "observed_at_ms": timestamp}
+        record = validate_learning_record({**material, "record_id": "route_availability:" + content_digest(material)})
+        self._append_checked_locked(project_id, record, producer="lifecycle", timestamp=timestamp)
+
     def provider_state_snapshot(self, project_id: str, *, now_ms: int | None = None):
         """Build advisory routing state from the service's trusted account evidence."""
-        from .admission_metadata import ProviderStateSnapshot, classify_provider_state, _latest, IDENTITY_MAX_AGE_MS
+        from .admission_metadata import ProviderStateSnapshot, classify_provider_state, select_provider_identity
         timestamp = self._clock_ms() if now_ms is None else now_ms
         states = {}
         with self._write_unit():
@@ -6657,8 +6671,7 @@ class LearningLedger:
                 raise LedgerError("project binding is not active")
             for provider in ("codex", "claude"):
                 identities = self._provider_records_locked(project_id, "provider_identity", provider)
-                identity = _latest([(r, d) for r, d in identities
-                                    if 0 <= timestamp-r["observed_at_ms"] <= IDENTITY_MAX_AGE_MS])
+                identity = select_provider_identity(provider, identities, timestamp)
                 fingerprint = identity[0]["account_fingerprint"] if identity is not None else None
                 headroom, _ = self._account_records_locked(project_id, "provider_headroom", provider)
                 billing, _ = self._account_records_locked(project_id, "provider_billing", provider)
@@ -6756,11 +6769,14 @@ class LearningLedger:
                 # Denials are durable metadata too. Begin explicitly only for
                 # their write; a successful informational evaluation stays read-only.
                 with self._account_transaction():
-                    self._store_admission_locked(
+                    record = self._store_admission_locked(
                         project_id, decision, run_id=None, timestamp=timestamp
                     )
         if decision["decision"] == "deny":
-            raise AdmissionDenied(decision["reason_code"])
+            denial = AdmissionDenied(decision["reason_code"])
+            denial.open_reference = {"project_id": project_id, "admission_record_id": record["record_id"],
+                                     "admission_content_digest": content_digest(record)}
+            raise denial
         self.state.harden_database_files()
         return decision
 

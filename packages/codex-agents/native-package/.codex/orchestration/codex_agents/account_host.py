@@ -45,6 +45,7 @@ SECOND = 1_000_000_000
 # never offered. A host open must carry its originals; a claim, the run's lease.
 HOST_OPERATIONS = frozenset({
     'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
+    'account.provider_state_snapshot',
     'account.observe_provider', 'account.record_observation_unavailable', 'account.billing_probe',
     'account.open_host_run', 'account.claim_launch',
     'account.withdraw_open',  # B3: the host that opened a run may withdraw it before its claim
@@ -62,6 +63,7 @@ PROJECT_OPERATIONS = frozenset({
 # (who is signed in): one for a run's launch evidence is refused.
 OWNER_OPERATIONS = frozenset({
     'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
+    'account.provider_state_snapshot',
     'account.observe_provider',
 })
 GENERATION = 1

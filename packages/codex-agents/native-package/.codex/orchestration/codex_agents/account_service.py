@@ -1285,6 +1285,9 @@ class AccountService:
                                                    withdrawal=withdrawal, request_digest=digest)
             elif request.operation == "account.health":
                 result = {"transport_alive": True, "database_checked": False}
+            elif request.operation == "account.provider_state_snapshot":
+                self._views._guard()
+                result = self._views._ledger.provider_state_snapshot(project).audit()
             elif request.operation == "account.project":
                 result = self._views.project(request.project_id)
             elif operation == "account.capacity_status":

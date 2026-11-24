@@ -1485,11 +1485,17 @@ def _select_verifier(
             )
             if dispatch == "bridge" and verifier["sandbox_mode"] != "read-only":
                 skipped = _bridged_writable(verifier)
+                if availability is not None:
+                    availability["candidates"].append({"phase": "verifier", "provider": provider,
+                                                       "skip": "containment", "detail": skipped})
                 continue
         else:
             claude = policy.get("providers", {}).get("claude")
             agent = _claude_agent(policy, "verification")
             if claude is None or agent is None:
+                if availability is not None:
+                    availability["candidates"].append({"phase": "verifier", "provider": provider,
+                                                       "skip": "configuration"})
                 continue
             setting, banded = verifier_setting(policy, "claude", risk)
             verifier = {
@@ -1505,6 +1511,9 @@ def _select_verifier(
         if not _provider_admitted(
             policy, primary_provider, provider, verifier["model"]
         ):
+            if availability is not None:
+                availability["candidates"].append({"phase": "verifier", "provider": provider,
+                                                   "skip": "configuration"})
             continue
         verifier["provider"] = provider
         verifier["dispatch"] = dispatch
@@ -1933,7 +1942,7 @@ def _route_with_availability(task_data, policy, **kwargs):
 
 
 def open_routed_task(task, policy, *, project_id, snapshot, open_route, primary_provider="codex",
-                     trusted_routing_evidence_refs=frozenset()):
+                     trusted_routing_evidence_refs=frozenset(), resolve_route=None):
     """One logical open: fresh advisory routing and at most one exhaustion recovery.
 
     The callback must perform normal authoritative admission. No other denial
@@ -1942,23 +1951,32 @@ def open_routed_task(task, policy, *, project_id, snapshot, open_route, primary_
     from .providers import AdmissionDenied
     attempts = []
     for retry in range(2):
-        route = route_task(task, policy, project_id=project_id, provider_snapshot=snapshot(),
-                           primary_provider=primary_provider,
-                           trusted_routing_evidence_refs=trusted_routing_evidence_refs)
+        current = snapshot()
+        route = (resolve_route(current) if resolve_route is not None else
+                 route_task(task, policy, project_id=project_id, provider_snapshot=current,
+                            primary_provider=primary_provider,
+                            trusted_routing_evidence_refs=trusted_routing_evidence_refs))
         route["availability"].update(reroute_count=retry, open_attempts=deepcopy(attempts))
         if retry:
             route["availability"]["reroute_trigger"] = "provider_exhausted"
         if route.get("status") == "unsatisfied":
             return {"ready": False, "reason_code": route["reason_code"], "route": route}
+        reference = content_digest({"task_id": task["id"], "provider": route["provider"],
+                                    "snapshot_ref": route["availability"].get("snapshot_ref"), "attempt": retry + 1})
+        attempt = {"provider": route["provider"], "reason_code": "admitted", "open_ref": reference,
+                   "snapshot_ref": route["availability"].get("snapshot_ref")}
+        route["availability"].update(open_attempt_count=retry + 1,
+            original_open_ref=attempts[0]["open_ref"] if attempts else reference,
+            replacement_open_ref=reference if retry else None,
+            open_attempts=[*deepcopy(attempts), attempt])
         try:
             opened = open_route(route)
         except AdmissionDenied as error:
-            attempts.append({"provider": route["provider"], "reason_code": error.reason_code,
-                             "snapshot_ref": route["availability"].get("snapshot_ref")})
+            attempts.append({**attempt, "reason_code": error.reason_code,
+                             **({"denial_reference": error.open_reference}
+                                if hasattr(error, "open_reference") else {})})
             if error.reason_code == "provider_exhausted" and retry == 0:
                 continue
             route["availability"]["open_attempts"] = attempts
             return {"ready": False, "reason_code": error.reason_code, "route": route}
-        route["availability"]["open_attempts"] = [*attempts, {"provider": route["provider"],
-            "run_handle": opened.get("run_handle"), "reason_code": "admitted"}]
         return {"ready": True, "route": route, "open": opened}

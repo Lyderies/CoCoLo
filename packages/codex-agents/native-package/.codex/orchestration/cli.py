@@ -127,7 +127,7 @@ from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
     HostOutcomeUnknown, _host_pair, operational_checks_client, record_operational_qa_client, learning_cycle_client,
-    routing_evidence_client, owner_learning_client, orchestration_report_client, capacity_report_client, runtime_hint_path,
+    provider_state_snapshot_client, routing_evidence_client, owner_learning_client, orchestration_report_client, capacity_report_client, runtime_hint_path,
     run_control_client, bridged_run_owner, abandon_bridged_run,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
@@ -205,6 +205,7 @@ from codex_agents.providers import (  # noqa: E402
     billing_attestation_record,
 )
 from codex_agents.routing import (  # noqa: E402
+    open_routed_task,
     PolicyError,
     _route_task_legacy_fallback,
     load_effective_policy,
@@ -1131,16 +1132,19 @@ def _validated_assignment_route(
         ledger, project_id = _learning_ledger(args)
         try:
             trusted = ledger.trusted_routing_evidence_refs(project_id, task)
-            route = route_task(
+            route = _available_route(
                 task,
                 policy,
                 trusted_routing_evidence_refs=trusted,
+                provider_snapshot=ledger.provider_state_snapshot(project_id), project_id=project_id,
                 primary_provider=_host_primary_provider(),
             )
         finally:
             _close_ledger(ledger)
+    elif project_root is not None:
+        route = _installed_route(args, task)
     else:
-        route = route_task(task, policy, primary_provider=_host_primary_provider())
+        route = _available_route(task, policy, primary_provider=_host_primary_provider())
     assigned = validate_assignment(
         _json_input(args.assignment),
         task=task,
@@ -1249,8 +1253,33 @@ def _host_client_for(route: dict) -> str:
     return BRIDGE_CLIENT if route.get("dispatch") == "bridge" else _host_client()
 
 
+class RouteUnsatisfied(Exception):
+    def __init__(self, route):
+        self.route = {**route, "ready": False}
+        resets = [v["next_reset_ms"] for v in route["providers"].values()
+                  if v.get("next_reset_ms") is not None]
+        self.route["error"] = ("no provider has allowance; next reset at " +
+                               (str(min(resets)) if resets else "unknown"))
+
+
+def _available_route(task, policy, **kwargs):
+    route = route_task(task, policy, **kwargs)
+    if route.get("status") == "unsatisfied":
+        raise RouteUnsatisfied(route)
+    return route
+
+
+def _same_route(left, right):
+    # Snapshot timestamps are advisory, and are refreshed between route and open.
+    return {k: v for k, v in left.items() if k != "availability"} == {
+        k: v for k, v in right.items() if k != "availability"}
+
+
+_FRESH_SNAPSHOT = object()
+
+
 def _store_free_route(project_root: Path, task: dict, client_version: str | None = None,
-                      state_root: Path | None = None):
+                      state_root: Path | None = None, *, provider_snapshot=_FRESH_SNAPSHOT):
     """The route when it needs nothing from the ledger, else None.
 
     With an empty release registry there are no learning candidates to read, and
@@ -1280,7 +1309,12 @@ def _store_free_route(project_root: Path, task: dict, client_version: str | None
         ORCHESTRATION_ROOT / "config" / "routing-policy.json",
         ORCHESTRATION_ROOT / "config" / "discovery-policy.json",
     )
-    route = route_task(task, policy, trusted_routing_evidence_refs=trusted,
+    snapshot = provider_snapshot
+    if snapshot is _FRESH_SNAPSHOT:
+        snapshot = (provider_state_snapshot_client(state_root, project_root, host_client=_host_client())
+                    if state_root is not None else None)
+    route = _available_route(task, policy, trusted_routing_evidence_refs=trusted,
+                       provider_snapshot=snapshot, project_id=snapshot.project_id if snapshot else None,
                        primary_provider=_host_primary_provider())
     clients = load_client_capabilities(ORCHESTRATION_ROOT / "config" / "learning-clients.json")
     capability = clients[client_version or _host_client_for(route)]
@@ -1311,6 +1345,7 @@ def _trusted_host_route(
     task: dict,
     *,
     fallback_receipt: str | None = None,
+    provider_snapshot=_FRESH_SNAPSHOT,
 ) -> tuple[dict, dict]:
     """Resolve the exact installed route used by the trusted host lifecycle."""
 
@@ -1320,6 +1355,8 @@ def _trusted_host_route(
         ORCHESTRATION_ROOT / "config" / "discovery-policy.json",
     )
     trusted = ledger.trusted_routing_evidence_refs(project_id, task)
+    if provider_snapshot is _FRESH_SNAPSHOT:
+        provider_snapshot = ledger.provider_state_snapshot(project_id)
     # A verifier bound to a worker outcome is routed only when that outcome is
     # this project's, from the named provider and family, in an active boundary.
     # Open and dispatch read the result itself; recording needs only the binding.
@@ -1329,10 +1366,11 @@ def _trusted_host_route(
         # A worker the project host recorded is bound by its verifier's open instead.
         if str(error) != "verification_for_outcome is not a recorded host outcome":
             raise
-    primary_route = route_task(
+    primary_route = _available_route(
         task,
         policy,
         trusted_routing_evidence_refs=trusted,
+        provider_snapshot=provider_snapshot, project_id=project_id,
         primary_provider=_host_primary_provider(),
     )
     clients = load_client_capabilities(
@@ -1373,8 +1411,11 @@ def _trusted_host_route(
         task,
         policy,
         trusted_routing_evidence_refs=trusted,
+        provider_snapshot=provider_snapshot, project_id=project_id,
         primary_provider=_host_primary_provider(),
     )
+    if route.get("status") == "unsatisfied":
+        raise RouteUnsatisfied(route)
     route["fallback"]["receipt_id"] = fallback_receipt
     route["fallback"]["authorization_digest"] = fallback_authorization[
         "authorization_digest"
@@ -2083,7 +2124,8 @@ def main() -> int:
         elif args.command == "inventory":
             report = discover(args.root, load_discovery_policy(args.policy))
         elif args.command == "route":
-            report = route_task(
+            snapshot = provider_state_snapshot_client(args.state_root, args.root, host_client=_host_client()) if getattr(args, "state_root", None) else None
+            report = _available_route(
                 _json_input(args.task),
                 load_effective_policy(
                     args.root,
@@ -2091,6 +2133,7 @@ def main() -> int:
                     ORCHESTRATION_ROOT / "config" / "discovery-policy.json",
                 ),
                 primary_provider=_host_primary_provider(),
+                provider_snapshot=snapshot, project_id=snapshot.project_id if snapshot else None,
             )
         elif args.command == "learning-route":
             task = _json_input(args.task)
@@ -2131,10 +2174,11 @@ def main() -> int:
                     # not this ledger; its verifier's open binds and checks it there.
                     if str(error) != "verification_for_outcome is not a recorded host outcome":
                         raise
-                base_route = route_task(
+                base_route = _available_route(
                     task,
                     policy,
                     trusted_routing_evidence_refs=trusted,
+                    provider_snapshot=ledger.provider_state_snapshot(project_id), project_id=project_id,
                     primary_provider=_host_primary_provider(),
                 )
                 if explicit_client is None:
@@ -2183,8 +2227,11 @@ def main() -> int:
                         task,
                         policy,
                         trusted_routing_evidence_refs=trusted,
+                        provider_snapshot=ledger.provider_state_snapshot(project_id), project_id=project_id,
                         primary_provider=_host_primary_provider(),
                     )
+                    if report.get("status") == "unsatisfied":
+                        raise RouteUnsatisfied(report)
                     report["fallback"]["receipt_id"] = receipt["receipt_id"]
                     report["fallback"]["authorization_digest"] = receipt[
                         "authorization_digest"
@@ -2233,10 +2280,11 @@ def main() -> int:
                     ORCHESTRATION_ROOT / "config" / "routing-policy.json"
                 )
                 trusted = ledger.trusted_routing_evidence_refs(project_id, task)
-                report = route_task(
+                report = _available_route(
                     task,
                     policy,
                     trusted_routing_evidence_refs=trusted,
+                    provider_snapshot=ledger.provider_state_snapshot(project_id), project_id=project_id,
                     primary_provider=_host_primary_provider(),
                 )
                 current_configuration = installed_execution_configuration(
@@ -2521,91 +2569,111 @@ def main() -> int:
             # route remains untrusted until the ledger resolves and compares it.
             validate_assignment(assignment, task=task, route=supplied_route,
                                 parent_grant=parent_grant)
-            if _host_driven(supplied_route):
-                # Model, effort, agent and sandbox come only from the installed route.
-                if args.fallback_receipt is None and supplied_route != _installed_route(args, task):
+            # Validate the originally advertised choice before refreshing availability.
+            # A fresh snapshot may change provider/model/effort, never permissions or task lineage.
+            policy = load_effective_policy(args.project_root,
+                ORCHESTRATION_ROOT / "config" / "routing-policy.json",
+                ORCHESTRATION_ROOT / "config" / "discovery-policy.json")
+            current_route = _installed_route(args, task)
+            if args.fallback_receipt is None and not _same_route(supplied_route, current_route):
+                # A changed worker/verifier provider invalidates advertised execution
+                # settings. Only the fresh installed route supplies their replacements;
+                # the task, bounds, policy and mapping constraints must still agree.
+                selection_fields = {"availability", "provider", "dispatch", "model", "effort", "role",
+                    "verifier", "independent", "reason", "selection", "routing_basis", "agent_type",
+                    "agent_path", "skill_paths", "execution_configuration"}
+                changed_provider = (supplied_route.get("provider") != current_route.get("provider") or
+                    (supplied_route.get("verifier") or {}).get("provider") !=
+                    (current_route.get("verifier") or {}).get("provider"))
+                if (not changed_provider or
+                        {k: v for k, v in supplied_route.items() if k not in selection_fields} !=
+                        {k: v for k, v in current_route.items() if k not in selection_fields}):
                     raise ContractError("supplied route does not match the installed route")
+
+            if _host_driven(current_route):
                 _start_project_host(args)
-                host = _host_client()  # Consistency only; native identity is independently checked.
-                if host == CLAUDE_HOST_CLIENT:
+                if _host_client() == CLAUDE_HOST_CLIENT:
                     check_backend(os.environ, args.project_root.resolve())
-                if args.fallback_receipt is not None:
-                    raise ContractError('bridged open never uses a fallback receipt')
                 if api_keys_present(os.environ):
-                    # The same admission refusal the account owner would give, before any request.
                     raise AdmissionDenied('provider_api_key_present')
-                report = open_codex_client(args.state_root, args.project_root, args.orchestration_handle,
-                    task, supplied_route, assignment, parent_grant, host_client=host)
-                if report['state'] == 'denied':
-                    raise AdmissionDenied(report['reason_code'])
-                _print_command_report(args, report)
-                return 0
-            ledger, project_id = _learning_ledger(args)
-            try:
-                host = _require_host_owner(
-                    ledger, project_id, orchestration_handle=args.orchestration_handle
-                )
-                route, _ = _trusted_host_route(
-                    ledger,
-                    project_id,
-                    args.project_root,
-                    task,
-                    fallback_receipt=args.fallback_receipt,
-                )
-                if supplied_route != route:
-                    raise ContractError("supplied route does not match the installed route")
-                assignment = validate_assignment(
-                    assignment,
-                    task=task,
-                    route=route,
-                    parent_grant=parent_grant,
-                )
-                verification_input = ledger.verification_worker_result(
-                    project_id, task, orchestration_handle=args.orchestration_handle
-                )
-                host_profile, spawn = _claude_host_open_checks(
-                    ledger, project_id, host, route, args.project_root.resolve()
-                )
-                # The ledger admits the run itself as it opens it; later steps read
-                # the stored decision. A verifier is admitted when its run opens.
-                report = {
-                    "ready": True,
-                    **ledger.open_host_run(
-                        project_id,
-                        assignment=assignment,
-                        task=task,
-                        route=route,
-                        execution_configuration=route["execution_configuration"],
-                        client_version=_host_client_for(route),
-                        orchestration_handle=args.orchestration_handle,
-                        fallback_receipt=args.fallback_receipt,
-                        host_profile=host_profile,
-                    ),
-                    **({"native_spawn": spawn} if spawn is not None else {}),
-                    # A native verifier cannot be handed a file by the bridge, so
-                    # the primary puts this ledger-read result in its prompt. A
-                    # bridged verifier gets it from `dispatch` instead.
-                    **(
-                        {"verification_input": {
-                            "host_outcome_digest": verification_input["host_outcome_digest"],
-                            "worker_result": verification_input["worker_result"],
-                        }}
-                        if verification_input is not None
-                        and route.get("dispatch") != "bridge"
-                        else {}
-                    ),
-                    # Native children of either provider run with the parent
-                    # session's permissions, so only a bridged Claude child's
-                    # reads are contained.
-                    "read_containment": (
-                        "enforced"
-                        if route.get("dispatch") == "bridge"
-                        and route.get("provider") == "claude"
-                        else "advisory"
-                    ),
-                }
-            finally:
-                _close_ledger(ledger)
+
+            def snapshot():
+                value = provider_state_snapshot_client(args.state_root, args.project_root, host_client=_host_client())
+                if value is not None or _host_driven(current_route):
+                    return value
+                ledger, project_id = _learning_ledger(args)
+                try:
+                    return ledger.provider_state_snapshot(project_id)
+                finally:
+                    _close_ledger(ledger)
+
+            def resolve(current):
+                if current is None and _host_driven(current_route):
+                    # No live account service: preserve its open refusal, without a ledger takeover.
+                    return {**current_route, "availability": dict(current_route["availability"])}
+                try:
+                    # Fast route uses the same installed policy and execution configuration.
+                    fast = _store_free_route(args.project_root, task, state_root=args.state_root,
+                        provider_snapshot=current)
+                    if fast is not None and args.fallback_receipt is None:
+                        return fast[0]
+                    ledger, project_id = _learning_ledger(args)
+                    try:
+                        return _trusted_host_route(ledger, project_id, args.project_root, task,
+                            fallback_receipt=args.fallback_receipt, provider_snapshot=current)[0]
+                    finally:
+                        _close_ledger(ledger)
+                except RouteUnsatisfied as error:
+                    return error.route
+
+            def open_route(route):
+                rebound = dict(assignment)
+                for name in ("model", "effort", "role", "verification_required"):
+                    rebound[name] = route[name]
+                validate_assignment(rebound, task=task, route=route, parent_grant=parent_grant)
+                if _host_driven(route):
+                    _start_project_host(args)
+                    host = _host_client()
+                    if host == CLAUDE_HOST_CLIENT:
+                        check_backend(os.environ, args.project_root.resolve())
+                    if args.fallback_receipt is not None:
+                        raise ContractError('bridged open never uses a fallback receipt')
+                    if api_keys_present(os.environ):
+                        raise AdmissionDenied('provider_api_key_present')
+                    opened = open_codex_client(args.state_root, args.project_root, args.orchestration_handle,
+                        task, route, rebound, parent_grant, host_client=host)
+                    if opened['state'] == 'denied':
+                        denial = AdmissionDenied(opened['reason_code'])
+                        denial.open_reference = {k: opened[k] for k in
+                            ('receipt_digest', 'admission_content_digest', 'inputs_digest')}
+                        raise denial
+                else:
+                    ledger, project_id = _learning_ledger(args)
+                    try:
+                        host = _require_host_owner(ledger, project_id, orchestration_handle=args.orchestration_handle)
+                        verification_input = ledger.verification_worker_result(project_id, task,
+                            orchestration_handle=args.orchestration_handle)
+                        host_profile, spawn = _claude_host_open_checks(ledger, project_id, host, route,
+                            args.project_root.resolve())
+                        opened = {"ready": True, **ledger.open_host_run(project_id, assignment=rebound, task=task,
+                            route=route, execution_configuration=route["execution_configuration"],
+                            client_version=_host_client_for(route), orchestration_handle=args.orchestration_handle,
+                            fallback_receipt=args.fallback_receipt, host_profile=host_profile),
+                            **({"native_spawn": spawn} if spawn is not None else {}), "read_containment": "advisory"}
+                        if verification_input is not None:
+                            opened["verification_input"] = {k: verification_input[k]
+                                for k in ("host_outcome_digest", "worker_result")}
+                    finally:
+                        _close_ledger(ledger)
+                return {**opened, "route": route, "assignment": rebound}
+
+            recovered = open_routed_task(task, policy, project_id=None, snapshot=snapshot,
+                resolve_route=resolve, open_route=open_route, primary_provider=_host_primary_provider())
+            if not recovered["ready"]:
+                if recovered["route"].get("status") == "unsatisfied":
+                    raise RouteUnsatisfied(recovered["route"])
+                raise AdmissionDenied(recovered["reason_code"])
+            report = recovered["open"]
         elif args.command == "dispatch":
             if args.fallback_receipt is not None:
                 raise ContractError("bridged dispatch never uses a fallback receipt")
@@ -2953,8 +3021,9 @@ def main() -> int:
                     raise ContractError(
                         "fallback receipts require a trusted host run handle"
                     )
-                route = route_task(
-                    task, policy, primary_provider=_host_primary_provider()
+                route = _available_route(
+                    task, policy, primary_provider=_host_primary_provider(),
+                    provider_snapshot=ledger.provider_state_snapshot(project_id), project_id=project_id,
                 )
                 current_configuration = installed_execution_configuration(
                     BUNDLE_ROOT,
@@ -3992,6 +4061,9 @@ def main() -> int:
         if str(exc) == "launch denied: billing_attestation_missing":
             report["hint"] = BILLING_ATTESTATION_HINT
         _print(report)
+        return 2
+    except RouteUnsatisfied as exc:
+        _print_command_report(args, exc.route)
         return 2
     except AdmissionDenied as exc:
         report = {

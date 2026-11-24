@@ -100,6 +100,7 @@ class OpenExecution:
     worker_expires_at_ms: int | None
     agent_type: str
     hard_timeout_seconds: int
+    availability: dict | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -195,6 +196,27 @@ def _capture(ledger, project_id, runtime_digest, caller_scope, request_id, reque
     request_key = keyed_digest(key, b'account-original-open-id-v1\0'+canonical_json({'scope_digest': scope, 'request_id': request_id}))
     original_key = keyed_digest(key, b'account-original-open-assignment-v1\0'+canonical_json({
         'scope_digest': scope, 'task_id': task['id'], 'stage': route['stage'], 'attempt': assignment['attempt']}))
+    availability = route.get('availability', {})
+    if (availability.get('reroute_count') == 1 and availability.get('open_attempts')
+            and 'receipt_digest' in availability['open_attempts'][0].get('denial_reference', {})):
+        try:
+            attempts = availability['open_attempts']
+            reference = attempts[0]['denial_reference']
+            prior = ledger._connection.execute(
+                'SELECT r.content,j.original_key FROM account_open_receipts r JOIN account_open_requests j '
+                'ON j.project_id=r.project_id AND j.request_key=r.request_key '
+                'WHERE r.project_id=? AND r.content_seal=?',
+                (project_id, reference['receipt_digest'])).fetchone()
+            receipt = parse_bounded_json(bytes(prior['content']), max_bytes=MAX_ACCOUNT_OPEN_RECEIPT_BYTES)
+            if (prior['original_key'] != original_key or receipt['view']['state'] != 'denied'
+                    or receipt['view']['reason_code'] != 'provider_exhausted'
+                    or receipt['view']['admission_content_digest'] != reference['admission_content_digest']
+                    or receipt['view']['inputs_digest'] != reference['inputs_digest']
+                    or len(attempts) != 2 or availability.get('reroute_trigger') != 'provider_exhausted'):
+                raise ValueError()
+            original_key = keyed_digest(key, 'account-exhaustion-recovery\0'+original_key+'\0'+reference['receipt_digest'])
+        except (KeyError, TypeError, ValueError):
+            raise OpenError('open_conflict') from None
     parameters = keyed_digest(key, b'account-original-open-parameters-v1\0'+canonical_json(original))
     # The original opaque handle is recoverable without persisting a bearer token.
     handle = 'hrn_'+keyed_digest(key, b'account-original-open-handle-v1\0'+request_key.encode())[:48]
@@ -204,7 +226,7 @@ def _capture(ledger, project_id, runtime_digest, caller_scope, request_id, reque
         facts['orchestration_id'], keyed_digest(key, request.orchestration_handle), task.get('verification_for_outcome'),
         None if facts['worker'] is None else facts['worker']['expires_at_ms'],
         route.get('agent_type', assignment['role']),
-        min(route['bounds']['timeout_seconds'], assignment['bounds']['timeout_seconds']))
+        min(route['bounds']['timeout_seconds'], assignment['bounds']['timeout_seconds']), route.get('availability'))
     return OriginalOpenRequest(ledger._attestation_origin, project_id, runtime_digest, caller_scope, request_id,
         request, raw, scope, request_key, original_key, parameters, handle, keyed_digest(key, handle), external_id(key, 'run', handle), seconds, execution)
 
@@ -622,6 +644,8 @@ def finish_open_from_signature_job(ledger, request, pool, handle, *, before_comm
                     (request.project_id, request.handle_digest, request.run_id, e.assignment_digest, e.task_digest, e.task_id_digest,
                      e.route_digest, e.configuration_digest, 'bridge-v1', request.opened_at_ms, expires, e.orchestration_id,
                      e.agent_type, request.opened_at_ms, request.observation_deadline_at_ms, request.opened_at_ms))
+                ledger._store_route_availability_locked(request.project_id, request.run_id,
+                    {'availability': e.availability or {}}, now)
                 ledger._connection.execute('INSERT INTO launch_inputs VALUES(?,?,?,?,?,?,?,?)',
                     (request.project_id, request.handle_digest, request.run_id, request.runtime_digest, _provider(request), e.model, e.effort, e.hard_timeout_seconds))
                 ledger._connection.execute('INSERT OR IGNORE INTO sessions VALUES(?,?,?,?)',

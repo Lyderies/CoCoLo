@@ -87,6 +87,7 @@ RECORD_TYPES = {
     "execution_provenance",
     "host_open_provenance",
     "host_run_profile",
+    "route_availability",
     "probe_admission",
     "observation_unavailable",
     "provider_usage",
@@ -2083,6 +2084,20 @@ HOST_RUN_PROFILE_FIELDS = {
 }
 
 
+def validate_route_availability(data: Any) -> dict[str, Any]:
+    data = _closed(data, {"schema_version", "record_type", "record_id", "run_id",
+                          "availability", "observed_at_ms"}, "route_availability")
+    _base(data, "route_availability")
+    _identifier(data["run_id"], "run_id")
+    _integer(data["observed_at_ms"], "observed_at_ms")
+    audit = data["availability"]
+    if (type(audit) is not dict or audit.get("status") not in {"checked", "not_checked"}
+            or type(audit.get("open_attempts")) is not list or not 1 <= len(audit["open_attempts"]) <= 2
+            or audit.get("open_attempt_count") != len(audit["open_attempts"])):
+        raise ContractError("route availability open attempts are invalid")
+    return data
+
+
 def validate_host_run_profile(data: Any) -> dict[str, Any]:
     """The host-side checks an opened run passed, and how its model was pinned."""
 
@@ -2396,6 +2411,7 @@ VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "dispatch_intent": validate_dispatch_intent,
     "dispatch_result": validate_dispatch_result,
     "host_run_profile": validate_host_run_profile,
+    "route_availability": validate_route_availability,
     "probe_admission": validate_probe_admission,
     "observation_unavailable": validate_observation_unavailable,
     "provider_usage": validate_provider_usage,
