@@ -1,0 +1,12 @@
+{
+ "requirement": "TF-27c",
+ "finding": "Claude cross-provider check MED-2: full replay of the real 0852 binding never recorded",
+ "head": "5aaefb0a",
+ "run_by": "primary, outside the Codex sandbox (the sandbox stops at a container-fingerprint dependency mismatch: no Podman)",
+ "command": "PYTHON -B -c \"from pathlib import Path; import rebind_approved_edits as r; r.checked_bindings(Path('.').resolve())\" (PYTHONPATH=scripts)",
+ "what_it_checks": "binding_state rebuilds every admitted binding in introduction order (0851, then 0852 on top) and refuses unless each rebuild equals the committed bytes (scripts/rebind_approved_edits.py:450-453), then checks current sources",
+ "bindings": {"0851": "rebuilt equal", "0852": "rebuilt equal (523 proofs)"},
+ "result": "GATE OK 2236 admitted proofs",
+ "seconds": 294,
+ "earlier_runs": ["ce1e9936: GATE OK 2236", "f8c7d3ef: GATE OK 2236"]
+}
