@@ -1311,7 +1311,7 @@ def _service_snapshot(state_root, project_root):
     snapshot = provider_state_snapshot_client(state_root, project_root, host_client=_host_client(),
                                               unavailable=unavailable)
     if snapshot is not None:
-        return None, snapshot
+        return None, _usage_recheck(state_root, project_root, snapshot)
     return "snapshot_unavailable:" + (unavailable[0] if unavailable else "unknown")[:72], None
 
 
@@ -1325,6 +1325,198 @@ def _names_state(state_root) -> bool:
     default state implicitly (tests run there).
     """
     return state_root is not None or os.path.lexists(INSTALL_MANIFEST)
+
+
+_RECHECK_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
+
+
+def _recheck_reservation_path(state_root, provider, fingerprint):
+    return CollectorPaths(state_root).root / "usage-recheck" / f"{provider}-{fingerprint}.json"
+
+
+_RECHECK_RECORD_LIMIT = 4096
+_RECHECK_LOCK_WAIT_SECONDS = 1.0
+
+
+class _RecheckRefused(Exception):
+    """A reservation file is not what the route wrote: no re-check this route (no spend, route as today)."""
+
+
+def _recheck_check_file(descriptor, *, record):
+    import stat
+    info = os.fstat(descriptor)
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077
+            or info.st_nlink != 1 or (record and info.st_size > _RECHECK_RECORD_LIMIT)):
+        raise _RecheckRefused()
+
+
+def _recheck_open_directory(state_root, provider, fingerprint):
+    """The private reservation directory as a descriptor: created 0700, opened without following a link, and
+    owned by this user with no group or world access (else refused)."""
+    import stat
+    path = _recheck_reservation_path(state_root, provider, fingerprint).parent
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise _RecheckRefused() from error
+    info = os.fstat(descriptor)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        os.close(descriptor)
+        raise _RecheckRefused()
+    return descriptor
+
+
+def _recheck_read_record(directory, name):
+    """The reserved time, None when there is no record; a link, FIFO, foreign, loose or oversized one is refused."""
+    try:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise _RecheckRefused() from error
+    try:
+        _recheck_check_file(descriptor, record=True)
+        data = os.read(descriptor, _RECHECK_RECORD_LIMIT + 1)
+    finally:
+        os.close(descriptor)
+    if len(data) > _RECHECK_RECORD_LIMIT:
+        raise _RecheckRefused()
+    try:
+        value = json.loads(data)
+    except ValueError:
+        return None
+    at = value.get("reserved_at_ms") if type(value) is dict else None
+    return at if type(at) is int else None
+
+
+def _recheck_reserved_at(state_root, provider, fingerprint):
+    """When the route last took this account's re-check attempt (USAGE-RECHECK-5), or None."""
+    if type(fingerprint) is not str or not _RECHECK_FINGERPRINT.fullmatch(fingerprint):
+        return None
+    try:
+        directory = _recheck_open_directory(state_root, provider, fingerprint)
+        try:
+            return _recheck_read_record(directory, f"{provider}-{fingerprint}.json")
+        finally:
+            os.close(directory)
+    except (OSError, StateError, _RecheckRefused):
+        return None
+
+
+def _reserve_usage_recheck(state_root, provider, fingerprint, now_ms):
+    """USAGE-RECHECK-5: atomically take this account's one re-check attempt for the interval, before any I/O.
+
+    The attempt is spent whatever it yields (a reading, no reading, a failure), and it is kept on disk under the
+    state root, so neither a failed read nor a restart lets the route try again within the interval. False: an
+    attempt was already taken inside it, or none can be recorded safely (a link, FIFO, foreign owner, loose mode,
+    oversized file, or a lock held past a short deadline), so none is made. Never blocks the route."""
+    import fcntl
+    import secrets
+    from codex_agents.admission_metadata import USAGE_RECHECK_INTERVAL_MS
+    if type(fingerprint) is not str or not _RECHECK_FINGERPRINT.fullmatch(fingerprint):
+        return False
+    name = f"{provider}-{fingerprint}.json"
+    try:
+        directory = _recheck_open_directory(state_root, provider, fingerprint)
+    except (OSError, StateError, _RecheckRefused):
+        return False
+    try:
+        lock = os.open(".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory)
+        try:
+            _recheck_check_file(lock, record=False)
+            deadline = time.monotonic() + _RECHECK_LOCK_WAIT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        return False
+                    time.sleep(0.02)
+            last = _recheck_read_record(directory, name)
+            if last is not None and abs(now_ms - last) < USAGE_RECHECK_INTERVAL_MS:
+                return False
+            temporary = f".{name}.{secrets.token_hex(8)}.tmp"
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                                 dir_fd=directory)
+            try:
+                with os.fdopen(descriptor, "w") as handle:
+                    json.dump({"reserved_at_ms": now_ms}, handle)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(temporary, dir_fd=directory)
+                raise
+            os.fsync(directory)
+            return True
+        finally:
+            os.close(lock)
+    except (OSError, StateError, _RecheckRefused):
+        return False
+    finally:
+        os.close(directory)
+
+
+def _usage_recheck(state_root, project_root, snapshot):
+    """USAGE-RECHECK-2/4/5: one bounded fresh reading for each provider the snapshot says is due one.
+
+    Codex is read with the non-spending observation; Claude with one billing probe (a single Haiku
+    low-effort turn). Each attempt is reserved first, once per account per interval. Routing then uses only
+    the snapshot read afterwards, so no work goes to a provider that is still exhausted. A refused or failed
+    re-check never fails the route: it keeps the snapshot. The audit names the account's new reading, or null
+    when none arrived (decision 134 pending).
+    """
+    import dataclasses
+    due = [provider for provider in ("codex", "claude")
+           if snapshot.providers[provider].get("state") == "exhausted"
+           and type(snapshot.providers[provider].get("recheck_due_at_ms")) is int
+           and snapshot.providers[provider]["recheck_due_at_ms"] <= snapshot.evaluated_at_ms
+           and _reserve_usage_recheck(state_root, provider, snapshot.providers[provider].get("account_fingerprint"),
+                                      snapshot.evaluated_at_ms)]
+    if not due:
+        return snapshot
+    failures = {}
+    for provider in due:
+        try:
+            if provider == "codex":
+                observe_provider_client(state_root, project_root, "codex")
+            else:
+                billing_probe_client(state_root, project_root)
+        except (RuntimeBillingProbeError, RuntimeObservationError, DispatchError, StateError, OSError,
+                ContractError) as error:
+            reason = getattr(error, "reason_code", None)
+            failures[provider] = "failed:" + (reason if type(reason) is str and reason else type(error).__name__)[:64]
+    fresh = provider_state_snapshot_client(state_root, project_root, host_client=_host_client())
+    current = snapshot if fresh is None else fresh
+    audit = {}
+    for provider in due:
+        before, after = snapshot.providers[provider], None if fresh is None else fresh.providers[provider]
+        reading = None if after is None else after.get("last_reading_at_ms")
+        # A new reading of the same account; a probe the provider stopped (e.g. still rejected) can still store one.
+        if (type(reading) is int and after.get("account_fingerprint") == before.get("account_fingerprint")
+                and reading > (before.get("last_reading_at_ms") or -1)):
+            outcome = "still_exhausted" if after["state"] == "exhausted" else "cleared"
+        else:
+            reading = None
+            outcome = failures.get(provider) or ("failed:snapshot_unavailable" if fresh is None
+                                                 else "failed:no_reading")
+        audit[provider] = {"outcome": outcome, "observed_at_ms": reading}
+    return dataclasses.replace(current, recheck=audit)
+
+
+def _ledger_route_recheck(state_root, project_root):
+    """The ledger-backed route's re-check (USAGE-RECHECK-4), taken through the account services before the
+    ledger is opened; its audit, or None when nothing was due or the services cannot be asked."""
+    if not _names_state(state_root):
+        return None
+    _, snapshot = _service_snapshot(state_root, project_root)
+    return None if snapshot is None else snapshot.recheck
 
 
 def _route_snapshot(state_root, project_root):
@@ -2253,6 +2445,8 @@ def main() -> int:
                 report = fast[0]
                 _print_command_report(args, report)
                 return 0
+            recheck = (_ledger_route_recheck(args.state_root, args.project_root)
+                       if args.fallback_from_run_handle is None else None)
             ledger, project_id = _learning_ledger(args)
             try:
                 trusted = ledger.trusted_routing_evidence_refs(project_id, task)
@@ -2263,11 +2457,15 @@ def main() -> int:
                     # not this ledger; its verifier's open binds and checks it there.
                     if str(error) != "verification_for_outcome is not a recorded host outcome":
                         raise
+                provider_snapshot = ledger.provider_state_snapshot(project_id)
+                if recheck:
+                    import dataclasses
+                    provider_snapshot = dataclasses.replace(provider_snapshot, recheck=recheck)
                 base_route = _available_route(
                     task,
                     policy,
                     trusted_routing_evidence_refs=trusted,
-                    provider_snapshot=ledger.provider_state_snapshot(project_id), project_id=project_id,
+                    provider_snapshot=provider_snapshot, project_id=project_id,
                     primary_provider=_host_primary_provider(),
                 )
                 if explicit_client is None:

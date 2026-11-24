@@ -536,6 +536,10 @@ class AccountBillingAdmission:
                     or self._newer_run_restricts(latest, mine, prepared['headroom'], fingerprint, now,
                                               {r.raw[2]: r.raw[0] for r in result.prepared.rows})):
                 latest = None
+            # USAGE-RECHECK-5: an admitted probe of this account reserved its re-check interval when it was committed.
+            attempts = tuple(r.record['observed_at_ms'] for r in result.prepared.rows
+                             if r.record['record_type'] == 'probe_admission' and r.record['provider'] == 'claude'
+                             and r.record['decision'] == 'pass' and r.record['account_fingerprint'] == fingerprint)
             judged = None
             yes_kind = None  # decision 50: 'reply' / 'permit' when this judgment ends in a yes (gated below)
             history = self._value(row) if repeat else None
@@ -546,7 +550,7 @@ class AccountBillingAdmission:
                     attestations=prepared['attestations'], billing=prepared['billing'], headroom=prepared['headroom'],
                     window_headroom=prepared['headroom'], prior_claude_admissions=prepared['prior_claude_admissions'],
                     environ=guard, now_ms=now, admission_policy=prepared['admission_policy'],
-                    cited_digests=prepared['cited_digests'], probe=True,
+                    cited_digests=prepared['cited_digests'], probe=True, recheck_attempts_ms=attempts,
                     prior_run_admissions=[(f, t) for f, t in prepared['prior_admissions'] if t >= now-18_000_000])
             selected = None
             if latest is not None and judged['decision'] == 'pass':
@@ -596,7 +600,7 @@ class AccountBillingAdmission:
                     attestations=prepared['attestations'], billing=prepared['billing'], headroom=prepared['headroom'],
                     window_headroom=prepared['headroom'], prior_claude_admissions=prepared['prior_claude_admissions'],
                     environ=guard, now_ms=now, admission_policy=prepared['admission_policy'],
-                    cited_digests=prepared['cited_digests'], probe=True,
+                    cited_digests=prepared['cited_digests'], probe=True, recheck_attempts_ms=attempts,
                     prior_run_admissions=[(f, t) for f, t in prepared['prior_admissions'] if t >= now-18_000_000])
                 if repeat and (identity is None or decision['decision'] == 'pass'
                                or decision['reason_code'] == 'billing_unverified'):
