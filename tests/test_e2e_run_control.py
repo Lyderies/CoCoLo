@@ -194,6 +194,8 @@ def uncommitted_scene(**changes):
         uncommitted=SimpleNamespace(open_code=2, opened={"ready": False, "admission": "denied",
                                                                  "reason_code": "read_path_not_committed"}, code=2,
                                     reply={"ready": False, "reason_code": "read_path_not_committed"}),
+        uncommitted_preflight_again=(2, {"ready": False, "admission_created": False,
+                                         "reason": "assignment read path is not committed"}, ""),
         admissions_before=dict(history), admissions_after_preflight=dict(history),
         admissions_after_open=dict(history), admissions_after_dispatch=dict(history),
         # the fields the 1ea7bf8b check read, so the old check runs on the same scene
@@ -430,9 +432,14 @@ class L62ReasonTests(SceneTest):
         scene.uncommitted.opened = {"ready": False, "admission": "denied", "reason_code": "run_unavailable"}
         self.assertFalse(run_check(control.l6_2_uncommitted_read_path_refused_before_admission))
 
-    def test_a_dispatch_refused_for_another_reason_fails(self):
+    def test_a_dispatch_refused_for_another_reason_still_passes(self):
+        # decision 172: the dispatch after a refused open has no run handle; its reason is no longer judged
         scene = uncommitted_scene()
-        scene.uncommitted.reply = {"ready": False, "reason_code": "run_unavailable"}
+        scene.uncommitted.reply = {"ready": False, "reason_code": "dispatch_unavailable"}
+        self.assertTrue(run_check(control.l6_2_uncommitted_read_path_refused_before_admission))
+
+    def test_a_repeat_preflight_refused_for_another_reason_fails(self):
+        scene = uncommitted_scene(uncommitted_preflight_again=(2, {"ready": False, "admission_created": False, "reason": "other"}, ""))
         self.assertFalse(run_check(control.l6_2_uncommitted_read_path_refused_before_admission))
 
 

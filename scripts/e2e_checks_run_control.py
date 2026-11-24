@@ -409,7 +409,9 @@ def control_scene():
     scene.admissions_after_preflight = admission_history(world, ctl.project_id)
     ctl.open(scene.uncommitted, refuses=True)  # exit judged by the L6.2 check (it must refuse)
     scene.admissions_after_open = admission_history(world, ctl.project_id)
-    ctl.dispatch(scene.uncommitted, refuses=True)
+    ctl.dispatch(scene.uncommitted, refuses=True)  # no run handle after the refused open: not judged for its reason
+    # decision 172: the preflight of the same path, run again after the open and dispatch attempts, is independent of them
+    scene.uncommitted_preflight_again = ctl.host("dispatch-preflight", *scene.uncommitted.common, refuses=True)
     scene.admissions_after_dispatch = admission_history(world, ctl.project_id)
     return scene
 
@@ -557,10 +559,13 @@ def l6_2_uncommitted_read_path_refused_before_admission(phase: Phase) -> None:
                  "opening a run for the uncommitted path is refused, with the read-path reason (a crash with an empty reply is no refusal)")
     phase.expect(scene.admissions_after_open == scene.admissions_before,
                  "after the open attempt the admission history is unchanged (re-read after it)")
-    phase.expect(run.code not in (0, None) and (run.reply or {}).get("ready") is not True and names_uncommitted(run.reply),
-                 "a dispatch of the uncommitted path is refused with the read-path reason")
+    again_code, again, _ = scene.uncommitted_preflight_again
+    phase.expect(again_code not in (0, None) and (again or {}).get("ready") is not True and names_uncommitted(again)
+                 and (again or {}).get("admission_created") is False,
+                 "dispatch-preflight of the uncommitted path, run again after the open and dispatch attempts, refuses with the "
+                 "read-path reason and admission_created false")
     phase.expect(scene.admissions_after_dispatch == scene.admissions_before,
-                 "the refused dispatch claims no capacity slot and admits nothing")
+                 "after both attempts the admission history shows no new admission, run binding or capacity slot")
 
 
 # ---------------------------------------------------------------------------------------------
