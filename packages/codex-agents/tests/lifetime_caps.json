@@ -207,6 +207,11 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "admission_metadata.py::classify_provider_state": {
+   "checks": 1,
+   "ends": "usage-recheck (decision 134/225): not a count; compares the time left to a window's reset with USAGE_RECHECK_FAR_RESET_MS (1 h) to decide whether a re-check is due; nothing accumulates",
+   "test": "test_a_far_reset_exhaustion_is_due_for_a_recheck_after_the_interval"
+  },
   "admission_metadata.py::evaluate_admission": {
    "checks": 2,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
@@ -218,6 +223,11 @@
   "admission_metadata.py::paid_usage_digest": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "admission_metadata.py::reset_early": {
+   "checks": 1,
+   "ends": "usage-recheck (decision 134 A): not a count; an early-reset proof needs the restrictive reading's reset to be more than USAGE_RECHECK_FAR_RESET_MS (1 h) after the clearing reading; nothing accumulates",
+   "test": "test_a_proven_early_reset_stays_cleared_as_the_old_reset_nears"
   },
   "admission_metadata.py::select_provider_identity": {
    "checks": 1,
