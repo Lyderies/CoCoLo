@@ -411,7 +411,7 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
                 ProjectHistory(self.fixture.directory, self.fixture.store.project_id, **options)
             self.assertEqual(before, hashlib.sha256(path.read_bytes()).hexdigest())
         self.fixture.store = self.fixture.open(allow_schema_upgrade=True)
-        self.assertEqual(20, self.store._connection.execute("PRAGMA user_version").fetchone()[0])  # (requirement) SB: schema 20
+        self.assertEqual(21, self.store._connection.execute("PRAGMA user_version").fetchone()[0])  # (requirement) B6: schema 21 (decision 131)
         for name, rows in snapshot.items():
             self.assertEqual(rows, [tuple(row) for row in self.store._connection.execute("SELECT * FROM " + name)])
         self.assertEqual(self.fixture.payload()[0], self.store.read_result(binding()))
@@ -454,7 +454,7 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
             self.fixture.open()
         self.assertEqual(before, hashlib.sha256(path.read_bytes()).hexdigest())
         self.fixture.store = self.fixture.open(allow_schema_upgrade=True)
-        self.assertEqual(20, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) SB: schema 20
+        self.assertEqual(21, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) B6: schema 21 (decision 131)
         for name, rows in snapshot.items():
             assert_migrated_rows(self, self.store, name, rows)
         self.assertEqual(self.fixture.payload()[0], self.store.read_result(binding()))

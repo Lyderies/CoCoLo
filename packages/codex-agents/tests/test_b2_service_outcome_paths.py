@@ -56,6 +56,12 @@ class RealFixture(B2Fixture):
     def idle_end(self):
         """The 24 h idle end through the store's own pass (clock moved past the idle point)."""
         self.fixture.base.stamp += ORCHESTRATION_IDLE_MS
+        # B6 (RS-B-B6-2): the unattended close also waits for the reservation's register row, which the account's
+        # release acknowledgement releases `completed`; this stands in for it as `_account_released` does.
+        self.store._connection.execute(
+            "UPDATE project_holds SET state='released',release_kind='completed',released_at_ms=? "
+            "WHERE kind='reservation' AND identity=? AND state<>'released'",
+            (self.fixture.base.stamp, self.binding.claim_id))
         with mock.patch.object(OrchestrationOwner, '_account_released', return_value=True):
             return self.orchestration_owner().end_idle(self.fixture.base.stamp, 10)
 

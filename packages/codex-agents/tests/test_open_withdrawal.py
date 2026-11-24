@@ -26,6 +26,7 @@ from unittest import mock
 import tests.support  # noqa: F401
 from tests import test_result_leases as leases
 from tests.learning_support import attest_provider
+from tests.project_schema_fixtures import legacy_orchestration_state_layout  # B6: the format 18 fixture
 from tests.test_bridge import CLEAN, git, null_filled, result
 from tests.test_project_driver import DriverHarness
 from tests.test_project_history import PROJECT_A, binding as history_binding
@@ -495,7 +496,7 @@ class OpenBindingStoreTests(unittest.TestCase):
 
     def test_D108_a_format_18_project_store_upgrades_to_19_and_keeps_its_rows_and_its_refusals(self):
         from codex_agents import project_history
-        self.assertEqual(20, project_history._SCHEMA_VERSION)
+        self.assertEqual(21, project_history._SCHEMA_VERSION)  # B6: schema 21 (decision 131)
         self.fill(5, 0)
         self.register(1)
         db = self.store._connection
@@ -507,13 +508,14 @@ class OpenBindingStoreTests(unittest.TestCase):
         for name in added:  # the format 18 never had these
             db.execute('DROP INDEX ' + name)
         db.execute('DROP TABLE project_result_recorders')  # schema20 (B2, decision 114.1 A): format 18 never had it
+        legacy_orchestration_state_layout(self.store)  # schema21 (B6, decision 131): format 18 never had it
         db.execute('PRAGMA user_version=18')
         self.store.close()
         with self.assertRaisesRegex(HistoryError, 'history_incompatible'):  # an ordinary start never upgrades
             self.base.fixture.open()
         self.base.fixture.store = self.base.fixture.open(allow_schema_upgrade=True)
         db = self.store._connection
-        self.assertEqual(20, db.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(21, db.execute('PRAGMA user_version').fetchone()[0])  # B6: schema 21 (decision 131)
         self.assertEqual(added, {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='index'")} & added)
         self.assertEqual(before, sorted(tuple(row) for row in db.execute('SELECT * FROM project_holds')))
         with self.assertRaisesRegex(HistoryError, 'history_conflict'):

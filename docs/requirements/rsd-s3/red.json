@@ -1,0 +1,172 @@
+{
+  "base": "8d4a7ce3 (user supplied; no git invoked)",
+  "product_changes": false,
+  "command": "/private/tmp/cocolo-testfw-venv/bin/python -B scripts/parallel_tests.py --module root:test_rsd_budget --save-timings /private/tmp/cocolo-rsd-s3-red-final.json",
+  "tests": 6,
+  "outcomes": {
+    "root:test_rsd_budget.RsdBudgetTests.test_S2_lookup_equal_work": "passed",
+    "root:test_rsd_budget.RsdBudgetTests.test_S2_retirement_equal_work": "failed",
+    "root:test_rsd_budget.RsdBudgetTests.test_S2_sweep_equal_work": "passed",
+    "root:test_rsd_budget.RsdBudgetTests.test_S3_lookup_partial_plan": "passed",
+    "root:test_rsd_budget.RsdBudgetTests.test_S3_retirement_partial_plan": "failed",
+    "root:test_rsd_budget.RsdBudgetTests.test_S3_sweep_partial_plan": "passed"
+  },
+  "module_seconds": 1.8866251660510898,
+  "unittest_seconds": 1.674,
+  "discovery_seconds": 2.354730167076923,
+  "preflight_seconds": 6.7345895828912035,
+  "metadata_errors": [],
+  "budget_failures": [],
+  "samples": {
+    "0": {
+      "retirement": [
+        {
+          "cursor_page": true,
+          "vm_steps": 296,
+          "rows_returned": 10,
+          "sql": "SELECT rowid FROM result_reservations WHERE project_id='prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' AND state!='expired' AND CASE WHEN state='reserved' AND EXISTS(SELECT 1 FROM result_leases AS born WHERE born.project_id=result_reservations.project_id AND born.claim_id=result_reservations.claim_id) THEN EXISTS(SELECT 1 FROM project_holds AS obligation WHERE obligation.project_id=result_reservations.project_id AND obligation.kind='reservation' AND obligation.identity=result_reservations.claim_id AND obligation.state='released') ELSE (expires_at_ms<=1000 OR state='retiring' OR EXISTS(SELECT 1 FROM project_orchestrations AS owned WHERE owned.project_id=result_reservations.project_id AND owned.orchestration_handle=result_reservations.orchestration_handle)) END AND rowid>0 ORDER BY rowid LIMIT 10",
+          "plan": [
+            "SEARCH result_reservations USING INDEX result_expiry (project_id=?)",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH born USING COVERING INDEX sqlite_autoindex_result_leases_3 (project_id=? AND claim_id=?)",
+            "CORRELATED SCALAR SUBQUERY 2",
+            "SEARCH obligation USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+            "CORRELATED SCALAR SUBQUERY 3",
+            "SEARCH owned USING COVERING INDEX sqlite_autoindex_project_orchestrations_1 (project_id=? AND orchestration_handle=?)",
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        },
+        {
+          "cursor_page": false,
+          "vm_steps": 275,
+          "rows_returned": 10,
+          "sql": "SELECT rowid FROM result_reservations WHERE project_id='prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' AND state!='expired' AND CASE WHEN state='reserved' AND EXISTS(SELECT 1 FROM result_leases AS born WHERE born.project_id=result_reservations.project_id AND born.claim_id=result_reservations.claim_id) THEN EXISTS(SELECT 1 FROM project_holds AS obligation WHERE obligation.project_id=result_reservations.project_id AND obligation.kind='reservation' AND obligation.identity=result_reservations.claim_id AND obligation.state='released') ELSE (expires_at_ms<=1000 OR state='retiring' OR EXISTS(SELECT 1 FROM project_orchestrations AS owned WHERE owned.project_id=result_reservations.project_id AND owned.orchestration_handle=result_reservations.orchestration_handle)) END ORDER BY rowid LIMIT 10",
+          "plan": [
+            "SEARCH result_reservations USING INDEX result_expiry (project_id=?)",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH born USING COVERING INDEX sqlite_autoindex_result_leases_3 (project_id=? AND claim_id=?)",
+            "CORRELATED SCALAR SUBQUERY 2",
+            "SEARCH obligation USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+            "CORRELATED SCALAR SUBQUERY 3",
+            "SEARCH owned USING COVERING INDEX sqlite_autoindex_project_orchestrations_1 (project_id=? AND orchestration_handle=?)",
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        }
+      ],
+      "lookup": [
+        {
+          "cursor_page": false,
+          "vm_steps": 25,
+          "rows_returned": 1,
+          "sql": "SELECT * FROM project_result_contexts INDEXED BY project_result_contexts_outcome WHERE project_id='prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' AND outcome_digest='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+          "plan": [
+            "SEARCH project_result_contexts USING INDEX project_result_contexts_outcome (project_id=? AND outcome_digest=?)"
+          ]
+        }
+      ],
+      "sweep": [
+        {
+          "cursor_page": false,
+          "vm_steps": 463,
+          "rows_returned": 10,
+          "sql": "SELECT c.rowid,c.run_handle,c.attempt FROM project_result_contexts c INDEXED BY project_result_contexts_live WHERE c.project_id='prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' AND c.state NOT IN ('ended','expired') AND NOT EXISTS(SELECT 1 FROM result_reservations s WHERE s.project_id=c.project_id AND s.run_handle=c.run_handle AND s.attempt=c.attempt) AND EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=c.project_id AND h.kind='result_custody' AND h.identity=c.run_handle||':'||c.attempt AND h.state='released') ORDER BY c.rowid LIMIT 10",
+          "plan": [
+            "SCAN c USING INDEX project_result_contexts_live",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH s USING COVERING INDEX sqlite_autoindex_result_reservations_2 (project_id=? AND run_handle=? AND attempt=?)",
+            "SEARCH h EXISTS USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        },
+        {
+          "cursor_page": true,
+          "vm_steps": 486,
+          "rows_returned": 10,
+          "sql": "SELECT c.rowid,c.run_handle,c.attempt FROM project_result_contexts c INDEXED BY project_result_contexts_live WHERE c.project_id='prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' AND c.state NOT IN ('ended','expired') AND NOT EXISTS(SELECT 1 FROM result_reservations s WHERE s.project_id=c.project_id AND s.run_handle=c.run_handle AND s.attempt=c.attempt) AND EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=c.project_id AND h.kind='result_custody' AND h.identity=c.run_handle||':'||c.attempt AND h.state='released') AND c.rowid>0 ORDER BY c.rowid LIMIT 10",
+          "plan": [
+            "SCAN c USING INDEX project_result_contexts_live",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH s USING COVERING INDEX sqlite_autoindex_result_reservations_2 (project_id=? AND run_handle=? AND attempt=?)",
+            "SEARCH h EXISTS USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        }
+      ]
+    },
+    "100000": {
+      "retirement": [
+        {
+          "cursor_page": true,
+          "vm_steps": 700296,
+          "rows_returned": 10,
+          "sql": "SELECT rowid FROM result_reservations WHERE project_id='prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' AND state!='expired' AND CASE WHEN state='reserved' AND EXISTS(SELECT 1 FROM result_leases AS born WHERE born.project_id=result_reservations.project_id AND born.claim_id=result_reservations.claim_id) THEN EXISTS(SELECT 1 FROM project_holds AS obligation WHERE obligation.project_id=result_reservations.project_id AND obligation.kind='reservation' AND obligation.identity=result_reservations.claim_id AND obligation.state='released') ELSE (expires_at_ms<=1000 OR state='retiring' OR EXISTS(SELECT 1 FROM project_orchestrations AS owned WHERE owned.project_id=result_reservations.project_id AND owned.orchestration_handle=result_reservations.orchestration_handle)) END AND rowid>0 ORDER BY rowid LIMIT 10",
+          "plan": [
+            "SEARCH result_reservations USING INDEX result_expiry (project_id=?)",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH born USING COVERING INDEX sqlite_autoindex_result_leases_3 (project_id=? AND claim_id=?)",
+            "CORRELATED SCALAR SUBQUERY 2",
+            "SEARCH obligation USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+            "CORRELATED SCALAR SUBQUERY 3",
+            "SEARCH owned USING COVERING INDEX sqlite_autoindex_project_orchestrations_1 (project_id=? AND orchestration_handle=?)",
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        },
+        {
+          "cursor_page": false,
+          "vm_steps": 500275,
+          "rows_returned": 10,
+          "sql": "SELECT rowid FROM result_reservations WHERE project_id='prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' AND state!='expired' AND CASE WHEN state='reserved' AND EXISTS(SELECT 1 FROM result_leases AS born WHERE born.project_id=result_reservations.project_id AND born.claim_id=result_reservations.claim_id) THEN EXISTS(SELECT 1 FROM project_holds AS obligation WHERE obligation.project_id=result_reservations.project_id AND obligation.kind='reservation' AND obligation.identity=result_reservations.claim_id AND obligation.state='released') ELSE (expires_at_ms<=1000 OR state='retiring' OR EXISTS(SELECT 1 FROM project_orchestrations AS owned WHERE owned.project_id=result_reservations.project_id AND owned.orchestration_handle=result_reservations.orchestration_handle)) END ORDER BY rowid LIMIT 10",
+          "plan": [
+            "SEARCH result_reservations USING INDEX result_expiry (project_id=?)",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH born USING COVERING INDEX sqlite_autoindex_result_leases_3 (project_id=? AND claim_id=?)",
+            "CORRELATED SCALAR SUBQUERY 2",
+            "SEARCH obligation USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+            "CORRELATED SCALAR SUBQUERY 3",
+            "SEARCH owned USING COVERING INDEX sqlite_autoindex_project_orchestrations_1 (project_id=? AND orchestration_handle=?)",
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        }
+      ],
+      "lookup": [
+        {
+          "cursor_page": false,
+          "vm_steps": 25,
+          "rows_returned": 1,
+          "sql": "SELECT * FROM project_result_contexts INDEXED BY project_result_contexts_outcome WHERE project_id='prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' AND outcome_digest='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+          "plan": [
+            "SEARCH project_result_contexts USING INDEX project_result_contexts_outcome (project_id=? AND outcome_digest=?)"
+          ]
+        }
+      ],
+      "sweep": [
+        {
+          "cursor_page": false,
+          "vm_steps": 463,
+          "rows_returned": 10,
+          "sql": "SELECT c.rowid,c.run_handle,c.attempt FROM project_result_contexts c INDEXED BY project_result_contexts_live WHERE c.project_id='prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' AND c.state NOT IN ('ended','expired') AND NOT EXISTS(SELECT 1 FROM result_reservations s WHERE s.project_id=c.project_id AND s.run_handle=c.run_handle AND s.attempt=c.attempt) AND EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=c.project_id AND h.kind='result_custody' AND h.identity=c.run_handle||':'||c.attempt AND h.state='released') ORDER BY c.rowid LIMIT 10",
+          "plan": [
+            "SCAN c USING INDEX project_result_contexts_live",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH s USING COVERING INDEX sqlite_autoindex_result_reservations_2 (project_id=? AND run_handle=? AND attempt=?)",
+            "SEARCH h EXISTS USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        },
+        {
+          "cursor_page": true,
+          "vm_steps": 486,
+          "rows_returned": 10,
+          "sql": "SELECT c.rowid,c.run_handle,c.attempt FROM project_result_contexts c INDEXED BY project_result_contexts_live WHERE c.project_id='prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' AND c.state NOT IN ('ended','expired') AND NOT EXISTS(SELECT 1 FROM result_reservations s WHERE s.project_id=c.project_id AND s.run_handle=c.run_handle AND s.attempt=c.attempt) AND EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=c.project_id AND h.kind='result_custody' AND h.identity=c.run_handle||':'||c.attempt AND h.state='released') AND c.rowid>0 ORDER BY c.rowid LIMIT 10",
+          "plan": [
+            "SCAN c USING INDEX project_result_contexts_live",
+            "CORRELATED SCALAR SUBQUERY 1",
+            "SEARCH s USING COVERING INDEX sqlite_autoindex_result_reservations_2 (project_id=? AND run_handle=? AND attempt=?)",
+            "SEARCH h EXISTS USING INDEX sqlite_autoindex_project_holds_1 (project_id=? AND kind=? AND identity=?)",
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        }
+      ]
+    }
+  }
+}

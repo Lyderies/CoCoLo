@@ -23,6 +23,7 @@ from tests import test_deadlines_retention as dr
 from tests import test_record_context as rc
 from tests import test_result_leases as leases
 from tests.learning_support import assignment
+from tests.project_schema_fixtures import legacy_orchestration_state_layout  # B6: the format 19 fixtures
 from tests.test_project_history import binding as history_binding
 
 from codex_agents import history_api, project_history, project_result_contexts, service_record
@@ -783,7 +784,7 @@ class SchemaStepTests(B2Fixture):
     """Owner decision 92.3 A: one schema step, 19 -> 20, for the recorder table, with its upgrade path."""
 
     def test_schema_is_20_and_the_table_is_exactly_as_designed(self):
-        self.assertEqual(20, project_history._SCHEMA_VERSION)
+        self.assertEqual(21, project_history._SCHEMA_VERSION)  # B6: schema 21 (decision 131)
         columns = [row[1] for row in self.store._connection.execute('PRAGMA table_info(project_result_recorders)')]
         self.assertEqual(['project_id', 'record_id', 'recorded_by', 'recorded_at_ms'], columns)
         with self.assertRaises(sqlite3.IntegrityError):
@@ -795,6 +796,7 @@ class SchemaStepTests(B2Fixture):
         db = self.store._connection
         rows = {name: sorted(tuple(row) for row in db.execute(f'SELECT * FROM {name}'))
                 for name in ('records', 'project_result_contexts', 'project_holds')}
+        legacy_orchestration_state_layout(self.store)  # schema21 (B6, decision 131): format 19 never had it
         db.execute('DROP TABLE project_result_recorders')
         db.execute('PRAGMA user_version=19')
         self.store.close()
@@ -802,14 +804,15 @@ class SchemaStepTests(B2Fixture):
             rc.seven_day_store(self.fixture)
         self.fixture.store = upgrading_store(self.fixture)
         db = self.store._connection
-        self.assertEqual(20, db.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(21, db.execute('PRAGMA user_version').fetchone()[0])  # B6: schema 21 (decision 131)
         self.assertEqual(0, db.execute('SELECT COUNT(*) FROM project_result_recorders').fetchone()[0])
         for name, kept in rows.items():
             self.assertEqual(kept, sorted(tuple(row) for row in db.execute(f'SELECT * FROM {name}')), name)
-        self.assertEqual(1, len(list(self.directory.glob('history.sqlite3.before-20.*'))))  # the copy made for it
+        self.assertEqual(1, len(list(self.directory.glob('history.sqlite3.before-21.*'))))  # the copy made for it
 
     def test_a_failed_validator_rolls_the_step_back_and_removes_its_copy(self):
         db = self.store._connection
+        legacy_orchestration_state_layout(self.store)  # schema21 (B6, decision 131): format 19 never had it
         db.execute('DROP TABLE project_result_recorders')
         db.execute('PRAGMA user_version=19')
         self.store.close()
@@ -820,9 +823,9 @@ class SchemaStepTests(B2Fixture):
         self.assertEqual(19, connection.execute('PRAGMA user_version').fetchone()[0])
         self.assertEqual([], connection.execute("SELECT name FROM sqlite_master WHERE name='project_result_recorders'").fetchall())
         connection.close()
-        self.assertEqual([], list(self.directory.glob('history.sqlite3.before-20.*')))
+        self.assertEqual([], list(self.directory.glob('history.sqlite3.before-21.*')))  # B6: schema 21 (decision 131)
         self.fixture.store = upgrading_store(self.fixture)  # and a later honest upgrade succeeds
-        self.assertEqual(20, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(21, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # B6: schema 21 (decision 131)
 
 
 if __name__ == '__main__':

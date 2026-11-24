@@ -374,12 +374,39 @@ class OrchestrationCountsTests(unittest.TestCase):
 
 
 class OrchestrationCountsCostTests(unittest.TestCase):
-    @unittest.skip("decision 185.2: bounding the closed-row scan needs a NEW indexed status column on "
-                   "project_orchestrations (a schema step); schema steps ride B6 (decision 131). Until then SQLite "
-                   "still parses every closed checkpoint's content in open_counts.")
+    """decision 185.2 / 187, un-skipped in batch 4 on B6's step-21 indexed `state` column (decision 195)."""
+
+    fixture = OrchestrationCountsTests.fixture
+
     def test_L14_1_the_closed_count_parses_no_closed_checkpoint(self):
-        from codex_agents.orchestration_schema import ORCHESTRATION_COLUMNS
-        self.assertIn('status', ORCHESTRATION_COLUMNS['project_orchestrations'])
+        from codex_agents.orchestration_schema import ORCHESTRATION_STATE_COLUMNS, ORCHESTRATION_STATE_INDEX_SCHEMA
+        from codex_agents.project_orchestration_report import orchestration_counts
+        self.assertIn('state', ORCHESTRATION_STATE_COLUMNS['project_orchestrations'])
+        self.assertIn('project_orchestrations(project_id,state)', ORCHESTRATION_STATE_INDEX_SCHEMA)
+        fixture = self.fixture()
+        snapshots = [fixture.call('open', identity=f'open-{number}')['current']['snapshot'] for number in range(3)]
+        for number, snapshot in enumerate(snapshots[:2]):
+            fixture.call('close', fixture.target(snapshot, status='completed', goal_tokens_used=None,
+                                                 goal_time_used_seconds=None), f'close-{number}')
+        connection = fixture.store._connection
+        closed = [snapshot['orchestration_handle'] for snapshot in snapshots[:2]]
+        statements = []
+        connection.set_trace_callback(statements.append)
+        self.addCleanup(connection.set_trace_callback, None)
+        counts = orchestration_counts(fixture.store)
+        connection.set_trace_callback(None)
+        self.assertEqual({'active': 1, 'paused': 0, 'closed': 2}, counts)
+        reads = [text for text in statements if 'project_orchestration_checkpoints' in text]
+        self.assertTrue(reads, 'the open one is still verified from its checkpoint')
+        for text in reads:
+            for handle in closed:
+                self.assertNotIn(handle, text, 'a closed checkpoint was read')
+            self.assertNotIn('json_extract', text)
+        plan = ' '.join(str(tuple(row)) for row in connection.execute(
+            "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM project_orchestrations INDEXED BY project_orchestrations_state "
+            "WHERE project_id=? AND state='closed'", (PROJECT_A,)).fetchall())
+        self.assertIn('project_orchestrations_state', plan)
+        self.assertNotIn('project_orchestration_checkpoints', plan)
 
 
 class HoldsProtocolTests(dr.LeaseBackedFixture):

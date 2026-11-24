@@ -151,7 +151,8 @@ class RuntimeCloseServiceTests(RuntimeCloseFixture):
         self.assertEqual('active', owner.metadata_for(self.binding)['snapshot']['status'])
         self.assertEqual(('held', None), rc.custody(store, *self.attempt)[:2])
         # Failure to persist the status fact rolls back the close too; the sweep can retry.
-        db.execute("CREATE TEMP TRIGGER refuse_update_close BEFORE INSERT ON project_holds "
+        # B6 (RS-B-B6-1): the open took the row, so the close's write is its release (an UPDATE).
+        db.execute("CREATE TEMP TRIGGER refuse_update_close BEFORE UPDATE ON project_holds "
                    "WHEN NEW.kind='orchestration' BEGIN SELECT RAISE(ABORT,'fixture close cut'); END")
         self.assertEqual(0, owner.end_earlier(self.changed(), 10))
         self.assertEqual('active', owner.metadata_for(self.binding)['snapshot']['status'])
