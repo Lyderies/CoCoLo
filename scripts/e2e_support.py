@@ -244,7 +244,7 @@ class World:
             (self.home / folder).mkdir(mode=0o700)
         (self.base / "tmp").mkdir()
         printed = subprocess.run(["/bin/bash", str(SETUP), "--print-python"], capture_output=True, text=True,
-                                 check=False, stdin=subprocess.DEVNULL).stdout.strip()
+                                 check=False, stdin=subprocess.DEVNULL, env=child_environment(os.environ)).stdout.strip()
         if not printed.startswith("/"):
             raise HarnessError("no trusted python3 (setup.sh --print-python refused)")
         self.python = printed
@@ -279,7 +279,8 @@ class World:
         """Every owner key the run has made (a replacement makes the next one): (fingerprint, public blob)."""
         found = []
         for pub in sorted((self.home / ".ssh").glob("codex-agents-owner*.pub")):
-            done = subprocess.run(["/usr/bin/ssh-keygen", "-lf", str(pub)], capture_output=True, text=True)
+            done = subprocess.run(["/usr/bin/ssh-keygen", "-lf", str(pub)], capture_output=True, text=True,
+                                  env=child_environment(os.environ))
             found.append(((done.stdout.split() or ["", ""])[1], pub.read_text().split()[1]))
         return found
 
@@ -300,7 +301,7 @@ class World:
 
     def git(self, *args: str, project: Path | None = None) -> subprocess.CompletedProcess:
         git = subprocess.run(["/bin/bash", str(SETUP), "--print-git"], capture_output=True, text=True,
-                             stdin=subprocess.DEVNULL).stdout.strip()
+                             stdin=subprocess.DEVNULL, env=child_environment(os.environ)).stdout.strip()
         if not git.startswith("/"):
             raise HarnessError("no trusted git")
         return subprocess.run([git, "-C", str(project or self.project), *args], capture_output=True, text=True,
@@ -622,7 +623,8 @@ class World:
         if base is None:
             return
         for _ in range(3):
-            listing = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
+            listing = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True,
+                                     env=child_environment(os.environ)).stdout
             pids = [int(line.split(None, 1)[0]) for line in listing.splitlines()
                     if str(base) in line and int(line.split(None, 1)[0]) != os.getpid()]
             if not pids:

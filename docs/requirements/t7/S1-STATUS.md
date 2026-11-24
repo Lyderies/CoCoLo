@@ -84,3 +84,11 @@ only (E2E_T7S1_FAULT set, no --fault) /tmp/claude-501/t7s1/r2-envonly.json: same
 /tmp/claude-501/t7s1/fault2.json: L7.1, L7.2, L7.3, L9.2, L9.3, G5 newly red, L6.1/L6.2 stay red, G1 and every
 other ID unchanged, `fault_isolated` true. L9.1 stays green under the release fault by construction (it judges the
 refusals while the six slots are held for the first time, before any release; FAULT_TARGETS).
+
+## Fix round 2 (decision 157), 2026-11-25
+New HIGH (refuses only on expected refusals; G1 judges the rest), L9.3 (scheduled runs, 4/3/1), fault isolation (all
+subprocesses strip E2E_*; comparator accepts only declared red IDs: S1 targets + G1), L6.2 (expected refusal reason).
+Evidence: normal --flows L6,L7,L9 --jobs 2 (/tmp/claude-501/t7s1/r4.json): only L6.1, L6.2 red. Fault run
+(fault3.json): L7.1-3, L9.2, L9.3, G5, G1 newly red, L9.1 green, fault_isolated true. One earlier normal run (r3) had
+L9.2/G5 red on a per-run capacity read "not released" under load (passed alone and on rerun): possible flake, watch it.
+Assertion changes: assertions.md, "fix round 2".

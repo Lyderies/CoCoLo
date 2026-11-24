@@ -61,3 +61,15 @@ unexpected exit of one of THOSE steps fails the S1 check that asserts its `code`
 other S1 step (setup, observe, open, record, status, capacity reads) is still judged for G1 at capture, and timeouts
 and bare reasons of every step still are. Without it a capacity fault (slots never released) turns G1 red too. For
 the primary to read against G1's intent.
+
+## Slice S1, fix round 2 (primary decision 157, confirming check on 3f190429): assertions changed
+All in scripts/e2e_checks_run_control.py (S1 checks only) and tests/test_e2e_run_control.py.
+| ID | Check | Old assertion | New assertion | Reason |
+|----|-------|---------------|---------------|--------|
+| G1 (judging) | `Ctl.dispatch`, G5 probe | every S1 dispatch and the G5 probe passed `refuses=True` (an unexpected exit hid from G1) | `refuses=True` only on the expected refusals (fourth child: preparation_full, third project's child: claim_busy, uncommitted dispatch, the full-machine probe); every other dispatch and the G5 probe are judged by G1 (exit 0) again | NEW HIGH. Under the slot fault G1 now also goes red; it is declared in `FAULT_ALSO_RED`. |
+| L9.2 | l9_2_capacity_released... | (no exit assertion for the six first-wave dispatches) | added: each of the six first-wave dispatches exits 0 | NEW HIGH: explicit success. |
+| L9.3 | l9_3_two_projects_share_one_collector... | results == run IDs whose `run.code == 0` (a failed dispatch and its missing result vanished together; counts 4/3/1 no longer asserted) | results == run IDs of the runs SCHEDULED to succeed (all except `scene.refused`) AND counts are 4/3/1 AND no None ID | MED L9.3. Stricter. |
+| L6.2 | l6_2_uncommitted_read_path_refused_before_admission | open refused = nonzero exit, not admitted, not ready (a crash with an empty reply passed); dispatch refused = nonzero, not ready, ANY reason_code | open refused AND its reply names the read-path reason (reason_code `read_path_not_committed` or a reason saying "not committed"); dispatch refused (nonzero, not ready) with the same reason | HIGH L6.2. Stricter; check stays red until the product fix. |
+| fault isolation | `fault_isolated` | changed IDs outside S1 failed; any S1 ID (incl. L9.1) could turn red | a newly red ID outside the fault's declared targets (`FAULT_TARGETS` + `FAULT_ALSO_RED` = G1) fails: L9.1 red under the fault is a failure | HIGH. |
+| fault isolation | helper children | E2E_* stripped from workers and product processes only | every subprocess in e2e_support.py (trusted python/git lookups, ssh-keygen, ps) gets `child_environment(os.environ)`; a test asserts every subprocess call in e2e_support.py and e2e_lifecycle.py names `env=` | HIGH. |
+Tests changed in tests/test_e2e_run_control.py: `test_a_fault_run_must_turn_exactly_the_s1_ids_red` - old: G1 red -> not isolated, L9.1 red accepted; new: G1 red accepted (declared), any other ID or L9.1 red -> not isolated (fixture fault keeps L9.1 green). `uncommitted_scene` fixture: open reply now carries reason_code `read_path_not_committed`; `L93Tests.scene` fixture: adds `refused` (a4, c1).

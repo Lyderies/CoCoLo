@@ -114,10 +114,13 @@ class FaultIsolationTests(SceneTest):
     def test_a_fault_run_must_turn_exactly_the_s1_ids_red(self):
         s1 = control.S1_IDS
         normal = {"requirements": {**{i: {"passed": i not in ("L6.1", "L6.2")} for i in s1}, "G1": {"passed": True}}}
-        fault = {"requirements": {**{i: {"passed": False} for i in s1}, "G1": {"passed": True}}}
+        fault = {"requirements": {**{i: {"passed": i == "L9.1"} for i in s1}, "G1": {"passed": True}}}
         self.assertTrue(control.fault_isolated(normal, fault)["isolated"])
         g1_red = {"requirements": {**fault["requirements"], "G1": {"passed": False}}}
-        self.assertFalse(control.fault_isolated(normal, g1_red)["isolated"])
+        self.assertTrue(control.fault_isolated(normal, g1_red)["isolated"])  # G1 is declared (a refused expected-success dispatch)
+        other_red = {"requirements": {**fault["requirements"], "G3": {"passed": False}}}
+        self.assertFalse(control.fault_isolated({"requirements": {**normal["requirements"], "G3": {"passed": True}}},
+                                                other_red)["isolated"])
         missing = {"requirements": {i: v for i, v in fault["requirements"].items() if i != "L7.3"}}
         self.assertFalse(control.fault_isolated(normal, missing)["isolated"])
         one_green = {"requirements": {**fault["requirements"], "L7.1": {"passed": True}}}
@@ -125,6 +128,8 @@ class FaultIsolationTests(SceneTest):
         # L9.1 (refusals before any release) is the one S1 ID the release fault cannot reach
         l9_1_green = {"requirements": {**fault["requirements"], "L9.1": {"passed": True}}}
         self.assertTrue(control.fault_isolated(normal, l9_1_green)["isolated"])
+        l9_1_red = {"requirements": {**fault["requirements"], "L9.1": {"passed": False}}}
+        self.assertFalse(control.fault_isolated(normal, l9_1_red)["isolated"])  # not a declared target
         self.assertEqual(set(control.S1_IDS) - {"L9.1"}, set(control.FAULT_TARGETS["slot_not_released"]))
 
 
@@ -186,7 +191,8 @@ def uncommitted_scene(**changes):
         world=None,
         uncommitted_preflight=(2, {"ready": False, "admission_created": False,
                                    "reason": "assignment read path is not committed"}, ""),
-        uncommitted=SimpleNamespace(open_code=2, opened={"ready": False, "admission": "denied"}, code=2,
+        uncommitted=SimpleNamespace(open_code=2, opened={"ready": False, "admission": "denied",
+                                                                 "reason_code": "read_path_not_committed"}, code=2,
                                     reply={"ready": False, "reason_code": "read_path_not_committed"}),
         admissions_before=dict(history), admissions_after_preflight=dict(history),
         admissions_after_open=dict(history), admissions_after_dispatch=dict(history),
@@ -242,11 +248,12 @@ class L93Tests(SceneTest):
         a = [opened("a1"), opened("a2"), opened("a3"), opened("a4", code=2), opened("a5")]
         b = [opened("b1"), opened("b2"), opened("b3")]
         c = [opened("c1", code=2), opened("c2")]
+        refused = [a[3], c[0]]
         ctls = [SimpleNamespace(project_id=p, runs=runs) for p, runs in (("pa", a), ("pb", b), ("pc", c))]
         slots = [{"project_id": p, "bridge_run_id": f"{p}{i}", "run_id": None, "released_at_ms": None}
                  for p in ("pa", "pb") for i in range(3)]
         e2e_core._SCENES["run_capacity"] = SimpleNamespace(
-            world=capacity_tree(folder), ctls=ctls, slots_full=slots,
+            world=capacity_tree(folder), ctls=ctls, slots_full=slots, refused=refused,
             reports=[{"runs": {"admitted": n}} for n in (5, 3, 2)])
         return {"pa": ["a1", "a2", "a3", "a5"], "pb": ["b1", "b2", "b3"], "pc": ["c2"]}
 
@@ -325,3 +332,117 @@ class AccountReadTimeoutTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------------------------
+# Decision 157 (final targeted fix): each red on 3f190429.
+
+import ast
+
+
+class DispatchExitJudgingTests(SceneTest):
+    """NEW HIGH: only a step EXPECTED to refuse is marked refuses=True; every other dispatch is judged by G1."""
+
+    def ctl(self):
+        ctl = object.__new__(control.Ctl)
+        ctl.calls = []
+        ctl.host = lambda *args, **kw: ctl.calls.append(kw) or (0, {}, "")
+        return ctl
+
+    def test_a_plain_dispatch_is_not_marked_as_an_expected_refusal(self):
+        ctl = self.ctl()
+        run = SimpleNamespace(common=[], route_file="r", opened={"run_handle": "h"}, code=None, reply=None, seconds=None)
+        ctl.dispatch(run)
+        self.assertFalse(ctl.calls[-1].get("refuses"))
+        ctl.dispatch(run, refuses=True)
+        self.assertTrue(ctl.calls[-1].get("refuses"))
+
+    def _calls(self, function_name):
+        tree = ast.parse((ROOT / "scripts" / "e2e_checks_run_control.py").read_text())
+        function = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == function_name)
+        return {ast.get_source_segment((ROOT / "scripts" / "e2e_checks_run_control.py").read_text(), n):
+                any(k.arg == "refuses" and getattr(k.value, "value", None) is True for k in n.keywords)
+                for n in ast.walk(function) if isinstance(n, ast.Call)
+                and getattr(n.func, "attr", getattr(n.func, "id", "")) in ("dispatch", "probe_as_second_account")}
+
+    def test_only_the_expected_refusals_of_the_capacity_scene_are_marked(self):
+        calls = self._calls("capacity_scene")
+        refusing = sorted(text for text, flag in calls.items() if flag)
+        self.assertEqual(["a.dispatch(scene.fourth, refuses=True)", "c.dispatch(scene.c_run, refuses=True)",
+                          "probe_as_second_account(world, views[2], refuses=True)"], refusing)
+        self.assertIn("a.dispatch(scene.fourth_again)", calls)
+        self.assertIn("c.dispatch(scene.c_again)", calls)
+        source = (ROOT / "scripts" / "e2e_checks_run_control.py").read_text()
+        self.assertNotIn("scene.probe_free = probe_as_second_account(world, views[2], refuses=True)", source)
+        self.assertIn("scene.probe_full = probe_as_second_account(world, views[2], refuses=True)", source)
+
+    def test_the_dispatch_helper_has_no_blanket_refuses(self):
+        source = (ROOT / "scripts" / "e2e_checks_run_control.py").read_text()
+        body = source.split("def dispatch(self, run", 1)[1].split("def record", 1)[0]
+        self.assertNotIn("refuses=True", body)
+
+    def test_the_six_first_wave_dispatches_must_exit_zero(self):
+        runs = [SimpleNamespace(code=0, reply={"ready": True}) for _ in range(6)]
+        for bad in (None, 3):
+            with self.subTest(code=bad):
+                runs[0].code = bad
+                e2e_core._SCENES["run_capacity"] = SimpleNamespace(
+                    a_runs=runs[:3] + [SimpleNamespace(code=2)], b_runs=runs[3:], world=None,
+                    reads={str(i): {"state": "released", "released_at_ms": 1} for i in range(6)},
+                    slots_ended=[{"released_at_ms": 1}] * 6,
+                    fourth_again=SimpleNamespace(code=0, reply={"ready": True}), c_again=SimpleNamespace(code=0, reply={"ready": True}))
+                with mock.patch.object(control, "terminal_state", return_value="failed"):
+                    self.assertFalse(run_check(control.l9_2_capacity_released_after_each_terminal_shown_by_per_run_read))
+        runs[0].code = 0
+        with mock.patch.object(control, "terminal_state", return_value="failed"):
+            self.assertTrue(run_check(control.l9_2_capacity_released_after_each_terminal_shown_by_per_run_read))
+
+
+class L93ScheduledTests(L93Tests):
+    """MED L9.3: expected results derive from the runs SCHEDULED to succeed; the 4/3/1 counts are kept."""
+
+    def test_a_scheduled_run_whose_dispatch_failed_and_whose_result_is_missing_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            histories = self.scene(folder)
+            histories["pa"].remove("a5")  # a5 was scheduled to succeed but its dispatch failed
+            e2e_core._SCENES["run_capacity"].ctls[0].runs[4].code = 2
+            with mock.patch.object(control, "project_records", side_effect=self.records(histories)):
+                self.assertFalse(run_check(control.l9_3_two_projects_share_one_collector_each_with_its_own_runs_and_capacity))
+
+    def test_the_refused_run_must_leave_no_result(self):
+        with tempfile.TemporaryDirectory() as folder:
+            histories = self.scene(folder)
+            histories["pa"].append("a4")
+            with mock.patch.object(control, "project_records", side_effect=self.records(histories)):
+                self.assertFalse(run_check(control.l9_3_two_projects_share_one_collector_each_with_its_own_runs_and_capacity))
+
+
+class L62ReasonTests(SceneTest):
+    """HIGH L6.2: a crashed open with an empty reply is no refusal; the dispatch must refuse with the expected reason."""
+
+    def test_a_crashed_open_with_an_empty_reply_fails(self):
+        scene = uncommitted_scene()
+        scene.uncommitted.open_code, scene.uncommitted.opened = 1, {}
+        self.assertFalse(run_check(control.l6_2_uncommitted_read_path_refused_before_admission))
+
+    def test_an_open_refused_for_another_reason_fails(self):
+        scene = uncommitted_scene()
+        scene.uncommitted.opened = {"ready": False, "admission": "denied", "reason_code": "run_unavailable"}
+        self.assertFalse(run_check(control.l6_2_uncommitted_read_path_refused_before_admission))
+
+    def test_a_dispatch_refused_for_another_reason_fails(self):
+        scene = uncommitted_scene()
+        scene.uncommitted.reply = {"ready": False, "reason_code": "run_unavailable"}
+        self.assertFalse(run_check(control.l6_2_uncommitted_read_path_refused_before_admission))
+
+
+class ChildEnvironmentTests(unittest.TestCase):
+    """HIGH fault isolation: no helper child inherits an E2E_* variable."""
+
+    def test_every_subprocess_call_names_its_environment(self):
+        for name in ("e2e_support.py", "e2e_lifecycle.py"):
+            tree = ast.parse((ROOT / "scripts" / name).read_text())
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and getattr(node.func.value, "id", "") == "subprocess" and node.func.attr in ("run", "Popen", "check_output")):
+                    self.assertTrue(any(k.arg == "env" for k in node.keywords), f"{name}:{node.lineno}")

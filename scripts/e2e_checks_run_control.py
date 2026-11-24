@@ -55,19 +55,24 @@ def fault_patches() -> list:
 # while the six slots are held for the FIRST time, before any slot is released, so it stays green under
 # slot_not_released by construction (its refusals are proven in the normal run).
 FAULT_TARGETS = {"slot_not_released": tuple(i for i in S1_IDS if i != "L9.1")}
+# IDs a fault may also turn red without being a target: under slot_not_released the later expected-success dispatches
+# (fourth_again, c_again) are refused, which G1 (every step not expected to refuse exits 0) rightly reports. Nothing
+# else may change: L9.1 red, or any other ID, is not isolation.
+FAULT_ALSO_RED = {"slot_not_released": ("G1",)}
 
 
 def fault_isolated(normal: dict, fault: dict, name: str = "slot_not_released") -> dict:
     """Compare a normal report with a fault report over EVERY requirement ID: the fault run must hold the same IDs,
-    turn every target S1 ID of the fault red and change no ID outside S1 (a G1 or other ID that changes is not
-    isolation)."""
+    turn every target S1 ID of the fault red and change no ID outside the fault's declared targets (FAULT_TARGETS, and
+    FAULT_ALSO_RED for G1); a newly red L9.1 or any other ID is not isolation."""
     before, after = normal.get("requirements") or {}, fault.get("requirements") or {}
     changed = sorted(i for i in set(before) & set(after) if bool(before[i].get("passed")) != bool(after[i].get("passed")))
-    outside = [i for i in changed if i not in S1_IDS]
+    allowed = set(FAULT_TARGETS[name]) | set(FAULT_ALSO_RED.get(name, ()))
+    outside = [i for i in changed if i not in allowed]
     green_s1 = sorted(i for i in FAULT_TARGETS[name] if (after.get(i) or {}).get("passed") is not False)
     missing = sorted(set(before) ^ set(after)) + sorted(i for i in S1_IDS if i not in after)
     return {"isolated": not outside and not green_s1 and not missing, "changed": changed,
-            "changed_outside_s1": outside, "s1_not_red": green_s1, "ids_differ": missing}
+            "changed_outside_targets": outside, "changed_outside_s1": outside, "s1_not_red": green_s1, "ids_differ": missing}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -186,12 +191,11 @@ class Ctl:
         self.runs.append(run)
 
     def dispatch(self, run, *, refuses: bool = False) -> None:
-        """A dispatch whose exit the S1 check asserts itself (`run.code`): a refusal is judged there, as that
-        requirement's failure, so a capacity fault turns the S1 IDs red and not G1 (G1 still judges every step's
-        timeouts and bare reasons at capture)."""
+        """A dispatch. Only a dispatch EXPECTED to refuse passes the refuses flag (its reason is asserted by the check);
+        every other dispatch is judged by G1 (exit 0) at capture, and its S1 check asserts `run.code` too."""
         started = time.monotonic()
         run.code, run.reply, _ = self.host("dispatch", *run.common, "--route", run.route_file,
-                                           "--run-handle", (run.opened or {}).get("run_handle", ""), refuses=True)
+                                           "--run-handle", (run.opened or {}).get("run_handle", ""), refuses=refuses)
         run.seconds = time.monotonic() - started
 
     def record(self, run) -> None:
@@ -410,6 +414,13 @@ def control_scene():
     return scene
 
 
+def names_uncommitted(reply) -> bool:
+    """The reply refuses for the expected reason: the uncommitted read path (reason_code read_path_not_committed, or a
+    reason that says the path is not committed). An empty reply, or any other reason, is not that refusal."""
+    reply = reply or {}
+    return reply.get("reason_code") == "read_path_not_committed" or "not committed" in (reply.get("reason") or "")
+
+
 def admission_history(world, project_id: str | None) -> dict:
     """What an admission leaves, read-only and not through the command: the project history's open provenance
     records, the account ledger's run bindings and its capacity slots."""
@@ -542,11 +553,12 @@ def l6_2_uncommitted_read_path_refused_before_admission(phase: Phase) -> None:
     phase.reason("read_path_not_committed")
     run = scene.uncommitted
     phase.expect(run.open_code not in (0, None) and (run.opened or {}).get("admission") != "admitted"
-                 and (run.opened or {}).get("ready") is not True, "opening a run for the uncommitted path is refused")
+                 and (run.opened or {}).get("ready") is not True and names_uncommitted(run.opened),
+                 "opening a run for the uncommitted path is refused, with the read-path reason (a crash with an empty reply is no refusal)")
     phase.expect(scene.admissions_after_open == scene.admissions_before,
                  "after the open attempt the admission history is unchanged (re-read after it)")
-    phase.expect(run.code != 0 and (run.reply or {}).get("ready") is not True
-                 and bool((run.reply or {}).get("reason_code")), "a dispatch of the uncommitted path is refused plainly")
+    phase.expect(run.code not in (0, None) and (run.reply or {}).get("ready") is not True and names_uncommitted(run.reply),
+                 "a dispatch of the uncommitted path is refused with the read-path reason")
     phase.expect(scene.admissions_after_dispatch == scene.admissions_before,
                  "the refused dispatch claims no capacity slot and admits nothing")
 
@@ -699,6 +711,7 @@ def capacity_scene():
     # Full: every slot of the machine is held (3 + 3 of 6).
     scene.slots_full = ledger_slots(world)
     scene.fourth = scene.a_runs[3]
+    scene.refused = [scene.fourth, scene.c_run]  # the two dispatches expected to be refused: they leave no result
     a.dispatch(scene.fourth, refuses=True)  # a fourth child of project A: refused (the project's own limit)
     c.dispatch(scene.c_run, refuses=True)  # a child of project C: every machine slot is held
     # A billing probe the provider must answer (the second account has no reading to reuse): no slot either.
@@ -722,13 +735,13 @@ def capacity_scene():
     a.dispatch(scene.fourth_again)
     c.dispatch(scene.c_again)
     a.record(scene.fourth_again), c.record(scene.c_again)
-    # G5: close every orchestration first; then ONE probe (the second account's, refused while full), its launch
+    # G5: close every orchestration first; then ONE probe (the second account's, the one refused while full; now expected to succeed), its launch
     # read in the account ledger; then the eight per-run reads and the ledger's capacity table.
     scene.reports = [ctl.close() for ctl in ctls]
     scene.closed_at_ms = now_ms()
     world.claude_frames(e2e_support.claude_probe_frames())
     scene.probe_started_ms = now_ms()
-    scene.probe_free = probe_as_second_account(world, views[2], refuses=True)  # its exit is judged by G5
+    scene.probe_free = probe_as_second_account(world, views[2], refuses=False)  # expected to succeed: G1 and G5 judge it
     scene.probe_admissions = [r for r in ledger_records(world, "probe_admission")
                               if r.get("account_fingerprint") == scene.probe_fingerprint]
     scene.probe_billing = [r for r in ledger_records(world, "provider_billing")
@@ -780,6 +793,8 @@ def l9_2_capacity_released_after_each_terminal_shown_by_per_run_read(phase: Phas
                  and len(scene.slots_ended) == 6, "the ledger's capacity table holds all six slots released")
     for run in scene.a_runs[:3] + scene.b_runs:
         phase.expect(terminal_state(scene.world, run) is not None, "the history holds a terminal for each child")
+    phase.expect(all(run.code == 0 for run in scene.a_runs[:3] + scene.b_runs),
+                 "each of the six first-wave dispatches exits 0 (an expected success, never a refusal)")
     phase.expect(scene.fourth_again.code == 0 and (scene.fourth_again.reply or {}).get("ready") is True,
                  "a fourth child of the project runs once its slots are free")
     phase.expect(scene.c_again.code == 0 and (scene.c_again.reply or {}).get("ready") is True,
@@ -807,13 +822,14 @@ def l9_3_two_projects_share_one_collector_each_with_its_own_runs_and_capacity(ph
     # Exact run IDs, not counts (a result exchanged between two projects keeps every count): each project's
     # results are exactly the runs it dispatched, and every record of its history that names a run names one of
     # the runs opened for it.
-    for ctl in scene.ctls:
+    for ctl, count in zip(scene.ctls, (4, 3, 1)):
         opened = {(run.opened or {}).get("run_id") for run in ctl.runs} - {None}
-        dispatched = sorted((run.opened or {}).get("run_id") for run in ctl.runs
-                            if run.code == 0 and (run.opened or {}).get("run_id"))
+        # the runs SCHEDULED to succeed (all but the ones the scene expects to be refused), not the runs that happened
+        # to exit 0: a failed dispatch and its missing result must not disappear together
+        scheduled = sorted((run.opened or {}).get("run_id") for run in ctl.runs if run not in scene.refused)
         results = sorted(row.get("run_id") for row in project_records(scene.world, ctl.project_id, "dispatch_result"))
-        phase.expect(bool(dispatched) and results == dispatched,
-                     "each project's history holds exactly the results of the runs it dispatched, by run ID")
+        phase.expect(results == scheduled and len(results) == count and None not in results,
+                     "each project's history holds exactly the results of the runs scheduled to succeed, by run ID (4, 3, 1)")
         named = {row.get("run_id") for kind in ("dispatch_result", "event", "host_open_provenance")
                  for row in project_records(scene.world, ctl.project_id, kind) if row.get("run_id")}
         phase.expect(named <= opened, "no record of a project's history names a run opened for another project")
