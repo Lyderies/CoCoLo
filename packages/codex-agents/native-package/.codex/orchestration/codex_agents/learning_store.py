@@ -11986,7 +11986,7 @@ class LearningLedger:
                 roots = self._registered_roots(project_id)
                 if not roots:
                     continue
-                # The owner screen (decision 36) shows the project and state paths and the run id. The first step
+                # The owner screen (decision 36) shows the project and state paths and the run id. The first command
                 # prints the payload to sign; the second repeats it with the signature file. A child of the slot may
                 # still run: confirming is the owner's call.
                 step = ("python3 " + shlex.quote(str(roots[0] / '.codex/orchestration/cli.py'))
@@ -11994,8 +11994,10 @@ class LearningLedger:
                         + " --state-root " + shlex.quote(str(self.state.root))
                         + " --run-id " + shlex.quote(row["run_id"])
                         + " --handle-digest " + shlex.quote(row["handle_digest"]))
-                confirmations.append({"reason": reason, "command": step + " ; then with the signed payload: "
-                                      + step + " --signature owner-signature.bin"})
+                confirmations.append({
+                    "reason": reason, "command": step,
+                    "signing_instruction": "Sign the payload printed above and save the signature as owner-signature.bin, then run:",
+                    "signed_command": step + " --signature owner-signature.bin"})
         if any(not row["due"] and row["deadline_at_ms"] is None for row in held):
             status["run_slot"]["next_eligible"] = None
         if any(row["kind"] == "legacy_unknown" for row in held):

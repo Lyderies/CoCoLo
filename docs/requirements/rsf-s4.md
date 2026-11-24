@@ -78,7 +78,7 @@ Status: implemented after primary decision 164 approved the enumerated assertion
 changes. Behavioral red/green results and primary-only commands are recorded in
 [validation.md](rsf-s4/validation.md).
 
-**RSF-S4-8 — Owner confirmation.** A deadline-free native Claude slot awaiting
+**RSF-S4-8 — Owner confirmation.** Every deadline-free held slot (native, pruned-intent bridge or codex host, or no binding row) awaiting
 owner confirmation shows a plain reason and the exact owner command for that
 slot. The command uses the existing detached-signature owner-record authority,
 releases exactly its project's named slot, records the confirmation atomically,

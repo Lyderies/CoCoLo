@@ -67,7 +67,7 @@ B4m reply-shape table addition:
 
 | Collector op | Request after envelope | Success body | Retry body |
 | --- | --- | --- | --- |
-| `confirm_legacy_slot` | `project_root`, `record` (closed `run_slot_confirmation`: `schema_version`, `record_type`, deterministic `record_id`, `run_id`), `signature_b64` | `{"ok":true,"committed":{"stored":true,"duplicate":false,"source_sequence":integer,"late":boolean}}` | `{"ok":true,"committed":{"stored":false,"duplicate":true,"source_sequence":same_integer}}` |
+| `confirm_legacy_slot` | `project_root`, `record` (closed `run_slot_confirmation`: `schema_version`, `record_type`, deterministic `record_id`, `run_id`, optional `handle_digest` that, when present, is part of the record identity and names the slot), `signature_b64` | `{"ok":true,"committed":{"stored":true,"duplicate":false,"source_sequence":integer,"late":boolean}}` | `{"ok":true,"committed":{"stored":false,"duplicate":true,"source_sequence":same_integer}}` |
 
 The envelope is `protocol`, `op`, `runtime_digest`. Operation/signature refusal
 uses the existing `{"ok":false,"code":"operation_rejected"}` shape; incompatible

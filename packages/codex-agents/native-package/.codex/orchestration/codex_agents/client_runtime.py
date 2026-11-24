@@ -324,9 +324,9 @@ def _status_account_holds(value):
             if (type(kind.get('reasons')) is not list
                     or any(reason not in (DEADLINE_REASON, OWNER_REASON, MISSING_REASON) for reason in kind['reasons'])
                     or type(kind.get('owner_confirmations')) is not list
-                    or any(type(item) is not dict or set(item) != {'reason', 'command'}
+                    or any(type(item) is not dict or set(item) != {'reason', 'command', 'signing_instruction', 'signed_command'}
                            or item['reason'] not in (OWNER_REASON, MISSING_REASON) or type(item['command']) is not str
-                           or '\n' in item['command'] for item in kind['owner_confirmations'])):
+                           or any(type(item[name]) is not str or '\n' in item[name] for name in ('signing_instruction', 'signed_command')) or '\n' in item['command'] for item in kind['owner_confirmations'])):
                 return None
         if (type(kind) is not dict or kind.keys() != fields
                 or not all(account_integer(kind[n]) for n in ('held', 'past_due'))
@@ -361,8 +361,10 @@ def _hold_words(name, kind):
     if name == 'run_slot' and kind['deadline'] is not None:  # draft 4 item 4: the execution deadline beside it
         notes.append(f"{'deadline' if held == 1 else 'nearest deadline'} {at(kind['deadline'])}")
     notes.extend(kind.get('reasons', []))
-    notes.extend('Owner command: ' + item['command'] for item in kind.get('owner_confirmations', []))
-    return f"{held} {noun} held" + (f" ({'; '.join(notes)})" if notes else '')
+    text = f"{held} {noun} held" + (f" ({'; '.join(notes)})" if notes else '')
+    for item in kind.get('owner_confirmations', []):
+        text += '\nOwner command: ' + item['command'] + '\n' + item['signing_instruction'] + '\n' + item['signed_command']
+    return text
 
 
 _CODE_STALE_NOTE = ('collector_code_stale: this collector started before its code changed and still runs the old '

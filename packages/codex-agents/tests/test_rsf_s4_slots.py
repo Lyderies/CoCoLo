@@ -246,16 +246,16 @@ class LegacySlotCorrectionTests(LegacySlotEvidenceTests):
     def commands(self):
         return self.slot()['owner_confirmations']
 
-    def run_command(self, command):
-        """The command as shown: the unsigned step prints the payload, the signed step is the same command + file."""
+    def run_command(self, item):
+        """Each command parsed exactly as displayed: unsigned step, a plain instruction, then the signed step."""
         import shlex
-        steps = command.split(' ; then ')
-        self.assertEqual(2, len(steps))
-        unsigned = shlex.split(steps[0])
-        self.assertNotIn('--signature', unsigned)
-        signed = shlex.split(steps[1].replace('with the signed payload: ', ''))
-        self.assertIn('--signature', signed)
-        return unsigned, signed
+        self.assertEqual({'reason', 'command', 'signing_instruction', 'signed_command'}, set(item))
+        for text in (item['command'], item['signed_command']):
+            self.assertNotIn('\n', text)
+            self.assertNotIn(';', text)
+        self.assertNotIn('--signature', item['command'])
+        self.assertIn('owner-signature.bin', item['signing_instruction'])
+        return shlex.split(item['command']), shlex.split(item['signed_command'])
 
     def argument(self, words, name):
         return words[words.index(name) + 1]
@@ -264,8 +264,8 @@ class LegacySlotCorrectionTests(LegacySlotEvidenceTests):
         from codex_agents.learning_contracts import run_slot_confirmation
         return run_slot_confirmation(self.argument(words, '--run-id'), self.argument(words, '--handle-digest'))
 
-    def release_by(self, command, label):
-        _, signed = self.run_command(command)
+    def release_by(self, item, label):
+        _, signed = self.run_command(item)
         record = self.record_for(signed)
         signature = sign_owner_payload(self.fixture.owner_private_key,
             OwnerGrantAuthority.owner_record_payload(self.project, record), label).read_bytes()
@@ -284,7 +284,7 @@ class LegacySlotCorrectionTests(LegacySlotEvidenceTests):
             self.assertIn(item['reason'], ('waiting for process evidence or owner confirmation', 'dispatch evidence is missing'))
         for index in (0, 1):
             self.assertEqual(2 - index, self.count())
-            shown = {self.argument(self.run_command(c['command'])[1], '--run-id'): c['command'] for c in self.commands()}
+            shown = {self.argument(self.run_command(c)[1], '--run-id'): c for c in self.commands()}
             self.release_by(shown['legacy-run-' + str(index)], 's4-poor-%d' % index)
             self.assertEqual(1 - index, self.count())
             released = [r[0] for r in self.ledger._connection.execute(
@@ -305,14 +305,13 @@ class LegacySlotCorrectionTests(LegacySlotEvidenceTests):
         self.ledger._connection.execute('PRAGMA foreign_keys=ON')
         self.assertEqual(2, self.count())
         for expected in (1, 0):
-            command = self.commands()[0]['command']
-            self.release_by(command, 's4-dup-%d' % expected)
+            self.release_by(self.commands()[0], 's4-dup-%d' % expected)
             self.assertEqual(expected, self.count())
 
     def test_command_has_unsigned_step_then_signed_step_and_shows_paths(self):
         self.seed(native=True)
-        unsigned, signed = self.run_command(self.commands()[0]['command'])
-        self.assertEqual(signed[:len(unsigned)], unsigned)
+        unsigned, signed = self.run_command(self.commands()[0])
+        self.assertEqual(unsigned + ['--signature', 'owner-signature.bin'], signed)
         self.assertEqual('owner-signature.bin', self.argument(signed, '--signature'))
         self.assertEqual(str(self.fixture.state.root), self.argument(unsigned, '--state-root'))
         self.assertEqual('legacy-run-0', self.argument(unsigned, '--run-id'))
@@ -339,3 +338,48 @@ class LegacySlotCorrectionTests(LegacySlotEvidenceTests):
             self.assertEqual(1, self.count())
             self.assertEqual(1, self.ledger.release_due_account_holds())
         self.assertEqual(0, self.count())
+
+    def test_handleless_record_matching_two_slots_is_refused(self):
+        from codex_agents.learning_contracts import run_slot_confirmation
+        self.seed(native=True, two=True)
+        self.ledger._connection.execute('PRAGMA foreign_keys=OFF')
+        self.ledger._connection.execute("UPDATE active_run_capacity SET run_id='legacy-run-0' WHERE handle_digest=?", (self.digests[1],))
+        self.ledger._connection.execute('PRAGMA foreign_keys=ON')
+        record = run_slot_confirmation('legacy-run-0')
+        signature = sign_owner_payload(self.fixture.owner_private_key,
+            OwnerGrantAuthority.owner_record_payload(self.project, record), 's4-ambiguous').read_bytes()
+        with self.assertRaises(learning_store.LedgerError):
+            self.ledger.commit_owner_record(self.project, record=record, signature=signature)
+        self.assertEqual(2, self.count())
+
+    def test_signed_record_with_a_substituted_handle_is_refused(self):
+        from codex_agents.learning_contracts import run_slot_confirmation
+        self.seed(native=True, two=True)
+        signed_for = run_slot_confirmation('legacy-run-0', self.digests[0])
+        signature = sign_owner_payload(self.fixture.owner_private_key,
+            OwnerGrantAuthority.owner_record_payload(self.project, signed_for), 's4-substitute').read_bytes()
+        substituted = run_slot_confirmation('legacy-run-0', self.digests[1])
+        before = self.ledger._connection.total_changes
+        with self.assertRaises(learning_store.LedgerError):
+            self.ledger.commit_owner_record(self.project, record=substituted, signature=signature)
+        self.assertEqual(before, self.ledger._connection.total_changes)
+        self.assertEqual(2, self.count())
+
+    def test_collector_timer_releases_a_slot_whose_process_proof_appears(self):
+        import threading
+        with mock.patch.object(launch_journal, 'tree_state', return_value='alive'):
+            self.seed(native=True, journal='watched')
+        self.assertEqual(1, self.count())
+        with mock.patch.object(learning_store, 'WORKER_RESULT_SWEEP_SECONDS', 0.3), \
+                mock.patch.object(learning_store, 'SWEEP_IDLE_CHECK_SECONDS', 0.1), \
+                mock.patch.object(launch_journal, 'tree_state', return_value='gone'):
+            server = learning_store.CollectorServer(self.ledger, client_capabilities=self.fixture.clients)
+            server.start()
+            self.addCleanup(server.stop)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and self.ledger._connection.execute(
+                    'SELECT COUNT(*) FROM active_run_capacity WHERE released_at_ms IS NULL').fetchone()[0]:
+                time.sleep(0.1)
+        self.assertEqual(0, self.count())
+        self.assertEqual('process_gone', self.ledger._connection.execute(
+            "SELECT release_kind FROM run_holds WHERE kind='run_slot'").fetchone()[0])

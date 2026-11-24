@@ -90,3 +90,8 @@ slot whose child may still run; that is the owner's call. Process proof (journal
 sweep/adoption (which writes a durable release); counts, status and admission use the deadline rule only, so a slot whose
 process ends later is released at the next adoption/sweep, not by a count. Not done: test_reply_shape_live DRIVERS covers
 only account/history service replies; confirm_legacy_slot is a collector op outside reply_shapes, so no driver was added.
+
+Decision 168 follow-up: each owner_confirmations entry is `{reason, command, signing_instruction, signed_command}`; the
+status shows the unsigned command, the plain signing instruction, then the signed command, on separate lines (no `;`
+inside a command). Tests parse each command exactly as displayed. Added regression tests: handleless record matching two
+slots refused; substituted handle_digest refused; the collector's own sweep timer releases a slot whose process proof appears.
