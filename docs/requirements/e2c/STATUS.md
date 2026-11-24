@@ -80,3 +80,11 @@ run, product files restored), then green. Red run, 12 tests, 214 s: FAILED (fail
 Fixture change only (assertions.md 3): T11 serves out a 1 s probation before the restart kill.
 Green: tests.test_project_start 36 + lifetime_cap_guard via `scripts/parallel_tests.py --module` 38 s,
 `"metadata_errors": []`, failed_units []. Registry: 15 new checks in scripts/test-requirements.json; timing 85 s.
+
+Neighbour regression (parallel_tests --module, 21 named modules + root:test_test_stages, 42 s, metadata_errors []):
+first run found 3 tests that count ledger changes or waits in an in-process collector's first seconds
+(rsf_s1_ingress_socket RSF-S1-1, e2a_launch_record E2a-3, ledger_lock_limits E1a-3): the fix round had moved the
+first claim to "at once". Put back to one STARTER_CHECK_SECONDS after ready (as d16a9448; E2c-1 allows it); rerun of
+project_start, rsf_s1_ingress_socket, e2a_launch_record, ledger_lock_limits, lifetime_cap_guard: 91 tests, 44 s, all
+green, metadata_errors []. test_runtime_release red for the digest only (computed fc19c3a2b77de508e7712685d53ad4c6
+279b6c8249b09bc84353e0cf3d504d04; 0.8.59 entry kept dcc18633..., primary's bookkeeping).

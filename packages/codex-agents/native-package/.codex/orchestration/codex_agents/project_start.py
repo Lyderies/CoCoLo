@@ -142,10 +142,11 @@ class ProjectStarter:
     def _main(self):
         from .learning_store import SWEEP_BATCH_GAP_SECONDS, WORKER_RESULT_SWEEP_SECONDS
         tick = min(STARTER_TICK_SECONDS, STARTER_CHECK_SECONDS)
-        # E2c-10: stranded claims and kept probations are reconciled first, before the first claim, which follows
-        # at once (E2c-1); then once per sweep interval.
+        # E2c-10: stranded claims and kept probations are reconciled first, before the first claim, which comes one
+        # STARTER_CHECK_SECONDS after ready (E2c-1); then once per sweep interval.
         now = time.monotonic()
-        next_tick = stranded_at = claim_at = now
+        next_tick = now
+        stranded_at = claim_at = now + STARTER_CHECK_SECONDS
         while not self._stop.wait(max(0.0, min(next_tick, stranded_at, claim_at) - time.monotonic())):
             now = time.monotonic()
             try:

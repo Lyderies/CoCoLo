@@ -1212,7 +1212,8 @@ class ProductionIntervalTests(StarterBase):
         self.assertTrue(holds)
         self.assertLess(max(holds), 0.750, holds)
         first = min(row['t'] for row in self.events('begin'))
-        self.assertLessEqual(first - ready, project_start.STARTER_CHECK_SECONDS)  # E2c-1 at production intervals
+        # E2c-1 at production intervals: within one STARTER_CHECK_SECONDS (one tick of slack, as T1).
+        self.assertLessEqual(first - ready, project_start.STARTER_CHECK_SECONDS + project_start.STARTER_TICK_SECONDS)
         print(f'\nE2c-3 production drain: {drained:.1f} s, {len(holds)} claims, longest {max(holds) * 1000:.1f} ms',
               file=sys.stderr)
 
