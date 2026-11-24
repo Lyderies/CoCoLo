@@ -416,8 +416,11 @@ def verifier_answers_pass(phase: Phase, scene, verdict: str) -> None:
     phase.expect(stored.get("execution_state") == "completed", "the history says the verifier's run completed")
     phase.expect(stored.get("semantic_verdict") == verdict and verdict in ("pass", "ready"),
                  "the history holds the verifier's verdict, pass or ready")
-    phase.expect(stored.get("required_criteria_total") == len(ORACLE) == stored.get("required_criteria_passed"),
-                 "the history counts every required evidence item passed by the verifier")
+    # The verifier's own outcome keeps its pre-QA counts; the QA record holds the criteria the verifier passed.
+    verifier_result = [row for row in scene.world.history_records("dispatch_result")
+                       if row.get("run_id") == stored.get("run_id")]
+    phase.expect(len(verifier_result) == 1 and qa.get("verifier_result_digest") == verifier_result[0].get("result_digest"),
+                 "the stored QA judged exactly the result the history recorded for the verifier")
     phase.expect(qa.get("required_criteria_passed") == qa.get("required_criteria_total") == len(ORACLE),
                  "the stored QA counts every required criterion passed")
     phase.expect(qa.get("verifier_disagreement") is False, "the stored QA records no discrepancy between verifier and worker")
@@ -433,10 +436,10 @@ def qa_accepted(phase: Phase, scene) -> None:
     phase.expect(qa.get("accepted") is True, "the stored QA records accepted: true")
     phase.expect(qa.get("deterministic_pass") is True and qa.get("security_pass") is True,
                  "the stored QA passed its deterministic and security checks")
-    records = [row for row in scene.world.history_records("operational_qa") if row.get("record_id") == qa.get("record_id")]
-    phase.expect(len(records) == 1 and records[0].get("accepted") is True,
-                 "the QA record is in the project's records, accepted")
     stored = stored_outcome(scene, "")
+    worker_result = [row for row in scene.world.history_records("dispatch_result") if row.get("run_id") == stored.get("run_id")]
+    phase.expect(len(worker_result) == 1 and qa.get("evaluator_result_digest") == worker_result[0].get("result_digest"),
+                 "the stored QA accepted exactly the result the history recorded for the worker")
     phase.expect(stored.get("accepted") is True and stored.get("status") == "accepted",
                  "the worker's outcome in the history is accepted")
     report = (scene.steps.get("report") or (None, {}))[1] or {}

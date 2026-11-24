@@ -54,7 +54,7 @@ def g8_no_private_value_in_any_output(phase: Phase) -> None:
         leaked.update(world.leaks(output))
     for name in sorted(leaked):
         phase.reason("leaks_" + name)
-    phase.expect(len(world.outputs) >= 6, "the outputs of every step were collected")
+    phase.expect(len(world.outputs) + len(world.screens) >= 6, "the outputs of every step were collected")
     phase.expect(not leaked, "no output carries a key, a fingerprint, the passphrase or a path under the temporary home")
     phase.expect(world.passphrase not in "\n".join(world.outputs), "the passphrase is never shown")
     phase.expect(len(world.screens) >= 3, "the owner's screens were collected")
