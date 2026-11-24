@@ -212,9 +212,21 @@ def _schema(connection, store):
     # Global account metadata stays with its original owner; unknown tables
     # could hide an unrepresented project partition, so refuse this image.
     # admission_evidence holds only fields derived from the records it indexes.
-    if {row[0] for row in names} != {*_KEYS, "projects", "additive_migrations",
-                                   "owner_key_history", "sqlite_sequence", "admission_evidence"}:
+    # E2a-1: the machine-local wake and starter tables are never part of the image (0.8.60 full-run fixes); each
+    # one present must have exactly its own columns, so it cannot hide an unrepresented partition either.
+    found = {row[0] for row in names}
+    local = found & set(store.LOCAL_TABLE_COLUMNS)
+    if found - local != {*_KEYS, "projects", "additive_migrations",
+                         "owner_key_history", "sqlite_sequence", "admission_evidence"}:
         raise HistoryError("history_incompatible")
+    for table in sorted(local):
+        cursor = connection.execute("PRAGMA table_info(" + table + ")")
+        try:
+            rows = cursor.fetchmany(65)
+        finally:
+            cursor.close()
+        if tuple(r[1] for r in rows) != store.LOCAL_TABLE_COLUMNS[table]:
+            raise HistoryError("history_incompatible")
     for table in ("projects", *_KEYS):
         row = _one(connection, "SELECT type FROM sqlite_master WHERE name=?", (table,))
         if row is None or row[0] != "table":
@@ -227,7 +239,10 @@ def _schema(connection, store):
         columns = (store._BACKUP_PROJECT_COLUMNS if table == "projects"
                    else ("project_id", *store._BACKUP_TABLE_COLUMNS[table]))
         keys = ("project_id",) if table == "projects" else ("project_id", *_KEYS[table])
-        if (len(rows) > 64 or {r[1] for r in rows} != set(columns)
+        names = {r[1] for r in rows}
+        if table == "projects" and store.LOCAL_PROJECT_COLUMNS <= names:
+            names -= store.LOCAL_PROJECT_COLUMNS  # E2a-1: the machine-local launch record, never in the image
+        if (len(rows) > 64 or names != set(columns)
                 or tuple(r[1] for r in sorted(rows, key=lambda r: r[5]) if r[5]) != keys):
             raise HistoryError("history_incompatible")
 

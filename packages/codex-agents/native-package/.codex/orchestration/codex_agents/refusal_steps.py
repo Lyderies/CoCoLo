@@ -73,6 +73,9 @@ EXACT = {
     'host_client_unknown': "This command runs only from the project's host: run it inside the Claude Code or Codex "
                            "session that runs CoCoLo for this project (or name a host that is running there).",
     'service_refused_busy':"The service is busy with other connections: wait a moment, then try again.",
+    # RS-E E2a-6 (0.8.60 full-run fixes): an older service's wake publication after a newer one's; only counted.
+    'wake_stale': "A newer start of this project's service already told the collector when to wake it, so this "
+                  "older notice was ignored: nothing to do while that service runs.",
 }
 
 FAMILY = {

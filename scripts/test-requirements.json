@@ -459,7 +459,8 @@
   "checks": [
    "codex:tests.test_e2a_launch_record.LedgerSchemaTests.test_E2a_1_additive_columns_and_wake_table_keep_the_schema_version",
    "codex:tests.test_e2a_launch_record.LedgerSchemaTests.test_E2a_1_backup_keeps_its_format_and_restore_has_no_launch_record",
-   "codex:tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2c_10_a_released_0_8_59_ledger_opens_and_works_under_this_build"
+   "codex:tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2c_10_a_released_0_8_59_ledger_opens_and_works_under_this_build",
+   "codex:tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2a_1_a_released_0_8_59_ledger_backs_up_restores_and_moves_after_the_upgrade"
   ],
   "source": "docs/requirements/e2a.md#E2a-1",
   "statement": "**E2a-1 \u2014 Additive ledger schema.** (D:21, D:35, D:40, D:127) Opening the collector ledger adds, without changing\n`PRAGMA user_version` (16), the nullable columns `launch_copy` and `launch_digest` to `projects` and the table\n`project_wake` (one row per project: allocated epoch, published generation epoch + seq, state\n`pending|exact|clean_stop` or null when only reconciled, next due, a body digest, the collector's `due_at_ms`, a\nrefused count, the update time) with an index on `due_at_ms` for due rows. Reopening is idempotent. The launch columns are\nmachine-local: a project backup snapshot keeps its exact earlier format (the six original project columns) and a\nrestored row has no launch record. Tests: tests.test_e2a_launch_record.LedgerSchemaTests.test_E2a_1_additive_columns_and_wake_table_keep_the_schema_version,\ntests.test_e2a_launch_record.LedgerSchemaTests.test_E2a_1_backup_keeps_its_format_and_restore_has_no_launch_record.\nReview round 1: also the additive table `project_wake_instances` (per project, the service instance its last epoch was allocated to; machine-local, never in a backup)."

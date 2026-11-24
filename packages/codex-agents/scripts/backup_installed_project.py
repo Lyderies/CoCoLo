@@ -175,6 +175,8 @@ def _write_authorization(path: Path, content: bytes) -> None:
             pass  # Never replaces the outcome above; a stray copy changes nothing the collector reads.
 
 
+# E2a-1: the machine-local launch record columns (an installed 0.8.60+ ledger has both; older ones neither).
+LOCAL_PROJECT_COLUMNS = frozenset({"launch_copy", "launch_digest"})
 _PROJECT_COLUMNS = (
     "project_id", "canonical_root", "root_digest", "status", "created_at_ms",
     "deleted_at_ms",
@@ -714,6 +716,10 @@ def _main() -> int:
                 str(row[1])
                 for row in connection.execute("PRAGMA table_info(projects)").fetchall()
             }
+            # E2a-1 (0.8.60 full-run fixes): the launch record is machine-local and never in a backup; the
+            # backup keeps the six original columns exactly. Both launch columns or neither.
+            if LOCAL_PROJECT_COLUMNS <= project_columns:
+                project_columns -= LOCAL_PROJECT_COLUMNS
             if project_columns != set(_PROJECT_COLUMNS):
                 raise RuntimeError("project backup cannot represent projects exactly")
             project = connection.execute(

@@ -14,6 +14,21 @@ from codex_agents import learning_store
 from codex_agents.learning_store import LearningLedger, LedgerError
 
 
+def drop_launch_and_wake_for_legacy_fixture(db):
+    """RS-E E2a-1 / E2c (0.8.60 full-run fixes, setup only): the additive launch columns and the machine-local
+    wake/starter tables are newer than schemas 11 and 12; a ledger those releases wrote had none of them."""
+    for table in ('project_starts', 'project_wake_instances', 'project_wake'):
+        if db.execute('SELECT 1 FROM sqlite_master WHERE type=? AND name=?', ('table', table)).fetchone():
+            if db.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0]:
+                raise AssertionError('cannot discard wake or starter state in a legacy fixture')
+            db.execute('DROP TABLE ' + table)
+    for column in ('launch_digest', 'launch_copy'):
+        if column in {row[1] for row in db.execute('PRAGMA table_info(projects)')}:
+            if db.execute(f'SELECT 1 FROM projects WHERE {column} IS NOT NULL').fetchone():
+                raise AssertionError('cannot discard a launch record in a legacy fixture')
+            db.execute(f'ALTER TABLE projects DROP COLUMN {column}')
+
+
 class AccountObservationSchemaTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixtures.AccountApiTests(methodName='runTest')
@@ -67,6 +82,7 @@ class AccountObservationSchemaTests(unittest.TestCase):
             if kind == 'trigger':
                 db.execute(f'DROP TRIGGER IF EXISTS {name}')
         db.execute('DROP TABLE IF EXISTS run_holds')
+        drop_launch_and_wake_for_legacy_fixture(db)
         db.execute('PRAGMA user_version=11')
         expected = json.loads((Path(__file__).parent / 'fixtures/learning/schema11-layout.json').read_text())
         actual = {kind + ':' + name: hashlib.sha256(' '.join(sql.replace('"', '').split()).encode()).hexdigest()
@@ -90,10 +106,14 @@ class AccountObservationSchemaTests(unittest.TestCase):
     def assert_old_rows(self, ledger):
         for name, rows in self.before.items():
             columns = [r[1] for r in ledger._connection.execute('PRAGMA table_info(' + name + ')')
-                       if not (name == 'records' and r[1] == 'probe_id')]
+                       if not (name == 'records' and r[1] == 'probe_id')
+                       and not (name == 'projects' and r[1] in ('launch_copy', 'launch_digest'))]
             self.assertEqual(rows, [tuple(row) for row in ledger._connection.execute(
                 'SELECT ' + ','.join(columns) + ' FROM ' + name)], name)
         self.assertIsNone(ledger._connection.execute('SELECT 1 FROM records WHERE probe_id IS NOT NULL').fetchone())
+        # E2a-1 (0.8.60 full-run fixes): the upgrade adds the launch columns empty; it never invents a launch record.
+        self.assertIsNone(ledger._connection.execute(
+            'SELECT 1 FROM projects WHERE launch_copy IS NOT NULL OR launch_digest IS NOT NULL').fetchone())
 
     def test_default_refuses_without_writes_and_explicit_upgrade_keeps_all_original_cells(self):
         self.eleven()
@@ -160,6 +180,7 @@ class AccountObservationSchemaTests(unittest.TestCase):
         drop_admission_evidence_for_legacy_fixture(db)
         db.execute('DROP TABLE account_billing_probe_requests')
         db.execute('DROP TABLE account_billing_probe_origins')
+        drop_launch_and_wake_for_legacy_fixture(db)
         db.execute('PRAGMA user_version=12')
         if backups:
             with mock.patch.object(learning_store, 'LEDGER_SCHEMA_VERSION', 12):

@@ -99,3 +99,9 @@ project_service_startup, ledger_lock_limits, account_host, rsf_s1_ingress_socket
 Open: wake next_hold_due reads due_at_ms only; B6 orchestration rows are selected at max(due_at_ms, next_check_ms), so a
 refused-and-backed-off due orchestration makes the wake early (never late). Not run: test_learning_cli,
 test_publication_replay_driver, test_reply_shape_live, --affected (primary).
+
+## 0.8.60 full-run fixes (decision 245, 2026-11-25)
+All 10 failed units fixed (see assertions.md "0.8.60 full-run fixes"). 0.8.60 digest refreshed in
+runtime-releases.json (0.8.59 unchanged). Named run (17 modules, 26 units, 277 tests) via parallel_tests.py --module:
+failed_units [], metadata_errors []; test_project_start is over its 60 s scenario budget (pre-existing: its recorded
+timing is 130 s).

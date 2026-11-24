@@ -60,7 +60,7 @@ class LedgerBusyAnswerTests(AccountApiTests):
         from codex_agents.account_host import AccountServiceHost
         entry = types.SimpleNamespace(kind="account", enrolled=types.SimpleNamespace(
             role="account", host_client="codex-host-v1", subject=str(self.roots[0]), context=None,
-            request_digest=None))
+            request_digest=None, bound_project=None, project_bound=False))  # E2a-5: Enrolled's new fields (unbound)
         request = self.request()
         entry.enrolled.request_digest = account_request_digest(request)
         host = types.SimpleNamespace(_frontend=types.SimpleNamespace(context=lambda token: entry),

@@ -60,3 +60,34 @@ Conflict union only (both sides added one op to the same pins: base B4s `account
 Runtime (not assertions): account_service's project-source op set = base set (with lost_run_closure) + publish_wake, the
 E2a wake_bound/source guard kept; account_api/account_host op lists keep both entries. Schema: no new step (E2a adds
 no project-holds schema version; only wake hooks), B6 step 21 unchanged.
+
+## 0.8.60 full-run fixes
+
+The 0.8.60 full run (decision 245) failed 10 units, all caused by E2a/E2c's additive columns and tables. Requirement
+followed: E2a-1 (the launch columns and the wake/starter tables are machine-local; a backup keeps its exact earlier
+format and a restore has no launch record) and LEGACY-H1B. Product fixes: `scripts/backup_installed_project.py` and
+`learning_source_image._schema` now accept exactly the machine-local columns/tables (by exact column list,
+`learning_store.LOCAL_TABLE_COLUMNS`) and never carry them; `refusal_steps.EXACT['wake_stale']` added.
+E2a did not change a released CREATE statement in place (ALTER TABLE ADD COLUMN + CREATE TABLE IF NOT EXISTS): the
+new released-ledger test proves a fresh ledger's tables and indexes equal an upgraded 0.8.59 ledger's.
+
+Existing assertions changed (one; no assertion removed or weakened):
+
+| Test | Old | New | Reason |
+|---|---|---|---|
+| tests.test_account_observation_schema `assert_old_rows` (used by 5 tests) | compares every column of every pre-upgrade table except `records.probe_id` | also leaves out `projects.launch_copy`/`launch_digest` from the column-by-column comparison, and ADDS `assertIsNone(SELECT 1 FROM projects WHERE launch_copy IS NOT NULL OR launch_digest IS NOT NULL)` | the upgrade adds the two E2a-1 columns empty (same form as the `probe_id` precedent); every original cell is still compared, and the new assertion proves the upgrade invents no launch record |
+
+Setup-only fixture changes (no assertion touched):
+- tests.test_account_observation_schema: new `drop_launch_and_wake_for_legacy_fixture` called by the schema-11 and
+  schema-12 fixtures (drops project_starts, project_wake_instances, project_wake and the two launch columns, refusing
+  if any holds data), so the fixture again matches the genuine schema-11 layout (`fixture must match genuine
+  prior-source layout` unchanged) - schemas 11/12 never had them.
+- tests.test_ledger_busy_answers test_E1a_2_the_account_hosts_authorizer_passes_busy_through: the SimpleNamespace
+  `enrolled` gains `bound_project=None, project_bound=False` - E2a-5 added both to `service_enrollment.Enrolled`
+  and `account_host._authorize` reads `project_bound`.
+
+New test: tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2a_1_a_released_0_8_59_ledger_backs_up_restores_and_moves_after_the_upgrade
+(registered under E2a-1): `git archive 227b0c5e` setup, then this build adds a launch record, wake, instance and
+starter rows; backup keeps the six project columns and no machine-local table, verifies (isolated restore, current
+records match), learning move completes, fresh layout == upgraded layout. Red without the source-image fix
+(`migration_incompatible`), green with it.

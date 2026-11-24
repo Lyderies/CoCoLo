@@ -200,6 +200,17 @@ ACCOUNT_HOLD_RELEASE_BATCH = 64
 WAKE_STATES = ("pending", "exact", "clean_stop")
 WAKE_RECONCILE_BATCH = 64
 LOCAL_PROJECT_COLUMNS = frozenset({"launch_copy", "launch_digest"})
+# 0.8.60 full-run fixes (E2a-1): the machine-local tables, by their exact columns. A backup, a restore and the learning
+# move never carry them (they hold this machine's wake, epoch and starter state, and a path-bearing launch record);
+# a check that refuses unknown tables accepts exactly these, and only with exactly these columns.
+LOCAL_TABLE_COLUMNS = {
+    "project_wake": ("project_id", "allocated_epoch", "epoch", "seq", "state", "next_due_at_ms", "body_digest",
+                     "due_at_ms", "refused", "updated_at_ms"),
+    "project_wake_instances": ("project_id", "instance", "epoch"),
+    "project_starts": ("project_id", "attempt", "claimed_at_ms", "child_pid", "failures", "streak_first_ms",
+                       "next_start_at_ms", "parked_reason", "parked_digest", "outcome", "reason", "outcome_at_ms",
+                       "started_at_ms", "probation_attempt", "probation_pid", "probation_until_ms", "updated_at_ms"),
+}
 _WAKE_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS project_wake("
     "project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,"

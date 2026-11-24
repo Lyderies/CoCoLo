@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import asdict
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -1485,6 +1486,102 @@ class ReleasedLedgerUpgradeTests(upgrade_tests.Fixture, unittest.TestCase):
             ledger.start_probation(project_id, attempt=claims[0].attempt, survived=True, now_ms=now,
                                    **project_start.start_policy())
             self.assertEqual('started', ledger.start_record(project_id)['outcome'])
+
+    def released_ledger(self):
+        """The released 0.8.59 setup's own ledger (real processes), its collector stopped; None when absent."""
+        top = subprocess.run(['git', '-C', str(Path(__file__).resolve().parent), 'rev-parse', '--show-toplevel'],
+                             capture_output=True, text=True).stdout.strip()
+        if subprocess.run(['git', '-C', top, 'cat-file', '-e', self.RELEASED_COMMIT + '^{commit}']).returncode:
+            self.skipTest('the released commit is not in this repository')
+        self.prepare()
+        archive = subprocess.run(['git', '-C', top, 'archive', self.RELEASED_COMMIT,
+                                  'packages/codex-agents/native-package'], capture_output=True, check=True).stdout
+        old = self.base / 'old'
+        old.mkdir()
+        subprocess.run(['tar', '-x', '-C', str(old)], input=archive, check=True)
+        self.assertEqual('0.8.59', (old / 'packages/codex-agents/native-package/VERSION').read_text().strip())
+        started = self.run_cli(old / upgrade_tests.CLI_RELATIVE)
+        self.assertEqual(0, started.returncode, started.stdout + started.stderr)
+        self.stop_collector()
+        return LearningState(self.state, create=False)
+
+    @requirements('E2a-1', why_not_scenario='Real processes of the released runtime, then this build on its ledger.')
+    def test_E2a_1_a_released_0_8_59_ledger_backs_up_restores_and_moves_after_the_upgrade(self):
+        """0.8.60 full-run fixes: after the additive upgrade, with a launch record, wake, epoch and starter rows
+        present, the project's backup keeps its exact earlier format (six project columns, no machine-local table),
+        verifies by an isolated restore that matches the current records, and the learning move completes."""
+        from codex_agents import learning_migration
+        from codex_agents.project_history import ProjectHistory
+        from codex_agents.result_contracts import ResultCapacity
+        from codex_agents.learning_contracts import content_digest
+        from tests.learning_support import event_record, verification_outcome
+        state = self.released_ledger()
+        # The learning move is offline owner work (no collector, explicit upgrade), as learning-migrate-project runs.
+        with contextlib.closing(LearningLedger(state, allow_schema_upgrade=True)) as ledger:
+            project_id = ledger.register_project(self.project)
+            now = time.time_ns() // 1_000_000
+            ledger.append(project_id, event_record('released_upgrade_1', observed_at_ms=now), producer='hook',
+                          now_ms=now)
+            outcome = verification_outcome('released_upgrade_outcome')  # learning history: the move has rows
+            sequence = ledger._connection.execute('SELECT MAX(source_sequence) FROM records WHERE project_id=?',
+                                                  (project_id,)).fetchone()[0] + 1
+            ledger._connection.execute(
+                'INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,'
+                'ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                (project_id, outcome['record_id'], 'outcome', 'host', sequence,
+                 outcome.get('observed_at_ms', now), now, None,
+                 canonical_json(outcome), content_digest(outcome), 0))
+            ledger._connection.commit()
+            canonical = ledger._connection.execute('SELECT canonical_root FROM projects WHERE project_id=?',
+                                                   (project_id,)).fetchone()[0]
+            folder = hashlib.sha256(canonical.encode()).hexdigest()[:12]
+            digest = 'e' * 64
+            ledger.record_launch(project_id, str(Path('/var/empty/owner/.codex/agent-orchestration') / folder
+                                                 / digest), digest)
+            published = ledger.publish_wake(project_id, epoch=None, seq=1, state='pending',
+                                            next_due_at_ms=now + 60_000, now_ms=now, instance='a' * 32)
+            ledger.mark_wakes_due([(project_id, canonical, published['epoch'], 1)], now_ms=now + 1)
+            self.assertEqual([project_id], [c.project_id for c in ledger.claim_due_starts(now_ms=now + 1, limit=64)])
+            for table in learning_store.LOCAL_TABLE_COLUMNS:
+                self.assertEqual(1, ledger._connection.execute(
+                    f'SELECT COUNT(*) FROM {table} WHERE project_id=?', (project_id,)).fetchone()[0], table)
+            backup = ledger.create_sanitized_backup(project_id, file_id='released_upgrade',
+                                                    expires_at_ms=now + 600_000)
+            verified = ledger.verify_sanitized_backup(project_id, file_id='released_upgrade')
+            self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, verified['ledger_schema_version'])
+            self.assertEqual('ok', verified['isolated_restore_integrity'])
+            with contextlib.closing(sqlite3.connect(f'file:{backup}?mode=ro', uri=True)) as kept:
+                self.assertEqual(list(learning_store._BACKUP_PROJECT_COLUMNS),
+                                 [row[1] for row in kept.execute('PRAGMA table_info(projects)')])
+                names = {row[0] for row in kept.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                self.assertFalse(names & set(learning_store.LOCAL_TABLE_COLUMNS))
+                self.assertEqual(2, kept.execute('SELECT COUNT(*) FROM records WHERE project_id=?',
+                                                 (project_id,)).fetchone()[0])
+            directory = self.base / 'moved-history'
+            directory.mkdir(mode=0o700)
+            with contextlib.closing(ProjectHistory(directory, project_id, result_key=state.digest_key(),
+                                                   result_capacity=ResultCapacity(2, 2 * 1_048_576, 120_000,
+                                                                                  120_000),
+                                                   allow_schema_upgrade=True)) as history:
+                report = learning_migration.migrate_project(ledger, history, project_id, now_ms=now)
+                self.assertEqual('complete', report['state'])
+            self.assertTrue(ledger.learning_moved(project_id))
+            # A fresh ledger of this build has exactly the upgraded layout (the migration is additive, never an
+            # in-place change of a released CREATE statement).
+            fresh_root = self.base / 'fresh-state'
+            fresh_root.mkdir(mode=0o700)
+            with contextlib.closing(LearningLedger(LearningState(fresh_root))) as fresh:
+                def layout(connection):
+                    return {kind + ':' + name: ' '.join(sql.replace('"', '').split()) for kind, name, sql in
+                            connection.execute("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL "
+                                               "AND type IN ('table','index')")}
+                # Triggers are left out: the collector adds and drops cleanup_host_binding_with_event while it runs
+                # (also in 0.8.59), and the released collector here was stopped, not closed.
+                self.assertEqual(layout(fresh._connection), layout(ledger._connection))
+            # The machine-local rows stay with this machine's ledger, untouched by the move.
+            self.assertEqual((str(Path('/var/empty/owner/.codex/agent-orchestration') / folder / digest), digest),
+                             ledger.launch_record(project_id))
+
 
 if __name__ == '__main__':
     unittest.main()
