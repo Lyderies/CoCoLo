@@ -77,3 +77,25 @@ scenario (it starts real child processes: a sleeping shell and a Python script, 
 No new product op in batch 4 (B6, bkfix, expfix, S3 add none): `reply_shapes.REPLY_FIELDS`, the RS-F S1 mutating
 gate and the op-set pins are unchanged (test_reply_shape_compatibility, test_rsf_s1_ingress green).
 Assertion changes in this batch: only the one in section 1 (OrchestrationCountsCostTests, decisions 185/187/195).
+
+## Proof (merge/batch-0859 at the S3 merge)
+- Lifecycle: `python3 -I -B scripts/e2e_lifecycle.py --flows L6,L7,L8,L9,L10,L11,L13,L14,L15 --jobs 3 --report
+  /tmp/claude-501/batch4/r.json` (282 s): every S1 (L6.1, L6.2, L7.1-L7.3, L9.1-L9.3), S2 (L8.1-L8.3, L14.1,
+  L15.1) and S3 (L10.1, L10.2, L10.3, L11.1, L13.1, L13.2) ID PASSES, G1-G5, G8, G9 pass. L10.3 is green with expfix
+  (red by design on the S3 branch alone, decision 211); L11.1 is green with bkfix (same). Runner exit 1 only from
+  L11.2 `no_check` (no slice has a check for it; not an S1/S2/S3 ID).
+- Fault runs (same flows, --jobs 3), each isolated by its own slice's `fault_isolated`:
+  `slot_not_released` (291 s) changed G1, G5, L6.1, L7.1-L7.3, L9.2, L9.3 (all inside its targets / FAULT_ALSO_RED);
+  `recovery_broken` (361 s) changed G1 + the five S2 IDs; `learning_guard_broken` (282 s) changed exactly the six
+  S3 IDs. No ID outside its targets, no target left green, no ID missing.
+- Named modules (packaged venv, from packages/codex-agents): merge 1 set (37 modules incl. every B6-touched test,
+  test_holds_report, test_project_store_removal, test_rsf_s4_slots/transport, test_rsf_s5_probe, backup/schema
+  modules, test_lifetime_cap_guard, test_reply_shape_compatibility, test_rsf_s1_ingress) 782 tests, 251 s + 121 s
+  in two halves: one error in test_lost_run_settlement (KeyError terminal_state under the two halves' parallel
+  load), its class passed twice alone (re-run). bkfix: test_backup_reply_private, test_owner_backup_streamed,
+  test_installer, test_backup_installed_project 77 tests 43 s. expfix: test_event_retention,
+  test_legacy_history_compatibility, test_lifetime_cap_guard 3 s; test_learning_cli 30 tests 58 s. After all
+  merges: cap guard, reply shapes, rsf_s1_ingress, holds_report, event_retention, backup_reply_private, legacy
+  history 82 tests 7 s. test_project_driver alone: 99 tests 247 s OK. Root: test_rsd_budget 6 tests; test_e2e_*
+  (learning_guard, recovery, requirements, run_control, strictness) + test_test_stages 220 tests 5 s.
+- Metadata (`parallel_tests.metadata()`): 0 errors.
