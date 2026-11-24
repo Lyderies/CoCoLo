@@ -177,7 +177,11 @@ def _drained(connection, now, monotonic_ns=None, *, children_only=False):
     # Otherwise an unclaimed run counts until its binding expires: no claim can be
     # admitted after that, so it can never record anything.
     monotonic_ns = time.monotonic_ns() if monotonic_ns is None else monotonic_ns
-    crashed, parameters = crashed_claim("a", now, monotonic_ns)
+    # Only an unreleased earlier-version slot can be decided by its recorded dispatch
+    # deadline; with none (read in this same hold) that branch is left out.
+    legacy = _one(connection, "SELECT 1 FROM active_run_capacity WHERE kind='legacy_unknown' "
+                  "AND released_at_ms IS NULL LIMIT 1") is not None
+    crashed, parameters = crashed_claim("a", now, monotonic_ns, legacy_slots=legacy)
     if children_only:
         crashed = f"({crashed} OR a.kind='legacy_unknown')"
     if ((not children_only and _one(connection,

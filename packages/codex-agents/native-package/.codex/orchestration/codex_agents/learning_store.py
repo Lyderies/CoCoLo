@@ -2248,8 +2248,9 @@ class LearningLedger:
             connection.row_factory = sqlite3.Row
             # O0b RS-A (F5): the register's triggers record releases at the ledger's own clock.
             connection.create_function("ledger_now_ms", 0, lambda: self._clock_ms())
-            from .legacy_slots import dispatch_deadline
+            from .legacy_slots import dispatch_deadline, dispatch_run_id
             connection.create_function("legacy_dispatch_deadline", 4, dispatch_deadline, deterministic=True)
+            connection.create_function("legacy_dispatch_run_id", 1, dispatch_run_id, deterministic=True)
             version = connection.execute('PRAGMA user_version').fetchone()[0]
             if version > LEDGER_SCHEMA_VERSION:
                 raise LedgerError('ledger schema is newer than this package')
@@ -12234,11 +12235,9 @@ class LearningLedger:
             proof = (process_proof(self.state, slot["project_id"], slot["handle_digest"], slot["run_id"],
                                    slot["bridge_run_id"]) if slot["kind"] == "legacy_unknown" else None)
             if slot["kind"] == "legacy_unknown" and not slot["lost"] and proof is None:
-                from .legacy_slots import dispatch_deadline
+                from .legacy_slots import dispatch_deadline, intents_sql
                 intents = self._connection.execute(
-                    "SELECT content,content_digest FROM records WHERE project_id=? AND record_type='dispatch_intent' "
-                    "AND source='lifecycle' AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
-                    (slot["project_id"], slot["run_id"])).fetchall()
+                    intents_sql(), (slot["project_id"], slot["run_id"])).fetchall()
                 deadline = (dispatch_deadline(intents[0]["content"], intents[0]["content_digest"],
                                              slot["run_id"], slot["bridge_run_id"]) if len(intents) == 1 else None)
                 if deadline is None or now <= deadline + CRASHED_CLAIM_GRACE_MS:

@@ -24,12 +24,33 @@ def dispatch_deadline(raw, digest, run_id, bridge_run_id):
     return None
 
 
+def dispatch_run_id(raw):
+    """SQLite scalar: the run id a stored intent names, else None.
+
+    Kept out of SQL JSON (json_extract) so no capacity count, including the deferred
+    claim owner's, parses JSON in SQL; it runs only for an unreleased earlier-version
+    slot (the `kind='legacy_unknown' AND ...` guard short-circuits for every other row).
+    """
+    try:
+        value = json.loads(raw)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    run_id = value.get('run_id') if isinstance(value, dict) else None
+    return run_id if isinstance(run_id, str) else None
+
+
 def deadline_sql(table):
     # Ambiguous duplicate intents provide no single recorded deadline.
     return ("(SELECT CASE WHEN COUNT(*)=1 THEN MAX(legacy_dispatch_deadline(d.content,d.content_digest,"
             f"{table}.run_id,{table}.bridge_run_id)) END FROM records d WHERE d.project_id={table}.project_id "
             "AND d.record_type='dispatch_intent' AND d.source='lifecycle' "
-            f"AND json_extract(CAST(d.content AS TEXT),'$.run_id')={table}.run_id)")
+            f"AND legacy_dispatch_run_id(d.content)={table}.run_id)")
+
+
+def intents_sql():
+    """The sweep's read of the same intents deadline_sql counts (one rule on every path)."""
+    return ("SELECT content,content_digest FROM records WHERE project_id=? AND record_type='dispatch_intent' "
+            "AND source='lifecycle' AND legacy_dispatch_run_id(content)=?")
 
 
 def process_proof(state, project_id, handle_digest, run_id, bridge_run_id):

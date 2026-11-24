@@ -180,7 +180,7 @@ LEGACY_RUN_MAX_MS = 24 * 3_600_000
 LOST_RUN_REASON = 'service_lost'
 
 
-def crashed_claim(alias, now_ms, monotonic_ns):
+def crashed_claim(alias, now_ms, monotonic_ns, *, legacy_slots=True):
     """SQL for "this unreleased claim's run cannot still be alive", with its parameters.
 
     True when the run's project service settled it as lost (its binding is
@@ -191,19 +191,27 @@ def crashed_claim(alias, now_ms, monotonic_ns):
     with no deadline column) requires a retained validated dispatch deadline plus
     grace here; process/no-spawn evidence is read only by the sweep and adoption (which write a durable
     release), never by a count; claim age is never proof.
+
+    `legacy_slots=False` is only for a caller that has just seen, under the same
+    hold, that no unreleased `legacy_unknown` slot exists: the deadline branch can
+    then decide nothing, so it is left out and the SQL reads no `records` (the
+    migration drain check, whose rule is stated over the capacity and binding
+    tables alone).
     """
     from .legacy_slots import deadline_sql
 
     column = (alias + ".") if alias else ""
     table = alias or "active_run_capacity"
+    legacy = (f"OR ({column}kind='legacy_unknown' AND COALESCE({deadline_sql(table)}<?,0)) "
+              if legacy_slots else "")
     return (
         f"(({column}deadline_at_ms IS NOT NULL AND {column}deadline_at_ms<? "
         f"AND {column}execution_deadline_ns IS NOT NULL "
         f"AND ({column}execution_deadline_ns<=? OR {column}clock_reference_ns>?)) "
-        f"OR ({column}kind='legacy_unknown' AND COALESCE({deadline_sql(table)}<?,0)) "
+        f"{legacy}"
         f"OR EXISTS(SELECT 1 FROM host_run_bindings lost WHERE lost.project_id={table}.project_id "
         f"AND lost.handle_digest={table}.handle_digest AND lost.binding_state='abandoned' "
         f"AND lost.abandoned_reason='{LOST_RUN_REASON}'))",
         (now_ms - CRASHED_CLAIM_GRACE_MS, monotonic_ns - CRASHED_CLAIM_GRACE_MS * 1_000_000, monotonic_ns,
-         now_ms - CRASHED_CLAIM_GRACE_MS),
+         *((now_ms - CRASHED_CLAIM_GRACE_MS,) if legacy_slots else ())),
     )

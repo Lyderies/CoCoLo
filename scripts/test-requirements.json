@@ -581,12 +581,22 @@
   "statement": "The protected copy refuses a project it is not bound to."
  },
  "L14.1": {
-  "checks": [],
+  "checks": [
+   "codex:tests.test_account_settlement_driver.StatusAgreementTests.test_L14_1_a_settled_lost_run_reads_abandoned_in_the_report_as_in_learning_status",
+   "codex:tests.test_account_settlement_driver.StatusAgreementTests.test_L14_1_learning_status_counts_the_projects_orchestrations_by_state"
+  ],
   "source": "PLAN-0.4.0.md T7",
   "statement": "learning-status, learning-run-status, earlier_version_runs and learning-orchestration-report give the right values at each phase, and none is private."
  },
  "L15.1": {
-  "checks": [],
+  "checks": [
+   "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_L15_1_a_busy_history_writer_leaves_a_pending_cleanup_that_a_later_deletion_finishes",
+   "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_L15_1_a_new_registration_at_the_same_root_keeps_its_service",
+   "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_L15_1_a_wedged_host_makes_the_deletion_not_ready_with_a_plain_reason",
+   "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_L15_1_deleting_a_project_stops_its_service_and_leaves_the_other_running",
+   "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_L15_1_deletion_removes_the_projects_history_store",
+   "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_L15_1_hint_lock_contention_is_unknown_never_not_running"
+  ],
   "source": "PLAN-0.4.0.md T7",
   "statement": "learning-delete-project removes the project's records and services and leaves another project untouched."
  },
@@ -676,7 +686,9 @@
   "statement": "After the collector is killed, the project service survives: the run either completes normally with capacity released once the collector returns, or settles run_lost; never in limbo, never counted twice."
  },
  "L8.3": {
-  "checks": [],
+  "checks": [
+   "codex:tests.test_refusal_steps.RefusalStepTests.test_L8_3_an_unfinished_orchestration_close_names_the_runs_status_not_a_service_restart"
+  ],
   "source": "PLAN-0.4.0.md T7 L8b (control project, 2026-11-16)",
   "statement": "A project service replaced while its dispatch runs (another project's setup restarting the shared collector) leaves no run in limbo: the run ends run_lost with its slot freed, the dispatching CLI says so plainly instead of dispatch_not_authorized, and the orchestration can close."
  },
@@ -1472,6 +1484,7 @@
    "codex:tests.test_account_settlement.ValidatorTests.test_B4_7_a_settlement_row_whose_hold_has_another_kind_is_refused",
    "codex:tests.test_account_settlement.ValidatorTests.test_B4_7_releasing_without_a_settlement_row_and_a_matching_one_are_accepted",
    "codex:tests.test_account_settlement_driver.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
+   "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_L14_1_an_old_settled_entry_is_released_in_run_status_only_once_its_recovery_is_done",
    "codex:tests.test_account_settlement_driver.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
    "codex:tests.test_account_settlement_driver.SettlementThroughTheDriverTests.test_A1_a_run_lost_after_its_claim_is_settled_in_the_project_store",
    "codex:tests.test_account_settlement_driver.SettlementThroughTheDriverTests.test_A2_a_claim_admitted_but_never_bound_releases_its_lease_lost_unbound",

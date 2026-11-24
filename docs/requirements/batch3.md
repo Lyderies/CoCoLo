@@ -102,3 +102,15 @@ covered by no decision, and `test_refusal_is_expected_only_at_named_call_sites` 
 - Open for the primary: section 5 (L14.1/G1) and section 6 (L6.2 fault target). test_reply_shape_live (soak, not
   run) should confirm `history.orchestration_counts` is produced live by a DRIVERS module (test_b2_service_outcome_hosts
   drives it but is not listed).
+
+## 0.8.58 full-run fixes (integration)
+- Metadata (10 checks, 20 lines): the fix/t7s2-findings tests named L14.1, L15.1, L8.3 and RS-B-B4 but were never
+  listed in scripts/test-requirements.json; now listed under each ID (metadata errors 10 -> 0).
+- RS-F S4 `legacy_slots.deadline_sql` put `json_extract` into `crashed_claim`, so every capacity count (the deferred
+  claim owner's machine/account counts, the source image's drain check) carried SQL JSON parsing, and the drain check
+  read `records`. Fix: the intent's run id is read by a Python scalar `legacy_dispatch_run_id` (registered with
+  `legacy_dispatch_deadline`, same rows; the sweep uses the same `intents_sql`), and `_drained` leaves the
+  legacy-deadline branch out when, in the same hold, no unreleased `legacy_unknown` slot exists (it could decide
+  nothing then). Behaviour unchanged; RS-F S4 tests green. No assertion changed; the source-image table count (31)
+  did not change (that failure was the `JSON_` assertion, same cause).
+- 0.8.58 runtime digest refreshed (not installed anywhere): c8581b79... -> 1ababa83...
