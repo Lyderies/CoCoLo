@@ -43,6 +43,11 @@ _HELD_LEASES = (
 _HELD_LEASE_ROWS = (
     "SELECT identity FROM project_holds INDEXED BY project_holds_kind_due "
     "WHERE kind='lease' AND state<>'released' AND project_id=? LIMIT ?")
+# Decision 212: every held or releasing reservation, by its register row (its claim id), so a changed orchestration
+# column cannot hide one from the close (each is verified by its seal, which covers that column).
+_HELD_RESERVATION_ROWS = (
+    "SELECT identity FROM project_holds INDEXED BY project_holds_kind_due "
+    "WHERE kind='reservation' AND state<>'released' AND project_id=? LIMIT ?")
 
 
 class OrchestrationOwner:
@@ -392,6 +397,18 @@ class OrchestrationOwner:
             raise HistoryError('history_incompatible')  # SH-7: a held lease row is exactly a live lease
         return list(live.values())
 
+    def _verify_held_reservations(self):
+        project = self._history.project_id
+        held = self._db.execute(_HELD_RESERVATION_ROWS, (project, MAX_LEASE_ROWS + 1)).fetchall()
+        if len(held) > MAX_LEASE_ROWS:
+            raise HistoryError('history_orchestration_unavailable')
+        for (claim_id,) in held:
+            row = self._db.execute('SELECT * FROM result_reservations WHERE project_id=? AND claim_id=?',
+                                   (project, claim_id)).fetchone()
+            if row is None:
+                raise HistoryError('history_incompatible')
+            self._history._reservation(row)  # raises unless the row (its orchestration column too) verifies
+
     def _check_lease(self, scope, handle, lease):
         """Whether a verified lease of this orchestration is still live; a claim it names whose consumption has no
         reservation is refused (item 2: one the target's leases could own)."""
@@ -414,6 +431,10 @@ class OrchestrationOwner:
             row = self._db.execute('SELECT * FROM result_leases WHERE rowid=?', (rowid,)).fetchone()
             if self._check_lease(scope, handle, self._history._lease(row)):
                 return True
+        # Decision 212: every held or releasing reservation is read by its register row and verified (its orchestration
+        # column against its sealed binding), so the target's own are all found by the index below; one that is missing
+        # or does not verify refuses the close.
+        self._verify_held_reservations()
         # Item 2: an orphan consumption of this orchestration refuses the close (the old project-wide check, by index).
         if self._db.execute(self._ORPHAN_CONSUMPTION, (scope.project_id, handle)).fetchone() is not None:
             raise HistoryError('history_incompatible')

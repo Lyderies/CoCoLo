@@ -47,3 +47,13 @@ test file beside it): `history_orchestration_unavailable` from `_positions`, the
 | 3 crash copy (B6-7) | FinalCrashCopyTests.test_B6_7_a_dead_attempts_copy_with_another_hard_link_is_left_alone | 020e530d: empty marker content (`JSONDecodeError`) | pass: content names path/size/sha256; linked copy kept |
 | 4 unverifiable pointer (B6-8) | FinalUnverifiablePointerTests x2 (state `closed` with released row; state `open`) | 020e530d: both opened (`HistoryError not raised`) | pass: `history_incompatible` |
 | 5 cap isolation (B6-2) | FinalCapIsolationTests.test_B6_2_more_than_4096_valid_rows_of_another_orchestration_do_not_refuse_a_close | 700d41f8: `history_orchestration_unavailable` (4,097 VALID-seal neighbours); 020e530d: pass | pass |
+
+## Decision 212 (same fixed-scope round): reservation selection, crash before the marker
+
+Red = the new tests on 3db04d46's code: 3 tests, failures=3. Green = the fix commit.
+
+| Item | Test (tests/test_b6_unattended_close.py) | Red on 3db04d46 | Green |
+|---|---|---|---|
+| reservation version of item 1 (B6-2) | FinalReservationSelectionTests.test_B6_2_a_held_reservation_whose_orchestration_column_was_changed_refuses_the_primary_close | `HistoryError not raised` | pass: refused, reservation and orchestration rows held |
+| same (B6-2) | FinalReservationSelectionTests.test_B6_2_a_held_reservation_whose_orchestration_column_was_changed_refuses_the_unattended_close | `0 != 1` (closed) | pass |
+| crash before the marker (B6-7) | FinalStalePartialTests.test_B6_7_a_crash_before_the_marker_leaves_no_partial_after_the_next_attempt | `True is not false` (dead `.partial` left) | pass; other-format, hard-linked and lookalike files untouched |

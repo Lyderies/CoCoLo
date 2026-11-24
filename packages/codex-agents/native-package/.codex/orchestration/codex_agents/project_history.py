@@ -752,6 +752,27 @@ class ProjectHistory:
                         os.fsync(self._directory_fd)
             with contextlib.suppress(OSError):
                 marker.unlink()
+        if remove_copy:
+            self._remove_stale_partials()
+
+    def _remove_stale_partials(self) -> None:
+        """Decision 212: a crash before its marker was written (during the copy) leaves only a temporary copy. Before
+        the next attempt, under this writer lock (so no attempt of this store is running), this store's own stale
+        temporary copies go: exactly this format's temporary name, a regular file owned by this user with one link.
+        Any other file (another format's, a lookalike name, one with another hard link, a link) is never touched."""
+        pattern = re.compile(rf"\.history\.sqlite3\.before-{_SCHEMA_VERSION}\.[0-9]+\.[0-9a-f]{{16}}\.partial")
+        removed = False
+        for path in self._directory.glob(f".history.sqlite3.before-{_SCHEMA_VERSION}.*.partial"):
+            if not pattern.fullmatch(path.name):
+                continue
+            with contextlib.suppress(OSError):
+                status = os.lstat(path)
+                if stat.S_ISREG(status.st_mode) and status.st_nlink == 1 and status.st_uid == os.getuid():
+                    path.unlink()
+                    removed = True
+        if removed:
+            with contextlib.suppress(OSError):
+                os.fsync(self._directory_fd)
 
     def _write_marker(self, marker, identity) -> None:
         """Item 3: the attempt marker's content, written and synced (with its folder) before the copy is published."""

@@ -1135,5 +1135,85 @@ class FinalCapIsolationTests(OrchestrationStore):
                          (self.status(primary['orchestration_handle']), self.status(unattended)))
 
 
+
+# Decision 212 (same fixed-scope round): the reservation version of item 1, and a crash before the marker.
+
+class FinalReservationSelectionTests(rc.RecordedContextFixture):
+    """A held reservation is found by its register row and verified by its seal, never only by its orchestration
+    column: one whose column was changed refuses the close and stays held."""
+    owner, handle = EligibilityWithRunsTests.owner, EligibilityWithRunsTests.handle
+    snapshot, primary_close = EligibilityWithRunsTests.snapshot, EligibilityWithRunsTests.primary_close
+    past_due = EligibilityWithRunsTests.past_due
+
+    def setUp(self):
+        super().setUp()
+        if self.store._orchestration_limits is None:
+            self.store._orchestration_limits = OrchestrationLimits(4, 12)
+
+    def corrupt(self):
+        self.recorded()  # a held reservation of the target
+        db = self.store._connection
+        db.execute('PRAGMA foreign_keys=OFF')  # a reservation with no lease (as an earlier format's), so no lease
+        for table in ('project_host_opens', 'project_cleanup_receipts', 'project_cleanup_reservations',
+                      'result_leases'):  # read of its parent can expose the change first
+            db.execute(f'DELETE FROM {table} WHERE run_handle=? AND attempt=?',
+                       (self.binding.run_handle, self.binding.attempt))
+        db.execute('UPDATE result_reservations SET orchestration_handle=? WHERE claim_id=?',
+                   (OTHER, self.binding.claim_id))
+        db.execute('PRAGMA foreign_keys=ON')
+        self.past_due()
+
+    def held(self):
+        return self.store._connection.execute("SELECT state FROM project_holds WHERE kind='reservation' "
+                                              "AND identity=?", (self.binding.claim_id,)).fetchone()[0]
+
+    @requirements('RS-B-B6-2', why_not_scenario=WHY)
+    def test_B6_2_a_held_reservation_whose_orchestration_column_was_changed_refuses_the_primary_close(self):
+        self.corrupt()
+        with self.assertRaises(HistoryError):
+            self.primary_close()
+        self.assertEqual(('held', 'held'), (hold(self.store, self.handle)[0], self.held()))
+
+    @requirements('RS-B-B6-2', why_not_scenario=WHY)
+    def test_B6_2_a_held_reservation_whose_orchestration_column_was_changed_refuses_the_unattended_close(self):
+        self.corrupt()
+        self.assertEqual(0, self.owner.end_idle(self.fixture.base.stamp))
+        self.assertEqual(('held', 'held'), (hold(self.store, self.handle)[0], self.held()))
+
+
+class FinalStalePartialTests(Step20Store):
+    """A crash before the marker is written leaves a temporary copy; the next attempt removes this store's own stale
+    temporary copies (this format's name, regular, one link, owned by this user) and never another file."""
+
+    @requirements('RS-B-B6-7', why_not_scenario=WHY)
+    def test_B6_7_a_crash_before_the_marker_leaves_no_partial_after_the_next_attempt(self):
+        script = (
+            'import os, sys\n'
+            f'sys.path.insert(0, {str(ORCHESTRATION_ROOT)!r})\n'
+            'from pathlib import Path\n'
+            'from codex_agents import project_history\n'
+            'from codex_agents.project_history import ProjectHistory\n'
+            'from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity\n'
+            'ProjectHistory._content_identity = staticmethod(lambda path: os._exit(9))  # after the backup\n'
+            f'ProjectHistory(Path({str(self.directory)!r}), {PROJECT_A!r}, result_key={KEY!r}, '
+            'result_capacity=ResultCapacity(8, 4 * MAX_RESULT_BODY_BYTES, 60_000, 120_000), '
+            'result_clock_ms=lambda: 4000, allow_schema_upgrade=True)\n')
+        completed = subprocess.run([sys.executable, '-I', '-B', '-c', script], capture_output=True, timeout=60)
+        self.assertEqual(9, completed.returncode, completed.stderr)
+        (dead,) = self.directory.glob('*.partial')
+        self.assertEqual(([], []), (self.copies(), list(self.directory.glob('*.attempt'))))
+        # Others, never removed: another format's temporary name, one with another hard link, a lookalike name.
+        other_format = self.directory / '.history.sqlite3.before-20.1.0123456789abcdef.partial'
+        linked = self.directory / '.history.sqlite3.before-21.2.0123456789abcdef.partial'
+        lookalike = self.directory / '.history.sqlite3.before-21.3.partial'
+        for path in (other_format, linked, lookalike):
+            path.write_bytes(b'not this attempt')
+        os.link(linked, self.directory.parent / 'operator-link')
+        self.assertEqual(21, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertFalse(dead.exists())
+        self.assertTrue(all(path.read_bytes() == b'not this attempt' for path in (other_format, linked, lookalike)))
+        self.assertEqual(1, len(self.copies()))
+
+
 if __name__ == '__main__':
     unittest.main()

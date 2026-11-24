@@ -20,6 +20,14 @@ Evidence: docs/requirements/b6/red.md. Assertion ledger: docs/requirements/b6/as
   B2 8 modules (backups, learning source, cap guard) 112 tests 54 s; test_project_driver alone 99 tests 247 s; root
   tests.test_rsd_budget 2 s. Not run: full suite / --affected (primary). Digests not refreshed.
 
+### Decision 212 (same round, on 3db04d46): COMPLETE
+- `_verify_held_reservations`: every held/releasing reservation register row's reservation is read and verified
+  (seal covers its orchestration column) before the target's are selected by column; missing/unverifiable refuses.
+- `_remove_stale_partials`: before an attempt, this store's own stale `.history.sqlite3.before-21.<n>.<16hex>.partial`
+  (regular, one link, own uid) go; nothing else.
+- Runs (all green): store batch 731 tests 241 s; service batch 226 tests 229 s; backup/learning/guard 112 tests 55 s;
+  test_project_driver alone 99 tests 251 s. Red/green in red.md "Decision 212"; ledger assertions.md G.
+
 ## Earlier state: review round 1 fix COMPLETE (020e530d)
 
 ### Review round 1 (one fix round; red evidence in red.md, ledger section E in assertions.md, acceptance in b6.md)

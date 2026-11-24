@@ -106,3 +106,7 @@ about behaviour was weakened; each line is a format pin, a copy-name pin, or a f
 - `tests/lifetime_caps.json` (registry, no test text): `orchestration_store.py::<module>` checks 1 -> 3 (the two
   item-1 selects `_HELD_LEASES`, `_HELD_LEASE_ROWS`, LIMIT over live leases only) and new
   `orchestration_store.py::_held_leases` (checks 1); both name the new cap test.
+
+## G. Decision 212 (no existing assertion changed or removed)
+- New tests only (FinalReservationSelectionTests x2, FinalStalePartialTests x1). `tests/lifetime_caps.json`:
+  `<module>` checks 3 -> 4 (`_HELD_RESERVATION_ROWS`) and new `_verify_held_reservations` (checks 1).
