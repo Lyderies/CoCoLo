@@ -2144,6 +2144,30 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+UNCOMMITTED_READ_PATH = "assignment read path is not committed"
+# Repository-level export conditions; open never refused these before L6.2 and dispatch-preflight still does.
+REPOSITORY_TRUST_REFUSALS = frozenset({
+    "project repository cannot be trusted for export",
+    "project root is not the top of a git repository",
+})
+
+
+def _refuse_uncommitted_read_paths(project_root: Path, assignment: dict[str, Any], task: dict[str, Any]) -> None:
+    """L6.2 at open: refuse what dispatch-preflight refuses about the assignment's read paths (an uncommitted,
+    ungranted or unexportable path), before any host start, admission or hold.
+
+    Repository-trust conditions are not about the read paths: open did not refuse them before L6.2, so they
+    are left to dispatch-preflight's full check, unchanged, and never mask an open-time refusal (route
+    exhaustion, an API key, admission).
+    """
+    try:
+        committed_export_manifest(project_root, assignment_read_paths(
+            assignment, worker_outcome_digest=task.get("verification_for_outcome")))
+    except BridgeRefused as exc:
+        if str(exc) not in REPOSITORY_TRUST_REFUSALS:
+            raise
+
+
 def main() -> int:
     args = build_parser().parse_args()
     global _EXPLICIT_HOST_CLIENT, _COLLECTOR_UNREACHED
@@ -2615,8 +2639,7 @@ def main() -> int:
             if supplied_route.get("dispatch") == "bridge":
                 # L6.2: the same refusal as dispatch-preflight, before the host starts, any backend call,
                 # admission or capacity hold, so nothing else can mask it. Read paths do not depend on the route.
-                committed_export_manifest(args.project_root, assignment_read_paths(
-                    assignment, worker_outcome_digest=task.get("verification_for_outcome")))
+                _refuse_uncommitted_read_paths(args.project_root, assignment, task)
             # Validate the originally advertised choice before refreshing availability.
             # A fresh snapshot may change provider/model/effort, never permissions or task lineage.
             policy = load_effective_policy(args.project_root,
@@ -2640,8 +2663,7 @@ def main() -> int:
 
             if current_route.get("dispatch") == "bridge" and supplied_route.get("dispatch") != "bridge":
                 # L6.2: a supplied route that the refresh resolved to a bridge route gets the same refusal.
-                committed_export_manifest(args.project_root, assignment_read_paths(
-                    assignment, worker_outcome_digest=task.get("verification_for_outcome")))
+                _refuse_uncommitted_read_paths(args.project_root, assignment, task)
             if _host_driven(current_route):
                 _start_project_host(args)
                 if _host_client() == CLAUDE_HOST_CLIENT:
@@ -2691,8 +2713,7 @@ def main() -> int:
                 validate_assignment(rebound, task=task, route=route, parent_grant=parent_grant)
                 if route.get("dispatch") == "bridge":
                     # L6.2: the route as resolved after refresh, before any admission.
-                    committed_export_manifest(args.project_root, assignment_read_paths(
-                        rebound, worker_outcome_digest=task.get("verification_for_outcome")))
+                    _refuse_uncommitted_read_paths(args.project_root, rebound, task)
                 if _host_driven(route):
                     _start_project_host(args)
                     host = _host_client()
@@ -4122,6 +4143,8 @@ def main() -> int:
     except BridgeRefused as exc:
         # Refusal messages are fixed strings; they never carry prompts or paths.
         report = {"ready": False, "error": "dispatch refused", "reason": str(exc)}
+        if str(exc) == UNCOMMITTED_READ_PATH:
+            report["reason_code"] = "read_path_not_committed"  # L6.2: open and dispatch-preflight name it
         if args.command == "dispatch-preflight":
             report["admission_created"] = False  # a preflight refusal admitted nothing (decision 167)
         if str(exc) == "launch denied: billing_attestation_missing":

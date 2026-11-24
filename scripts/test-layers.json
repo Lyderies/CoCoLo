@@ -248,7 +248,7 @@
  "codex:tests.test_refusal_steps": "unit",
  "codex:tests.test_release_batch_queries": "unit",
  "codex:tests.test_reply_shape_compatibility": "unit",
- "codex:tests.test_reply_shape_live": "scenario",
+ "codex:tests.test_reply_shape_live": "soak",
  "codex:tests.test_required_host_open": "scenario",
  "codex:tests.test_result_commit_busy": "scenario",
  "codex:tests.test_result_denial_lane": "scenario",

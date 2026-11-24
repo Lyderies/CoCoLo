@@ -414,7 +414,9 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
             return preflight_failure('cannot record coverage: ' + str(error), jobs, save, preflight_started)
     running, results, started = {}, [], time.monotonic()
     environment = worker_environment()
-    worker_timeout = float(os.environ.get('COCOLO_WORKER_TIMEOUT', UNIT_SECONDS))
+    # A soak module may use its whole layer budget (decision 175: release-gate replays run under --profile soak).
+    default_timeout = max(UNIT_SECONDS, framework.BUDGETS['soak']) if profile == 'soak' else UNIT_SECONDS
+    worker_timeout = float(os.environ.get('COCOLO_WORKER_TIMEOUT', default_timeout))
     timed_out_workers = set()
     counter, total, reported = 0, len(queue), time.monotonic()
     try:

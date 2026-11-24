@@ -1671,6 +1671,13 @@ class LearningCliTests(unittest.TestCase):
             "tools": ["shell"], "filesystem": ["source.txt:read"],
             "network": False, "mcps": [], "external_effects": False,
         }
+        # Setup (L6.2): the assignment reads source.txt; open refuses an uncommitted read path before
+        # admission, so the fixture commits it as a real project would.
+        (self.project / "source.txt").write_text("fixture\n")
+        git = ["git", "-C", str(self.project), "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+               "-c", "commit.gpgsign=false"]
+        subprocess.run([*git, "add", "source.txt"], check=True)
+        subprocess.run([*git, "commit", "-q", "-m", "fixture"], check=True)
         task_path = self._write("trusted-task.json", task)
         assignment_path = self._write("trusted-assignment.json", assigned)
         parent_path = self._write("trusted-parent.json", parent)

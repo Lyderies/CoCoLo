@@ -43,6 +43,18 @@ module budgets, and disjoint complete shard/combine checks. Current non-ceiling 
 debt files retain existing measured limits; changes receive ordinary review. No tests
 or helpers need a legacy-baseline migration to be edited.
 
+## Release-gate replays (soak layer)
+
+Modules whose proof is a long replay are in the `soak` layer (`scripts/test-layers.json`): the default
+`ci` and `dev` profiles, and so every local full run and `--affected` run, skip them; their requirement
+checks then report as unselected, never as passing. They stay mandatory at the release-end gate and in CI's
+`release-replay` job (main, tags and the nightly run; a failure fails the run). Run them by name:
+`python -B scripts/parallel_tests.py --profile soak --module codex:tests.test_reply_shape_live`. Under
+`--profile soak` the worker timeout defaults to the soak budget (900 s) instead of 600 s. Today the list is
+`codex:tests.test_reply_shape_live` (decision 175, LR-1 / RS-B-B4m-2, about 10 minutes; its replayed drivers
+run against the fake provider clients only). `codex:tests.test_merge_library_soak` is the local-routing
+fault-sweep campaign (TF-18) and is not part of CI.
+
 Requirements without a check have coverage state `unchecked`; run records contain
 `unchecked_requirement_count` and `unchecked_requirement_ids`, and the last output line
 lists both. They do not fail the run. Tagged tests still validate IDs, source statements

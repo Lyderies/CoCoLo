@@ -49,3 +49,57 @@ Status: see the bottom of this file.
   (red KeyError 'admission_created', then green).
 - Assertions changed: none. reply_shapes.py has no table for the preflight refusal (checked); no other test pins that reply.
 - runtime-releases.json: only the 0.8.57 entry refreshed (ffc6ac85... -> 3f66f3ae...); 0.8.55/0.8.56 untouched.
+
+## 5. Full-run 0.8.57 failures (three)
+1. codex:tests.test_route_exhausted_open (BridgeRefused "project repository cannot be trusted for export" at open).
+   Cause: the L6.2 open check (cli.py learning-open-host-run) ran the WHOLE committed-export inspection, so open
+   also refused repository-trust conditions it never refused before and that dispatch-preflight refuses later.
+   Product fix: `_refuse_uncommitted_read_paths` runs the same inspection at the same three points but leaves
+   `REPOSITORY_TRUST_REFUSALS` ("project repository cannot be trusted for export", "project root is not the top of
+   a git repository") to dispatch-preflight's full check, which is unchanged. Every read-path refusal (not committed,
+   not granted, symlink, ...) still refuses at open before host start/admission, so the existing L6.2 driver tests
+   (test_project_driver -k test_l6_2, which use an uncommitted AND ungranted path) stay green unchanged.
+   Narrowing to the "not committed" reason alone was tried and broke those two tests, so it was not kept.
+   Test (new): test_dispatch_preflight test_open_time_read_path_check_leaves_repository_trust_to_dispatch
+   (red: no such helper; green).
+2. codex:tests.test_learning_cli test_trusted_host_lifecycle_opens_and_records_exact_assignment (KeyError
+   reason_code). Cause: the fixture project is `git init` with NO commit, so the assignment's read path source.txt is
+   genuinely uncommitted; L6.2 (open refuses an uncommitted read path before host start, any backend call or
+   admission) now refuses it before the API-key admission check the test exercises, and the later successful open
+   in the same test could never pass. The product is right per L6.2. Setup fix only (no assertion changed): the test
+   writes and commits source.txt before its first open.
+   Product fix for the missing code: a BridgeRefused reply for "assignment read path is not committed" now carries
+   `reason_code: read_path_not_committed` (open and dispatch-preflight share the handler; the T7 L6.2 check accepts
+   that code). Test (new): test_dispatch_preflight test_cli_refusal_of_an_uncommitted_read_path_names_its_reason_code
+   (red KeyError 'reason_code'; green). Other BridgeRefused reasons (about 60 fixed strings) still have no
+   reason_code: mapping them all is a separate decision (one test pins the exact refusal dict:
+   test_dispatch_delivery_cli line 174).
+3. codex:tests.test_reply_shape_live (10-minute worker timeout). Decision 175: it is a release-gate proof.
+   Mechanism used: the existing `soak` layer (scripts/test-layers.json scenario -> soak). Default ci/dev profiles,
+   so every local full run and --affected run, skip it; `--profile soak --module codex:tests.test_reply_shape_live`
+   runs it. Runner: under --profile soak the worker timeout defaults to the soak budget (900 s) instead of 600 s
+   (COCOLO_WORKER_TIMEOUT still overrides). CI: new job `release-replay` (main, tags, nightly; not
+   continue-on-error). Documented in TESTING-framework.md (Release-gate replays) and CONTRIBUTING.md (release gate).
+   Drivers: observed() now wraps the whole replay in trusted_tools(fake_provider_tools(...)) (the same setup the
+   drivers' BridgeTestCase uses), so an unpatched driver resolves only the fake clients; a real client binary
+   cannot be found. The hang in the log was inside a driver's fake-client observation at the 600 s mark, i.e. the
+   replay's total time, not a real binary (BridgeTestCase already patches the trusted path).
+
+### Assertion / setup changes (old -> new)
+- tests/test_learning_cli.py test_trusted_host_lifecycle_opens_and_records_exact_assignment: SETUP only.
+  old: project is an empty `git init` (read path source.txt never committed) -> new: the test writes source.txt and
+  commits it before the first open. No assertion changed.
+- tests/test_reply_shape_live.py LiveReplyShapeTests.observed: SETUP only. old: drivers replayed with the default
+  trusted search path -> new: replayed inside trusted_tools(fake clients). No assertion changed.
+- scripts/test-layers.json codex:tests.test_reply_shape_live: scenario -> soak (selection, decision 175). Its
+  RS-B-B4m-2 checks are unselected (not passing) in ci-profile runs; the other RS-B-B4m-2 checks still run there.
+- runtime-releases.json: only the 0.8.57 entry refreshed (3f66f3ae... -> f287792a...); 0.8.55/0.8.56 untouched.
+
+### Runs (clean env, named modules)
+- test_dispatch_preflight + test_route_exhausted_open + test_learning_cli: 60 tests 65 s OK (after final narrowing:
+  dispatch_preflight + route_exhausted_open + the learning_cli test 31 tests 10 s OK; test_project_driver -k test_l6_2 4 OK).
+- test_bridge + test_runtime_release: 171 tests 206 s OK. Root test_test_stages + test_e2e_run_control + test_ci_stages:
+  49 tests 3 s OK.
+- `parallel_tests.py --profile soak --module codex:tests.test_reply_shape_live`: 5 tests, unit 636 s OK, no requirement
+  failures. Runner exit 1 only from 50 pre-existing METADATA errors ("RS-B-B4 does not list its check",
+  test_account_settlement*/driver), the same 50 as in the 0.8.57 full-run log: not from this change; for the primary.

@@ -8,6 +8,7 @@ must satisfy reply_fields_match, every operation in both tables must have been p
 optional field the table allows must have been seen on a real reply.
 """
 import collections
+import contextlib
 import io
 from threading import local as ThreadSlot
 import unittest
@@ -17,7 +18,11 @@ import tests.support  # noqa: F401
 from tests.support import REPOSITORY_ROOT
 import sys
 
+import tempfile
+from pathlib import Path
+
 from codex_agents import account_service, history_api, history_service
+from tests.learning_support import fake_provider_tools, trusted_tools
 from codex_agents.account_api import account_request_digest, decode_account_request
 from codex_agents.reply_shapes import REPLY_FIELDS, reply_fields_match
 
@@ -116,10 +121,15 @@ class LiveReplyShapeTests(unittest.TestCase):
     def observed(cls):
         if cls.recorder is None:
             recorder = Recorder()
-            patches = recorder.patches()
-            for patch in patches:
-                patch.start()
-            try:
+            # Setup (decision 175): no driver may reach a real provider client. The default trusted search path
+            # is the fake clients, exactly as the drivers' own BridgeTestCase setup installs them; a driver's own
+            # trusted_tools still wins inside it.
+            with contextlib.ExitStack() as stack:
+                tools = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix='reply-shape-clients-'))) / 'tools'
+                fake_provider_tools(tools)
+                stack.enter_context(trusted_tools(tools))
+                for patch in recorder.patches():
+                    stack.enter_context(patch)
                 loader = unittest.defaultTestLoader
                 for group, modules in DRIVERS:
                     suite = loader.loadTestsFromNames([f'tests.{name}' for name in modules])
@@ -127,9 +137,6 @@ class LiveReplyShapeTests(unittest.TestCase):
                     result = unittest.TextTestRunner(stream=stream, verbosity=0).run(suite)
                     if not result.wasSuccessful():
                         recorder.driver_failures.append((group, stream.getvalue()[-4000:]))
-            finally:
-                for patch in reversed(patches):
-                    patch.stop()
             cls.recorder = recorder
         return cls.recorder
 

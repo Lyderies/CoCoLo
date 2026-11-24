@@ -57,6 +57,9 @@ proposes one.
 - Before opening a release pull request from `version/*` to `main`, try that release on a real
   install from its `version/*` branch. Record what ran and its results; unit tests and a disposable
   install alone do not satisfy this release gate.
+- The release-end gate also runs the release-gate replays (soak layer, not in local full runs):
+  `python -B scripts/parallel_tests.py --profile soak --module codex:tests.test_reply_shape_live`
+  (see TESTING-framework.md).
 
 ## No identifiers
 
