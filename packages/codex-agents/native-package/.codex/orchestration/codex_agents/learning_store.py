@@ -6719,6 +6719,19 @@ class LearningLedger:
             if row[0] is not None
         }
 
+    def _recheck_attempts_locked(self, provider, fingerprint):
+        """USAGE-RECHECK-5: when this account's admitted billing probes began, in any project.
+
+        An admitted probe is committed before it launches, so it reserves the account's re-check interval whether
+        or not its run produced a reading. Codex re-checks do not spend; the route reserves them (cli.py)."""
+        if provider != "claude" or fingerprint is None:
+            return ()
+        return tuple(int(row[0]) for row in self._connection.execute(
+            "SELECT observed_at_ms FROM records WHERE source='lifecycle' AND record_type='probe_admission' "
+            "AND json_extract(CAST(content AS TEXT),'$.provider')='claude' "
+            "AND json_extract(CAST(content AS TEXT),'$.decision')='pass' "
+            "AND json_extract(CAST(content AS TEXT),'$.account_fingerprint')=?", (fingerprint,)).fetchall())
+
     def _store_route_availability_locked(self, project_id, run_id, route, timestamp):
         """Bind the logical open's bounded attempt history to its admitted run."""
         availability = route.get("availability", {})
@@ -6744,7 +6757,8 @@ class LearningLedger:
                 fingerprint = identity[0]["account_fingerprint"] if identity is not None else None
                 headroom, _ = self._account_records_locked(project_id, "provider_headroom", provider)
                 billing, _ = self._account_records_locked(project_id, "provider_billing", provider)
-                state = classify_provider_state(provider, fingerprint, headroom, billing, timestamp)
+                state = classify_provider_state(provider, fingerprint, headroom, billing, timestamp,
+                    recheck_attempts_ms=self._recheck_attempts_locked(provider, fingerprint))
                 digests = state["evidence_digests"]
                 refs = []
                 if digests:
@@ -6786,6 +6800,13 @@ class LearningLedger:
         headroom, local_headroom = self._account_records_locked(
             project_id, "provider_headroom", provider
         )
+        if probe:
+            from .admission_metadata import select_provider_identity
+            identity = select_provider_identity(provider, identities, timestamp)
+            attempts = self._recheck_attempts_locked(
+                provider, identity[0]["account_fingerprint"] if identity is not None else None)
+        else:
+            attempts = ()
         return evaluate_admission(
             admission_policy=self._admission_settings(provider),
             prior_run_admissions=self._prior_run_admissions_locked(provider, timestamp),
@@ -6805,6 +6826,7 @@ class LearningLedger:
             environ=environ,
             now_ms=timestamp,
             probe=probe,
+            recheck_attempts_ms=attempts,
         )
 
     def evaluate_admission(

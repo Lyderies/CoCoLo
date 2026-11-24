@@ -28,10 +28,10 @@ reading 10 min old -> refused `provider_exhausted`, nothing launched.
 
 ### USAGE-RECHECK-3 - An early reset clears a measured restriction (NEEDS OWNER DECISION: changes RT-RX-5)
 A later reading (strictly later `observed_at_ms`, at or before evaluation time) of the same provider, account and
-window (same `scope` and `window_minutes`) that rates that window non-restrictive AND carries its own explicit
-`resets_at` different from the restrictive window's proves the window reset early: it supersedes that window's
+window (same `scope` and `window_minutes`, at least one of them known; review r1) that rates that window non-restrictive AND carries its own explicit
+`resets_at` (the one that reading reported, never one a merge lent it) different from the restrictive window's proves the window reset early: it supersedes that window's
 restriction (and a Claude `rejected` status bound to that window). This applies only while the restrictive
-window's reset is more than `USAGE_RECHECK_FAR_RESET_MS` away: a near reset is waited for, so RT-RX-5 and
+window's reset is more than `USAGE_RECHECK_FAR_RESET_MS` away at the clearing reading's time (a proof then stands as the old reset nears): a near reset is waited for, so RT-RX-5 and
 `tests/test_providers.py:1171-1173` ("a later, favourable read does not clear a window that has not reset", reset
 5 s away) are unchanged. A later reading with no reset time, for another
 window, for another account, or older/equal in time does not clear it; RT-RX-5 is otherwise unchanged.
@@ -54,10 +54,10 @@ may pick Claude; still rejected -> Claude skipped as today; a second route strai
 ### USAGE-RECHECK-5 - Bounded, recorded, never real work on the exhausted provider
 Selection uses only the snapshot read after the re-check; no worker or verifier is ever routed to a provider that
 snapshot still calls exhausted. At most one re-check per provider per route call, and at most one per provider per
-`USAGE_RECHECK_INTERVAL_MS` across calls (the stored reading's time is the clock, so a restart does not reset it).
+`USAGE_RECHECK_INTERVAL_MS` across calls (the newest stored reading or reserved attempt is the clock, so a restart does not reset it; review r1: an attempt is reserved before any I/O and counts whether it yields a reading, no reading or a failure).
 A re-check never fails the route: a refused or failed re-check routes on the existing snapshot. The route's
 availability audit records `recheck: {<provider>: {"outcome": "cleared"|"still_exhausted"|"failed:<reason>",
-"observed_at_ms": int|null}}`; the probe's records are stored as every probe's are.
+"observed_at_ms": int|null}}` (`observed_at_ms`: the account's new reading, null when none arrived; `cleared` needs one); the probe's records are stored as every probe's are.
 
 ### UX-HCU-1 - host_client_unknown says what to do (LOW)
 The refusal `host_client_unknown` gets its own next step: run the command from the Claude Code or Codex session

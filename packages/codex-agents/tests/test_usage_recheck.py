@@ -88,6 +88,98 @@ class EarlyResetTests(unittest.TestCase):
                 self.assertEqual('exhausted', state('claude', rejected, later)['state'])
 
 
+def unnamed(used, reset):
+    """A window whose identity is unknown: no scope and no duration."""
+    return {'scope': None, 'window_minutes': None, 'used_percent': used, 'resets_at': reset}
+
+
+class RecheckReviewFixTests(unittest.TestCase):
+    """Review round 1 (NOT-READY) findings HIGH 1, HIGH 2, HIGH 4 and its MED, on the pure classifier."""
+
+    @requirements('USAGE-RECHECK-3', 'RT-RX-5', why_not_scenario=PURE)
+    def test_windows_of_unknown_identity_never_clear_each_other(self):
+        far = NOW + 3 * DAY
+        for provider, restrictive, later in (
+                ('codex', codex(NOW - 2 * 3_600_000, unnamed(95, far)), codex(NOW - MINUTE, unnamed(10, NOW + 7 * DAY))),
+                ('claude', claude(NOW - 2 * 3_600_000, 'rejected', unnamed(100, far)),
+                 claude(NOW - MINUTE, 'allowed', unnamed(2, NOW + 7 * DAY)))):
+            with self.subTest(provider=provider):
+                self.assertEqual('exhausted', state(provider, restrictive, later)['state'])
+
+    @requirements('USAGE-RECHECK-3', 'RT-RX-5', why_not_scenario=PURE)
+    def test_an_inherited_merged_reset_is_not_proof_of_an_early_reset(self):
+        from codex_agents.provider_restrictions import merged_restriction
+        from codex_agents.providers import headroom_record
+
+        def run_reading(at, used, reset):
+            return headroom_record(provider='claude', account_fingerprint=ACCOUNT, status='allowed', run_id=None,
+                                   phase=None, observed_at_ms=at, windows=[window('seven_day', used, reset)])
+        far, new = NOW + 3 * DAY, NOW + 7 * DAY
+        rejected = claude(NOW - 2 * 3_600_000, 'rejected', window('seven_day', 100, far))
+        # A low reading that reports the OLD reset, merged with an unmeasured event that names another reset:
+        # the merge gives the low component the later reset, which the provider never reported for it.
+        low = run_reading(NOW - 2 * MINUTE, 2, far)
+        unmeasured = run_reading(NOW - MINUTE, None, new)
+        merged = merged_restriction([low, unmeasured], observed_at_ms=NOW - MINUTE)
+        self.assertEqual('exhausted', state('claude', rejected, merged)['state'])
+
+    @requirements('USAGE-RECHECK-3', why_not_scenario=PURE)
+    def test_a_proven_early_reset_stays_cleared_as_the_old_reset_nears(self):
+        far = NOW + 3 * DAY
+        rejected = claude(NOW - 2 * 3_600_000, 'rejected', window('seven_day', 100, far))
+        fresh = claude(NOW - MINUTE, 'allowed', window('seven_day', 2, NOW + 7 * DAY))
+        for later in (NOW, far - 30 * MINUTE, far - 1):
+            with self.subTest(now=later):
+                self.assertEqual('ample', state('claude', rejected, fresh, now=later)['state'])
+
+    @requirements('USAGE-RECHECK-1', 'USAGE-RECHECK-5', why_not_scenario=PURE)
+    def test_a_recheck_attempt_without_a_reading_starts_the_interval(self):
+        far = NOW + 3 * DAY
+        old = claude(NOW - 61 * MINUTE, 'rejected', window('seven_day', 100, far))
+        result = metadata.classify_provider_state('claude', ACCOUNT, pairs(old), [], NOW,
+                                                  recheck_attempts_ms=[NOW - 5 * MINUTE, NOW + DAY])
+        self.assertEqual(NOW + 55 * MINUTE, result['recheck_due_at_ms'])
+        self.assertEqual(NOW - 61 * MINUTE, result['last_reading_at_ms'])  # an attempt is not a reading
+        self.assertFalse(metadata.usage_recheck_due('claude', ACCOUNT, pairs(old), [], NOW,
+                                                    recheck_attempts_ms=[NOW - 5 * MINUTE]))
+        self.assertTrue(metadata.usage_recheck_due('claude', ACCOUNT, pairs(old), [], NOW,
+                                                   recheck_attempts_ms=[NOW - 61 * MINUTE]))
+
+
+class RecheckAuditTests(unittest.TestCase):
+    """Review round 1 MED: the audit reports the account's actual new reading, or null; never 'cleared' because the
+    identity expired, never the snapshot's own time when no reading arrived."""
+
+    @requirements('USAGE-RECHECK-5', why_not_scenario='The CLI re-check step with its account-service clients '
+                  'replaced; no service, ledger or provider is reached.')
+    def test_the_audit_names_the_actual_reading_or_null(self):
+        from unittest import mock
+        import cli
+        before = metadata.ProviderStateSnapshot('p', NOW, {
+            'codex': {'state': 'ample', 'recheck_due_at_ms': None, 'account_fingerprint': ACCOUNT},
+            'claude': {'state': 'exhausted', 'recheck_due_at_ms': NOW - MINUTE, 'account_fingerprint': ACCOUNT,
+                       'last_reading_at_ms': NOW - 61 * MINUTE}})
+
+        def after(claude_state):
+            return metadata.ProviderStateSnapshot('p', NOW + 5, {
+                'codex': before.providers['codex'], 'claude': claude_state})
+        expired = {'state': 'unknown', 'recheck_due_at_ms': None, 'account_fingerprint': None,
+                   'last_reading_at_ms': None}
+        unchanged = {**before.providers['claude'], 'recheck_due_at_ms': NOW + 5 * MINUTE}
+        read = {**before.providers['claude'], 'recheck_due_at_ms': NOW + 2 + 3_600_000, 'last_reading_at_ms': NOW + 2}
+        for fresh, expected in ((expired, {'outcome': 'failed:no_reading', 'observed_at_ms': None}),
+                                (unchanged, {'outcome': 'failed:no_reading', 'observed_at_ms': None}),
+                                (read, {'outcome': 'still_exhausted', 'observed_at_ms': NOW + 2}),
+                                ({**read, 'state': 'ample', 'recheck_due_at_ms': None},
+                                 {'outcome': 'cleared', 'observed_at_ms': NOW + 2})):
+            with self.subTest(fresh=fresh), \
+                    mock.patch.object(cli, 'provider_state_snapshot_client', return_value=after(fresh)), \
+                    mock.patch.object(cli, 'billing_probe_client', return_value={'probe': 'launched'}), \
+                    mock.patch.object(cli, '_reserve_usage_recheck', return_value=True, create=True), \
+                    mock.patch.object(cli, '_host_client', return_value='claude-host-v1'):
+                self.assertEqual({'claude': expected}, cli._usage_recheck(None, None, before).recheck)
+
+
 class HostClientUnknownStepTests(unittest.TestCase):
     @requirements('UX-HCU-1', why_not_scenario=PURE)
     def test_host_client_unknown_says_to_run_it_from_the_host_session(self):

@@ -1327,19 +1327,74 @@ def _names_state(state_root) -> bool:
     return state_root is not None or os.path.lexists(INSTALL_MANIFEST)
 
 
+_RECHECK_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
+
+
+def _recheck_reservation_path(state_root, provider, fingerprint):
+    return CollectorPaths(state_root).root / "usage-recheck" / f"{provider}-{fingerprint}.json"
+
+
+def _recheck_reserved_at(state_root, provider, fingerprint):
+    """When the route last took this account's re-check attempt (USAGE-RECHECK-5), or None."""
+    if type(fingerprint) is not str or not _RECHECK_FINGERPRINT.fullmatch(fingerprint):
+        return None
+    try:
+        value = json.loads(_recheck_reservation_path(state_root, provider, fingerprint).read_text())
+    except (OSError, ValueError, StateError):
+        return None
+    at = value.get("reserved_at_ms") if type(value) is dict else None
+    return at if type(at) is int else None
+
+
+def _reserve_usage_recheck(state_root, provider, fingerprint, now_ms):
+    """USAGE-RECHECK-5: atomically take this account's one re-check attempt for the interval, before any I/O.
+
+    The attempt is spent whatever it yields (a reading, no reading, a failure), and it is kept on disk under the
+    state root, so neither a failed read nor a restart lets the route try again within the interval. False: an
+    attempt was already taken inside it (or none can be recorded, so none is made)."""
+    import fcntl
+    from codex_agents.admission_metadata import USAGE_RECHECK_INTERVAL_MS
+    if type(fingerprint) is not str or not _RECHECK_FINGERPRINT.fullmatch(fingerprint):
+        return False
+    try:
+        path = _recheck_reservation_path(state_root, provider, fingerprint)
+        path.parent.mkdir(mode=0o700, exist_ok=True)
+        lock = os.open(path.parent / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            last = _recheck_reserved_at(state_root, provider, fingerprint)
+            if last is not None and abs(now_ms - last) < USAGE_RECHECK_INTERVAL_MS:
+                return False
+            temporary = path.with_name(path.name + ".tmp")
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "w") as handle:
+                json.dump({"reserved_at_ms": now_ms}, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+            return True
+        finally:
+            os.close(lock)
+    except (OSError, StateError):
+        return False
+
+
 def _usage_recheck(state_root, project_root, snapshot):
     """USAGE-RECHECK-2/4/5: one bounded fresh reading for each provider the snapshot says is due one.
 
     Codex is read with the non-spending observation; Claude with one billing probe (a single Haiku
-    low-effort turn). Routing then uses only the snapshot read afterwards, so no work goes to a provider
-    that is still exhausted. A refused or failed re-check never fails the route: it keeps the snapshot.
-    The stored reading starts the next interval (decision 134 pending).
+    low-effort turn). Each attempt is reserved first, once per account per interval. Routing then uses only
+    the snapshot read afterwards, so no work goes to a provider that is still exhausted. A refused or failed
+    re-check never fails the route: it keeps the snapshot. The audit names the account's new reading, or null
+    when none arrived (decision 134 pending).
     """
     import dataclasses
     due = [provider for provider in ("codex", "claude")
            if snapshot.providers[provider].get("state") == "exhausted"
            and type(snapshot.providers[provider].get("recheck_due_at_ms")) is int
-           and snapshot.providers[provider]["recheck_due_at_ms"] <= snapshot.evaluated_at_ms]
+           and snapshot.providers[provider]["recheck_due_at_ms"] <= snapshot.evaluated_at_ms
+           and _reserve_usage_recheck(state_root, provider, snapshot.providers[provider].get("account_fingerprint"),
+                                      snapshot.evaluated_at_ms)]
     if not due:
         return snapshot
     failures = {}
@@ -1357,14 +1412,27 @@ def _usage_recheck(state_root, project_root, snapshot):
     current = snapshot if fresh is None else fresh
     audit = {}
     for provider in due:
-        after = None if fresh is None else fresh.providers[provider].get("recheck_due_at_ms")
-        # A probe the provider stopped (e.g. still rejected) can still store its reading: judge by the fresh state.
-        read = fresh is not None and (after is None or after > fresh.evaluated_at_ms)
-        outcome = (("still_exhausted" if current.providers[provider]["state"] == "exhausted" else "cleared")
-                   if read else failures.get(provider)
-                   or ("failed:snapshot_unavailable" if fresh is None else "failed:no_reading"))
-        audit[provider] = {"outcome": outcome, "observed_at_ms": None if fresh is None else fresh.evaluated_at_ms}
+        before, after = snapshot.providers[provider], None if fresh is None else fresh.providers[provider]
+        reading = None if after is None else after.get("last_reading_at_ms")
+        # A new reading of the same account; a probe the provider stopped (e.g. still rejected) can still store one.
+        if (type(reading) is int and after.get("account_fingerprint") == before.get("account_fingerprint")
+                and reading > (before.get("last_reading_at_ms") or -1)):
+            outcome = "still_exhausted" if after["state"] == "exhausted" else "cleared"
+        else:
+            reading = None
+            outcome = failures.get(provider) or ("failed:snapshot_unavailable" if fresh is None
+                                                 else "failed:no_reading")
+        audit[provider] = {"outcome": outcome, "observed_at_ms": reading}
     return dataclasses.replace(current, recheck=audit)
+
+
+def _ledger_route_recheck(state_root, project_root):
+    """The ledger-backed route's re-check (USAGE-RECHECK-4), taken through the account services before the
+    ledger is opened; its audit, or None when nothing was due or the services cannot be asked."""
+    if not _names_state(state_root):
+        return None
+    _, snapshot = _service_snapshot(state_root, project_root)
+    return None if snapshot is None else snapshot.recheck
 
 
 def _route_snapshot(state_root, project_root):
@@ -2293,6 +2361,8 @@ def main() -> int:
                 report = fast[0]
                 _print_command_report(args, report)
                 return 0
+            recheck = (_ledger_route_recheck(args.state_root, args.project_root)
+                       if args.fallback_from_run_handle is None else None)
             ledger, project_id = _learning_ledger(args)
             try:
                 trusted = ledger.trusted_routing_evidence_refs(project_id, task)
@@ -2303,11 +2373,15 @@ def main() -> int:
                     # not this ledger; its verifier's open binds and checks it there.
                     if str(error) != "verification_for_outcome is not a recorded host outcome":
                         raise
+                provider_snapshot = ledger.provider_state_snapshot(project_id)
+                if recheck:
+                    import dataclasses
+                    provider_snapshot = dataclasses.replace(provider_snapshot, recheck=recheck)
                 base_route = _available_route(
                     task,
                     policy,
                     trusted_routing_evidence_refs=trusted,
-                    provider_snapshot=ledger.provider_state_snapshot(project_id), project_id=project_id,
+                    provider_snapshot=provider_snapshot, project_id=project_id,
                     primary_provider=_host_primary_provider(),
                 )
                 if explicit_client is None:
