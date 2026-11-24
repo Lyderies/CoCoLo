@@ -55,6 +55,8 @@ class RuntimeIngressSocketTests(unittest.TestCase):
 
     def test_RSF_S1_2_all_mutating_wire_operations_refuse_old_callers(self):
         for operation in sorted(ingress_tests.COLLECTOR_MUTATIONS):
+            if operation == "shutdown_if_drained":
+                continue  # UPG-5: accepted from another runtime (test_upgrade_handover, real process)
             for fields in ({}, {"runtime_digest": "0" * 64}):
                 with self.subTest(operation=operation, fields=fields):
                     self.assert_upgrade(self.exchange({"protocol": 1, "op": operation, **fields}))

@@ -87,6 +87,8 @@ class RepairIngressTests(StoreFixture):
     def test_RSF_S1_2_every_collector_mutation_refuses_before_touching_state(self):
         for operation in sorted(COLLECTOR_MUTATIONS):
             for fields in ({}, {"runtime_digest": "0" * 64}, {"runtime_digest": []}):
+                if operation == "shutdown_if_drained" and fields != {"runtime_digest": []}:
+                    continue  # UPG-5: the drained stop is accepted from another runtime (test_UPG_5_*)
                 with self.subTest(operation=operation, fields=fields):
                     # An incompatible caller is refused before parsing operation-specific inputs.
                     request = {"protocol": COLLECTOR_PROTOCOL_VERSION, "op": operation, **fields}
@@ -162,6 +164,8 @@ class AccountIngressTests(StoreFixture):
         self.assertEqual(16, len(mutations))  # batch 0.8.57b: + account.lost_run_closure (B4s)
         for operation in sorted(mutations):
             for fields in ({}, {"runtime_digest": "0" * 64}, {"runtime_digest": []}):
+                if operation == "shutdown_if_drained" and fields != {"runtime_digest": []}:
+                    continue  # UPG-5: the drained stop is accepted from another runtime (test_UPG_5_*)
                 with self.subTest(operation=operation, fields=fields):
                     raw = canonical_json({"protocol_version": ACCOUNT_PROTOCOL_VERSION,
                         "operation": operation, "request_id": "rsf-s1", "project_id": self.fixture.project_a_id,
