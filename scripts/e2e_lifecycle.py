@@ -50,7 +50,7 @@ def requirements() -> dict:
 
 
 def run_checks(flows: set[str], *, home_root: Path | None = None, keep_scenes: bool = False, jobs: int = 1,
-               unbuilt_all: bool = True) -> dict:
+               unbuilt_all: bool = True, fault: str | None = None) -> dict:
     """Run every check of the selected flows; the report, as written by main().
 
     `jobs` above 1 runs the checks in that many processes, one scene group per process. `unbuilt_all` false
@@ -61,11 +61,13 @@ def run_checks(flows: set[str], *, home_root: Path | None = None, keep_scenes: b
                 and (unbuilt_all or item["flow"] != "all" or item["checks"])]
     wanted = sorted({name for item in selected for name in item["checks"]})
     if jobs > 1:
-        results = _execute_in_processes(wanted, jobs)
+        results = _execute_in_processes(wanted, jobs, fault=fault)
     else:
+        e2e_checks_run_control.FAULT = fault
         try:
             results = _execute(wanted, home_root)
         finally:
+            e2e_checks_run_control.FAULT = None
             if not keep_scenes:
                 close_scenes()
     decided = {}
@@ -117,7 +119,7 @@ def _execute(wanted, home_root) -> list:
     return results
 
 
-def _execute_in_processes(wanted, jobs: int) -> list:
+def _execute_in_processes(wanted, jobs: int, *, fault: str | None = None) -> list:
     """Run the checks in `jobs` processes: the checks of one scene group stay together (they share one World),
     the groups that take longest start first. A process that dies fails its checks, never skips them."""
     groups: dict[str, list] = {}
@@ -128,8 +130,11 @@ def _execute_in_processes(wanted, jobs: int) -> list:
         def run_group(item):
             _group, names = item
             out = Path(folder) / (re.sub(r"[^a-z0-9_]", "_", _group) + ".json")
+            # The fault, if any, is the worker's explicit argument (never an environment variable it inherits).
             done = subprocess.run([sys.executable, "-I", "-B", str(Path(__file__).resolve()),
-                                   "--execute", ",".join(names), "--results", str(out)], stdin=subprocess.DEVNULL)
+                                   "--execute", ",".join(names), "--results", str(out),
+                                   *(["--fault", fault] if fault else [])],
+                                  stdin=subprocess.DEVNULL, env=e2e_support.child_environment(os.environ))
             try:
                 entries = json.loads(out.read_text())
             except (OSError, ValueError):
@@ -273,14 +278,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", type=Path)
     parser.add_argument("--results", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--jobs", type=int, default=1, help="processes to run the scene groups in (default 1)")
+    parser.add_argument("--fault", choices=sorted(e2e_checks_run_control.FAULTS),
+                        help="inject this test-only product fault into the run-control scenes (T7 S1)")
     args = parser.parse_args(argv)
     if args.execute is not None:
-        return _worker(args.execute.split(","), args.results)
+        return _worker(args.execute.split(","), args.results, fault=args.fault)
     known = set(requirements()["flows"])
     flows = known if args.all else {flow.strip() for flow in args.flows.split(",")}
     if not flows <= known:
         parser.error("unknown flow: " + ",".join(sorted(flows - known)))
-    report = run_checks(flows, jobs=max(1, args.jobs), unbuilt_all=args.all)
+    report = run_checks(flows, jobs=max(1, args.jobs), unbuilt_all=args.all, fault=args.fault)
     if not args.all:
         unbuilt = [i["id"] for i in requirements()["requirements"] if i["flow"] == "all" and not i["checks"]]
         if unbuilt:
@@ -291,11 +298,14 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if json.loads(text)["passed"] else 1
 
 
-def _worker(names: list[str], results: Path | None) -> int:
-    """One --jobs process: run the named checks and write their entries (content-free, scanned for private values)."""
+def _worker(names: list[str], results: Path | None, *, fault: str | None = None) -> int:
+    """One --jobs process: run the named checks and write their entries (content-free, scanned for private values).
+    `fault` is the runner's explicit --fault argument, the only way a fault is selected."""
+    e2e_checks_run_control.FAULT = fault
     try:
         entries = _execute(names, None)
     finally:
+        e2e_checks_run_control.FAULT = None
         close_scenes()
     text = json.dumps(entries)
     home_roots = [tempfile.gettempdir(), str(Path.home()), os.path.realpath(Path.home())]

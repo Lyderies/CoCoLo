@@ -10,7 +10,11 @@ tests/test_e2e_run_control.py. Nothing pushed, nothing installed.
 - run_silence (one project, silence limits scaled 3/1/2/4 s by the stand-in Python, decision 128, test only): L7.2.
   About 35 s.
 - run_capacity (three projects, one HOME, one collector; all three set up before any child starts, because a later
-  setup restarts the shared collector): L9.1, L9.2, L9.3, G5. About 2 min.
+  setup restarts the shared collector): L9.1, L9.2, L9.3, G5. About 2 min. Its billing probes (L9.1 probe_busy, G5)
+  are made for a SECOND Claude account, attested in project C with the owner key and never probed before, so the
+  installed five-minute reuse and cooldown cannot answer for it (no billing constant is rewritten). G5 order: close
+  all three orchestrations, then ONE probe (launched), its `probe_admission` pass and `provider_billing` read in the
+  account ledger, then the eight per-run reads and the ledger table.
 
 ## How values are read (never the command that made the run)
 Project history (read-only sqlite, per project): dispatch_result.terminal_state, event.stop_reason. Account ledger
@@ -21,15 +25,14 @@ The project service's live `learning-run-status`. Per-orchestration report count
 ## Test-only mechanism (decision 128)
 e2e_support.BOOT now reads HOME/.e2e-bin/patches.json: source rewrites applied to a named product module as it is
 imported (each must match exactly once or the import fails loudly). Used for: the project service's LIVENESS limits
-(L7.2), the billing probe reuse and cooldown (60 s scale, so a probe is a real claim on a slot, L9.1/G5), and the
-fault injection below. No product code is changed.
+(L7.2, decision 128) and the fault injection below. Nothing else (no billing constant since fix round 1). No product
+code is changed.
 
 ## Fault injection (one fault turns this slice red)
-`E2E_T7S1_FAULT=slot_not_released` skips the UPDATE that releases a finished run's slot in the installed
-learning_store and in account_cleanup (the live release path). Result (2026-11-24): every S1 check goes red (slots
-leak, later children are refused and the per-run reads say held); the S0 groups do not read the variable. Without the
-variable the official run (`--flows L6,L7,L9 --jobs 2`, report /tmp/claude-501/t7s1/r.json) passed every check except
-the L6.1 finding check: 21 checks, S1 scenes 68 s, 34 s, 127 s (wall about 6 min with the all-flow G checks).
+`--fault slot_not_released` (an explicit runner argument, passed to each --jobs worker as an argument; no environment
+variable selects a fault, and World environments drop every E2E_* variable) skips the UPDATE that releases a
+finished run's slot in the installed learning_store and in account_cleanup (the live release path). Evidence (fix
+round 1, 2026-11-25): see "Fix round 1" below.
 
 ## Facts that differ from the requirement text (primary decision needed)
 1. L9.1 says two children at once and the third refused. The installed limits are six per machine and three per
@@ -41,14 +44,19 @@ the L6.1 finding check: 21 checks, S1 scenes 68 s, 34 s, 127 s (wall about 6 min
    by the child ending; the account slot is released when the child ends. The checks record each result as the
    primary does.
 
-## Product findings (no product code changed)
-- L6.1 (red check, l6_1_tool_the_client_denied_is_reported_in_the_result): the bridge builds
-  report["permission_denials"] (bridge.py:1631) but the dispatch reply drops it; a child the client denied a tool
-  ends completed and neither the reply nor the result says so. A child that calls a tool the run does not allow is
-  stopped and says so (green check).
-- L6.2: `dispatch-preflight` refuses an uncommitted read path before any admission ("assignment read path is not
-  committed", no admission record, no slot). `learning-open-host-run` still ADMITS a run for that path; the dispatch
-  is then refused `preparation_export_failed` with no slot, and the run stays opened (counted abandoned at close).
+## Product findings (no product code changed here; decision 151: fixed on fix/l6-findings, checks stay)
+Both checks are RED against today's product, which is correct; they are known product findings, not harness faults.
+- L6.1 (l6_1_tool_the_client_denied_is_reported_in_the_result, red): a child the client denied a tool ends
+  `completed` with no terminal state, and nothing persisted names the denial (bridge.py:1631 builds
+  report["permission_denials"]; the reply drops it). The check now requires exactly what fix/l6-findings a876f6f0
+  produces: the stored dispatch_result `terminal_state == "failed"`, reply outcome `claude_tool_not_allowed`, and the
+  stored result failed and naming `claude_tool_not_allowed` (the history keeps it as a keyed digest; recording the
+  returned result against that digest must be accepted); plus the report's denial count/tool and read
+  containment (kept). The same stored-result assertion was added to the green stray-tool check (same path), and it passes there.
+- L6.2 (red, first failing assertion: the preflight refusal carries no `admission_created` field): the check also
+  requires `learning-open-host-run` to REFUSE the uncommitted path and re-reads the admission history (project
+  open provenance, ledger run bindings, capacity slots) after the open attempt and after the dispatch attempt.
+  Today the open still ADMITS the run (finding unchanged).
 - Not provable without the owner: a real OS sandbox or network deny (the fake client cannot enforce one), see the
   analysis list "Cannot be proven" item 1.
 
@@ -56,3 +64,23 @@ the L6.1 finding check: 21 checks, S1 scenes 68 s, 34 s, 127 s (wall about 6 min
 None. No S0 check or existing assertion was edited. Additions to shared files: e2e_support.BOOT (patches block),
 e2e_core.GROUP_SECONDS (three group names), e2e_lifecycle.py (one import), requirements.json (`checks` arrays of the
 nine IDs).
+
+## Fix round 1 (Codex review t7s1 NOT-READY, scratchpad t7s1-review-result.md), 2026-11-25
+Every HIGH and MED fixed in the harness/checks only; strictness unit tests in tests/test_e2e_run_control.py (red on
+1ea7bf8b: 17 failures/errors, list in /tmp/claude-501/t7s1/red-first.txt; green after).
+- HIGH L6.1 / L6.2: see Product findings (both red by design). Assertion changes listed in assertions.md.
+- HIGH G5: close all three orchestrations, then ONE probe, its launch read in the account ledger (exactly one
+  `probe_admission` pass of that account after the close, its `provider_billing` reading), then the eight reads.
+- HIGH billing: the reuse/cooldown rewrites are gone (BOOT applies only the silence-limit patch and the fault). The
+  probes use a second attested, never-probed Claude account (attest_probe_account), so they are genuinely eligible.
+- HIGH fault isolation: `--fault NAME` argument only (module FAULT, set by the runner or worker); E2E_* dropped from
+  every World environment and from the --jobs worker environment. S1 dispatches and the G5 probe are judged by the S1
+  check that asserts their exit (refuses=True to the harness), so the fault does not turn G1 red (assertions.md, G1
+  note: for the primary to read). Comparison `fault_isolated(normal, fault)` over every requirement ID.
+- MED L9.3: exact run IDs per project. MED G8: capacity_read catches TimeoutExpired, captures partial output
+  (timed_out) and answers `capacity_read_timed_out`.
+Evidence: normal /tmp/claude-501/t7s1/r2.json (L6.1, L6.2 red; everything else green, G1 green); inherited variable
+only (E2E_T7S1_FAULT set, no --fault) /tmp/claude-501/t7s1/r2-envonly.json: same verdicts as normal; fault
+/tmp/claude-501/t7s1/fault2.json: L7.1, L7.2, L7.3, L9.2, L9.3, G5 newly red, L6.1/L6.2 stay red, G1 and every
+other ID unchanged, `fault_isolated` true. L9.1 stays green under the release fault by construction (it judges the
+refusals while the six slots are held for the first time, before any release; FAULT_TARGETS).

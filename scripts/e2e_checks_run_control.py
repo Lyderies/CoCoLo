@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 import sqlite3
 import subprocess
 import sys
@@ -28,8 +27,11 @@ from e2e_core import CLAUDE_MODEL, PROBE, ROUTE_TASK, _SCENES, Phase, check  # n
 INIT = {"type": "system", "subtype": "init", "session_id": "s", "apiKeySource": "none", "model": CLAUDE_MODEL,
         "plugins": [], "claude_code_version": "2.1.311", "mcp_servers": [], "tools": ["StructuredOutput"]}
 SECOND = 1_000_000_000
-# The run-control scene's fault switch (a fault injected into the installed product, to show the slice goes red).
-FAULT_VARIABLE = "E2E_T7S1_FAULT"
+# The run-control scenes' fault (a fault injected into the installed product, to show the slice goes red). It is
+# chosen ONLY by the runner's explicit `--fault NAME` argument (e2e_lifecycle.py sets FAULT in the process that runs
+# the scenes); no environment variable selects it, and World environments carry no E2E_ variable (e2e_support).
+FAULT: str | None = None
+S1_IDS = ("L6.1", "L6.2", "L7.1", "L7.2", "L7.3", "L9.1", "L9.2", "L9.3", "G5")
 FAULTS = {
     # A finished run's slot is never released: both UPDATEs of active_run_capacity that release it are made to match nothing.
     "slot_not_released": [
@@ -46,8 +48,26 @@ FAULTS = {
 
 
 def fault_patches() -> list:
-    name = os.environ.get(FAULT_VARIABLE)
-    return FAULTS[name] if name else []
+    return FAULTS[FAULT] if FAULT else []
+
+
+# The S1 IDs each fault must turn red. L9.1 is the one S1 ID a release fault cannot reach: it judges the refusals
+# while the six slots are held for the FIRST time, before any slot is released, so it stays green under
+# slot_not_released by construction (its refusals are proven in the normal run).
+FAULT_TARGETS = {"slot_not_released": tuple(i for i in S1_IDS if i != "L9.1")}
+
+
+def fault_isolated(normal: dict, fault: dict, name: str = "slot_not_released") -> dict:
+    """Compare a normal report with a fault report over EVERY requirement ID: the fault run must hold the same IDs,
+    turn every target S1 ID of the fault red and change no ID outside S1 (a G1 or other ID that changes is not
+    isolation)."""
+    before, after = normal.get("requirements") or {}, fault.get("requirements") or {}
+    changed = sorted(i for i in set(before) & set(after) if bool(before[i].get("passed")) != bool(after[i].get("passed")))
+    outside = [i for i in changed if i not in S1_IDS]
+    green_s1 = sorted(i for i in FAULT_TARGETS[name] if (after.get(i) or {}).get("passed") is not False)
+    missing = sorted(set(before) ^ set(after)) + sorted(i for i in S1_IDS if i not in after)
+    return {"isolated": not outside and not green_s1 and not missing, "changed": changed,
+            "changed_outside_s1": outside, "s1_not_red": green_s1, "ids_differ": missing}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -115,7 +135,7 @@ class Ctl:
     """One project's orchestration and the runs made on it, as a primary session drives them."""
 
     def __init__(self, view, tag: str):
-        self.view, self.tag, self.count = view, tag, 0
+        self.view, self.tag, self.count, self.runs = view, tag, 0, []
         self.lock = threading.Lock()
         self.host = lambda *args, **kw: view.host_cli("claude", *args, **kw)
         self.orchestration = self.host("learning-open-orchestration")[1] or {}
@@ -158,16 +178,20 @@ class Ctl:
             self.open(run, probe=probe)
         return run
 
-    def open(self, run, *, probe: bool = True) -> None:
+    def open(self, run, *, probe: bool = True, refuses: bool = False) -> None:
         if probe:
             self.host("provider-observe", "--provider", "claude", "--billing-probe")
         run.open_code, run.opened, _ = self.host("learning-open-host-run", *run.common, "--route", run.route_file,
-                                                 "--orchestration-handle", self.handle)
+                                                 "--orchestration-handle", self.handle, refuses=refuses)
+        self.runs.append(run)
 
     def dispatch(self, run, *, refuses: bool = False) -> None:
+        """A dispatch whose exit the S1 check asserts itself (`run.code`): a refusal is judged there, as that
+        requirement's failure, so a capacity fault turns the S1 IDs red and not G1 (G1 still judges every step's
+        timeouts and bare reasons at capture)."""
         started = time.monotonic()
         run.code, run.reply, _ = self.host("dispatch", *run.common, "--route", run.route_file,
-                                           "--run-handle", (run.opened or {}).get("run_handle", ""), refuses=refuses)
+                                           "--run-handle", (run.opened or {}).get("run_handle", ""), refuses=True)
         run.seconds = time.monotonic() - started
 
     def record(self, run) -> None:
@@ -282,18 +306,34 @@ print(json.dumps(AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, t
 """
 
 
-def capacity_read(view, run) -> dict:
+def _text(value) -> str:
+    if value is None:
+        return ""
+    return value.decode("utf-8", "replace") if isinstance(value, bytes) else value
+
+
+def capacity_read(view, run, *, timeout: float = 60) -> dict:
     """The supported per-run capacity read: the account service's `account.capacity_status` for this run, asked over
-    its own socket by the installed client library (state held, released or unknown; never the dispatch reply)."""
+    its own socket by the installed client library (state held, released or unknown; never the dispatch reply).
+
+    A read that times out is judged like any step (its partial output through capture, G1 and G8) and answers the
+    fixed failure `capacity_read_timed_out`; the command, HOME and run handle never reach a traceback."""
     bridge = bridge_run(run)
     if not bridge or not (run.opened or {}).get("run_handle"):
         return {}
     code = ACCOUNT_READ.format(orchestration=str(view.project / ".codex" / "orchestration"),
                                state=str(view.home / ".local" / "state" / "codex-agents"),
                                project=str(view.project), handle=run.opened["run_handle"], bridge=bridge)
-    done = subprocess.run([str(view.shim), "-I", "-B", "-S", "-c", code], capture_output=True, text=True,
-                          env={**view.env, **view.CLAUDE_HOST}, stdin=subprocess.DEVNULL, timeout=60,
-                          cwd=str(view.project))
+    try:
+        done = subprocess.run([str(view.shim), "-I", "-B", "-S", "-c", code], capture_output=True, text=True,
+                              env={**view.env, **view.CLAUDE_HOST}, stdin=subprocess.DEVNULL, timeout=timeout,
+                              cwd=str(view.project))
+    except subprocess.TimeoutExpired as expired:
+        text = _text(expired.stdout) + _text(expired.stderr)
+        view.outputs.append(text)
+        view.steps.append({"step": "capacity-read", "code": -1, "refuses": False, "timed_out": True})
+        view._capture(text, kind="output", code=-1, refuses=False, timed_out=True)
+        return {"failure": "capacity_read_timed_out"}
     text = done.stdout + done.stderr
     view.outputs.append(text)
     view.steps.append({"step": "capacity-read", "code": done.returncode, "refuses": False, "timed_out": False})
@@ -356,19 +396,37 @@ def control_scene():
                          "total_cost_usd": 0.1, "permission_denials": [{"tool_name": "Write"}]})
     ctl.dispatch(scene.client_denied)
     ctl.record(scene.client_denied)
-    # L6.2: a read path that is not committed (a file the owner has not committed).
+    # L6.2: a read path that is not committed (a file the owner has not committed). The admission history is read
+    # before the preflight, after it, after the open attempt (which must refuse) and after a dispatch attempt.
     (world.project / "fixture" / "draft.txt").write_text("uncommitted\n")
-    before = (len(project_records(world, ctl.project_id, "host_open_provenance")), len(ledger_slots(world)))
+    scene.admissions_before = admission_history(world, ctl.project_id)
     scene.uncommitted = ctl.child(path="fixture/draft.txt", open_run=False)
     scene.uncommitted_preflight = ctl.host("dispatch-preflight", *scene.uncommitted.common, refuses=True)
-    scene.uncommitted_before = before
-    scene.uncommitted_after = (len(project_records(world, ctl.project_id, "host_open_provenance")), len(ledger_slots(world)))
-    # Opening a run for it is not refused by the product (finding in S1-STATUS.md); the dispatch is, with no slot.
-    ctl.open(scene.uncommitted)
-    scene.uncommitted_slots = len(ledger_slots(world))
+    scene.admissions_after_preflight = admission_history(world, ctl.project_id)
+    ctl.open(scene.uncommitted, refuses=True)  # exit judged by the L6.2 check (it must refuse)
+    scene.admissions_after_open = admission_history(world, ctl.project_id)
     ctl.dispatch(scene.uncommitted, refuses=True)
-    scene.uncommitted_slots_after = len(ledger_slots(world))
+    scene.admissions_after_dispatch = admission_history(world, ctl.project_id)
     return scene
+
+
+def admission_history(world, project_id: str | None) -> dict:
+    """What an admission leaves, read-only and not through the command: the project history's open provenance
+    records, the account ledger's run bindings and its capacity slots."""
+    counts = world.ledger_counts()
+    return {"host_open_provenance": len(project_records(world, project_id, "host_open_provenance")),
+            "host_run_bindings": counts.get("host_run_bindings"),
+            "active_run_capacity": counts.get("active_run_capacity")}
+
+
+def stored_result_names(run, reason: str) -> bool:
+    """Whether the run's stored result is a failure naming `reason`. The history keeps the child's result only as a
+    keyed digest (dispatch_result.result_digest, with its terminal_state); the result the dispatch returned is the
+    one the product stores, and recording it as the primary does (learning-record-host-result) succeeds only when
+    it matches that stored digest. So: the recording was accepted, and that result is failed and names `reason`."""
+    result = (run.reply or {}).get("result") or {}
+    return (run.recorded is not None and run.recorded[0] == 0 and result.get("execution_state") == "failed"
+            and reason in (result.get("summary") or ""))
 
 
 def terminal_state(world, run) -> str | None:
@@ -432,7 +490,7 @@ def l6_1_child_calling_a_tool_the_run_does_not_allow_is_stopped_and_result_says_
     scene = control_scene()
     world = scene.world
     for tool, run in scene.denied.items():
-        phase.expect(run.open_code == 0, f"the {tool} run opens")
+        phase.expect(run.open_code == 0 and run.code == 0, f"the {tool} run opens and its dispatch answers")
         report = (run.reply or {}).get("bridge_report") or {}
         result = (run.reply or {}).get("result") or {}
         phase.expect(report.get("outcome") == "claude_tool_not_allowed",
@@ -440,6 +498,8 @@ def l6_1_child_calling_a_tool_the_run_does_not_allow_is_stopped_and_result_says_
         phase.expect(result.get("execution_state") == "failed" and "claude_tool_not_allowed" in (result.get("summary") or ""),
                      f"the {tool} run's result says the tool was not allowed")
         phase.expect(terminal_state(world, run) == "failed", f"the history holds the {tool} run as failed")
+        phase.expect(stored_result_names(run, "claude_tool_not_allowed"),
+                     f"the {tool} run's stored result (recorded against its digest) names claude_tool_not_allowed")
         phase.expect(report.get("capacity_state") == "retained" and slot_of(world, run) is not None
                      and slot_of(world, run)["released_at_ms"] is not None, f"the {tool} run's slot is released")
     phase.reason("claude_tool_not_allowed")
@@ -455,7 +515,12 @@ def l6_1_tool_the_client_denied_is_reported_in_the_result(phase: Phase) -> None:
     report = (run.reply or {}).get("bridge_report") or {}
     phase.expect(run.open_code == 0 and run.code == 0, "the run opens and the dispatch answers")
     stored = history_rows(scene.world, run, "dispatch_result")
-    phase.expect(len(stored) == 1 and stored[0].get("terminal_state") is None, "the history holds the run's result")
+    phase.expect(len(stored) == 1, "the history holds the run's result")
+    phase.expect(stored[0].get("terminal_state") == "failed",
+                 "the history holds the run as failed, never completed or with no terminal state")
+    phase.expect(report.get("outcome") == "claude_tool_not_allowed", "the dispatch reply ends the run claude_tool_not_allowed")
+    phase.expect(stored_result_names(run, "claude_tool_not_allowed"),
+                 "the stored result (recorded against its digest) is failed and names claude_tool_not_allowed")
     phase.expect((report.get("permission_denials") or {}).get("count") == 1
                  and (report.get("permission_denials") or {}).get("tools") == ["Write"],
                  "the report counts the client's permission denial and names the tool")
@@ -464,19 +529,26 @@ def l6_1_tool_the_client_denied_is_reported_in_the_result(phase: Phase) -> None:
 
 @check("L6.2", group="run_ctl")
 def l6_2_uncommitted_read_path_refused_before_admission(phase: Phase) -> None:
+    """FINDING (S1-STATUS.md, decision 151): learning-open-host-run admits a run for the uncommitted path; this check
+    is red until the product fix (fix/l6-findings) makes the open refuse."""
     scene = control_scene()
     code, reply, text = scene.uncommitted_preflight
     phase.expect(code == 2 and (reply or {}).get("ready") is False, "the export preflight refuses the assignment")
     phase.expect("not committed" in ((reply or {}).get("reason") or ""), "the refusal says the read path is not committed")
-    phase.expect((reply or {}).get("admission_created") is not True, "the refusal admits nothing")
-    phase.expect(scene.uncommitted_before == scene.uncommitted_after,
-                 "no admission record and no capacity slot were made (the history and ledger counts are unchanged)")
+    phase.expect("admission_created" in (reply or {}) and reply["admission_created"] is False,
+                 "the refusal says it admitted nothing (admission_created false)")
+    phase.expect(scene.admissions_after_preflight == scene.admissions_before,
+                 "the preflight made no admission record, run binding or capacity slot")
     phase.reason("read_path_not_committed")
     run = scene.uncommitted
-    phase.expect(run.code != 0 and (run.reply or {}).get("reason_code") == "preparation_export_failed",
-                 "a dispatch of the uncommitted path is refused plainly")
-    phase.expect(scene.uncommitted_slots == scene.uncommitted_slots_after == scene.uncommitted_before[1],
-                 "the refused dispatch claims no capacity slot")
+    phase.expect(run.open_code not in (0, None) and (run.opened or {}).get("admission") != "admitted"
+                 and (run.opened or {}).get("ready") is not True, "opening a run for the uncommitted path is refused")
+    phase.expect(scene.admissions_after_open == scene.admissions_before,
+                 "after the open attempt the admission history is unchanged (re-read after it)")
+    phase.expect(run.code != 0 and (run.reply or {}).get("ready") is not True
+                 and bool((run.reply or {}).get("reason_code")), "a dispatch of the uncommitted path is refused plainly")
+    phase.expect(scene.admissions_after_dispatch == scene.admissions_before,
+                 "the refused dispatch claims no capacity slot and admits nothing")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -530,6 +602,75 @@ def l7_2_silent_child_stopped_at_the_cutoff_ends_work_silence_capacity_released(
 # ---------------------------------------------------------------------------------------------
 # Scene 3: capacity across three projects of one HOME (L9.1, L9.2, L9.3, G5)
 
+# The billing probes of this scene are made for a second Claude account of the same machine, attested by the
+# owner key in project C and never probed before: its billing reading does not exist, so the installed reuse and
+# cooldown (five minutes each, unchanged: decision 128 scales only the silence limits) cannot answer for it, and
+# the probe is a genuine claim on a machine slot. The children run on the account the setups attested.
+PROBE_ACCOUNT = "capacity-probe@example.invalid"
+
+
+def now_ms() -> int:
+    return time.time_ns() // 1_000_000
+
+
+def attest_probe_account(world, view) -> str:
+    """Observe the second account in `view`'s project and attest its billing with the owner key, as the owner's
+    tool does (a signed statement); the account's fingerprint. The fake client is the first account again after."""
+    from e2e_checks_owner_key import sign_with_key  # the owner-key checks' own signer (scratch key, askpass)
+    import base64
+    world.claude_account(PROBE_ACCOUNT)
+    try:
+        code, observed, _ = view.cli("provider-observe", "--provider", "claude")
+        identity = [r for r in (observed or {}).get("records", []) if r.get("record_type") == "provider_identity"]
+        fingerprint = (identity[0].get("account_fingerprint") if identity else None) or ""
+        grant = world.base / "tmp" / "probe-account-grant.json"
+        grant.write_text(json.dumps({"version": 1, "provider": "claude", "account_fingerprint": fingerprint,
+                                     "no_paid_overage": True, "no_usage_credits": True,
+                                     "issued_at": int(time.time() * 1000)}))
+        base = ("learning-record-billing-attestation", "--provider", "claude", "--grant", str(grant))
+        code, prepared, _ = view.cli(*base)
+        if code != 0 or "signing_payload_b64" not in (prepared or {}):
+            raise e2e_support.HarnessError("the second account's billing statement was not prepared")
+        signature = sign_with_key(world, world.home / ".ssh" / "codex-agents-owner",
+                                  base64.b64decode(prepared["signing_payload_b64"]))
+        if signature is None or view.cli(*base, "--signature", str(signature))[0] != 0:
+            raise e2e_support.HarnessError("the second account's billing statement was not recorded")
+    finally:
+        world.claude_account(None)
+    view.cli("provider-observe", "--provider", "claude")
+    return fingerprint
+
+
+def probe_as_second_account(world, view, *, refuses: bool):
+    """One billing probe of project C made while the fake client is the second account; the client is the first
+    account again after it (and C observes it)."""
+    world.claude_account(PROBE_ACCOUNT)
+    try:
+        return view.host_cli("claude", *PROBE, refuses=refuses)
+    finally:
+        world.claude_account(None)
+        view.cli("provider-observe", "--provider", "claude")
+
+
+def ledger_records(world, record_type: str) -> list[dict]:
+    """The account ledger's records of one kind, read-only, with the time the ledger stored for each."""
+    path = world.home / ".local" / "state" / "codex-agents" / "learning.sqlite3"
+    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        found = []
+        for observed, content in connection.execute(
+                "select observed_at_ms, content from records where record_type = ? order by observed_at_ms", (record_type,)):
+            try:
+                record = json.loads(content)
+            except (TypeError, ValueError):
+                continue
+            found.append({**record, "observed_at_ms": observed}
+                         if isinstance(record, dict) else {"observed_at_ms": observed})
+        return found
+    finally:
+        connection.close()
+
+
 def capacity_scene():
     if "run_capacity" in _SCENES:
         return _SCENES["run_capacity"]
@@ -537,16 +678,12 @@ def capacity_scene():
     scene = SimpleNamespace(world=world)
     _SCENES["run_capacity"] = scene
     trusted_interpreter_checks(world)
-    # Decision 128 (test only): a billing reading older than one second needs a new probe, so a probe is a real
-    # claim on a slot here (the product reuses one, and waits before another, for five minutes).
-    module = "codex_agents.account_billing_admission"
-    write_patches(world, [{"module": module, "old": "PROBE_REUSE_MS = 300_000", "new": "PROBE_REUSE_MS = 1_000"},
-                          {"module": module, "old": "PROBE_COOLDOWN_MS = 300_000", "new": "PROBE_COOLDOWN_MS = 500"},
-                          *fault_patches()])
+    write_patches(world, fault_patches())  # no billing constant is rewritten (decision 128)
     views = [project_view(world), add_project(world, "project-b"), add_project(world, "project-c")]
     for view in views:  # every setup first: a later setup restarts the shared collector
         set_up(view)
     scene.views = views
+    scene.probe_fingerprint = attest_probe_account(world, views[2])
     ctls = scene.ctls = [Ctl(view, tag) for view, tag in zip(views, "abc")]
     a, b, c = ctls
     gate = world.tools / "capacity-gate"
@@ -564,8 +701,8 @@ def capacity_scene():
     scene.fourth = scene.a_runs[3]
     a.dispatch(scene.fourth, refuses=True)  # a fourth child of project A: refused (the project's own limit)
     c.dispatch(scene.c_run, refuses=True)  # a child of project C: every machine slot is held
-    # A billing probe that needs the provider (the last reading is older than the scaled reuse age): no slot either.
-    scene.probe_full = c.host(*PROBE, refuses=True)
+    # A billing probe the provider must answer (the second account has no reading to reuse): no slot either.
+    scene.probe_full = probe_as_second_account(world, views[2], refuses=True)
     scene.slots_after_refusals = ledger_slots(world)
     # Let every child end: each ends without a result, which is a terminal that releases its slot.
     gate.write_text("open")
@@ -579,21 +716,29 @@ def capacity_scene():
     scene.reads = {run.name + str(index): capacity_read(run_view, run)
                    for index, (run_view, run) in enumerate([(views[0], r) for r in scene.a_runs[:3]]
                                                            + [(views[1], r) for r in scene.b_runs])}
-    # Capacity is free again: the refused children now run, and the probe that was refused gets its slot.
-    world.claude_frames(e2e_support.claude_probe_frames())
+    # Capacity is free again: the refused children now run.
     scene.fourth_again, scene.c_again = a.child(), c.child()
     child_frames(world)
     a.dispatch(scene.fourth_again)
     c.dispatch(scene.c_again)
     a.record(scene.fourth_again), c.record(scene.c_again)
+    # G5: close every orchestration first; then ONE probe (the second account's, refused while full), its launch
+    # read in the account ledger; then the eight per-run reads and the ledger's capacity table.
+    scene.reports = [ctl.close() for ctl in ctls]
+    scene.closed_at_ms = now_ms()
     world.claude_frames(e2e_support.claude_probe_frames())
-    time.sleep(1.2)
-    scene.probe_free = c.host(*PROBE)
+    scene.probe_started_ms = now_ms()
+    scene.probe_free = probe_as_second_account(world, views[2], refuses=True)  # its exit is judged by G5
+    scene.probe_admissions = [r for r in ledger_records(world, "probe_admission")
+                              if r.get("account_fingerprint") == scene.probe_fingerprint]
+    scene.probe_billing = [r for r in ledger_records(world, "provider_billing")
+                           if r.get("account_fingerprint") == scene.probe_fingerprint
+                           and r["observed_at_ms"] >= scene.closed_at_ms]
+    scene.reads_started_ms = now_ms()
     scene.final_reads = [(view, run, capacity_read(view, run)) for view, run in
                          [(views[0], r) for r in scene.a_runs[:3] + [scene.fourth_again]]
                          + [(views[1], r) for r in scene.b_runs] + [(views[2], scene.c_again)]]
     scene.slots_final = settled_slots(world)
-    scene.reports = [ctl.close() for ctl in ctls]
     return scene
 
 
@@ -659,9 +804,22 @@ def l9_3_two_projects_share_one_collector_each_with_its_own_runs_and_capacity(ph
     # Each project's history holds only its own runs: read each project's own history file.
     homes = sorted((scene.world.home / ".local" / "state" / "codex-agents" / "projects").glob("*/history.sqlite3"))
     phase.expect(len(homes) == 3, "each project has its own history")
-    counts = {ctl.project_id: len(project_records(scene.world, ctl.project_id, "dispatch_result")) for ctl in scene.ctls}
-    phase.expect(counts.get(a.project_id) == 4 and counts.get(b.project_id) == 3 and counts.get(scene.ctls[2].project_id) == 1,
-                 "each project's history holds exactly its own children's results")
+    # Exact run IDs, not counts (a result exchanged between two projects keeps every count): each project's
+    # results are exactly the runs it dispatched, and every record of its history that names a run names one of
+    # the runs opened for it.
+    for ctl in scene.ctls:
+        opened = {(run.opened or {}).get("run_id") for run in ctl.runs} - {None}
+        dispatched = sorted((run.opened or {}).get("run_id") for run in ctl.runs
+                            if run.code == 0 and (run.opened or {}).get("run_id"))
+        results = sorted(row.get("run_id") for row in project_records(scene.world, ctl.project_id, "dispatch_result"))
+        phase.expect(bool(dispatched) and results == dispatched,
+                     "each project's history holds exactly the results of the runs it dispatched, by run ID")
+        named = {row.get("run_id") for kind in ("dispatch_result", "event", "host_open_provenance")
+                 for row in project_records(scene.world, ctl.project_id, kind) if row.get("run_id")}
+        phase.expect(named <= opened, "no record of a project's history names a run opened for another project")
+    phase.expect(sum(len(ctl.runs) for ctl in scene.ctls) == len({(run.opened or {}).get("run_id")
+                                                                  for ctl in scene.ctls for run in ctl.runs}),
+                 "no run ID was opened for two projects")
     admitted = [(report.get("runs") or {}).get("admitted") for report in scene.reports]
     phase.expect(admitted == [5, 3, 2], "each project's orchestration report counts its own admitted runs (5, 3, 2)")
 
@@ -669,15 +827,21 @@ def l9_3_two_projects_share_one_collector_each_with_its_own_runs_and_capacity(ph
 @check("G5", group="run_capacity")
 def g5_after_close_every_claimed_run_released_next_probe_gets_a_slot_and_nothing_active(phase: Phase) -> None:
     scene = capacity_scene()
+    for report in scene.reports:
+        runs = (report or {}).get("runs") or {}
+        phase.expect(runs.get("current_active") == 0 and runs.get("pending") == 0,
+                     "the final statistics show no active or pending run")
+    phase.expect(scene.closed_at_ms <= scene.probe_started_ms <= scene.reads_started_ms,
+                 "the orchestrations are closed first, then the probe is made, then the per-run reads are taken")
+    code, probe, _ = scene.probe_free
+    phase.expect(code == 0 and (probe or {}).get("ready") is True and (probe or {}).get("probe") == "launched",
+                 "the next billing probe, the one refused while the machine was full, gets a slot and completes")
+    passed = [r for r in scene.probe_admissions if r.get("decision") == "pass"]
+    phase.expect(len(passed) == 1 and passed[0]["observed_at_ms"] >= scene.closed_at_ms,
+                 "the account ledger holds exactly one admitted probe of that account, made after the close")
+    phase.expect(len(scene.probe_billing) >= 1, "the account ledger holds the launched probe's billing reading")
     phase.expect(len(scene.final_reads) == 8, "every claimed run has a per-run capacity read")
     phase.expect(all(read.get("state") == "released" for _view, _run, read in scene.final_reads),
                  "the account service's per-run read says every claimed run is released")
     phase.expect(len(scene.slots_final) == 8 and all(row["released_at_ms"] is not None for row in scene.slots_final),
                  "the ledger holds eight claimed runs, every one released")
-    code, probe, _ = scene.probe_free
-    phase.expect(code == 0 and (probe or {}).get("ready") is True and (probe or {}).get("probe") == "launched",
-                 "the next billing probe, the one refused while the machine was full, gets a slot and completes")
-    for report in scene.reports:
-        runs = (report or {}).get("runs") or {}
-        phase.expect(runs.get("current_active") == 0 and runs.get("pending") == 0,
-                     "the final statistics show no active or pending run")

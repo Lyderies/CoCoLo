@@ -148,6 +148,12 @@ def capture_breaks(text: str, *, kind: str, private: dict, code: int, refuses: b
     return sorted(found)
 
 
+def child_environment(environ) -> dict:
+    """The environment a World's processes start from: never a harness variable (E2E_*), so no switch of the test
+    runner (a fault selection, for one) reaches the product or a child it starts (T7 S1 fault isolation)."""
+    return {key: value for key, value in environ.items() if not key.startswith("E2E_")}
+
+
 class HarnessError(Exception):
     """The harness itself could not be built (a missing tool, a refused location): the check fails."""
 
@@ -278,7 +284,7 @@ class World:
         return found
 
     def _environment(self) -> dict:
-        env = {key: value for key, value in os.environ.items()
+        env = {key: value for key, value in child_environment(os.environ).items()
                if key not in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NO_COLOR", "PYTHONDONTWRITEBYTECODE",
                               "CODEX_HOME", "CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME",
                               "XDG_DATA_HOME", "XDG_CACHE_HOME", "CLAUDECODE") and not key.startswith(("CODEX_", "CLAUDE_"))}
