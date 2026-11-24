@@ -4,17 +4,26 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
-- RS-F S1 (RSF-S1-1/2, owner decision 129.3): every mutating collector/account request
-  must name the serving runtime's digest. Old-format repair requests and missing or
-  different runtime identities are refused before any write with `runtime_upgrade_required`
-  and a plain instruction to run `./setup.sh --update`. Before 1.0, older clients and
-  runtimes have no compatibility path; update each project to the serving runtime.
-- B4m (LR-1): compatibility refusals name the version holding the state and print an update
-  command from the local install record. Already-installed 0.3.x clients may still report
-  `status_collector_unavailable` or `runtime_newer`: in a plain terminal, substitute your paths
-  in `cd /path/to/CoCoLo && ./setup.sh /path/to/project`, choose Configure, then
-  "Update the install and walk through every step". Existing account/history reply fields are
-  frozen against the previous-release catalogue; new reply data requires a new operation.
+- Package 0.8.56: release batch.
+  - RS-D S2 changed-runtime closure: an orchestration whose close was not recorded across an update is
+    counted once across restart; one without a verified release stays open, with custody, to its deadline.
+  - RS-E S6 login entry: status reports the login entry as on, off or stale; an update keeps the entry
+    current (a failed systemd refresh puts a stopped or not-enabled unit back, and never recreates a
+    vanished entry); the entry command passes the runtime check.
+  - T7 S0: lifecycle e2e base (checks L1-L5, G1-G4, G8, G9) runs the installed CLI, split into groups with
+    `--jobs`, plus a non-required CI lifecycle job.
+  - RS-B B7a: holds report (`history.holds_report`) for open holds, with a capped page walk.
+  - RS-F S1 (RSF-S1-1/2, owner decision 129.3): every mutating collector/account request
+    must name the serving runtime's digest. Old-format repair requests and missing or
+    different runtime identities are refused before any write with `runtime_upgrade_required`
+    and a plain instruction to run `./setup.sh --update`. Before 1.0, older clients and
+    runtimes have no compatibility path; update each project to the serving runtime.
+  - B4m (LR-1): compatibility refusals name the version holding the state and print an update
+    command from the local install record. Already-installed 0.3.x clients may still report
+    `status_collector_unavailable` or `runtime_newer`: in a plain terminal, substitute your paths
+    in `cd /path/to/CoCoLo && ./setup.sh /path/to/project`, choose Configure, then
+    "Update the install and walk through every step". Existing account/history reply fields are
+    frozen against the previous-release catalogue; new reply data requires a new operation.
 - Package 0.8.55: an installed CLI reads the live provider state from its default state root (0.8.54 installed
   still routed "not_checked", with no reason: the checked default `--state-root` became "no state root"); a
   not_checked route always says why.
