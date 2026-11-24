@@ -1,0 +1,35 @@
+{
+ "authority": "docs/requirements/usage-recheck/requirements.md",
+ "requirements": [
+  {
+   "id": "USAGE-RECHECK-1",
+   "statement": "### USAGE-RECHECK-1 - When a re-check is due\n\nFor each provider the classifier reports `recheck_due_at_ms`: when the state is `exhausted` and its\n`next_reset_ms` is null or more than `USAGE_RECHECK_FAR_RESET_MS` after the evaluation time, it is the newest\nusage reading of that provider/account (`observed_at_ms`, at or before evaluation time) plus\n`USAGE_RECHECK_INTERVAL_MS`; otherwise null. A re-check is due when `recheck_due_at_ms <= evaluation time`.\n**Acceptance:** exhausted with a reset 3 days away and the newest reading 61 min old -> due; 10 min old -> not due\n(due at reading + 60 min); exhausted with a reset 30 min away -> null; ample/constrained/unknown -> null.",
+   "source": "tests/requirements/usage-recheck.json#USAGE-RECHECK-1"
+  },
+  {
+   "id": "USAGE-RECHECK-2",
+   "statement": "### USAGE-RECHECK-2 - The re-check reading itself\n\nCodex re-checks with the existing non-spending observation (`account/rateLimits/read`). Claude re-checks with one\nbilling probe: while a re-check is due (USAGE-RECHECK-1), the probe's admission does not apply the exhausted gate;\nevery other probe gate stays (attestation, paid usage, API keys, managed config, cooldown, reuse). When no\nre-check is due the exhausted gate still refuses the probe (keeps `test_bridge.py`\n`test_exhausted_window_blocks_probes_at_ninety_percent`). A probe is not a run: no work, no run cap.\nCost (flag for owner): one Haiku low-effort single turn per re-check, at most one per provider per interval.\n**Acceptance (real account service):** Claude exhausted (rejected, reset 3 days away) by a reading 61 min old ->\n`provider-observe --provider claude --billing-probe` launches one probe and stores its records; same with a\nreading 10 min old -> refused `provider_exhausted`, nothing launched.",
+   "source": "tests/requirements/usage-recheck.json#USAGE-RECHECK-2"
+  },
+  {
+   "id": "USAGE-RECHECK-3",
+   "statement": "### USAGE-RECHECK-3 - An early reset clears a measured restriction (owner decision 134 (a): option A; changes RT-RX-5 only for a proven early reset)\n\nA later reading (strictly later `observed_at_ms`, at or before evaluation time) of the same provider, account and\nwindow (same `scope` and `window_minutes`, at least one of them known; review r1) that rates that window non-restrictive AND carries its own explicit\n`resets_at` (the one that reading reported, never one a merge lent it) different from the restrictive window's proves the window reset early: it supersedes that window's\nrestriction (and a Claude `rejected` status bound to that window). This applies only while the restrictive\nwindow's reset is more than `USAGE_RECHECK_FAR_RESET_MS` away at the clearing reading's time (a proof then stands as the old reset nears): a near reset is waited for, so RT-RX-5 and\n`tests/test_providers.py:1171-1173` (\"a later, favourable read does not clear a window that has not reset\", reset\n5 s away) are unchanged. A later reading with no reset time, for another\nwindow, for another account, or older/equal in time does not clear it; RT-RX-5 is otherwise unchanged.\n**Acceptance:** Claude `rejected` seven_day window (reset +3 days) at t1, later `allowed` seven_day 2% (reset +7\ndays) at t2 -> not exhausted; later five_hour-only reading -> still exhausted; later resetless reading -> still\nexhausted (existing RT-RX-5 test); same for Codex 95% -> 10% on the same window with a new reset.\nOption B if the live reading after an early reset keeps the old reset time: any later measured non-restrictive\nreading of the same window supersedes it (changes `test_route_exhausted.py:84`).",
+   "source": "tests/requirements/usage-recheck.json#USAGE-RECHECK-3"
+  },
+  {
+   "id": "USAGE-RECHECK-4",
+   "statement": "### USAGE-RECHECK-4 - Who triggers it\n\n(a) The primary host's route (`learning-route`, and the route re-pick at `learning-open-host-run`): when the\nsnapshot says a re-check is due for a provider, take that one reading (USAGE-RECHECK-2), then re-read the snapshot\nand route on it. (b) Explicit: `provider-observe --provider <p>` (Codex) / `--billing-probe` (Claude) from the host\nis the re-check command. (c) The owner's `learning-status` shows each provider's state, `next_reset` and\n`recheck_due_at`; it takes no spending reading (the owner terminal cannot run probes,\n`tests/test_owner_terminal_flow.py:66`).\n**Acceptance (real account service):** route with Claude due -> exactly one probe; early-reset reading -> route\nmay pick Claude; still rejected -> Claude skipped as today; a second route straight after -> no second probe.",
+   "source": "tests/requirements/usage-recheck.json#USAGE-RECHECK-4"
+  },
+  {
+   "id": "USAGE-RECHECK-5",
+   "statement": "### USAGE-RECHECK-5 - Bounded, recorded, never real work on the exhausted provider\n\nSelection uses only the snapshot read after the re-check; no worker or verifier is ever routed to a provider that\nsnapshot still calls exhausted. At most one re-check per provider per route call, and at most one per provider per\n`USAGE_RECHECK_INTERVAL_MS` across calls (the newest stored reading or reserved attempt is the clock, so a restart does not reset it; review r1: an attempt is reserved before any I/O and counts whether it yields a reading, no reading or a failure).\nA re-check never fails the route: a refused or failed re-check routes on the existing snapshot. The route's\navailability audit records `recheck: {<provider>: {\"outcome\": \"cleared\"|\"still_exhausted\"|\"failed:<reason>\",\n\"observed_at_ms\": int|null}}` (`observed_at_ms`: the account's new reading, null when none arrived; `cleared` needs one); the probe's records are stored as every probe's are.",
+   "source": "tests/requirements/usage-recheck.json#USAGE-RECHECK-5"
+  },
+  {
+   "id": "UX-HCU-1",
+   "statement": "### UX-HCU-1 - host_client_unknown says what to do (LOW)\n\nThe refusal `host_client_unknown` gets its own next step: run the command from the Claude Code or Codex session\nthat is the project's host (or name a host that is running there). It does not say to run learning-status.\n**Acceptance:** `refusal_steps.next_step('host_client_unknown')` names the host session and not learning-status.",
+   "source": "tests/requirements/usage-recheck.json#UX-HCU-1"
+  }
+ ]
+}

@@ -322,6 +322,8 @@
  "codex:tests.test_trial_run_driver_bugs": "integration",
  "codex:tests.test_type_lookups": "integration",
  "codex:tests.test_upgrade_handover": "integration",
+ "codex:tests.test_usage_recheck": "integration",
+ "codex:tests.test_usage_recheck_live": "integration",
  "codex:tests.test_usage_report": "integration",
  "codex:tests.test_validation": "integration",
  "codex:tests.test_validation_cli_client_boundary": "integration",

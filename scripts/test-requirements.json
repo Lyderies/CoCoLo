@@ -2014,10 +2014,13 @@
   "checks": [
    "codex:tests.test_route_exhausted.RouteExhaustedTests.test_chronology_five_hours_explicit_resets_and_rollback",
    "codex:tests.test_route_exhausted.RouteExhaustedTests.test_merge_preserves_resetless_provenance_and_later_clearing",
-   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_newer_reading_clears_at_real_open_but_api_key_and_explicit_reset_still_deny"
+   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_newer_reading_clears_at_real_open_but_api_key_and_explicit_reset_still_deny",
+   "codex:tests.test_usage_recheck.EarlyResetTests.test_other_later_readings_still_do_not_clear_a_measured_reset",
+   "codex:tests.test_usage_recheck.RecheckReviewFixTests.test_an_inherited_merged_reset_is_not_proof_of_an_early_reset",
+   "codex:tests.test_usage_recheck.RecheckReviewFixTests.test_windows_of_unknown_identity_never_clear_each_other"
   ],
   "source": "tests/requirements/route-exhausted.json#RT-RX-5",
-  "statement": "### RT-RX-5 \u2014 Explicit resets and rollback protection\n\nAn explicit restrictive window with `resets_at > evaluation_time` shall remain restrictive despite a later favorable reading, until that reset. At the reset it no longer contributes. An expired explicit window shall not acquire a fresh resetless lifetime. A future-stamped restrictive observation shall not disappear merely because the evaluation clock moved backward; an older favorable reading cannot clear it.\n\n**Acceptance:** At reset minus one millisecond an explicit 95% window still exhausts despite a later 10% reading; at reset it does not. The same assertions apply to an explicit Claude rejected window. A future resetless rejection/95% reading survives rollback even with an older ample record present; an explicitly elapsed window stays elapsed even if its observation is future-stamped. Future favorable supersession is OPEN-1.\n\n**Keeps/changes:** Keeps `admission_metadata.py:57`, `admission_metadata.py:59`, and `admission_metadata.py:398`; narrows restrictive-wins only as RT-RX-3 permits. Authority: 124.2."
+  "statement": "### RT-RX-5 \u2014 Explicit resets and rollback protection\n\nAn explicit restrictive window with `resets_at > evaluation_time` shall remain restrictive despite a later favorable reading, until that reset, except a proven early reset (USAGE-RECHECK-3, decision 134 A). At the reset it no longer contributes. An expired explicit window shall not acquire a fresh resetless lifetime. A future-stamped restrictive observation shall not disappear merely because the evaluation clock moved backward; an older favorable reading cannot clear it.\n\n**Acceptance:** Except a proven early reset (USAGE-RECHECK-3, decision 134 A), at reset minus one millisecond an explicit 95% window still exhausts despite a later 10% reading; at reset it does not. The same assertions apply to an explicit Claude rejected window. A future resetless rejection/95% reading survives rollback even with an older ample record present; an explicitly elapsed window stays elapsed even if its observation is future-stamped. Future favorable supersession is OPEN-1.\n\n**Keeps/changes:** Keeps `admission_metadata.py:57`, `admission_metadata.py:59`, and `admission_metadata.py:398`; narrows restrictive-wins only as RT-RX-3 permits. Authority: 124.2."
  },
  "RT-RX-6": {
   "checks": [
@@ -2611,5 +2614,76 @@
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-9",
   "statement": "**TF-9 \u2014 Preserve honest timing and timeout evidence.** Save per-worker elapsed values and run identity,\nselected tests, actual jobs, platform/interpreter, completion/timeout status and module totals. Sum only\ncurrent-run workers for job-seconds (never stale seed timings, module totals plus per-test estimates, or CPU).\nKeep wall time separate; report discovery and preflight seconds separately from worker job-seconds,\nincluding on preflight failure. Always write available measurements on test failure and timeout. Name timed-out\nworkers and keep their diagnostic log. The scheduler's historical estimates are not measurements. Witness:\nseed timings with obsolete entries, fail one worker and time out another; current totals and diagnostics remain\ncorrect. Hard worker timeout is a safety bound separate from the module's budget. Overall elapsed time is\nreported without a five-minute failure threshold."
+ },
+ "USAGE-RECHECK-1": {
+  "checks": [
+   "codex:tests.test_usage_recheck.RecheckDueTests.test_a_far_reset_exhaustion_is_due_for_a_recheck_after_the_interval",
+   "codex:tests.test_usage_recheck.RecheckReviewFixTests.test_a_recheck_attempt_without_a_reading_starts_the_interval"
+  ],
+  "source": "tests/requirements/usage-recheck.json#USAGE-RECHECK-1",
+  "statement": "### USAGE-RECHECK-1 - When a re-check is due\n\nFor each provider the classifier reports `recheck_due_at_ms`: when the state is `exhausted` and its\n`next_reset_ms` is null or more than `USAGE_RECHECK_FAR_RESET_MS` after the evaluation time, it is the newest\nusage reading of that provider/account (`observed_at_ms`, at or before evaluation time) plus\n`USAGE_RECHECK_INTERVAL_MS`; otherwise null. A re-check is due when `recheck_due_at_ms <= evaluation time`.\n**Acceptance:** exhausted with a reset 3 days away and the newest reading 61 min old -> due; 10 min old -> not due\n(due at reading + 60 min); exhausted with a reset 30 min away -> null; ample/constrained/unknown -> null."
+ },
+ "USAGE-RECHECK-2": {
+  "checks": [
+   "codex:tests.test_usage_recheck_live.UsageRecheckLiveTests.test_a_due_recheck_probe_runs_while_claude_is_exhausted",
+   "codex:tests.test_usage_recheck_live.UsageRecheckLiveTests.test_a_probe_before_the_interval_is_still_refused_as_exhausted",
+   "codex:tests.test_usage_recheck_live.UsageRecheckReviewLiveTests.test_a_claude_probe_with_no_events_is_not_spent_again_after_the_cooldown",
+   "codex:tests.test_usage_recheck_live.UsageRecheckReviewLiveTests.test_the_route_rechecks_codex_once_with_its_non_spending_read"
+  ],
+  "source": "tests/requirements/usage-recheck.json#USAGE-RECHECK-2",
+  "statement": "### USAGE-RECHECK-2 - The re-check reading itself\n\nCodex re-checks with the existing non-spending observation (`account/rateLimits/read`). Claude re-checks with one\nbilling probe: while a re-check is due (USAGE-RECHECK-1), the probe's admission does not apply the exhausted gate;\nevery other probe gate stays (attestation, paid usage, API keys, managed config, cooldown, reuse). When no\nre-check is due the exhausted gate still refuses the probe (keeps `test_bridge.py`\n`test_exhausted_window_blocks_probes_at_ninety_percent`). A probe is not a run: no work, no run cap.\nCost (flag for owner): one Haiku low-effort single turn per re-check, at most one per provider per interval.\n**Acceptance (real account service):** Claude exhausted (rejected, reset 3 days away) by a reading 61 min old ->\n`provider-observe --provider claude --billing-probe` launches one probe and stores its records; same with a\nreading 10 min old -> refused `provider_exhausted`, nothing launched."
+ },
+ "USAGE-RECHECK-3": {
+  "checks": [
+   "codex:tests.test_usage_recheck.EarlyResetTests.test_a_later_reading_of_the_same_window_with_a_new_reset_clears_it",
+   "codex:tests.test_usage_recheck.EarlyResetTests.test_other_later_readings_still_do_not_clear_a_measured_reset",
+   "codex:tests.test_usage_recheck.RecheckReviewFixTests.test_a_proven_early_reset_stays_cleared_as_the_old_reset_nears",
+   "codex:tests.test_usage_recheck.RecheckReviewFixTests.test_an_inherited_merged_reset_is_not_proof_of_an_early_reset",
+   "codex:tests.test_usage_recheck.RecheckReviewFixTests.test_windows_of_unknown_identity_never_clear_each_other",
+   "codex:tests.test_usage_recheck_live.UsageRecheckLiveTests.test_the_route_rechecks_once_and_an_early_reset_clears_claude",
+   "codex:tests.test_usage_recheck_live.UsageRecheckReviewLiveTests.test_the_route_rechecks_codex_once_with_its_non_spending_read"
+  ],
+  "source": "tests/requirements/usage-recheck.json#USAGE-RECHECK-3",
+  "statement": "### USAGE-RECHECK-3 - An early reset clears a measured restriction (owner decision 134 (a): option A; changes RT-RX-5 only for a proven early reset)\n\nA later reading (strictly later `observed_at_ms`, at or before evaluation time) of the same provider, account and\nwindow (same `scope` and `window_minutes`, at least one of them known; review r1) that rates that window non-restrictive AND carries its own explicit\n`resets_at` (the one that reading reported, never one a merge lent it) different from the restrictive window's proves the window reset early: it supersedes that window's\nrestriction (and a Claude `rejected` status bound to that window). This applies only while the restrictive\nwindow's reset is more than `USAGE_RECHECK_FAR_RESET_MS` away at the clearing reading's time (a proof then stands as the old reset nears): a near reset is waited for, so RT-RX-5 and\n`tests/test_providers.py:1171-1173` (\"a later, favourable read does not clear a window that has not reset\", reset\n5 s away) are unchanged. A later reading with no reset time, for another\nwindow, for another account, or older/equal in time does not clear it; RT-RX-5 is otherwise unchanged.\n**Acceptance:** Claude `rejected` seven_day window (reset +3 days) at t1, later `allowed` seven_day 2% (reset +7\ndays) at t2 -> not exhausted; later five_hour-only reading -> still exhausted; later resetless reading -> still\nexhausted (existing RT-RX-5 test); same for Codex 95% -> 10% on the same window with a new reset.\nOption B if the live reading after an early reset keeps the old reset time: any later measured non-restrictive\nreading of the same window supersedes it (changes `test_route_exhausted.py:84`)."
+ },
+ "USAGE-RECHECK-4": {
+  "checks": [
+   "codex:tests.test_usage_recheck_live.UsageRecheckLiveTests.test_a_still_exhausted_recheck_skips_claude_and_is_not_repeated",
+   "codex:tests.test_usage_recheck_live.UsageRecheckLiveTests.test_the_route_rechecks_once_and_an_early_reset_clears_claude",
+   "codex:tests.test_usage_recheck_live.UsageRecheckReviewLiveTests.test_the_ledger_backed_route_also_rechecks",
+   "codex:tests.test_usage_recheck_live.UsageRecheckReviewLiveTests.test_the_route_rechecks_codex_once_with_its_non_spending_read"
+  ],
+  "source": "tests/requirements/usage-recheck.json#USAGE-RECHECK-4",
+  "statement": "### USAGE-RECHECK-4 - Who triggers it\n\n(a) The primary host's route (`learning-route`, and the route re-pick at `learning-open-host-run`): when the\nsnapshot says a re-check is due for a provider, take that one reading (USAGE-RECHECK-2), then re-read the snapshot\nand route on it. (b) Explicit: `provider-observe --provider <p>` (Codex) / `--billing-probe` (Claude) from the host\nis the re-check command. (c) The owner's `learning-status` shows each provider's state, `next_reset` and\n`recheck_due_at`; it takes no spending reading (the owner terminal cannot run probes,\n`tests/test_owner_terminal_flow.py:66`).\n**Acceptance (real account service):** route with Claude due -> exactly one probe; early-reset reading -> route\nmay pick Claude; still rejected -> Claude skipped as today; a second route straight after -> no second probe."
+ },
+ "USAGE-RECHECK-5": {
+  "checks": [
+   "codex:tests.test_usage_recheck.RecheckAuditTests.test_the_audit_names_the_actual_reading_or_null",
+   "codex:tests.test_usage_recheck.RecheckReviewFixTests.test_a_recheck_attempt_without_a_reading_starts_the_interval",
+   "codex:tests.test_usage_recheck.ReservationFileSafetyTests.test_a_fifo_at_the_record_path_refuses_without_hanging",
+   "codex:tests.test_usage_recheck.ReservationFileSafetyTests.test_a_foreign_owner_or_loose_mode_is_refused",
+   "codex:tests.test_usage_recheck.ReservationFileSafetyTests.test_a_fresh_reservation_is_taken_once_in_a_private_directory",
+   "codex:tests.test_usage_recheck.ReservationFileSafetyTests.test_a_held_lock_gives_a_bounded_wait_then_no_recheck",
+   "codex:tests.test_usage_recheck.ReservationFileSafetyTests.test_a_link_as_the_directory_is_refused",
+   "codex:tests.test_usage_recheck.ReservationFileSafetyTests.test_a_link_at_the_record_path_is_refused",
+   "codex:tests.test_usage_recheck.ReservationFileSafetyTests.test_a_planted_link_at_the_temporary_name_never_truncates_its_target",
+   "codex:tests.test_usage_recheck.ReservationFileSafetyTests.test_an_oversized_record_is_refused",
+   "codex:tests.test_usage_recheck_live.UsageRecheckLiveTests.test_a_probe_before_the_interval_is_still_refused_as_exhausted",
+   "codex:tests.test_usage_recheck_live.UsageRecheckLiveTests.test_a_still_exhausted_recheck_skips_claude_and_is_not_repeated",
+   "codex:tests.test_usage_recheck_live.UsageRecheckLiveTests.test_the_route_rechecks_once_and_an_early_reset_clears_claude",
+   "codex:tests.test_usage_recheck_live.UsageRecheckReviewLiveTests.test_a_claude_probe_with_no_events_is_not_spent_again_after_the_cooldown",
+   "codex:tests.test_usage_recheck_live.UsageRecheckReviewLiveTests.test_a_failed_codex_recheck_is_not_retried_within_the_interval",
+   "codex:tests.test_usage_recheck_live.UsageRecheckReviewLiveTests.test_the_ledger_backed_route_also_rechecks",
+   "codex:tests.test_usage_recheck_live.UsageRecheckReviewLiveTests.test_the_route_rechecks_codex_once_with_its_non_spending_read"
+  ],
+  "source": "tests/requirements/usage-recheck.json#USAGE-RECHECK-5",
+  "statement": "### USAGE-RECHECK-5 - Bounded, recorded, never real work on the exhausted provider\n\nSelection uses only the snapshot read after the re-check; no worker or verifier is ever routed to a provider that\nsnapshot still calls exhausted. At most one re-check per provider per route call, and at most one per provider per\n`USAGE_RECHECK_INTERVAL_MS` across calls (the newest stored reading or reserved attempt is the clock, so a restart does not reset it; review r1: an attempt is reserved before any I/O and counts whether it yields a reading, no reading or a failure).\nA re-check never fails the route: a refused or failed re-check routes on the existing snapshot. The route's\navailability audit records `recheck: {<provider>: {\"outcome\": \"cleared\"|\"still_exhausted\"|\"failed:<reason>\",\n\"observed_at_ms\": int|null}}` (`observed_at_ms`: the account's new reading, null when none arrived; `cleared` needs one); the probe's records are stored as every probe's are."
+ },
+ "UX-HCU-1": {
+  "checks": [
+   "codex:tests.test_usage_recheck.HostClientUnknownStepTests.test_host_client_unknown_says_to_run_it_from_the_host_session"
+  ],
+  "source": "tests/requirements/usage-recheck.json#UX-HCU-1",
+  "statement": "### UX-HCU-1 - host_client_unknown says what to do (LOW)\n\nThe refusal `host_client_unknown` gets its own next step: run the command from the Claude Code or Codex session\nthat is the project's host (or name a host that is running there). It does not say to run learning-status.\n**Acceptance:** `refusal_steps.next_step('host_client_unknown')` names the host session and not learning-status."
  }
 }
