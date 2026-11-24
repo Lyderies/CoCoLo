@@ -179,21 +179,28 @@
    "flow": "L8",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Killing the project service mid-run: the next service settles the run (run_lost), frees its slot and records nothing twice.",
-   "checks": []
+   "checks": [
+    "l8_1_killed_service_next_service_settles_run_lost_slot_freed_nothing_twice"
+   ]
   },
   {
    "id": "L8.2",
    "flow": "L8",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Killing the collector mid-run: the same, once it is back.",
-   "checks": []
+   "checks": [
+    "l8_2_killed_collector_run_settles_once_back_slot_freed_nothing_twice"
+   ]
   },
   {
    "id": "L8.3",
    "flow": "L8",
    "source": "PLAN-0.4.0.md T7 L8b (control project, 2026-11-16)",
    "statement": "A project service replaced while its dispatch runs (another project's setup restarting the shared collector) leaves no run in limbo: the run ends run_lost with its slot freed, the dispatching CLI says so plainly instead of dispatch_not_authorized, and the orchestration can close.",
-   "checks": []
+   "checks": [
+    "l8_3_replaced_service_leaves_no_run_in_limbo_cli_says_so_plainly_orchestration_closes",
+    "l8_3_second_projects_setup_during_a_dispatch_leaves_no_run_in_limbo"
+   ]
   },
   {
    "id": "L9.1",
@@ -319,14 +326,18 @@
    "flow": "L14",
    "source": "PLAN-0.4.0.md T7",
    "statement": "learning-status, learning-run-status, earlier_version_runs and learning-orchestration-report give the right values at each phase, and none is private.",
-   "checks": []
+   "checks": [
+    "l14_1_status_commands_give_the_right_values_at_each_phase_and_none_is_private"
+   ]
   },
   {
    "id": "L15.1",
    "flow": "L15",
    "source": "PLAN-0.4.0.md T7",
    "statement": "learning-delete-project removes the project's records and services and leaves another project untouched.",
-   "checks": []
+   "checks": [
+    "l15_1_delete_project_removes_records_and_service_leaves_the_other_untouched"
+   ]
   },
   {
    "id": "G1",

@@ -38,3 +38,11 @@ check (main ruleset's 9 required checks unchanged).
 - G9: added "a missing report fails its CI step" (`if-no-files-found: error`).
 - scripts/test-requirements.json: G8 and L1.2 statements copied from tests/e2e/requirements.json (their
   authority, already changed by the e2e-t7-l1 merge); they had drifted and failed validate_sources.
+
+## Slice S2 (recovery, status, deletion; branch feat/t7-s2): assertions changed
+None. No S0 or S1 check, test or existing assertion was edited or removed. Additions only: scripts/e2e_checks_recovery.py
+(L8.1, L8.2, L8.3 x2, L14.1, L15.1), tests/test_e2e_recovery.py, `checks` arrays of five IDs in tests/e2e/requirements.json,
+and shared-file hunks that are byte-identical to S1's (e2e_support.py: BOOT patch hook and `child_environment`) or
+analogous to them (e2e_lifecycle.py: `--fault` wiring for the recovery module; e2e_core.py: GROUP_SECONDS).
+Assumptions a decision may reverse (not changes): L15.1 treats `projects`, `tombstones` and the account's provider
+observation rows (`account_observation_origins/requests`) as kept by design after a deletion.
