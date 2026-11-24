@@ -170,8 +170,10 @@ class CollectorClient:
         self.socket_path = socket_path
         self.timeout = timeout
 
-    def _request(self, request: dict[str, Any]) -> dict[str, Any]:
-        if request.get("op") in COLLECTOR_MUTATING_OPERATIONS:
+    def _request(self, request: dict[str, Any], *, earlier_collector: bool = False) -> dict[str, Any]:
+        # `earlier_collector`: the hand-over stop to a collector of an older release (UPG-1), whose
+        # handler accepts only the bare shape. Never used for a same-build collector (decision 129.3).
+        if request.get("op") in COLLECTOR_MUTATING_OPERATIONS and not earlier_collector:
             request = {**request, "runtime_digest": COLLECTOR_RUNTIME_DIGEST}
         reason = None
         try:
@@ -362,11 +364,15 @@ class CollectorClient:
             raise CollectorError("collector response is invalid", code="response_invalid")
         return response["moved"]
 
-    def shutdown(self, *, only_if_drained: bool = False) -> None:
-        """Stop the collector; with `only_if_drained` it refuses (`collector_busy`) while any run is active."""
+    def shutdown(self, *, only_if_drained: bool = False, earlier_collector: bool = False) -> None:
+        """Stop the collector; with `only_if_drained` it refuses (`collector_busy`) while any run is active.
+
+        `earlier_collector` sends the bare shape an older release accepts (UPG-1); only the maintenance
+        hand-over uses it, after the collector's own health reply showed it is older than this build."""
         self._request(
             {"protocol": COLLECTOR_PROTOCOL_VERSION,
-             "op": "shutdown_if_drained" if only_if_drained else "shutdown"}
+             "op": "shutdown_if_drained" if only_if_drained else "shutdown"},
+            earlier_collector=earlier_collector,
         )
 
     def issue_result_repair(

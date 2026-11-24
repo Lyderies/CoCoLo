@@ -1,0 +1,5 @@
+# upgfix status
+Bug (owner, live): setup "Registering the collector" failed `operation_invalid` against a running 0.8.55 collector (its drained stop rejects the runtime_digest key added by decision 129.3).
+Requirements: UPG-1 hand-over to a running earlier driving collector completes (busy still refuses); UPG-2 same-build mutating ops still carry runtime_digest, check not weakened; UPG-3 proof with a real 0.8.55 process (git archive 8d4a7ce3); UPG-4 no other hand-over request is rejected (register and learning_moved_if_empty go to this build's collector after the stop; the real-process flow registers end to end).
+Done: tests/test_upgrade_handover.py (scenario; registered in scripts/test-layers.json, test-stages.json, test-timings.json); red on b6eb186e (operation_invalid), green with the fix in collector_client.py (`earlier_collector` flag on _request/shutdown) and learning_store.py (CollectorMaintenance.acquire).
+Not done: runtime-releases.json 0.8.59 digest not refreshed (batch release bookkeeping, primary). Busy older collector refusal is by code path only (no real busy 0.8.55 run in the test).

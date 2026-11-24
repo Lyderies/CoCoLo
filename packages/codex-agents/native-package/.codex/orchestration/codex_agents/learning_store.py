@@ -13582,9 +13582,26 @@ class CollectorMaintenance:
                     ).get("runtime_version"))
                 except CollectorError:
                     reported = None
-                if reported is None or reported >= FIRST_RUN_DRIVING_VERSION:
+                if reported is None:
                     raise
-                client.shutdown()
+                if reported >= FIRST_RUN_DRIVING_VERSION:
+                    # UPG-1: a release that drives runs but predates the runtime-identity key on its
+                    # stop (decision 129.3) takes the same drained stop in its own bare shape; a busy
+                    # one still refuses. A collector of this build or newer is never sent that shape.
+                    own = _version_tuple(PACKAGE_VERSION)
+                    if own is None or reported >= own:
+                        raise
+                    try:
+                        client.shutdown(only_if_drained=True, earlier_collector=True)
+                    except CollectorError as earlier_error:
+                        if earlier_error.code == "collector_busy":
+                            raise CollectorError(
+                                "a child run is active; nothing was changed, try again when none is running",
+                                code="collector_busy",
+                            ) from None
+                        raise
+                else:
+                    client.shutdown()
             # The stop was accepted: a collector that is slow to go down is waited
             # for a little longer than the caller asked before this gives up.
             if (_wait_for_collector_shutdown(client, state, deadline)
