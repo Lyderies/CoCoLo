@@ -563,7 +563,15 @@ def _service_slots(slots):
                    "runs it cannot finish (a run failed after its claim, or a child's end could not be confirmed). "
                    "It keeps them, since a child may still run, and it will be replaced by a fresh service once "
                    "no run is under way and it has been idle; the new service settles them.")
-    return {'stuck_run_slots': stuck, 'limit': limit, 'replaced_when_idle': stuck > 0, 'summary': summary}
+    report = {'stuck_run_slots': stuck, 'limit': limit, 'replaced_when_idle': stuck > 0, 'summary': summary}
+    warm_up = slots.get('warm_up')
+    if warm_up is not None:
+        # LRS-7: a service that cannot finish its start-up checks says so (fixed codes only).
+        report['warm_up'] = warm_up
+        if warm_up['state'] == 'failing':
+            report['summary'] += (" Project service: still checking runs left by its previous start; the last check "
+                                  f"failed ({warm_up['last_failure_code']}). Asking about such a run says to ask again.")
+    return report
 
 
 def _start_project_host(args):

@@ -407,6 +407,8 @@ class RunDriver:
         self._lost, self._sweep, self._next_sweep = {}, None, 0.0
         # LRS-1: set once the first sweep was collected; until then the earlier runs are not known yet.
         self._swept = False
+        # LRS-7: when start-up began, and the last failure code of each start-up check still failing.
+        self._warm_started, self._warm_failures = clock(), {}
         self._expiry, self._next_expiry = None, 0.0  # The first cleanup runs at start (0.3.4 R2).
         # Leases an earlier service left armed with no admitted claim, fenced here (0.3.3, C3).
         self._earlier, self._earlier_fences, self._fenced = None, {}, {}
@@ -519,27 +521,8 @@ class RunDriver:
             # Commands that know only a run handle: which host class holds it, or
             # dropping one that never took a lease.
             held = [run for run in self._runs.values() if run.key[0] == request['run_handle']]
-            lost = self._lost.get(request['run_handle'])
-            fenced = self._fenced.get(request['run_handle'])
-            settling = not self._earlier_listed or not self._swept or any(
-                entry['binding'].run_handle == request['run_handle'] for entry in self._earlier_fences.values())
-            if not held and fenced is not None:
-                # An earlier service's run this one fenced: it never launched and holds nothing.
-                self._reply(connection, {'state': 'refused', 'reason_code': 'history_not_authorized'}
-                            if fenced != enrolled.host_client else {'state': 'failed', 'reason_code': 'run_closed'})
-            elif not held and lost is None and settling:
-                # This service may still be closing it, an earlier service's run (C3d). It answers for
-                # the run, as for one it closed, so a command never looks for it elsewhere.
-                self._reply(connection, {'state': 'failed', 'reason_code': 'run_settling'})
-            elif not held and lost is not None:
-                # A run of an earlier service of this project; it is never started again here.
-                if lost[0] != enrolled.host_client:
-                    self._reply(connection, {'state': 'refused', 'reason_code': 'history_not_authorized'})
-                else:
-                    self._reply(connection, {'state': 'failed',
-                                             'reason_code': 'run_lost' if lost[1] == 'released' else 'run_lost_held'})
-            elif not held:
-                self._reply(connection, {'state': 'refused', 'reason_code': 'history_orchestration_unavailable'})
+            if not held:
+                self._reply(connection, self._unheld_reply(request['run_handle'], enrolled.host_client))
             elif held[0].host_client != enrolled.host_client:
                 self._reply(connection, {'state': 'refused', 'reason_code': 'history_not_authorized'})
             elif request['operation'] == 'run.describe':
@@ -1649,14 +1632,14 @@ class RunDriver:
                     return
                 try:
                     self._earlier = lane.earlier_leases()
-                except HistoryError:
-                    self._earlier_later(now)
+                except HistoryError as error:
+                    self._earlier_later(now, error.reason_code)
                 return
             if self._earlier.state == 'queued':
                 return
             if self._earlier.state == 'failed':
                 self._earlier = None
-                self._earlier_later(now)
+                self._earlier_later(now, 'listing_failed')
                 return
             for binding, evidence, host_client in self._earlier.result:
                 if (host_client in HOST_CLIENTS and binding.claim_request_id not in self._earlier_fences
@@ -1666,9 +1649,10 @@ class RunDriver:
                         'closure': None, 'settling': None, 'refusals': 0, 'outages': 0, 'at': 0.0}
             skipped, self._earlier = self._earlier.skipped, None
             if skipped:
-                self._earlier_later(now)  # O10 E2: some could not be read yet; listed again later.
+                self._earlier_later(now, 'listing_incomplete')  # O10 E2: some could not be read yet; listed again later.
             else:
                 self._earlier_listed = True
+                self._warm_failures.pop('listing', None)
         else:
             # B4s confirming check (HIGH 3): after the listing, each outstanding intent's claim no listed lease covered
             # is fenced once, with the same request (the account answers it alike: its closure, or its receipt).
@@ -1738,8 +1722,9 @@ class RunDriver:
     def _earlier_delay(attempts):
         return _backoff(FENCE_RETRY_SECONDS, FENCE_RETRY_MAX_SECONDS, attempts - 1)
 
-    def _earlier_later(self, now):
+    def _earlier_later(self, now, code='listing_failed'):
         """The earlier leases could not be listed: asked again later, less and less often."""
+        self._warm_failures['listing'] = code
         self._earlier_failures += 1
         self._earlier_at = now + self._earlier_delay(self._earlier_failures)
 
@@ -1776,6 +1761,42 @@ class RunDriver:
         except HistoryError:
             pass  # The writer is closing.
 
+    def _unheld_reply(self, run_handle, host_client):
+        """LRS-6: the answer for a run handle this service does not hold (run.describe, run.abandon).
+
+        Until the service both listed the earlier leases and collected its first sweep it cannot tell an
+        earlier run from an unknown handle, so it answers `run_settling` first, whatever fence or lost
+        entry it already has: a final answer never changes afterwards."""
+        if not self._earlier_listed or not self._swept:
+            return {'state': 'failed', 'reason_code': 'run_settling'}
+        lost, fenced = self._lost.get(run_handle), self._fenced.get(run_handle)
+        if fenced is not None:
+            # An earlier service's run this one fenced: it never launched and holds nothing.
+            return ({'state': 'refused', 'reason_code': 'history_not_authorized'} if fenced != host_client
+                    else {'state': 'failed', 'reason_code': 'run_closed'})
+        if lost is None and any(entry['binding'].run_handle == run_handle for entry in self._earlier_fences.values()):
+            # This service may still be closing it, an earlier service's run (C3d).
+            return {'state': 'failed', 'reason_code': 'run_settling'}
+        if lost is not None:
+            # A run of an earlier service of this project; it is never started again here.
+            if lost[0] != host_client:
+                return {'state': 'refused', 'reason_code': 'history_not_authorized'}
+            return {'state': 'failed', 'reason_code': 'run_lost' if lost[1] == 'released' else 'run_lost_held'}
+        return {'state': 'refused', 'reason_code': 'history_orchestration_unavailable'}
+
+    def warm_up(self):
+        """LRS-7: (state, elapsed ms, failed phase, last failure code) of this service's start-up checks.
+
+        `ready` once the earlier leases are listed and the first sweep is collected; `failing` while a
+        check last failed; else `warming`. Fixed codes only, never paths or raw error text."""
+        elapsed = max(0, int((self._clock() - self._warm_started) * 1000))
+        if self._earlier_listed and self._swept:
+            return ('ready', elapsed, None, None)
+        for phase in ('listing', 'sweep'):
+            if phase in self._warm_failures:
+                return ('failing', elapsed, phase, self._warm_failures[phase])
+        return ('warming', elapsed, None, None)
+
     # Runs of earlier service instances of this project.
     def _sweep_lost(self):
         """Owner step: collect the last sweep, and start the next one on its own helper thread."""
@@ -1785,8 +1806,9 @@ class RunDriver:
             try:
                 self._lost = self._sweep.result()
                 self._swept = True  # Only a collected result ends the warm-up.
+                self._warm_failures.pop('sweep', None)
             except Exception:
-                pass
+                self._warm_failures['sweep'] = 'sweep_failed'
             self._sweep, self._next_sweep = None, self._clock() + SWEEP_SECONDS
         if self._clock() >= self._next_sweep:
             self._sweep = self._sweeper.submit(self._settle_lost, False)

@@ -21,6 +21,7 @@ from .history_api import (
     HISTORY_OPERATIONS, HISTORY_PROTOCOL_VERSION, LARGE_REPLY_OPERATIONS, MAX_HISTORY_REPLY_BYTES,
     HistoryRequest, decode_history_request, decode_history_response, history_request_digest,
 )
+import re
 from .history_contracts import AttemptBinding, HistoryEntry, HistoryError, _DIGEST, _PROJECT, matches
 from .project_learning_live import ProjectLearning
 from .host_result_contracts import (HostResultContext, OperationalCheckContext, OperationalQAContext,
@@ -35,6 +36,9 @@ from .orchestration_service import OrchestrationService
 from .result_read_api import RESULT_READ_OPERATION, ResultReadRequest
 from .result_read_service import ResultReadAuthorization, ResultReadService
 from .service_transport import MAX_FRAME_BYTES
+
+
+_CODE = re.compile(r"[a-z0-9_]{1,64}")
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,8 @@ class HistoryAuthorization:
     open_scope_context: OpenScopeContext | None = None
     # O0c M1, M3: (run slots this host can no longer free, run slots it has), for the capacity report.
     run_slots: tuple | None = None
+    # LRS-7: (state, elapsed ms, failed phase, failure code) of the host's start-up checks, for the same report.
+    warm_up: tuple | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -71,6 +77,11 @@ class HistoryAuthorization:
             or (self.open_scope_context is not None and type(self.open_scope_context) is not OpenScopeContext)
             or (self.run_slots is not None and (type(self.run_slots) is not tuple or len(self.run_slots) != 2
                                                 or any(type(n) is not int or n < 0 for n in self.run_slots)))
+            or (self.warm_up is not None and (type(self.warm_up) is not tuple or len(self.warm_up) != 4
+                                              or self.warm_up[0] not in {'warming', 'ready', 'failing'}
+                                              or type(self.warm_up[1]) is not int or self.warm_up[1] < 0
+                                              or self.warm_up[2] not in {None, 'listing', 'sweep'}
+                                              or (self.warm_up[3] is not None and not matches(self.warm_up[3], _CODE))))
         ):
             raise HistoryError("history_not_authorized")
 
@@ -417,6 +428,10 @@ class HistoryService:
                 if authorization.run_slots is not None:
                     stuck, limit = authorization.run_slots
                     result['run_slots'] = {'stuck': stuck, 'limit': limit}
+                    if authorization.warm_up is not None:
+                        state, since_ms, phase, code = authorization.warm_up
+                        result['run_slots']['warm_up'] = {'state': state, 'since_ms': since_ms,
+                                                          'failed_phase': phase, 'last_failure_code': code}
             elif request.operation == 'history.orchestration_report':
                 from .project_orchestration_report import orchestration_report
                 self._history()
