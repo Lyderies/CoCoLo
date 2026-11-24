@@ -7,6 +7,8 @@ Needs git and those commits in this repository.
 """
 import json
 import os
+import socket
+import threading
 import shutil
 import subprocess
 import sys
@@ -15,7 +17,12 @@ import time
 import unittest
 from pathlib import Path
 
+from unittest import mock
+
 from codex_agents import collector_client
+from codex_agents.collector_client import CollectorError, PACKAGE_VERSION
+from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST
+from codex_agents.learning_store import CollectorMaintenance, LearningState
 from codex_agents.collector_client import CollectorClient, canonical_json, exchange_frame
 from codex_agents.collector_contracts import COLLECTOR_MUTATING_OPERATIONS
 
@@ -48,11 +55,31 @@ class Fixture:
                                          request_limit=4096, response_limit=16_384))
 
     def stop_collector(self):
-        """Whatever collector is left: the plain stop every release accepts."""
+        """Stop whatever collector is left with a stop it accepts, check it was accepted, wait for it to exit."""
         try:
-            self.frame({"protocol": 1, "op": "shutdown"})
+            health = self.frame({"protocol": 1, "op": "health"})
         except Exception:
-            pass
+            return  # nothing is answering
+        accepted = False
+        for extra in ({"runtime_digest": health.get("runtime_digest")}, {}):
+            try:
+                if self.frame({"protocol": 1, "op": "shutdown_if_drained", **extra}).get("ok") is True:
+                    accepted = True
+                    break
+            except Exception:
+                pass
+        self.assertTrue(accepted, "the leftover collector did not accept the drained stop")
+        end = time.monotonic() + 15
+        while self.socket.exists() or self.alive():
+            self.assertLess(time.monotonic(), end, "the leftover collector did not exit")
+            time.sleep(.1)
+
+    def alive(self):
+        try:
+            self.reported_version()
+            return True
+        except Exception:
+            return False
 
     def reported_version(self):
         return self.frame({"protocol": 1, "op": "health"})["runtime_version"]
@@ -84,7 +111,13 @@ class EarlierCollectorMixin(Fixture):
         report = json.loads(done.stdout)
         self.assertTrue(report["ready"], report)
         self.assertTrue(report["project_id"].startswith("prj_"))
-        self.assertNotEqual(self.OLD_VERSION, self.reported_version())
+        # UPG-4: the replacement is this build's collector and takes this build's own post-hand-over calls.
+        health = self.frame({"protocol": 1, "op": "health"})
+        self.assertEqual(PACKAGE_VERSION, health["runtime_version"])
+        self.assertEqual(COLLECTOR_RUNTIME_DIGEST, health["runtime_digest"])
+        client = CollectorClient(self.socket)
+        self.assertIsInstance(client.learning_moved_if_empty(self.project), bool)
+        self.assertEqual(report["project_id"], client.register(self.project))
 
 
 class Earlier0855Tests(EarlierCollectorMixin, unittest.TestCase):
@@ -99,6 +132,144 @@ class Earlier0858Tests(EarlierCollectorMixin, unittest.TestCase):
     OLD_VERSION = "0.8.58"
 
 
+class StandInCollector:
+    """A socket-level stand-in answering exactly the old wire shapes (a busy real 0.8.5x collector needs a real run).
+
+    `script(request, seen)` returns the reply for one request; every request is recorded."""
+
+    def __init__(self, path, script):
+        self.requests = []
+        self.script = script
+        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.server.bind(str(path))
+        self.server.listen(8)
+        self.server.settimeout(.2)
+        self.stopping = False
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+
+    def serve(self):
+        while not self.stopping:
+            try:
+                connection, _ = self.server.accept()
+            except (socket.timeout, OSError):
+                continue
+            with connection:
+                data = b""
+                while not data.endswith(b"\n"):
+                    chunk = connection.recv(65536)
+                    if not chunk:
+                        break
+                    data += chunk
+                request = json.loads(data)
+                self.requests.append(request)
+                connection.sendall(json.dumps(self.script(request, self.requests)).encode() + b"\n")
+
+    def close(self):
+        self.stopping = True
+        self.thread.join(5)
+        self.server.close()
+
+    def stops(self):
+        return [r for r in self.requests if r["op"] == "shutdown_if_drained"]
+
+
+class HandoverRefusalTests(unittest.TestCase):
+    """The compatibility retries of the hand-over stop refuse, and stay bounded (review r1 MED).
+
+    Stand-in server used (not a real busy collector: a busy one needs a driven run)."""
+    DIGEST = "cd" * 32
+
+    def setUp(self):
+        self.base = Path(tempfile.mkdtemp(prefix="upr", dir=os.environ.get("TMPDIR", "/tmp"))).resolve()
+        self.addCleanup(shutil.rmtree, self.base, True)
+        (self.base / "s").mkdir(mode=0o700)
+        self.state = LearningState(self.base / "s")
+        self.project = self.base / "p"
+        self.project.mkdir()
+
+    def health(self, version, digest=DIGEST):
+        return {"ok": True, "runtime_version": version, "schema_version": 1, "runtime_digest": digest}
+
+    def acquire(self, script, *, owner=True):
+        stand_in = StandInCollector(self.state.socket, script)
+        self.addCleanup(stand_in.close)
+        with mock.patch("codex_agents.learning_store._start_collector_locked") as start, \
+                mock.patch("codex_agents.learning_store._wait_for_collector_shutdown") as waited:
+            try:
+                CollectorMaintenance.acquire(self.state, ORCHESTRATION / "cli.py", self.project,
+                                             owner_registration=owner)
+            except CollectorError as error:
+                outcome = error
+            else:
+                outcome = None
+            self.assertEqual(0, start.call_count, "a refused hand-over must not restart or register")
+            self.assertEqual(0, waited.call_count)
+        self.assertEqual([], [r for r in stand_in.requests if r["op"] not in ("health", "shutdown_if_drained")])
+        return outcome, stand_in
+
+    def test_the_bare_retry_to_a_busy_collector_refuses_with_collector_busy(self):
+        def script(request, seen):
+            if request["op"] == "health":
+                return self.health("0.8.55")
+            return {"ok": False, "code": "operation_invalid" if "runtime_digest" in request else "collector_busy"}
+        outcome, stand_in = self.acquire(script)
+        self.assertEqual("collector_busy", outcome.code)
+        self.assertEqual([True, False], ["runtime_digest" in r for r in stand_in.stops()])
+
+    def test_the_echoed_retry_to_a_busy_collector_refuses_with_collector_busy(self):
+        def script(request, seen):
+            if request["op"] == "health":
+                return self.health("0.8.58")
+            if request["runtime_digest"] == self.DIGEST:
+                return {"ok": False, "code": "collector_busy"}
+            return {"ok": False, "code": "runtime_upgrade_required"}
+        outcome, stand_in = self.acquire(script)
+        self.assertEqual("collector_busy", outcome.code)
+        self.assertEqual([COLLECTOR_RUNTIME_DIGEST, self.DIGEST], [r["runtime_digest"] for r in stand_in.stops()])
+
+    def test_each_compatibility_retry_happens_at_most_once(self):
+        for version, code in (("0.8.55", "operation_invalid"), ("0.8.58", "runtime_upgrade_required")):
+            with self.subTest(version=version):
+                def script(request, seen):
+                    return self.health(version) if request["op"] == "health" else {"ok": False, "code": code}
+                outcome, stand_in = self.acquire(script)
+                self.assertEqual(code, outcome.code)
+                self.assertEqual(2, len(stand_in.stops()))
+                stand_in.close()
+                self.state.socket.unlink()
+
+    def test_a_collector_that_reports_this_version_or_newer_is_never_retried(self):
+        for code in ("operation_invalid", "runtime_upgrade_required"):
+            with self.subTest(code=code):
+                def script(request, seen):
+                    if request["op"] == "health":
+                        # Older at first (the stop is attempted), this build's version when asked again.
+                        return self.health("0.8.58" if len(seen) == 1 else PACKAGE_VERSION)
+                    return {"ok": False, "code": code}
+                outcome, stand_in = self.acquire(script)
+                self.assertEqual(code, outcome.code)
+                self.assertEqual(1, len(stand_in.stops()))
+                stand_in.close()
+                self.state.socket.unlink()
+
+    def test_without_a_reported_digest_the_echo_fails_closed(self):
+        def script(request, seen):
+            if request["op"] == "health":
+                return self.health("0.8.58", digest="not-a-digest")
+            return {"ok": False, "code": "runtime_upgrade_required"}
+        outcome, stand_in = self.acquire(script)
+        self.assertEqual("runtime_upgrade_required", outcome.code)
+        self.assertEqual(1, len(stand_in.stops()))
+
+    def test_a_caller_that_is_not_the_owner_registration_never_retries(self):
+        def script(request, seen):
+            return self.health("0.8.58") if request["op"] == "health" else {"ok": False, "code": "runtime_upgrade_required"}
+        outcome, stand_in = self.acquire(script, owner=False)
+        self.assertIsInstance(outcome, CollectorError)  # refused (here its authorization check), no stop sent
+        self.assertEqual(0, len(stand_in.stops()))
+
+
 class SameBuildCollectorTests(Fixture, unittest.TestCase):
     """UPG-2 and UPG-5 against this build's own collector, a real process."""
     FOREIGN = "ab" * 32
@@ -107,13 +278,6 @@ class SameBuildCollectorTests(Fixture, unittest.TestCase):
         self.prepare()
         done = self.run_cli(ORCHESTRATION / "cli.py")
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
-
-    def alive(self):
-        try:
-            self.reported_version()
-            return True
-        except Exception:
-            return False
 
     def wait_stopped(self):
         end = time.monotonic() + 15

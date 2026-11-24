@@ -1,5 +1,4 @@
 # upgfix assertions
-No existing assertion changed or removed.
 
 ## tests.test_learning_store.LearningStoreTests.test_maintenance_never_stops_a_collector_from_under_a_run (UPG-1)
 - Old: reported runtime_version "0.8.13" with operation_invalid on the drained stop -> refused (CollectorError operation_invalid); comment "this version with an older schema is not [stopped]".
