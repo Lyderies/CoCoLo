@@ -2069,7 +2069,7 @@
  "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_a_host_stops_when_its_hint_is_withdrawn_or_it_has_been_idle": 2.62,
  "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_a_killed_host_is_replaced_and_an_unregistered_project_gets_none": 1.55,
  "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_cli_starts_one_host_reuses_it_and_recovers_after_it_stops": 1.28,
- "codex:tests.test_project_start": 85.0,
+ "codex:tests.test_project_start": 130.0,
  "codex:tests.test_project_worker_result": 11.24,
  "codex:tests.test_project_worker_result.ProjectWorkerResultTests.test_actual_original_reference_precedes_any_verifier_open_and_private_bytes_use_bound_reader": 0.67,
  "codex:tests.test_project_worker_result.ProjectWorkerResultTests.test_arbitrary_task_flags_paths_and_result_body_are_not_wire_authority": 0.68,

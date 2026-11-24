@@ -57,7 +57,9 @@ user action unparks: a new launch digest (setup ran again: a new install or upda
 ends the streak). A project reporting again (a publish) does not unpark it. A start that serves for
 `START_PROBATION_SECONDS` ends the streak. **Acceptance:** a broken project backs off with growing waits; once
 its streak is old enough it parks after its next failure; a republish leaves it parked; the owner command unparks;
-a project that is fixed and serves ends its streak; a host killed within probation counts as failed.
+a project that is fixed and serves ends its streak; a host killed within probation counts as failed. A probation
+ends its streak only when its host is seen alive at or after the probation's end; a host found gone, however late
+a restarted collector looks, counts failed (decision 243).
 
 ### E2c-5 - What is launched (E2-3, T6)
 The child is the launch record's copy only: entry `<launch_copy>/.codex/orchestration/project_host.py`, run with
@@ -108,9 +110,13 @@ over the real collector; unsigned requests for a registered and an unknown root 
 A claim carries its attempt id, claim time and, once spawned, the child's pid. At collector start (on the
 starter's thread, before its first claim) and once per sweep interval, every outstanding claim that is not one of
 this starter's own is reconciled: no child, or a child gone, releases it (a child gone without serving counts
-failed); a surviving child keeps it until it serves or ends, and past twice the start timeout it is released as
-failed without being signalled (its identity cannot be proved after a restart). A claim never stays outstanding
-after a collector crash. The starter's own child still alive at twice `START_TIMEOUT_SECONDS` gets SIGKILL to its
+failed); a surviving child keeps it until it serves or ends, and past twice the start timeout its own process group (the
+child leads it: spawned with setsid) gets SIGKILL and the claim ends as failed only once that group is gone, so
+never more than `START_SLOTS` started children live (decision 243). A spawned child is never left unowned
+(decision 243): a pid record the ledger refuses is tried again for as long as the child lives; a clean stop before
+it lands kills and reaps the child before its claim is released; a claim left without a pid is released only when
+no process group led by that project's host exists. A claim never stays outstanding after a collector crash
+longer than its child lives. The starter's own child still alive at twice `START_TIMEOUT_SECONDS` gets SIGKILL to its
 process group and counts failed. A service killed between its pending acknowledgement and its commit, or between
 its commit and `exact`, is started within one interval; a collector restart keeps a project's failures and
 backoff and reconciles unknown projects as due. **Acceptance:** a claim left by a dead collector with a dead child

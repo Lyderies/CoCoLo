@@ -44,6 +44,9 @@ STARTER_TICK_SECONDS = 1.0
 # thread every tick until it lands.
 SETTLE_TRIES = 3
 SETTLE_RETRY_SECONDS = 0.05
+# Review round 2 (decision 243, HIGH 2): a refused pid record is tried again this often for as long as its child
+# lives; the child never runs unowned (see `_spawn` and `_find_child`).
+RECORD_RETRY_SECONDS = 0.25
 HOST_RELATIVE = Path('.codex') / 'orchestration' / project_host_client.HOST_ENTRY
 
 
@@ -283,22 +286,28 @@ class ProjectStarter:
 
     def _watch_reserved(self):
         """HIGH 3: a dead collector's surviving child holds its slot until it serves, ends or reaches twice the start
-        timeout (released as failed, never signalled: its identity cannot be proved after a restart)."""
+        timeout; then its own process group gets SIGKILL and the slot is freed (failed) once that group is gone."""
         with self._condition:
             reserved = list(self._reserved.values())
         limit_ms = int(2 * start_timeout() * 1000)
         for row in reserved:
             claim = types.SimpleNamespace(project_id=row['project_id'], attempt=row['attempt'])
             pid = row['child_pid']
-            if project_host_client.project_host_serving(self.state_root, row['canonical_root']):
+            if not row.get('killing') and project_host_client.project_host_serving(self.state_root,
+                                                                                    row['canonical_root']):
                 self._settle(claim, 'started', child_pid=pid, tries=1)
                 self._foreign.setdefault(row['project_id'], {
                     'project_id': row['project_id'], 'probation_attempt': row['attempt'], 'probation_pid': pid,
                     'probation_until_ms': _now_ms() + int(START_PROBATION_SECONDS * 1000),
                     'canonical_root': row['canonical_root']})
-            elif not _group_alive(pid):
+            elif not row.get('killing') and not _group_alive(pid):
                 self._settle(claim, 'failed', 'service_ended', tries=1)
-            elif _now_ms() - int(row['claimed_at_ms'] or 0) >= limit_ms:
+            elif row.get('killing') or _now_ms() - int(row['claimed_at_ms'] or 0) >= limit_ms:
+                # Review round 2 (decision 243, HIGH 3): its own process group is killed, and its slot is freed
+                # only once that group is gone, so never more than START_SLOTS started children live.
+                row['killing'] = True
+                if not _kill_group(pid):
+                    continue
                 self._settle(claim, 'failed', 'start_timeout', tries=1)
             else:
                 continue
@@ -317,13 +326,15 @@ class ProjectStarter:
             until = int(row['probation_until_ms'] or 0)
             if alive and now < until:
                 continue
-            self._probation(project_id, row['probation_attempt'], alive or now >= until)
+            # Review round 2 (decision 243, HIGH 4): it survived only when it is seen alive at or after its
+            # probation's end; a host found gone counts failed, however late the check comes.
+            self._probation(project_id, row['probation_attempt'], alive)
             self._foreign.pop(project_id, None)
 
     def _reconcile_stranded(self):
         """E2c-10: claims this starter does not own (a dead collector left them): released when no child or a
-        child gone; kept while a child survives (holding a slot, HIGH 3), released as failed past twice the
-        timeout, never signalled."""
+        child gone; kept while a child survives (holding a slot, HIGH 3); past twice the timeout its own process
+        group gets SIGKILL and the claim ends as failed once that group is gone (decision 243)."""
         limit_ms = int(2 * start_timeout() * 1000)
         after = ''
         while not self._stop.is_set():
@@ -340,17 +351,28 @@ class ProjectStarter:
                 return
         pid = row['child_pid']
         if pid is None:
-            self.ledger.release_start(row['project_id'], row['attempt'], now_ms=_now_ms())
-        elif project_host_client.project_host_serving(self.state_root, row['canonical_root']):
+            # Review round 2 (decision 243, HIGH 2): a refused pid record left no pid, but its child may still run:
+            # the claim is released only when no process group of this project's host exists.
+            pid = _find_child(self.state_root, row['canonical_root'])
+            if pid is None:
+                self.ledger.release_start(row['project_id'], row['attempt'], now_ms=_now_ms())
+                return
+            row = {**row, 'child_pid': pid}
+            try:
+                self.ledger.set_start_child(row['project_id'], row['attempt'], pid)
+            except Exception as error:  # still kept and watched here; a later pass finds it again
+                self._error(error)
+        if project_host_client.project_host_serving(self.state_root, row['canonical_root']):
             self.ledger.finish_start(row['project_id'], row['attempt'], outcome='started', reason=None,
                                      now_ms=_now_ms(), child_pid=pid, **start_policy())  # its probation is kept
         elif not _group_alive(pid):
             self.ledger.finish_start(row['project_id'], row['attempt'], outcome='failed', reason='service_ended',
                                      now_ms=_now_ms(), **start_policy())
-        elif _now_ms() - int(row['claimed_at_ms'] or 0) >= limit_ms:
+        elif _now_ms() - int(row['claimed_at_ms'] or 0) >= limit_ms and _kill_group(pid):
             self.ledger.finish_start(row['project_id'], row['attempt'], outcome='failed', reason='start_timeout',
                                      now_ms=_now_ms(), **start_policy())
-        else:
+        else:  # alive, or killed and not yet gone (then `_watch_reserved` frees it once it is)
+            row = {**row, 'killing': _now_ms() - int(row['claimed_at_ms'] or 0) >= limit_ms}
             with self._condition:  # its slot is held from now on, watched every tick (_watch_reserved)
                 self._reserved[row['attempt']] = row
                 self._own.add(row['attempt'])
@@ -452,7 +474,8 @@ class ProjectStarter:
         timeout (then its process group is killed). Returns (outcome, reason, pid), or ('left', recorded) when the
         collector stops first (the child is left to run; with its pid on record the next collector reconciles it).
         HIGH 2: from the spawn on, this worker owns the child whatever fails: a pid record the ledger refuses is
-        tried again and otherwise only missing from the ledger, and an unexpected error kills and reaps the child."""
+        tried again every RECORD_RETRY_SECONDS while the child lives; a stop before it lands kills and reaps the
+        child; an unexpected error kills and reaps the child."""
         root = Path(claim.root)
         report_path = self.state_root / f'.project-start-{secrets.token_hex(8)}.json'
         actions = [(os.POSIX_SPAWN_OPEN, 0, os.devnull, os.O_RDWR, 0),
@@ -468,7 +491,11 @@ class ProjectStarter:
             try:
                 kill_at = time.monotonic() + 2 * start_timeout()
                 recorded = self._record_child(claim, pid)
+                record_at = time.monotonic() + RECORD_RETRY_SECONDS
                 while True:
+                    if not recorded and time.monotonic() >= record_at:  # HIGH 2: never given up while it lives
+                        recorded = self._record_child(claim, pid, tries=1)
+                        record_at = time.monotonic() + RECORD_RETRY_SECONDS
                     if project_host_client.project_host_serving(self.state_root, root):
                         return ('started', None, pid)
                     if os.waitpid(pid, os.WNOHANG)[0] == pid:
@@ -482,6 +509,14 @@ class ProjectStarter:
                         reaped = True
                         return ('failed', 'start_timeout', None)
                     if self._stop.is_set():
+                        if not recorded:
+                            recorded = self._record_child(claim, pid)
+                        if not recorded:
+                            # HIGH 2 (decision 243): a child no later collector could find by its record is not
+                            # left behind: it is killed and reaped before its claim is released.
+                            _kill_and_reap(pid)
+                            reaped = True
+                            return ('left', False)
                         with self._children_lock:
                             self._children[pid] = [claim.project_id, claim.attempt, None]
                         reaped = True  # reaped by the starter thread or left to the system at exit
@@ -497,15 +532,15 @@ class ProjectStarter:
             except OSError:
                 pass
 
-    def _record_child(self, claim, pid):
+    def _record_child(self, claim, pid, *, tries=SETTLE_TRIES):
         """E2c-10: the child's pid on its claim, for a later collector; whether the ledger kept it (HIGH 2)."""
-        for attempt in range(SETTLE_TRIES):
+        for attempt in range(tries):
             try:
                 self.ledger.set_start_child(claim.project_id, claim.attempt, pid)
                 return True
             except Exception as error:
                 self._error(error)
-                if attempt + 1 < SETTLE_TRIES:
+                if attempt + 1 < tries:
                     time.sleep(SETTLE_RETRY_SECONDS)
         return False
 
@@ -519,6 +554,33 @@ def _kill_and_reap(pid):
         os.waitpid(pid, 0)
     except ChildProcessError:
         pass
+
+
+def _kill_group(pid):
+    """Decision 243 (HIGH 3): SIGKILL to the child's own process group (setsid made it its leader); whether that
+    group is gone (or is not this user's, so the child is gone and its pid reused). False: signalled, not yet gone."""
+    try:
+        os.killpg(int(pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        return True
+    return not _group_alive(pid)
+
+
+def _find_child(state_root, canonical_root):
+    """Decision 243 (HIGH 2): the pid of a live process group led by this project's host under this state root (the
+    starter's child is spawned with setsid, so it leads its own group), or None when no such group exists. Used
+    only for a claim whose pid record was refused. Fails closed: when the process table cannot be read it raises,
+    so the claim is kept and the pass is tried again."""
+    import subprocess
+    listed = subprocess.run(['/bin/ps', '-ax', '-ww', '-o', 'pid=,pgid=,command='], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env={'PATH': os.defpath},
+                            timeout=10, check=True, text=True)
+    tail = f"{HOST_RELATIVE} --state-root {state_root} --project-root {canonical_root}"
+    for line in listed.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[0] == parts[1] and parts[2].endswith(tail):
+            return int(parts[0])
+    return None
 
 
 def _group_alive(pid):

@@ -24,8 +24,35 @@ No assertion removed or weakened. Changed tests, old -> new:
 
 Not an assertion change, for the primary: `tests.test_runtime_release.test_current_runtime_is_recorded_for_the_current_version`
 fails on this branch by design. Runtime files changed (new `project_start.py`, learning_store, collector_client,
-collector_contracts, client_runtime, cli, runtime_files), so the computed runtime digest is
-`0eb7787ad120755ae5decf712f25a69c52878f3185989a261b85f9a1db34cdd0`. As briefed, `runtime-releases.json` keeps
+collector_contracts, client_runtime, cli, runtime_files), so the computed runtime digest differs from the recorded
+one (the release bookkeeping computes it; no digest is pinned here). As briefed, `runtime-releases.json` keeps
 `"0.8.59": "dcc18633d92e87eeabf2d52e3e8e0058a03e39621ccf8ff95b2d1e811846bfe9"` (E2a's in-branch refresh to 848d3e3a... was
 put back) and no 0.8.60 key or VERSION bump was added: in this repo the version bump is the primary's release
 bookkeeping commit (VERSION, runtime-releases.json, claude-agents previous-releases.json, catalogue test, CHANGELOG).
+
+## Review round 2 final targeted fix (confirming check reviews/040-e2c-r2c/RESULT-codex.md, primary decision 243)
+
+No assertion removed or weakened. Changed, old -> new:
+
+5. `StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client` (MED 2, tightened): old: each
+   due project's `begin` by ready + STARTER_CHECK_SECONDS + one tick + 1 s, then serving within a further
+   2 x START_TIMEOUT_SECONDS (16 s); new: the same begin assertion, and both projects SERVING by that same deadline
+   (a serving check that answered by then; no further wait). Later assertions unchanged.
+6. Requirement text (accepted statements, decision 243; requirements.md, tests/requirements/e2c.json,
+   scripts/test-requirements.json): E2c-10 old "past twice the start timeout it is released as failed without being
+   signalled (its identity cannot be proved after a restart). A claim never stays outstanding after a collector
+   crash." -> new: past twice the timeout its own process group gets SIGKILL and the claim ends failed only once that
+   group is gone (never more than START_SLOTS live started children); a refused pid record is retried while the
+   child lives; a clean stop kills and reaps an unrecorded child before releasing; a claim without a pid is released
+   only when no process group led by that project's host exists; "never outstanding after a crash longer than its
+   child lives". E2c-4: added "a probation ends its streak only when its host is seen alive at or after the
+   probation's end; a host found gone, however late a restarted collector looks, counts failed". No existing test
+   asserted the old "never signalled" behaviour (SlotTests and StrandedTests keep their survivors under 2 x 30 s).
+7. assertions.md (this file) line 28: the stale computed runtime digest removed (above).
+8. Test fixture only: the LAUNCHER gains an `unserved` option (while a named file exists the starter's view of
+   `project_host_serving` answers False; the host itself runs) and `launch(unserved=...)`. No existing test uses it.
+
+New tests (all in tests/test_project_start.py): `RecordRefusedTests` (2, E2c-10), `TimeoutSlotTests` (E2c-2,
+E2c-10), `ProbationDeadlineTests` (E2c-4, E2c-10), `ReleasedLedgerUpgradeTests` (E2a-1, E2c-10). Schema/version pins:
+none changed; the released-ledger test asserts `PRAGMA user_version` stays `LEDGER_SCHEMA_VERSION` (16) after this
+build's additive, idempotent migration (E2a-1 rule: additive columns/tables, no version change).

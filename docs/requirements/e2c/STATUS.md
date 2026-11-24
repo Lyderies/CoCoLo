@@ -88,3 +88,36 @@ first claim to "at once". Put back to one STARTER_CHECK_SECONDS after ready (as 
 project_start, rsf_s1_ingress_socket, e2a_launch_record, ledger_lock_limits, lifetime_cap_guard: 91 tests, 44 s, all
 green, metadata_errors []. test_runtime_release red for the digest only (computed fc19c3a2b77de508e7712685d53ad4c6
 279b6c8249b09bc84353e0cf3d504d04; 0.8.59 entry kept dcc18633..., primary's bookkeeping).
+
+## Review round 2: one final targeted fix (decision 243; confirming check reviews/040-e2c-r2c/RESULT-codex.md)
+
+Base 0c9179f9. New tests written first and run on the 0c9179f9 product code (red), then the fix (green):
+- HIGH 2 `RecordRefusedTests` (2 tests, E2c-10; pid record refused for ever, host hidden from the starter's serving
+  check by the launcher's new `unserved` seam). Red on 0c9179f9: clean stop "released while its child still runs"
+  (attempt None, child alive); collector SIGKILL + restart "the claim ended while its child still ran". Fix
+  (project_start.py): the pid record is retried every RECORD_RETRY_SECONDS while the child lives; a stop before it
+  lands kills and reaps the child, then releases; a stranded claim without a pid is released only when `_find_child`
+  (ps: a process group led by this project's host under this state root) finds none, else it is kept, recorded and
+  watched like any survivor.
+- HIGH 3 `TimeoutSlotTests.test_E2c_2_a_surviving_child_s_slot_is_freed_only_once_it_is_killed_and_gone`. Red:
+  "'one' not found ... a third live child" (fresh began while both survivors ran). Fix: at 2 x timeout a survivor's
+  own group gets SIGKILL (`_kill_group`); its claim ends failed/start_timeout and its slot is freed only once the
+  group is gone (reconcile and `_watch_reserved`).
+- HIGH 4 `ProbationDeadlineTests` (E2c-4). Red: (1, 'service_ended_early') != (0, None). Fix: `_watch_foreign`
+  passes survived only when the host is alive at the check at/after the deadline.
+- New HIGH `ReleasedLedgerUpgradeTests` (E2a-1, E2c-10; git archive 227b0c5e = 0.8.59, its own learning-register and
+  collector make the ledger). GREEN on 0c9179f9: the released schema has no project_wake/project_starts, so the
+  existing additive, idempotent `_initialize_launch_and_wake` (E2a ALTERs + CREATE IF NOT EXISTS) already migrates
+  it; the reviewer's OperationalError is a d16a9448 (unreleased) ledger, not supported (owner rule 129.3). No product
+  change. Red by mutation (E2a ALTER removed): "{'launch_digest', 'launch_copy'} not less than or equal ... : projects".
+  This build's own learning-register is not run on it: the branch keeps VERSION 0.8.59 until the primary's release
+  bookkeeping, so it refuses the 0.8.59-authorized state ("authorized collector build conflicts with this package
+  version") by design.
+- MED 2 T1 now requires SERVING by the begin deadline (assertions.md 5). Green on 0c9179f9 (no product bug); red by
+  mutation (2 s sleep before posix_spawn): "the due projects were not serving within one interval", 23.1 s.
+- assertions.md:28 stale digest removed. runtime-releases.json untouched (0.8.59 stays dcc18633...).
+Green: the 5 new tests 18.7 s; touched classes (11 tests) 51.5 s; `parallel_tests.py --module` project_start,
+lifetime_cap_guard, learning_store, upgrade_handover, e2a_launch_record, rsf_s1_ingress, rsf_s1_ingress_socket:
+192 tests, 39.6 s, failed_units [], metadata_errors []; exit 1 only for OVER BUDGET test_project_start
+129.7 s > 60 s integration/scenario (already over at 85 s in round 1; needs a primary decision: budget debt or a
+split). test-timings 85 -> 130.

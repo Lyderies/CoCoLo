@@ -28,6 +28,7 @@ import unittest
 from unittest import mock
 
 from tests import test_learning_store as store_tests
+from tests import test_upgrade_handover as upgrade_tests
 from tests.learning_support import generate_test_owner_key
 from tests.support import ORCHESTRATION_ROOT, SHORT_TMP
 from tests.test_host_commands import install_package
@@ -87,6 +88,17 @@ for method_name in list(refusals):
             raise learning_store.LedgerError('refused by the test')
         return _real(self, *args, **kwargs)
     setattr(learning_store.LearningLedger, method_name, refused)
+# Review round 2 (HIGH 2/3): while the file `unserved` names exists, the starter sees no host serving (its hosts still
+# run): a child that lives without serving, as a slow or stuck host does. Only the starter's view is changed.
+if options.get('unserved'):
+    import types
+    from codex_agents import project_host_client
+    view = types.ModuleType('project_host_client_view')
+    view.__dict__.update(project_host_client.__dict__)
+    def unserved_serving(*args, _real=project_host_client.project_host_serving, **kwargs):
+        return False if os.path.exists(options['unserved']) else _real(*args, **kwargs)
+    view.project_host_serving = unserved_serving
+    project_start.project_host_client = view
 claim_due = learning_store.LearningLedger.claim_due_starts
 def timed_claim(self, **kwargs):
     began = time.perf_counter()
@@ -196,9 +208,10 @@ class StarterBase(unittest.TestCase):
         (self.state.root / 'projects' / self.projects[name][1] / 'history.sqlite3').unlink()
 
     def launch(self, constants=None, store=None, env=None, block=None, fail=None, trust_temp=True,
-               orchestration=ORCHESTRATION_ROOT):
+               orchestration=ORCHESTRATION_ROOT, unserved=None):
         options = {'constants': {**self.CONSTANTS, **(constants or {})}, 'store': {**self.STORE, **(store or {})},
-                   'log': str(self.log), 'block': block, 'fail': fail, 'trust_temp': trust_temp}
+                   'log': str(self.log), 'block': block, 'fail': fail, 'trust_temp': trust_temp,
+                   'unserved': unserved}
         self.options = options
         errors = open(self.base / 'collector.err', 'ab')
         self.addCleanup(errors.close)
@@ -412,8 +425,15 @@ class StartTests(StarterBase):
             begun = wait_for(self, lambda: self.events('begin', name), max(0.0, deadline - time.monotonic()),
                              f'{name}: no start began within one interval')
             self.assertLessEqual(begun[0]['t'], deadline)
-        wait_for(self, lambda: self.serving('never') and self.serving('stopped'),
-                 2 * project_start.project_host_client.START_TIMEOUT_SECONDS, 'the due projects never served')
+        # Review round 2 (decision 243, MED 2): serving, not only begun, by that same deadline.
+        served = None
+        while served is None and time.monotonic() <= deadline:
+            if self.serving('never') and self.serving('stopped'):
+                served = time.monotonic()  # both checks answered serving by this time
+            else:
+                time.sleep(0.05)
+        self.assertIsNotNone(served, 'the due projects were not serving within one interval')
+        self.assertLessEqual(served, deadline)
         time.sleep(1.0)
         self.assertFalse(self.serving('idle'))
         self.assertEqual([], self.events('begin', 'idle'))
@@ -1277,6 +1297,194 @@ class FairnessTests(unittest.TestCase):
         self.assertEqual(200, self.ledger._connection.execute(
             "SELECT COUNT(*) FROM project_starts WHERE outcome='no_record' AND project_id LIKE 'prj_q%'").fetchone()[0])
 
+
+
+def group_alive(pid):
+    try:
+        os.killpg(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return False  # not this user's: the child (this user's) is gone and its pid was reused
+    return True
+
+
+class RecordRefusedTests(StarterBase):
+    """Review round 2 (decision 243, HIGH 2): a spawned child is never lost. While the ledger refuses its pid record,
+    the claim stays until the child is proven gone, through a clean stop and through the collector's loss."""
+
+    TIMEOUT = 2.0
+
+    def spawn_unrecorded(self):
+        self.add('alpha')
+        unserved = self.base / 'unserved'
+        unserved.touch()  # the host runs but the starter does not see it serve: it stays a starting child
+        self.launch(constants={'START_TIMEOUT_SECONDS': self.TIMEOUT, 'START_BACKOFF_FIRST_SECONDS': 60.0},
+                    fail={'set_start_child': 10 ** 6}, unserved=str(unserved))
+        spawned = wait_for(self, lambda: self.events('spawned'), 20, 'alpha was never spawned')
+        wait_for(self, lambda: self.events('refused'), 10, lambda: f'the pid record was not refused: {self.events()[-6:]}')
+        time.sleep(1.0)  # well past the pid record's first tries
+        row = self.starts('alpha')
+        self.assertIsNotNone(row['attempt'])
+        self.assertIsNone(row['child_pid'])  # refused: the ledger does not know the child
+        self.assertTrue(group_alive(spawned[0]['pid']))
+        return spawned[0]['pid'], row['attempt'], unserved
+
+    def assert_kept_until_gone(self, pid, attempt, seconds):
+        """Until the claim `attempt` ends, the child's group may live; once it ended, the child is gone."""
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            alive = group_alive(pid)
+            row = self.starts('alpha')
+            if row['attempt'] != attempt:
+                self.assertFalse(alive and group_alive(pid),
+                                 f'the claim ended while its child still ran: {row} {self.events()[-6:]}')
+                return row
+            time.sleep(0.02)
+        self.fail(f'the claim never ended: {self.starts("alpha")}')
+
+    @requirements('E2c-10', why_not_scenario=SCENARIO)
+    def test_E2c_10_a_clean_stop_never_releases_an_unrecorded_live_child_s_claim(self):
+        pid, attempt, _unserved = self.spawn_unrecorded()
+        self.stop_collector()
+        row = self.starts('alpha')
+        if row['attempt'] == attempt:
+            return  # kept: a later collector reconciles it
+        self.assertFalse(group_alive(pid), f'released while its child still runs: {row}')
+        self.assertEqual([], self.host_pids())
+
+    @requirements('E2c-10', why_not_scenario=SCENARIO)
+    def test_E2c_10_after_the_collector_s_loss_an_unrecorded_child_keeps_its_claim_until_it_is_gone(self):
+        pid, attempt, unserved = self.spawn_unrecorded()
+        self.collector.kill()  # lost: no stop step runs
+        self.collector.wait(10)
+        self.collector = None
+        self.assertTrue(group_alive(pid))
+        self.assertEqual(attempt, self.starts('alpha')['attempt'])
+        self.launch(constants={'START_TIMEOUT_SECONDS': self.TIMEOUT, 'START_BACKOFF_FIRST_SECONDS': 60.0},
+                    unserved=str(unserved), store={'WORKER_RESULT_SWEEP_SECONDS': 1.0})
+        row = self.assert_kept_until_gone(pid, attempt, 4 * self.TIMEOUT + 15)
+        self.assertEqual(('failed', 'start_timeout'), (row['outcome'], row['reason']))
+
+
+class TimeoutSlotTests(StarterBase):
+    @requirements('E2c-2', 'E2c-10', why_not_scenario=SCENARIO)
+    def test_E2c_2_a_surviving_child_s_slot_is_freed_only_once_it_is_killed_and_gone(self):
+        """Review round 2 (decision 243, HIGH 3): never more than START_SLOTS live started children, also when a
+        surviving stranded child reaches twice the start timeout."""
+        for name in ('one', 'two', 'fresh'):
+            self.add(name)
+        survivors, exits = {}, {}
+        for name in ('one', 'two'):
+            survivors[name] = subprocess.Popen(['/bin/sleep', '60'], start_new_session=True)
+            self.held.append(survivors[name])
+
+            def reap(name=name):  # as the system reaps an orphan: a killed survivor leaves no zombie behind
+                survivors[name].wait()
+                exits[name] = time.monotonic()
+            threading.Thread(target=reap, daemon=True).start()
+        now = self.now_ms()
+        with self.offline() as ledger:
+            ledger.mark_wakes_due([(self.projects[name][1], str(self.root(name)), None, None)
+                                   for name in ('one', 'two')], now_ms=now)
+            claims = {item.project_id: item for item in ledger.claim_due_starts(now_ms=now, limit=64)}
+            for name in ('one', 'two'):
+                ledger.set_start_child(self.projects[name][1], claims[self.projects[name][1]].attempt,
+                                       survivors[name].pid)
+        self.launch(constants={'START_TIMEOUT_SECONDS': 1.0, 'START_BACKOFF_FIRST_SECONDS': 60.0},
+                    store={'WORKER_RESULT_SWEEP_SECONDS': 1.0})
+        begun = wait_for(self, lambda: self.events('begin', 'fresh'), 20, 'no start once the survivors timed out')
+        for name in ('one', 'two'):
+            self.assertIn(name, exits, f'{name} still ran when fresh began: a third live child')
+            self.assertLessEqual(exits[name], begun[0]['t'])
+            self.assertEqual(('failed', 'start_timeout'), (self.starts(name)['outcome'], self.starts(name)['reason']))
+        wait_for(self, lambda: self.serving('fresh'), 30, 'fresh never served')
+
+
+class ProbationDeadlineTests(StarterBase):
+    @requirements('E2c-4', 'E2c-10', why_not_scenario=SCENARIO)
+    def test_E2c_4_a_host_that_died_early_is_failed_when_the_restart_comes_after_its_deadline(self):
+        """Review round 2 (decision 243, HIGH 4): survival needs the host alive at or after its probation's end."""
+        self.add('dies')
+        constants = {'START_PROBATION_SECONDS': 3.0, 'START_BACKOFF_FIRST_SECONDS': 60.0}
+        self.launch(constants=constants)
+        row = wait_for(self, lambda: (self.starts('dies') or {}).get('outcome') == 'started'
+                       and self.starts('dies')['attempt'] is None and self.starts('dies'), 30,
+                       lambda: f'never started: {self.starts("dies")}')
+        self.assertIsNotNone(row['probation_pid'])
+        self.stop_collector()  # within its probation
+        for pid in self.host_pids('dies'):
+            os.kill(pid, signal.SIGKILL)  # it ends early, while no collector watches it
+        wait_for(self, lambda: not self.host_pids('dies'), 10, 'the host did not end')
+        time.sleep(max(0.0, (row['probation_until_ms'] + 1_000 - self.now_ms()) / 1000))
+        self.launch(constants=constants)  # after its probation's deadline
+        after = wait_for(self, lambda: self.starts('dies')['probation_attempt'] is None and self.starts('dies'), 20,
+                         lambda: f'the kept probation was never reconciled: {self.starts("dies")}')
+        self.assertEqual((1, 'service_ended_early'), (after['failures'], after['reason']))
+
+
+class ReleasedLedgerUpgradeTests(upgrade_tests.Fixture, unittest.TestCase):
+    """Review round 2 (decision 243, new HIGH): a ledger the released 0.8.59 runtime created (real processes: a git
+    archive of its release commit registers a project and runs its own collector, as tests/test_upgrade_handover.py
+    does) opens and works under this build: E2a's launch columns and wake tables and E2c's start table are added by
+    an additive, idempotent migration, with no ledger schema version change."""
+
+    RELEASED_COMMIT = '227b0c5e'  # 0.8.59
+    EXPECTED = {
+        'projects': {'launch_copy', 'launch_digest'},
+        'project_wake': {'project_id', 'allocated_epoch', 'epoch', 'seq', 'state', 'next_due_at_ms', 'body_digest',
+                         'due_at_ms', 'refused', 'updated_at_ms'},
+        'project_wake_instances': {'project_id', 'instance', 'epoch'},
+        'project_starts': {'project_id', 'attempt', 'claimed_at_ms', 'child_pid', 'failures', 'streak_first_ms',
+                           'next_start_at_ms', 'parked_reason', 'parked_digest', 'outcome', 'reason', 'outcome_at_ms',
+                           'started_at_ms', 'probation_attempt', 'probation_pid', 'probation_until_ms',
+                           'updated_at_ms'},
+    }
+
+    @requirements('E2a-1', 'E2c-10', why_not_scenario='Real processes of the released runtime and of this build.')
+    def test_E2c_10_a_released_0_8_59_ledger_opens_and_works_under_this_build(self):
+        top = subprocess.run(['git', '-C', str(Path(__file__).resolve().parent), 'rev-parse', '--show-toplevel'],
+                             capture_output=True, text=True).stdout.strip()
+        if subprocess.run(['git', '-C', top, 'cat-file', '-e', self.RELEASED_COMMIT + '^{commit}']).returncode:
+            self.skipTest('the released commit is not in this repository')
+        self.prepare()
+        archive = subprocess.run(['git', '-C', top, 'archive', self.RELEASED_COMMIT,
+                                  'packages/codex-agents/native-package'], capture_output=True, check=True).stdout
+        old = self.base / 'old'
+        old.mkdir()
+        subprocess.run(['tar', '-x', '-C', str(old)], input=archive, check=True)
+        self.assertEqual('0.8.59', (old / 'packages/codex-agents/native-package/VERSION').read_text().strip())
+        started = self.run_cli(old / upgrade_tests.CLI_RELATIVE)  # the released setup: its ledger, its collector
+        self.assertEqual(0, started.returncode, started.stdout + started.stderr)
+        self.stop_collector()
+        with contextlib.closing(sqlite3.connect(self.state / 'learning.sqlite3')) as connection:
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION,
+                             connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertFalse({'project_wake', 'project_starts'} & tables)  # the released schema, before E2a and E2c
+        state = LearningState(self.state, create=False)
+        for _ in range(2):  # opened twice: the migration is idempotent
+            with contextlib.closing(LearningLedger(state)) as ledger:
+                for table, columns in self.EXPECTED.items():
+                    have = {row[1] for row in ledger._connection.execute(f'PRAGMA table_info({table})')}
+                    self.assertLessEqual(columns, have, table)
+                self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION,
+                                 ledger._connection.execute('PRAGMA user_version').fetchone()[0])
+        # The starter's ledger steps on the released ledger, with this build's code (this branch keeps the 0.8.59
+        # version until the release bookkeeping, so its own setup refuses the 0.8.59-authorized state by design).
+        with contextlib.closing(LearningLedger(state)) as ledger:
+            project_id = ledger.register_project(self.project)
+            now = time.time_ns() // 1_000_000
+            ledger.mark_wakes_due([(project_id, str(self.project), None, None)], now_ms=now)
+            claims = ledger.claim_due_starts(now_ms=now, limit=64)
+            self.assertEqual([project_id], [claim.project_id for claim in claims])
+            ledger.set_start_child(project_id, claims[0].attempt, os.getpid())
+            ledger.finish_start(project_id, claims[0].attempt, outcome='started', reason=None, now_ms=now,
+                                child_pid=os.getpid(), **project_start.start_policy())
+            self.assertEqual([project_id], [row['project_id'] for row in ledger.probation_starts()])
+            ledger.start_probation(project_id, attempt=claims[0].attempt, survived=True, now_ms=now,
+                                   **project_start.start_policy())
+            self.assertEqual('started', ledger.start_record(project_id)['outcome'])
 
 if __name__ == '__main__':
     unittest.main()
