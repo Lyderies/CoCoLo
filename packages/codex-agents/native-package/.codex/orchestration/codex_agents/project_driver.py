@@ -72,6 +72,7 @@ from pathlib import Path
 import stat
 from threading import Lock, local
 import time
+import types
 
 from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountClient, AccountError, AccountRequest, account_request_digest
 from .account_claim_contracts import CLAIM_DENIAL_CODES, LaunchClaimInput
@@ -91,7 +92,7 @@ from .execution_grant import ExecutionRegistrationInput, checked_execution_grant
 from .history_contracts import AttemptBinding, HistoryError, _DIGEST, _ID, matches
 from .host_open_contracts import OpenProvenanceInput
 from .hosts import HOST_CLIENTS
-from .launch_journal import JournalError, LaunchJournal, tree_state
+from .launch_journal import JournalError, LaunchJournal, new_process_token, tree_state
 from .launch_journal import entry_key as launch_journal_key
 from .learning_contracts import canonical_json, content_digest, parse_bounded_json
 from .lost_run_contracts import SettleLostInput
@@ -146,6 +147,14 @@ def _wall_ms():
 FENCE_RETRY_SECONDS = 1.0
 FENCE_RETRY_MAX_SECONDS = 300.0
 MAX_FENCE_ATTEMPTS = 10
+# B4s confirming check: `settled` journal entries checked against the project store, remembered at most this many
+# (past it only those of the current pass stay; a forgotten one is checked once more, harmlessly).
+MAX_SETTLED_CHECKED = 1024
+
+
+def _backoff(base, cap, attempts):
+    """`base` doubled per attempt up to `cap`; the exponent is capped before multiplying (no float overflow)."""
+    return min(cap, base * 2 ** min(max(0, attempts), 32))
 # A failure report is asked again only for these (R6-8); any other refusal can never succeed.
 _REPORT_RETRIED = frozenset({'history_writer_busy', 'history_service_unavailable', 'history_unavailable'})
 # O10 E1: the account (or its service) stopped or could not take the call; asked again while this
@@ -264,12 +273,15 @@ class _Run:
     publish_attempts: int = 0  # Failed publications of the run's result retried (O10 D4).
     publish_at: float | None = None  # When the failed publication is retried.
     launch_token: str | None = None  # C2: its container intent's token (containers switched on only).
+    intent_token: str | None = None  # B4s r1 HIGH 3: its process intent's token (process mode only).
     # C3: a failed admitted run's own settlement once its container is gone: the account call under
     # way, whether it is done, and the refused ones (with when it is asked again).
     own_settle: object = None
     own_settled: bool = False
     own_settle_failures: int = 0
     own_settle_at: float | None = None
+    own_reply: dict | None = None  # B4s r1: the account's answer, kept until the workspace is confirmed gone
+    own_workspace: str | None = None
 
 
 class _Call(local):
@@ -350,6 +362,10 @@ class RunDriver:
     _containers = None
     # C4: the recovery of earlier instances' container entries, made on its first use (containers only).
     _recovery = None
+    # B4s r1 (HIGH 3): `settled` journal entries checked against the project store (once each, by this service), and
+    # those whose recovery failed (failures, next try), kept from the prune until recovered. Replaced, never mutated.
+    _settled_checked = frozenset()
+    _settled_retry = types.MappingProxyType({})
     # O0c M7: retired runs' monitor attempts the monitor still refused after MAX_FORGET_ATTEMPTS
     # (rebound, never mutated, so the class default stays empty).
     _stuck_monitor = frozenset()
@@ -392,6 +408,13 @@ class RunDriver:
         self._expiry, self._next_expiry = None, 0.0  # The first cleanup runs at start (0.3.4 R2).
         # Leases an earlier service left armed with no admitted claim, fenced here (0.3.3, C3).
         self._earlier, self._earlier_fences, self._fenced = None, {}, {}
+        # B4s r1 HIGH 3: the receipts of earlier leases the account admitted after all (`_fence_earlier`), by claim
+        # request id; read by the sweep for the process intents it settles. Replaced whole, never mutated.
+        self._earlier_admitted = {}
+        # B4s confirming check (HIGH 3, second stop): outstanding process intents the sweep could not decide (no
+        # decision of this service about their claim), by claim request id: (binding, evidence, host client); the
+        # owner thread fences each once (`_fence_earlier`), with the identical request. Replaced whole by the sweep.
+        self._intent_fences, self._intent_asked = {}, set()
         # S1-R6: reporting writes for the orchestration report, in order, each retried a few times.
         self._reports = []
         self._earlier_failures, self._earlier_at, self._earlier_listed = 0, 0.0, False
@@ -885,6 +908,7 @@ class RunDriver:
                 self._journal.remove(run.launch_token)
             except JournalError:
                 pass  # Left for the container's recovery, which finds it never admitted.
+        self._forget_intent(run)
         self._give_back(run)
         run.closed = run.prepared is None
 
@@ -905,10 +929,22 @@ class RunDriver:
                                   lease={n: getattr(run.lease, n) for n in run.lease.__dataclass_fields__},
                                   identity_digest=run.identity_digest, claim_request_id=run.claim_request_id,
                                   storage_evidence=run.evidence, workspace=run.prepared_inputs.workspace)
+            self._forget_intent(run)  # Its `claimed` entry now holds everything the intent did.
         run.binding = AttemptBinding(**{n: getattr(run.lease, n) for n in LEASE_SCOPE_FIELDS},
                                      claim_id=receipt['bridge_run_id'], claim_digest=receipt['receipt_digest'])
         self._runtime.persistence.bind_claim(run.persistence, run.binding, hard_deadline_at_ms=receipt['deadline_at_ms'])
         run.state = 'binding'
+
+    def _forget_intent(self, run):
+        """B4s r1 HIGH 3: the run's process intent is done with (its admission is in its `claimed` entry, or its
+        claim was closed unadmitted). One left behind is fenced by a later service, which finds that out."""
+        if run.intent_token is None:
+            return
+        try:
+            self._journal.remove(run.intent_token)
+        except JournalError:
+            return
+        run.intent_token = None
 
     def _give_back(self, run):
         """A run that stopped before the account admitted its claim gives its preparation
@@ -1284,6 +1320,14 @@ class RunDriver:
             snapshot = lane.snapshot(run.persistence)
             state = snapshot['state']
             if state == 'failed' and snapshot['reason_code'] in _CAPACITY_REASONS:
+                # B4s r1 (RS-B-B4-9, RC-3): the store refused the lease for result space, so nothing of it was
+                # stored; the job's input goes and the run fails as one that never took a lease, so its open
+                # binding is marked for withdrawal at once (`_retire_unclaimed`), not left held for 24 h.
+                try:
+                    lane.retire_refused(run.persistence)
+                    run.persistence = None
+                except HistoryError:
+                    pass  # Not provably refused: it keeps its job, as before.
                 self._fail(run, _CAPACITY_REASONS[snapshot['reason_code']])  # 0.3.4 R3, O10 RC-1
                 return
             if state != 'preparing':
@@ -1316,6 +1360,19 @@ class RunDriver:
                 try:
                     run.launch_token = self._containers.intent(
                         run_handle=run.key[0], attempt=run.key[1], host_client=run.host_client,
+                        lease={n: getattr(run.lease, n) for n in run.lease.__dataclass_fields__},
+                        identity_digest=run.identity_digest, claim_request_id=run.claim_request_id,
+                        storage_evidence=run.evidence, workspace=run.prepared_inputs.workspace)
+                except Exception:
+                    self._fail(run, 'run_unavailable')
+                    return
+            if self._containers is None and run.intent_token is None:
+                # B4s r1 HIGH 3 (decision 146): no intent, no claim, in process mode too. What a later service
+                # needs to fence the claim and settle the run is on disk before the account is asked.
+                run.intent_token = new_process_token()
+                try:
+                    self._journal.process_intent(
+                        run.intent_token, run_handle=run.key[0], attempt=run.key[1], host_client=run.host_client,
                         lease={n: getattr(run.lease, n) for n in run.lease.__dataclass_fields__},
                         identity_digest=run.identity_digest, claim_request_id=run.claim_request_id,
                         storage_evidence=run.evidence, workspace=run.prepared_inputs.workspace)
@@ -1610,6 +1667,20 @@ class RunDriver:
                 self._earlier_later(now)  # O10 E2: some could not be read yet; listed again later.
             else:
                 self._earlier_listed = True
+        else:
+            # B4s confirming check (HIGH 3): after the listing, each outstanding intent's claim no listed lease covered
+            # is fenced once, with the same request (the account answers it alike: its closure, or its receipt).
+            intents = self._intent_fences
+            self._intent_asked &= set(intents)  # an intent settled since is forgotten here too
+            for key, (binding, evidence, host_client) in intents.items():
+                if (key in self._intent_asked or key in self._earlier_fences or key in self._earlier_admitted
+                        or binding.run_handle in self._fenced or host_client not in HOST_CLIENTS
+                        or binding.claim_request_id != key):
+                    continue
+                self._intent_asked.add(key)
+                self._earlier_fences[key] = {
+                    'binding': binding, 'evidence': evidence, 'host_client': host_client, 'future': None,
+                    'closure': None, 'settling': None, 'refusals': 0, 'outages': 0, 'at': 0.0}
         for key, entry in list(self._earlier_fences.items()):
             if entry['settling'] is not None:
                 state = entry['settling'].state
@@ -1657,12 +1728,13 @@ class RunDriver:
                 continue
             if reply['receipt']['state'] == 'claimed':
                 del self._earlier_fences[key]  # Admitted after all: the lost-run settlement's to settle.
+                self._earlier_admitted = {**self._earlier_admitted, key: reply['receipt']}  # (its process intent's)
                 continue
             entry['closure'] = canonical_json(reply['closure'])  # Kept until its lease is expired.
 
     @staticmethod
     def _earlier_delay(attempts):
-        return min(FENCE_RETRY_MAX_SECONDS, FENCE_RETRY_SECONDS * 2 ** max(0, attempts - 1))
+        return _backoff(FENCE_RETRY_SECONDS, FENCE_RETRY_MAX_SECONDS, attempts - 1)
 
     def _earlier_later(self, now):
         """The earlier leases could not be listed: asked again later, less and less often."""
@@ -1737,15 +1809,26 @@ class RunDriver:
                     continue
                 future, run.own_settle = run.own_settle, None
                 try:
-                    reply = future.result()
+                    run.own_reply, run.own_settle_at = future.result(), None
                 except Exception:
                     run.own_settle_failures += 1
                     run.own_settle_at = now + container_launch.stop_retry_delay(run.own_settle_failures)
                     continue
+            if run.own_reply is not None:
+                if run.own_settle_at is not None and now < run.own_settle_at:
+                    continue
+                # B4s r1 (MED 2): the preparation goes back, then the journal is `settled` only once the run's
+                # workspace is confirmed gone; otherwise both are tried again later (the account's answer is kept).
+                self._give_back_own(run)
+                if not self._remove_workspace(run.own_workspace):
+                    run.own_settle_failures += 1
+                    run.own_settle_at = now + container_launch.stop_retry_delay(run.own_settle_failures)
+                    continue
                 try:
-                    self._journal.settled(run.launch_token, reply['state'])
+                    self._journal.settled(run.launch_token, run.own_reply['state'])
                 except JournalError:
                     pass  # The account settled it; a later service asks again and gets the same answer.
+                run.own_reply = None
                 self._settled_own(run)
                 continue
             if run.own_settle_at is not None and now < run.own_settle_at:
@@ -1760,11 +1843,15 @@ class RunDriver:
                 continue
             if entry['state'] != 'gone' or entry['instance'] != self._journal.instance:
                 continue
+            run.own_workspace = entry['workspace']
             run.own_settle = self._sweeper.submit(self._settle_entry, entry)
 
     def _settled_own(self, run):
         """The account no longer holds the run: its preparation goes back, as a run never admitted's does."""
         run.own_settled, run.own_settle_at = True, None
+        self._give_back_own(run)
+
+    def _give_back_own(self, run):
         if run.prepared is None:
             return
         try:
@@ -1797,42 +1884,65 @@ class RunDriver:
                 pass  # Asked again on the next sweep.
         recovery = self._container_recovery()
         journal, lost, stopped, recovering = self._journal, {}, {}, []
-        for entry in journal.entries():
-            if entry['state'] is None:
-                continue
-            handle, host_client = entry['run_handle'], entry['host_client']
-            if entry['state'] == 'settled':
+        # B4s confirming check (pruning): only the `settled` entries this pass inspected (and recovered, or needing
+        # nothing) may be pruned; an entry it never saw, or one whose recovery failed, stays.
+        inspected = set()
+        entries = journal.entries()
+        claimed_requests = {entry['claim_request_id'] for entry in entries if entry.get('version') == 1}
+        for entry in entries:
+            # B4s confirming check: one entry's failure never aborts the sweep for the later ones.
+            try:
+                if entry['state'] is None:
+                    continue
+                handle, host_client = entry['run_handle'], entry['host_client']
+                if entry.get('version') == 3:
+                    # B4s r1 HIGH 3: a process intent; only a stopped instance's is settled (`_settle_intent`).
+                    if entry['state'] == 'settled':
+                        inspected.add(launch_journal_key(entry))
+                        if entry['outcome'] != 'fenced':
+                            lost[handle] = (host_client, 'released')
+                    elif entry['instance'] != journal.instance and stopped.setdefault(
+                            entry['instance'], journal.instance_stopped(entry['instance'])) is True:
+                        if self._settle_intent(entry, entry['claim_request_id'] in claimed_requests) == 'settled':
+                            lost[handle] = (host_client, 'released')
+                    continue
+                if entry['state'] == 'settled':
+                    lost[handle] = (host_client, 'released')
+                    if self._recover_settled(entry):
+                        inspected.add(launch_journal_key(entry))
+                    continue
+                instance = entry['instance']
+                adopted = entry.get('version') == 2 and recovery is not None and recovery.owns(entry['token'])
+                if adopted:
+                    pass
+                elif instance == journal.instance:
+                    if not own:
+                        continue
+                elif stopped.setdefault(instance, journal.instance_stopped(instance)) is not True:
+                    continue
+                lost[handle] = (host_client, 'held')
+                if entry.get('version') == 2:
+                    if adopted or (instance != journal.instance and not own):
+                        if recovery is not None:
+                            recovering.append(entry)
+                        continue
+                    if instance != journal.instance or not self._own_container_gone(entry):
+                        continue
+                elif tree_state(entry) != 'gone':
+                    continue
+                try:
+                    reply = self._settle_entry(entry)
+                except Exception:
+                    continue  # The account is unreachable or refused: asked again on the next sweep.
+                if not self._remove_workspace(entry['workspace']):
+                    continue  # B4s r1 (MED 2): not confirmed gone; the next sweep replays the identical settlement
+                try:
+                    journal.settled(launch_journal_key(entry), reply['state'])
+                except JournalError:
+                    continue
                 lost[handle] = (host_client, 'released')
-                continue
-            instance = entry['instance']
-            adopted = entry.get('version') == 2 and recovery is not None and recovery.owns(entry['token'])
-            if adopted:
-                pass
-            elif instance == journal.instance:
-                if not own:
-                    continue
-            elif stopped.setdefault(instance, journal.instance_stopped(instance)) is not True:
-                continue
-            lost[handle] = (host_client, 'held')
-            if entry.get('version') == 2:
-                if adopted or (instance != journal.instance and not own):
-                    if recovery is not None:
-                        recovering.append(entry)
-                    continue
-                if instance != journal.instance or not self._own_container_gone(entry):
-                    continue
-            elif tree_state(entry) != 'gone':
-                continue
-            try:
-                reply = self._settle_entry(entry)
             except Exception:
-                continue  # The account is unreachable or refused: asked again on the next sweep.
-            self._remove_workspace(entry['workspace'])
-            try:
-                journal.settled(launch_journal_key(entry), reply['state'])
-            except JournalError:
-                continue
-            lost[handle] = (host_client, 'released')
+                continue  # Asked again on the next sweep.
         if recovery is not None:
             try:
                 recovered = recovery.recover(recovering, orphans=not own)
@@ -1841,11 +1951,97 @@ class RunDriver:
             for entry in recovering:
                 if entry['token'] in recovered:
                     lost[entry['run_handle']] = (entry['host_client'], 'released')
-        journal.prune()
+        try:
+            pruned = frozenset(journal.prune(only=frozenset(inspected), keep=frozenset(self._settled_retry)))
+        except Exception:
+            pruned = frozenset()
+        checked = self._settled_checked - pruned
+        if len(checked) > MAX_SETTLED_CHECKED:
+            checked = checked & inspected  # bounded: a key forgotten here is checked once more, harmlessly
+        self._settled_checked = frozenset(checked)
         for instance in journal.instances():
             if instance != journal.instance:
-                journal.forget_instance(instance)
+                try:
+                    journal.forget_instance(instance)
+                except Exception:
+                    pass  # Asked again on the next sweep.
         return lost
+
+    def _settle_intent(self, entry, claimed):
+        """Sweep thread, B4s r1 HIGH 3 (decision 146): a stopped instance's process intent with no later entry.
+
+        Its claim request is not fenced here: the earlier service's armed lease is fenced by `_fence_earlier` (as
+        before). When the account answers there that it admitted the claim after all, the run is settled as lost
+        through the one sequence (`_settle_entry`) with the intent's own identity and that receipt's bridge run id:
+        nothing of it spawned, since a child is created only from a `claimed` entry. When `_fence_earlier` closed
+        the claim unadmitted (nothing was counted), the intent is `settled` as `fenced`. An intent whose `claimed`
+        entry exists (`claimed`: a stop between that write and the intent's removal), or one whose receipt names a
+        bridge run id with an entry, is only removed: the process rule settles that run. The workspace goes before
+        the intent is written `settled`. 'settled', 'fenced', 'removed' or None (nothing known yet, or a failure:
+        the next sweep asks again, identically)."""
+        journal, token = self._journal, entry['token']
+        try:
+            receipt = self._earlier_admitted.get(entry['claim_request_id'])
+            if claimed or (receipt is not None and journal.entry(receipt['bridge_run_id']) is not None):
+                journal.remove(token)
+                return 'removed'
+            if receipt is not None:
+                outcome = self._settle_entry({**entry, 'bridge_run_id': receipt['bridge_run_id']})['state']
+                answer = 'settled'
+            elif self._fenced.get(entry['run_handle']) is not None:
+                outcome = answer = 'fenced'
+            else:
+                # B4s confirming check (HIGH 3): an earlier service may have fenced this claim already (its lease is
+                # no longer `claim_pending`, so it is not listed again) and stopped before this intent's completion:
+                # the intent itself asks for the identical fence, so its answer is known again.
+                if entry['claim_request_id'] not in self._intent_fences:
+                    self._intent_fences = {**self._intent_fences, entry['claim_request_id']: (
+                        ResultLeaseBinding(**entry['lease']), bytes.fromhex(entry['storage_evidence']),
+                        entry['host_client'])}
+                return None
+            if not self._remove_workspace(entry['workspace']):
+                return None
+            journal.settled(token, outcome)
+        except Exception:
+            return None
+        self._intent_fences = {k: v for k, v in self._intent_fences.items() if k != entry['claim_request_id']}
+        return answer
+
+    def _recover_settled(self, entry):
+        """Sweep thread, B4s r1 (HIGH 3): a journal entry written `settled` before project settlement existed (0.8.54
+        and earlier: the account settled the run, its reservation hold stayed `releasing`) is recovered from the
+        project store before it can be pruned: an outstanding hold of its attempt is settled through the one
+        sequence (`_settle_entry`; the account answers `known`). Checked once per entry by each service; a failed
+        recovery is tried again later, with backoff, and keeps the entry from the prune. Whether the entry is
+        recovered (or needs nothing): only such an entry, inspected in this pass, may be pruned (confirming check)."""
+        key = launch_journal_key(entry)
+        if key in self._settled_checked or entry.get('lease') is None or entry.get('bridge_run_id') is None:
+            return True
+        failures, at = self._settled_retry.get(key, (0, 0.0))
+        if self._clock() < at:
+            return False
+        try:
+            lease = ResultLeaseBinding(**entry['lease'])
+            try:
+                opened = self._settlement_step('open_account_settlement', lease.run_handle, lease.attempt,
+                    'lost-' + hashlib.sha256(entry['bridge_run_id'].encode()).hexdigest()[:32],
+                    SettleLostInput(entry['run_handle'], entry['identity_digest'], entry['claim_request_id'],
+                                    entry['bridge_run_id'], parse_bounded_json(bytes.fromhex(
+                                        entry['storage_evidence']))['lease']['lease_digest']).payload(),
+                    runtime_digest=COLLECTOR_RUNTIME_DIGEST)['state']
+            except HistoryError as error:
+                if error.reason_code != 'history_result_not_reserved':
+                    raise
+                opened = None  # nothing of this attempt is outstanding in the store
+            if opened == 'releasing':
+                self._settle_entry(entry)
+        except Exception:
+            self._settled_retry = {**self._settled_retry, key: (failures + 1, self._clock() + _backoff(
+                FENCE_RETRY_SECONDS, FENCE_RETRY_MAX_SECONDS, failures))}
+            return False
+        self._settled_retry = {k: v for k, v in self._settled_retry.items() if k != key}
+        self._settled_checked = self._settled_checked | {key}
+        return True
 
     def _container_recovery(self):
         """C4: this service's container recovery, or None while containers are switched off."""
@@ -1893,8 +2089,33 @@ class RunDriver:
             raise HistoryError(request.reason or 'history_service_unavailable')
         return request.result
 
+    def _settlement_step(self, operation, *arguments, **options):
+        """Helper thread, B4s: one settlement step on the project writer (the outbox, or the closure's record); at
+        this service's own exit its writer has stopped, and the step runs on a store opened for it. An unanswered
+        step raises: the whole settlement is asked again, identically, on the next sweep."""
+        persistence = self._runtime.persistence
+        if persistence is None:
+            raise HistoryError('history_service_unavailable')
+        if self._exiting:
+            return persistence.account_settlement_after_stop(operation, *arguments, **options)
+        request = persistence.account_settlement(operation, *arguments, **options)
+        end = time.monotonic() + SETTLE_TIMEOUT_SECONDS
+        while request.state == 'queued':
+            if time.monotonic() >= end:
+                raise HistoryError('history_service_unavailable')
+            time.sleep(0.01)
+        if request.state != 'done':
+            raise HistoryError(request.reason or 'history_service_unavailable')
+        return request.result
+
     def _settle_entry(self, entry):
-        """Helper thread: the account's settlement of this run, sent with the run's own custody."""
+        """Helper thread: the account's settlement of this run, sent with the run's own custody.
+
+        B4s (RS-B-B4-2..4): D4's arbitration first; then the outbox (the run's register row `releasing` with the
+        exact closure request); then the account settles the run (`settle_lost_run`, its reply unchanged) and gives
+        its closure (`lost_run_closure`), and the project writer records the closure. Only then does it return, so
+        each caller removes the workspace and writes the journal `settled` after the settlement is committed. Any
+        failure raises before the journal is written: the next sweep sends the identical requests again."""
         lease = ResultLeaseBinding(**entry['lease'])
         if lease.project_id != self._scope.project_id or entry['host_client'] not in HOST_CLIENTS:
             raise HistoryError('history_conflict')
@@ -1902,6 +2123,15 @@ class RunDriver:
         evidence = bytes.fromhex(entry['storage_evidence'])
         settle = SettleLostInput(entry['run_handle'], entry['identity_digest'], entry['claim_request_id'],
                                  entry['bridge_run_id'], parse_bounded_json(evidence)['lease']['lease_digest'])
+        request_id = 'lost-' + hashlib.sha256(entry['bridge_run_id'].encode()).hexdigest()[:32]
+        try:
+            opened = self._settlement_step('open_account_settlement', lease.run_handle, lease.attempt, request_id,
+                                           settle.payload(), runtime_digest=COLLECTOR_RUNTIME_DIGEST)
+        except HistoryError as error:
+            if error.reason_code != 'history_result_not_reserved':
+                raise
+            opened = {'state': None}  # Nothing of this attempt is left to settle in the store: the account alone.
+        outbox = opened['state']
         custody = canonical_json({'purpose': 'run', 'lease': entry['lease'], 'storage_evidence': entry['storage_evidence'],
                                   'terminal_evidence': None, 'cleanup_evidence': None})
         call = self._call
@@ -1909,10 +2139,22 @@ class RunDriver:
         try:
             client = AccountClient(self._account, self._scope.project_id, COLLECTOR_RUNTIME_DIGEST,
                                    timeout=SETTLE_TIMEOUT_SECONDS)
-            return client.settle_lost_run(
-                settle, request_id='lost-' + hashlib.sha256(entry['bridge_run_id'].encode()).hexdigest()[:32])
+            try:
+                reply = client.settle_lost_run(settle, request_id=request_id)
+            except Exception:
+                if outbox != 'settled':
+                    raise
+                # B4s r1 (HIGH 1): the store holds this attempt's verified settlement (the account only closes a run
+                # it settled or released), so its local receipt finishes the journal even when the account cannot
+                # answer any more (its open purged, the run settled before its tombstone kept the replay evidence).
+                return {'state': 'released' if opened['release_kind'] == 'released_unacknowledged' else 'settled',
+                        'known': True}
+            closure = None if outbox != 'releasing' else client.lost_run_closure(settle, request_id=request_id)
         finally:
             call.role = call.host_client = call.context = None
+        if closure is not None:
+            self._settlement_step('record_account_settlement', lease, canonical_json(closure))
+        return reply
 
     def _fence_entry(self, entry):
         """Helper thread (C4): the account's fence for a recovered intent's own claim request, with the run's
@@ -1937,23 +2179,35 @@ class RunDriver:
 
     @staticmethod
     def _remove_workspace(workspace):
-        """The settled run's private workspace, only if it is one of the host scratch folder's."""
+        """The settled run's private workspace, only if it is one of the host scratch folder's. B4s r1 (MED 2):
+        whether it is confirmed gone afterwards (True too for no workspace, or a path that is not one of this
+        host's workspaces, which is never removed); a removal that failed or could not be checked is False, and so
+        is an entry left at the path because it is not this host's own folder (a symlink, another owner's)."""
         if workspace is None:
-            return
+            return True
         from .bridge import SCRATCH_CONTAINER, scratch_base
         from .host_paths import remove_private_directory
         try:
             # Resolved on both sides: no component of either path may be a symlink.
             container = Path(os.path.realpath(scratch_base())) / SCRATCH_CONTAINER
             path = Path(workspace)
-            if (os.path.realpath(container) != str(container) or os.path.realpath(path) != str(path)
-                    or path.parent != container or not path.name.startswith('prepare-')):
-                return
-            info = os.lstat(path)
-            if stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid():
-                remove_private_directory(path)
+            if path.parent != container or not path.name.startswith('prepare-'):
+                return True
+            # B4s confirming check (MED 2): whatever stands at the recorded path and is not this host's own folder
+            # (a symlink, a symlinked container, another owner's entry, a file) is left there and is NOT gone.
+            if os.path.realpath(container) != str(container):
+                return not os.path.lexists(path)
+            try:
+                info = os.lstat(path)
+            except FileNotFoundError:
+                return True
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                    or os.path.realpath(path) != str(path)):
+                return False
+            remove_private_directory(path)
+            return not os.path.lexists(path)
         except Exception:
-            pass
+            return False
 
     def settle_on_exit(self, *, settle=True):
         """After every thread of this host stopped: settle its own runs, then let later hosts settle the rest.

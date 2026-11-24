@@ -316,6 +316,15 @@ class OrchestrationOwner:
             raise
         return True
 
+    def _settled(self, binding):
+        """B4s: whether this reservation's attempt has a settlement row whose closure verifies for its own lease."""
+        row = self._db.execute('SELECT * FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?',
+                               (binding.project_id, binding.run_handle, binding.attempt)).fetchone()
+        if row is None:
+            return False
+        lease = self._history._lease(row)
+        return lease.claim_id == binding.claim_id and self._history._attempt_settled(lease)
+
     def _unfinished(self, scope, handle, *, unrecorded=None):
         # A timeout, absent process or accepted terminal does not prove cleanup.
         for position in self._positions('result_leases'):
@@ -339,6 +348,8 @@ class OrchestrationOwner:
                 continue
             if not scope.matches_attempt(binding):
                 raise HistoryError('history_conflict')
+            if self._settled(binding):
+                continue  # B4s (RS-B-B4-5): ended by the account's verified settlement, before any consumption check
             if reservation.state not in {'committed', 'expired'} or reservation.terminal_record_id is None:
                 return True
             consumed = self._db.execute('SELECT * FROM project_execution_consumptions WHERE project_id=? AND claim_id=?',

@@ -155,11 +155,22 @@ _REGISTER_INCONSISTENT = (
     # B1 coverage: a reservation with no row (held, or released by its own release).
     "SELECT 1 FROM result_reservations s LEFT JOIN project_holds r ON r.project_id=s.project_id "
     "AND r.kind='reservation' AND r.identity=s.claim_id WHERE r.kind IS NULL LIMIT 1",
+    # B4s (RS-B-B4-7): a settlement row's register row, where there is one, is released by it: the reservation's (by
+    # its claim id) with the settlement's kind, or, for a claim never bound (no claim id), the lease's `lost_unbound`.
+    # A held or `releasing` row with a settlement row is refused; `releasing` without one is the open outbox (legal).
+    # B4s r1 (MED 3): a settlement row naming no register row at all is refused too (the readers require one).
+    "SELECT 1 FROM project_account_settlements t LEFT JOIN project_holds r ON r.project_id=t.project_id "
+    "AND r.kind='reservation' AND r.identity=t.claim_id "
+    "WHERE t.claim_id IS NOT NULL AND (r.kind IS NULL OR r.state<>'released' OR r.release_kind<>t.release_kind) "
+    "LIMIT 1",
+    "SELECT 1 FROM project_account_settlements t LEFT JOIN project_holds r ON r.project_id=t.project_id "
+    "AND r.kind='lease' AND r.identity=t.run_handle||':'||t.attempt "
+    "WHERE t.claim_id IS NULL AND (r.kind IS NULL OR r.state<>'released' OR r.release_kind<>'lost_unbound') LIMIT 1",
 )
 
 
 def register_consistent(connection) -> bool:
-    """RS-B's register validator (SH-7), as far as SB and B1 can check it."""
+    """RS-B's register validator (SH-7), as far as SB, B1 and B4s can check it."""
     return all(connection.execute(sql).fetchone() is None for sql in _REGISTER_INCONSISTENT)
 
 

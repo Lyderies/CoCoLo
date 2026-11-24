@@ -2559,6 +2559,204 @@ class ProjectHistory:
                 return "settling"
         return "unrecoverable"
 
+    # B4s (RS-B-B4-2..6): a lost run's settlement through the register outbox. The attempt's register row is its
+    # reservation's (once bound) or else its lease's; it goes `releasing` with the account request before any account
+    # call, and is released by the account's verified closure, in the writer transaction that records it.
+    _SETTLED_LEASE_KIND = "lost_unbound"
+
+    def _settlement_hold(self, run_handle: str, attempt: int):
+        reservation = self._connection.execute("SELECT * FROM result_reservations WHERE project_id=? AND run_handle=? "
+                                               "AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
+        kind, identity = (("reservation", reservation["claim_id"]) if reservation is not None
+                          else ("lease", attempt_identity(run_handle, attempt)))
+        hold = self._connection.execute("SELECT * FROM project_holds WHERE project_id=? AND kind=? AND identity=?",
+                                        (self.project_id, kind, identity)).fetchone()
+        return reservation, kind, hold
+
+    def _settlement_row(self, run_handle: str, attempt: int):
+        return self._connection.execute("SELECT * FROM project_account_settlements WHERE project_id=? AND run_handle=? "
+                                        "AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
+
+    @_operation
+    def open_account_settlement(self, run_handle: str, attempt: int, request_id: str, payload: dict, *,
+                                runtime_digest: str) -> dict:
+        """RS-B-B4-2: the outbox step, before any account call for this lost attempt. The register row goes
+        `releasing` with the request id and the digest of the exact `account.lost_run_closure` request; a row already
+        `releasing` keeps its first complete request, and the identical one is answered alike (a crash replay); another
+        request is `history_conflict`. A reservation still `reserved` and `held` was not arbitrated (D4, S-3) and is
+        refused. `settled` once the settlement is recorded (or its tombstone remains). An attempt with nothing left
+        to settle here (no register row, a row released some other way, a lease never claimed or already ended) is
+        `history_result_not_reserved`: the account is then only asked to settle, as before B4s."""
+        from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountError, AccountRequest, account_request_digest
+        from .account_claim_contracts import ClaimError
+        from .lost_run_closure import CLOSURE_OPERATION, RELEASE_KINDS
+
+        if (type(run_handle) is not str or not valid_integer(attempt, minimum=1) or type(request_id) is not str
+                or type(payload) is not dict):
+            raise HistoryError("history_invalid_input")
+        invalid = False
+        try:
+            digest = account_request_digest(AccountRequest(ACCOUNT_PROTOCOL_VERSION, CLOSURE_OPERATION, request_id,
+                                                           self.project_id, runtime_digest, payload))
+            if payload["run_handle"] != run_handle:
+                raise ValueError()
+        except (AccountError, ClaimError, TypeError, ValueError, KeyError):
+            invalid = True
+        if invalid:
+            raise HistoryError("history_invalid_input")
+        with self._transaction():
+            reservation, kind, hold = self._settlement_hold(run_handle, attempt)
+            settled = self._settlement_row(run_handle, attempt) is not None
+            if hold is None:
+                # B4s confirming check (MED 3): a settlement row whose register row is absent is not "nothing to
+                # settle" (that answer lets the driver complete its journal on the account's word alone).
+                raise HistoryError("history_conflict" if settled else "history_result_not_reserved")
+            lease_row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND run_handle=? "
+                                                 "AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
+            if settled or hold["state"] == "released":
+                ended = (RELEASE_KINDS.values() if kind == "reservation" else (self._SETTLED_LEASE_KIND,))
+                if not settled and hold["release_kind"] not in ended:
+                    raise HistoryError("history_result_not_reserved")  # released some other way: nothing to settle
+                # B4s r1 (MED 3): `settled` only for this attempt's verified closure with its hold released by it;
+                # with no settlement row, only the tombstone of a purged attempt (no lease row left) says so.
+                verified = (lease_row is not None and self._attempt_settled(self._lease(lease_row)) if settled
+                            else lease_row is None)
+                if not verified:
+                    raise HistoryError("history_conflict")
+                return {"state": "settled", "request_id": hold["request_id"], "request_digest": hold["request_digest"],
+                        "release_kind": hold["release_kind"]}
+            if hold["state"] == "held":
+                if kind == "reservation" and reservation["state"] == "reserved":
+                    raise HistoryError("history_conflict")  # publishable: D4's arbitration decides first
+                if kind == "lease" and self._connection.execute(
+                        "SELECT state FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
+                        (self.project_id, run_handle, attempt)).fetchone()[0] != "claim_pending":
+                    raise HistoryError("history_result_not_reserved")
+            elif (hold["request_digest"] not in (None, digest) or hold["request_id"] not in (None, request_id)):
+                raise HistoryError("history_conflict")  # the first complete request stands
+            self._connection.execute(
+                "UPDATE project_holds SET state='releasing',request_id=?,request_digest=? WHERE project_id=? AND kind=? "
+                "AND identity=? AND state<>'released'", (request_id, digest, self.project_id, kind, hold["identity"]))
+        return {"state": "releasing", "request_id": request_id, "request_digest": digest}
+
+    @_operation
+    def record_account_settlement(self, lease_binding: ResultLeaseBinding, raw: bytes) -> dict:
+        """RS-B-B4-3: record the account's verified closure of this lost attempt, in one writer transaction: the
+        settlement row; a `claim_pending` lease expired and its hold released `lost_unbound`; a `reserved` reservation
+        `retiring` (its prepared material removed), a committed one left to its retention; the reservation hold
+        released with the closure's kind and receipt; unfinished custody released `lost_with_reservation`. Nothing is
+        written to the terminal outbox, execution consumptions, cleanup receipts or records. The closure must name the
+        outbox request the register row holds (RS-B-B4-2). An identical closure again is answered from the settlement
+        row, or after the purge from the register tombstone (`known`); any other is refused with nothing written."""
+        from .lost_run_closure import MAX_LOST_RUN_CLOSURE_BYTES, verify_lost_run_closure
+
+        lease_binding = self._lease_binding(lease_binding)
+        if self._result_key is None:
+            raise HistoryError("history_result_unavailable")
+        invalid = False
+        try:
+            closure = verify_lost_run_closure(self._result_key, raw, project_id=self.project_id)
+        except Exception:
+            invalid = True
+        if invalid:
+            raise HistoryError("history_invalid_input")
+        if closure["binding"] != lease_binding.as_data():
+            raise HistoryError("history_conflict")
+        run_handle, attempt = lease_binding.run_handle, lease_binding.attempt
+        kind, receipt = closure["release_kind"], closure["receipt_digest"]
+        answer = {"release_kind": kind, "receipt_digest": receipt, "known": True}
+        ending = False
+        with self._transaction():
+            stored = self._settlement_row(run_handle, attempt)
+            if stored is not None:
+                if self._stored_blob(stored["closure"], maximum=MAX_LOST_RUN_CLOSURE_BYTES) != raw:
+                    raise HistoryError("history_conflict")
+                return answer
+            reservation, hold_kind, hold = self._settlement_hold(run_handle, attempt)
+            if reservation is None:
+                # After the purge a bound attempt's reservation row is gone; its tombstone is found by the claim id.
+                bound = self._connection.execute("SELECT * FROM project_holds WHERE project_id=? AND kind='reservation' "
+                                                 "AND identity=?", (self.project_id, closure["bridge_run_id"])).fetchone()
+                if bound is not None:
+                    hold_kind, hold = "reservation", bound
+            if hold is None:
+                raise HistoryError("history_conflict")
+            expected_kind = kind if hold_kind == "reservation" else self._SETTLED_LEASE_KIND
+            lease_row = self._connection.execute("SELECT 1 FROM result_leases WHERE project_id=? AND run_handle=? "
+                                                 "AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
+            if lease_row is None or hold["state"] == "released":
+                # Purged (RS-B-B4-6): only the tombstone is left; it answers the identical closure alone.
+                if (hold["state"] == "released" and hold["release_kind"] == expected_kind
+                        and hold["receipt"] == receipt and hold["request_digest"] == closure["request_digest"]
+                        and (hold_kind == "lease" or hold["identity"] == closure["bridge_run_id"])
+                        and lease_row is None):
+                    return answer
+                raise HistoryError("history_conflict")
+            lease = self._lease_row(lease_binding)
+            if (lease.lease_digest != closure["lease_digest"] or lease.assignment_digest != closure["assignment_digest"]
+                    or closure["released_at_ms"] < lease.created_at_ms
+                    or hold["state"] != "releasing" or hold["request_digest"] != closure["request_digest"]):
+                raise HistoryError("history_conflict")
+            now = self._hold_now()
+            if reservation is not None:
+                value = self._reservation(reservation)
+                if value.binding.claim_id != closure["bridge_run_id"] or lease.state != "bound":
+                    raise HistoryError("history_conflict")
+                claim_id = value.binding.claim_id
+                if value.state == "reserved":
+                    self._connection.execute("UPDATE result_reservations SET state='retiring' WHERE project_id=? "
+                                             "AND claim_id=? AND state='reserved'", (self.project_id, claim_id))
+                    self._connection.execute("DELETE FROM project_result_publications WHERE project_id=? AND claim_id=?",
+                                             (self.project_id, claim_id))
+                    ending = project_result_contexts.release_unfinished(self, run_handle, attempt, kind, now)
+            else:
+                if lease.state != "claim_pending":
+                    raise HistoryError("history_conflict")
+                claim_id = None
+                self._set_lease(replace(lease, state="expired"))
+                # B4s r1 (HIGH 2): the claim was admitted, so the run's open binding ends as claimed here; with the
+                # lease never bound, no bind will ever release it.
+                self._release_claimed_open(run_handle, attempt, "claimed", receipt)
+                ending = project_result_contexts.release_unfinished(self, run_handle, attempt,
+                                                                    self._SETTLED_LEASE_KIND, now)
+            self._connection.execute(
+                "INSERT INTO project_account_settlements(project_id,run_handle,attempt,claim_id,release_kind,closure,"
+                "settled_at_ms) VALUES(?,?,?,?,?,?,?)", (self.project_id, run_handle, attempt, claim_id, kind, raw, now))
+            project_holds_schema.release_hold(self._connection, self.project_id, hold_kind, hold["identity"],
+                                              expected_kind, now_ms=now, receipt=receipt)
+        if ending:
+            project_result_contexts.finish_quietly(self, run_handle, attempt)
+        return {**answer, "known": False}
+
+    def _attempt_settled(self, lease) -> bool:
+        """RS-B-B4-5: whether this attempt's settlement row holds a closure that verifies with this store's key, for
+        this lease, and the register row it released is this attempt's, released by it (B4s r1 MED 3: the readers
+        and the validator agree). Only such a row ends the attempt for `_unfinished` and the purge; never a success."""
+        from .lost_run_closure import MAX_LOST_RUN_CLOSURE_BYTES, verify_lost_run_closure
+
+        row = self._settlement_row(lease.binding.run_handle, lease.binding.attempt)
+        if row is None or self._result_key is None:
+            return False
+        try:
+            raw = self._stored_blob(row["closure"], maximum=MAX_LOST_RUN_CLOSURE_BYTES)  # never coerced (MED 4)
+        except HistoryError:
+            return False  # B4s confirming check (MED 4): only the guard's own refusal is caught here
+        try:
+            closure = verify_lost_run_closure(self._result_key, raw, project_id=self.project_id)
+        except Exception:
+            return False
+        if (closure["binding"] != lease.binding.as_data() or closure["lease_digest"] != lease.lease_digest
+                or closure["release_kind"] != row["release_kind"] or row["claim_id"] != lease.claim_id
+                or (row["claim_id"] is not None and closure["bridge_run_id"] != row["claim_id"])):
+            return False
+        kind, identity, released = (("lease", attempt_identity(lease.binding.run_handle, lease.binding.attempt),
+                                     self._SETTLED_LEASE_KIND) if row["claim_id"] is None
+                                    else ("reservation", row["claim_id"], row["release_kind"]))
+        hold = self._connection.execute("SELECT state,release_kind,receipt FROM project_holds WHERE project_id=? "
+                                        "AND kind=? AND identity=?", (self.project_id, kind, identity)).fetchone()
+        return (hold is not None and hold["state"] == "released" and hold["release_kind"] == released
+                and hold["receipt"] == closure["receipt_digest"])
+
     def _client_usage_id(self, binding):
         return "client_usage:" + keyed_digest(self._result_key, b"project-client-usage-v1\0" + canonical_json(binding.as_data()))
 
@@ -2876,8 +3074,9 @@ class ProjectHistory:
 
     def _attempt_released(self, lease) -> bool:
         """Whether an attempt may go (0.3.4 R1f): it reserved no cleanup, it was never admitted (O10 D3), or
-        the account's release of it is verified here. Otherwise the account could still hold the run while its project record went."""
-        if lease.cleanup_reservation_digest is None:
+        the account's release of it is verified here. Otherwise the account could still hold the run while its project record went.
+        B4s (RS-B-B4-5): a verified account settlement of the attempt (lost or released unacknowledged) releases it too."""
+        if lease.cleanup_reservation_digest is None or self._attempt_settled(lease):
             return True
         if lease.state == "expired" and self._connection.execute(
                 "SELECT 1 FROM result_reservations WHERE project_id=? AND run_handle=? AND attempt=? LIMIT 1",
@@ -2902,7 +3101,8 @@ class ProjectHistory:
         attempt_key = (self.project_id, run_handle, attempt)
         for table in ("project_cleanup_acknowledgements", "project_cleanup_receipts", "project_cleanup_reservations",
                       "project_host_opens", "project_registered_runs",  # with its registration (R6-13)
-                      "project_result_contexts"):  # D1: only a finished one (`purgeable`); its custody stays
+                      "project_result_contexts",  # D1: only a finished one (`purgeable`); its custody stays
+                      "project_account_settlements"):  # B4s: its register tombstones answer a retry from now on
             self._connection.execute(f"DELETE FROM {table} WHERE project_id=? AND run_handle=? AND attempt=?",
                                      attempt_key)
         if claim_id is not None:

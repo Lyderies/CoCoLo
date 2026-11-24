@@ -102,8 +102,6 @@ class ResultLifetimeTests(DriverHarness):
         self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
         self.assertEqual(['committed'], self.result_states())
 
-    @unittest.skip("RC-3 fails: the refused run's binding stays 'pending' (24 h); the account operation that calls "
-                   "withdraw_open and the driver calling it are RS-B (not built)")
     def test_RC_3_a_run_refused_for_result_space_ends_its_account_binding_at_once(self):
         """O10 RC-3 (B0-1): the refused run's binding is abandoned and its slot released now, not after 24 h."""
         from unittest import mock

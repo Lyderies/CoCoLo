@@ -710,5 +710,44 @@ class LaunchJournalTests(unittest.TestCase):
                                                  for item in report['unresolved_launches']['entries']])
 
 
+
+class ProcessIntentTests(unittest.TestCase):
+    """B4s r1 HIGH 3 (decision 146): the process-mode write-ahead intent, beside the unchanged version 1 entries."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = Path(self.temporary.name) / 'launches'
+
+    def intent(self, journal, token):
+        journal.process_intent(token, run_handle='hrn_' + 'a' * 48, attempt=1, host_client='codex-host-v1',
+                               lease={'project_id': 'prj_' + 'b' * 32}, identity_digest='c' * 64,
+                               claim_request_id='claim-' + 'd' * 32, storage_evidence=b'{"evidence":1}',
+                               workspace=None)
+
+    def test_an_intent_is_durable_settles_fenced_is_never_tree_gone_and_old_entries_still_read(self):
+        journal = LaunchJournal(self.directory)
+        self.addCleanup(journal.release)
+        token = launch_journal.new_process_token()
+        with mock.patch.object(journal, '_sync_directory', wraps=journal._sync_directory) as synced:
+            self.intent(journal, token)
+        self.assertTrue(synced.called)  # the folder reaches the disk with the file
+        with self.assertRaises(JournalError):
+            self.intent(journal, token)  # written once
+        entry = journal.entry(token)
+        self.assertEqual(('intent', 3, 'c' * 64, 'claim-' + 'd' * 32),
+                         (entry['state'], entry['version'], entry['identity_digest'], entry['claim_request_id']))
+        self.assertEqual('unknown', tree_state(entry))  # only its fence settles it
+        claimed(journal)  # an old-format (version 1) entry beside it reads as before
+        self.assertEqual({BRIDGE: 'claimed', token: 'intent'},
+                         {launch_journal.entry_key(e): e['state'] for e in journal.entries()})
+        self.assertEqual(set(), journal.tokens())  # never taken for a container's
+        journal.settled(token, 'fenced', now_ms=1)
+        self.assertEqual(('settled', 'fenced'), (journal.entry(token)['state'], journal.entry(token)['outcome']))
+        journal.prune(now_ms=1 + launch_journal.TOMBSTONE_MS + 1)
+        self.assertIsNone(journal.entry(token))  # tombstones keep the journal's lifetime bound
+        self.assertEqual('claimed', journal.entry(BRIDGE)['state'])
+
+
 if __name__ == '__main__':
     unittest.main()

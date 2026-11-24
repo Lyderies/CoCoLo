@@ -64,6 +64,8 @@ ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
     'account.billing_probe',
     # B3 (RS-B draft 2 §8): a never-claimed run's open, withdrawn by its project's service or its opening host.
     'account.withdraw_open',
+    # B4s (RS-B-B4-1): a settled or released lost run's closure for the project store; settle_lost_run's reply is fixed.
+    'account.lost_run_closure',
 }
 ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
@@ -191,7 +193,7 @@ def _checked_request(data: object) -> None:
             decode_fence_claim(data['payload'])
         except ClaimError:
             raise AccountError('account_invalid_request') from None
-    elif data['operation'] == 'account.settle_lost_run':
+    elif data['operation'] in {'account.settle_lost_run', 'account.lost_run_closure'}:
         try:
             decode_settle_lost(data['payload'])
         except ClaimError:
@@ -322,6 +324,17 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
     elif request.operation == 'account.settle_lost_run':
         try:
             return checked_lost_reply(result, decode_settle_lost(request.payload))
+        except ClaimError:
+            raise AccountError('account_invalid_response') from None
+    elif request.operation == 'account.lost_run_closure':
+        from .lost_run_closure import checked_lost_run_closure
+        try:
+            checked = checked_lost_run_closure(result, decode_settle_lost(request.payload))
+            if (checked['binding']['project_id'] != request.project_id
+                    or checked['binding']['runtime_digest'] != request.runtime_digest
+                    or checked['request_digest'] != account_request_digest(request)):
+                raise ClaimError('claim_cleanup_invalid')
+            return checked
         except ClaimError:
             raise AccountError('account_invalid_response') from None
     elif request.operation == 'account.withdraw_open':
@@ -698,6 +711,25 @@ class AccountClient:
             raise AccountError('account_invalid_request')
         try:
             request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.settle_lost_run', request_id,
+                                     self._project, self._runtime, settle.payload())
+        except ClaimError:
+            raise AccountError('account_invalid_request') from None
+        failed = False
+        try:
+            raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
+                                 response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else 'account_unavailable'
+        if failed:
+            raise AccountError(failed)
+        return decode_account_response(raw, request)
+
+    def lost_run_closure(self, settle, *, request_id):
+        """B4s: the closure of a run the account settled lost or found released, for the project store."""
+        if type(settle) is not SettleLostInput:
+            raise AccountError('account_invalid_request')
+        try:
+            request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.lost_run_closure', request_id,
                                      self._project, self._runtime, settle.payload())
         except ClaimError:
             raise AccountError('account_invalid_request') from None
