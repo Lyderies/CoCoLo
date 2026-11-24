@@ -272,6 +272,7 @@ def commit(history, binding: AttemptBinding, retained_until_ms: int) -> None:
         "UPDATE project_result_contexts SET state='committed',retained_until_ms=? "
         "WHERE project_id=? AND run_handle=? AND attempt=?",
         (retained_until_ms, history.project_id, binding.run_handle, binding.attempt))
+    project_holds_schema.wake_before(history.project_id, retained_until_ms)  # E2a-7: a custody deadline is set
     history._connection.execute(
         "UPDATE project_holds SET due_at_ms=? WHERE project_id=? AND kind='result_custody' AND identity=? "
         "AND state='held'", (retained_until_ms, history.project_id,

@@ -88,6 +88,7 @@ REPLY_FIELDS = {'account.billing_probe': {'optional': ['billing_waivers', 'clien
                                                          'record',
                                                          'run_handle',
                                                          'run_id']},
+ 'account.publish_wake': {'optional': [], 'required': ['epoch', 'outcome', 'seq']},
  'account.record_rate_limit_event': {'optional': [], 'required': ['kept', 'stop']},
  'account.register_execution': {'optional': [], 'required': ['grant', 'known']},
  'account.release_capacity': {'optional': [],

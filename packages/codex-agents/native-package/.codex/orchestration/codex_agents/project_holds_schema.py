@@ -225,6 +225,58 @@ def _orchestration_of(connection, project_id: str, kind: str, identity: str):
     return None if row is None or type(row[0]) is not str else row[0]
 
 
+# RS-E E2a-7: the project service's wake publisher, by project. A hold write tells it first (it may publish `pending`
+# and wait for the acknowledgement); the store's transaction end tells it after (it publishes `exact`). Nothing is
+# installed outside a project service, and then these do nothing.
+_WAKE_GUARDS = {}
+
+
+def install_wake_guard(project_id: str, guard) -> None:
+    if guard is None:
+        _WAKE_GUARDS.pop(project_id, None)
+    else:
+        _WAKE_GUARDS[project_id] = guard
+
+
+def wake_before(project_id: str, due_at_ms: int | None) -> None:
+    """Before a hold write with this deadline (never raises: a publication failure lets the write proceed)."""
+    guard = _WAKE_GUARDS.get(project_id)
+    if guard is not None:
+        try:
+            guard.before_due(due_at_ms)
+        except Exception:
+            pass
+
+
+def wake_touch(project_id: str) -> None:
+    guard = _WAKE_GUARDS.get(project_id)
+    if guard is not None:
+        guard.touch()
+
+
+def wake_settled(project_id: str, connection) -> None:
+    """After a store transaction ends (committed or not): the next due, read from the store, goes to the publisher."""
+    guard = _WAKE_GUARDS.get(project_id)
+    if guard is not None and guard.dirty:
+        try:
+            guard.after_settle(next_hold_due(connection))
+        except Exception:
+            pass
+
+
+def next_hold_due(connection) -> int | None:
+    """The earliest deadline of a held or releasing hold, by index seeks per kind (never the tombstones)."""
+    found = None
+    for kind in HOLD_KINDS:
+        for state in ("held", "releasing"):
+            value = connection.execute(
+                "SELECT MIN(due_at_ms) FROM project_holds WHERE kind=? AND state=? AND due_at_ms IS NOT NULL",
+                (kind, state)).fetchone()[0]
+            if value is not None and (found is None or value < found):
+                found = int(value)
+    return found
+
+
 def take_hold(connection, project_id: str, kind: str, identity: str, *, now_ms: int, lease_case: str | None = None,
               due_at_ms: int | None = None, evidence: str | None = None) -> None:
     """Take one hold. An identity is taken once: its tombstone (a released row, kept for good) or a row still held
@@ -233,6 +285,7 @@ def take_hold(connection, project_id: str, kind: str, identity: str, *, now_ms: 
     if connection.execute("SELECT 1 FROM project_holds WHERE project_id=? AND kind=? AND identity=?",
                           (project_id, kind, identity)).fetchone() is not None:
         raise HistoryError("history_conflict")
+    wake_before(project_id, due_at_ms)  # E2a-7: before the row exists
     connection.execute(
         "INSERT INTO project_holds(project_id,kind,identity,state,lease_case,taken_at_ms,due_at_ms,evidence) "
         "VALUES(?,?,?,'held',?,?,?,?)", (project_id, kind, identity, lease_case, now_ms, due_at_ms, evidence))
@@ -264,6 +317,7 @@ def release_hold(connection, project_id: str, kind: str, identity: str, release_
     if handle is not None:
         connection.execute("UPDATE project_holds SET next_check_ms=0,evidence=NULL WHERE project_id=? "
                            "AND kind='orchestration' AND identity=? AND state='held'", (project_id, handle))
+    wake_touch(project_id)  # E2a-7: the next due may move later
 
 
 def adopt_orchestrations(connection, project_id: str, orchestrations) -> None:

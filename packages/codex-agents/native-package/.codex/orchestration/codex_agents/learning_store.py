@@ -107,6 +107,7 @@ from .contracts import (
     validate_result,
     validate_task,
 )
+from .project_host_client import project_host_serving
 from .learning_contracts import (
     validate_outcome,
     PRODUCER_AUTHORITY as PRODUCER_AUTHORITY,
@@ -194,6 +195,20 @@ WORKER_RESULT_SWEEP_SECONDS = 60.0
 # F15 (scripts/measure_release_batches.py, 2026-11-21): on 1,001 due holds a batch of 64 took at most 5.3 ms
 # (mean 1.6 ms) and the longest lock hold was 5.4 ms; RS-A-7 allows 50 ms and 750 ms.
 ACCOUNT_HOLD_RELEASE_BATCH = 64
+# RS-E E2a: the projects' wake rows (E2a-1, E2a-6, E2a-9). The launch columns are machine-local, never in a backup.
+WAKE_STATES = ("pending", "exact", "clean_stop")
+WAKE_RECONCILE_BATCH = 64
+LOCAL_PROJECT_COLUMNS = frozenset({"launch_copy", "launch_digest"})
+_WAKE_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS project_wake("
+    "project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,"
+    "allocated_epoch INTEGER NOT NULL DEFAULT 0 CHECK(allocated_epoch>=0),"
+    "epoch INTEGER CHECK(epoch IS NULL OR epoch>=1),seq INTEGER CHECK(seq IS NULL OR seq>=1),"
+    "state TEXT CHECK(state IS NULL OR state IN ('pending','exact','clean_stop')),"
+    "next_due_at_ms INTEGER,body_digest TEXT,due_at_ms INTEGER,"
+    "refused INTEGER NOT NULL DEFAULT 0 CHECK(refused>=0),updated_at_ms INTEGER NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS project_wake_due ON project_wake(due_at_ms) WHERE due_at_ms IS NOT NULL",
+)
 SWEEP_BATCH_GAP_SECONDS = 0.01
 SWEEP_BUSY_RETRY_SECONDS = 1.0
 # O0b RS-A round 2 G6: while idle, due account holds are checked this often (one indexed read, no
@@ -591,7 +606,8 @@ def _snapshot_project_partition(
     project_columns = {
         str(row[1]) for row in connection.execute("PRAGMA table_info(projects)").fetchall()
     }
-    if project_columns != set(_BACKUP_PROJECT_COLUMNS):
+    # E2a-1: the launch record is machine-local; a backup keeps the six original columns, a restore has none.
+    if project_columns - LOCAL_PROJECT_COLUMNS != set(_BACKUP_PROJECT_COLUMNS):
         raise LedgerError("project backup cannot represent projects exactly")
     project = connection.execute(
         f"SELECT {','.join(_BACKUP_PROJECT_COLUMNS)} FROM projects "
@@ -2220,6 +2236,7 @@ class LearningLedger:
                 "CREATE INDEX IF NOT EXISTS account_open_requests_committed_expiry "
                 "ON account_open_requests(observation_deadline_at_ms) WHERE state='committed'"
             )
+            self._initialize_launch_and_wake()  # RS-E E2a-1: additive, no schema version change
             self._record_first_owner_key()
             self.state.mark_initialized()
             self._reconcile_managed_files()
@@ -3987,11 +4004,130 @@ class LearningLedger:
             if row:
                 return str(row["project_id"])
             project_id = f"prj_{secrets.token_hex(16)}"
+            # E2a-2: explicit columns; registration never writes the launch record.
             self._connection.execute(
-                "INSERT INTO projects VALUES(?,?,?,?,?,NULL)",
+                "INSERT INTO projects(project_id,canonical_root,root_digest,status,created_at_ms,deleted_at_ms) "
+                "VALUES(?,?,?,?,?,NULL)",
                 (project_id, root_text, digest, "active", timestamp),
             )
             return project_id
+
+    def _initialize_launch_and_wake(self) -> None:
+        """RS-E E2a-1: the launch columns and the wake table, additive and idempotent (no version change)."""
+        columns = {row[1] for row in self._connection.execute("PRAGMA table_info(projects)")}
+        for name in ("launch_copy", "launch_digest"):
+            if name not in columns:
+                self._connection.execute(f"ALTER TABLE projects ADD COLUMN {name} TEXT")
+        for statement in _WAKE_SCHEMA:
+            self._connection.execute(statement)
+
+    def active_project_roots(self) -> list[tuple[str, str]]:
+        """(project_id, canonical root) of every active project, in project order."""
+        with self._held():
+            return [(str(row["project_id"]), str(row["canonical_root"])) for row in self._connection.execute(
+                "SELECT project_id,canonical_root FROM projects WHERE status='active' ORDER BY project_id")]
+
+    def record_launch(self, project_id: str, launch_copy: str, launch_digest: str) -> None:
+        """E2a-3: setup's launch record for one active project. The copy must be named by its digest inside this
+        project's digest folder of a runtime container; anything else is refused and nothing changes."""
+        if (type(launch_digest) is not str or len(launch_digest) != 64 or not set(launch_digest) <= set("0123456789abcdef")
+                or type(launch_copy) is not str or "\0" in launch_copy or len(launch_copy.encode()) > 4096):
+            raise LedgerError("launch record is invalid")
+        copy = Path(launch_copy)
+        with self._held():
+            row = self._connection.execute(
+                "SELECT canonical_root FROM projects WHERE project_id=? AND status='active'", (project_id,)).fetchone()
+            if row is None:
+                raise ProjectNotRegisteredError("project is not registered")
+            folder = hashlib.sha256(str(row["canonical_root"]).encode("utf-8")).hexdigest()[:12]
+            if (not copy.is_absolute() or str(copy) != launch_copy or ".." in copy.parts
+                    or copy.name != launch_digest or copy.parent.name != folder
+                    or copy.parent.parent.name != "agent-orchestration"):
+                raise LedgerError("launch record is invalid")
+            self._connection.execute("UPDATE projects SET launch_copy=?,launch_digest=? WHERE project_id=?",
+                                     (launch_copy, launch_digest, project_id))
+
+    def launch_record(self, project_id: str) -> tuple[str, str] | None:
+        with self._held():
+            row = self._connection.execute(
+                "SELECT launch_copy,launch_digest FROM projects WHERE project_id=? AND status='active'",
+                (project_id,)).fetchone()
+        if row is None or row["launch_copy"] is None or row["launch_digest"] is None:
+            return None
+        return str(row["launch_copy"]), str(row["launch_digest"])
+
+    def publish_wake(self, project_id: str, *, epoch: int | None, seq: int, state: str,
+                     next_due_at_ms: int | None, now_ms: int | None = None) -> dict:
+        """E2a-6: one wake publication. A null epoch allocates the next durable epoch; a strictly newer generation
+        replaces the row; the same generation and body is a duplicate; anything else is `stale` and only counted."""
+        if (state not in WAKE_STATES or type(seq) is not int or seq < 1
+                or (epoch is not None and (type(epoch) is not int or epoch < 0))
+                or (next_due_at_ms is not None and (type(next_due_at_ms) is not int or next_due_at_ms < 0))):
+            raise LedgerError("wake publication is invalid")
+        now = time.time_ns() // 1_000_000 if now_ms is None else now_ms
+        body = hashlib.sha256(canonical_json({"state": state, "next_due_at_ms": next_due_at_ms})).hexdigest()
+        with self._account_transaction():
+            if self._connection.execute("SELECT 1 FROM projects WHERE project_id=? AND status='active'",
+                                        (project_id,)).fetchone() is None:
+                raise ProjectNotRegisteredError("project is not registered")
+            self._connection.execute(
+                "INSERT OR IGNORE INTO project_wake(project_id,allocated_epoch,refused,updated_at_ms) VALUES(?,0,0,?)",
+                (project_id, now))
+            row = self._connection.execute("SELECT * FROM project_wake WHERE project_id=?", (project_id,)).fetchone()
+            current = None if row["epoch"] is None else (int(row["epoch"]), int(row["seq"]))
+            outcome = "accepted"
+            if epoch is None:
+                epoch = int(row["allocated_epoch"]) + 1
+                self._connection.execute("UPDATE project_wake SET allocated_epoch=? WHERE project_id=?",
+                                         (epoch, project_id))
+            elif epoch < 1 or epoch > int(row["allocated_epoch"]):
+                outcome = "stale"
+            elif current is not None and (epoch, seq) == current:
+                outcome = "duplicate" if row["body_digest"] == body else "stale"
+            elif current is not None and (epoch, seq) < current:
+                outcome = "stale"
+            if outcome == "accepted":
+                self._connection.execute(
+                    "UPDATE project_wake SET epoch=?,seq=?,state=?,next_due_at_ms=?,body_digest=?,due_at_ms=?,"
+                    "updated_at_ms=? WHERE project_id=?",
+                    (epoch, seq, state, next_due_at_ms, body, next_due_at_ms, now, project_id))
+            elif outcome == "stale":
+                self._connection.execute(
+                    "UPDATE project_wake SET refused=refused+1,updated_at_ms=? WHERE project_id=?", (now, project_id))
+        return {"epoch": epoch, "seq": seq, "outcome": outcome}
+
+    def wake_reconcile_candidates(self, *, now_ms: int, limit: int = WAKE_RECONCILE_BATCH,
+                                  after: str = "") -> list[tuple[str, str, int | None, int | None]]:
+        """E2a-9: active projects whose wake state is unknown and not yet due, from `after` in project order:
+        (project_id, root, epoch, seq). Bounded; the served check is the caller's, off this lock."""
+        with self._held():
+            return [(str(row["project_id"]), str(row["canonical_root"]), row["epoch"], row["seq"])
+                    for row in self._connection.execute(
+                        "SELECT p.project_id,p.canonical_root,w.epoch,w.seq FROM projects p "
+                        "LEFT JOIN project_wake w ON w.project_id=p.project_id WHERE p.status='active' "
+                        "AND p.project_id>? AND (w.project_id IS NULL OR w.state IS NULL OR w.state<>'clean_stop') "
+                        "AND (w.due_at_ms IS NULL OR w.due_at_ms>?) ORDER BY p.project_id LIMIT ?",
+                        (after, now_ms, limit))]
+
+    def mark_wakes_due(self, candidates, *, now_ms: int) -> int:
+        """E2a-9: mark these unknown projects due now, unless a publication landed since they were read."""
+        marked = 0
+        with self._account_transaction():
+            for project_id, _root, epoch, seq in candidates:
+                if epoch is None:
+                    inserted = self._connection.execute(
+                        "INSERT OR IGNORE INTO project_wake(project_id,allocated_epoch,refused,due_at_ms,updated_at_ms) "
+                        "SELECT project_id,0,0,?,? FROM projects WHERE project_id=? AND status='active'",
+                        (now_ms, now_ms, project_id)).rowcount
+                    marked += inserted or self._connection.execute(
+                        "UPDATE project_wake SET due_at_ms=?,updated_at_ms=? WHERE project_id=? AND epoch IS NULL "
+                        "AND (due_at_ms IS NULL OR due_at_ms>?)", (now_ms, now_ms, project_id, now_ms)).rowcount
+                else:
+                    marked += self._connection.execute(
+                        "UPDATE project_wake SET due_at_ms=?,updated_at_ms=? WHERE project_id=? AND epoch=? AND seq=? "
+                        "AND (state IS NULL OR state<>'clean_stop')",
+                        (now_ms, now_ms, project_id, epoch, seq)).rowcount
+        return marked
 
     def _learning_moved_locked(self, project_id: str) -> bool:
         return self._connection.execute(
@@ -12995,6 +13131,11 @@ class CollectorServer:
         listener.listen(16)
         listener.settimeout(0.1)
         self._started_at_ms = time.time_ns() // 1_000_000
+        # RS-E E2a-9: unknown projects are marked due before this collector reports ready (nothing starts here).
+        try:
+            self._reconcile_wakes()
+        except Exception as error:
+            self.sweep_error = type(error).__name__
         # S1-H1a-6b: the sweeps run on their own thread, so no request waits behind one. G5: one that
         # cannot start is a start-up failure, before ready is published.
         try:
@@ -13009,6 +13150,11 @@ class CollectorServer:
             self._ready.set()
             return
         self._sweeps = sweeps
+        # RS-E E2a-9: and once per sweep interval on a thread of its own (never inside a sweep's ledger hold).
+        self._wakes = None
+        with contextlib.suppress(Exception):
+            self._wakes = threading.Thread(target=self._wake_loop, name="collector-wakes", daemon=True)
+            self._wakes.start()
         self._ready.set()
         try:
             while not self._stop.is_set():
@@ -13028,6 +13174,8 @@ class CollectorServer:
             # Its own event, not _stop: the host reads _stop as "asked to stop" (C10d).
             self._sweeps_stop.set()
             self._sweeps.join(5)
+            if getattr(self, "_wakes", None) is not None:
+                self._wakes.join(5)
             listener.close()
             self._socket = None
             with contextlib.suppress(FileNotFoundError):
@@ -13071,6 +13219,36 @@ class CollectorServer:
                 continue
             full, draining = False, outcome == "more"
             wait = SWEEP_BATCH_GAP_SECONDS if draining else min(SWEEP_IDLE_CHECK_SECONDS, due - time.monotonic())
+
+    def _wake_loop(self) -> None:
+        while not self._sweeps_stop.wait(WORKER_RESULT_SWEEP_SECONDS):
+            try:
+                self._reconcile_wakes()
+            except Exception as error:
+                self.sweep_error = type(error).__name__
+
+    def _reconcile_wakes(self) -> int:
+        """RS-E E2a-9: one bounded pass. The candidates are read and marked under the ledger lock, each in its own
+        short hold; whether a live host serves a candidate is checked between, off the lock. Returns how many
+        were marked due. Nothing is started."""
+        now = time.time_ns() // 1_000_000
+        after = getattr(self, "_wake_cursor", "")
+        candidates = self.ledger.wake_reconcile_candidates(now_ms=now, after=after)
+        if len(candidates) < WAKE_RECONCILE_BATCH:
+            self._wake_cursor = ""
+            if after:
+                candidates += self.ledger.wake_reconcile_candidates(
+                    now_ms=now, limit=WAKE_RECONCILE_BATCH - len(candidates))
+        else:
+            self._wake_cursor = candidates[-1][0]
+        seen, unserved = set(), []
+        for row in candidates:
+            if row[0] in seen:
+                continue
+            seen.add(row[0])
+            if not project_host_serving(self.state.root, row[1]):
+                unserved.append(row)
+        return self.ledger.mark_wakes_due(unserved, now_ms=now) if unserved else 0
 
     def _run_health_pass(self) -> None:
         """HM-0: one bounded health pass, never under the ledger lock. A failure of the runner itself is
@@ -13298,7 +13476,20 @@ class CollectorServer:
             }:
                 # The owner's registration on the running compatible collector, so
                 # another project's running children keep their collector.
-                return {"ok": True, "project_id": self.ledger.register_project(Path(request["project_root"]))}
+                project_id = self.ledger.register_project(Path(request["project_root"]))
+                # RS-E E2a-5: the project's wake credential, as the account host issues one at its start.
+                with contextlib.suppress(Exception):
+                    from .service_enrollment import issue_wake_capability
+                    from .collector_paths import CollectorPaths
+                    issue_wake_capability(CollectorPaths(self.state.root), Path(request["project_root"]))
+                return {"ok": True, "project_id": project_id}
+            if request.get("op") == "record_launch" and set(request) == {
+                "protocol", "op", "project_root", "launch_copy", "launch_digest",
+            }:
+                # RS-E E2a-3: setup's launch record for its registered project (the owner's step).
+                project_id = self.ledger.project_for_root(Path(request["project_root"]))
+                self.ledger.record_launch(project_id, request["launch_copy"], request["launch_digest"])
+                return {"ok": True}
             if request.get("op") in {
                 "owner_record_payload", "commit_owner_record", "verify_owner_record", "confirm_legacy_slot",
             } and set(request) == {

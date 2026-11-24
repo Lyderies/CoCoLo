@@ -298,6 +298,14 @@ class CollectorClient:
             raise CollectorError("collector response is invalid", code="response_invalid")
         return project_id
 
+    def record_launch(self, project_root: Path, launch_copy: str, launch_digest: str) -> None:
+        """RS-E E2a-3: record setup's validated launch target for this registered root (the owner's step)."""
+        response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "record_launch",
+                                  "project_root": str(project_root.resolve()), "launch_copy": str(launch_copy),
+                                  "launch_digest": launch_digest})
+        if response.get("ok") is not True:
+            raise CollectorError("collector response is invalid", code="response_invalid")
+
     def owner_record_payload(self, project_root: Path, record: dict) -> bytes:
         response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "owner_record_payload",
                                   "project_root": str(project_root.resolve()), "record": record})

@@ -33,7 +33,8 @@ from .provider_observation_contracts import ObservationError, decode_observation
 from .learning_contracts import keyed_digest, parse_bounded_json
 from .owned_execution import OwnedExecutionRegistry
 from .service_enrollment import (
-    EnrollmentVerifier, account_endpoint_path, issue_capability, prepare_proof_directory, proof_directory, revoke_capability,
+    EnrollmentError, EnrollmentVerifier, account_endpoint_path, issue_capability, issue_wake_capability,
+    prepare_proof_directory, proof_directory, read_wake_capability, revoke_capability,
 )
 from .service_host import EnrolledFrontend, ServiceHostLimits
 from .signature_job_intake import SignatureIntakeLimits
@@ -58,7 +59,10 @@ PROJECT_OPERATIONS = frozenset({
     'account.fence_claim', 'account.settle_lost_run', 'account.record_rate_limit_event',
     'account.withdraw_open',  # B3: a run that ends before its claim withdraws its open (it has no lease)
     'account.lost_run_closure',  # B4s: a settled lost run's closure, with the run's own custody
+    'account.publish_wake',  # RS-E E2a-5: only under a credential the verifier bound to one project
 })
+# RS-E E2a-5: all a project-bound wake credential may do.
+WAKE_OPERATIONS = frozenset({'account.publish_wake'})
 # The owner's terminal (setup, status, attestation): reads that spend nothing, and
 # never an open, a claim or a probe. Its provider observation is the standalone kind
 # (who is signed in): one for a run's launch evidence is refused.
@@ -153,7 +157,14 @@ class AccountServiceHost:
             prepare_proof_directory(proofs)
             key = issue_capability(state, None, 'account')
             self._issued = True
-            self._frontend = EnrolledFrontend(EnrollmentVerifier(key, frozenset({'account', 'project'}), GENERATION, proofs),
+            # RS-E E2a-5: a fresh wake key per active project (registration issues one for a project added later).
+            for _project, root in ledger.active_project_roots():
+                try:
+                    issue_wake_capability(state, Path(root))
+                except EnrollmentError:
+                    pass  # a project whose folder is gone cannot publish; reconcile counts it unknown
+            self._frontend = EnrolledFrontend(EnrollmentVerifier(key, frozenset({'account', 'project'}), GENERATION, proofs,
+                                                                 subject_keys=self._wake_key),
                 ServiceHostLimits(32, 2 * SECOND, 64, 65 * SECOND, 30_000, 4_096),
                 lambda kind, connection, token: self._ingress.attach(connection, token), proofs, clock_ns=clock_ns)
             self._frontend.listen(account_endpoint(state), 'account')
@@ -167,6 +178,13 @@ class AccountServiceHost:
                 raise HistoryError('history_service_unavailable') from None
             raise
 
+    def _wake_key(self, subject):
+        """E2a-5: the subject's own wake key, or None (any failure is the verifier's ordinary refusal)."""
+        try:
+            return read_wake_capability(self._state, Path(subject))
+        except EnrollmentError:
+            return None
+
     def _owner(self):
         if self._pid != os.getpid() or self._thread is not threading.current_thread():
             raise HistoryError('history_wrong_owner')
@@ -178,7 +196,12 @@ class AccountServiceHost:
         allowed = {'account': HOST_OPERATIONS, 'project': PROJECT_OPERATIONS}.get(role)
         if role == 'account' and entry.enrolled.host_client == OWNER_CLIENT:
             allowed = OWNER_OPERATIONS
+        # E2a-5: a project-bound credential publishes its wake and nothing else; no other credential publishes one.
+        bound = entry is not None and entry.enrolled.project_bound is True
+        if bound:
+            allowed = WAKE_OPERATIONS if role == 'project' else None
         if (entry is None or entry.kind != 'account' or allowed is None or request.operation not in allowed
+                or (request.operation in WAKE_OPERATIONS) != bound
                 or account_request_digest(request) != entry.enrolled.request_digest):
             return None
         if allowed is OWNER_OPERATIONS and request.operation == 'account.observe_provider':
@@ -199,6 +222,11 @@ class AccountServiceHost:
             return None
         except Exception:
             return None
+        if bound:
+            # The verifier chose the key by this subject, so its registered project is the only target.
+            caller = keyed_digest(self._state.digest_key(), 'account-wake\0' + request.project_id)
+            return AccountAuthorization(request.project_id, COLLECTOR_RUNTIME_DIGEST, account_request_digest(request),
+                                        'project', WAKE_OPERATIONS, caller, wake_bound=True)
         # One context object per connection: the owner compares its identity
         # across the reauthorizations of a single request.
         context = self._contexts.get(token)

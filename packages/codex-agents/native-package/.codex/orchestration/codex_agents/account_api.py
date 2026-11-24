@@ -48,6 +48,7 @@ from .billing_probe_contracts import (
 from .open_withdrawal import (
     WITHDRAW_ERROR_CODES, WithdrawError, WithdrawOpenInput, checked_withdraw_reply, decode_withdraw_open,
 )
+from .wake_contracts import WAKE_REASON_CODES, checked_wake_reply, decode_wake_publish
 
 ACCOUNT_PROTOCOL_VERSION = 1
 MAX_ACCOUNT_FRAME_BYTES = 16_384
@@ -66,6 +67,8 @@ ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
     'account.withdraw_open',
     # B4s (RS-B-B4-1): a settled or released lost run's closure for the project store; settle_lost_run's reply is fixed.
     'account.lost_run_closure',
+    # RS-E E2a-6: a project service's wake state, under its project-bound credential.
+    'account.publish_wake',
 }
 ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
@@ -76,7 +79,7 @@ ACCOUNT_REASON_CODES = frozenset({
     "account_closed_without_reply",
     # The account's connection limit is reached (an attach refusal, said as service_refused_busy on the wire).
     "account_busy",
-}) | SERVICE_REFUSALS | CLAIM_ERROR_CODES | OPEN_REASON_CODES | OBSERVATION_REASONS | BILLING_PROBE_REASONS | ADMISSION_CAPTURE_PUBLIC_REASONS | WITHDRAW_ERROR_CODES
+}) | SERVICE_REFUSALS | CLAIM_ERROR_CODES | OPEN_REASON_CODES | OBSERVATION_REASONS | BILLING_PROBE_REASONS | ADMISSION_CAPTURE_PUBLIC_REASONS | WITHDRAW_ERROR_CODES | WAKE_REASON_CODES
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}")
 _PROJECT = re.compile(r"prj_[0-9a-f]{32}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
@@ -203,6 +206,11 @@ def _checked_request(data: object) -> None:
             decode_withdraw_open(data['payload'])
         except WithdrawError:
             raise AccountError('account_invalid_request') from None
+    elif data['operation'] == 'account.publish_wake':
+        try:
+            decode_wake_publish(data['payload'])
+        except ValueError:
+            raise AccountError('account_invalid_request') from None
     elif data["payload"]:
         raise AccountError("account_invalid_request")
 
@@ -239,6 +247,11 @@ def account_request_digest(request: AccountRequest) -> str:
 def _checked_result(result: object, request: AccountRequest) -> dict:
     if not reply_fields_match(request.operation, result):
         raise AccountError("account_invalid_response")
+    if request.operation == 'account.publish_wake':
+        try:
+            return checked_wake_reply(result, decode_wake_publish(request.payload))
+        except ValueError:
+            raise AccountError('account_invalid_response') from None
     if request.operation == 'account.billing_probe':
         try:
             return checked_billing_probe_reply(result)

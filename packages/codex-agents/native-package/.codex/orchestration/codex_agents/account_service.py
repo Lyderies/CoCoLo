@@ -29,7 +29,7 @@ from .collector_contracts import RUNTIME_UPDATE_COMMAND, RUNTIME_UPGRADE_MESSAGE
 from .learning_contracts import MAX_RECORD_BYTES, canonical_json, parse_bounded_json
 from .learning_store import (
     COLLECTOR_RUNTIME_DIGEST, OWNER_SIGNER_LINE, OWNER_SIGNERS_MAX_BYTES,
-    LearningLedger, LedgerError, OwnerSignerNotConfigured, StateError,
+    LearningLedger, LedgerError, OwnerSignerNotConfigured, ProjectNotRegisteredError, StateError,
     _owner_key_identity, _signer_fingerprint,
 )
 from .owner_key_contracts import owner_public_key_from_line
@@ -126,6 +126,8 @@ class AccountAuthorization:
     open_context: AccountOpenContext | None = None
     cleanup_evidence: bytes | None = None
     observation_context: ObservationContext | None = None
+    # RS-E E2a-5: set only by the account host for a credential its verifier bound to this one project.
+    wake_bound: bool = False
 
     def __post_init__(self) -> None:
         if (
@@ -138,6 +140,7 @@ class AccountAuthorization:
             or (self.caller_scope is not None and not matches(self.caller_scope, _DIGEST))
             or (self.open_context is not None and type(self.open_context) is not AccountOpenContext)
             or (self.observation_context is not None and type(self.observation_context) is not ObservationContext)
+            or type(self.wake_bound) is not bool
         ):
             raise AccountError("account_not_authorized")
         from .claim_storage import capture_storage_evidence
@@ -281,6 +284,19 @@ class AccountOwnerViews:
         return lost_run_closure(self._ledger, project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
                                 settle=settle, storage_binding=storage_binding, storage_evidence=storage_evidence,
                                 request_digest=request_digest)
+
+    def publish_wake(self, project_id, wake):
+        """RS-E E2a-6: one wake publication for the bound project; a stale one is refused, only counted."""
+        self._guard()
+        self._project_locked(project_id)
+        try:
+            result = self._ledger.publish_wake(project_id, epoch=wake.epoch, seq=wake.seq, state=wake.state,
+                                               next_due_at_ms=wake.next_due_at_ms)
+        except ProjectNotRegisteredError:
+            raise AccountError('account_project_not_found') from None
+        if result['outcome'] == 'stale':
+            raise AccountError('wake_stale')
+        return result
 
     def withdraw_open(self, project_id, *, caller_scope, withdrawal, request_digest):
         """B3: the ledger's withdrawal for an authenticated caller, its refusals as public reasons."""
@@ -1039,6 +1055,8 @@ class AccountService:
                 observation = decode_observation_failure(request.payload)
             from .rate_limit_contracts import decode_rate_limit_event
             rate_event = decode_rate_limit_event(request.payload) if operation == 'account.record_rate_limit_event' else None
+            from .wake_contracts import decode_wake_publish
+            wake = decode_wake_publish(request.payload) if operation == 'account.publish_wake' else None
             labels = {"request_id": request.request_id, "project_id": request.project_id,
                       "runtime_digest": request.runtime_digest, "request_digest": digest}
             if self._pid != os.getpid():
@@ -1065,7 +1083,10 @@ class AccountService:
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
                 or (authorization.source == "project" and operation not in {
                     "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.lost_run_closure", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable",
-                    "account.record_rate_limit_event", "account.withdraw_open"})
+                    "account.record_rate_limit_event", "account.withdraw_open", "account.publish_wake"})
+                # RS-E E2a-5: only a credential bound to this one project publishes its wake, and it does nothing else.
+                or (operation == "account.publish_wake") != (authorization.wake_bound is True)
+                or (operation == "account.publish_wake" and authorization.source != "project")
                 # B3: a withdrawal comes from the run's project service or the host that opened it, each with the
                 # caller scope of the run's host class (the ledger matches it to the open's receipt).
                 or (operation == "account.withdraw_open" and (authorization.source not in {"project", "host"}
@@ -1323,6 +1344,8 @@ class AccountService:
                 result = self._views.lost_run_closure(project, runtime_digest=runtime, caller_scope=authorization.caller_scope,
                                                       settle=lost, storage_binding=storage_binding,
                                                       storage_evidence=storage_evidence, request_digest=digest)
+            elif operation == 'account.publish_wake':
+                result = self._views.publish_wake(project, wake)
             elif operation == 'account.withdraw_open':
                 result = self._views.withdraw_open(project, caller_scope=authorization.caller_scope,
                                                    withdrawal=withdrawal, request_digest=digest)

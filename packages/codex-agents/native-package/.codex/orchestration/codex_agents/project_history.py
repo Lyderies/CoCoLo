@@ -496,7 +496,9 @@ class ProjectHistory:
         except BaseException:
             with contextlib.suppress(sqlite3.Error):
                 self._connection.execute("ROLLBACK")
+            project_holds_schema.wake_settled(self.project_id, self._connection)  # RS-E E2a-7
             raise
+        project_holds_schema.wake_settled(self.project_id, self._connection)  # RS-E E2a-7: exact, after commit
 
     def _initialize(self) -> None:
         connection = self._connection

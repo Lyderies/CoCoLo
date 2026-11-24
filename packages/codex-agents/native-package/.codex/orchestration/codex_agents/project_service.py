@@ -279,9 +279,17 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
     except (StateError, OSError):
         return {'ready': False, 'reason_code': 'history_service_unavailable'}
 
+    # RS-E E2a-7: this instance's wake publications; every hold write of this project tells it first.
+    from . import project_holds_schema
+    from .project_wake import WakePublisher
+    wake = WakePublisher(state, root, project_id)
+    project_holds_schema.install_wake_guard(project_id, wake)
+
     def open_history():
-        return service_history(directory, project_id, result_key=key, orchestration_limits=ORCHESTRATIONS,
-                               result_capacity=_result_capacity())
+        history = service_history(directory, project_id, result_key=key, orchestration_limits=ORCHESTRATIONS,
+                                  result_capacity=_result_capacity())
+        wake.open(history._connection)  # pending (this instance's epoch), then exact; once
+        return history
 
     try:
         # Children are prepared from the project's installed package (see service_bundle_root).
@@ -290,6 +298,8 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
                                   bundle_root=service_bundle_root(Path(__file__).resolve().parent.parent, root)
                                   if bundle_root is None else Path(bundle_root))
     except HistoryError as error:
+        wake.close()
+        project_holds_schema.install_wake_guard(project_id, None)
         return {'ready': False, 'reason_code': error.reason_code}
     stopping, checked, faulted = [], [0.0], []
     if stopped is None:
@@ -337,6 +347,12 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
             # A run it still held (a running child it stopped, a finished one not yet
             # released) is settled now on kernel evidence, or by the next host.
             host.settle_lost_runs()
+        # RS-E E2a-8: after final settlement, clean_stop within 2 s, best effort; after a writer fault nothing,
+        # so the collector keeps this project's wake state unknown.
+        try:
+            wake.finish(faulted=bool(faulted))
+        finally:
+            project_holds_schema.install_wake_guard(project_id, None)
     if faulted:
         return {'ready': True, 'stopped': True, 'reason_code': 'writer_fault'}
     return {'ready': True, 'stopped': True}

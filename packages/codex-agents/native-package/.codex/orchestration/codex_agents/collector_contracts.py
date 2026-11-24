@@ -14,6 +14,7 @@ MAX_REQUEST_BYTES = MAX_RECORD_BYTES + 16_384
 COLLECTOR_MUTATING_OPERATIONS = frozenset({
     "bind", "ingest", "issue_result_repair", "register", "commit_owner_record", "confirm_legacy_slot",
     "learning_moved_if_empty", "shutdown", "shutdown_if_drained",
+    "record_launch",  # RS-E E2a-3: setup's launch record
 })
 RUNTIME_UPDATE_COMMAND = "./setup.sh --update"
 RUNTIME_UPGRADE_MESSAGE = (

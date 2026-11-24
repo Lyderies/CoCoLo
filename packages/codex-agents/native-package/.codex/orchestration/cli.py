@@ -476,6 +476,24 @@ def _start_collector_quietly(args: argparse.Namespace) -> None:
         pass
 
 
+def _launch_recorder(args):
+    """RS-E E2a-3: setup's launch record, through the running collector of this runtime; never creates state.
+
+    With no such collector the record is not written (`launch_record: not_recorded`); setup's registration step
+    starts the collector first, and the next setup run records it.
+    """
+
+    def record(copy, digest):
+        from codex_agents.collector_paths import CollectorPaths
+        state = CollectorPaths(args.state_root) if getattr(args, "state_root", None) else CollectorPaths()
+        running = _compatible_collector(state)
+        if running is None:
+            raise CollectorError("no compatible collector is running")
+        running.record_launch(args.project_root, str(copy), digest)
+
+    return record
+
+
 def _compatible_collector(state):
     """The running collector when it serves exactly this runtime, else None (owner maintenance)."""
     try:
@@ -4369,6 +4387,7 @@ def main() -> int:
                 installed = install_codex_rule(
                     args.project_root, replace=args.replace,
                     clone_root=installer_root(ORCHESTRATION_ROOT),
+                    record_launch=_launch_recorder(args),
                 )
                 report = {
                     "ready": installed["codex_rule"] != "differs",
