@@ -62,6 +62,7 @@ from .host_paths import (
     temp_roots,
 )
 from .learning_contracts import (
+    CLIENT_TOOL_NAMES,
     CLIENT_ERROR_CODES,
     CLIENT_EXIT_CODE_MAX,
     CLIENT_EXIT_CODE_MIN,
@@ -1467,7 +1468,7 @@ def run_claude(
         "result_frame_seen": False, "result_subtype": None, "client_error_code": None,
         "rate_limit_failed": False, "frames": 0,
         "models": set(),
-        "helper_models": set(),
+        "helper_models": set(), "denial_count": 0, "denied_tools": set(),
     }
     activity = (ClaudeActivity(model, CLAUDE_RUN_TOOLS) if type(_execution) is ExecutionTicket
                 and _execution.activity_enabled() else None)
@@ -1537,6 +1538,13 @@ def run_claude(
                 raise _Abort("provider_rejected")
         elif kind == "result":
             state["result"] = frame
+            denials = frame.get("permission_denials")
+            if isinstance(denials, list):
+                state["denial_count"] += len(denials)
+                state["denied_tools"].update(
+                    item["tool_name"] if isinstance(item, dict) and isinstance(item.get("tool_name"), str)
+                    and item["tool_name"] in CLIENT_TOOL_NAMES else "other"
+                    for item in denials)
             usage = frame.get("modelUsage")
             if isinstance(usage, dict):
                 for name in usage:
@@ -1628,21 +1636,16 @@ def run_claude(
             "api_equivalent_cost_usd_estimate": result_frame.get("total_cost_usd"),
         }
         report["model_usage"] = _claude_model_usage(result_frame.get("modelUsage"))
-        denials = result_frame.get("permission_denials")
-        if isinstance(denials, list):
-            report["permission_denials"] = {
-                "count": len(denials),
-                "tools": sorted({
-                    str(item.get("tool_name")) for item in denials
-                    if isinstance(item, dict) and isinstance(item.get("tool_name"), str)
-                }),
-            }
+    # L6.1: denials are kept as they are seen (every result frame), so a later clean frame never erases one.
+    # The client's frame does not tell a refused read/write/network call from a harmless prompt, so any
+    # denial fails closed. Names are the client's known tools or "other", never an arbitrary string.
+    if state["denial_count"] > 0:
+        report["permission_denials"] = {"count": state["denial_count"], "tools": sorted(state["denied_tools"])}
+    if state["denial_count"] > 0:
+        # A denial wins over a concurrent stop: the stored reason never hides it.
+        return None, {**report, "outcome": "claude_tool_not_allowed"}
     if outcome["abort"] is not None:
         return None, {**report, "outcome": outcome["abort"]}
-    if report["permission_denials"] and report["permission_denials"]["count"] > 0:
-        # L6.1: a call the client itself refused (outside the export, a write, the network) ends the run
-        # stopped with the same fixed reason as a call outside the run's tools; its result is not trusted.
-        return None, {**report, "outcome": "claude_tool_not_allowed"}
     if raw_answer is not None and isinstance(result_frame, dict):
         structured_answer = result_frame.get("structured_output")
         if type(structured_answer) is dict:

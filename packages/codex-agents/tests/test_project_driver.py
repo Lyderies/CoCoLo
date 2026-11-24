@@ -1568,9 +1568,13 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
                   '--parent-grant', self.write('l6-grant.json', PARENT_GRANT))
         route_path = self.write('l6-route.json', route)
         orchestration = self.cli_for(self.project, 'learning-open-orchestration')['orchestration_handle']
+        started = []
         preflight = self.cli_for(self.project, 'dispatch-preflight', *common, expected=2)
-        opened = self.cli_for(self.project, 'learning-open-host-run', *common, '--route', route_path,
-                              '--orchestration-handle', orchestration, expected=2)
+        with mock.patch.object(cli, '_start_project_host', side_effect=lambda *a, **k: started.append(a)), \
+                mock.patch.object(cli, 'check_backend', side_effect=lambda *a, **k: started.append(a)):
+            opened = self.cli_for(self.project, 'learning-open-host-run', *common, '--route', route_path,
+                                  '--orchestration-handle', orchestration, expected=2)
+        self.assertEqual([], started)   # no host start and no backend call before the refusal
         self.assertEqual(preflight['reason'], opened['reason'])
         connection = self.collector_ledger._connection
         for table in ('host_run_bindings', 'active_run_capacity'):

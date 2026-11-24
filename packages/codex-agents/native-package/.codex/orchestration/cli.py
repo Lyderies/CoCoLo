@@ -2608,6 +2608,11 @@ def main() -> int:
             # route remains untrusted until the ledger resolves and compares it.
             validate_assignment(assignment, task=task, route=supplied_route,
                                 parent_grant=parent_grant)
+            if supplied_route.get("dispatch") == "bridge":
+                # L6.2: the same refusal as dispatch-preflight, before the host starts, any backend call,
+                # admission or capacity hold, so nothing else can mask it. Read paths do not depend on the route.
+                committed_export_manifest(args.project_root, assignment_read_paths(
+                    assignment, worker_outcome_digest=task.get("verification_for_outcome")))
             # Validate the originally advertised choice before refreshing availability.
             # A fresh snapshot may change provider/model/effort, never permissions or task lineage.
             policy = load_effective_policy(args.project_root,
@@ -2676,10 +2681,6 @@ def main() -> int:
                 for name in ("model", "effort", "role", "verification_required"):
                     rebound[name] = route[name]
                 validate_assignment(rebound, task=task, route=route, parent_grant=parent_grant)
-                if route.get("dispatch") == "bridge" and route.get("provider") in {"codex", "claude"}:
-                    # L6.2: the same refusal as dispatch-preflight, before any admission or hold is made.
-                    committed_export_manifest(args.project_root, assignment_read_paths(
-                        rebound, worker_outcome_digest=task.get("verification_for_outcome")))
                 if _host_driven(route):
                     _start_project_host(args)
                     host = _host_client()

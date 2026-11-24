@@ -26,6 +26,7 @@ import weakref
 from . import bridge
 from .contracts import RESULT_DIAGNOSTIC_REASON_CODES, ContractError, validate_assignment
 from .learning_contracts import (
+    CLIENT_TOOL_NAMES,
     SUPPORTED_EFFORTS, SUPPORTED_MODELS, canonical_json, parse_bounded_json, validate_client_diagnostics,
 )
 from .owned_execution import ExecutionCustodyError, ExecutionTicket, OwnedExecutionRegistry
@@ -188,8 +189,8 @@ def _safe_report(report, provider):
                     or not 0 <= denials["count"] <= 1_000_000 or type(denials["tools"]) is not list
                     or any(type(t) is not str for t in denials["tools"])):
                 raise CodexWorkerError()
-            # A name that is not a plain tool name is reported as "other", never passed on.
-            names = sorted({t if re.fullmatch(r"[A-Za-z0-9_]{1,40}", t) else "other" for t in denials["tools"]})[:16]
+            # A name that is not a known client tool is reported as "other", never passed on.
+            names = sorted({t if t in CLIENT_TOOL_NAMES else "other" for t in denials["tools"]})
             result["permission_denials"] = {"count": denials["count"], "tools": names}
     if "raw_answer" in report:
         result["raw_answer"] = _safe_raw_answer(report["raw_answer"])

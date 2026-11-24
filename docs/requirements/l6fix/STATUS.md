@@ -1,4 +1,6 @@
 # l6fix status
-- L6.1: codex_worker._safe_report and dispatch_api response validation carry permission_denials {count, tools} (fixed names only). Test: tests.test_project_driver.ClaudeChildDriverTests.test_l6_1_*. Terminal state stays completed (T7 check expects terminal_state None); stored dispatch_result record unchanged (closed schema).
-- L6.2: cli.py open_route runs committed_export_manifest before any admission. Test: ...test_l6_2_*.
-- Digest 0.8.55 refreshed in place (not installed anywhere). Done and committed.
+- L6.1: any client permission denial ends the run failed / claude_tool_not_allowed (bridge.run_claude). Denials are accumulated per result frame (sticky: a later clean frame or a concurrent stop never erases or hides them). The reply and stored result carry it via the existing outcome path plus report permission_denials {count, tools}; tool names are limited to learning_contracts.CLIENT_TOOL_NAMES, else "other". The client's result frame does not tell a refused read/write/network call from a harmless prompt, so every denial fails closed. Stored dispatch_result record schema unchanged.
+- L6.2: learning-open-host-run runs the committed-export check right after validate_assignment, before the project host starts, any backend call, admission or hold (cli.py). Tests spy on host start and backend check.
+- runtime-releases.json untouched (0.8.55 installed; digest bookkeeping happens in the batch release).
+- Assertion changes: see assertions.md.
+- Done: committed.
