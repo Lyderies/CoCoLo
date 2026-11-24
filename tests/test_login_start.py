@@ -266,6 +266,56 @@ class InstallTests(TempHome):
         self.assertFalse(systemd.active)
         self.assertFalse([c for c in systemd.calls if c[2] in ("start", "restart")])
 
+    @requirements('E1-9', why_not_scenario='Pure file and command rendering with a stateful stand-in systemctl.')
+    def test_E1_9_a_failed_refresh_puts_a_stopped_systemd_unit_back_stopped_and_not_enabled(self):
+        class Stateful(FakeSystemd):
+            enabled = False
+
+            def __call__(self, argv):
+                verb = argv[2]
+                if verb == "is-enabled":
+                    self.calls.append(list(argv))
+                    return 0 if self.enabled else 1
+                if verb == "stop":
+                    self.calls.append(list(argv))
+                    self.active = False
+                    return 0
+                if verb == "disable":
+                    self.calls.append(list(argv))
+                    self.enabled = False
+                    return 0
+                if verb == "enable":
+                    self.enabled = True
+                if verb == "try-restart" and "try-restart" in self.fail and not self.rollback:
+                    self.calls.append(list(argv))
+                    self.rollback = True
+                    return 1  # the unit enable --now started stays running
+                return super().__call__(argv)
+
+        changed = ARGV[:-1] + ["/srv/example/.local/state/other"]
+        systemd = Stateful(active=False)
+        login_start.install(self.home, "systemd", ARGV, self.logs, systemd, uid=1)
+        systemd.active, systemd.enabled = False, False  # stopped and not enabled by the owner
+        path = login_start.entry_path(self.home, "systemd")
+        old = path.read_bytes()
+        systemd.fail, systemd.rollback = ("try-restart",), False
+        self.assertFalse(login_start.install(self.home, "systemd", changed, self.logs, systemd, uid=1).ok)
+        self.assertEqual(old, path.read_bytes())
+        self.assertFalse(systemd.active)
+        self.assertFalse(systemd.enabled)
+
+    @requirements('E1-9', why_not_scenario='Pure file and command rendering.')
+    def test_E1_9_a_refresh_does_not_recreate_an_entry_that_vanished(self):
+        login_start.install(self.home, "systemd", ARGV, self.logs, FakeSystemd(), uid=1)
+        path = login_start.entry_path(self.home, "systemd")
+        path.unlink()
+        runner = Runner()
+        result = login_start._install(self.home, "systemd", ARGV[:-1] + ["/x"], self.logs, runner, uid=1,
+                                      refreshing=True)[0]
+        self.assertFalse(result.ok)
+        self.assertFalse(path.exists())
+        self.assertEqual([], runner.calls)
+
     @requirements('E1-1', why_not_scenario='Pure file and command rendering with a stateful stand-in systemctl.')
     def test_E1_1_a_failed_rollback_is_reported(self):
         changed = ARGV[:-1] + ["/srv/example/.local/state/other"]

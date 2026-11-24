@@ -277,40 +277,46 @@ def install(home, kind: str | None, argv, log_dir, runner, *, uid: int) -> Resul
     return _install(home, kind, argv, log_dir, runner, uid=uid)[0]
 
 
-def _install(home, kind, argv, log_dir, runner, *, uid: int) -> tuple[Result, bytes | None, bool]:
+def _install(home, kind, argv, log_dir, runner, *, uid: int,
+             refreshing: bool = False) -> tuple[Result, bytes | None, bool, bool]:
     """install, and also the earlier entry's bytes and whether it was on, so a caller can put it back."""
     if kind not in ("launchd", "systemd"):
-        return Result(False, "this system has no login-start support (macOS and Linux only)"), None, False
+        return Result(False, "this system has no login-start support (macOS and Linux only)"), None, False, False
     problem = _command_problem(argv) or ("the log folder has a line break or other control character"
                                           if _has_control(log_dir) else "")
     if problem:
-        return Result(False, problem), None, False
+        return Result(False, problem), None, False, False
     path = entry_path(home, kind)
     problem = _link_problem(home, path, log_dir)
     if problem:
-        return Result(False, problem), None, False
+        return Result(False, problem), None, False, False
     if os.path.lexists(path) and not stat.S_ISREG(os.lstat(path).st_mode):
-        return Result(False, f"{path} already exists and is not a plain file, so it was left alone"), None, False
+        return Result(False, f"{path} already exists and is not a plain file, so it was left alone"), None, False, False
     found, old = _read_entry(home, path)
+    if refreshing and found == "none":  # E1-9: a refresh never makes an entry the owner no longer has
+        return Result(False, "the entry is gone, so it was not written again"), None, False, False
     if found == "unreadable":
-        return Result(False, f"{path} could not be read, so it was left alone"), None, False
+        return Result(False, f"{path} could not be read, so it was left alone"), None, False, False
     if found == "unsafe":
-        return Result(False, NOT_YOURS), None, False
+        return Result(False, NOT_YOURS), None, False, False
     try:
         Path(log_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(log_dir, 0o700)
     except OSError as exc:
-        return Result(False, f"the log folder could not be made ({exc.strerror or 'refused'})"), None, False
+        return Result(False, f"the log folder could not be made ({exc.strerror or 'refused'})"), None, False, False
     data = render_plist(argv, log_dir) if kind == "launchd" else render_unit(argv, log_dir).encode("utf-8")
+    was_enabled = True  # systemd: whether the earlier unit was enabled; a failed change must not leave it so.
     was_on = False  # Whether the older entry was loaded (launchd) or running (systemd) before this change.
     if old is not None:
         if kind == "launchd":
             was_on = runner([LAUNCHCTL, "print", f"gui/{uid}/{LABEL}"]) == 0
         else:
             was_on = runner([SYSTEMCTL, "--user", "is-active", UNIT]) == 0
+            if not was_on:  # only a stopped unit can be started by enable --now
+                was_enabled = runner([SYSTEMCTL, "--user", "is-enabled", UNIT]) == 0
     reason = _write_entry(home, path, data)  # A new file renamed over the old one: the old stays until the swap.
     if reason:
-        return Result(False, reason), None, False
+        return Result(False, reason), None, False, False
     if kind == "launchd":
         runner([LAUNCHCTL, "bootout", f"gui/{uid}/{LABEL}"])  # Replaces an older load; fine when none.
         loaded = runner([LAUNCHCTL, "bootstrap", f"gui/{uid}", str(path)]) == 0
@@ -320,17 +326,18 @@ def _install(home, kind, argv, log_dir, runner, *, uid: int) -> tuple[Result, by
                   # enable --now leaves a running unit as it was; a changed command needs a restart.
                   and (old is None or old == data or runner([SYSTEMCTL, "--user", "try-restart", UNIT]) == 0))
     if loaded:
-        return Result(True), old, was_on
+        return Result(True), old, was_on, was_enabled
     if old is None:
         path.unlink(missing_ok=True)
         if kind == "systemd":
             runner([SYSTEMCTL, "--user", "daemon-reload"])
-        return Result(False, "the system's login tool did not accept the entry, so it was removed again"), None, False
+        return Result(False, "the system's login tool did not accept the entry, so it was removed again"), None, False, False
     return _put_back(home, kind, old, was_on, runner, uid=uid, why="the system's login tool did not accept the "
-                     "new entry"), old, was_on
+                     "new entry", was_enabled=was_enabled), old, was_on, was_enabled
 
 
-def _put_back(home, kind, old: bytes, was_on: bool, runner, *, uid: int, why: str) -> Result:
+def _put_back(home, kind, old: bytes, was_on: bool, runner, *, uid: int, why: str,
+              was_enabled: bool = True) -> Result:
     """Write the earlier entry back and load it again only if it was on; a failed result either way."""
     path = entry_path(home, kind)
     if _write_entry(home, path, old):
@@ -341,7 +348,10 @@ def _put_back(home, kind, old: bytes, was_on: bool, runner, *, uid: int, why: st
     else:
         # try-restart never starts a stopped unit, so a unit the failed change stopped needs a real restart.
         back = runner([SYSTEMCTL, "--user", "daemon-reload"]) == 0 and (
-            not was_on or runner([SYSTEMCTL, "--user", "restart", UNIT]) == 0)
+            runner([SYSTEMCTL, "--user", "restart", UNIT]) == 0 if was_on else
+            # enable --now may already have started a unit that was stopped (or not enabled): put that back.
+            (was_enabled or runner([SYSTEMCTL, "--user", "disable", UNIT]) == 0)
+            and runner([SYSTEMCTL, "--user", "stop", UNIT]) == 0)
     if not back:
         return Result(False, f"{why}; the earlier one was put back but could not be started again, so check {path} "
                              "and the collector", upset=True)
@@ -542,11 +552,12 @@ def refresh(*, home, kind, answer_file, argv, log_dir, runner, uid: int, state_r
     status = entry_status(home, kind, argv, log_dir, answer_file, digest)
     if status.state != "stale" or read_answer(answer_file) != "yes" or digest is None:
         return status, False
-    result, old, was_on = _install(home, kind, argv, log_dir, runner, uid=uid)
+    result, old, was_on, was_enabled = _install(home, kind, argv, log_dir, runner, uid=uid, refreshing=True)
     if not result.ok:
         return Status("stale", STALE_UPSET if result.upset else STALE_KEPT), False
     if not write_record(answer_file, digest):
-        back = _put_back(home, kind, old, was_on, runner, uid=uid, why="the runtime record could not be kept") \
+        back = _put_back(home, kind, old, was_on, runner, uid=uid, why="the runtime record could not be kept",
+                         was_enabled=was_enabled) \
             if old is not None else Result(False, upset=True)
         return Status("stale", STALE_NO_RECORD_UPSET if back.upset else STALE_NO_RECORD), False
     return Status("on"), True
