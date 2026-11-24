@@ -266,7 +266,7 @@ def validate_dependencies(root):
             errors.append('test dependency is not exactly pinned and hashed')
         else:
             names.add(match[1])
-    if names != {'hypothesis', 'sortedcontainers'}:
+    if not {'hypothesis', 'sortedcontainers'} <= names <= {'hypothesis', 'sortedcontainers', 'coverage'}:
         errors.append('unexpected test dependency set')
     shipped = ('packages/codex-agents/native-package', 'packages/claude-agents/src',
                'setup.sh', 'scripts/install.py', 'scripts/setup-wizard.py', 'packages/codex-agents/scripts/install.py')
@@ -290,9 +290,9 @@ def validate_dependencies(root):
             tree = ast.parse(text)
             for node in ast.walk(tree):
                 modules = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ''] if isinstance(node, ast.ImportFrom) else []
-                if any(m.split('.')[0] in {'hypothesis', 'sortedcontainers'} for m in modules):
+                if any(m.split('.')[0] in {'hypothesis', 'sortedcontainers', 'coverage'} for m in modules):
                     errors.append(f'{file.relative_to(root)}: shipped test dependency import')
-        elif re.search(r'\b(hypothesis|sortedcontainers)\b', text, re.I):
+        elif re.search(r'\b(hypothesis|sortedcontainers|coverage)\b', text, re.I):
             errors.append(f'{file.relative_to(root)}: shipped test dependency manifest/install reference')
     return errors
 

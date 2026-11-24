@@ -8,6 +8,7 @@ each with its own temporary folder, so no two units share files, sockets or stat
 
 Usage: parallel_tests.py [--jobs N] [--suite root|codex|claude ...] [--stage unit|integration|e2e ...]
                          [--module SUITE:MODULE ...] [--save-timings FILE]
+                         [--record-coverage | --affected BASE]
 
 Every test module has a stage in scripts/test-stages.json ({"suite:module": stage}):
 unit (no process, socket or sleep; enforced: such a test fails), integration (real
@@ -73,6 +74,8 @@ WORKER_ENVIRONMENT = frozenset({
     'LC_ALL', 'LC_CTYPE', 'LC_COLLATE', 'LC_MESSAGES', 'LC_MONETARY', 'LC_NUMERIC', 'LC_TIME',
     'PYTHONIOENCODING', 'PYTHONUTF8', 'PYTHONHASHSEED', 'PYTHONDONTWRITEBYTECODE',
     'COCOLO_WORKER_TIMEOUT', 'HYPOTHESIS_STORAGE_DIRECTORY',
+    # Keep coverage.py's subprocess patch active through nested test runners.
+    'COVERAGE_PROCESS_CONFIG',
 })
 
 
@@ -304,9 +307,11 @@ def preflight_failure(message, jobs, save, started):
 
 def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
         wanted: set[str] = frozenset(STAGE_NAMES), modules: dict[str, set[str]] | None = None,
-        part: tuple[int, int] = (1, 1), profile: str = 'ci') -> int:
+        part: tuple[int, int] = (1, 1), profile: str = 'ci', *,
+        record_coverage: bool = False, affected_base: str | None = None) -> int:
     """Run the suites' units in the wanted stages; with `modules` ({suite: module names}), only those."""
     global _CURRENT_DISCOVERY
+    recording_started = time.monotonic() if record_coverage else None
     _CURRENT_DISCOVERY = None
     timings = json.loads(TIMINGS.read_text()) if TIMINGS.is_file() else {}
     preflight_started = time.monotonic()
@@ -338,6 +343,20 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
     runnable = {key for key in eligible if layers[key] in framework.STAGES and stages.get(key) in framework.STAGES[layers[key]]}
     for suite in _CURRENT_DISCOVERY:
         _CURRENT_DISCOVERY[suite] = {m: names for m, names in _CURRENT_DISCOVERY[suite].items() if suite + ':' + m in runnable}
+    if affected_base is not None:
+        from test_affected import affected
+        sources = {key: (SUITES[suite] / (('tests/' if suite == 'root' else '') +
+                                        name.replace('.', '/') + '.py')).relative_to(ROOT).as_posix()
+                   for key in runnable & discovered.keys() for suite, name in [key.split(':', 1)]}
+        selected, full_reasons = affected(ROOT, affected_base, sources)
+        for reason in full_reasons:
+            print('AFFECTED FULL RUN: ' + reason, flush=True)
+        for module, reasons in sorted(selected.items()):
+            print('AFFECTED ' + module + ': ' + '; '.join(reasons), flush=True)
+        if not selected:
+            print('AFFECTED: no test modules selected (no recorded dependencies changed)', flush=True)
+        modules = {suite: {key.split(':', 1)[1] for key in selected if key.startswith(suite + ':')}
+                   for suite in suites}
     queue = sorted(((seconds, suite, name, names) for suite in suites
                     for seconds, name, names in select(
                         units(suite, timings, None if modules is None else modules[suite]), suite, wanted, stages)),
@@ -351,6 +370,14 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                        (modules[suite] if modules is not None else discover(suite))
                        if f'{suite}:{module}' in runnable and stages[f'{suite}:{module}'] in wanted)
     base = Path(tempfile.mkdtemp(prefix="pt", dir="/private/tmp" if sys.platform == "darwin" else None))
+    recorder = None
+    if record_coverage:
+        from test_affected import CoverageRecorder, git
+        try:
+            recording_commit = git(ROOT, 'rev-parse', 'HEAD').strip()
+            recorder = CoverageRecorder(ROOT, base, selection)
+        except (ImportError, OSError, subprocess.CalledProcessError) as error:
+            return preflight_failure('cannot record coverage: ' + str(error), jobs, save, preflight_started)
     running, results, started = {}, [], time.monotonic()
     environment = worker_environment()
     worker_timeout = float(os.environ.get('COCOLO_WORKER_TIMEOUT', UNIT_SECONDS))
@@ -367,8 +394,10 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                 folder.mkdir()
                 log = folder.with_suffix(".log")
                 handle = log.open("wb")
+                command = (recorder.command(folder, names) if recorder is not None else
+                           [sys.executable, "-B", "-c", _RUNNER, *names])
                 process = subprocess.Popen(
-                    [sys.executable, "-B", "-c", _RUNNER, *names], cwd=SUITES[suite],
+                    command, cwd=SUITES[suite],
                     env={**environment, **EXTRA_ENV.get(suite, {}), "TMPDIR": str(folder),
                          "COCOLO_TEST_STAGE": stage_of(suite, name, stages),
                          "COCOLO_TEST_LAYER": layers[f'{suite}:{name.split("#")[0]}'],
@@ -419,6 +448,11 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                     timed_out = results[-1]['timed_out']
                     tail = "\n".join(output.strip().splitlines()[-(80 if timed_out else 25):])
                     print(f"FAILED {suite}:{name} (exit {returncode}) -> {log}\n{tail}\n", flush=True)
+                if recorder is not None:
+                    try:
+                        recorder.collect(folder, suite + ':' + name.split('#')[0])
+                    except (OSError, ValueError, recorder.coverage.exceptions.CoverageException) as error:
+                        metadata_errors.append(f'coverage collection failed for {suite}:{name}: {error}')
                 if not keep:
                     shutil.rmtree(folder, ignore_errors=True)
     except BaseException as error:
@@ -434,11 +468,23 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
             process.wait(timeout=2)
             entry[4].close()
     elapsed = time.monotonic() - started
+    recording_seconds = None
+    if recorder is not None:
+        recording_seconds = time.monotonic() - recording_started
+        if not metadata_errors:
+            try:
+                destination = recorder.write(recording_commit, recording_seconds)
+                print('COVERAGE MAP: ' + str(destination), flush=True)
+            except (OSError, ValueError) as error:
+                metadata_errors.append('cannot write coverage map: ' + str(error))
+        print(f'COVERAGE RECORDING: {recording_seconds:.3f} seconds (including preflight)', flush=True)
     detail = framework.measurements(results, layers, stages, jobs=jobs, elapsed=elapsed, selection=selection, part=part,
                                     profile=profile, catalogue=catalogue,
                                     budget_debt=budget_debt, discovery_seconds=DISCOVERY_SECONDS, preflight_seconds=preflight_seconds,
                                     expected_fragments=expected_fragments)
     detail['profile'], detail['metadata_errors'] = profile, metadata_errors
+    if recording_seconds is not None:
+        detail['recording_seconds'] = recording_seconds
     outcomes = {key: value for row in results for key, value in row['outcomes'].items()}
     detail['requirements'] = framework.coverage(catalogue, outcomes)
     unchecked = sorted(key for key, row in catalogue.items() if not row['checks'])
@@ -502,6 +548,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--profile', choices=('dev', 'ci', 'soak'), action='append')
     parser.add_argument('--invocation-id', help='shared identity for every shard/stage in one run')
     parser.add_argument('--base', help='accepted for CI compatibility; unused')
+    dependency_mode = parser.add_mutually_exclusive_group()
+    dependency_mode.add_argument('--record-coverage', action='store_true', help='record executed-file dependencies in a full run')
+    dependency_mode.add_argument('--affected', metavar='BASE', help='run tests affected by changes since BASE, or all when uncertain')
     parser.add_argument('--requirement-gate', nargs='+', type=Path, help='combine all stages and enforce every requirement')
     parser.add_argument('--budgets-only', action='store_true', help='only check complete shard budgets; final requirement gate remains mandatory')
     parser.add_argument('--combine-timings', nargs='+', type=Path, help='combine complete disjoint shard .run.json files')
@@ -516,6 +565,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.profile and len(args.profile) != 1:
         parser.error('conflicting profile selectors; choose one explicit profile')
     args.profile = args.profile[0] if args.profile else 'ci'
+    if args.record_coverage or args.affected is not None:
+        if (args.module or args.suite or args.stage or args.shard != (1, 1) or args.profile != 'ci'
+                or args.requirement_gate or args.combine_timings):
+            parser.error('--record-coverage/--affected require an unfiltered, unsharded ci-profile run')
     if args.requirement_gate:
         try:
             report = framework.combine_run_records([framework.decode_json(path.read_text()) for path in args.requirement_gate])
@@ -542,7 +595,11 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error(f"--module wants SUITE:MODULE, got {item!r}")
             modules[suite].add(module)
         suites = [suite for suite in suites if modules[suite]]
-    return run(args.jobs, suites, args.save_timings, args.keep, set(args.stage or STAGE_NAMES), modules, args.shard, args.profile)
+    options = {'record_coverage': True} if args.record_coverage else {}
+    if args.affected is not None:
+        options['affected_base'] = args.affected
+    return run(args.jobs, suites, args.save_timings, args.keep, set(args.stage or STAGE_NAMES), modules, args.shard, args.profile,
+               **options)
 
 
 if __name__ == "__main__":

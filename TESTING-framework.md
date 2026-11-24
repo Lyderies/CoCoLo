@@ -19,6 +19,23 @@ at the default job count, with no competing test or review load. Record the prin
 `preflight_seconds` (acceptance: below 60 seconds); C13's known load flake is the only
 accepted full-run failure. Record socket tests blocked by the local sandbox separately.
 
+## Which tests to run
+
+While working, run `python -B scripts/parallel_tests.py --affected BASE`, with BASE the
+commit before your changes. It selects changed test modules and modules that executed
+changed files, including dependencies reached through fixtures and child Python processes.
+It prints each selection reason. Missing or invalid coverage data, a map commit outside
+HEAD's ancestry, an unseen changed Python file, or changed non-Python files under
+`scripts/` or `packages/` trigger a full run. Staged, unstaged and untracked changes count,
+as do changes since the map's commit so an older map cannot hide dependencies.
+
+Run the full suite before every merge/install: `python -B scripts/parallel_tests.py`.
+Refresh the ignored `.cocolo-test-cache/coverage-map.json` with a full
+`python -B scripts/parallel_tests.py --record-coverage` run. This uses the pinned
+coverage.py subprocess patch and reports its wall time, including preflight. The map
+contains HEAD and each test module's executed repository-relative files. Ordinary and
+affected runs do not enable coverage. Recording preserves each worker's short TMPDIR.
+
 The runner retains unittest, per-worker temporary directories and stripped environments,
 module/stage selection, five resource layers, process/socket/sleep guards, hard timeouts,
 Hypothesis profiles, golden provenance, exclusive crash-campaign scheduling, complete
