@@ -65,3 +65,8 @@ or beside `--save-timings`. CI retains them as artifacts. `measurements/` is ign
 and removed from the tracked tree. The primary must tag the last commit containing it
 as `measurements-0.8.52` (the starting HEAD is `36b7ef5f`) before committing this removal.
 See REMOVED-CHECKS-test-reset.md for the complete removal/replacement ledger.
+
+Known limits of affected selection (review of step 4): tests that only read source files as text (scanners) are
+selected through their own file or an "unseen file" full run, not through coverage; modules that fail under
+coverage or start children with a reduced environment are selected on every Python change. Any non-Python change
+except Markdown outside tests/ runs everything. The full run before every merge and install stays the backstop.

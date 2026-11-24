@@ -449,6 +449,10 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                     tail = "\n".join(output.strip().splitlines()[-(80 if timed_out else 25):])
                     print(f"FAILED {suite}:{name} (exit {returncode}) -> {log}\n{tail}\n", flush=True)
                 if recorder is not None:
+                    if returncode != 0:
+                        # A module failing under coverage (e.g. it checks that a child loads no sqlite) may
+                        # record too few files: it is selected on every Python change (review MED-2).
+                        recorder.opaque.add(suite + ':' + name.split('#')[0])
                     try:
                         recorder.collect(folder, suite + ':' + name.split('#')[0])
                     except (OSError, ValueError, recorder.coverage.exceptions.CoverageException) as error:

@@ -21,6 +21,17 @@ def changed_files(root, base):
     return set(git(root, 'diff', '--name-only', '--no-renames', '-z', base, '--').split('\0')) - {''}
 
 
+_REDUCED_ENV = re.compile(r'env\s*=\s*\{(?![^}]*\*\*)')
+
+
+def reduced_env_children(path):
+    """True when a test starts children with an env dict that drops the coverage variable (review MED-1)."""
+    try:
+        return bool(_REDUCED_ENV.search(Path(path).read_text()))
+    except OSError:
+        return False  # a deleted test module has no children to measure
+
+
 def affected(root, base, sources):
     """Return module -> selection reasons, plus reasons requiring the whole suite."""
     def full(reason):
@@ -33,8 +44,11 @@ def affected(root, base, sources):
             raise ValueError('invalid commit')
         if not isinstance(modules, dict) or not modules:
             raise ValueError('missing module dependencies')
+        opaque = record.get('opaque', [])
+        if not isinstance(opaque, list) or not all(isinstance(name, str) for name in opaque):
+            raise ValueError('invalid opaque module list')
         for module, files in modules.items():
-            if not isinstance(files, list) or not files:
+            if not isinstance(files, list) or (not files and module not in opaque):
                 raise ValueError('missing dependencies for ' + module)
             for name in files:
                 if (not isinstance(name, str) or not name or PurePosixPath(name).is_absolute()
@@ -58,16 +72,22 @@ def affected(root, base, sources):
     for name in sorted(changed):
         if name.endswith('.py') and name not in seen:
             uncertain.append('changed Python file was never recorded: ' + name)
-        elif not name.endswith('.py') and name.startswith(('scripts/', 'packages/')):
-            uncertain.append('changed non-Python file under scripts/ or packages/: ' + name)
+        elif not name.endswith('.py') and not (name.endswith('.md') and not name.startswith('tests/')):
+            # Coverage sees only Python: fixtures, JSON, shell, config and CI files may change any test (review HIGH-1).
+            uncertain.append('changed non-Python file: ' + name)
     for module, source in sources.items():
         if module not in modules and source not in changed:
             uncertain.append('module missing from coverage map: ' + module)
     if uncertain:
         return {module: ['full run: ' + reason for reason in uncertain] for module in sources}, uncertain
+    python_changed = any(name.endswith('.py') for name in changed)
     selected = {}
     for module, source in sorted(sources.items()):
         reasons = []
+        if python_changed and module in opaque:
+            reasons.append('opaque in the coverage map (failed under coverage): any Python change')
+        if python_changed and reduced_env_children(root / source):
+            reasons.append('starts children with a reduced environment (unmeasured): any Python change')
         if source in changed:
             reasons.append('changed or new test module: ' + source)
         reasons += ['executed changed file: ' + name for name in sorted(changed & set(modules.get(module, [])))]
@@ -86,6 +106,7 @@ class CoverageRecorder:
         self.root, self.directory = root.resolve(), directory / 'coverage'
         self.directory.mkdir()
         self.dependencies = {module: set() for module in modules}
+        self.opaque = set()
         self.bootstrap = self.directory / 'worker.py'
         self.bootstrap.write_text(
             'import sys\n' + f'sys.path.insert(0, {str(root / "scripts")!r})\n'
@@ -114,13 +135,14 @@ class CoverageRecorder:
                 self.dependencies[module].add(relative)
 
     def write(self, commit, seconds):
-        missing = [module for module, files in self.dependencies.items() if not files]
+        missing = [module for module, files in self.dependencies.items() if not files and module not in self.opaque]
         if missing:
             raise ValueError('no recorded files for: ' + ', '.join(sorted(missing)))
         destination = self.root / CACHE
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_suffix('.tmp')
         temporary.write_text(json.dumps({'commit': commit, 'recording_seconds': seconds,
+                                        'opaque': sorted(self.opaque),
                                         'modules': {key: sorted(files) for key, files in self.dependencies.items()}},
                                        indent=1, sort_keys=True) + '\n')
         temporary.replace(destination)

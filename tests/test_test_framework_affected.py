@@ -120,11 +120,35 @@ class AffectedTests(unittest.TestCase):
                 self.changed = [name]
                 self.assert_full('changed Python file was never recorded: ' + name)
 
-    def test_non_python_scripts_and_packages_force_full_run(self):
-        for name in ['scripts/config.json', 'scripts/setup.sh', 'packages/a/template.j2']:
+    def test_non_python_files_force_full_run(self):
+        for name in ['scripts/config.json', 'scripts/setup.sh', 'packages/a/template.j2', 'setup.sh',
+                     'requirements-test.txt', 'tests/merge-persistence-samples.json', 'tests/e2e/requirements.json',
+                     '.github/workflows/ci.yml', 'tests/notes.md']:
             with self.subTest(path=name):
                 self.changed = [name]
-                self.assert_full('changed non-Python file under scripts/ or packages/: ' + name)
+                self.assert_full('changed non-Python file: ' + name)
+
+    def test_opaque_module_is_selected_on_any_python_change(self):
+        (self.root / dependencies.CACHE).write_text(json.dumps(
+            {'commit': self.commit, 'opaque': [self.other], 'modules': self.modules}))
+        self.changed = [self.helper]
+        selected, reasons = self.select()
+        self.assertEqual({self.holds, self.context, self.other}, set(selected))
+        self.assertIn('opaque in the coverage map (failed under coverage): any Python change', selected[self.other])
+        self.changed = ['README.md']
+        self.assertEqual(({}, []), self.select())
+
+    def test_module_starting_reduced_env_children_is_selected_on_any_python_change(self):
+        source = self.root / self.sources[self.other]
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("subprocess.run(['x'], env={'PATH': '/usr/bin'})\n")
+        self.changed = [self.helper]
+        selected, _ = self.select()
+        self.assertIn('starts children with a reduced environment (unmeasured): any Python change',
+                      selected[self.other])
+        source.write_text("subprocess.run(['x'], env={**os.environ, 'A': '1'})\n")
+        selected, _ = self.select()
+        self.assertNotIn(self.other, selected)
 
     def test_no_dependencies_changed_selects_nothing(self):
         self.changed = ['README.md']
