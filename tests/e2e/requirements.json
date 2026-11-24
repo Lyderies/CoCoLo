@@ -26,84 +26,118 @@
    "flow": "L1",
    "source": "PLAN-0.4.0.md T7",
    "statement": "A fresh install through the scripted setup (S1 answers file and passphrase) finishes with every step ok, the protected command rule installed and the collector ready.",
-   "checks": []
+   "checks": [
+    "l1_fresh_install_scripted_setup"
+   ]
   },
   {
    "id": "L1.2",
    "flow": "L1",
    "source": "PLAN-0.4.0.md T7",
-   "statement": "Setup run again on an installed project changes nothing: same files, same digests, no new records except its own checks.",
-   "checks": []
+   "statement": "Setup run again on an installed project changes nothing: same files, same digests, no new records except its own checks; an answers-file re-run skips signing a billing statement that is already signed and current unless the answers ask to sign again (owner decision 37).",
+   "checks": [
+    "l1_setup_again_with_answers_changes_nothing",
+    "l1_update_on_installed_project_changes_nothing"
+   ]
   },
   {
    "id": "L2.1",
    "flow": "L2",
    "source": "PLAN-0.4.0.md T7",
    "statement": "The owner key is configured; a wrong passphrase is refused with its fixed reason and changes nothing.",
-   "checks": []
+   "checks": [
+    "l2_1_owner_key_configured_and_wrong_passphrase_refused"
+   ]
   },
   {
    "id": "L2.2",
    "flow": "L2",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Replacing the owner key refuses signatures made with the old key and accepts the new one's.",
-   "checks": []
+   "checks": [
+    "l2_2_replacing_owner_key_refuses_old_signatures_accepts_new"
+   ]
   },
   {
    "id": "L3.1",
    "flow": "L3",
    "source": "PLAN-0.4.0.md T7",
    "statement": "provider-observe succeeds for both fake clients, and the Claude billing probe succeeds.",
-   "checks": []
+   "checks": [
+    "l3_1_observe_both_clients_and_claude_billing_probe"
+   ]
   },
   {
    "id": "L3.2",
    "flow": "L3",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Billing attestation is recorded and admission accepts it.",
-   "checks": []
+   "checks": [
+    "l3_2_billing_attestation_recorded_and_admission_accepts_it"
+   ]
   },
   {
    "id": "L3.3",
    "flow": "L3",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Paid usage on is refused with paid_usage_usable; an API key in the environment with provider_api_key_present; an unreviewed client version with client_version_unreviewed; a signed-out client with observation_unavailable.",
-   "checks": []
+   "checks": [
+    "l3_3_paid_usage_on_refused",
+    "l3_3_api_key_in_environment_refused",
+    "l3_3_client_version_unreviewed_refused",
+    "l3_3_signed_out_client_refused"
+   ]
   },
   {
    "id": "L4.1",
    "flow": "L4",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Routing for a Codex primary and a Claude primary returns the policy's role, model, effort, agent and sandbox, and the child runs with exactly those.",
-   "checks": []
+   "checks": [
+    "l4_1_claude_primary_route_and_child_run_match_policy",
+    "l4_1_codex_primary_route_and_child_run_match_policy"
+   ]
   },
   {
    "id": "L4.2",
    "flow": "L4",
    "source": "PLAN-0.4.0.md T7",
    "statement": "A route edited after learning-route is refused.",
-   "checks": []
+   "checks": [
+    "l4_2_claude_primary_edited_route_refused",
+    "l4_2_codex_primary_edited_route_refused"
+   ]
   },
   {
    "id": "L5.1",
    "flow": "L5",
    "source": "PLAN-0.4.0.md T7",
    "statement": "For each primary, readiness, assignment and result preflight and export preflight pass.",
-   "checks": []
+   "checks": [
+    "l5_1_claude_primary_preflights_pass",
+    "l5_1_codex_primary_preflights_pass"
+   ]
   },
   {
    "id": "L5.2",
    "flow": "L5",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Open, dispatch, validate (with one structural repair on a native path where one applies) and record the result succeed; the worker's answer values match the oracle and each required evidence outcome is pass or observed.",
-   "checks": []
+   "checks": [
+    "l5_2_claude_primary_open_dispatch_validate_record",
+    "l5_2_codex_primary_open_dispatch_validate_record"
+   ]
   },
   {
    "id": "L5.3",
    "flow": "L5",
    "source": "PLAN-0.4.0.md T7",
    "statement": "The verifier opened for the worker's outcome digest passes every required evidence item with no discrepancy and verdict pass or ready; operational checks pass and QA records accepted: true; the orchestration closes and its report is right.",
-   "checks": []
+   "checks": [
+    "l5_3_claude_primary_verifier_qa_accepted_and_close",
+    "l5_3_claude_primary_worker_pass_verifier_ready_qa_accepted",
+    "l5_3_codex_primary_verifier_qa_accepted_and_close"
+   ]
   },
   {
    "id": "L6.1",
@@ -299,7 +333,9 @@
    "flow": "all",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Every step exits 0, or refuses with a reason the step expects; a bare run_unavailable, account_unavailable or probe_unavailable is a failure.",
-   "checks": []
+   "checks": [
+    "g1_every_step_exits_zero_or_refuses_as_expected"
+   ]
   },
   {
    "id": "G2",
@@ -347,15 +383,19 @@
    "id": "G8",
    "flow": "all",
    "source": "PLAN-0.4.0.md T7",
-   "statement": "No private value appears in any output: keys, fingerprints, paths under the temporary HOME.",
-   "checks": []
+   "statement": "No private value (keys, fingerprints, paths under the temporary HOME) appears in any output that is saved, logged, reported or read by an AI helper (including the status command); a screen shown to the owner may show one only when the owner needs it to proceed or troubleshoot (owner decision 36).",
+   "checks": [
+    "g8_no_private_value_in_any_output"
+   ]
   },
   {
    "id": "G9",
    "flow": "all",
    "source": "PLAN-0.4.0.md T7",
    "statement": "A content-free JSON report with phases, seconds, reason codes and pass or fail per requirement is written, kept as the CI artifact.",
-   "checks": []
+   "checks": [
+    "g9_report_is_content_free_json_with_phases_seconds_reasons"
+   ]
   },
   {
    "id": "API-1",
