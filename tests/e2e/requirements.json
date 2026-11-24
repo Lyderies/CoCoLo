@@ -187,7 +187,7 @@
    "id": "L8.2",
    "flow": "L8",
    "source": "PLAN-0.4.0.md T7",
-   "statement": "Killing the collector mid-run: the same, once it is back.",
+   "statement": "After the collector is killed, the project service survives: the run either completes normally with capacity released once the collector returns, or settles run_lost; never in limbo, never counted twice.",
    "checks": [
     "l8_2_killed_collector_run_settles_once_back_slot_freed_nothing_twice"
    ]

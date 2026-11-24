@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import json
 import os
 import signal
@@ -25,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))  # -I leaves the script's own folder off the path
 import e2e_support  # noqa: E402
 from e2e_checks_run import WORK_EVIDENCE, WORK_GRANT, WORK_PATH, trusted_interpreter_checks  # noqa: E402
-from e2e_core import CLAUDE_MODEL, PROBE, ROUTE_TASK, _SCENES, Phase, check  # noqa: E402
+from e2e_core import CLAUDE_MODEL, PROBE, ROUTE_TASK, _SCENES, CheckFailed, Phase, check  # noqa: E402
 
 INIT = {"type": "system", "subtype": "init", "session_id": "s", "apiKeySource": "none", "model": CLAUDE_MODEL,
         "plugins": [], "claude_code_version": "2.1.311", "mcp_servers": [], "tools": ["StructuredOutput"]}
@@ -250,14 +251,17 @@ def slot_of(world, run) -> dict | None:
 
 # Processes -------------------------------------------------------------------------------------
 
-def processes(world, script: str) -> list[int]:
-    """The pids of the running `script` (collector_host.py, project_host.py) started inside this World."""
+def processes(world, script: str, project: Path | None = None) -> list[int]:
+    """The pids of the running `script` (collector_host.py, project_host.py) started inside this World; with
+    `project`, only the services started from that project's own folder (the command names the project's runtime)."""
     listing = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True,
                              env=e2e_support.child_environment(os.environ)).stdout
     found = []
     for line in listing.splitlines():
         pid, _, command = line.strip().partition(" ")
-        if script in command and str(world.base) in command and int(pid) != os.getpid():
+        flag = f"--project-root {project}" if project is not None else ""
+        if (script in command and str(world.base) in command and int(pid) != os.getpid()
+                and (project is None or command.endswith(flag) or flag + " " in command)):
             found.append(int(pid))
     return sorted(found)
 
@@ -328,6 +332,154 @@ def wait_released(view, run, *, seconds: float = 40) -> dict:
         if read.get("state") == "released" or time.monotonic() >= deadline:
             return read
         time.sleep(1.0)
+
+
+# ---------------------------------------------------------------------------------------------
+# Pure judges (guarded without a World by tests/test_e2e_recovery.py)
+
+def persisted_terminal(binding: tuple | None) -> str | None:
+    """What the account ledger's persisted fields say a run ended as: (binding state, abandoned reason, released).
+    Exactly `run_lost` (abandoned for a lost service, slot released) or `completed` (terminal, slot released);
+    anything else, a missing row included, is None (limbo)."""
+    if not binding or len(binding) != 3 or binding[2] != 1:
+        return None
+    state, reason, _released = binding
+    if state == "abandoned" and reason == "service_lost":
+        return "run_lost"
+    if state == "terminal" and reason is None:
+        return "completed"
+    return None
+
+
+def service_replaced(before: list, after: list, *, alive_fn=None) -> bool:
+    """A project's service was replaced: one service before, a different single one now, the old one gone."""
+    alive_fn = alive_fn or alive
+    return len(before) == 1 and len(after) == 1 and after[0] != before[0] and not alive_fn(before[0])
+
+
+def is_running(reply: dict | None) -> bool:
+    """A run status that shows the child started (an activity was seen) and has not ended; missing is not running."""
+    reply = reply or {}
+    return bool((reply.get("liveness") or {}).get("last_activity_category")) and reply.get("terminal_observed") is False
+
+
+def closed_ok(result: tuple) -> bool:
+    """A close that worked: exit 0 and an explicit ready true (a missing or null ready is not a close)."""
+    code, reply, _text = result
+    return code == 0 and isinstance(reply, dict) and reply.get("ready") is True
+
+
+def expect_each(phase: Phase, pairs: list) -> None:
+    """Judge EVERY (condition, fixed text) pair, then fail naming each that did not hold: none is skipped because an
+    earlier one failed."""
+    failed = []
+    for condition, what in pairs:
+        phase.expectations += 1
+        if not condition:
+            failed.append(what)
+    if failed:
+        raise CheckFailed("; ".join(failed))
+
+
+def is_tombstone(row: dict | None, project_id: str | None) -> bool:
+    """A deleted registration scrubbed to a tombstone: deleted, with no root fields and a deletion time."""
+    row = row or {}
+    deleted_at = row.get("deleted_at_ms")
+    return (project_id is not None and row.get("project_id") == project_id and row.get("status") == "deleted"
+            and row.get("canonical_root") is None and row.get("root_digest") is None
+            and isinstance(deleted_at, int) and not isinstance(deleted_at, bool))
+
+
+def observation_problems(rows: list[dict], paths: list[str]) -> list[str]:
+    """Why retained provider observations may not stay: any project path in any column, or any run identifier.
+    (Basis for keeping them: account-level provider health readings tied to no run and no path.)"""
+    problems = []
+    for row in rows:
+        if row.get("run_id") is not None or row.get("handle_digest") is not None:
+            problems.append("run_identifier")
+        if any(path and isinstance(value, str) and path in value for value in row.values() for path in paths):
+            problems.append("project_path")
+    return problems
+
+
+def identity_digest(pairs: list) -> str:
+    """A digest of record identities (id, content digest), order free: a substitution at the same count changes it."""
+    return hashlib.sha256(json.dumps(sorted([list(pair) for pair in pairs]), separators=(",", ":")).encode()).hexdigest()
+
+
+def run_binding(world, run) -> tuple | None:
+    """(binding state, abandoned reason, released) of this run alone, from the ledger; None unless exactly one row.
+    A run the project counts terminal from completion evidence (a consumed binding, or a released completion row:
+    the same rule `learning-status` counts host_runs_terminal by) reads `terminal` here; its binding row alone
+    stays `pending` after a normal completion."""
+    wanted = (run.opened or {}).get("run_id")
+    path = state_dir(world) / "learning.sqlite3"
+    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        rows = [tuple(row) for row in connection.execute(
+            "SELECT h.binding_state,h.abandoned_reason,a.released_at_ms IS NOT NULL,"
+            "(h.consumed_at_ms IS NOT NULL OR EXISTS(SELECT 1 FROM capacity_completions cc WHERE "
+            "cc.project_id=h.project_id AND cc.handle_digest=h.handle_digest AND cc.released_at_ms IS NOT NULL)) "
+            "FROM active_run_capacity a JOIN host_run_bindings h ON h.project_id=a.project_id "
+            "AND h.handle_digest=a.handle_digest WHERE a.run_id=?", (wanted,))] if wanted else []
+    finally:
+        connection.close()
+    if len(rows) != 1:
+        return None
+    state, reason, released, completed = rows[0]
+    return ("terminal" if state == "pending" and completed else state, reason, released)
+
+
+def settled_binding(world, run, seconds: float = 20):
+    """The run's persisted binding, polled (bounded) until it reads as a terminal; the last reading either way."""
+    poll(lambda: persisted_terminal(run_binding(world, run)), seconds, every=1.0)
+    return run_binding(world, run)
+
+
+def _ledger(world):
+    connection = sqlite3.connect(f"file:{state_dir(world) / 'learning.sqlite3'}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def registration_row(world, project_id: str | None) -> dict | None:
+    connection = _ledger(world)
+    try:
+        row = connection.execute("select * from projects where project_id = ?", (project_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        connection.close()
+
+
+def observation_rows(world, project_id: str | None) -> list[dict]:
+    """The retained provider observations of one project (both observation tables), as rows."""
+    connection = _ledger(world)
+    try:
+        rows = []
+        for table in ("account_observation_requests", "account_observation_origins"):
+            rows += [dict(row) for row in connection.execute(f'select * from "{table}" where project_id = ?',
+                                                             (project_id,))]
+        return rows
+    finally:
+        connection.close()
+
+
+def survivor_identity(world, project_id: str | None) -> dict:
+    """Record identities of one project, never only counts: the ledger's records and the project's own history
+    (record id and content digest of each), as digests."""
+    connection = _ledger(world)
+    try:
+        ledger = [tuple(row) for row in connection.execute(
+            "select record_id, content_digest from records where project_id = ?", (project_id,))]
+    finally:
+        connection.close()
+    history_connection = sqlite3.connect(f"file:{project_history(world, project_id)}?mode=ro", uri=True)
+    try:
+        history = [tuple(row) for row in history_connection.execute("select record_id, content_digest from records")]
+    finally:
+        history_connection.close()
+    return {"ledger": identity_digest(ledger), "history": identity_digest(history),
+            "sizes": [len(ledger), len(history)]}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -432,12 +584,13 @@ def phase_view(ctl, run=None, *, expect_refusal: bool = False) -> dict:
     out["orchestration"] = {"code": code, "reply": reply}
     if run is not None:
         code, reply, text = ctl.host("learning-run-status", "--orchestration-handle", ctl.handle,
-                                     "--run-handle", (run.opened or {}).get("run_handle", ""), refuses=True)
+                                     "--run-handle", (run.opened or {}).get("run_handle", ""),
+                                     refuses=expect_refusal)
         out["run"] = {"code": code, "reply": reply}
     code, reply, text = world.cli("learning-migrate-project", "--status")
     out["migration"] = {"code": code, "reply": reply}
     out["report"] = ctl.host("learning-orchestration-report", "--orchestration-id",
-                             ctl.orchestration.get("orchestration_id", ""), refuses=True)[1]
+                             ctl.orchestration.get("orchestration_id", ""))[1]
     return out
 
 
@@ -522,7 +675,7 @@ def service_scene():
     run = scene.run = ctl.child(open_run=False)
     arm(ctl, run, 14)
     ctl.open(run)
-    scene.phases["opened"] = phase_view(ctl, run)
+    scene.phases["opened"] = phase_view(ctl, run, expect_refusal=True)
     ctl.dispatch_in_background(run, refuses=True)  # the stimulus below cuts it short: its refusal is expected
     scene.running = ctl.wait_running(run)
     scene.phases["running"] = phase_view(ctl, run)
@@ -555,7 +708,7 @@ def service_scene():
     scene.second_start = ctl.host("learning-start-project-service")
     time.sleep(8)
     scene.counts_second = run_counts(world, ctl.project_id)
-    scene.status_second = ctl.status(run, refuses=True)
+    scene.status_second = ctl.status(run)
     # The slot is free: the next child claims it and finishes.
     nxt = scene.next = ctl.child(open_run=False)
     arm(ctl, nxt, 0)
@@ -564,22 +717,23 @@ def service_scene():
     record(ctl, nxt)
     row = ledger_run(world, nxt)
     nxt.bridge = (row or {}).get("bridge_run_id")
+    scene.next_binding = settled_binding(world, nxt)
     scene.next_read = wait_released(world, nxt, seconds=40)
     scene.phases["next"] = phase_view(ctl, nxt)
     # Can the orchestration close? (L8.3). If the close is refused, try the step the run's own status names.
+    # Recovery and close are expected to succeed (judged by G1): a refusal here is a finding, not an expectation.
     scene.close_first = ctl.host("learning-close-orchestration", "--orchestration-handle", ctl.handle,
-                                 "--status", "completed", refuses=True)
+                                 "--status", "completed")
     scene.close_recovery = []
     if scene.close_first[0] != 0:
-        scene.close_recovery.append(ctl.host("learning-pause-orchestration", "--orchestration-handle", ctl.handle,
-                                             refuses=True))
+        scene.close_recovery.append(ctl.host("learning-pause-orchestration", "--orchestration-handle", ctl.handle))
         scene.close_recovery.append(ctl.host("learning-classify-host-run-abandoned", "--run-handle",
-                                             run.opened["run_handle"], "--reason", "host_confirmed_gone",
-                                             refuses=True))
+                                             run.opened["run_handle"], "--reason", "host_confirmed_gone"))
         scene.close_recovery.append(ctl.host("learning-close-orchestration", "--orchestration-handle", ctl.handle,
-                                             "--status", "completed", refuses=True))
+                                             "--status", "completed"))
+    scene.phases["closed"] = phase_view(ctl, nxt)
     scene.report = ctl.host("learning-orchestration-report", "--orchestration-id",
-                            ctl.orchestration.get("orchestration_id", ""), refuses=True)[1] or {}
+                            ctl.orchestration.get("orchestration_id", ""))[1] or {}
     return scene
 
 
@@ -616,8 +770,11 @@ def collector_scene():
     scene.collector_new = poll(lambda: processes(world, "collector_host.py"), 20)
     scene.read_back = wait_released(world, run, seconds=60)
     scene.slot_after = ledger_run(world, run)
-    scene.status_after = ctl.status(run, refuses=True)  # before the result is recorded (a recorded run is forgotten)
+    scene.status_after = ctl.status(run)  # before the result is recorded (a recorded run is forgotten)
     record(ctl, run)
+    scene.binding = settled_binding(world, run)
+    scene.service_survived = (bool(scene.service_old) and scene.service_during == scene.service_old
+                              and all(alive(pid) for pid in scene.service_old))
     scene.counts_first = run_counts(world, ctl.project_id)
     old = processes(world, "collector_host.py")
     scene.second_killed = bool(old) and kill_hard(old[0])
@@ -629,25 +786,29 @@ def collector_scene():
     arm(ctl, other, 14)
     ctl.open(other)
     ctl.dispatch_in_background(other)
-    ctl.wait_running(other)
+    scene.other_running = ctl.wait_running(other)  # judged: the run really runs when the setup starts
     row = ledger_run(world, other)
     other.bridge = (row or {}).get("bridge_run_id")
+    scene.other_slot_before = row  # THIS run's slot, never the earlier run's
     scene.collector_before_setup = processes(world, "collector_host.py")
     scene.services_before_setup = note_service(world)
+    scene.dispatch_service_before = processes(world, "project_host.py", world.project)
     second = scene.second = add_project(world, "second")
     scene.second_setup = second.setup(second.answers(providers={
         "codex": "on", "claude": "on", "claude_models": CLAUDE_MODEL, "bridge": "off"}))
     scene.collector_after_setup = processes(world, "collector_host.py")
+    poll(lambda: service_replaced(scene.dispatch_service_before, processes(world, "project_host.py", world.project)), 25)
+    scene.dispatch_service_after = processes(world, "project_host.py", world.project)
     ctl.finish(other)
     scene.other_code, scene.other_reply, scene.other_text = other.code, other.reply, other.text
     scene.other_read = wait_released(world, other, seconds=60)
     scene.other_slot = ledger_run(world, other)
-    scene.other_status = ctl.status(other, refuses=True)
+    scene.other_status = ctl.status(other)
     record(ctl, other)
     scene.close = ctl.host("learning-close-orchestration", "--orchestration-handle", ctl.handle, "--status",
-                           "completed", refuses=True)
+                           "completed")
     scene.report = ctl.host("learning-orchestration-report", "--orchestration-id",
-                            ctl.orchestration.get("orchestration_id", ""), refuses=True)[1] or {}
+                            ctl.orchestration.get("orchestration_id", ""))[1] or {}
     # L15.1: delete the second project; the first must be untouched.
     second.claude_frames(e2e_support.claude_probe_frames())
     second.cli("provider-observe", "--provider", "codex")
@@ -662,17 +823,23 @@ def collector_scene():
     scene.deleted_service = [pid for pid in scene.kept_service_before if pid not in scene.services_before_setup]
     scene.deleted_history_before = project_history(world, scene.deleted_id).exists()
     scene.kept_status_before = lifecycle(world)
-    scene.delete = second.cli("learning-delete-project", "--confirm-project-id", scene.deleted_id, refuses=True)
+    scene.kept_identity_before = survivor_identity(world, scene.kept_id)
+    scene.deleted_paths = sorted({str(second.project), os.path.realpath(second.project)})
+    scene.delete = second.cli("learning-delete-project", "--confirm-project-id", scene.deleted_id)
     scene.deleted_rows_after = project_rows(world, scene.deleted_id)
     scene.kept_rows_after = project_rows(world, scene.kept_id)
     scene.kept_history_after = count_by_type(world, scene.kept_id)
     scene.kept_status_after = lifecycle(world)
-    scene.deleted_status = second.cli("learning-status", refuses=True)
+    scene.kept_identity_after = survivor_identity(world, scene.kept_id)
     scene.kept_report_after = ctl.host("learning-orchestration-report", "--orchestration-id",
-                                       ctl.orchestration.get("orchestration_id", ""), refuses=True)[1] or {}
+                                       ctl.orchestration.get("orchestration_id", ""))[1] or {}
     scene.deleted_service_gone = poll(lambda: not any(alive(pid) for pid in scene.deleted_service), 25)
     scene.deleted_history_after = project_history(world, scene.deleted_id).exists()
     scene.services_final = note_service(world)
+    scene.deleted_service_final = processes(world, "project_host.py", second.project)  # identity, not one pid
+    scene.deleted_registration = registration_row(world, scene.deleted_id)
+    scene.kept_registration = registration_row(world, scene.kept_id)
+    scene.deleted_observations = observation_rows(world, scene.deleted_id)
     return scene
 
 
@@ -715,8 +882,7 @@ def l8_1_killed_service_next_service_settles_run_lost_slot_freed_nothing_twice(p
     scene = service_scene()
     run, world = scene.run, scene.world
     phase.expect(run.open_code == 0 and (run.opened or {}).get("admission") == "admitted", "the run opens admitted")
-    phase.expect(((scene.running.get("liveness") or {}).get("last_activity_category")) is not None
-                 and scene.running.get("terminal_observed") in (False, None), "the child is running before the kill")
+    phase.expect(is_running(scene.running), "the child is running before the kill (explicit, never missing)")
     phase.expect(scene.slot_before is not None and scene.slot_before["released_at_ms"] is None,
                  "the account ledger holds the run's slot, unreleased, before the kill")
     phase.expect(isinstance(scene.read_before.get("state"), str) and scene.read_before["state"] != "released",
@@ -747,8 +913,8 @@ def l8_1_killed_service_next_service_settles_run_lost_slot_freed_nothing_twice(p
                  and (scene.status_second or {}).get("capacity_state") == "released",
                  "after the second replacement the run still reads lost and released")
     nxt = scene.next
-    phase.expect(nxt.code == 0 and ((nxt.reply or {}).get("result") or {}).get("execution_state") == "completed",
-                 "the next child claims the freed slot and completes")
+    phase.expect(nxt.code == 0 and persisted_terminal(scene.next_binding) == "completed",
+                 "the next child claims the freed slot and completes (read from the persisted ledger, not the reply)")
     phase.expect(scene.next_read.get("state") == "released", "the next run's slot is released by the account's own read")
 
 
@@ -767,7 +933,7 @@ def l8_3_replaced_service_leaves_no_run_in_limbo_cli_says_so_plainly_orchestrati
                  and "stopped" in status["error"], "run-status says the service stopped, in words")
     phase.expect(scene.account_read.get("state") == "released", "the account's own read agrees the slot is freed")
     final = scene.close_recovery[-1] if scene.close_recovery else scene.close_first
-    phase.expect(final[0] == 0 and (final[1] or {}).get("ready") is not False,
+    phase.expect(closed_ok(final),
                  "the orchestration closes (after the step the run's own status names, if one is needed)")
     phase.expect(scene.report.get("status") == "completed", "the orchestration report says completed")
 
@@ -827,14 +993,28 @@ def l14_1_status_commands_give_the_right_values_at_each_phase_and_none_is_privat
     phase.expect(counts(view, "host_runs_opened", "host_runs_pending", "host_runs_terminal", "host_runs_abandoned")
                  == {"host_runs_opened": 2, "host_runs_pending": 0, "host_runs_terminal": 1, "host_runs_abandoned": 1},
                  "after the next run: learning-status counts two runs, one ended, one abandoned, none pending")
+    for name in ("orchestration", "opened", "running", "lost", "next", "closed"):
+        migration = phases[name]["migration"]
+        phase.expect(migration["code"] == 0 and ((migration["reply"] or {}).get("earlier_version_runs") or {})
+                     .get("holding") == 0, f"{name}: the migration status reports no earlier-version run holding a slot")
+    view = phases["closed"]
+    phase.expect(counts(view, "host_runs_pending", "host_runs_terminal", "host_runs_abandoned")
+                 == {"host_runs_pending": 0, "host_runs_terminal": 1, "host_runs_abandoned": 1},
+                 "after the close attempt: learning-status still counts one ended, one abandoned, none pending")
     texts = [text for text in world.outputs]
     phase.expect(len(texts) > 20 and not [name for text in texts for name in world.leaks(text)],
                  "no status output carries a private value (owner key, passphrase, key material, home path)")
-    # The two readings the product gets wrong today, last so that every other value is judged first.
-    phase.expect(counts(phases["orchestration"], "orchestrations_active")["orchestrations_active"] == 1,
-                 "orchestration open: learning-status counts one active orchestration")
-    phase.expect(report_runs(phases["lost"]).get("current_active") == 0 and report_runs(phases["lost"]).get("pending") == 0,
-                 "lost: the report no longer counts the released, abandoned run as active or pending")
+    # The readings the product got wrong, last so that every other value is judged first; all are judged, none
+    # is skipped because an earlier one failed.
+    closed = counts(phases["closed"], "orchestrations_active", "orchestrations_closed")
+    expect_each(phase, [
+        (counts(phases["orchestration"], "orchestrations_active")["orchestrations_active"] == 1,
+         "orchestration open: learning-status counts one active orchestration"),
+        (report_runs(phases["lost"]).get("current_active") == 0 and report_runs(phases["lost"]).get("pending") == 0,
+         "lost: the report no longer counts the released, abandoned run as active or pending"),
+        (closed == {"orchestrations_active": 0, "orchestrations_closed": 1}
+         and (phases["closed"]["report"] or {}).get("status") == "completed",
+         "after the close attempt: learning-status counts the orchestration closed, the report says completed")])
 
 
 @check("L8.2", group="rec_collector")
@@ -855,7 +1035,14 @@ def l8_2_killed_collector_run_settles_once_back_slot_freed_nothing_twice(phase: 
                  "once it is back the account's own per-run read (polled, bounded) says released")
     phase.expect(scene.slot_after is not None and isinstance(scene.slot_after["released_at_ms"], int),
                  "the ledger's capacity table holds the slot released")
-    phase.expect(settled(scene.status_after), "the run is settled (ended with cleanup confirmed, or lost and released)")
+    terminal = persisted_terminal(scene.binding)
+    phase.expect(terminal in ("run_lost", "completed"),
+                 "the persisted ledger fields settle the run as exactly run_lost or completed, released (never limbo)")
+    phase.reason(terminal)
+    phase.expect((scene.status_after.get("reason_code") == "run_lost") == (terminal == "run_lost"),
+                 "the run's own status agrees with the persisted terminal")
+    phase.expect(scene.service_during == scene.service_old and scene.service_survived is True,
+                 "the project service survived the collector's death (the same process, alive)")
     first, second = scene.counts_first, scene.counts_second
     phase.expect(first["ledger"]["active_run_capacity"] == 1 and first["ledger"]["host_run_bindings"] == 1,
                  "the run left one slot and one binding (counts by kind)")
@@ -868,36 +1055,42 @@ def l8_2_killed_collector_run_settles_once_back_slot_freed_nothing_twice(phase: 
 def l8_3_second_projects_setup_during_a_dispatch_leaves_no_run_in_limbo(phase: Phase) -> None:
     scene = collector_scene()
     run = scene.second_run
-    phase.expect(len(scene.collector_before_setup) == 1 and scene.slot_before is not None,
-                 "one shared collector ran while the first project's dispatch ran")
+    phase.expect(is_running(scene.other_running), "this run was running (explicit status) when the second project's setup began")
+    phase.expect(scene.other_slot_before is not None and scene.other_slot_before["released_at_ms"] is None,
+                 "this run held its own slot, unreleased, when the setup began")
+    phase.expect(len(scene.collector_before_setup) == 1, "one shared collector ran while the dispatch ran")
     phase.expect(scene.second_setup.code == 0, "the second project's scripted setup finishes during the dispatch")
     phase.expect(len(scene.collector_after_setup) == 1, "a collector runs after the second project's setup")
+    # 0.8.56 no longer replaces a project's service when another project is set up (the L8b incident is fixed), so the
+    # scenario has two outcomes, each judged in full: the service WAS replaced (new process, old one gone; the
+    # dispatch must then be cut short and say so), or it was NOT (the same single process, alive; the dispatch must
+    # then complete untouched). Anything else (no service, two services) fails.
+    replaced_service = service_replaced(scene.dispatch_service_before, scene.dispatch_service_after)
+    kept_service = (len(scene.dispatch_service_before) == 1 and scene.dispatch_service_after == scene.dispatch_service_before
+                    and alive(scene.dispatch_service_before[0]))
+    phase.expect(replaced_service or kept_service,
+                 "the dispatching project's service is either replaced (new process, old gone) or untouched (same live process)")
+    phase.reason("service_replaced" if replaced_service else "service_untouched")
     replaced = scene.collector_after_setup[0] != scene.collector_before_setup[0]
-    phase.reason("collector_replaced" if replaced else "collector_kept")
+    phase.reason("collector_replaced" if replaced else "collector_unchanged")
     phase.expect(run.thread is not None and not run.thread.is_alive() and scene.other_code is not None,
                  "the dispatch running during the setup ends")
     phase.expect("dispatch_not_authorized" not in scene.other_text and "Traceback" not in scene.other_text,
                  "the dispatching CLI never answers dispatch_not_authorized")
-    if replaced or scene.other_code != 0:
-        phase.expect(plain(scene.other_reply, scene.other_text),
-                     "a dispatch that was cut short says in words what happened and what to do")
+    if replaced_service:
+        phase.expect(scene.other_code != 0 and plain(scene.other_reply, scene.other_text),
+                     "a dispatch whose service was replaced is cut short and says in words what happened and what to do")
     else:
-        phase.expect(((scene.other_reply or {}).get("result") or {}).get("execution_state") == "completed",
-                     "a dispatch the setup did not touch completes")
+        phase.expect(scene.other_code == 0 and ((scene.other_reply or {}).get("result") or {}).get("execution_state") == "completed",
+                     "a dispatch whose service was untouched completes")
     phase.expect(scene.other_read.get("state") == "released", "the account's own per-run read says the slot is released")
     phase.expect(scene.other_slot is not None and isinstance(scene.other_slot["released_at_ms"], int),
                  "the ledger's capacity table holds the slot released")
     phase.expect(settled(scene.other_status), "the run is not in limbo (settled or lost and released)")
-    phase.expect(scene.close[0] == 0 and (scene.close[1] or {}).get("ready") is not False,
-                 "the orchestration closes")
+    phase.expect(closed_ok(scene.close), "the orchestration closes")
     runs = scene.report.get("runs") or {}
     phase.expect(scene.report.get("status") == "completed" and runs.get("pending") == 0
                  and runs.get("current_active") == 0, "the report says completed with no run pending or active")
-
-
-# Rows a deletion keeps by design (assumption, recorded in S2-STATUS.md for the primary): the project's registration
-# row, its deletion tombstone, and the account's provider observations (account-level health readings).
-KEPT_BY_DESIGN = ("tombstones", "projects", "account_observation_origins", "account_observation_requests")
 
 
 @check("L15.1", group="rec_collector")
@@ -910,14 +1103,31 @@ def l15_1_delete_project_removes_records_and_service_leaves_the_other_untouched(
     code, reply, _ = scene.delete
     phase.expect(code == 0 and (reply or {}).get("ready") is True and (reply or {}).get("project_id") == scene.deleted_id
                  and isinstance((reply or {}).get("deletion_id"), str), "learning-delete-project deletes the project")
-    left = {name: count for name, count in after.items() if count and name not in KEPT_BY_DESIGN}
+    # The registration is scrubbed to a tombstone (no root fields); a deletion tombstone is the only row kept, and
+    # the retained provider observations hold no project path and no run identifier.
+    phase.expect(is_tombstone(scene.deleted_registration, scene.deleted_id),
+                 "the deleted registration is a scrubbed tombstone: deleted, no root path, no root digest")
+    phase.expect(not is_tombstone(scene.kept_registration, scene.kept_id)
+                 and (scene.kept_registration or {}).get("status") == "active"
+                 and (scene.kept_registration or {}).get("canonical_root"),
+                 "the surviving project's registration is still active with its root")
+    phase.expect(not observation_problems(scene.deleted_observations, scene.deleted_paths),
+                 "retained provider observations hold no project path and no run identifier")
+    left = {name: count for name, count in after.items()
+            if count and name not in ("tombstones", "projects", "account_observation_origins",
+                                      "account_observation_requests")}
     phase.expect(after != {} and not left, "the account ledger holds no content row of the deleted project (table by table)")
     phase.expect(after.get("tombstones") == 1, "the deletion leaves its tombstone")
     history = project_history(scene.world, scene.deleted_id)
     phase.expect(not history.exists() or count_by_type(scene.world, scene.deleted_id) == {},
                  "the deleted project's own history holds no records")
+    phase.expect(scene.deleted_service_gone is True and scene.deleted_service_final == [],
+                 "the deleted project's service is gone and no replacement service runs for it (final process listing)")
     phase.expect(scene.kept_rows_before.get("records", 0) > 0 and scene.kept_rows_after == scene.kept_rows_before,
                  "the other project's ledger rows are untouched (table by table)")
+    kept = scene.kept_identity_before
+    phase.expect(kept["sizes"][0] > 0 and kept["sizes"][1] > 0 and scene.kept_identity_after == kept,
+                 "the other project's record IDs and content digests are unchanged (ledger and own history)")
     phase.expect(scene.kept_history_before and scene.kept_history_after == scene.kept_history_before,
                  "the other project's own history is untouched (counts by kind)")
     phase.expect(scene.kept_status_before["ready"] is True and scene.kept_status_after == scene.kept_status_before,
@@ -927,4 +1137,3 @@ def l15_1_delete_project_removes_records_and_service_leaves_the_other_untouched(
     phase.expect(scene.kept_report_after.get("status") == "completed"
                  and scene.kept_report_after.get("runs") == scene.report.get("runs"),
                  "the other project's orchestration report is unchanged")
-    phase.expect(scene.deleted_service_gone is True, "the deleted project's service is gone")

@@ -60,3 +60,23 @@ every other ID unchanged, `fault_isolated` true. Note L8.3, L14.1, L15.1 are red
 fault cannot "turn" them: it fails them at an earlier expectation (L14.1 at the next-run count, L15.1 at the deletion itself,
 L8.3 second check at the slot read).
 Tests: tests.test_e2e_recovery (14, new), tests.test_e2e_requirements, tests.test_e2e_strictness green.
+
+## Fix round 1 (Codex review t7s2 NOT-READY), 2026-11-25: harness/checks only
+Changes (old -> new for every assertion: assertions.md, "S2 fix round 1"): L8.2 reworded (decision 173) and judged from the
+persisted ledger terminal (exactly run_lost or completed, released, counted once, service pid survived); L8.3 collector scene
+uses this run's slot and running status, and judges the dispatching project's service (replaced or untouched, see below);
+G1 refusal flags only on the kill-cut dispatch and the run-status polls (a guard test lists every flagged call site; reports,
+recovery, close, deletion are expected-success); G8 `World.cli()` captures a timeout; L15.1 built to owner question 174's
+recommendation (scrubbed tombstone, retained observations hold no project path or run identifier, no replacement service in the
+final listing, survivor record IDs/digests); missing `terminal_observed`/`ready` fail; L8.1 next completion read from the
+persisted ledger; L14.1 judges a `closed` phase, the migration status at every phase, and all last assertions (`expect_each`).
+Finding: on 0.8.56 the second project's setup replaces neither the collector nor the dispatching project's service, so the L8.3
+collector check judges both outcomes (reason `service_replaced` or `service_untouched`); needs a primary decision whether to add a
+stimulus that forces a replacement.
+A completed run's binding row stays `pending`; the harness reads it as terminal from completion evidence (consumed binding or a
+released completion row, the rule `learning-status` counts host_runs_terminal by).
+Evidence (/tmp/claude-501/t7s2r2/n.json, f.json): normal L8.1 green, L8.2 green (reason completed), L8.3 red (service scene: close
+refuses, product finding 1; collector scene green), L14.1 red (findings 2), L15.1 red (finding 3: the deleted project's service
+stays), G1 red (the close and orchestration reads that now must succeed; same in the fault run). Fault: L8.1, L8.2 newly red, L8.3
+collector scene newly red, `fault_isolated` true (changed: L8.1, L8.2 only; the others were already red). Tests: tests.test_e2e_recovery
+(31), tests.test_e2e_requirements, tests.test_e2e_strictness green.
