@@ -41,8 +41,16 @@ import e2e_checks_routing  # noqa: E402,F401
 import e2e_checks_run  # noqa: E402,F401
 import e2e_checks_general  # noqa: E402,F401
 import e2e_checks_run_control  # noqa: E402,F401
+import e2e_checks_learning_guard  # noqa: E402,F401
 
 REQUIREMENTS = ROOT / "tests" / "e2e" / "requirements.json"
+
+
+def set_fault(fault: str | None) -> None:
+    """Hand the runner's explicit --fault argument to the one checks module that owns that fault (a module never
+    sees a fault it does not own, and no environment variable selects one)."""
+    e2e_checks_run_control.FAULT = fault if fault in e2e_checks_run_control.FAULTS else None
+    e2e_checks_learning_guard.FAULT = fault if fault in e2e_checks_learning_guard.FAULTS else None
 
 
 def requirements() -> dict:
@@ -63,11 +71,11 @@ def run_checks(flows: set[str], *, home_root: Path | None = None, keep_scenes: b
     if jobs > 1:
         results = _execute_in_processes(wanted, jobs, fault=fault)
     else:
-        e2e_checks_run_control.FAULT = fault
+        set_fault(fault)
         try:
             results = _execute(wanted, home_root)
         finally:
-            e2e_checks_run_control.FAULT = None
+            set_fault(None)
             if not keep_scenes:
                 close_scenes()
     decided = {}
@@ -278,8 +286,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", type=Path)
     parser.add_argument("--results", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--jobs", type=int, default=1, help="processes to run the scene groups in (default 1)")
-    parser.add_argument("--fault", choices=sorted(e2e_checks_run_control.FAULTS),
-                        help="inject this test-only product fault into the run-control scenes (T7 S1)")
+    parser.add_argument("--fault", choices=sorted({*e2e_checks_run_control.FAULTS, *e2e_checks_learning_guard.FAULTS}),
+                        help="inject this test-only product fault into the scenes that own it (T7 S1 run control, S3 learning and guard)")
     args = parser.parse_args(argv)
     if args.execute is not None:
         return _worker(args.execute.split(","), args.results, fault=args.fault)
@@ -301,11 +309,11 @@ def main(argv: list[str] | None = None) -> int:
 def _worker(names: list[str], results: Path | None, *, fault: str | None = None) -> int:
     """One --jobs process: run the named checks and write their entries (content-free, scanned for private values).
     `fault` is the runner's explicit --fault argument, the only way a fault is selected."""
-    e2e_checks_run_control.FAULT = fault
+    set_fault(fault)
     try:
         entries = _execute(names, None)
     finally:
-        e2e_checks_run_control.FAULT = None
+        set_fault(None)
         close_scenes()
     text = json.dumps(entries)
     home_roots = [tempfile.gettempdir(), str(Path.home()), os.path.realpath(Path.home())]
