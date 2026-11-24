@@ -1743,7 +1743,9 @@
  },
  "RT-RX-LIVE-ROOT-2": {
   "checks": [
-   "codex:tests.test_route_live_root.InstalledRootRouteTests.test_a_not_checked_route_always_says_why"
+   "codex:tests.test_route_live_root.InstalledRootRouteTests.test_a_not_checked_route_always_says_why",
+   "codex:tests.test_route_live_root.InstalledRootRouteTests.test_a_route_with_no_snapshot_input_still_says_why",
+   "codex:tests.test_route_live_root.InstalledRootRouteTests.test_validate_assignment_without_a_project_root_routes_with_a_reason"
   ],
   "source": "tests/requirements/route-exhausted.json#RT-RX-LIVE-ROOT-2",
   "statement": "### RT-RX-LIVE-ROOT-2 \u2014 A not_checked route always says why\n\nA route whose availability ends `not_checked` always carries `reason_code` `snapshot_unavailable:<reason>`, on every route call site, including when no state root resolves at all: the source tree run without `--state-root` (`snapshot_unavailable:no_state_root`; the developer's own default state is never read implicitly there) and an installed CLI whose default state root cannot be resolved.\n\n**Acceptance:** Source tree without `--state-root`: `learning-route` and `route` return `not_checked` with `snapshot_unavailable:no_state_root`. Installed with a refused XDG_STATE_HOME: both return `not_checked` with a `snapshot_unavailable:` reason. No route returns `not_checked` without `reason_code`.\n\n**Keeps/changes:** Extends RT-RX-7/RT-RX-18 (98f18967 gave reasons only where a state root was given). Keeps decision 3 (no service, no snapshot, selection unchanged); the reason is advisory and never changes a refusal or an admission."

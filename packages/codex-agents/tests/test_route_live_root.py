@@ -32,6 +32,7 @@ from tests.test_host_commands import install_package
 from codex_agents.collector_paths import default_state_root
 from codex_agents.host_commands import OwnRootRefused
 from codex_agents.providers import headroom_record
+from codex_agents.routing import route_task
 from test_framework import requirements
 
 
@@ -135,6 +136,38 @@ class InstalledRootRouteTests(ClaudePrimaryCase):
                     self.assertEqual('not_checked', availability['status'], availability)
                     self.assertTrue(availability.get('reason_code', '').startswith('snapshot_unavailable:'),
                                     availability)
+
+    @requirements('RT-RX-LIVE-ROOT-2')
+    def test_a_route_with_no_snapshot_input_still_says_why(self):
+        # Direct route_task() callers that pass neither a snapshot nor a reason.
+        task = self.task()
+        availability = route_task(task, self.policy)['availability']
+        self.assertEqual('not_checked', availability['status'], availability)
+        self.assertEqual('snapshot_unavailable:unknown', availability.get('reason_code'), availability)
+        # A specific reason a caller gives is kept as it is.
+        given = route_task(task, self.policy, snapshot_unavailable='snapshot_unavailable:no_state_root')
+        self.assertEqual('snapshot_unavailable:no_state_root', given['availability'].get('reason_code'))
+
+    @requirements('RT-RX-LIVE-ROOT-2')
+    def test_validate_assignment_without_a_project_root_routes_with_a_reason(self):
+        task = self.write('task.json', self.task())
+        assigned = self.write('assignment.json', self.assignment_for(route_task(self.task(), self.policy)))
+        grant = self.write('grant.json', test_bridge.PARENT_GRANT)
+        routed = []
+        original = cli.route_task
+
+        def spy(*arguments, **options):
+            routed.append(original(*arguments, **options))
+            return routed[-1]
+
+        with mock.patch.object(cli, 'route_task', spy):
+            self.run_cli('validate-assignment', '--task', task, '--assignment', assigned, '--parent-grant', grant,
+                         installed=False)
+        self.assertTrue(routed)
+        for made in routed:
+            self.assertEqual('not_checked', made['availability']['status'])
+            self.assertTrue(made['availability'].get('reason_code', '').startswith('snapshot_unavailable:'),
+                            made['availability'])
 
     @requirements('RT-RX-LIVE-ROOT-3')
     def test_an_installed_cli_still_refuses_another_state_root(self):
