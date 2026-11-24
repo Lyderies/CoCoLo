@@ -113,8 +113,8 @@ class FaultIsolationTests(SceneTest):
 
     def test_a_fault_run_must_turn_exactly_the_s1_ids_red(self):
         s1 = control.S1_IDS
-        normal = {"requirements": {**{i: {"passed": i not in ("L6.1", "L6.2")} for i in s1}, "G1": {"passed": True}}}
-        fault = {"requirements": {**{i: {"passed": i == "L9.1"} for i in s1}, "G1": {"passed": True}}}
+        normal = {"requirements": {**{i: {"passed": i != "L6.1"} for i in s1}, "G1": {"passed": True}}}
+        fault = {"requirements": {**{i: {"passed": i in ("L9.1", "L6.2")} for i in s1}, "G1": {"passed": True}}}
         self.assertTrue(control.fault_isolated(normal, fault)["isolated"])
         g1_red = {"requirements": {**fault["requirements"], "G1": {"passed": False}}}
         self.assertTrue(control.fault_isolated(normal, g1_red)["isolated"])  # G1 is declared (a refused expected-success dispatch)
@@ -125,12 +125,12 @@ class FaultIsolationTests(SceneTest):
         self.assertFalse(control.fault_isolated(normal, missing)["isolated"])
         one_green = {"requirements": {**fault["requirements"], "L7.1": {"passed": True}}}
         self.assertFalse(control.fault_isolated(normal, one_green)["isolated"])
-        # L9.1 (refusals before any release) is the one S1 ID the release fault cannot reach
+        # L9.1 and L6.2 (refusals before any admission or release) are the S1 IDs the release fault cannot reach
         l9_1_green = {"requirements": {**fault["requirements"], "L9.1": {"passed": True}}}
         self.assertTrue(control.fault_isolated(normal, l9_1_green)["isolated"])
         l9_1_red = {"requirements": {**fault["requirements"], "L9.1": {"passed": False}}}
         self.assertFalse(control.fault_isolated(normal, l9_1_red)["isolated"])  # not a declared target
-        self.assertEqual(set(control.S1_IDS) - {"L9.1"}, set(control.FAULT_TARGETS["slot_not_released"]))
+        self.assertEqual(set(control.S1_IDS) - {"L9.1", "L6.2"}, set(control.FAULT_TARGETS["slot_not_released"]))
 
 
 class BillingConstantsTests(unittest.TestCase):

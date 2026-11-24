@@ -79,7 +79,7 @@ def _text(value) -> str:
 
 
 def step(view, label: str, argv: list, *, timeout: float, environment: dict | None = None,
-         cwd: Path | None = None, refuses: bool = False) -> tuple[int, str]:
+         cwd: Path | None = None, refuses: bool | str = False) -> tuple[int, str]:
     """One helper command through the stand-in Python, judged like any step (G1, G8), a timeout included."""
     try:
         done = subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout,
@@ -92,7 +92,7 @@ def step(view, label: str, argv: list, *, timeout: float, environment: dict | No
         return -1, text
     text = done.stdout + done.stderr
     view.outputs.append(text)
-    view.steps.append({"step": label, "code": done.returncode, "refuses": refuses, "timed_out": False})
+    view.steps.append({"step": label, "code": done.returncode, "refuses": bool(refuses), "timed_out": False})
     view._capture(text, kind="output", code=done.returncode, refuses=refuses, timed_out=False)
     return done.returncode, done.stdout
 
@@ -189,7 +189,7 @@ class Ctl:
     def finish(self, run, timeout: float | None = None) -> None:
         run.thread.join(self.FINISH_TIMEOUT if timeout is None else timeout)
 
-    def status(self, run, *, refuses: bool = False) -> dict:
+    def status(self, run, *, refuses: bool | str = False) -> dict:
         return self.host("learning-run-status", "--orchestration-handle", self.handle,
                          "--run-handle", (run.opened or {}).get("run_handle", ""), refuses=refuses)[1] or {}
 

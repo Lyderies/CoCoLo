@@ -51,7 +51,7 @@ class FaultTests(unittest.TestCase):
         self.assertFalse(rec.fault_isolated(normal, one_green)["isolated"])
         missing = {"requirements": {i: v for i, v in fault["requirements"].items() if i != "L14.1"}}
         self.assertFalse(rec.fault_isolated(normal, missing)["isolated"])
-        self.assertEqual(set(), set(rec.FAULT_ALSO_RED))
+        self.assertEqual({"G1"}, set(rec.FAULT_ALSO_RED))  # decision 191 (was empty)
 
     def test_the_runner_takes_the_fault_only_as_an_argument(self):
         text = (ROOT / "scripts" / "e2e_lifecycle.py").read_text()
@@ -202,18 +202,28 @@ class FixRoundTests(unittest.TestCase):
         tree = ast.parse(SOURCE)
         for function in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
             for call in [n for n in ast.walk(function) if isinstance(n, ast.Call)]:
-                flagged = [k for k in call.keywords if k.arg == "refuses" and isinstance(k.value, ast.Constant)
-                           and k.value.value is True]
+                flagged = [k for k in call.keywords if k.arg in ("refuses", "expect_refusal")
+                           and isinstance(k.value, ast.Constant) and (k.value.value is True or isinstance(k.value.value, str))]
                 if not flagged:
                     continue
                 label = next((a.value for a in call.args if isinstance(a, ast.Constant) and isinstance(a.value, str)),
-                             getattr(call.func, "attr", "?"))
+                             getattr(call.func, "attr", None) or getattr(call.func, "id", "?"))
                 found.add((function.name, label))
         self.assertEqual({("service_scene", "dispatch_in_background"),
                           ("collector_scene", "dispatch_in_background"),
                           ("wait_running", "status"),
                           ("lost_and_released", "learning-run-status"),
-                          ("service_scene", "learning-run-status")}, found)  # the nested poll, seen from its scene
+                          ("service_scene", "learning-run-status"),
+                          ("service_scene", "phase_view"), ("service_scene", "status")}, found)  # the nested poll, seen from its scene
+
+    def test_an_expected_refusal_names_its_reason_and_a_different_reason_breaks_g1(self):
+        # decision 191: refuses may be an expected reason_code text; another reason is a G1 break
+        from e2e_support import capture_breaks
+        kw = dict(kind="output", private={}, timed_out=False)
+        self.assertEqual([], capture_breaks('{"reason_code": "run_lost"}', code=2, refuses="run_lost", **kw))
+        self.assertEqual(["g1_refusal_reason_unexpected"],
+                         capture_breaks('{"reason_code": "other"}', code=2, refuses="run_lost", **kw))
+        self.assertEqual(["g1_unexpected_exit"], capture_breaks('{}', code=2, refuses=False, **kw))
 
     def test_only_the_run_status_of_an_unstarted_run_may_refuse_in_phase_view(self):
         text = _function_source("phase_view")

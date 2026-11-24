@@ -402,7 +402,7 @@ def lifecycle(world) -> dict:
             "stuck": (reply.get("project_service") or {}).get("stuck_run_slots")}
 
 
-def phase_view(ctl, run=None, *, expect_refusal: bool = False) -> dict:
+def phase_view(ctl, run=None, *, expect_refusal: bool | str = False) -> dict:
     """What the status commands answer right now: learning-status, learning-orchestration-status, the run's
     learning-run-status and the migration status (its earlier_version_runs). Texts are kept for the privacy scan."""
     world = ctl.view
@@ -453,9 +453,10 @@ FAULTS["recovery_broken"] = [
             "                self._connection.execute(\"DELETE FROM sessions WHERE project_id=?\", (project_id,))",
      "new": "                self._connection.execute(\"DELETE FROM records WHERE project_id=? AND 0\", (project_id,))\n"
             "                self._connection.execute(\"DELETE FROM sessions WHERE project_id=?\", (project_id,))"}]
-# What a fault run may newly turn red besides the S2 IDs: nothing (a refused dispatch or a failed read is judged by
-# the S2 checks that made it; G1 is not declared because every step the fault could refuse passes `refuses`).
-FAULT_ALSO_RED: tuple = ()
+# What a fault run may newly turn red besides the S2 IDs: G1 only (decision 191). Under recovery_broken the lost run's
+# slot is never freed, so the next child's expected-success dispatch is refused, which G1 rightly reports; G1 was
+# red in the normal run until decision 191, so this could not show before.
+FAULT_ALSO_RED: tuple = ("G1",)
 
 
 def fault_isolated(normal: dict, fault: dict) -> dict:
@@ -520,11 +521,11 @@ def service_scene():
 
     def lost_and_released():
         code, reply, _ = ctl.host("learning-run-status", "--orchestration-handle", ctl.handle,
-                                  "--run-handle", run.opened["run_handle"], refuses=True)
+                                  "--run-handle", run.opened["run_handle"], refuses="run_lost")
         scene.lost_reads = getattr(scene, "lost_reads", []) + [(reply or {}).get("capacity_state")]
         return reply if (reply or {}).get("reason_code") == "run_lost" and (reply or {}).get("capacity_state") == "released" else None
     scene.lost_status = poll(lost_and_released, 60, every=1.5)
-    scene.phases["lost"] = phase_view(ctl, run)
+    scene.phases["lost"] = phase_view(ctl, run, expect_refusal="run_lost")
     scene.account_read = wait_released(world, run, seconds=40)
     scene.slot_after = ledger_run(world, run)
     scene.bindings = claimed_bindings(world)
@@ -535,7 +536,7 @@ def service_scene():
     scene.second_start = ctl.host("learning-start-project-service")
     time.sleep(8)
     scene.counts_second = run_counts(world, ctl.project_id)
-    scene.status_second = ctl.status(run)
+    scene.status_second = ctl.status(run, refuses="run_lost")
     # The slot is free: the next child claims it and finishes.
     nxt = scene.next = ctl.child(open_run=False)
     arm(ctl, nxt, 0)
@@ -547,7 +548,11 @@ def service_scene():
     scene.next_outcome = persisted_outcome(world, nxt, ctl.project_id)
     scene.next_binding = settled_binding(world, nxt, outcome=scene.next_outcome)
     scene.next_read = wait_released(world, nxt, seconds=40)
-    scene.phases["next"] = phase_view(ctl, nxt)
+    # Decision 191: a recorded run's status read is refused by design (control_attempt_not_found); its recorded
+    # terminal state is read through the persisted ledger and outcome instead, and the report counts it.
+    scene.phases["next"] = phase_view(ctl, nxt, expect_refusal="control_attempt_not_found")
+    scene.phases["next"]["recorded"] = persisted_terminal(settled_binding(world, nxt, outcome=scene.next_outcome),
+                                                          persisted_outcome(world, nxt, ctl.project_id))
     # Can the orchestration close? (L8.3). If the close is refused, try the step the run's own status names.
     # Recovery and close are expected to succeed (judged by G1): a refusal here is a finding, not an expectation.
     scene.close_first = ctl.host("learning-close-orchestration", "--orchestration-handle", ctl.handle,
@@ -559,7 +564,9 @@ def service_scene():
                                              run.opened["run_handle"], "--reason", "host_confirmed_gone"))
         scene.close_recovery.append(ctl.host("learning-close-orchestration", "--orchestration-handle", ctl.handle,
                                              "--status", "completed"))
-    scene.phases["closed"] = phase_view(ctl, nxt)
+    scene.phases["closed"] = phase_view(ctl, nxt, expect_refusal="control_attempt_not_found")
+    scene.phases["closed"]["recorded"] = persisted_terminal(settled_binding(world, nxt, outcome=scene.next_outcome),
+                                                            persisted_outcome(world, nxt, ctl.project_id))
     scene.report = ctl.host("learning-orchestration-report", "--orchestration-id",
                             ctl.orchestration.get("orchestration_id", ""))[1] or {}
     return scene
@@ -835,6 +842,15 @@ def l14_1_status_commands_give_the_right_values_at_each_phase_and_none_is_privat
         migration = phases[name]["migration"]
         phase.expect(migration["code"] == 0 and ((migration["reply"] or {}).get("earlier_version_runs") or {})
                      .get("holding") == 0, f"{name}: the migration status reports no earlier-version run holding a slot")
+    for name in ("next", "closed"):
+        read = phases[name]["run"]
+        phase.expect(read["code"] == 2 and (read["reply"] or {}).get("ready") is False
+                     and (read["reply"] or {}).get("reason_code") == "control_attempt_not_found",
+                     f"{name}: learning-run-status of the recorded run is refused with control_attempt_not_found (by design)")
+        phase.expect(phases[name]["recorded"] == "completed",
+                     f"{name}: the recorded run's persisted terminal state reads completed (ledger and outcome record)")
+        phase.expect(report_runs(phases[name]).get("terminal") == 1,
+                     f"{name}: learning-orchestration-report counts one recorded terminal run")
     view = phases["closed"]
     phase.expect(counts(view, "host_runs_pending", "host_runs_terminal", "host_runs_abandoned")
                  == {"host_runs_pending": 0, "host_runs_terminal": 1, "host_runs_abandoned": 1},

@@ -132,7 +132,7 @@ PRIVATE_KEY_BLOCK = re.compile(r"-----(BEGIN|END) [A-Z0-9 ]*PRIVATE KEY-----")
 SCREEN_SECRETS = ("passphrase", "owner_key_material", "owner_private_key")
 
 
-def capture_breaks(text: str, *, kind: str, private: dict, code: int, refuses: bool, timed_out: bool) -> list[str]:
+def capture_breaks(text: str, *, kind: str, private: dict, code: int, refuses: bool | str, timed_out: bool) -> list[str]:
     """The rules one captured step breaks: `kind` is "output" (saved or AI-read) or "screen" (an owner's terminal).
     `private` maps a value's name to the value (World.private_values); only names reach the result."""
     found = set()
@@ -140,6 +140,8 @@ def capture_breaks(text: str, *, kind: str, private: dict, code: int, refuses: b
         found.add("g1_step_timed_out")
     elif code != 0 and not refuses:
         found.add("g1_unexpected_exit")
+    elif code != 0 and isinstance(refuses, str) and refuses not in text:
+        found.add("g1_refusal_reason_unexpected")  # decision 191: an expected refusal names its expected reason
     found.update("g1_bare_" + reason for reason in bare_unavailable(text))
     found.update(f"g8_{kind}_leaks_" + re.sub(r"(_[0-9]+)+$", "", name) for name, value in private.items()
                  if value and value in text and (kind == "output" or name.startswith(SCREEN_SECRETS)))
@@ -407,7 +409,7 @@ class World:
         code = os.waitstatus_to_exitcode(status) if status is not None else -1
         if record:
             self.screens.append(text)
-            self.steps.append({"step": label, "code": code, "refuses": refuses, "timed_out": timed_out})
+            self.steps.append({"step": label, "code": code, "refuses": bool(refuses), "timed_out": timed_out})
         self.register_private_values()
         # Every screen is judged, kept in `screens` or not (record=False only keeps a tool's screen out of the
         # list one check reads; the screen rule still holds for it).
@@ -454,7 +456,7 @@ class World:
             return -1, None, text
         text = done.stdout + done.stderr
         self.outputs.append(text)
-        self.steps.append({"step": args[0], "code": done.returncode, "refuses": refuses, "timed_out": False})
+        self.steps.append({"step": args[0], "code": done.returncode, "refuses": bool(refuses), "timed_out": False})
         self._capture(text, kind="output", code=done.returncode, refuses=refuses, timed_out=False)
         try:
             reply = json.loads(done.stdout)

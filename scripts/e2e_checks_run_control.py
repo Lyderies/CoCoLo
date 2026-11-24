@@ -52,10 +52,11 @@ def fault_patches() -> list:
     return FAULTS[FAULT] if FAULT else []
 
 
-# The S1 IDs each fault must turn red. L9.1 is the one S1 ID a release fault cannot reach: it judges the refusals
+# The S1 IDs each fault must turn red. L6.2 (refused before admission: no slot is ever claimed, decision 190c) and
+# L9.1 are the S1 IDs a release fault cannot reach; L9.1: it judges the refusals
 # while the six slots are held for the FIRST time, before any slot is released, so it stays green under
 # slot_not_released by construction (its refusals are proven in the normal run).
-FAULT_TARGETS = {"slot_not_released": tuple(i for i in S1_IDS if i != "L9.1")}
+FAULT_TARGETS = {"slot_not_released": tuple(i for i in S1_IDS if i not in ("L9.1", "L6.2"))}
 # IDs a fault may also turn red without being a target: under slot_not_released the later expected-success dispatches
 # (fourth_again, c_again) are refused, which G1 (every step not expected to refuse exits 0) rightly reports. Nothing
 # else may change: L9.1 red, or any other ID, is not isolation.
