@@ -365,7 +365,7 @@ def compile_bundle(source_root: Path) -> Bundle:
 # same change as its record; never copy it from an installed project, which may be tampered.
 PINNED_RELEASE_DIGESTS = frozenset({
     "c3e80b3f92cc5e5728b848e384d820265f70b32031ed931b723f201c1b0309ae",  # 0.8.40
-    "eb34209dacdac6d3fe00fcd8a3f4c055bb3cdf661683ea270abc527f95ff62d3",  # 0.8.41 (source 1e3f43ba); 0.8.42 (source 9f229d0c), 0.8.43 (source d2bb82a3), 0.8.44 (source 87005877), 0.8.45 (source 1b3e665a), 0.8.46 (source eb54e847), 0.8.47 (source a1d25560), 0.8.48 (source 42b05f81), 0.8.49 (source b5318440), 0.8.50 (source 5ab0a9d3) and 0.8.51 (source 0e1c713a), 0.8.52 (source 36b7ef5f), 0.8.53 (source 45c214cd), 0.8.54 (source e626977d), 0.8.55 (source 8d4a7ce3) compile to the same bundle
+    "eb34209dacdac6d3fe00fcd8a3f4c055bb3cdf661683ea270abc527f95ff62d3",  # 0.8.41 (source 1e3f43ba); 0.8.42 (source 9f229d0c), 0.8.43 (source d2bb82a3), 0.8.44 (source 87005877), 0.8.45 (source 1b3e665a), 0.8.46 (source eb54e847), 0.8.47 (source a1d25560), 0.8.48 (source 42b05f81), 0.8.49 (source b5318440), 0.8.50 (source 5ab0a9d3) and 0.8.51 (source 0e1c713a), 0.8.52 (source 36b7ef5f), 0.8.53 (source 45c214cd), 0.8.54 (source e626977d), 0.8.55 (source 8d4a7ce3), 0.8.56 (source ace235a4) compile to the same bundle
 })
 
 

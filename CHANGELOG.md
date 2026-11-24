@@ -4,6 +4,12 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.57: release batch.
+  - B4s lost-run settlement: a run whose process is gone is settled from its recorded launch, with a
+    write-ahead intent written before the settlement so a crash between the two steps is finished on restart.
+  - T7 S1: run-control lifecycle checks (L6, L7, L9) run the installed CLI in the lifecycle e2e.
+  - L6.1: a concurrent stop never overwrites a denial, and a clean frame reports zero denials.
+  - L6.2: a refusal names the resolved route.
 - Package 0.8.56: release batch.
   - RS-D S2 changed-runtime closure: an orchestration whose close was not recorded across an update is
     counted once across restart; one without a verified release stays open, with custody, to its deadline.
