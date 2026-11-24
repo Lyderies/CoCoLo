@@ -1155,6 +1155,11 @@
    "ends": "O0c P5: an open orchestration idle 24 hours is ended interrupted by the service's cleanup pass",
    "test": "test_O0c_P5_abandoned_orchestrations_end_after_24_hours_idle_so_a_new_one_opens"
   },
+  "orchestration_store.py::open_counts": {
+   "checks": 2,
+   "ends": "s2fix round 2 (L14.1): learning-status's reading; it verifies at most max_orchestrations + 1 rows that are not closed (the open limit keeps active and paused ones at that many, and a closed one is removed after ORCHESTRATION_RETENTION_MS by purge_closed); BOUNDED",
+   "test": "test_L14_1_the_counts_read_only_the_open_ones_and_never_verify_a_closed_one"
+  },
   "orchestration_store.py::purge_closed": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"

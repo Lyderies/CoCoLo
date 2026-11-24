@@ -1910,6 +1910,10 @@ class RunDriver:
                     lost[handle] = (host_client, 'released')
                     if self._recover_settled(entry):
                         inspected.add(launch_journal_key(entry))
+                    else:
+                        # s2fix round 2 (L14.1): the project store has not recorded this older entry's settlement
+                        # yet (its report counts the run pending), so run-status does not say `released` early.
+                        lost[handle] = (host_client, 'held')
                     continue
                 instance = entry['instance']
                 adopted = entry.get('version') == 2 and recovery is not None and recovery.owns(entry['token'])

@@ -327,5 +327,85 @@ class ProjectServiceStartupTests(unittest.TestCase):
         self.assertTrue(project_host_serving(self.paths.root, self.project))
 
 
+    def second_project(self):
+        other = self.base / 'other'
+        (other / '.git').mkdir(parents=True)
+        other_id = self.ledger.register_project(other)
+        self.assertTrue(self.cli('learning-start-project-service', project=other)['serving'])
+        return other, other_id
+
+    def delete_in_process(self, project, project_id):
+        """learning-delete-project in this process (as the L15.1 test above): the collector here is this test's own."""
+        self.collector.stop()
+        self.ledger.close()
+        import contextlib
+        import io
+        from unittest import mock
+        from tests.test_bridge import cli as cli_module
+        out = io.StringIO()
+        argv = ['cli.py', 'learning-delete-project', '--state-root', str(self.state.root), '--project-root', str(project),
+                '--confirm-project-id', project_id]
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(cli_module.CollectorMaintenance, 'acquire',
+                                                                     return_value=mock.Mock()), \
+                contextlib.redirect_stdout(out):
+            code = cli_module.main()
+        return code, json.loads(out.getvalue())
+
+    @__import__('test_framework').requirements('L15.1', why_not_scenario='Real host processes; the lifecycle check '
+                                               'L15.1 drives the unmodified CLI.')
+    def test_L15_1_a_new_registration_at_the_same_root_keeps_its_service(self):
+        """s2fix round 2: the withdrawal compares the hint's project id with the deleted project's id."""
+        from codex_agents.project_host_client import stop_project_host
+        other, _ = self.second_project()
+        (host,) = self.hosts()
+        hint = runtime_hint_path(self.paths, other)
+        self.assertEqual('not_running', stop_project_host(self.state.root, other, project_id='prj_' + 'f' * 32))
+        self.assertTrue(hint.exists())
+        self.assertEqual([host], self.hosts())
+        self.assertTrue(project_host_serving(self.paths.root, other))
+
+    @__import__('test_framework').requirements('L15.1', why_not_scenario='Real host processes; the lifecycle check '
+                                               'L15.1 drives the unmodified CLI.')
+    def test_L15_1_hint_lock_contention_is_unknown_never_not_running(self):
+        import fcntl
+        from unittest import mock
+        from codex_agents import project_host_client
+        from codex_agents.project_host_client import stop_project_host
+        other, other_id = self.second_project()
+        scope, _, endpoint = read_runtime_hint(self.paths, other)
+        with open(endpoint.parent / project_host_client.HINT_LOCK, 'a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            with mock.patch.object(project_host_client, 'HINT_READ_WAIT_SECONDS', 0.05):
+                self.assertEqual('unknown', stop_project_host(self.state.root, other, project_id=other_id))
+        self.assertEqual(1, len(self.hosts()))
+
+    @__import__('test_framework').requirements('L15.1', why_not_scenario='Real host processes; the lifecycle check '
+                                               'L15.1 drives the unmodified CLI.')
+    def test_L15_1_a_wedged_host_makes_the_deletion_not_ready_with_a_plain_reason(self):
+        from unittest import mock
+        from codex_agents import project_host_client
+        other, other_id = self.second_project()
+        (host,) = self.hosts()
+        os.kill(host, signal.SIGSTOP)  # wedged: it cannot notice its withdrawn hint
+        self.addCleanup(lambda: os.kill(host, signal.SIGCONT))
+        with mock.patch.object(project_host_client, 'STOP_TIMEOUT_SECONDS', 0.5):
+            code, deleted = self.delete_in_process(other, other_id)
+        self.assertEqual('still_running', deleted['project_service'])
+        self.assertIs(False, deleted['ready'])
+        self.assertIn('service', deleted['reason'])
+        self.assertNotIn('prj_', deleted['reason'])
+
+    @__import__('test_framework').requirements('L15.1', why_not_scenario='Real host processes; the lifecycle check '
+                                               'L15.1 drives the unmodified CLI.')
+    def test_L15_1_deletion_removes_the_projects_history_store(self):
+        other, other_id = self.second_project()
+        store = history_directory(self.paths, other_id)
+        self.assertTrue((store / 'history.sqlite3').exists())
+        code, deleted = self.delete_in_process(other, other_id)
+        self.assertEqual((0, True, 'stopped'), (code, deleted['ready'], deleted['project_service']))
+        self.assertFalse((store / 'history.sqlite3').exists())
+        self.assertEqual([], [path.name for path in store.glob('history.sqlite3*')] if store.exists() else [])
+
+
 if __name__ == '__main__':
     unittest.main()

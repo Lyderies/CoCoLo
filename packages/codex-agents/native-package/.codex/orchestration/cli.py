@@ -2488,13 +2488,17 @@ def main() -> int:
                 report[name] = None if holds is None else holds[name]
             # T7 S2 (L14.1): orchestrations live in the project's own store, so its service's count replaces the
             # ledger's (whose table holds only those of versions before the project store); while the service is
-            # not running the ledger's reading stands.
+            # not running the counts are unknown (null, with the reason), never the ledger's.
             managed = (report.get('ingestion') or {}).get('managed_lifecycle')
             if type(managed) is dict and 'orchestrations_active' in managed:
-                counts = orchestration_counts_client(args.state_root, args.project_root, host_client=label)
-                if counts is not None:
-                    for name in ('active', 'paused', 'closed'):
-                        managed['orchestrations_' + name] = counts[name]
+                counts = orchestration_counts_client(args.state_root, args.project_root, host_client=OWNER_CLIENT)  # owner-only
+                for name in ('active', 'paused', 'closed'):
+                    managed['orchestrations_' + name] = None if counts is None else counts[name]
+                if counts is None:
+                    # Never the ledger's older table, which reads zero for every orchestration of the project store.
+                    managed['orchestrations_unknown_reason'] = (
+                        "this project's service is not running, so its orchestrations cannot be counted now: "
+                        "start it (learning-start-project-service) and ask again")
             # O0c M1, M3: the run slots this project's service can no longer free, said plainly.
             slots = (report['project_capacity'] or {}).pop('run_slots', None)
             if slots is not None:
@@ -2551,13 +2555,29 @@ def main() -> int:
                 client_health_clear(ledger.state, args.project_root)
             finally:
                 _close_ledger(ledger)
-            # T7 S2 (L15.1): the project's records AND its service go; the deletion refused any project still
-            # holding a run, so its service is idle and stops by the ordinary withdrawal (bounded wait).
+            # T7 S2 (L15.1): the project's records, its service AND its history store go (owner question 174: only
+            # the tombstone and the path-free provider observations stay). The deletion refused any project still
+            # holding a run, so its service is idle and stops by the ordinary withdrawal (bounded wait). The
+            # withdrawal compares the hint's project id: a newer registration at this root keeps its service.
             from codex_agents.project_host_client import stop_project_host
-            report["project_service"] = stop_project_host(args.state_root, args.project_root)
-            if report["project_service"] == "still_running":
-                report["project_service_note"] = ("the deleted project's service did not stop in time; it stops by "
-                                                  "itself once idle")
+            from codex_agents.project_service import remove_project_history
+            report["project_service"] = stop_project_host(args.state_root, args.project_root, project_id=project_id)
+            if report["project_service"] in ("stopped", "not_running"):
+                report["project_history_removed"] = remove_project_history(CollectorPaths(args.state_root), project_id)
+                if not report["project_history_removed"]:
+                    report["ready"] = False
+                    report["reason"] = ("the deleted project's service still holds its history store, so that "
+                                        "store was not removed: check that no run of the project is active, then "
+                                        "run learning-delete-project again")
+            elif report["project_service"] == "still_running":
+                report["ready"] = False
+                report["reason"] = ("the deleted project's service did not stop in time, so its history store was "
+                                    "not removed: it stops by itself once idle; then run learning-delete-project "
+                                    "again")
+            else:
+                report["ready"] = False
+                report["reason"] = ("the deleted project's service could not be checked just now, so its history "
+                                    "store was not removed: run learning-delete-project again in a moment")
         elif args.command == "learning-normalize-app":
             state = CollectorPaths(args.state_root)
             clients = load_client_capabilities(

@@ -168,20 +168,32 @@ def withdraw_project_host(state_root, project_root, directory, *, timeout=WITHDR
     return True
 
 
-def stop_project_host(state_root, project_root, *, timeout=STOP_TIMEOUT_SECONDS):
-    """T7 S2 (L15.1): stop this project's service, whatever version started it, by the withdrawal path above (its
-    hint removed under HINT_LOCK; the host stops once it holds no run). The caller has removed the project's
-    records, so no run is held. `not_running` when no live host serves it, `stopped` once its host lock is
-    released within `timeout`, else `still_running`. Another project's host is never touched: the hint and the
-    lock directory are this project root's own."""
+def stop_project_host(state_root, project_root, *, project_id, timeout=None):
+    """T7 S2 (L15.1): stop the service of the project `project_id` at this root, whatever version started it, by the
+    withdrawal path above (its hint removed under HINT_LOCK; the host stops once it holds no run). The caller has
+    removed the project's records, so no run is held. A hint naming another project id is a newer registration at
+    the same root: its service is not touched (`not_running` for the deleted project). Else: `not_running` when
+    no live host serves it, `stopped` once its host lock is released within `timeout`, `still_running` when it
+    is not (a wedged host), and `unknown` when the hint cannot be read now (its lock stayed busy): never a
+    `not_running` from a reading that did not happen."""
+    timeout = STOP_TIMEOUT_SECONDS if timeout is None else timeout
     try:
         state = CollectorPaths(state_root)
         root = _canonical_project_root(Path(project_root))
         hinted = _hinted_host(state, root, any_runtime=True)
+        if hinted is None:
+            try:
+                _read_runtime_endpoints(state, root, any_runtime=True)
+            except (DispatchError, StateError, OSError, ValueError):
+                return 'not_running'  # no hint to read: nothing is serving this root
+            return 'unknown'  # a hint exists but could not be read under its lock now
     except (StateError, OSError, ValueError):
+        return 'unknown'
+    scope = hinted[0]
+    if scope.project_id != project_id or hinted[2] is False:
         return 'not_running'
-    if hinted is None or hinted[2] is not True:
-        return 'not_running'
+    if hinted[2] is not True:
+        return 'unknown'
     directory = hinted[1][0].parent
     deadline = time.monotonic() + timeout
     descriptor = None
@@ -193,13 +205,14 @@ def stop_project_host(state_root, project_root, *, timeout=STOP_TIMEOUT_SECONDS)
                 break
             except BlockingIOError:
                 if time.monotonic() >= deadline:
-                    return 'still_running'
+                    return 'unknown'
                 time.sleep(0.01)
         current = _hinted_host(state, root, any_runtime=True, hint_locked=True)
-        if current is not None and current[1][0].parent == directory:
-            runtime_hint_path(state, root).unlink(missing_ok=True)
+        if current is None or current[0].project_id != project_id or current[1][0].parent != directory:
+            return 'not_running'  # the hint is gone, or another registration's service took the root since
+        runtime_hint_path(state, root).unlink(missing_ok=True)
     except (DispatchError, StateError, OSError):
-        return 'still_running'
+        return 'unknown'
     finally:
         if descriptor is not None:
             os.close(descriptor)

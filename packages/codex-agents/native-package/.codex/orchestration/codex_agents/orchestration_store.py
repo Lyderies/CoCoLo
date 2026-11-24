@@ -130,9 +130,9 @@ class OrchestrationOwner:
         return counts['active'] + counts['paused']
 
     def state_counts(self):
-        """This project's orchestrations as active, paused and closed: the one reading behind the open limit
-        (`_open_count`) and learning-status (T7 S2, L14.1). One whose latest checkpoint cannot be verified counts
-        as active, so it is never shown, nor freed, as closed."""
+        """This project's orchestrations as active, paused and closed, each latest checkpoint verified: the reading
+        behind the open limit (`_open_count`). One whose latest checkpoint cannot be verified counts as active, so
+        a changed row never frees a place."""
         counts = {'active': 0, 'paused': 0, 'closed': 0}
         for row in self._db.execute('SELECT orchestration_handle,sequence,checkpoint_digest FROM project_orchestrations '
                                     'WHERE project_id=?', (self._history.project_id,)).fetchall():
@@ -140,6 +140,30 @@ class OrchestrationOwner:
             status = 'active' if snapshot is None else snapshot['status']
             counts['closed' if status in ORCHESTRATION_TERMINAL_STATES else 'paused' if status == 'paused'
                    else 'active'] += 1
+        return counts
+
+    def open_counts(self):
+        """learning-status's reading (s2fix round 2, L14.1): active and paused ones, verified one by one, and the
+        closed ones only counted. The rows the open limit lets exist at once (`max_orchestrations`) are all that is
+        verified: SQLite names a row closed from its latest checkpoint's status without verifying it, and a row
+        whose checkpoint cannot be read is left to the verifying pass (counted active, as `state_counts`). The
+        closed count is the rows' count less those; closed ones are removed after ORCHESTRATION_RETENTION_MS."""
+        limits = self._history._orchestration_limits
+        ceiling = (limits.max_orchestrations if limits is not None else 65_536) + 1
+        terminal = ','.join("'" + state + "'" for state in sorted(ORCHESTRATION_TERMINAL_STATES))
+        rows = self._db.execute(
+            'SELECT o.orchestration_handle,o.sequence,o.checkpoint_digest FROM project_orchestrations o '
+            'JOIN project_orchestration_checkpoints c ON c.project_id=o.project_id '
+            'AND c.orchestration_handle=o.orchestration_handle AND c.sequence=o.sequence WHERE o.project_id=? '
+            "AND NOT (json_valid(CAST(c.content AS TEXT)) AND json_extract(CAST(c.content AS TEXT),"
+            f"'$.snapshot.status') IN ({terminal})) LIMIT ?", (self._history.project_id, ceiling)).fetchall()
+        total = self._db.execute('SELECT COUNT(*) FROM project_orchestrations WHERE project_id=?',
+                                 (self._history.project_id,)).fetchone()[0]
+        counts = {'active': 0, 'paused': 0, 'closed': 0}
+        for row in rows:
+            snapshot = self._latest_snapshot(row)
+            counts['paused' if snapshot is not None and snapshot['status'] == 'paused' else 'active'] += 1
+        counts['closed'] = max(total - counts['active'] - counts['paused'], 0)
         return counts
 
     def end_earlier(self, current, limit):

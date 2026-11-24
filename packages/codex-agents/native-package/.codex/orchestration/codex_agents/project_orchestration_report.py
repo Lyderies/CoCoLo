@@ -60,7 +60,7 @@ def orchestration_counts(history):
     """This project's orchestrations by state (T7 S2, L14.1): what learning-status shows, read as the open limit is."""
     from .orchestration_store import OrchestrationOwner
     history._require_owner()
-    return OrchestrationOwner(history).state_counts()
+    return OrchestrationOwner(history).open_counts()
 
 
 def _settled(history, state, lease_row):

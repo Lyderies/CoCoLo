@@ -322,6 +322,57 @@ class HoldsUpdateTests(unittest.TestCase):
         self.assertEqual(frozenset({'history.holds_report'}), authorized.allowed_operations)
 
 
+class OrchestrationCountsTests(unittest.TestCase):
+    """s2fix round 2 (L14.1): `history.orchestration_counts` is the owner's reading, over active and paused ones only."""
+
+    def fixture(self):
+        from tests import test_project_orchestration as orchestration
+        fixture = orchestration.ProjectOrchestrationTests(methodName='runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        return fixture
+
+    def counts_request(self):
+        return HistoryRequest(1, 'history.orchestration_counts', 'orchestrations', PROJECT_A, RUNTIME, {})
+
+    def test_L14_1_only_the_owner_label_may_read_the_orchestration_counts(self):
+        from codex_agents.service_host import ProjectServiceHost
+        from codex_agents.hosts import CODEX_HOST_CLIENT, CLAUDE_HOST_CLIENT, OWNER_CLIENT
+        for client, allowed in ((OWNER_CLIENT, True), (CODEX_HOST_CLIENT, False), (CLAUDE_HOST_CLIENT, False)):
+            host = ProjectServiceHost.__new__(ProjectServiceHost)
+            enrolled = SimpleNamespace(role='host', host_client=client)
+            host._frontend = SimpleNamespace(context=lambda token: SimpleNamespace(kind='project', enrolled=enrolled))
+            authorized = host._authorize_history(self.counts_request(), object())
+            self.assertEqual(allowed, authorized is not None, client)
+            if allowed:
+                self.assertEqual(frozenset({'history.orchestration_counts'}), authorized.allowed_operations)
+
+    def test_L14_1_the_counts_read_only_the_open_ones_and_never_verify_a_closed_one(self):
+        from codex_agents.orchestration_store import OrchestrationOwner
+        from codex_agents.project_orchestration_report import orchestration_counts
+        fixture = self.fixture()
+        handles = []
+        for number in range(3):
+            snapshot = fixture.call('open', identity=f'open-{number}')['current']['snapshot']
+            handles.append(snapshot)
+        for number, snapshot in enumerate(handles[:2]):  # two closed, one still active
+            fixture.call('close', fixture.target(snapshot, status='completed', goal_tokens_used=None,
+                                                 goal_time_used_seconds=None), f'close-{number}')
+        fixture.call('open', identity='open-paused')
+        paused = fixture.call('open', identity='open-paused-2')['current']['snapshot']
+        fixture.call('pause', fixture.target(paused), 'pause')
+        verified = []
+        original = OrchestrationOwner._checkpoint
+        def counting(owner, handle, *arguments, **options):
+            verified.append(handle)
+            return original(owner, handle, *arguments, **options)
+        with mock.patch.object(OrchestrationOwner, '_checkpoint', counting):
+            counts = orchestration_counts(fixture.store)
+        self.assertEqual({'active': 2, 'paused': 1, 'closed': 2}, counts)
+        closed = {handles[0]['orchestration_handle'], handles[1]['orchestration_handle']}
+        self.assertFalse(closed & set(verified), 'a closed orchestration was verified row by row')
+
+
 class HoldsProtocolTests(dr.LeaseBackedFixture):
     def setUp(self):
         super().setUp()

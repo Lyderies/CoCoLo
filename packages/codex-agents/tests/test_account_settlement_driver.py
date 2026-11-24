@@ -663,6 +663,16 @@ class ConfirmFixSweepTests(unittest.TestCase):
         self.assertEqual((1025, 1000.0 + project_driver.FENCE_RETRY_MAX_SECONDS), self.driver._settled_retry[bridge])
         self.assertEqual(project_driver.FENCE_RETRY_MAX_SECONDS, project_driver.RunDriver._earlier_delay(5000))
 
+    def test_L14_1_an_old_settled_entry_is_released_in_run_status_only_once_its_recovery_is_done(self):
+        """s2fix round 2 (L14.1): while the project store's settlement of an older journal's run is still being
+        recovered, learning-run-status says it is held, as the report counts it pending: never `released` early."""
+        bridge = self.settled(1, aged=False)
+        handle = self.journal.entry(bridge)['run_handle']
+        self.driver._recover_settled = lambda entry: False
+        self.assertEqual('held', self.driver._settle_lost(False)[handle][1])
+        self.driver._recover_settled = lambda entry: True
+        self.assertEqual('released', self.driver._settle_lost(False)[handle][1])
+
     def test_c_one_entry_failing_never_aborts_the_sweep_for_later_entries(self):
         """NEW HIGH (backoff): per-entry isolation; an exception for one entry leaves the later ones swept."""
         first, second = self.settled(1, aged=False), self.settled(2, aged=False)

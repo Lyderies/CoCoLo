@@ -38,3 +38,23 @@ Red evidence: /tmp/claude-501/s2fix/red1.txt, red2.txt. Runtime digest NOT refre
 - test_project_driver alone: 99 tests 257 s OK.
 - e2e S2 flows in the scratch copy with the fix (/tmp/claude-501/s2fix/fixed.json): L8.1, L8.2, L8.3 x2, L14.1,
   L15.1, G1-G5, G8, G9 all green, 257 s.
+
+## Round 2 (Codex review NOT-READY, 2026-11-25), each test red first, then the fix
+1. `history.orchestration_counts` is owner-only (service_host: separate branch, `host_client == OWNER_CLIENT`; the CLI
+   asks with the owner label always). It reads active and paused ones only (`OrchestrationOwner.open_counts`): a
+   row whose latest checkpoint's status is closed is named closed by SQLite without verifying it (no per-row
+   checkpoint verify of closed rows, at most max_orchestrations + 1 other rows verified); closed = row count less
+   those. Closed rows go after 90 days (purge_closed). lifetime_caps.json: `open_counts`. Tests:
+   test_holds_report.OrchestrationCountsTests (2).
+2. run-status no longer says `released` for an older `settled` journal entry whose project settlement is not yet
+   recovered (`_settle_lost`: 'held' until `_recover_settled` is true), so it agrees with the report (pending).
+   Test: ConfirmFixSweepTests.test_L14_1_an_old_settled_entry_is_released_in_run_status_only_once_its_recovery_is_done.
+   learning-status with no running service shows the three counts null plus `orchestrations_unknown_reason`.
+   Test: the one assertion changed below (test_learning_cli).
+3. `stop_project_host(..., project_id=)`: a hint of another project id (newer registration at the same root) is left
+   (`not_running`); a wedged host is `still_running`; hint-lock contention is `unknown` (never `not_running`). The CLI
+   reports `ready: false` plus `reason` for still_running/unknown, and removes the project's history store
+   (`project_service.remove_project_history`: under its writer lock, no symlink followed) once its service is
+   stopped; a store still held is `ready: false`, `project_history_removed: false`. Tombstone and path-free provider
+   observations (the ledger) are all that stays. Tests: test_project_service_startup test_L15_1_* (4 new).
+- e2e S2 flows round 2 (scratch copy, /tmp/claude-501/s2fix/fixed2.json): L8.1, L8.2, L8.3 x2, L14.1, L15.1, G1-G5, G8, G9 all green, 255 s. Named modules round 2: holds_report/b2/refusal/history_api/contracts/project_orchestration/cli_status/lifetime guard 249 tests 36 s; settlement_driver+lost_run+learning_cli+host_commands+holds_socket+service_host+host_result+open_withdrawal 209 tests 302 s (1 known base failure KeyError reason_code); project_service_startup 12 tests 23 s; test_project_driver 99 tests 248 s OK.

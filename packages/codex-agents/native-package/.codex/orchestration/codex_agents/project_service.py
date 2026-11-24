@@ -6,6 +6,7 @@ process, never values from a request. The registry lookup goes through the
 collector; this process opens only its own project's history.
 """
 from pathlib import Path
+import os
 import signal
 import time
 
@@ -71,6 +72,68 @@ def supervisor_scope(state, project_id):
 
 def history_directory(state, project_id):
     return state.root / 'projects' / project_id
+
+
+def _empty_directory(descriptor, depth=0):
+    """Remove everything under an open directory, never following a symlink (it goes itself, not its target)."""
+    import stat
+    flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        for name in os.listdir(descriptor):
+            if stat.S_ISDIR(os.stat(name, dir_fd=descriptor, follow_symlinks=False).st_mode):
+                if depth >= 4:
+                    return False
+                child = os.open(name, flags, dir_fd=descriptor)
+                try:
+                    if not _empty_directory(child, depth + 1):
+                        return False
+                finally:
+                    os.close(child)
+                os.rmdir(name, dir_fd=descriptor)
+            else:
+                os.unlink(name, dir_fd=descriptor)
+    except OSError:
+        return False
+    return True
+
+
+def remove_project_history(state, project_id):
+    """s2fix round 2 (L15.1): a deleted project's own history store (`history.sqlite3` with its journals, lock and
+    older copies) removed, once no service holds its writer lock. True when nothing of it is left; False when a
+    service still holds it (the caller says so) or a file could not be removed."""
+    import fcntl
+    import re
+    if re.fullmatch(r'prj_[0-9a-f]{32}', project_id) is None:
+        return False
+    directory = history_directory(state, project_id)
+    flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        descriptor = os.open(directory, flags)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    try:
+        try:
+            lock = os.open('history.lock', os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600, dir_fd=descriptor)
+        except OSError:
+            return False
+        try:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            if not _empty_directory(descriptor):
+                return False
+        finally:
+            os.close(lock)
+    finally:
+        os.close(descriptor)
+    try:
+        directory.rmdir()
+    except OSError:
+        return False
+    return True
 
 
 def _owned_directory(path):

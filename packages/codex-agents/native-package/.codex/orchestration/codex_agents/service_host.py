@@ -540,8 +540,7 @@ class ProjectServiceHost:
                                         frozenset({'history.admit_host_result', 'history.read_record'}),
                                         host_result_context=original)
         if request.operation in {'history.learning_cycle', 'history.learning_report', 'history.learning_review_case',
-                                 'history.orchestration_report', 'history.capacity_report', 'history.holds_report',
-                                 'history.orchestration_counts'}:
+                                 'history.orchestration_report', 'history.capacity_report', 'history.holds_report'}:
             # The project's own learning: any enrolled primary of this project may run and
             # read it. Reviewing a case is the owner's command, by the same convention as
             # every earlier version (the installed deny rules keep it from model sessions).
@@ -550,6 +549,12 @@ class ProjectServiceHost:
                                         frozenset({request.operation}),
                                         run_slots=self.stuck_run_slots()
                                         if request.operation == 'history.capacity_report' else None)
+        if request.operation == 'history.orchestration_counts':
+            # s2fix round 2 (L14.1): learning-status is the owner's command; no project primary reads these counts.
+            if entry.enrolled.host_client != OWNER_CLIENT:
+                return None
+            return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
+                                        frozenset({request.operation}))
         if request.operation == 'history.learning_feedback':
             # The authority is the owner's signature over this record, checked by the
             # account owner that holds the owner key; this process never reads that key.
