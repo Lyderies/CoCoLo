@@ -79,7 +79,7 @@ class OwnerBackupStreamedTests(unittest.TestCase):
     def test_F3_1_the_backup_is_a_registered_format_three_copy_equal_to_the_records(self):
         report = self.owner_backup()
         path = self.source.state.backups / self.project / "owner_backup.sqlite3"
-        self.assertEqual(str(path), report["path"])
+        self.assertEqual(path.name, report["backup_name"])
         self.assertEqual(3, report["format"])
         info = os.stat(path, follow_symlinks=False)
         self.assertTrue(stat.S_ISREG(info.st_mode))
@@ -145,7 +145,7 @@ class OwnerBackupStreamedTests(unittest.TestCase):
 
     def test_F3_5_the_report_keeps_its_fields_and_adds_the_format(self):
         report = self.owner_backup()
-        self.assertEqual({"ready", "project_id", "file_id", "path", "format", "ledger_schema_version",
+        self.assertEqual({"ready", "project_id", "file_id", "backup_name", "format", "ledger_schema_version",
                           "backup_sha256", "manifest_sha256", "counts", "isolated_restore_integrity",
                           "isolated_restore_foreign_keys"}, set(report))
         self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, report["ledger_schema_version"])
@@ -300,7 +300,7 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         self.assertEqual(3, code)
         self.assertTrue(final["ready"])
         self.assertFalse(final["collector_quiesced"])
-        self.assertEqual("authorization unreadable", final["quiesce_error"])
+        self.assertEqual("the backup could not be completed (RuntimeError)", final["quiesce_error"])
         self.assertIsNotNone(self.registered("kept"))
         final, code = TOOL["finish_backup"](report, leave_quiesced=True, quiesce=lambda: None)
         self.assertEqual((0, True), (code, final["collector_quiesced"]))
@@ -343,7 +343,7 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         def crashing(argv, *args, **kwargs):
             return real([sys.executable, "-I", "-c", "import sys; sys.stderr.write('boom in the child'); sys.exit(3)"],
                         *args, **kwargs)
-        with mock.patch.object(subprocess, "Popen", crashing), self.assertRaisesRegex(RuntimeError, "boom in the child"):
+        with mock.patch.object(subprocess, "Popen", crashing), self.assertRaisesRegex(RuntimeError, r"could not be written or checked \(exit 3\)"):
             self.owner_backup("crashed")
         self.assert_nothing_left("crashed")
 
@@ -392,7 +392,7 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         final, code = TOOL["finish_backup"](report, leave_quiesced=True, quiesce=quiesce)
         self.assertEqual(3, code)
         self.assertTrue(final["collector_quiesced"])
-        self.assertIn("restore failed", final["quiesce_error"])
+        self.assertEqual("the backup could not be completed (QuiesceLeftStopped)", final["quiesce_error"])
 
     def test_F3_13_a_collector_that_does_not_restart_is_in_the_one_report(self):
         report = self.owner_backup("not_restarted")
@@ -402,7 +402,8 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         final, code = TOOL["settle_maintenance"]({**report, "collector_quiesced": False}, 0, resume=resume)
         self.assertEqual(3, code)
         self.assertTrue(final["ready"])
-        self.assertIn("collector would not start", final["restart_error"])
+        self.assertIn("the installed collector did not restart", final["restart_error"])
+        self.assertNotIn("collector would not start", final["restart_error"])
         final, code = TOOL["settle_maintenance"]({**report, "collector_quiesced": True}, 0, resume=resume)
         self.assertEqual((0, None), (code, final.get("restart_error")))  # left stopped as asked: no restart
 
@@ -419,7 +420,9 @@ class OwnerBackupStreamedTests(unittest.TestCase):
                 mock.patch.object(os, "unlink", unlink), self.assertRaises(Exception) as caught:
             self.owner_backup("stuck")
         self.assertIn("could not be removed", str(caught.exception))
-        self.assertIn(str(self.source.state.backups / self.project / ".stuck.partial"), str(caught.exception))
+        self.assertNotIn(str(self.source.state.backups), str(caught.exception))  # decisions 36, 192
+        self.assertNotIn(str(self.source.state.root), str(caught.exception))
+        self.assertIn("1 partial file(s)", str(caught.exception))
         self.assertIsNone(self.registered("stuck"))
 
 
@@ -450,14 +453,15 @@ class OwnerBackupStreamedTests(unittest.TestCase):
                                close=fail("ledger would not close"), resume=lambda: resumed.append(True))
         self.assertEqual(3, code)
         self.assertTrue(final["ready"])
-        self.assertIn("ledger would not close", final["close_error"])
+        self.assertEqual("the backup could not be completed (RuntimeError)", final["close_error"])
         self.assertEqual([True], resumed)  # restarted although closing failed
         final, code = conclude(report=None, code=0, error=RuntimeError("preflight refused"),
                                close=lambda: None, resume=fail("collector would not start"))
         self.assertEqual(2, code)
         self.assertFalse(final["ready"])
-        self.assertEqual("preflight refused", final["error"])
-        self.assertIn("collector would not start", final["restart_error"])
+        self.assertEqual("the backup could not be completed (RuntimeError)", final["error"])
+        self.assertIn("the installed collector did not restart", final["restart_error"])
+        self.assertNotIn("collector would not start", final["restart_error"])
         final, code = conclude(report={**report, "collector_quiesced": True}, code=0, error=None,
                                close=lambda: None, resume=fail("must not be called"))
         self.assertEqual((0, None), (code, final.get("restart_error")))  # left stopped as asked
@@ -518,7 +522,8 @@ class OwnerBackupStreamedTests(unittest.TestCase):
                 mock.patch.object(Path, "unlink", unlink), \
                 self.assertRaises(SCRIPT_GLOBALS["QuiesceLeftStopped"]) as caught:
             TOOL["_quiesce_collector_authorization"](path)
-        self.assertIn("temporary file stuck", str(caught.exception))
+        self.assertNotIn("temporary file stuck", str(caught.exception))  # decisions 36, 192: fixed reason
+        self.assertIn("a temporary copy remains", str(caught.exception))
 
     def test_F3_16_an_interrupt_while_closing_still_restarts_the_collector(self):
         resumed = []

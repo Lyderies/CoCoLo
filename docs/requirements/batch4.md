@@ -29,3 +29,10 @@ Test change (decisions 185/187/195 cover it; batch 3 left it skipped "until B6")
   test_backup_installed_project, test_owner_backup_streamed, test_large_project_backups green).
 - No new history/account op in B6 (no reply-table/gate/pin change). Registrations came with the branch
   (`codex:tests.test_b6_unattended_close` component/integration, `root:test_rsd_budget` component/integration).
+
+## 2. Merge of fix/backup-path (bkfix; decisions 192/194/197/202/205)
+- Clean merge, no conflicts (cli.py and learning_store.py auto-merged with B6).
+- No new op. Registration: `codex:tests.test_backup_reply_private` was unregistered (metadata: missing stage/layer)
+  -> stage integration, layer scenario (one test starts a real Python child process; same as its sibling
+  test_owner_backup_streamed).
+- Assertion changes: only bkfix's own, listed in docs/requirements/bkfix/assertions.md (decisions 194/197/202/205).
