@@ -244,7 +244,8 @@ def combine_run_records(reports):
                     raise ValueError('duplicate stage check: ' + name)
                 outcomes[name] = status
     result = coverage(first['plan']['catalogue'], outcomes)
-    failures = {name: status for name, status in result.items() if status not in ('passed', 'unchecked')}
+    # Same rule as a local run (decision 126.2): skipped-only requirements are reported, not failures.
+    failures = {name: status for name, status in result.items() if status not in ('passed', 'unchecked', 'skipped')}
     if failures:
         raise ValueError('requirements failed/not_run: ' + repr(failures))
     return {'invocation_id': first['invocation_id'], 'requirements': result,

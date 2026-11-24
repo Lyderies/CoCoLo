@@ -6,3 +6,4 @@
 /scripts/test_worker.py            @Lyderies
 /scripts/assertion_diff.py         @Lyderies
 /.github/                         @Lyderies
+/scripts/test-*.json                 @Lyderies

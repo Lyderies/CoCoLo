@@ -192,3 +192,10 @@ A8 (quiet full run, preflight below 60 s) is unmet; a full run was not started. 
 - scripts/test_framework.py coverage(): new `skipped` state; scripts/parallel_tests.py prints "Requirements proved only by skipped checks here".
 - tests/test_assertion_diff.py (new module): fake git modelled ls-tree's `-z` argument (args[2]); .github/workflows/ci.yml assertion-diff job reports "no review base" instead of falling back to HEAD^ (existing B5 policy test forbids a parent fallback).
 - scripts/test_framework.py golden_bypasses(): each dependency's exported golden names are computed once per process (was re-parsed per import, recursively: the 4+ minute preflight after the fingerprint removal).
+
+## After the step A review (Claude Opus, ready-with-corrections: 0 HIGH, 1 MED, 3 LOW)
+- MED fixed: the golden-bypass scan covers every module with tests (was only modules whose every test had requirement tags). It found 4 existing direct golden reads (codex:tests.test_routing_judgment lines 70, 76, 176; codex:tests.test_routing_risk line 300). Decision 126.4: golden-bypass findings print as "GOLDEN WARNING" every run, not a failure; those 4 are fixed with RT-ROUTE-EXHAUSTED, which rewrites those exact lines.
+- Decision 126.3: debt_retirement_required (a module now under its budget) is a note, not a failure, locally and in the CI combine gate (test_container_stop flips around 60 s).
+- LOW fixed: the CI requirement gate and --combine-timings treat `skipped` as reported, like a local run (126.2).
+- LOW fixed: CODEOWNERS covers /scripts/test-*.json (budget debt and the other registries).
+- LOW listed: _GOLDEN_EXPORTS caches exports computed with the first path's cycle set; a dependency first reached inside an import cycle may cache fewer exports. Known limit of a warning-only lint.

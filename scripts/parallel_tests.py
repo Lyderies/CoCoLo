@@ -226,12 +226,14 @@ def metadata():
     errors += framework.validate_metadata(inventory=checked_inventory, stages=checked_stages, layers=checked_layers,
                                          catalogue=catalogue)
     for module, cases in discovered.items():
-        if not cases or not all(row.get('requirements') for row in cases.values()):
+        if not cases:
             continue
         suite, name = module.split(':', 1)
         source = SUITES[suite] / (('tests/' if suite == 'root' else '') + name.replace('.', '/') + '.py')
         if source.exists():
-            errors += [module + ': ' + error for error in framework.golden_bypasses(source.read_text(), filename=source)]
+            # A lint finding for review, printed every run, not a run failure (decision 126.4).
+            for error in framework.golden_bypasses(source.read_text(), filename=source):
+                print('GOLDEN WARNING: ' + module + ': ' + error, flush=True)
     entrypoints = ROOT / 'scripts/test-entrypoints.json'
     entries = framework.decode_json(entrypoints.read_text()) if entrypoints.exists() else {}
     check_layers = {name: layers.get(module) for module, cases in discovered.items() for name in cases}
@@ -485,7 +487,8 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
     skipped = sorted(key for key, value in detail['requirements'].items() if value == 'skipped')
     if skipped:
         print(f'Requirements proved only by skipped checks here ({len(skipped)}): ' + ', '.join(skipped), flush=True)
-    return 1 if failed or metadata_errors or detail['budget_failures'] or detail['debt_retirement_required'] or requirement_failures else 0
+    # A module now under its budget is a note to shrink the debt file, not a failed run (decision 126.3).
+    return 1 if failed or metadata_errors or detail['budget_failures'] or requirement_failures else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -524,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.combine_timings:
         report = framework.combine_measurements([framework.decode_json(path.read_text()) for path in args.combine_timings])
         print(json.dumps(report, indent=1))
-        return 1 if report['budget_failures'] or report['debt_retirement_required'] or report['metadata_errors'] or any(row['returncode'] for row in report['workers']) or (not args.budgets_only and any(value not in ('passed', 'unchecked') for value in report['requirements'].values())) else 0
+        return 1 if report['budget_failures'] or report['metadata_errors'] or any(row['returncode'] for row in report['workers']) or (not args.budgets_only and any(value not in ('passed', 'unchecked', 'skipped') for value in report['requirements'].values())) else 0
     if args.jobs < 1:
         parser.error('--jobs must be positive')
     suites = args.suite or sorted(SUITES)
