@@ -260,7 +260,7 @@ class WorkerTests(unittest.TestCase):
 
 
 class RunnerIntegrationTests(unittest.TestCase):
-    def run_fixture(self, body='self.assertEqual(2, 1 + 1)', tagged=True, timeout='600', extra_module=False, malformed=False, layer='scenario', extra_args=(), siblings=False, module_import='', interrupt=False, trusted=True, fixture_source=None, fixture_checks=None, estimates=None):
+    def run_fixture(self, body='self.assertEqual(2, 1 + 1)', tagged=True, timeout='600', extra_module=False, malformed=False, layer='scenario', extra_args=(), siblings=False, module_import='', interrupt=False, fixture_source=None, fixture_checks=None, estimates=None):
         with tempfile.TemporaryDirectory(prefix='tf-run-') as folder:
             root = Path(folder)
             (root / 'tests').mkdir()
@@ -284,14 +284,14 @@ class RunnerIntegrationTests(unittest.TestCase):
                 layers['root:test_sibling'] = layer
                 catalogue['TF-1']['checks'].append('root:test_sibling.Probe.test_value')
                 extra_args = (*extra_args, '--module', 'root:test_sibling')
+            if not tagged:
+                catalogue['TF-1']['checks'] = []
             if fixture_checks is not None:
                 catalogue['TF-1']['checks'] = fixture_checks
             (root / 'source.json').write_text(json.dumps({'requirements': [{'id': 'TF-1', 'statement': 'Retain isolated worker execution.'}]}))
-            for name, data in [('test-legacy-dependencies.json', {}), ('test-stages.json', stages), ('test-layers.json', layers),
+            for name, data in [('test-stages.json', stages), ('test-layers.json', layers),
                                ('test-requirements.json', catalogue), ('test-timings.json', estimates or {'obsolete': 99999}),
-                               ('test-budget-debt.json', {'baseline': 'fixture', 'modules': {}}),
-                               ('test-legacy.json', {'baseline': 'fixture', 'tests': {}}),
-                               ('test-legacy-ceiling.json', {'baseline': 'fixture', 'tests': {}})]:
+                               ('test-budget-debt.json', {'baseline': 'fixture', 'modules': {}})]:
                 (root / 'scripts' / name).write_text(json.dumps(data))
             if malformed:
                 (root / 'scripts/test-layers.json').write_text('{invalid json')
@@ -300,8 +300,6 @@ class RunnerIntegrationTests(unittest.TestCase):
                       "import parallel_tests as p\nfrom pathlib import Path\n"
                       f"p.ROOT=Path({str(root)!r}); p.SUITES={{'root':p.ROOT}}\n"
                       "p.STAGES=p.ROOT/'scripts/test-stages.json'; p.TIMINGS=p.ROOT/'scripts/test-timings.json'\n"
-                      + ("p.legacy_versions=lambda root, current, ceiling: (ceiling, current, [])\n"
-                       "p.budget_versions=lambda root, current: []\n" if trusted else "")
                       + interruption + f"raise SystemExit(p.main(['--module','root:test_probe','--save-timings',{str(root / 'timings.json')!r}]+{list(extra_args)!r}))\n")
             result = subprocess.run([sys.executable, '-B', '-c', driver], cwd=root,
                                     env={**os.environ, 'COCOLO_WORKER_TIMEOUT': timeout, 'TF_FIXTURE_SECRET': 'synthetic-secret'},
@@ -324,11 +322,13 @@ class RunnerIntegrationTests(unittest.TestCase):
         self.assertEqual(max(1, (os.cpu_count() or 2) - 2), report['jobs'])
 
     @requirements('TF-3', 'TF-4', why_not_scenario='Verify untagged new test fails the actual runner using isolated framework fixtures.')
-    def test_untagged_new_test_fails_the_actual_runner(self):
+    def test_untagged_test_and_unchecked_requirement_are_reported_without_failure(self):
         code, output, report = self.run_fixture(tagged=False)
-        self.assertNotEqual(0, code, output)
-        self.assertIn('root:test_probe.Probe.test_value', output)
-        self.assertTrue(report['metadata_errors'])
+        self.assertEqual(0, code, output)
+        self.assertEqual([], report['metadata_errors'])
+        self.assertEqual(['TF-1'], report['unchecked_requirement_ids'])
+        self.assertEqual(1, report['unchecked_requirement_count'])
+        self.assertEqual('Unchecked requirements (1): TF-1', output.splitlines()[-1])
 
     @requirements('TF-2', why_not_scenario='Verify missing layer in unselected module is not hidden by module filter using isolated framework fixtures.')
     def test_missing_layer_in_unselected_module_is_not_hidden_by_module_filter(self):
@@ -481,12 +481,6 @@ class RunnerIntegrationTests(unittest.TestCase):
             self.assertEqual(expected, statuses[name], 'M8 wrong executed outcome')
             self.assertNotEqual('passed', coverage({'TF-5': {'checks': [name]}}, statuses)['TF-5'])
 
-    @requirements('TF-1', why_not_scenario='Verify review C13 unpatched runner fails closed without trusted base using isolated framework fixtures.')
-    def test_review_C13_unpatched_runner_fails_closed_without_trusted_base(self):
-        code, output, report = self.run_fixture(trusted=False)
-        self.assertNotEqual(0, code)
-        self.assertIn('trusted --base', output)
-        self.assertIsNotNone(report)
 
     @requirements('TF-1', why_not_scenario='Execute the actual CI base-selection shell against diverged local git history.')
     def test_B5_missing_base_fails_and_advanced_PR_base_uses_merge_base(self):

@@ -1,9 +1,0 @@
-{
- "status": "green",
- "base": "93624f19",
- "witness": "root:test_product_dependencies.ProductDependencies.test_fileless_generated_helpers_keep_owned_namespace_and_external_identity",
- "diagnostic": "Generated helper changes are detected; external generated product changes retain identity.",
- "source_run": "generated-green.run.json",
- "job_seconds": 35.99250262399437,
- "jobs": 16
-}

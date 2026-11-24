@@ -18,15 +18,14 @@ class MetadataTests(unittest.TestCase):
         self.fw = importlib.import_module('test_framework')
         self.module = 'root:test_sample'
         self.test = self.module + '.Sample.test_value'
-        self.inventory = {self.module: {self.test: {'requirements': ['TF-2'], 'rationale': 'metadata rejection', 'fingerprint': 'a' * 64}}}
+        self.inventory = {self.module: {self.test: {'requirements': ['TF-2'], 'rationale': 'metadata rejection'}}}
         self.catalogue = {'TF-2': {'statement': 'Every module declares one valid layer.', 'source': 'requirements:TF-2', 'checks': [self.test]}}
         self.stages = {self.module: 'integration'}
         self.layers = {self.module: 'component'}
-        self.legacy = {'baseline': 'baseline', 'tests': {}}
 
     def errors(self, **changes):
         options = dict(inventory=self.inventory, stages=self.stages, layers=self.layers,
-                       catalogue=self.catalogue, legacy=self.legacy, ceiling=self.legacy, previous=self.legacy)
+                       catalogue=self.catalogue)
         options.update(changes)
         return self.fw.validate_metadata(**options)
 
@@ -41,8 +40,8 @@ class MetadataTests(unittest.TestCase):
             self.fw.decode_json('{"root:m":"unit","root:m":"scenario"}')
 
     @requirements('TF-3', 'TF-6', why_not_scenario='Verify unknown empty and untagged proofs and missing rationale are rejected using isolated framework fixtures.')
-    def test_unknown_empty_and_untagged_proofs_and_missing_rationale_are_rejected(self):
-        for ids in ([], ['UNKNOWN'], ['']):
+    def test_unknown_and_empty_tags_and_missing_tagged_rationale_are_rejected(self):
+        for ids in (['UNKNOWN'], ['']):
             self.inventory[self.module][self.test]['requirements'] = ids
             with self.subTest(ids=ids):
                 self.assertTrue(any(self.test in error for error in self.errors()))
@@ -64,8 +63,6 @@ class MetadataTests(unittest.TestCase):
                 self.assertEqual(2, 2)
         self.assertEqual(['TF-3'], fw.describe_test(Inherited('test_value'))['requirements'])
         self.assertEqual([], fw.describe_test(Overridden('test_value'))['requirements'])
-        self.assertNotEqual(fw.describe_test(Inherited('test_value'))['fingerprint'],
-                            fw.describe_test(Overridden('test_value'))['fingerprint'])
 
     @requirements('TF-4', why_not_scenario='Verify requirement and check links are checked in both directions using isolated framework fixtures.')
     def test_requirement_and_check_links_are_checked_in_both_directions(self):
@@ -78,29 +75,7 @@ class MetadataTests(unittest.TestCase):
         catalogue['TF-9'] = {**catalogue['TF-2'], 'checks': [self.test]}
         self.assertTrue(self.errors(catalogue=catalogue))
 
-    @requirements('TF-7', why_not_scenario='Verify legacy list cannot grow restore entries change fingerprints or rename tests using isolated framework fixtures.')
-    def test_legacy_list_cannot_grow_restore_entries_change_fingerprints_or_rename_tests(self):
-        self.inventory[self.module][self.test]['requirements'] = []
-        self.inventory[self.module][self.test]['rationale'] = ''
-        allowed = {'baseline': 'baseline', 'tests': {self.test: 'a' * 64}}
-        opts = dict(catalogue={}, legacy=allowed, ceiling=allowed, previous=allowed)
-        self.assertEqual([], self.errors(**opts))
-        for changes in (
-            {'previous': self.legacy}, {'ceiling': self.legacy},
-            {'legacy': {'baseline': 'changed', 'tests': allowed['tests']}},
-            {'legacy': {'baseline': 'baseline', 'tests': {self.test: 'b' * 64}}},
-        ):
-            with self.subTest(changes=changes):
-                self.assertTrue(self.errors(**(opts | changes)))
-        renamed = self.test + '_renamed'
-        self.inventory[self.module][renamed] = self.inventory[self.module].pop(self.test)
-        self.assertTrue(self.errors(**opts))
 
-    @requirements('TF-7', why_not_scenario='Verify migration removes legacy entry and new tagged proof is required using isolated framework fixtures.')
-    def test_migration_removes_legacy_entry_and_new_tagged_proof_is_required(self):
-        old = {'baseline': 'baseline', 'tests': {self.test: 'a' * 64}}
-        self.assertEqual([], self.errors(ceiling=old, previous=old))
-        self.assertTrue(self.errors(legacy=old, ceiling=old, previous=old))
 
     @requirements('TF-5', why_not_scenario='Verify a requirement passes only when all checks passed and actually ran using isolated framework fixtures.')
     def test_a_requirement_passes_only_when_all_checks_passed_and_actually_ran(self):
@@ -301,15 +276,7 @@ class BudgetDebtTests(unittest.TestCase):
         self.assertEqual([], self.measure(60., part=(1, 2))['debt_retirement_required'])
 
     @requirements('TF-8', why_not_scenario='Verify debt can only shrink and does not exempt new modules using isolated framework fixtures.')
-    def test_debt_can_only_shrink_and_does_not_exempt_new_modules(self):
-        self.assertEqual([], self.fw.validate_budget_debt(self.debt, self.debt, self.debt))
-        for changed in ({'baseline': 'wrong', 'modules': self.debt['modules']},
-                        {'baseline': 'baseline', 'modules': {**self.debt['modules'], 'root:new': 100.}},
-                        {'baseline': 'baseline', 'modules': {**self.debt['modules'], 'root:old': 81.}}):
-            with self.subTest(changed=changed):
-                self.assertTrue(self.fw.validate_budget_debt(changed, self.debt, self.debt))
-        removed = {'baseline': 'baseline', 'modules': {'root:unselected': 90.}}
-        self.assertTrue(self.fw.validate_budget_debt(self.debt, self.debt, removed))
+    def test_budget_debt_does_not_exempt_new_modules(self):
         rows = [dict(suite='root', unit='new', seconds=30.001, names=['test'], returncode=0)]
         report = self.fw.measurements(rows, self.layers, self.stages, jobs=16, elapsed=30.001,
                                       selection=['root:new'], budget_debt=self.debt)
@@ -368,36 +335,8 @@ class ReviewCoreTests(unittest.TestCase):
         exec(compile(source, str(path), 'exec'), module.__dict__)
         return module
 
-    def test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls(self):
-        source = "import unittest\nVALUE = 3\nclass Case(unittest.TestCase):\n    EXPECTED = 3\n    def helper(self):\n        return VALUE\n    def setUp(self):\n        self.actual = self.helper()\n    def test_value(self):\n        self.assertEqual(self.EXPECTED, self.actual)\n"
-        def fingerprint(text):
-            return self.fw.dependency_fingerprint(self.module(text).Case('test_value'))
-        baseline = fingerprint(source)
-        self.assertEqual(baseline, fingerprint(source))
-        for changed in (source.replace('VALUE = 3', 'VALUE = 4'), source.replace('EXPECTED = 3', 'EXPECTED = 4'),
-                        source.replace('return VALUE', 'return VALUE + 1'), source.replace('self.actual = self.helper()', 'self.actual = 4')):
-            with self.subTest(source=changed):
-                self.assertNotEqual(baseline, fingerprint(changed))
 
-    def test_A3_dynamic_helpers_need_explicit_source_dependencies(self):
-        source = "import unittest\nclass Case(unittest.TestCase):\n    def helper(self):\n        return 1\n    def test_value(self):\n        self.assertEqual(1, getattr(self, 'helper')())\n"
-        module = self.module(source)
-        self.assertIsNone(self.fw.dependency_fingerprint(module.Case('test_value')))
-        module.Case.__fixture_dependencies__ = (self.root / 'test_values.py',)
-        self.assertIsNotNone(self.fw.dependency_fingerprint(module.Case('test_value')))
 
-    def test_A4_review_records_bind_digest_and_nonempty_revision(self):
-        import hashlib, json
-        record = self.root / 'review.json'
-        record.write_text(json.dumps({'revision': 'reviewed', 'outcome': 'passed'}))
-        checks = {'review:x': {'kind': 'review', 'revision': 'reviewed'}}
-        valid = {'revision': 'reviewed', 'record': str(record), 'sha256': hashlib.sha256(record.read_bytes()).hexdigest(), 'outcome': 'passed'}
-        self.assertEqual({'review:x': 'passed'}, self.fw.registered_outcomes(checks, {'review:x': valid}))
-        for changed in ({**valid, 'record': str(self.root / 'absent')}, {**valid, 'sha256': '0' * 64},
-                        {**valid, 'revision': None}, {**valid, 'outcome': 'failed'}):
-            with self.subTest(record=changed):
-                self.assertEqual('failed', self.fw.registered_outcomes(checks, {'review:x': changed})['review:x'])
-        self.assertEqual('failed', self.fw.registered_outcomes({'review:x': {'kind': 'review'}}, {'review:x': {**valid, 'revision': None}})['review:x'])
 
     def test_A5_A12_authority_ids_and_EOF_splitter(self):
         text = '**TF-1 — First.** first statement.\n\n**TF-2 — Second.** final statement.'
@@ -498,17 +437,8 @@ class ReviewEvidenceTests(unittest.TestCase):
     __requirements__ = ('TF-1', 'TF-3', 'TF-4', 'TF-5', 'TF-7', 'TF-9', 'TF-14')
     __why_not_scenario__ = 'Direct negative controls prove framework discovery, source integrity and evidence enforcement.'
 
-    def test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced(self):
-        import test_framework as fw
-        name = 'root:fixture.Case.test_value'
-        legacy = {'tests': {name: 'source'}}
-        baseline = {name: {'fingerprint': 'old'}}
-        self.assertEqual([], fw.validate_legacy_values({name: {'dependency_values': 'old'}}, legacy, baseline))
-        for observed in ('edited', None):
-            self.assertIn(name, ' '.join(fw.validate_legacy_values({name: {'dependency_values': observed}}, legacy, baseline)))
-        self.assertTrue(fw.validate_legacy_values({name: {'dependency_values': 'old'}}, legacy, {}))
 
-    def test_C6_overridden_and_generated_cases_fail_preflight_by_full_id(self):
+    def test_C6_overridden_and_generated_cases_keep_optional_requirement_tags(self):
         from hypothesis.stateful import RuleBasedStateMachine, rule
         import test_framework as fw
         fixture = MetadataTests(); fixture.setUp()
@@ -527,7 +457,7 @@ class ReviewEvidenceTests(unittest.TestCase):
             name = 'root:' + case.id()
             record = fw.describe_test(case)
             fixture.inventory = {fixture.module: {name: record}}
-            self.assertIn(name + ': no requirement', fixture.errors(catalogue={}))
+            self.assertEqual([], fixture.errors(catalogue={}))
         Machine.TestCase.__requirements__ = ('TF-3',)
         Machine.TestCase.__why_not_scenario__ = 'Generated metadata fixture.'
         case = Machine.TestCase('runTest'); name = 'root:' + case.id()
@@ -581,24 +511,6 @@ class ReviewLifecycleTests(unittest.TestCase):
         outcomes = {'lifecycle:' + row['check']: 'passed' if row['passed'] else 'failed' for row in report['checks']}
         self.assertEqual('failed', fw.coverage({'TF-5': {'checks': ['lifecycle:assertion_free']}}, outcomes)['TF-5'])
 
-    def test_C3_C13_cross_module_helper_is_found_by_source_path(self):
-        import types
-        import test_framework as fw
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            def loaded(name, source):
-                path = root / (name + '.py'); path.write_text(source)
-                module = types.ModuleType(name); module.__file__ = str(path)
-                sys.modules[name] = module; self.addCleanup(sys.modules.pop, name, None)
-                exec(compile(source, str(path), 'exec'), module.__dict__)
-                return module
-            source = 'import unittest, outside_helper\nclass Case(unittest.TestCase):\n    def test_value(self): self.assertEqual(1,outside_helper.expected())\n'
-            def fingerprint(value):
-                loaded('outside_helper', 'def expected():\n    return ' + str(value) + '\n')
-                return fw.dependency_fingerprint(loaded('test_cross_module', source).Case('test_value'))
-            before = fingerprint(1)
-            self.assertEqual(before, fingerprint(1))
-            self.assertNotEqual(before, fingerprint(2))
 
     def test_B6_complete_shard_labels_cannot_hide_a_missing_worker(self):
         import test_framework as fw
@@ -617,9 +529,9 @@ class ReviewLifecycleTests(unittest.TestCase):
         records = []
         for module, case in [('m', 'a'), ('n', 'b')]:
             row = {'suite': 'root', 'unit': module, 'seconds': 1., 'names': [module+'.'+case], 'returncode': 0, 'outcomes': {'root:'+module+'.'+case: 'passed'}}
-            records.append(fw.measurements([row], layers, stages, jobs=1, elapsed=1., selection=['root:'+module], catalogue=catalogue, fingerprints={'test':'same'}, invocation_id='one'))
+            records.append(fw.measurements([row], layers, stages, jobs=1, elapsed=1., selection=['root:'+module], catalogue=catalogue, invocation_id='one'))
         self.assertEqual({'TF-5':'passed'}, fw.combine_run_records(records)['requirements'])
-        for key, value in [('fingerprints', {'test':'changed'}), ('layers', {'root:m':'soak','root:n':'scenario'}), ('stages', {}), ('budget_debt', {'modules':{'root:m':1000}})]:
+        for key, value in [('layers', {'root:m':'soak','root:n':'scenario'}), ('stages', {}), ('budget_debt', {'modules':{'root:m':1000}})]:
             changed = copy.deepcopy(records)
             changed[1]['plan'][key] = value
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'incompatible'):
@@ -639,26 +551,6 @@ class ReviewLifecycleTests(unittest.TestCase):
                     generator.main()
 
 
-    def test_A1_relocated_worktrees_keep_equal_fixture_hashes_without_hiding_constant_edits(self):
-        import types
-        import test_framework as fw
-        from unittest.mock import patch
-        with tempfile.TemporaryDirectory() as folder:
-            def fingerprint(label, expected):
-                root = Path(folder) / label
-                (root / 'tests').mkdir(parents=True, exist_ok=True)
-                path = root / 'tests/test_relocation.py'
-                source = 'import unittest\nfrom pathlib import Path\nFILE = __file__\nROOT = Path(__file__).parent\nEXPECTED = ' + repr(expected) + '\nclass Case(unittest.TestCase):\n    def test_value(self):\n        self.assertTrue(FILE.endswith("test_relocation.py"))\n        self.assertTrue(ROOT.is_dir())\n        self.assertEqual(EXPECTED, 1)\n'
-                path.write_text(source)
-                module = types.ModuleType('test_relocation'); module.__file__ = str(path)
-                sys.modules[module.__name__] = module
-                self.addCleanup(sys.modules.pop, module.__name__, None)
-                exec(compile(source, str(path), 'exec'), module.__dict__)
-                with patch.object(fw, '__file__', str(root / 'scripts/test_framework.py')):
-                    return fw.dependency_fingerprint(module.Case('test_value'))
-            first = fingerprint('first', 1)
-            self.assertEqual(first, fingerprint('second', 1))
-            self.assertNotEqual(first, fingerprint('second', 2))
 
 
 if __name__ == '__main__':

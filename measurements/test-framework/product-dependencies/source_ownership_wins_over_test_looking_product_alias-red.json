@@ -1,9 +1,0 @@
-{
- "status": "red",
- "base": "5ab0a9d3",
- "diagnostic": "TF-26 product source followed a test-looking alias",
- "witness": "root:test_product_dependencies.ProductDependencies.test_source_ownership_wins_over_test_looking_product_alias",
- "source_run": "old-red.run.json",
- "job_seconds": 0.10589620802784339,
- "jobs": 16
-}

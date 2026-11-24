@@ -1,8 +1,0 @@
-{
- "status": "green",
- "witness": "root:test_test_framework_integration.ReleaseIntegration.test_versioned_debt_has_measured_ceilings_and_cannot_grow",
- "positive_control": "Measured current debt validates; added keys and higher ceilings fail.",
- "jobs": 16,
- "job_seconds": 0.7942419989849441,
- "source_run": "testfw-integration-bindings-green.run.json"
-}

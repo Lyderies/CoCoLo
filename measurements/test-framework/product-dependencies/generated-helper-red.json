@@ -1,9 +1,0 @@
-{
- "status": "red",
- "base": "93624f19",
- "witness": "root:test_product_dependencies.ProductDependencies.test_fileless_generated_helpers_keep_owned_namespace_and_external_identity",
- "diagnostic": "TF-26 generated test helper edit was hidden",
- "source_run": "generated-red.run.json",
- "job_seconds": 0.31676200102083385,
- "jobs": 16
-}

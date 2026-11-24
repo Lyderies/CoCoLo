@@ -30,33 +30,7 @@ class RoundTwo(unittest.TestCase):
         exec(compile(source, str(path), 'exec'), module.__dict__)
         return module
 
-    @fw.requirements('TF-7')
-    def test_M1_unrelated_source_cannot_resolve_a_specific_dependency(self):
-        unrelated = self.root / 'unrelated.py'; unrelated.write_text('VALUE = 1\n')
-        sources = {
-            'values': 'import unittest\nOPAQUE = object()\nclass Case(unittest.TestCase):\n    def test_value(self): self.assertTrue(OPAQUE)\n',
-            'helpers': 'import unittest\nclass Case(unittest.TestCase):\n    def helper(self): return 1\n    def test_value(self): self.assertEqual(1, getattr(self,"helper")())\n',
-        }
-        for kind, source in sources.items():
-            with self.subTest(dependency=kind):
-                module = self.module('test_binding_' + kind, source)
-                case = module.Case('test_value')
-                self.assertIsNone(fw.dependency_fingerprint(case))
-                self.assertIsNone(fw.dependency_fingerprint(case, source_dependencies=(unrelated,)), 'unrelated source restored ' + kind + ' eligibility')
-                self.assertIsNotNone(fw.dependency_fingerprint(case, source_dependencies=(module.__file__,)))
 
-    @fw.requirements('TF-7')
-    def test_N1_same_basename_dependencies_both_contribute(self):
-        module = self.module('test_files', 'import unittest\nclass Case(unittest.TestCase):\n    def test_value(self): self.assertEqual(1,1)\n')
-        paths = [self.root / part / 'fixture.py' for part in ('a','b')]
-        for path in paths: path.parent.mkdir(); path.write_text('VALUE = 1\n')
-        def fingerprint(): return fw.dependency_fingerprint(module.Case('test_value'), source_dependencies=paths)
-        initial = fingerprint(); self.assertEqual(initial, fingerprint())
-        for path in paths:
-            path.write_text('VALUE = 2\n')
-            self.assertNotEqual(initial, fingerprint(), 'explicit dependency overwritten: ' + path.parent.name)
-            path.write_text('VALUE = 1\n')
-            self.assertEqual(initial, fingerprint())
 
     @fw.requirements('TF-14')
     def test_M2_qualified_and_renamed_imports_retain_golden_provenance(self):

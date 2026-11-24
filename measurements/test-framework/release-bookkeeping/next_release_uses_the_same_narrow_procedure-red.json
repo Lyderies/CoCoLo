@@ -1,9 +1,0 @@
-{
- "status": "red",
- "base": "c75eba51",
- "diagnostic": "missing narrow release-bookkeeping validator",
- "witness": "root:test_release_bookkeeping.ReleaseBookkeeping.test_next_release_uses_the_same_narrow_procedure",
- "source_run": "old.run.json",
- "job_seconds": 0.1650093750213273,
- "jobs": 16
-}

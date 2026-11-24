@@ -1,6 +1,6 @@
 """Slice B2 (decision 92 A): the project service records a finished child's outcome itself.
 
-DESIGN-0.4.0-B2-outcome.md draft 2 with the s2 corrections, rows B2-1 to B2-18 (measurements/b2/requirements.md maps
+DESIGN-0.4.0-B2-outcome.md draft 2 with the s2 corrections, rows B2-1 to B2-18 (docs/requirements/b2.md maps
 each row to its code and its test). Owner decision 92: after the orchestration closes, is interrupted or ends at the
 24 h idle point, nothing new is recorded ("unrecorded" is final); the service records right after the result is safely
 stored, plus a check after a restart; who recorded lives in a small separate table (schema step 19 -> 20), receipts and

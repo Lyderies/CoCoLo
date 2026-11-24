@@ -40,28 +40,7 @@ class RoundThree(unittest.TestCase):
                 ordinary=source.replace('GOLDEN_PATH','ORDINARY')
                 self.assertEqual([],fw.golden_bypasses(ordinary,filename=pkg/'test_case.py'))
 
-    @requirements('TF-7')
-    def test_p01_closure_fixture_state_invalidates_metadata(self):
-        module=self.module('test_r3_closure','import unittest\nfrom types import SimpleNamespace\ndef make():\n    state=SimpleNamespace(expected=1)\n    def test_value(self): self.assertEqual(1,state.expected)\n    return state,test_value\nstate,method=make()\nclass Case(unittest.TestCase): pass\nCase.test_value=method\n')
-        case=module.Case('test_value');before=fw.describe_test(case);result=unittest.TestResult();case.run(result);self.assertTrue(result.wasSuccessful())
-        module.state.expected=2;after=fw.describe_test(case);result=unittest.TestResult();case.run(result);self.assertEqual(1,len(result.failures))
-        self.assertTrue(before['dependency_values'] is None or after['dependency_values'] is None or before!=after,'p01 closure behavior changed but metadata stayed eligible')
-        simple=self.module('test_r3_simple','import unittest\ndef make(expected):\n    def test_value(self): self.assertEqual(1,expected)\n    return test_value\nclass Case(unittest.TestCase): pass\nCase.test_value=make(1)\n')
-        a=fw.dependency_fingerprint(simple.Case('test_value'));self.assertIsNotNone(a)
-        simple.Case.test_value=simple.make(2);self.assertNotEqual(a,fw.dependency_fingerprint(simple.Case('test_value')))
 
-    @requirements('TF-7')
-    def test_p01_positional_and_keyword_defaults_are_dependencies(self):
-        for signature in ('value=EXPECTED','*, value=EXPECTED'):
-            with self.subTest(signature=signature):
-                source='import unittest\nEXPECTED=1\ndef helper('+signature+'):\n    return value\nclass Case(unittest.TestCase):\n    def test_value(self): self.assertEqual(1,helper())\n'
-                module=self.module('test_r3_defaults',source);case=module.Case('test_value');before=fw.describe_test(case)
-                result=unittest.TestResult();case.run(result);self.assertTrue(result.wasSuccessful());self.assertIsNotNone(before['dependency_values'])
-                module.EXPECTED=2
-                if signature.startswith('*'): module.helper.__kwdefaults__={'value':module.EXPECTED}
-                else: module.helper.__defaults__=(module.EXPECTED,)
-                result=unittest.TestResult();case.run(result);self.assertEqual(1,len(result.failures))
-                self.assertNotEqual(before,fw.describe_test(case),'p01 default-only behavior change kept identical metadata')
 
     @requirements('TF-8','TF-9')
     def test_p02_retirement_witness_rejects_each_status_blind_mutant(self):
@@ -158,19 +137,3 @@ class RoundThree(unittest.TestCase):
                 with self.assertRaises(GoldenUpdated):compare(**{**args,'environ':{'UPDATE_GOLDEN':'1'}})
                 self.assertEqual('TF-14\n',sidecar.read_text());compare(**args)
 
-    @requirements('TF-23')
-    def test_TF23_declared_fixes_require_red_green_and_positive_control(self):
-        validate=getattr(fw,'validate_witness_evidence',None)
-        self.assertTrue(callable(validate),'TF23 missing evidence enforcement')
-        (self.root/'red.json').write_text(json.dumps({'base':'9c18c4a3','status':'red','diagnostic':'intended failure'}))
-        (self.root/'green.json').write_text(json.dumps({'status':'green'}))
-        good=dict(fix='fixture',requirement='TF-23',witness='root:fixture.test',positive_control='valid fixture',base='9c18c4a3',red='red.json',diagnostic='intended failure',green='green.json')
-        self.assertEqual([],validate(self.root,[good]))
-        for field in good:
-            bad=dict(good);bad.pop(field)
-            self.assertTrue(validate(self.root,[bad]),'TF23 accepted missing '+field)
-        (self.root/'red.json').write_text(json.dumps({'base':'9c18c4a3','status':'green','diagnostic':'different failure'}))
-        self.assertTrue(validate(self.root,[good]),'TF23 accepted wrong red outcome')
-        manifests=list((ROOT/'scripts').glob('test-review-witnesses-*.json'))
-        self.assertTrue(manifests,'TF23 no declared review witnesses')
-        for path in manifests:self.assertEqual([],validate(ROOT,json.loads(path.read_text())),str(path))

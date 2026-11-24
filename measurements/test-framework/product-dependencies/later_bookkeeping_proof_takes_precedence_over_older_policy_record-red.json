@@ -1,9 +1,0 @@
-{
- "status": "red",
- "base": "5ab0a9d3",
- "diagnostic": "TF-26 missing release/policy dependency precedence",
- "witness": "root:test_product_dependencies.ProductDependencies.test_later_bookkeeping_proof_takes_precedence_over_older_policy_record",
- "source_run": "old-red.run.json",
- "job_seconds": 0.10589620802784339,
- "jobs": 16
-}

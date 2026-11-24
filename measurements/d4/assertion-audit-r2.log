@@ -1,9 +1,0 @@
-Assertion comparison: e4cda541
-test_publication_replay.py: original assertions 177; current assertions 208; original tests 37; added tests 3; removed tests []
-test_publication_replay_driver.py: original assertions 47; current assertions 49; original tests 7; added tests 0; removed tests []
-REPLACED StoppedInstanceOrderTests.stranded_then_successor.settling:320: self.assertEqual(run_handle, value.run_handle)
-REPLACED StoppedInstanceOrderTests.stranded_then_successor.settling:321: self.assertEqual(held.binding.claim_id, value.bridge_run_id)
-test_publication_replay_proofs.py: original assertions 9; current assertions 19; original tests 6; added tests 5; removed tests []
-Both complete D3 entries equal 049e2ee8
-Complete D4 replay entry unchanged
-Changed pre-D4 files under tests/: ['packages/codex-agents/tests/lifetime_caps.json']

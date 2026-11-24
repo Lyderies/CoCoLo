@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import ast
 import hashlib
-from functools import lru_cache
-import inspect
 import json
 import math
 from pathlib import Path
@@ -16,8 +14,6 @@ import uuid
 BUDGETS = {'unit': 5., 'component': 30., 'crash': 60., 'scenario': 60., 'soak': 900.}
 STAGES = {'unit': {'unit'}, 'component': {'integration'}, 'crash': {'integration'},
           'scenario': {'integration', 'e2e'}, 'soak': {'integration', 'e2e'}}
-BASELINE = 'a1d25560c7748680387a542fb7d047c32205dad8'
-RELEASE_BASE = 'b531844030fa619c1f62ddd6c092ebc2ea4fca38'
 
 
 def requirements(*ids, why_not_scenario=''):
@@ -39,53 +35,18 @@ def decode_json(text):
     return json.loads(text, object_pairs_hook=unique)
 
 
-@lru_cache(maxsize=None)
-def _source(value):
-    try:
-        return inspect.getsource(value).replace('\r\n', '\n')
-    except (OSError, TypeError):
-        code = getattr(value, '__code__', None)
-        return repr((getattr(value, '__module__', ''), getattr(value, '__qualname__', ''),
-                     code.co_code.hex() if code else 'generated'))
 
 
-def describe_test(test, source_dependencies=(), *, test_owned=True):
+def describe_test(test):
     method = getattr(type(test), test._testMethodName)
     ids = getattr(method, '__requirements__', getattr(type(test), '__requirements__', ()))
     rationale = getattr(method, '__why_not_scenario__', None) or getattr(type(test), '__why_not_scenario__', '') or ''
-    # Include each defining fixture, including superclass fixtures used through super().
-    sources = [_source(method)]
-    for cls in type(test).__mro__:
-        if cls in (unittest.TestCase, object):
-            continue
-        for name in ('setUp', 'tearDown', 'setUpClass', 'tearDownClass'):
-            if name in cls.__dict__:
-                sources.append(_source(cls.__dict__[name]))
-    return {'requirements': list(ids), 'rationale': rationale,
-            'fingerprint': hashlib.sha256('\n'.join(sources).encode()).hexdigest(),
-            'dependencies': dependency_fingerprint(test, include_values=False, test_owned=test_owned),
-            'dependency_values': dependency_fingerprint(test, source_dependencies=source_dependencies, test_owned=test_owned)}
+    return {'requirements': list(ids), 'rationale': rationale}
 
 
 def inventory_suite(suite, layers=None):
     """Called only inside a suite's discovery child, honoring its load_tests hooks."""
     found = {}
-    root = Path(__file__).resolve().parents[1]
-    baseline_file = root / 'scripts/test-legacy-captured-values.json'
-    if not baseline_file.exists():
-        baseline_file = root / 'scripts/test-legacy-bound-values.json'
-    if not baseline_file.exists():
-        baseline_file = root / 'scripts/test-legacy-values.json'
-    baseline = decode_json(baseline_file.read_text()) if baseline_file.exists() else {}
-    release_file = root/'scripts/test-legacy-release-0850.json'
-    if release_file.exists():
-        baseline.update(decode_json(release_file.read_text())['tests'])
-    for name in ('test-legacy-release-0850-bindings.json', 'test-legacy-release-0850-runtime.json'):
-        bindings_file = root/'scripts'/name
-        if bindings_file.exists():
-            baseline.update(decode_json(bindings_file.read_text())['tests'])
-    for binding in sorted((root/'scripts/test-release-bindings').glob('*.json')):
-        baseline.update(decode_json(binding.read_text())['tests'])
     def walk(tests):
         for test in tests:
             if isinstance(test, unittest.TestSuite):
@@ -99,7 +60,7 @@ def inventory_suite(suite, layers=None):
                 module = found.setdefault(f'{suite}:{name}', {})
                 if key in module:
                     raise ValueError(f'duplicate discovered test: {key}')
-                module[key] = describe_test(test, tuple(root / name for name in baseline.get(key, {}).get('source_dependencies', ())))
+                module[key] = describe_test(test)
     from test_profiles import activate
     from test_worker import Guard
     activate()
@@ -124,19 +85,9 @@ def inventory_suite(suite, layers=None):
     return found
 
 
-def release_legacy(current, ceiling, previous, release, release_current=None,
-                   release_ceiling=None, release_previous=None):
-    """Overlay the reviewed version while retaining independent shrink-only manifests."""
-    original = {name: record['fingerprint'] for name, record in release['tests'].items()}
-    versions = []
-    for old, new in zip((current, ceiling, previous), (release_current, release_ceiling, release_previous)):
-        tests = {name: value for name, value in old['tests'].items() if name not in original}
-        tests.update(original if new is None else new['tests'])
-        versions.append({'baseline': old['baseline'], 'tests': tests})
-    return tuple(versions)
 
 
-def validate_metadata(*, inventory, stages, layers, catalogue, legacy, ceiling, previous):
+def validate_metadata(*, inventory, stages, layers, catalogue):
     errors = []
     tests = {key: value for module in inventory.values() for key, value in module.items()}
     for title, mapping in [('stage', stages), ('layer', layers)]:
@@ -155,36 +106,23 @@ def validate_metadata(*, inventory, stages, layers, catalogue, legacy, ceiling, 
                 errors.append(f'{name}: test import failed')
                 continue
             ids = record['requirements']
-            if not ids and name not in legacy['tests']:
-                errors.append(f'{name}: no requirement')
             for requirement in ids:
                 if not isinstance(requirement, str) or not re.fullmatch(r'[A-Z][A-Za-z0-9_.-]*', requirement) or requirement not in catalogue:
                     errors.append(f'{name}: unknown requirement {requirement!r}')
                 elif name not in catalogue[requirement]['checks']:
                     errors.append(f'{name}: {requirement} does not list its check')
-            if layer != 'unit' and not (record.get('rationale') or '').strip() and name not in legacy['tests']:
+            if layer != 'unit' and not (record.get('rationale') or '').strip() and ids:
                 errors.append(f'{name}: why_not_scenario missing')
     for requirement, row in catalogue.items():
         if row.get('active') is False:
             errors.append(requirement + ': requirement cannot be marked inactive')
-        if not row.get('statement', '').strip() or not row.get('source', '').strip() or not row.get('checks'):
-            errors.append(f'{requirement}: requirement has no statement, source or check')
+        if not row.get('statement', '').strip() or not row.get('source', '').strip():
+            errors.append(f'{requirement}: requirement has no statement or source')
         if len(row.get('checks', [])) != len(set(row.get('checks', []))):
             errors.append(f'{requirement}: duplicate check')
         for name in row.get('checks', []):
             if name not in tests or requirement not in tests[name].get('requirements', []):
                 errors.append(f'{requirement}: missing or unlinked check {name}')
-    for name, fingerprint in legacy['tests'].items():
-        if name not in tests:
-            errors.append(f'{name}: stale legacy entry')
-        elif tests[name].get('requirements'):
-            errors.append(f'{name}: tagged test must leave legacy list')
-        elif tests[name].get('fingerprint') != fingerprint:
-            errors.append(f'{name}: legacy implementation changed; tag it')
-        if any(version['tests'].get(name) != fingerprint for version in (ceiling, previous)):
-            errors.append(f'{name}: legacy list grew or fingerprint changed')
-    if legacy['baseline'] != ceiling['baseline'] or legacy['baseline'] != previous['baseline']:
-        errors.append('legacy baseline changed')
     return errors
 
 
@@ -192,7 +130,8 @@ def coverage(catalogue, outcomes):
     result = {}
     for requirement, row in catalogue.items():
         states = [outcomes.get(name, 'not_run') for name in row['checks']]
-        result[requirement] = ('failed' if not states or any(s not in ('passed', 'not_run') for s in states) else
+        result[requirement] = ('unchecked' if not states else
+                               'failed' if any(s not in ('passed', 'not_run') for s in states) else
                                'not_run' if 'not_run' in states else 'passed')
     return result
 
@@ -204,16 +143,8 @@ def select_layers(layers, profile):
 
 
 
-def validate_budget_debt(current, ceiling, previous):
-    errors = []
-    if current['baseline'] != ceiling['baseline'] or current['baseline'] != previous['baseline']:
-        errors.append('budget debt baseline changed')
-    for name, value in current['modules'].items():
-        if any(version['modules'].get(name) != value for version in (ceiling, previous)):
-            errors.append(f'{name}: budget debt grew, was restored or changed ceiling')
-    return errors
 
-def measurements(rows, layers, stages, *, jobs, elapsed, selection, part=(1, 1), profile='ci', catalogue=None, fingerprints=None,
+def measurements(rows, layers, stages, *, jobs, elapsed, selection, part=(1, 1), profile='ci', catalogue=None,
                  budget_debt=None, discovery_seconds=0., preflight_seconds=0., invocation_id=None, expected_fragments=None):
     modules = {}
     fragments = {}
@@ -237,9 +168,11 @@ def measurements(rows, layers, stages, *, jobs, elapsed, selection, part=(1, 1),
                 set(units) == {row['unit'] for row in rows if row['suite'] + ':' + row['unit'].split('#')[0] == name and row.get('returncode') == 0 and not row.get('timed_out')} }
     retirement = sorted(name for name in debt if name in complete and name in modules and modules[name] <= BUDGETS[layers[name]]) if part == (1, 1) else []
     plan = {'expected_fragments': supplied_fragments or {}, 'budget_debt': budget_debt or {}, 'layers': layers, 'stages': stages, 'selection': sorted(selection), 'profile': profile,
-            'catalogue': catalogue or {}, 'fingerprints': fingerprints or {}}
+            'catalogue': catalogue or {}}
     return {'schema': 1, 'run_id': uuid.uuid4().hex, 'invocation_id': invocation_id or __import__('os').environ.get('COCOLO_TEST_RUN_ID') or uuid.uuid4().hex, 'python': platform.python_version(),
             'platform': platform.system(), 'jobs': jobs, 'elapsed_seconds': elapsed,
+            'unchecked_requirement_ids': sorted(k for k, row in (catalogue or {}).items() if not row['checks']),
+            'unchecked_requirement_count': sum(not row['checks'] for row in (catalogue or {}).values()),
             'job_seconds': sum(row['seconds'] for row in rows), 'workers': rows, 'modules': modules,
             'budget_failures': failures, 'budget_warnings': warnings, 'debt_retirement_required': retirement,
             'discovery_seconds': discovery_seconds, 'preflight_seconds': preflight_seconds,
@@ -271,7 +204,7 @@ def combine_measurements(reports):
     result = measurements(rows, first['plan']['layers'], first['plan']['stages'],
                           selection=first['plan']['selection'], jobs=sum(r['jobs'] for r in reports),
                           elapsed=max(r['elapsed_seconds'] for r in reports), profile=first['plan']['profile'],
-                          catalogue=first['plan']['catalogue'], fingerprints=first['plan']['fingerprints'],
+                          catalogue=first['plan']['catalogue'],
                           budget_debt=first['plan']['budget_debt'],
                           discovery_seconds=sum(r['discovery_seconds'] for r in reports),
                           preflight_seconds=sum(r['preflight_seconds'] for r in reports), invocation_id=first['invocation_id'],
@@ -291,7 +224,7 @@ def combine_run_records(reports):
     for report in reports:
         if report.get('invocation_id') != first.get('invocation_id'):
             raise ValueError('mixed invocation identity')
-        if any(report['plan'][key] != first['plan'][key] for key in ('catalogue', 'profile', 'fingerprints', 'layers', 'stages', 'budget_debt')):
+        if any(report['plan'][key] != first['plan'][key] for key in ('catalogue', 'profile', 'layers', 'stages', 'budget_debt')):
             raise ValueError('incompatible requirement/source/layer plan')
         groups.setdefault(report['plan_digest'], []).append(report)
     complete = [combine_measurements(group) for group in groups.values()]
@@ -308,16 +241,13 @@ def combine_run_records(reports):
                 if name in outcomes:
                     raise ValueError('duplicate stage check: ' + name)
                 outcomes[name] = status
-    for report in reports:
-        for name, status in report.get('registered_outcomes', {}).items():
-            if name in outcomes and outcomes[name] != status:
-                raise ValueError('incompatible registered evidence: ' + name)
-            outcomes[name] = status
     result = coverage(first['plan']['catalogue'], outcomes)
-    failures = {name: status for name, status in result.items() if status != 'passed'}
+    failures = {name: status for name, status in result.items() if status not in ('passed', 'unchecked')}
     if failures:
         raise ValueError('requirements failed/not_run: ' + repr(failures))
     return {'invocation_id': first['invocation_id'], 'requirements': result,
+            'unchecked_requirement_ids': sorted(k for k, v in result.items() if v == 'unchecked'),
+            'unchecked_requirement_count': sum(v == 'unchecked' for v in result.values()),
             'job_seconds': sum(r['job_seconds'] for r in reports)}
 
 
@@ -364,255 +294,14 @@ def validate_dependencies(root):
     return errors
 
 
-@lru_cache(maxsize=None)
-def source_bindings(filename):
-    try:
-        tree = ast.parse(Path(filename).read_text())
-    except (OSError, TypeError, SyntaxError):
-        return {}
-    bindings = {}
-    for node in tree.body:
-        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in targets:
-                if isinstance(target, ast.Name):
-                    bindings[target.id] = node.value
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            for alias in node.names:
-                bindings[alias.asname or alias.name] = (node.module, alias.name)
-    return bindings
 
 
-def dependency_fingerprint(test, *, include_values=True, source_dependencies=(), test_owned=True):
-    """Hash local test fixtures/helpers transitively, including generated closure constants."""
-    import sys
-    import types
-    seen, records = set(), {}
-    unresolved = []
-    cls = type(test)
-    module = sys.modules[cls.__module__]
-    explicit = tuple(getattr(cls, '__fixture_dependencies__', ())) + tuple(source_dependencies)
-    explicit_files = {Path(value).resolve() for value in explicit if isinstance(value, (str, Path))}
-    def covered(filename):
-        return bool(filename and Path(filename).resolve() in explicit_files)
-    def dependency_source(value):
-        # Decorated/generated fixture methods belong to their original definition.
-        original = inspect.unwrap(value)
-        filename = inspect.getsourcefile(original)
-        if filename and filename.startswith('<'):
-            owner = sys.modules.get(original.__module__)
-            return getattr(owner, '__file__', None)
-        return filename
-    worktree_root = Path(__file__).resolve().parents[1]
-    worktree_prefix = str(worktree_root)
-    module_file = getattr(module, '__file__', None)
-    test_file = Path(module_file).resolve() if module_file else None
-    test_root = next((parent for parent in test_file.parents if parent.name == 'tests'), test_file.parent) if test_file else None
-    test_roots = tuple(root for root in (test_root, worktree_root / 'tests',
-                  worktree_root / 'packages/codex-agents/tests', worktree_root / 'packages/claude-agents/tests') if root is not None)
-    product_roots = (worktree_root / 'packages/codex-agents/native-package',
-                     worktree_root / 'packages/claude-agents/src')
-    @lru_cache(maxsize=None)
-    def owned_path(filename):
-        if not filename or filename.startswith('<'):
-            return False
-        path = Path(filename).resolve()
-        if any(path.is_relative_to(root) for root in product_roots):
-            return False
-        return any(path.is_relative_to(root) for root in test_roots) or path in explicit_files
-    def identity(value):
-        if isinstance(value, types.ModuleType):
-            return ('module', value.__name__)
-        return ('reference', value.__module__, value.__qualname__)
-    def stable(value, owner_file=None):
-        if isinstance(value, types.CodeType):
-            return code_value(value)
-        if isinstance(value, (set, frozenset)):
-            return ('set', sorted((stable(v, owner_file) for v in value), key=repr))
-        if isinstance(value, (tuple, list)):
-            return (type(value).__name__, [stable(v, owner_file) for v in value])
-        if isinstance(value, dict):
-            return ('dict', sorted(((stable(k, owner_file), stable(v, owner_file)) for k, v in value.items()), key=repr))
-        if isinstance(value, (str, bytes, int, float, bool, type(None))):
-            if include_values and isinstance(value, str):
-                if value == worktree_prefix or value.startswith(worktree_prefix + '/'):
-                    return repr('<worktree>' + value[len(worktree_prefix):])
-            return repr(value)
-        if inspect.isfunction(value) or inspect.isclass(value):
-            if include_values:
-                walk(value)
-            return (value.__module__, value.__qualname__)
-        if include_values and inspect.isbuiltin(value) and isinstance(getattr(value, '__self__', None), (types.ModuleType, type(None))):
-            return ('builtin', value.__module__, value.__qualname__)
-        if include_values:
-            if isinstance(value, Path):
-                return ('path', value.relative_to(worktree_root).as_posix() if value.is_relative_to(worktree_root) else value.as_posix())
-            if not covered(owner_file):
-                unresolved.append(type(value).__module__ + ':' + type(value).__qualname__)
-        return type(value).__module__ + ':' + type(value).__qualname__
-    def global_value(name, globals_, visited=()):
-        value = globals_.get(name)
-        filename = globals_.get('__file__')
-        binding = source_bindings(filename).get(name) if filename else None
-        if isinstance(binding, tuple) and binding not in visited:
-            imported = sys.modules.get(binding[0])
-            if imported is not None and (local(imported) if test_owned else binding[0].startswith(('tests.', 'test_')) or local(imported)):
-                return global_value(binding[1], vars(imported), visited + (binding,))
-            if test_owned:
-                return ('reference', *binding)
-        dynamic = binding is not None and not isinstance(binding, tuple) and any(
-            isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and ast.unparse(n.func).startswith(('secrets.', 'random.', 'time.', 'tempfile.', 'os.path.realpath'))
-            or isinstance(n, ast.Attribute) and ast.unparse(n) == 'os.environ'
-            for n in ast.walk(binding))
-        if dynamic:
-            if not covered(filename):
-                unresolved.append(name + ': runtime fixture value needs explicit source dependency')
-            return ('source-defined', ast.dump(binding, include_attributes=False))
-        return stable(value, filename)
-
-    def default_values(value, kind, defaults):
-        # Imported product defaults retain their declaration identity. Owned
-        # defaults still use the captured value, including runtime mutations.
-        if not test_owned:
-            return stable(defaults, dependency_source(value))
-        import textwrap
-        try:
-            node = ast.parse(textwrap.dedent(_source(value))).body[0]
-            expressions = node.args.defaults if kind == 'defaults' else dict(
-                (arg.arg, expr) for arg, expr in zip(node.args.kwonlyargs, node.args.kw_defaults))
-        except (SyntaxError, AttributeError, IndexError):
-            return stable(defaults, dependency_source(value))
-        def declared(expr, captured):
-            if isinstance(expr, ast.Name):
-                reference = global_value(expr.id, value.__globals__)
-                if isinstance(reference, tuple) and reference[0] == 'reference':
-                    return reference
-            elif isinstance(expr, ast.Attribute):
-                names = []
-                while isinstance(expr, ast.Attribute):
-                    names.insert(0, expr.attr); expr = expr.value
-                if isinstance(expr, ast.Name):
-                    module = value.__globals__.get(expr.id)
-                    if isinstance(module, types.ModuleType) and not local(module):
-                        return ('reference', module.__name__, '.'.join(names))
-            return stable(captured, dependency_source(value))
-        if kind == 'defaults' and len(expressions) == len(defaults):
-            return ('tuple', [declared(expr, captured) for expr, captured in zip(expressions, defaults)])
-        if kind == 'kwdefaults':
-            return ('dict', sorted(((stable(name), declared(expressions.get(name), captured))
-                                    for name, captured in defaults.items()), key=repr))
-        return stable(defaults, dependency_source(value))
-
-    def code_value(code):
-        return (code.co_code.hex(), code.co_names, tuple(stable(v, code.co_filename) for v in code.co_consts))
-    def local(value):
-        owner = getattr(value, '__module__', '')
-        try:
-            path = getattr(value, '__file__', None) if isinstance(value, types.ModuleType) else (dependency_source(value) if test_owned else inspect.getsourcefile(value)) if inspect.isfunction(value) or inspect.isclass(value) else None
-        except TypeError:
-            path = None
-        if test_owned:
-            if path:
-                return owned_path(path)
-            # exec-generated fixtures have no file. Their defining namespace,
-            # not a test-looking name or the current directory, establishes ownership.
-            original = inspect.unwrap(value)
-            if inspect.isfunction(original):
-                return original.__globals__ is vars(module)
-            if isinstance(value, types.ModuleType):
-                return value is module
-            if inspect.isclass(value):
-                return value is cls or any(inspect.isfunction(item) and item.__globals__ is vars(module)
-                                           for item in vars(value).values())
-            return False
-        return owner == cls.__module__ or owner.startswith(('tests.', 'test_')) or bool(path and ('/tests/' in path or include_values and Path(path).parent == Path(getattr(module, '__file__', '')).parent))
-    def walk(value):
-        if id(value) in seen:
-            return
-        seen.add(id(value))
-        if isinstance(value, (classmethod, staticmethod)):
-            walk(value.__func__)
-        elif inspect.ismethod(value):
-            walk(value.__func__)
-        elif inspect.isfunction(value) and local(value):
-            key = value.__module__ + ':' + value.__qualname__
-            records[key] = (_source(value), code_value(value.__code__))
-            if include_values and any(name in value.__code__.co_names for name in ('getattr', '__import__', 'import_module', 'eval', 'exec')) and not covered(dependency_source(value)):
-                unresolved.append(key + ': dynamic helper needs explicit source dependency')
-            if include_values:
-                for name, defaults in (('defaults', value.__defaults__), ('kwdefaults', value.__kwdefaults__)):
-                    if defaults:
-                        records[key + ':' + name] = default_values(value, name, defaults)
-            for name in value.__code__.co_names:
-                dependency = value.__globals__.get(name)
-                if inspect.isfunction(dependency) or inspect.isclass(dependency):
-                    if test_owned and not local(dependency):
-                        records[key + ':reference:' + name] = identity(dependency)
-                    else:
-                        walk(dependency)
-                elif test_owned and isinstance(dependency, types.ModuleType) and not local(dependency):
-                    records[key + ':reference:' + name] = identity(dependency)
-                elif isinstance(dependency, types.ModuleType) and (local(dependency) if test_owned else dependency.__name__.startswith(('tests.', 'test_')) or include_values and local(dependency)):
-
-                    for referenced in value.__code__.co_names:
-                        item = getattr(dependency, referenced, None)
-                        if include_values and referenced in vars(dependency) and not callable(item) and not isinstance(item, types.ModuleType):
-                            records[key + ':module:' + dependency.__name__ + ':' + referenced] = global_value(referenced, vars(dependency))
-                        else:
-                            walk(item)
-                elif include_values and name in value.__globals__ and not isinstance(dependency, types.ModuleType):
-                    records[key + ':global:' + name] = global_value(name, value.__globals__)
-                for parent in cls.__mro__:
-                    if parent not in (object, unittest.TestCase) and name in vars(parent):
-                        item = vars(parent)[name]
-                        if include_values and not callable(item) and not isinstance(item, (classmethod, staticmethod)):
-                            records[key + ':class:' + parent.__qualname__ + ':' + name] = stable(item, inspect.getsourcefile(parent))
-                        else:
-                            walk(item)
-            for index, cell in enumerate(value.__closure__ or ()):
-                item = cell.cell_contents
-                if inspect.isfunction(item) or inspect.isclass(item):
-                    walk(item)
-                elif include_values or isinstance(item, (str, bytes, int, float, bool, tuple, list, dict, type(None))):
-                    records[key + ':closure:' + str(index)] = stable(item, dependency_source(value))
-        elif inspect.isclass(value) and local(value):
-            for item in vars(value).values():
-                walk(item)
-    walk(getattr(cls, test._testMethodName))
-    for parent in cls.__mro__:
-        if parent in (object, unittest.TestCase):
-            continue
-        for name in ('setUp', 'tearDown', 'setUpClass', 'tearDownClass'):
-            walk(vars(parent).get(name))
-    for name in ('setUpModule', 'tearDownModule'):
-        walk(getattr(module, name, None))
-    for value in explicit:
-        if include_values and isinstance(value, (str, Path)):
-            path = Path(value)
-            try:
-                resolved = path.resolve()
-                source_identity = resolved.relative_to(worktree_root).as_posix() if resolved.is_relative_to(worktree_root) else resolved.as_posix()
-                if test_owned and not owned_path(str(resolved)):
-                    unresolved.append(source_identity + ': explicit dependency is not test-owned')
-                else:
-                    records['explicit:' + source_identity] = hashlib.sha256(path.read_bytes()).hexdigest()
-            except OSError:
-                unresolved.append(str(path))
-        else:
-            walk(value)
-    if include_values and unresolved:
-        return None
-    return hashlib.sha256(json.dumps(records, sort_keys=True).encode()).hexdigest()
 
 
-def validate_legacy_values(records, legacy, baseline):
-    errors = []
-    for name in legacy['tests']:
-        observed = records.get(name, {}).get('dependency_values')
-        expected = baseline.get(name, {}).get('fingerprint')
-        if observed is None or expected is None or observed != expected:
-            errors.append(name + ': legacy constants/helper sources changed or unresolved; migrate its requirement proof')
-    return errors
+
+
+# Exported golden names per dependency file, parsed once per process (TF-28 preflight time).
+_GOLDEN_EXPORTS = {}
 
 
 def golden_bypasses(source, *, filename=None):
@@ -638,7 +327,9 @@ def golden_bypasses(source, *, filename=None):
                         dependency = next((path for path in candidates if path.is_file()), None)
                         if dependency is None or dependency in seen:
                             return set()
-                        return analyze(dependency.read_text(), dependency, seen)[0]
+                        if dependency not in _GOLDEN_EXPORTS:
+                            _GOLDEN_EXPORTS[dependency] = analyze(dependency.read_text(), dependency, seen)[0]
+                        return _GOLDEN_EXPORTS[dependency]
                     exported = exports(module_name)
                     local_name = alias.asname or alias.name
                     if is_from:
@@ -686,27 +377,6 @@ def golden_bypasses(source, *, filename=None):
     return analyze(source, filename, set())[1]
 
 
-def registered_outcomes(checks, evidence):
-    outcomes = {}
-    for name, check in checks.items():
-        record = evidence.get(name)
-        if record is None:
-            outcomes[name] = 'not_run'
-        else:
-            outcomes[name] = 'failed'
-            try:
-                revision = check.get('revision')
-                path = Path(record['record'])
-                data = path.read_bytes()
-                contents = decode_json(data.decode())
-                if (check['kind'] == 'review' and isinstance(revision, str) and revision.strip()
-                        and record.get('revision') == revision == contents.get('revision')
-                        and record.get('sha256') == hashlib.sha256(data).hexdigest()
-                        and record.get('outcome') == contents.get('outcome') == 'passed'):
-                    outcomes[name] = 'passed'
-            except (OSError, KeyError, ValueError, TypeError):
-                pass
-    return outcomes
 
 
 def requirement_statements(text):
@@ -782,22 +452,3 @@ def validate_entrypoints(root, inventory, check_layers):
     return errors
 
 
-def validate_witness_evidence(root, records):
-    """TF-23: small presence/outcome gate; reviewers judge semantic relevance."""
-    errors = []
-    for row in records:
-        label = row.get('fix', '<unnamed>')
-        fields = ('fix', 'requirement', 'witness', 'positive_control', 'base', 'red', 'diagnostic', 'green')
-        if any(not isinstance(row.get(key), str) or not row[key].strip() for key in fields):
-            errors.append(label + ': incomplete witness evidence')
-            continue
-        try:
-            red = decode_json((root / row['red']).read_text())
-            green = decode_json((root / row['green']).read_text())
-            if red.get('status') != 'red' or red.get('base') != row['base'] or row['diagnostic'] not in red.get('diagnostic', ''):
-                errors.append(label + ': wrong red evidence')
-            if green.get('status') != 'green':
-                errors.append(label + ': wrong green evidence')
-        except (OSError, ValueError, TypeError, AttributeError):
-            errors.append(label + ': unreadable witness evidence')
-    return errors

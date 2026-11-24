@@ -15,4 +15,4 @@ afterwards) or `settling` (a `releasing` row or a settlement row already exists:
 stop before the body's final link leaves a run that RS-B's settlement ends lost, with no half-recorded state; a result is
 lost only when the service stops before a verifiable final body exists (RS-D-12 as narrowed; no numeric bound, owner
 decision 90.1 A and 90.2 A). A replay that commits a claim that has a live job is adopted by the lane once.
-Source: DESIGN-0.4.0-RS-D.md draft 3 s1-s3, s6, draft 4 s2-s4, rows P1, R1-R6, R3', R4', P2', P3', X1-X3, L1-L3; DESIGN-0.4.0-RS-BD-shared.md S-2, S-3; measurements/d4/requirements.md.
+Source: DESIGN-0.4.0-RS-D.md draft 3 s1-s3, s6, draft 4 s2-s4, rows P1, R1-R6, R3', R4', P2', P3', X1-X3, L1-L3; DESIGN-0.4.0-RS-BD-shared.md S-2, S-3; docs/requirements/d4.md.

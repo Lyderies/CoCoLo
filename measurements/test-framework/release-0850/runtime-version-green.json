@@ -1,8 +1,0 @@
-{
- "status": "green",
- "witness": "codex:tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version",
- "positive_control": "codex:tests.test_runtime_release.RuntimeReleaseTests.test_the_runtime_file_set_is_exactly_the_package_orchestration_files",
- "source_run": "runtime-final-green.run.json",
- "jobs": 16,
- "job_seconds": 159.4208272920223
-}

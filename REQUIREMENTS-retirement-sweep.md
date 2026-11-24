@@ -12,4 +12,4 @@ reservation row read or written, and never selects a context that has a reservat
 and partial context and body files and one name of a link pair using directory listing and `lstat` only: no body or context
 bytes are read, and its work does not grow with the number of tombstones (RS-D-9). A 1 MiB body is returned through every
 chunk (K2).
-Source: DESIGN-0.4.0-RS-D.md draft 3 s4-s6, draft 4 s1, rows U1-U10, K1, K2, S1; DESIGN-0.4.0-RS-BD-shared.md SH-3 (retirement); measurements/d3/requirements.md.
+Source: DESIGN-0.4.0-RS-D.md draft 3 s4-s6, draft 4 s1, rows U1-U10, K1, K2, S1; DESIGN-0.4.0-RS-BD-shared.md SH-3 (retirement); docs/requirements/d3.md.

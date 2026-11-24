@@ -1,8 +1,0 @@
-{
- "base": "9be79b00cb2945e5c93495cf6a11cfc3cd314879",
- "returncode": 0,
- "selection": [
-  "root:test_approved_edits"
- ],
- "test_source_sha256": "24b29c7c6ac6f9ce06c391e2474275cf9c335d5414c1f8e799cb570cf670ba6b"
-}

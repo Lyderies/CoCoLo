@@ -1,6 +1,0 @@
-Test-only decision 106b A implemented; no product change or commit.
-Test lines: test_rsa_step3.py added 167-170,184-192; removed HEAD 180-184; full text: 106b-test-lines.md. Existing setup assertions and owner refusal test preserved.
-Catalogue regenerated with generate_test_metadata.py --catalogue; retained only RSA3-3 changes, excluding unrelated generated sorting.
-Run: parallel_tests.py --base b531844030fa619c1f62ddd6c092ebc2ea4fca38 --module codex:tests.test_rsa_step3 --module codex:tests.test_owned_execution --save-timings measurements/rsa-step3/106b-run.json --keep (prepared interpreter).
-Results: rsa_step3 5/5 pass; owned_execution 74 tests, 31 failures/3 errors; RS-A-2 reports process_tracking_unavailable. Runner exit 1; 1132 metadata errors; no budget failures. Evidence: 106b-run.log and 106b-run.json.run.json.
-RSA3-3: passed; requirement_failures=[]; both requested modules passing remains unmet in this sandbox. pgrep/ps denied process inspection; concurrent full-run status unavailable.

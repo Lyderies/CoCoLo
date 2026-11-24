@@ -1,3 +1,10 @@
+# Test reset A (decisions 125 and 126)
+
+This version supersedes the historical fingerprint/approval and committed-evidence policy.
+Unimplemented requirements are reported, not treated as test failures. Measurements are
+ignored local output or CI artifacts; the primary preserves the old tree with tag
+`measurements-0.8.52` before committing their removal.
+
 # Test framework requirements for CoCoLo 0.4.0
 
 Status: step-1 review r1 applied; implementation authorized. Next review stop is after step 3 (owner, 2026-11-22).
@@ -20,11 +27,8 @@ asserts a requirement; a tag alone is not evidence. **Job-seconds** are the sum 
 including their imports and fixtures, not CPU seconds and not the sum of overlapping timing-map entries.
 
 The budgets and stage mapping below are the implementation contract under step-1 review r1.
-Step 2 first reports, from `measurements/test-framework/baseline-timings.json`, how many baseline modules
-exceed each proposed budget, per layer. Use complete module totals, never add fragments or per-test
-estimates to an already summed module value. The owner selected TF-8 option A: a generated, committed,
-shrink-only budget-debt file permits only named baseline debt at its recorded ceiling. This is separate
-from missing requirement metadata on unchanged existing tests (TF-7).
+Current run records report module job-seconds per layer. Use complete module totals, never add fragments or per-test
+estimates to an already summed module value. The current budget-debt file permits named debt at its recorded limit; historical replay is retired.
 
 | Layer | Purpose | Existing scheduling stage | Budget per complete module (job-seconds) | Real process / git / socket |
 |---|---|---|---:|---|
@@ -65,29 +69,22 @@ modules selected out of the current run, and import failures; never silently def
 integration. Witness: remove one module's layer, add a bogus layer, add a stale entry, duplicate a JSON key,
 or declare layer component with stage unit; each is rejected with the full module ID. Valid mappings above pass.
 
-**TF-3 — Every new or migrated test names its requirements.** Use one stdlib test-only decorator
-`@requirements("TF-3", ...)` (method or class, resolved to a concrete set for each discovered test) and the
-existing lifecycle `@check(...)`. Empty, malformed, unknown or stale requirement IDs fail preflight. A subclass
-override cannot accidentally inherit a method's old proof: it must redeclare its IDs or inherit an explicit
-class declaration. Every generated state-machine TestCase names its ML/TF IDs. Witness: new untagged test,
-unknown ID, empty tag, untagged override and untagged generated case fail with their stable IDs; tagged
-inherited and generated cases pass. Existing exceptions are solely TF-7.
+**TF-3 — Requirement tags remain available and validated.** Use the stdlib test-only
+`@requirements(...)` decorator at method or class level and lifecycle `@check(...)` tags.
+Validate declared IDs and reciprocal catalogue links. Inheritance follows the actual method;
+an override without a tag has no requirement claim. Untagged tests may run; CODEOWNERS and
+assertion-diff make their edits reviewable without a frozen grandfather list.
 
-**TF-4 — Requirements have text and a real check.** Maintain a checked-in catalogue of active requirements
-(unique ID, exact statement, source document/section, check IDs, check kind and evidence records). Check kinds are executable checks or registered review
-checks. The semantic review clauses of TF-5/6/19/21/22 require review-record checks with a source revision,
-review outcome and an immutable evidence record; executable checks alone do not discharge those clauses.
-Future-step checks (TF-19 step 3, TF-20 step 4) stay `not_run` until executed. Neither planned status nor
-missing review evidence makes the full gate pass. Import all TF requirements and all 80
-`tests/e2e/requirements.json` requirements without paraphrasing; import ML-1..ML-30 when the merge-library
-branch is integrated; other existing requirements are added with their source as legacy tests migrate.
-Reject an active requirement with no discoverable check and a check naming no known requirement, in both
-directions. A requirement cannot be removed or marked inactive just to clear this gate. Witness: absent
-check, missing reverse mapping, duplicate requirement ID, unknown check, empty statement, a catalogue
-statement differing from its cited source, and a missing or mismatched review evidence record each fail.
-The 80 missing lifecycle checks remain failures until step 4 supplies them; they receive no coverage waiver.
 
-**TF-5 — Coverage metadata is not a passing outcome.** A full gate reports a requirement passing only when
+**TF-4 — Validate the requirement catalogue and report missing coverage.** Maintain unique
+IDs, exact source statements, and valid reciprocal check links. Empty statements, bad source
+links, unknown IDs, duplicate checks and dangling links fail metadata validation. Requirements
+with no check are `unchecked`: report their count and IDs in run records and the runner's last
+line. They do not fail a run. Catalogue membership alone never claims passing coverage.
+Registered planned checks remain declarations, not evidence that a test ran.
+
+
+**TF-5 — Coverage metadata is not a passing outcome.** Requirements without checks are reported as unchecked and do not fail a run. A full gate reports a requirement passing only when
 every registered required check has run and passed. Skipped, missing, errored, assertion-free lifecycle checks,
 and unexpected successes cannot establish a passing requirement. Partial runs report unselected requirements
 as not run, never green; global structural validation still runs, and the selected checks determine runtime
@@ -101,45 +98,24 @@ is not proof of semantic correctness: review against the statement and fault sen
 `why_not_scenario` rationale (class-level rationale may cover inherited cases) naming the boundary, fault,
 concurrency or edge condition a named lifecycle check cannot prove, or records that it IS the canonical
 scenario check. Enforce presence; review truth against the requirement. Witness: a tagged non-unit test (including a fast one) without
-the rationale fails and names its ID. Existing tests in TF-7 are temporarily exempt from this metadata only.
+the rationale fails and names its ID. Untagged tests do not claim requirement coverage and need no rationale metadata.
 Rationale alone never authorizes deleting another proof.
 
-**TF-7 — Grandfather only the unchanged baseline, and only shrink it.** Generate and commit the initial
-legacy list from discovery on `a1d25560`, recording full suite/test IDs, baseline commit and a SHA-256 source
-fingerprint of the test implementation (including an inherited implementation's defining source and class
-setup/teardown sources). Include the effective setUp/tearDown/setUpClass/tearDownClass definitions across
-the MRO, module setUpModule/tearDownModule, and repository-local functions/classes transitively referenced
-by those fixtures or the test body (including imported shared fixture helpers). External stdlib/test-tool
-implementations are excluded; their versions are independently pinned. Resolve dependencies by module
-and qualified name with cycle detection; unresolved dynamic helper dependencies need an explicit declared
-source dependency, otherwise fail closed for grandfather eligibility. Keep deterministic sorted output and the generator command. The list exempts only
-missing requirement/rationale metadata. Compare later lists against an immutable initial ceiling AND the
-review base version: reject additions, restored removed entries, changed fingerprints or a replaced baseline.
-Renamed, overridden or changed tests must be tagged and removed from the list; missing/stale IDs must be
-removed. Duplicate IDs are rejected. Witness: add a new test, rename a legacy test, edit its assertion or a shared fixture/helper, grow
-the list, re-add a migrated entry, or replace its fingerprint; each fails. A tagged migration removes the entry
-and passes. The checker must fail closed if the review-base comparison cannot be made; use an explicit base
-commit argument locally and a trusted CI merge-base; never trust a base supplied by the candidate manifest itself
-or silently substitute candidate HEAD. Missing or unavailable trusted base fails closed.
+**TF-7 — Test edit review.** Retired (decision 126, test reset A).
+Replacement: ordinary PR review with `.github/CODEOWNERS` covering tests and framework/CI
+sources, plus the stdlib `scripts/assertion_diff.py BASE HEAD` report of added, removed and
+changed assertions and deleted test methods. No legacy source/dependency/value fingerprints,
+shrink-only lists, migration approval or trusted-base gate remain. `--base` is accepted for CI
+compatibility and has no validation effect.
 
-**TF-8 — Enforce module budgets, not worker-fragment budgets.** For each module sum actual elapsed seconds
-of every executed fragment (including import/setup/body/teardown), compare with the layer budget above, and
-name EVERY over-budget module with stage, layer, measured seconds, limit and fragment count. Apply
-owner-selected option A: generate and commit `scripts/test-budget-debt.json` from a1d25560's recorded
-module job-seconds, recording each module and its baseline ceiling. Every run names EVERY remaining debt
-entry as a warning (including unselected modules, explicitly marked not measured). A debt module fails if
-its complete measured total exceeds its unchanged recorded ceiling. A complete measurement at or below
-its layer budget requires removal from the debt file; afterward any excess over that budget fails. The
-file may only shrink: no added/restored modules, increased ceilings, or baseline replacement. Validate
-against the immutable generated baseline and the explicit trusted review base. Partial shards cannot
-retire debt or certify a complete module. All new modules and modules absent from the debt file fail
-above their layer budget. Do not bail out after the first offender.
-Separate shards produce mergeable records; the combined gate enforces the aggregate module budget and
-debt ceiling. A shard labels its measurement partial. Witness: two 20s component fragments fail its 30s
-budget unless authorized baseline debt covers 40s; equality passes and a value just above fails; two
-offenders are both printed. A baseline debt warning appears even when unselected; ceiling regression,
-restored debt, edited ceiling and debt retained after a complete under-budget result are rejected. Use an
-injected clock for these tests, not real sleeps. Overall wall time has no five-minute failure threshold.
+
+**TF-8 — Enforce complete module budgets.** Sum actual worker-fragment job-seconds per
+module, report every offender, and preserve complete/disjoint shard validation. Keep the
+current non-ceiling budget-debt files and their warnings, regression limits and complete-run
+retirement signal. New modules receive their layer budget. Historical Git replay, immutable
+budget-ceiling files and trusted-base comparisons are retired (decision 126, test reset A);
+replacement: current measured totals, ordinary review of debt changes, and CI run artifacts.
+
 
 **TF-9 — Preserve honest timing and timeout evidence.** Save per-worker elapsed values and run identity,
 selected tests, actual jobs, platform/interpreter, completion/timeout status and module totals. Sum only
@@ -301,32 +277,32 @@ time target are proposed. Existing slow-module and lifecycle-coverage failures a
 to claim the framework implementation is green overall.
 
 
-**TF-23 — Review witnesses need falsifiable evidence.** Every new or changed review-fix witness must name its requirement, positive control, an old-code red run at the reviewed base revision (round 3: `9c18c4a3`) with the intended failure diagnostic, and its green run after the fix. For a witness-only repair, the red must show that the old witness accepts a deliberately invalid result; the repaired witness must reject that same result and accept the valid control. A small committed evidence manifest declares each fix and its witnesses. A framework check rejects a declared fix without a requirement, positive control, reviewed base, red-run evidence/diagnostic, or green-run evidence. Referenced evidence files must exist and record the stated outcome. Human review verifies that the diagnostic and control prove the requirement; mechanical presence checks do not replace that judgment. No changed assertion may be omitted from the assertion ledger.
+**TF-23 — Review evidence.** Retired (decision 126, test reset A).
+Replacement: red/green test practice, PR review and CI logs/artifacts. No committed witness
+registry, review-evidence digest or replay gate is required.
 
 
-**TF-24 — Integrate the reviewed release without relaxing isolation or coverage.** The release integration base is `b531844030fa619c1f62ddd6c092ebc2ea4fca38`. Discovery uses the same framework import path as workers and preserves qualified failed-import module names. Existing thread-wait tests use component; real socket/process tests use scenario, with catalogue reasons; their assertions and guards remain unchanged. Release baseline versions may admit only tests and fixture sources from the reviewed release integration, with committed provenance and immutable introduction checks; old baseline files remain intact and subsequent changes still require migration. Local full-run instructions and CI explicitly supply a trusted base; missing base fails concisely before discovery. Decision 86's versioned budget debt admits the existing billing, ledger-startup and session-guard modules at the first full run's measured ceilings, retires completed under-budget entries, and never admits new merge-library modules. New crash campaigns run without competing workers, retaining every test and persistence point; queue waiting is excluded but all worker time and fragments count against the unchanged layer budget. Regression witnesses prove discovery, layer assignments, trusted release baseline rejection of candidate changes, shrink-only versioned debt, and exclusive scheduling with ordinary parallel controls. TF-23 evidence applies to each integration fix.
+**TF-24 — Release governance bindings.** Retired (decision 126, test reset A).
+Replacement: ordinary release PR review, CODEOWNERS and assertion-diff. Keep supported discovery
+imports and qualified errors, resource layer/reason assignments, and exclusive crash-campaign
+scheduling under TF-1/2/8/10–13. Release legacy overlays, immutable introductions, historical
+budget baselines and mandatory trusted-base checks are removed.
 
 
-**TF-25 — Narrow release bookkeeping may rebind its existing proof.** The only eligible files are `packages/claude-agents/previous-releases.json`, `packages/claude-agents/src/claude_agents/packaging.py`, and `packages/claude-agents/tests/test_previous_release_catalogue.py`. Accept exactly one appended catalogue record for the explicitly named previous installed release, whose version and compiled bundle/files match its trusted Git source revision; preserve every existing record and the catalogue schema. In the test file permit only the two existing catalogue-size assertions (`test_the_shipped_catalogue_is_accepted`, `test_cl1_a_catalogue_up_to_2_mib_is_accepted`) to increase from N to N+1 and their mechanically derived release-list comment. Preserve all other assertion operands, limits, test bodies, helpers, imports and comments. In packaging.py permit only the corresponding canonical release/source annotation on its existing pinned digest; a previously unpinned digest or any executable change requires ordinary proof review, not this routine path. This covers routine version bumps sharing an already reviewed bundle; new bundle/pin semantics remain subject to normal review. Reject removed/reordered/modified existing records, extra records, mismatched source/version/bundle, unpaired or excessive count changes, and every other edit in these files.
-
-An explicit `scripts/rebind_release_bookkeeping.py` command verifies a trusted pre-bookkeeping revision against the existing discovered catalogue-test bindings before admitting any replacement. Compute the before and after bindings in isolated temporary snapshots using the same fingerprint implementation and pinned interpreter, and require identical test IDs. Restrict rebinding to those already-grandfathered catalogue tests; never restore retired tests or admit new tests. Publish a new immutable release-named binding file with before/after source hashes and Git provenance, refusing overwrite. At run time verify immutable introduction, the permitted source transition and the binding chain, then compare the current test/helper/value fingerprints normally. Changing an admitted file later must still fail. Prior immutable baselines, including 11d36a06, remain unchanged. The initial repair restores all three files exactly from primary 0ca9c36f/30bf1fa9 and advances both count assertions from 9 to 10 for installed 0.8.49. Positive and mutation controls, actual command/runner integration, and TF-23 red/green evidence are required.
-
-
-**TF-26 — Legacy proof fingerprints describe test-owned code, not product implementation.** Refine TF-7: source, bytecode, captured state and constant values belong in a legacy fingerprint only when owned by the test module, its fixtures or its shared test helpers. Ownership follows the defining source file (including unwrapped decorators), not an imported alias or a product class's name. Test directories, helpers alongside the defining test module, and declared test fixture sources are test-owned; shipped product roots take precedence and are never test-owned. Product functions/classes and imported product constants, including source-derived runtime digests, are referenced by module and qualified attribute identity. Their implementation/source/value changes alone must not invalidate a legacy proof, including when reached transitively through shared fixtures. Changing which product symbol a test references still changes its proof. A changed test-owned helper, constant/default/closure, assertion or legacy ID must continue to fail the existing gate. Unresolved dynamic test-owned state remains fail-closed; this rule is not an exemption for arbitrary fixture changes.
-
-Publish an immutable `test-owned-v1` dependency baseline generated from trusted `5ab0a9d3`, with full source revision, generator/algorithm provenance, unchanged test IDs and unchanged implementation fingerprints. Compare the old discovery against its admitted baseline before translating dependencies; refuse a candidate test/helper edit, new or retired ID, or an overwritten baseline. Only dependency hashes are translated; retain the existing shrink-only lists and implementation checks. Runtime validation verifies immutable introduction, trusted provenance, and identity/fingerprint agreement before using a translated dependency record; later test/helper changes still face ordinary comparison. Existing release-bookkeeping records retain their original hashing interpretation; later records carry the new dependency interpretation as well so TF-25 remains usable without rewriting an old binding. TF-23 witnesses include the actual RSA product-only edit at old 5ab0a9d3, identity-preserving product changes, helper and test-edit/rename controls, migration tamper controls, and green results with the new version. No product test assertions are changed to accommodate this policy.
+**TF-25 — Release bookkeeping replays.** Retired (decision 126, test reset A).
+Replacement: ordinary release PR review, CODEOWNERS and assertion-diff. Existing product release
+catalogue tests continue to verify the shipped catalogue; no rebinding command or immutable
+release-binding chain runs during preflight.
 
 
-**TF-27 — Owner-approved test edits require exact immutable bindings.** Admit an owner-approved test edit only through a committed `scripts/test-approved-edits/<decision>.json` manifest recording the decision ID, file, trusted pre-edit commit, exact old and new line text (including line endings), and line number at the edit commit. Record insertions explicitly, including fixture lines and separately reviewed additions in existing modules. `scripts/rebind_approved_edits.py` verifies each historical transition byte for byte, chains it back to the trusted admitted pre-edit sources, and requires the current files to equal exactly the replayed transitions. Refuse stale bases and every unlisted literal, assertion, helper, test rename or restored legacy ID in those files.
+**TF-26 — Test-owned dependency fingerprints.** Retired (decision 126, test reset A).
+Replacement: ordinary review and assertion-diff. Product changes and test/helper edits need no
+fingerprint translation or test-owned baseline generation.
 
-Owner authority comes from the committed, owner-review-protected `scripts/test-approved-edits/APPROVALS.json`: each decision authorizes an exact manifest SHA-256 and binding name. The gate verifies that record against HEAD; only owner decisions may change it. Numeric filenames and first introduction alone confer no authority. Every edit commit must be an ancestor of binding introduction, whose source blobs and fingerprint-algorithm SHA-256 must already match the replay; later working-tree bytes cannot repair invalid introduction. Discover admitted binding paths from reachable trusted Git history, including deleted paths, and reject a missing admitted binding or referenced manifest. Later-added files absent at the trusted source revision may undergo historical byte verification but must be excluded from both proof snapshots unless their complete creation is independently admitted; distinguish confirmed absence from Git errors and propagate unexpected failures.
 
-Compute old and new I (implementation), D (dependency) and V (test-owned values/source) proofs in isolated trusted snapshots using the same fingerprint algorithm and interpreter. The old proofs must equal their immutable admitted records; the after snapshot differs only by the listed edits. Write a NEW immutable binding containing only active legacy proofs whose changed fingerprints are fully explained by that replay. Never overwrite a binding, change an older baseline, admit a new/retired ID, or bypass ordinary comparisons for unrelated or later changes. The gate verifies committed manifest and binding introduction, immutable bytes, provenance, replay, exact changed-proof membership, and shrink-only eligibility with the same fail-closed rules as TF-25. TF-23 evidence must show the 1,381 existing approved-edit errors red and removed after binding, with positive controls and refusals for an extra unlisted edit, wrong listed text, tampered binding, stale base, renamed/restored ID, and an unrelated changed legacy proof. The 11 hold_lifecycle and one refusal_steps errors remain outside this admission. No assertion is replaced by this framework change.
+**TF-27 — Owner-approved edit bindings.** Retired (decision 126, test reset A).
+TF-27c and TF-27c-2 are also Retired (decision 126, test reset A).
+Replacement: owner review through CODEOWNERS and the assertion-diff CI report. Approval manifests,
+APPROVALS authority, immutable binding generations, historical byte replay and admission proofs
+are removed; merged PR review and CI history provide the record.
 
-Compare every seeded old I/D/V tuple with its immutable admitted row even when unchanged. Each replay child uses ordinary guarded discovery, preserves load_tests hooks, and rejects duplicate IDs and sticky discovery violations. A committed Git fixture through metadata() must assert the exact changed (test ID, proof kind) diagnostic set, retain an unrelated failure, and reject invalid introduction and deleted admission documents; disabling gate verification or application must make that witness fail.
-
-A proof normally migrated in the candidate, with requirement metadata and retirement from both `test-legacy.json` and `test-legacy-0850.json`, is outside the approved-edit binding. The rebinder skips that proof after checking its trusted old I/D/V tuple; the gate checks its requirement metadata as for any migrated test. A changed retired proof without a requirement, or a decorated proof still present in either legacy list, is refused. Still-legacy proofs retain every existing replay and fingerprint check. Reconstruct migration retirement from the lists at binding introduction; later shrink-only retirement filters application without changing the immutable derivation. Before filtering any formerly bound ID, current guarded discovery must still find its original identity, decorated with a requirement linked reciprocally in the catalogue and absent from both legacy lists. Deletion, a cross-file move, or undecorated retirement cannot discard its protection. For each immutable admission document, introduction and HEAD blobs and current worktree bytes must all agree; a local restoration cannot conceal a committed deletion or alteration.
-
-TF-27c (later bindings cover only new manifests): The rebinder selects exactly the committed approved-edit manifests not covered by any admitted binding, using the same reachable-history discovery as the gate, and refuses with `no new approved-edit manifest` when none remain. Fully verify every earlier binding without changing its bytes. Replay each new binding only from its own manifests on top of the current trusted sources and I/D/V proofs produced by earlier bindings; preserve stale-base, unlisted-edit, tampering and committed `APPROVALS.json` authority checks. Never rebind an already covered decision: the gate rejects a later binding that lists it again. New witnesses prove two decisions in two generations pass, a duplicate decision fails, wrong binding authority fails, and tampering with the first binding after the second exists fails; each records old-code red and fixed-code green under TF-23.
-
-TF-27c-2 (later-generation integrity, from review r1): Each successive binding introduction must be a strict Git descendant of the previous one; sibling or reordered introductions are refused. Each introduction is checked against the cumulative replayed sources of every generation so far, not only the paths its own manifests touch, so a later commit that restores an earlier-only file cannot conceal an invalid introduction. Each admission document (manifest or binding) has exactly one origin in full Git history; an independent addition of the same path, including one hidden by a merge, is refused. Only proofs whose normal migration was verified at an earlier generation leave the old-proof comparison; absence from a legacy list alone never does, and each legacy list is checked on its own. A sole binding checks current source bytes before rebuilding, as before TF-27c, and normal migrations are checked by check_later_retirements at introduction for every binding.

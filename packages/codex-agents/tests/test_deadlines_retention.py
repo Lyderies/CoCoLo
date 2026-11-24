@@ -251,7 +251,7 @@ class PreCommitDeadlineTests(LeaseBackedFixture):
 
 @__import__('test_framework').requirements('RS-D-D2', why_not_scenario='D2 checks real project stores in temporary folders (leases, contexts, holds, files); the clock, close and settlement controls expose the deadline boundary.')
 class NativeProductCallerTests(unittest.TestCase):
-    """The scope note of measurements/d2/requirements.md rests on this: only tests reach the non-lease `prepare`.
+    """The scope note of docs/requirements/d2.md rests on this: only tests reach the non-lease `prepare`.
 
     The runtime test below is the enforcement (a service lane refuses it). The AST scans are a regression gate only:
     they read `codex_agents/*.py` for direct `.prepare(..., hard_deadline_at_ms=...)` and `.reserve_result(...)` calls

@@ -1,9 +1,0 @@
-{
- "status": "red",
- "base": "5ab0a9d3",
- "diagnostic": "TF-26 missing immutable test-owned baseline validator",
- "witness": "root:test_product_dependencies.ProductDependencies.test_migration_rejects_wrong_provenance_and_changed_test_identity",
- "source_run": "old-red.run.json",
- "job_seconds": 0.10589620802784339,
- "jobs": 16
-}

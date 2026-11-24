@@ -1,8 +1,0 @@
-{
- "base": "65ca8c20",
- "outcome": "error",
- "witness": "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B3_runner_reaps_disabled_watchdog_with_diagnostics",
- "run": "measurements/test-framework/release-bookkeeping/full.run.json",
- "diagnostic": "IndexError: list index out of range",
- "status": "red"
-}

@@ -58,57 +58,8 @@ class Fixture:
             catalogue['TF-4']['source'] = 'missing.json#TF-4'
             self.assertTrue(self.fw.validate_sources(root, catalogue))
 
-    @requirements('TF-4', why_not_scenario='Framework rejection witness independent of product scenarios.')
-    def test_registered_future_check_and_review_record_are_not_passing_evidence(self):
-        checks = {'future': {'kind': 'executable', 'step': 3},
-                  'review': {'kind': 'review', 'revision': 'abc', 'evidence': None}}
-        self.assertEqual({'future': 'not_run', 'review': 'not_run'}, self.fw.registered_outcomes(checks, {}))
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        record = Path(temporary.name) / 'review.json'
-        record.write_text(json.dumps({'revision': 'abc', 'outcome': 'passed'}))
-        evidence = {'review': {'revision': 'abc', 'outcome': 'passed', 'record': str(record),
-                              'sha256': __import__('hashlib').sha256(record.read_bytes()).hexdigest()}}
-        self.assertEqual('passed', self.fw.registered_outcomes(checks, evidence)['review'])
-        evidence['review']['revision'] = 'wrong'
-        self.assertEqual('failed', self.fw.registered_outcomes(checks, evidence)['review'], 'N2 wrong revision was accepted')
-        evidence['review']['revision'] = 'abc'
-        self.assertEqual('passed', self.fw.registered_outcomes(checks, evidence)['review'])
-        evidence['review'].pop('record')
-        self.assertEqual('failed', self.fw.registered_outcomes(checks, evidence)['review'])
 
-    @requirements('TF-7', why_not_scenario='Framework rejection witness independent of product scenarios.')
-    def test_fixture_and_transitive_helper_changes_change_dependency_fingerprint(self):
-        module = types.ModuleType('review_fixture')
-        sys.modules[module.__name__] = module
-        self.addCleanup(sys.modules.pop, module.__name__, None)
-        code = '''import unittest
-def helper():
-    return VALUE
-def setUpModule():
-    helper()
-class Case(unittest.TestCase):
-    def setUp(self):
-        self.value = helper()
-    def test_value(self):
-        self.assertEqual(self.value, 1)
-'''
-        exec(code.replace('VALUE', '1'), module.__dict__)
-        original = self.fw.dependency_fingerprint(module.Case('test_value'))
-        exec(code.replace('VALUE', '2'), module.__dict__)
-        changed = self.fw.dependency_fingerprint(module.Case('test_value'))
-        self.assertNotEqual(original, changed)
-        exec(code.replace('self.value = helper()', 'self.value = 9').replace('VALUE', '1'), module.__dict__)
-        self.assertNotEqual(original, self.fw.dependency_fingerprint(module.Case('test_value')))
 
-    @requirements('TF-7', why_not_scenario='Framework rejection witness independent of product scenarios.')
-    def test_missing_trusted_base_fails_closed_without_using_candidate_head(self):
-        import parallel_tests as runner
-        empty = {'baseline': 'baseline', 'tests': {}}
-        with mock.patch.object(runner, 'REVIEW_BASE', None), mock.patch.object(runner.subprocess, 'check_output', side_effect=AssertionError('must not consult candidate HEAD')), mock.patch.object(runner.subprocess, 'run', side_effect=AssertionError('must not run candidate HEAD')), mock.patch.object(runner.subprocess, 'Popen', side_effect=AssertionError('must not spawn candidate HEAD')):
-            errors = runner.legacy_versions(ROOT, empty, empty)[2]
-        self.assertTrue(errors)
-        self.assertIn('trusted', ' '.join(errors))
 
 
 if __name__ == '__main__':

@@ -1,8 +1,0 @@
-{
- "base": "65ca8c20",
- "outcome": "passed",
- "witness": "root:test_test_framework_guards.RunnerIntegrationTests.test_review_B3_runner_reaps_disabled_watchdog_with_diagnostics",
- "run": "measurements/test-framework/release-bookkeeping/watchdog-diagnostic.run.json",
- "diagnostic": "Existing timeout, log-content and retained-file assertions plus the diagnostic cardinality assertion pass.",
- "status": "green"
-}

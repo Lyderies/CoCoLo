@@ -1,9 +1,0 @@
-{
- "status": "green",
- "base": "5ab0a9d3",
- "diagnostic": "All assertions and positive controls pass.",
- "witness": "root:test_product_dependencies.ProductDependencies.test_migration_rejects_wrong_provenance_and_changed_test_identity",
- "source_run": "green.run.json",
- "job_seconds": 34.29203062399756,
- "jobs": 16
-}

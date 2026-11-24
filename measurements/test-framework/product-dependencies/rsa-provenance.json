@@ -1,8 +1,0 @@
-{
- "raw_sha256": "000d10c1ab35e8caa9e0efe598a8554bae08b43a01d91b086ff3a4ec2a1d25ea",
- "jobs": 16,
- "job_seconds": 195.15084187604953,
- "tests": 199,
- "metadata_errors": 80,
- "legacy_errors": 0
-}

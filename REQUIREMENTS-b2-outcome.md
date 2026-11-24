@@ -13,4 +13,4 @@ changes who recorded it; its refusals are named and write nothing. Who recorded 
 small separate table keyed by the receipt id with no foreign key (schema step 19 -> 20, owner decision 92.3 A);
 receipts, records and the enrolled operation set are unchanged; the service entry has no socket entry; the service
 writes no QA and never sets `accepted`.
-Source: DESIGN-0.4.0-B2-outcome.md draft 2 with the s2 corrections, rows B2-1 to B2-18; owner decision 92; measurements/b2/requirements.md.
+Source: DESIGN-0.4.0-B2-outcome.md draft 2 with the s2 corrections, rows B2-1 to B2-18; owner decision 92; docs/requirements/b2.md.

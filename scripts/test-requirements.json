@@ -324,7 +324,7 @@
    "codex:tests.test_project_driver.StoredContextRestartTests.test_D1_a_result_on_disk_before_its_record_is_recorded_by_the_next_service_from_the_stored_context"
   ],
   "source": "REQUIREMENTS-b2-outcome.md#B2-OUTCOME",
-  "statement": "**B2-OUTCOME \u2014 The project service records a finished child's outcome itself.**\nA committed terminal whose orchestration is still open (active or paused), whose reservation is live, whose context is\n`committed` and whose run belongs to the writer's own runtime and host class is recorded by the service on its own\nwriter, right after the result is safely stored and again by a bounded, fair sweep after a restart. The outcome is a\npure function of the store: the service's and the primary's records are byte-identical. One final predicate\n(`ServiceRecordAuthority`, a required typed check) runs as the first statement of the admission transaction at the\nservice entry and at the primary's, so admission, close, interruption, the 24 h idle end and expiry meet at one\nboundary; after any of those nothing new is recorded and \"unrecorded\" is final (owner decision 92.1 A). The primary's\nlater call on a recorded run is a read-only retrieval that writes nothing, works after a normal close, and never\nchanges who recorded it; its refusals are named and write nothing. Who recorded (`service` or `primary`) lives in a\nsmall separate table keyed by the receipt id with no foreign key (schema step 19 -> 20, owner decision 92.3 A);\nreceipts, records and the enrolled operation set are unchanged; the service entry has no socket entry; the service\nwrites no QA and never sets `accepted`.\nSource: DESIGN-0.4.0-B2-outcome.md draft 2 with the s2 corrections, rows B2-1 to B2-18; owner decision 92; measurements/b2/requirements.md."
+  "statement": "**B2-OUTCOME \u2014 The project service records a finished child's outcome itself.**\nA committed terminal whose orchestration is still open (active or paused), whose reservation is live, whose context is\n`committed` and whose run belongs to the writer's own runtime and host class is recorded by the service on its own\nwriter, right after the result is safely stored and again by a bounded, fair sweep after a restart. The outcome is a\npure function of the store: the service's and the primary's records are byte-identical. One final predicate\n(`ServiceRecordAuthority`, a required typed check) runs as the first statement of the admission transaction at the\nservice entry and at the primary's, so admission, close, interruption, the 24 h idle end and expiry meet at one\nboundary; after any of those nothing new is recorded and \"unrecorded\" is final (owner decision 92.1 A). The primary's\nlater call on a recorded run is a read-only retrieval that writes nothing, works after a normal close, and never\nchanges who recorded it; its refusals are named and write nothing. Who recorded (`service` or `primary`) lives in a\nsmall separate table keyed by the receipt id with no foreign key (schema step 19 -> 20, owner decision 92.3 A);\nreceipts, records and the enrolled operation set are unchanged; the service entry has no socket entry; the service\nwrites no QA and never sets `accepted`.\nSource: DESIGN-0.4.0-B2-outcome.md draft 2 with the s2 corrections, rows B2-1 to B2-18; owner decision 92; docs/requirements/b2.md."
  },
  "E1-1": {
   "checks": [
@@ -338,14 +338,14 @@
    "root:test_login_start.OfferTests.test_E1_1_a_failed_install_is_reported_and_not_remembered",
    "root:test_login_start.OfferTests.test_E1_1_asks_once_with_reason_pick_list_and_details_and_installs_only_on_yes"
   ],
-  "source": "measurements/e1/requirements.md#E1-1",
+  "source": "docs/requirements/e1.md#E1-1",
   "statement": "**E1-1 \u2014 Consent first.** RS-11, decision 90.11 A. Setup asks once, in plain words with the real reason, with a pick-list (yes / not now) and a details view, before the collector gets a login-start entry. Nothing is written or run without a yes; not now writes and runs nothing; a failed install is reported and not remembered. Tests: tests.test_login_start.OfferTests.test_E1_1_asks_once_with_reason_pick_list_and_details_and_installs_only_on_yes, tests.test_login_start.OfferTests.test_E1_1_a_failed_install_is_reported_and_not_remembered."
  },
  "E1-2": {
   "checks": [
    "root:test_login_start.InstallTests.test_E1_2_launchd_plist_and_load"
   ],
-  "source": "measurements/e1/requirements.md#E1-2",
+  "source": "docs/requirements/e1.md#E1-2",
   "statement": "**E1-2 \u2014 macOS entry.** A launchd user agent in the account's LaunchAgents folder runs the installed collector command (absolute paths, isolated Python, learning-serve) at login, restarts it after a crash with a throttle (KeepAlive on failure, ThrottleInterval), logs to the CoCoLo log folder, and holds no secret. Loaded through an injected runner (launchctl bootstrap), never the real one in tests. Test: tests.test_login_start.InstallTests.test_E1_2_launchd_plist_and_load."
  },
  "E1-3": {
@@ -354,7 +354,7 @@
    "root:test_login_start.InstallTests.test_E1_3_dollar_percent_and_newline_cannot_change_the_unit",
    "root:test_login_start.InstallTests.test_E1_3_systemd_unit_and_enable"
   ],
-  "source": "measurements/e1/requirements.md#E1-3",
+  "source": "docs/requirements/e1.md#E1-3",
   "statement": "**E1-3 \u2014 Linux entry.** A systemd user unit runs the same command, with Restart=on-failure, RestartSec and StartLimit back-off, logs to the CoCoLo log folder, WantedBy=default.target, and no secret; enabled through the injected runner (systemctl --user). Test: tests.test_login_start.InstallTests.test_E1_3_systemd_unit_and_enable."
  },
  "E1-4": {
@@ -366,7 +366,7 @@
    "root:test_login_start.OfferTests.test_E1_4_answered_is_not_asked_again",
    "root:test_login_start.OfferTests.test_E1_4_no_place_to_keep_the_answer_means_no_question"
   ],
-  "source": "measurements/e1/requirements.md#E1-4",
+  "source": "docs/requirements/e1.md#E1-4",
   "statement": "**E1-4 \u2014 Ask once.** The answer (yes or no) is kept in the private installer folder beside the project list. A re-run of setup does not ask again; with no private place to keep the answer, setup does not ask and says so; an update never asks. Tests: tests.test_login_start.OfferTests.test_E1_4_answered_is_not_asked_again, tests.test_login_start.OfferTests.test_E1_4_no_place_to_keep_the_answer_means_no_question, tests.test_login_start.AnswerTests.test_E1_4_answer_round_trip_and_refusals."
  },
  "E1-5": {
@@ -375,7 +375,7 @@
    "root:test_login_start.RemoveTests.test_E1_5_remove_tolerates_missing_file_and_failed_unload",
    "root:test_login_start.RemoveTests.test_E1_5_remove_unloads_and_deletes"
   ],
-  "source": "measurements/e1/requirements.md#E1-5",
+  "source": "docs/requirements/e1.md#E1-5",
   "statement": "**E1-5 \u2014 Removal.** Removing unloads the entry through the runner, deletes its file, records no, and works when the file is already gone or the unload fails. Offered under Configure when the entry is on. Tests: tests.test_login_start.RemoveTests.test_E1_5_remove_unloads_and_deletes, tests.test_login_start.RemoveTests.test_E1_5_remove_tolerates_missing_file_and_failed_unload, tests.test_login_start.OfferTests.test_E1_5_configure_offers_remove_when_on_and_turn_on_when_off."
  },
  "E1-6": {
@@ -387,7 +387,7 @@
    "root:test_login_start.OfferTests.test_E1_6_a_missing_collector_command_is_checked_before_the_owner_is_asked",
    "root:test_login_start.OfferTests.test_E1_6_unsupported_system_is_not_asked"
   ],
-  "source": "measurements/e1/requirements.md#E1-6",
+  "source": "docs/requirements/e1.md#E1-6",
   "statement": "**E1-6 \u2014 Refusals.** A relative command path, a symlinked entry path or an unsupported system is refused with a plain reason and changes nothing. Tests: tests.test_login_start.InstallTests.test_E1_6_refusals_change_nothing, tests.test_login_start.OfferTests.test_E1_6_unsupported_system_is_not_asked."
  },
  "E1-7": {
@@ -399,7 +399,7 @@
    "root:test_login_start.WiringTests.test_E1_7_setup_offers_login_start_after_the_collector_is_ready",
    "root:test_login_start.WiringTests.test_E1_7_the_real_set_up_choice_makes_the_first_run_ask_once_and_a_re_run_not_ask"
   ],
-  "source": "measurements/e1/requirements.md#E1-7",
+  "source": "docs/requirements/e1.md#E1-7",
   "statement": "**E1-7 \u2014 Wired into setup.** The collector step offers login start after the collector is ready, in setup (an update never asks), through the audited terminal runner; the existing Configure menu is unchanged. Test: tests.test_login_start.WiringTests.test_E1_7_setup_offers_login_start_after_the_collector_is_ready."
  },
  "E1-WS": {
@@ -417,7 +417,7 @@
    "root:test_setup_wizard_source.WizardSourceTests.test_the_git_builder_accepts_only_the_wizards_read_only_invocations",
    "root:test_setup_wizard_source.WizardSourceTests.test_wizard_messages_for_the_polished_screens"
   ],
-  "source": "measurements/e1/requirements.md#E1-WS",
+  "source": "docs/requirements/e1.md#E1-WS",
   "statement": "**E1-WS \u2014 Wizard source safety.** The Python setup wizard keeps the source-level safety properties setup.sh's source tests checked (audited launch builders, literal non-porcelain git with the trusted binary and helpers off, isolated Python, provider clients never run by name, product naming and screen wording). Source: tests/test_setup_wizard_source.py module docstring (S5) and owner decision 112b A (2026-11-24)."
  },
  "G1": {
@@ -1395,7 +1395,7 @@
    "codex:tests.test_deadlines_retention.VerifierMarginTests.test_V4_a_forward_jump_past_both_deadlines_releases_both_and_the_verifier_result_is_refused"
   ],
   "source": "REQUIREMENTS-deadlines-retention.md#RS-D-D2",
-  "statement": "**RS-D-D2 \u2014 Deadlines and retention of result custody.**\nNo deadline before the commit retires a lease-born reservation: a reserved row past its lease deadline stays charged and\npublishable while its RS-B obligation is held, and is retired only after RS-B releases that obligation (SH-4, RS-4);\na row that lacks its hold is kept and reported, never retired by a deadline. Committed custody is released `retention`\nexactly at `retained_until_ms`, judged at max(wall, persisted floor), so a moved-back clock revives nothing and blocks no\npass (RS-D-7). A closed orchestration releases committed custody `orchestration_closed`, but an unattended close does not\nend custody (owner decision 90.8). A verifier opens only when its worker outlasts the verifier's lease by one hour (owner\ndecision 90.4); a worker expiring while the verifier runs leaves the verifier's custody live, and a record on an expired\nattempt is refused. A retiring row refuses body, context and admission reads. Only the lease path (`prepare_lease`) is\nreachable from product code: the non-lease `prepare` is refused at runtime on any lane built without the local-reference allowance (the service runtime's lane).\nSource: DESIGN-0.4.0-RS-D.md draft 2 s1, s8, s9, draft 3 s8, rows D1-D4, C1-C3, V1-V4; DESIGN-0.4.0-RS-BD-shared.md SH-3, SH-4; measurements/d2/requirements.md."
+  "statement": "**RS-D-D2 \u2014 Deadlines and retention of result custody.**\nNo deadline before the commit retires a lease-born reservation: a reserved row past its lease deadline stays charged and\npublishable while its RS-B obligation is held, and is retired only after RS-B releases that obligation (SH-4, RS-4);\na row that lacks its hold is kept and reported, never retired by a deadline. Committed custody is released `retention`\nexactly at `retained_until_ms`, judged at max(wall, persisted floor), so a moved-back clock revives nothing and blocks no\npass (RS-D-7). A closed orchestration releases committed custody `orchestration_closed`, but an unattended close does not\nend custody (owner decision 90.8). A verifier opens only when its worker outlasts the verifier's lease by one hour (owner\ndecision 90.4); a worker expiring while the verifier runs leaves the verifier's custody live, and a record on an expired\nattempt is refused. A retiring row refuses body, context and admission reads. Only the lease path (`prepare_lease`) is\nreachable from product code: the non-lease `prepare` is refused at runtime on any lane built without the local-reference allowance (the service runtime's lane).\nSource: DESIGN-0.4.0-RS-D.md draft 2 s1, s8, s9, draft 3 s8, rows D1-D4, C1-C3, V1-V4; DESIGN-0.4.0-RS-BD-shared.md SH-3, SH-4; docs/requirements/d2.md."
  },
  "RS-D-D3": {
   "checks": [
@@ -1451,7 +1451,7 @@
    "codex:tests.test_retirement_sweep.UnsafeFileRetirementTests.test_U5_a_symlink_under_a_fixed_context_name_is_unlinked_not_followed"
   ],
   "source": "REQUIREMENTS-retirement-sweep.md#RS-D-D3",
-  "statement": "**RS-D-D3 \u2014 Crash-safe retirement and the context sweep.**\nRetirement records `retiring` (custody released, reads refused), unlinks the fixed names without opening or following them\n(a missing, corrupt, wrong-mode, extra-hard-link, symlink, FIFO or link-pair entry is unlinked as an entry), fsyncs the\ndirectory, and only then records `expired`; a stop at any step is finished by the next pass, and the charge is kept until\n`expired`. Only a directory under a fixed name needs repair: the row stays `retiring` and charged, its context is\n`repair_required` with the reason, it is shown by `result_retirement_repairs`, retried every pass, and other custody keeps\nretiring in the same pass; an unlink or fsync error keeps the row `retiring`, charged and retried. The context sweep finishes\ncontext-only custody (custody released, no reservation row, or its own `retiring` / `repair_required` retry) with no\nreservation row read or written, and never selects a context that has a reservation. Start-up reconciliation removes orphan\nand partial context and body files and one name of a link pair using directory listing and `lstat` only: no body or context\nbytes are read, and its work does not grow with the number of tombstones (RS-D-9). A 1 MiB body is returned through every\nchunk (K2).\nSource: DESIGN-0.4.0-RS-D.md draft 3 s4-s6, draft 4 s1, rows U1-U10, K1, K2, S1; DESIGN-0.4.0-RS-BD-shared.md SH-3 (retirement); measurements/d3/requirements.md."
+  "statement": "**RS-D-D3 \u2014 Crash-safe retirement and the context sweep.**\nRetirement records `retiring` (custody released, reads refused), unlinks the fixed names without opening or following them\n(a missing, corrupt, wrong-mode, extra-hard-link, symlink, FIFO or link-pair entry is unlinked as an entry), fsyncs the\ndirectory, and only then records `expired`; a stop at any step is finished by the next pass, and the charge is kept until\n`expired`. Only a directory under a fixed name needs repair: the row stays `retiring` and charged, its context is\n`repair_required` with the reason, it is shown by `result_retirement_repairs`, retried every pass, and other custody keeps\nretiring in the same pass; an unlink or fsync error keeps the row `retiring`, charged and retried. The context sweep finishes\ncontext-only custody (custody released, no reservation row, or its own `retiring` / `repair_required` retry) with no\nreservation row read or written, and never selects a context that has a reservation. Start-up reconciliation removes orphan\nand partial context and body files and one name of a link pair using directory listing and `lstat` only: no body or context\nbytes are read, and its work does not grow with the number of tombstones (RS-D-9). A 1 MiB body is returned through every\nchunk (K2).\nSource: DESIGN-0.4.0-RS-D.md draft 3 s4-s6, draft 4 s1, rows U1-U10, K1, K2, S1; DESIGN-0.4.0-RS-BD-shared.md SH-3 (retirement); docs/requirements/d3.md."
  },
  "RS-D-D4": {
   "checks": [
@@ -1515,21 +1515,21 @@
    "codex:tests.test_publication_replay_proofs.PublicationProofSensitivityTests.test_sweep_first_observer_rejects_settlement_only_after_expiry"
   ],
   "source": "REQUIREMENTS-publication-replay.md#RS-D-D4",
-  "statement": "**RS-D-D4 \u2014 Publication material and replay.**\nThe prepare transaction stores the exact prepared material (the canonical bytes whose keyed digest is `prepared_digest`) in\n`project_result_publications`; the commit transaction removes it, and so does the transaction that records `retiring`. A\nfailed publication with the service live is retried from the kept packet (the live lane keeps it until its own commit) and\ncommits once, reusing the final body file, with `prepared_digest` and `retained_until_ms` unchanged. A publication is committed\nfrom the store, by a successor or by settlement arbitration, only while it is still eligible, decided inside the commit\ntransaction: the reservation is `reserved`, its RS-B obligation row is `held`, the context is `bound`, and the stored material\nverifies (its digest, binding, assignment digest, terminal record, usage record and the final body's digest); no deadline is a\ncondition. An ineligible or altered publication is refused (`history_conflict` when altered) and only finishes cleanup. Before\nthe account is asked to settle an attempt the project writer arbitrates it: `recovered` (a verifiable body is committed\nfirst), `unrecoverable` (the obligation row goes `releasing`, so no publication of that attempt, live or replayed, commits\nafterwards) or `settling` (a `releasing` row or a settlement row already exists: nothing is committed, cleanup follows). A\nstop before the body's final link leaves a run that RS-B's settlement ends lost, with no half-recorded state; a result is\nlost only when the service stops before a verifiable final body exists (RS-D-12 as narrowed; no numeric bound, owner\ndecision 90.1 A and 90.2 A). A replay that commits a claim that has a live job is adopted by the lane once.\nSource: DESIGN-0.4.0-RS-D.md draft 3 s1-s3, s6, draft 4 s2-s4, rows P1, R1-R6, R3', R4', P2', P3', X1-X3, L1-L3; DESIGN-0.4.0-RS-BD-shared.md S-2, S-3; measurements/d4/requirements.md."
+  "statement": "**RS-D-D4 \u2014 Publication material and replay.**\nThe prepare transaction stores the exact prepared material (the canonical bytes whose keyed digest is `prepared_digest`) in\n`project_result_publications`; the commit transaction removes it, and so does the transaction that records `retiring`. A\nfailed publication with the service live is retried from the kept packet (the live lane keeps it until its own commit) and\ncommits once, reusing the final body file, with `prepared_digest` and `retained_until_ms` unchanged. A publication is committed\nfrom the store, by a successor or by settlement arbitration, only while it is still eligible, decided inside the commit\ntransaction: the reservation is `reserved`, its RS-B obligation row is `held`, the context is `bound`, and the stored material\nverifies (its digest, binding, assignment digest, terminal record, usage record and the final body's digest); no deadline is a\ncondition. An ineligible or altered publication is refused (`history_conflict` when altered) and only finishes cleanup. Before\nthe account is asked to settle an attempt the project writer arbitrates it: `recovered` (a verifiable body is committed\nfirst), `unrecoverable` (the obligation row goes `releasing`, so no publication of that attempt, live or replayed, commits\nafterwards) or `settling` (a `releasing` row or a settlement row already exists: nothing is committed, cleanup follows). A\nstop before the body's final link leaves a run that RS-B's settlement ends lost, with no half-recorded state; a result is\nlost only when the service stops before a verifiable final body exists (RS-D-12 as narrowed; no numeric bound, owner\ndecision 90.1 A and 90.2 A). A replay that commits a claim that has a live job is adopted by the lane once.\nSource: DESIGN-0.4.0-RS-D.md draft 3 s1-s3, s6, draft 4 s2-s4, rows P1, R1-R6, R3', R4', P2', P3', X1-X3, L1-L3; DESIGN-0.4.0-RS-BD-shared.md S-2, S-3; docs/requirements/d4.md."
  },
  "RSA3-1": {
   "checks": [
    "codex:tests.test_rsa_step3.OutstandingOwnerSignatureTests.test_RSA3_1_swept_owner_signature_returns_without_fault_and_is_forgotten",
    "codex:tests.test_rsa_step3.OwnerSignatureQueryTests.test_owner_signature_query"
   ],
-  "source": "measurements/rsa-step3/requirements.md#RSA3-1",
+  "source": "docs/requirements/rsa-step3.md#RSA3-1",
   "statement": "**RSA3-1 \u2014 Outstanding owner preparation.** Decision 87 F6: a swept owner-API reservation whose prepare signature work is still running refuses its late return without faulting claims, forgets its handle and releases capacity once."
  },
  "RSA3-2": {
   "checks": [
    "codex:tests.test_rsa_step3.RestoredDecisionTests.test_RSA3_2_crashed_and_lost_slots_restore_exactly_once"
   ],
-  "source": "measurements/rsa-step3/requirements.md#RSA3-2",
+  "source": "docs/requirements/rsa-step3.md#RSA3-2",
   "statement": "**RSA3-2 \u2014 Crashed-slot restore.** Decision 87 F5: back up and restore a project with a crashed or lost run_holds slot; consistency passes and slot accounting is preserved exactly."
  },
  "RSA3-3": {
@@ -1537,7 +1537,7 @@
    "codex:tests.test_rsa_step3.LateCompletionTests.test_RSA3_3_owner_release_refuses_a_decided_slot",
    "codex:tests.test_rsa_step3.LedgerLocalLateCompletionTests.test_RSA3_3_ledger_local_late_completion_is_kept_by_design"
   ],
-  "source": "measurements/rsa-step3/requirements.md#RSA3-3",
+  "source": "docs/requirements/rsa-step3.md#RSA3-3",
   "statement": "**RSA3-3 \u2014 Late-completion comparison, test only.** ledger-local and account releases differ by design on a decided slot (RS-A-2, decision 106b)."
  },
  "RSA3-4": {
@@ -1546,14 +1546,14 @@
    "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_additive_index_reopen_preserves_limited_batches_and_due_rows",
    "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_close_expired_reserved_plans"
   ],
-  "source": "measurements/rsa-step3/requirements.md#RSA3-4",
+  "source": "docs/requirements/rsa-step3.md#RSA3-4",
   "statement": "**RSA3-4 \u2014 Release-batch query cost.** Every SQL statement run per release batch by account_holds_due and close_expired_reserved uses an index for its WHERE/ORDER; EXPLAIN QUERY PLAN on a real ledger shows no table scans."
  },
  "RSA3-5": {
   "checks": [
    "codex:tests.test_release_batch_queries.ReleaseBatchQueryTests.test_additive_index_reopen_preserves_limited_batches_and_due_rows"
   ],
-  "source": "measurements/rsa-step3/requirements.md#RSA3-5",
+  "source": "docs/requirements/rsa-step3.md#RSA3-5",
   "statement": "**RSA3-5 \u2014 Release-batch rows unchanged.** The same seeded ledger selects the same due rows before and after the query-cost fix; account_holds_due agrees with _release_due_locked."
  },
  "TERM-13": {
@@ -1584,17 +1584,15 @@
  "TF-1": {
   "checks": [
    "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
-   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
-   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_keep_optional_requirement_tags",
    "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B5_workflow_has_validated_merge_base_and_no_parent_fallback",
    "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B6_full_gate_rejects_not_run_and_incomplete_stage_evidence",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_B5_missing_base_fails_and_advanced_PR_base_uses_merge_base",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_a_worker_exiting_zero_without_a_result_is_not_a_passing_check",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_owned_descendants_are_reaped_when_a_worker_finishes",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_r2_M7_real_runner_shards_and_import_failure",
-   "root:test_test_framework_guards.RunnerIntegrationTests.test_review_C13_unpatched_runner_fails_closed_without_trusted_base",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_runner_counts_structured_results_and_saves_only_current_job_seconds",
    "root:test_test_framework_guards.RunnerIntegrationTests.test_worker_secrets_are_stripped_and_temporary_roots_are_isolated",
    "root:test_test_framework_guards.WorkerTests.test_machine_results_distinguish_pass_skip_failure_and_import_error",
@@ -1662,19 +1660,15 @@
    "root:test_test_framework.GoldenTests.test_equal_update_mode_is_not_green_and_newlines_are_not_silently_normalized",
    "root:test_test_framework.GoldenTests.test_expected_output_is_exact_and_missing_or_different_fails",
    "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
-   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
    "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
-   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
-   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
    "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
    "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
-   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
-   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_keep_optional_requirement_tags",
    "root:test_test_framework_r2.RoundTwo.test_M2_function_local_import_keeps_golden_provenance",
    "root:test_test_framework_r2.RoundTwo.test_M2_package_import_keeps_golden_provenance",
    "root:test_test_framework_r2.RoundTwo.test_M2_qualified_and_renamed_imports_retain_golden_provenance",
@@ -1704,10 +1698,7 @@
    "root:test_entrypoint_inventory.EntryPointTests.test_job_reader_process_refuses_unbound_invocation_without_output",
    "root:test_test_framework.DependencyTests.test_dependencies_are_exactly_pinned_hashed_and_excluded_from_shipped_imports",
    "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
-   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
    "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
-   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
-   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
    "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
@@ -1912,164 +1903,65 @@
   "statement": "**TF-22 \u2014 Review checkpoints and evidence.** Step reports are under 15 lines each and name commits,\nrequirements -> red/green or measurement evidence, every assertion replacement, and open issues. Owner subsequently set the next review stop after step 3 (step-1 review r1). Apply that stop before proceeding to steps 4\u20135. Use only own worktrees/branches; never push, install outside the authorized temporary test environment, or modify the\ncontrol project or 0.3.3. Step 2 is authorized; step 3 rebases the existing merge\nbranch only after step 2 is committed. Acceptance includes macOS and Linux / Python 3.11 evidence or an\nexplicit outstanding platform gate; this Mac run alone cannot prove portability."
  },
  "TF-23": {
-  "checks": [
-   "root:test_approved_edits.ApprovedEdits.test_bridge_migration_plumbing_has_separate_exact_scope",
-   "root:test_approved_edits.ApprovedEdits.test_exact_transition_and_extra_unlisted_edits",
-   "root:test_approved_edits.ApprovedEdits.test_immutable_introduction_tampering_and_overwrite",
-   "root:test_approved_edits.ApprovedEdits.test_only_changed_active_proofs_rebind_all_three_kinds",
-   "root:test_approved_edits.ApprovedEdits.test_recorded_owner_transitions_match_current_bytes",
-   "root:test_approved_edits.ApprovedEdits.test_renamed_restored_and_unresolved_proofs_are_refused",
-   "root:test_approved_edits.ApprovedEdits.test_unrelated_legacy_proof_still_flags_and_retired_stays_retired",
-   "root:test_approved_edits.ApprovedEdits.test_wrong_text_line_endings_and_stale_base",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_absent_undecorated_id_in_previously_untouched_suite_is_not_migrated",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_first_binding_tampering_after_second_exists_is_refused",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_full_history_refuses_merge_hidden_independent_document_addition",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_introduction_checks_earlier_only_source_even_after_restoration",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_new_decision_approval_naming_wrong_binding_is_refused",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_second_generation_excludes_previously_migrated_unbound_proof",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_second_generation_relisting_first_decision_is_refused",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_second_generation_still_checks_unbound_legacy_proof",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_sibling_binding_introductions_are_not_linear",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_sole_binding_dirty_source_precedes_proof_rebuild",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_two_generations_pass_gate_and_no_covered_manifest_is_rebound",
-   "root:test_approved_edits.ApprovedEditsMigration.test_decorated_proof_in_either_legacy_list_is_refused",
-   "root:test_approved_edits.ApprovedEditsMigration.test_later_bound_retirement_requires_original_identity_and_normal_migration",
-   "root:test_approved_edits.ApprovedEditsMigration.test_migration_outside_manifest_uses_candidate_and_introduction_requirements",
-   "root:test_approved_edits.ApprovedEditsMigration.test_normal_migration_skips_binding_and_uses_requirement_gate",
-   "root:test_approved_edits.ApprovedEditsMigration.test_retired_undecorated_changed_proof_is_refused",
-   "root:test_approved_edits.ApprovedEditsR1.test_non_git_metadata_admits_nothing_and_documents_fail_closed",
-   "root:test_approved_edits.ApprovedEditsR1.test_r1_deleted_admission_documents_are_refused",
-   "root:test_approved_edits.ApprovedEditsR1.test_r1_introduction_requires_ancestry_sources_and_algorithm",
-   "root:test_approved_edits.ApprovedEditsR1.test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions",
-   "root:test_approved_edits.ApprovedEditsR1.test_r1_owner_record_authenticates_first_introduction",
-   "root:test_approved_edits.ApprovedEditsR1.test_r1_replay_uses_guarded_discovery_and_rejects_duplicate_ids",
-   "root:test_approved_edits.ApprovedEditsR1.test_r1_unanchored_files_never_generate_proofs",
-   "root:test_approved_edits.ApprovedEditsR1.test_r1_unchanged_stale_old_proofs_are_refused",
-   "root:test_product_dependencies.ProductDependencies.test_migration_rejects_wrong_provenance_and_changed_test_identity",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_exact_primary_restoration_matches_installed_release",
-   "root:test_test_framework_r3.RoundThree.test_TF23_declared_fixes_require_red_green_and_positive_control"
-  ],
+  "checks": [],
   "source": "REQUIREMENTS-test-framework.md#TF-23",
-  "statement": "**TF-23 \u2014 Review witnesses need falsifiable evidence.** Every new or changed review-fix witness must name its requirement, positive control, an old-code red run at the reviewed base revision (round 3: `9c18c4a3`) with the intended failure diagnostic, and its green run after the fix. For a witness-only repair, the red must show that the old witness accepts a deliberately invalid result; the repaired witness must reject that same result and accept the valid control. A small committed evidence manifest declares each fix and its witnesses. A framework check rejects a declared fix without a requirement, positive control, reviewed base, red-run evidence/diagnostic, or green-run evidence. Referenced evidence files must exist and record the stated outcome. Human review verifies that the diagnostic and control prove the requirement; mechanical presence checks do not replace that judgment. No changed assertion may be omitted from the assertion ledger."
+  "statement": "**TF-23 \u2014 Review evidence.** Retired (decision 126, test reset A).\nReplacement: red/green test practice, PR review and CI logs/artifacts. No committed witness\nregistry, review-evidence digest or replay gate is required."
  },
  "TF-24": {
   "checks": [
-   "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration",
    "root:test_test_framework_integration.ReleaseIntegration.test_discovery_imports_framework_and_preserves_package_names",
    "root:test_test_framework_integration.ReleaseIntegration.test_exclusive_campaigns_wait_for_empty_pool_and_block_other_launches",
-   "root:test_test_framework_integration.ReleaseIntegration.test_existing_resource_modules_have_correct_layers_and_reasons",
-   "root:test_test_framework_integration.ReleaseIntegration.test_explicit_base_is_documented_and_missing_base_stops_before_discovery",
-   "root:test_test_framework_integration.ReleaseIntegration.test_release_overlay_is_immutable_and_candidate_changes_are_rejected",
-   "root:test_test_framework_integration.ReleaseIntegration.test_versioned_debt_has_measured_ceilings_and_cannot_grow"
+   "root:test_test_framework_integration.ReleaseIntegration.test_existing_resource_modules_have_correct_layers_and_reasons"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-24",
-  "statement": "**TF-24 \u2014 Integrate the reviewed release without relaxing isolation or coverage.** The release integration base is `b531844030fa619c1f62ddd6c092ebc2ea4fca38`. Discovery uses the same framework import path as workers and preserves qualified failed-import module names. Existing thread-wait tests use component; real socket/process tests use scenario, with catalogue reasons; their assertions and guards remain unchanged. Release baseline versions may admit only tests and fixture sources from the reviewed release integration, with committed provenance and immutable introduction checks; old baseline files remain intact and subsequent changes still require migration. Local full-run instructions and CI explicitly supply a trusted base; missing base fails concisely before discovery. Decision 86's versioned budget debt admits the existing billing, ledger-startup and session-guard modules at the first full run's measured ceilings, retires completed under-budget entries, and never admits new merge-library modules. New crash campaigns run without competing workers, retaining every test and persistence point; queue waiting is excluded but all worker time and fragments count against the unchanged layer budget. Regression witnesses prove discovery, layer assignments, trusted release baseline rejection of candidate changes, shrink-only versioned debt, and exclusive scheduling with ordinary parallel controls. TF-23 evidence applies to each integration fix."
+  "statement": "**TF-24 \u2014 Release governance bindings.** Retired (decision 126, test reset A).\nReplacement: ordinary release PR review, CODEOWNERS and assertion-diff. Keep supported discovery\nimports and qualified errors, resource layer/reason assignments, and exclusive crash-campaign\nscheduling under TF-1/2/8/10\u201313. Release legacy overlays, immutable introductions, historical\nbudget baselines and mandatory trusted-base checks are removed."
  },
  "TF-25": {
-  "checks": [
-   "root:test_product_dependencies.ProductDependencies.test_later_bookkeeping_proof_takes_precedence_over_older_policy_record",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_claimed_pre_bump_commit_cannot_hide_old_record_edits",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_correct_append_passes_and_every_unrelated_edit_is_rejected",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_exact_primary_restoration_matches_installed_release",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_immutable_binding_tampering_is_rejected",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_later_edits_to_each_admitted_file_still_fail_metadata",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_next_release_uses_the_same_narrow_procedure",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebind_command_rejects_invalid_source_and_overwrite",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebinding_retains_retirement_and_catches_later_fingerprint_edits"
-  ],
+  "checks": [],
   "source": "REQUIREMENTS-test-framework.md#TF-25",
-  "statement": "**TF-25 \u2014 Narrow release bookkeeping may rebind its existing proof.** The only eligible files are `packages/claude-agents/previous-releases.json`, `packages/claude-agents/src/claude_agents/packaging.py`, and `packages/claude-agents/tests/test_previous_release_catalogue.py`. Accept exactly one appended catalogue record for the explicitly named previous installed release, whose version and compiled bundle/files match its trusted Git source revision; preserve every existing record and the catalogue schema. In the test file permit only the two existing catalogue-size assertions (`test_the_shipped_catalogue_is_accepted`, `test_cl1_a_catalogue_up_to_2_mib_is_accepted`) to increase from N to N+1 and their mechanically derived release-list comment. Preserve all other assertion operands, limits, test bodies, helpers, imports and comments. In packaging.py permit only the corresponding canonical release/source annotation on its existing pinned digest; a previously unpinned digest or any executable change requires ordinary proof review, not this routine path. This covers routine version bumps sharing an already reviewed bundle; new bundle/pin semantics remain subject to normal review. Reject removed/reordered/modified existing records, extra records, mismatched source/version/bundle, unpaired or excessive count changes, and every other edit in these files.\n\nAn explicit `scripts/rebind_release_bookkeeping.py` command verifies a trusted pre-bookkeeping revision against the existing discovered catalogue-test bindings before admitting any replacement. Compute the before and after bindings in isolated temporary snapshots using the same fingerprint implementation and pinned interpreter, and require identical test IDs. Restrict rebinding to those already-grandfathered catalogue tests; never restore retired tests or admit new tests. Publish a new immutable release-named binding file with before/after source hashes and Git provenance, refusing overwrite. At run time verify immutable introduction, the permitted source transition and the binding chain, then compare the current test/helper/value fingerprints normally. Changing an admitted file later must still fail. Prior immutable baselines, including 11d36a06, remain unchanged. The initial repair restores all three files exactly from primary 0ca9c36f/30bf1fa9 and advances both count assertions from 9 to 10 for installed 0.8.49. Positive and mutation controls, actual command/runner integration, and TF-23 red/green evidence are required."
+  "statement": "**TF-25 \u2014 Release bookkeeping replays.** Retired (decision 126, test reset A).\nReplacement: ordinary release PR review, CODEOWNERS and assertion-diff. Existing product release\ncatalogue tests continue to verify the shipped catalogue; no rebinding command or immutable\nrelease-binding chain runs during preflight."
  },
  "TF-26": {
-  "checks": [
-   "root:test_product_dependencies.ProductDependencies.test_assertion_edit_and_rename_still_fail_legacy_gate",
-   "root:test_product_dependencies.ProductDependencies.test_fileless_generated_helpers_keep_owned_namespace_and_external_identity",
-   "root:test_product_dependencies.ProductDependencies.test_imported_product_defaults_use_identity_but_owned_defaults_keep_values",
-   "root:test_product_dependencies.ProductDependencies.test_later_bookkeeping_proof_takes_precedence_over_older_policy_record",
-   "root:test_product_dependencies.ProductDependencies.test_migration_rejects_wrong_provenance_and_changed_test_identity",
-   "root:test_product_dependencies.ProductDependencies.test_product_only_constant_and_implementation_changes_keep_legacy_proof",
-   "root:test_product_dependencies.ProductDependencies.test_product_symbol_identity_changes_are_not_ignored",
-   "root:test_product_dependencies.ProductDependencies.test_source_ownership_wins_over_test_looking_product_alias",
-   "root:test_product_dependencies.ProductDependencies.test_test_owned_helper_and_constant_edits_still_flag"
-  ],
+  "checks": [],
   "source": "REQUIREMENTS-test-framework.md#TF-26",
-  "statement": "**TF-26 \u2014 Legacy proof fingerprints describe test-owned code, not product implementation.** Refine TF-7: source, bytecode, captured state and constant values belong in a legacy fingerprint only when owned by the test module, its fixtures or its shared test helpers. Ownership follows the defining source file (including unwrapped decorators), not an imported alias or a product class's name. Test directories, helpers alongside the defining test module, and declared test fixture sources are test-owned; shipped product roots take precedence and are never test-owned. Product functions/classes and imported product constants, including source-derived runtime digests, are referenced by module and qualified attribute identity. Their implementation/source/value changes alone must not invalidate a legacy proof, including when reached transitively through shared fixtures. Changing which product symbol a test references still changes its proof. A changed test-owned helper, constant/default/closure, assertion or legacy ID must continue to fail the existing gate. Unresolved dynamic test-owned state remains fail-closed; this rule is not an exemption for arbitrary fixture changes.\n\nPublish an immutable `test-owned-v1` dependency baseline generated from trusted `5ab0a9d3`, with full source revision, generator/algorithm provenance, unchanged test IDs and unchanged implementation fingerprints. Compare the old discovery against its admitted baseline before translating dependencies; refuse a candidate test/helper edit, new or retired ID, or an overwritten baseline. Only dependency hashes are translated; retain the existing shrink-only lists and implementation checks. Runtime validation verifies immutable introduction, trusted provenance, and identity/fingerprint agreement before using a translated dependency record; later test/helper changes still face ordinary comparison. Existing release-bookkeeping records retain their original hashing interpretation; later records carry the new dependency interpretation as well so TF-25 remains usable without rewriting an old binding. TF-23 witnesses include the actual RSA product-only edit at old 5ab0a9d3, identity-preserving product changes, helper and test-edit/rename controls, migration tamper controls, and green results with the new version. No product test assertions are changed to accommodate this policy."
+  "statement": "**TF-26 \u2014 Test-owned dependency fingerprints.** Retired (decision 126, test reset A).\nReplacement: ordinary review and assertion-diff. Product changes and test/helper edits need no\nfingerprint translation or test-owned baseline generation."
  },
  "TF-27": {
-  "checks": [
-   "root:test_approved_edits.ApprovedEdits.test_bridge_migration_plumbing_has_separate_exact_scope",
-   "root:test_approved_edits.ApprovedEdits.test_exact_transition_and_extra_unlisted_edits",
-   "root:test_approved_edits.ApprovedEdits.test_immutable_introduction_tampering_and_overwrite",
-   "root:test_approved_edits.ApprovedEdits.test_only_changed_active_proofs_rebind_all_three_kinds",
-   "root:test_approved_edits.ApprovedEdits.test_recorded_owner_transitions_match_current_bytes",
-   "root:test_approved_edits.ApprovedEdits.test_renamed_restored_and_unresolved_proofs_are_refused",
-   "root:test_approved_edits.ApprovedEdits.test_unrelated_legacy_proof_still_flags_and_retired_stays_retired",
-   "root:test_approved_edits.ApprovedEdits.test_wrong_text_line_endings_and_stale_base",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_absent_undecorated_id_in_previously_untouched_suite_is_not_migrated",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_first_binding_tampering_after_second_exists_is_refused",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_full_history_refuses_merge_hidden_independent_document_addition",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_introduction_checks_earlier_only_source_even_after_restoration",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_new_decision_approval_naming_wrong_binding_is_refused",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_second_generation_excludes_previously_migrated_unbound_proof",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_second_generation_relisting_first_decision_is_refused",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_second_generation_still_checks_unbound_legacy_proof",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_sibling_binding_introductions_are_not_linear",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_sole_binding_dirty_source_precedes_proof_rebuild",
-   "root:test_approved_edits_generations.ApprovedEditsLaterBinding.test_two_generations_pass_gate_and_no_covered_manifest_is_rebound",
-   "root:test_approved_edits.ApprovedEditsMigration.test_decorated_proof_in_either_legacy_list_is_refused",
-   "root:test_approved_edits.ApprovedEditsMigration.test_later_bound_retirement_requires_original_identity_and_normal_migration",
-   "root:test_approved_edits.ApprovedEditsMigration.test_migration_outside_manifest_uses_candidate_and_introduction_requirements",
-   "root:test_approved_edits.ApprovedEditsMigration.test_normal_migration_skips_binding_and_uses_requirement_gate",
-   "root:test_approved_edits.ApprovedEditsMigration.test_retired_undecorated_changed_proof_is_refused",
-   "root:test_approved_edits.ApprovedEditsR1.test_non_git_metadata_admits_nothing_and_documents_fail_closed",
-   "root:test_approved_edits.ApprovedEditsR1.test_r1_deleted_admission_documents_are_refused",
-   "root:test_approved_edits.ApprovedEditsR1.test_r1_introduction_requires_ancestry_sources_and_algorithm",
-   "root:test_approved_edits.ApprovedEditsR1.test_r1_metadata_wiring_exact_diagnostics_and_invalid_admissions",
-   "root:test_approved_edits.ApprovedEditsR1.test_r1_owner_record_authenticates_first_introduction",
-   "root:test_approved_edits.ApprovedEditsR1.test_r1_replay_uses_guarded_discovery_and_rejects_duplicate_ids",
-   "root:test_approved_edits.ApprovedEditsR1.test_r1_unanchored_files_never_generate_proofs",
-   "root:test_approved_edits.ApprovedEditsR1.test_r1_unchanged_stale_old_proofs_are_refused"
-  ],
+  "checks": [],
   "source": "REQUIREMENTS-test-framework.md#TF-27",
-  "statement": "**TF-27 \u2014 Owner-approved test edits require exact immutable bindings.** Admit an owner-approved test edit only through a committed `scripts/test-approved-edits/<decision>.json` manifest recording the decision ID, file, trusted pre-edit commit, exact old and new line text (including line endings), and line number at the edit commit. Record insertions explicitly, including fixture lines and separately reviewed additions in existing modules. `scripts/rebind_approved_edits.py` verifies each historical transition byte for byte, chains it back to the trusted admitted pre-edit sources, and requires the current files to equal exactly the replayed transitions. Refuse stale bases and every unlisted literal, assertion, helper, test rename or restored legacy ID in those files.\n\nOwner authority comes from the committed, owner-review-protected `scripts/test-approved-edits/APPROVALS.json`: each decision authorizes an exact manifest SHA-256 and binding name. The gate verifies that record against HEAD; only owner decisions may change it. Numeric filenames and first introduction alone confer no authority. Every edit commit must be an ancestor of binding introduction, whose source blobs and fingerprint-algorithm SHA-256 must already match the replay; later working-tree bytes cannot repair invalid introduction. Discover admitted binding paths from reachable trusted Git history, including deleted paths, and reject a missing admitted binding or referenced manifest. Later-added files absent at the trusted source revision may undergo historical byte verification but must be excluded from both proof snapshots unless their complete creation is independently admitted; distinguish confirmed absence from Git errors and propagate unexpected failures.\n\nCompute old and new I (implementation), D (dependency) and V (test-owned values/source) proofs in isolated trusted snapshots using the same fingerprint algorithm and interpreter. The old proofs must equal their immutable admitted records; the after snapshot differs only by the listed edits. Write a NEW immutable binding containing only active legacy proofs whose changed fingerprints are fully explained by that replay. Never overwrite a binding, change an older baseline, admit a new/retired ID, or bypass ordinary comparisons for unrelated or later changes. The gate verifies committed manifest and binding introduction, immutable bytes, provenance, replay, exact changed-proof membership, and shrink-only eligibility with the same fail-closed rules as TF-25. TF-23 evidence must show the 1,381 existing approved-edit errors red and removed after binding, with positive controls and refusals for an extra unlisted edit, wrong listed text, tampered binding, stale base, renamed/restored ID, and an unrelated changed legacy proof. The 11 hold_lifecycle and one refusal_steps errors remain outside this admission. No assertion is replaced by this framework change.\n\nCompare every seeded old I/D/V tuple with its immutable admitted row even when unchanged. Each replay child uses ordinary guarded discovery, preserves load_tests hooks, and rejects duplicate IDs and sticky discovery violations. A committed Git fixture through metadata() must assert the exact changed (test ID, proof kind) diagnostic set, retain an unrelated failure, and reject invalid introduction and deleted admission documents; disabling gate verification or application must make that witness fail.\n\nA proof normally migrated in the candidate, with requirement metadata and retirement from both `test-legacy.json` and `test-legacy-0850.json`, is outside the approved-edit binding. The rebinder skips that proof after checking its trusted old I/D/V tuple; the gate checks its requirement metadata as for any migrated test. A changed retired proof without a requirement, or a decorated proof still present in either legacy list, is refused. Still-legacy proofs retain every existing replay and fingerprint check. Reconstruct migration retirement from the lists at binding introduction; later shrink-only retirement filters application without changing the immutable derivation. Before filtering any formerly bound ID, current guarded discovery must still find its original identity, decorated with a requirement linked reciprocally in the catalogue and absent from both legacy lists. Deletion, a cross-file move, or undecorated retirement cannot discard its protection. For each immutable admission document, introduction and HEAD blobs and current worktree bytes must all agree; a local restoration cannot conceal a committed deletion or alteration.\n\nTF-27c (later bindings cover only new manifests): The rebinder selects exactly the committed approved-edit manifests not covered by any admitted binding, using the same reachable-history discovery as the gate, and refuses with `no new approved-edit manifest` when none remain. Fully verify every earlier binding without changing its bytes. Replay each new binding only from its own manifests on top of the current trusted sources and I/D/V proofs produced by earlier bindings; preserve stale-base, unlisted-edit, tampering and committed `APPROVALS.json` authority checks. Never rebind an already covered decision: the gate rejects a later binding that lists it again. New witnesses prove two decisions in two generations pass, a duplicate decision fails, wrong binding authority fails, and tampering with the first binding after the second exists fails; each records old-code red and fixed-code green under TF-23.\n\nTF-27c-2 (later-generation integrity, from review r1): Each successive binding introduction must be a strict Git descendant of the previous one; sibling or reordered introductions are refused. Each introduction is checked against the cumulative replayed sources of every generation so far, not only the paths its own manifests touch, so a later commit that restores an earlier-only file cannot conceal an invalid introduction. Each admission document (manifest or binding) has exactly one origin in full Git history; an independent addition of the same path, including one hidden by a merge, is refused. Only proofs whose normal migration was verified at an earlier generation leave the old-proof comparison; absence from a legacy list alone never does, and each legacy list is checked on its own. A sole binding checks current source bytes before rebuilding, as before TF-27c, and normal migrations are checked by check_later_retirements at introduction for every binding."
+  "statement": "**TF-27 \u2014 Owner-approved edit bindings.** Retired (decision 126, test reset A).\nTF-27c and TF-27c-2 are also Retired (decision 126, test reset A).\nReplacement: owner review through CODEOWNERS and the assertion-diff CI report. Approval manifests,\nAPPROVALS authority, immutable binding generations, historical byte replay and admission proofs\nare removed; merged PR review and CI history provide the record."
  },
  "TF-3": {
   "checks": [
    "root:test_test_framework.MetadataTests.test_decorator_inheritance_and_override_follow_the_actual_implementation",
-   "root:test_test_framework.MetadataTests.test_unknown_empty_and_untagged_proofs_and_missing_rationale_are_rejected",
+   "root:test_test_framework.MetadataTests.test_unknown_and_empty_tags_and_missing_tagged_rationale_are_rejected",
    "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
-   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
-   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
-   "root:test_test_framework_guards.RunnerIntegrationTests.test_untagged_new_test_fails_the_actual_runner"
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_keep_optional_requirement_tags",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_untagged_test_and_unchecked_requirement_are_reported_without_failure"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-3",
-  "statement": "**TF-3 \u2014 Every new or migrated test names its requirements.** Use one stdlib test-only decorator\n`@requirements(\"TF-3\", ...)` (method or class, resolved to a concrete set for each discovered test) and the\nexisting lifecycle `@check(...)`. Empty, malformed, unknown or stale requirement IDs fail preflight. A subclass\noverride cannot accidentally inherit a method's old proof: it must redeclare its IDs or inherit an explicit\nclass declaration. Every generated state-machine TestCase names its ML/TF IDs. Witness: new untagged test,\nunknown ID, empty tag, untagged override and untagged generated case fail with their stable IDs; tagged\ninherited and generated cases pass. Existing exceptions are solely TF-7."
+  "statement": "**TF-3 \u2014 Requirement tags remain available and validated.** Use the stdlib test-only\n`@requirements(...)` decorator at method or class level and lifecycle `@check(...)` tags.\nValidate declared IDs and reciprocal catalogue links. Inheritance follows the actual method;\nan override without a tag has no requirement claim. Untagged tests may run; CODEOWNERS and\nassertion-diff make their edits reviewable without a frozen grandfather list."
  },
  "TF-4": {
   "checks": [
    "root:test_test_framework.MetadataTests.test_requirement_and_check_links_are_checked_in_both_directions",
    "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
-   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
    "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
-   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
-   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
    "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
    "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
-   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
-   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
-   "root:test_test_framework_guards.RunnerIntegrationTests.test_untagged_new_test_fails_the_actual_runner",
-   "root:test_test_framework_review.ReviewTests.test_catalogue_statement_must_equal_its_exact_cited_source",
-   "root:test_test_framework_review.ReviewTests.test_registered_future_check_and_review_record_are_not_passing_evidence"
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_keep_optional_requirement_tags",
+   "root:test_test_framework_guards.RunnerIntegrationTests.test_untagged_test_and_unchecked_requirement_are_reported_without_failure",
+   "root:test_test_framework_review.ReviewTests.test_catalogue_statement_must_equal_its_exact_cited_source"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-4",
-  "statement": "**TF-4 \u2014 Requirements have text and a real check.** Maintain a checked-in catalogue of active requirements\n(unique ID, exact statement, source document/section, check IDs, check kind and evidence records). Check kinds are executable checks or registered review\nchecks. The semantic review clauses of TF-5/6/19/21/22 require review-record checks with a source revision,\nreview outcome and an immutable evidence record; executable checks alone do not discharge those clauses.\nFuture-step checks (TF-19 step 3, TF-20 step 4) stay `not_run` until executed. Neither planned status nor\nmissing review evidence makes the full gate pass. Import all TF requirements and all 80\n`tests/e2e/requirements.json` requirements without paraphrasing; import ML-1..ML-30 when the merge-library\nbranch is integrated; other existing requirements are added with their source as legacy tests migrate.\nReject an active requirement with no discoverable check and a check naming no known requirement, in both\ndirections. A requirement cannot be removed or marked inactive just to clear this gate. Witness: absent\ncheck, missing reverse mapping, duplicate requirement ID, unknown check, empty statement, a catalogue\nstatement differing from its cited source, and a missing or mismatched review evidence record each fail.\nThe 80 missing lifecycle checks remain failures until step 4 supplies them; they receive no coverage waiver."
+  "statement": "**TF-4 \u2014 Validate the requirement catalogue and report missing coverage.** Maintain unique\nIDs, exact source statements, and valid reciprocal check links. Empty statements, bad source\nlinks, unknown IDs, duplicate checks and dangling links fail metadata validation. Requirements\nwith no check are `unchecked`: report their count and IDs in run records and the runner's last\nline. They do not fail a run. Catalogue membership alone never claims passing coverage.\nRegistered planned checks remain declarations, not evidence that a test ran."
  },
  "TF-5": {
   "checks": [
@@ -2077,24 +1969,18 @@
    "root:test_test_framework.MetadataTests.test_a_requirement_passes_only_when_all_checks_passed_and_actually_ran",
    "root:test_test_framework.MetadataTests.test_shards_preserve_metadata_failures_and_reject_duplicate_tests_and_invalid_time",
    "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
-   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
    "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
-   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
-   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
    "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
    "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
-   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
-   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_keep_optional_requirement_tags",
    "root:test_test_framework.ReviewLifecycleTests.test_A12_unknown_registry_id_is_a_diagnostic_not_a_key_error",
-   "root:test_test_framework.ReviewLifecycleTests.test_A1_relocated_worktrees_keep_equal_fixture_hashes_without_hiding_constant_edits",
    "root:test_test_framework.ReviewLifecycleTests.test_B6_complete_shard_labels_cannot_hide_a_missing_worker",
    "root:test_test_framework.ReviewLifecycleTests.test_B6_stage_records_must_share_source_and_layer_plans",
-   "root:test_test_framework.ReviewLifecycleTests.test_C3_C13_cross_module_helper_is_found_by_source_path",
    "root:test_test_framework.ReviewLifecycleTests.test_C9_assertion_free_lifecycle_check_fails_the_real_gate",
    "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B5_workflow_has_validated_merge_base_and_no_parent_fallback",
    "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B6_full_gate_rejects_not_run_and_incomplete_stage_evidence",
@@ -2107,92 +1993,65 @@
    "root:test_test_framework_r3.RoundThree.test_p05_CI_selects_trusted_bases_for_supported_events"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-5",
-  "statement": "**TF-5 \u2014 Coverage metadata is not a passing outcome.** A full gate reports a requirement passing only when\nevery registered required check has run and passed. Skipped, missing, errored, assertion-free lifecycle checks,\nand unexpected successes cannot establish a passing requirement. Partial runs report unselected requirements\nas not run, never green; global structural validation still runs, and the selected checks determine runtime\nresults. Expected failures also cannot count as a passing proof. Preserve `Phase.expect` assertion counting and requirement-level AND across all scenario parts,\nincluding G1\u2013G9 checks selected for every affected flow. Witness: two checks for one ID, one failing or\nmissing from a shard result, cannot aggregate to pass; skipped-only and expected-failure-only proofs are\nnot coverage. An assertion-free lifecycle proof and an unexpected success both fail the coverage gate. Assertion counting\nis not proof of semantic correctness: review against the statement and fault sensitivity are also required."
+  "statement": "**TF-5 \u2014 Coverage metadata is not a passing outcome.** Requirements without checks are reported as unchecked and do not fail a run. A full gate reports a requirement passing only when\nevery registered required check has run and passed. Skipped, missing, errored, assertion-free lifecycle checks,\nand unexpected successes cannot establish a passing requirement. Partial runs report unselected requirements\nas not run, never green; global structural validation still runs, and the selected checks determine runtime\nresults. Expected failures also cannot count as a passing proof. Preserve `Phase.expect` assertion counting and requirement-level AND across all scenario parts,\nincluding G1\u2013G9 checks selected for every affected flow. Witness: two checks for one ID, one failing or\nmissing from a shard result, cannot aggregate to pass; skipped-only and expected-failure-only proofs are\nnot coverage. An assertion-free lifecycle proof and an unexpected success both fail the coverage gate. Assertion counting\nis not proof of semantic correctness: review against the statement and fault sensitivity are also required."
  },
  "TF-6": {
   "checks": [
    "review:TF-6",
-   "root:test_test_framework.MetadataTests.test_unknown_empty_and_untagged_proofs_and_missing_rationale_are_rejected"
+   "root:test_test_framework.MetadataTests.test_unknown_and_empty_tags_and_missing_tagged_rationale_are_rejected"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-6",
-  "statement": "**TF-6 \u2014 Make duplicate slow proof reviewable.** Every non-unit new or migrated test declares a nonempty\n`why_not_scenario` rationale (class-level rationale may cover inherited cases) naming the boundary, fault,\nconcurrency or edge condition a named lifecycle check cannot prove, or records that it IS the canonical\nscenario check. Enforce presence; review truth against the requirement. Witness: a tagged non-unit test (including a fast one) without\nthe rationale fails and names its ID. Existing tests in TF-7 are temporarily exempt from this metadata only.\nRationale alone never authorizes deleting another proof."
+  "statement": "**TF-6 \u2014 Make duplicate slow proof reviewable.** Every non-unit new or migrated test declares a nonempty\n`why_not_scenario` rationale (class-level rationale may cover inherited cases) naming the boundary, fault,\nconcurrency or edge condition a named lifecycle check cannot prove, or records that it IS the canonical\nscenario check. Enforce presence; review truth against the requirement. Witness: a tagged non-unit test (including a fast one) without\nthe rationale fails and names its ID. Untagged tests do not claim requirement coverage and need no rationale metadata.\nRationale alone never authorizes deleting another proof."
  },
  "TF-7": {
   "checks": [
-   "root:test_product_dependencies.ProductDependencies.test_assertion_edit_and_rename_still_fail_legacy_gate",
-   "root:test_product_dependencies.ProductDependencies.test_fileless_generated_helpers_keep_owned_namespace_and_external_identity",
-   "root:test_product_dependencies.ProductDependencies.test_imported_product_defaults_use_identity_but_owned_defaults_keep_values",
-   "root:test_product_dependencies.ProductDependencies.test_migration_rejects_wrong_provenance_and_changed_test_identity",
-   "root:test_product_dependencies.ProductDependencies.test_product_only_constant_and_implementation_changes_keep_legacy_proof",
-   "root:test_product_dependencies.ProductDependencies.test_product_symbol_identity_changes_are_not_ignored",
-   "root:test_product_dependencies.ProductDependencies.test_source_ownership_wins_over_test_looking_product_alias",
-   "root:test_product_dependencies.ProductDependencies.test_test_owned_helper_and_constant_edits_still_flag",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_claimed_pre_bump_commit_cannot_hide_old_record_edits",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_immutable_binding_tampering_is_rejected",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_later_edits_to_each_admitted_file_still_fail_metadata",
-   "root:test_release_bookkeeping.ReleaseBookkeeping.test_rebinding_retains_retirement_and_catches_later_fingerprint_edits",
-   "root:test_test_framework.MetadataTests.test_legacy_list_cannot_grow_restore_entries_change_fingerprints_or_rename_tests",
-   "root:test_test_framework.MetadataTests.test_migration_removes_legacy_entry_and_new_tagged_proof_is_required",
+   "root:test_assertion_diff.AssertionDiffTests.test_added_removed_and_changed_assertions_have_locations",
+   "root:test_assertion_diff.AssertionDiffTests.test_ci_is_a_new_report_only_job_and_codeowners_cover_the_scope",
+   "root:test_assertion_diff.AssertionDiffTests.test_comments_strings_and_line_shifts_do_not_report_assertion_changes",
+   "root:test_assertion_diff.AssertionDiffTests.test_commit_report_handles_added_deleted_files_and_parse_errors",
+   "root:test_assertion_diff.AssertionDiffTests.test_deleted_file_includes_every_test_and_helper_assertion",
+   "root:test_assertion_diff.AssertionDiffTests.test_multiline_async_context_and_plain_asserts",
+   "root:test_assertion_diff.AssertionDiffTests.test_path_filter_covers_root_and_package_tests",
    "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
-   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
    "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
-   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
-   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
    "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
    "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
-   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
-   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_keep_optional_requirement_tags",
    "root:test_test_framework.ReviewLifecycleTests.test_A12_unknown_registry_id_is_a_diagnostic_not_a_key_error",
-   "root:test_test_framework.ReviewLifecycleTests.test_A1_relocated_worktrees_keep_equal_fixture_hashes_without_hiding_constant_edits",
    "root:test_test_framework.ReviewLifecycleTests.test_B6_complete_shard_labels_cannot_hide_a_missing_worker",
    "root:test_test_framework.ReviewLifecycleTests.test_B6_stage_records_must_share_source_and_layer_plans",
-   "root:test_test_framework.ReviewLifecycleTests.test_C3_C13_cross_module_helper_is_found_by_source_path",
    "root:test_test_framework.ReviewLifecycleTests.test_C9_assertion_free_lifecycle_check_fails_the_real_gate",
-   "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards",
-   "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration",
-   "root:test_test_framework_integration.ReleaseIntegration.test_explicit_base_is_documented_and_missing_base_stops_before_discovery",
-   "root:test_test_framework_integration.ReleaseIntegration.test_release_overlay_is_immutable_and_candidate_changes_are_rejected",
-   "root:test_test_framework_r2.RoundTwo.test_M1_unrelated_source_cannot_resolve_a_specific_dependency",
-   "root:test_test_framework_r2.RoundTwo.test_N1_same_basename_dependencies_both_contribute",
-   "root:test_test_framework_r3.RoundThree.test_p01_closure_fixture_state_invalidates_metadata",
-   "root:test_test_framework_r3.RoundThree.test_p01_positional_and_keyword_defaults_are_dependencies",
-   "root:test_test_framework_review.ReviewTests.test_fixture_and_transitive_helper_changes_change_dependency_fingerprint",
-   "root:test_test_framework_review.ReviewTests.test_missing_trusted_base_fails_closed_without_using_candidate_head"
+   "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-7",
-  "statement": "**TF-7 \u2014 Grandfather only the unchanged baseline, and only shrink it.** Generate and commit the initial\nlegacy list from discovery on `a1d25560`, recording full suite/test IDs, baseline commit and a SHA-256 source\nfingerprint of the test implementation (including an inherited implementation's defining source and class\nsetup/teardown sources). Include the effective setUp/tearDown/setUpClass/tearDownClass definitions across\nthe MRO, module setUpModule/tearDownModule, and repository-local functions/classes transitively referenced\nby those fixtures or the test body (including imported shared fixture helpers). External stdlib/test-tool\nimplementations are excluded; their versions are independently pinned. Resolve dependencies by module\nand qualified name with cycle detection; unresolved dynamic helper dependencies need an explicit declared\nsource dependency, otherwise fail closed for grandfather eligibility. Keep deterministic sorted output and the generator command. The list exempts only\nmissing requirement/rationale metadata. Compare later lists against an immutable initial ceiling AND the\nreview base version: reject additions, restored removed entries, changed fingerprints or a replaced baseline.\nRenamed, overridden or changed tests must be tagged and removed from the list; missing/stale IDs must be\nremoved. Duplicate IDs are rejected. Witness: add a new test, rename a legacy test, edit its assertion or a shared fixture/helper, grow\nthe list, re-add a migrated entry, or replace its fingerprint; each fails. A tagged migration removes the entry\nand passes. The checker must fail closed if the review-base comparison cannot be made; use an explicit base\ncommit argument locally and a trusted CI merge-base; never trust a base supplied by the candidate manifest itself\nor silently substitute candidate HEAD. Missing or unavailable trusted base fails closed."
+  "statement": "**TF-7 \u2014 Test edit review.** Retired (decision 126, test reset A).\nReplacement: ordinary PR review with `.github/CODEOWNERS` covering tests and framework/CI\nsources, plus the stdlib `scripts/assertion_diff.py BASE HEAD` report of added, removed and\nchanged assertions and deleted test methods. No legacy source/dependency/value fingerprints,\nshrink-only lists, migration approval or trusted-base gate remain. `--base` is accepted for CI\ncompatibility and has no validation effect."
  },
  "TF-8": {
   "checks": [
    "root:test_test_framework.BudgetDebtTests.test_baseline_debt_warns_even_unselected_and_only_regression_fails",
-   "root:test_test_framework.BudgetDebtTests.test_debt_can_only_shrink_and_does_not_exempt_new_modules",
+   "root:test_test_framework.BudgetDebtTests.test_budget_debt_does_not_exempt_new_modules",
    "root:test_test_framework.BudgetDebtTests.test_shards_use_combined_debt_ceiling_and_preserve_preflight_time",
    "root:test_test_framework.MetadataTests.test_module_budgets_sum_fragments_and_name_every_offender",
    "root:test_test_framework.MetadataTests.test_shards_preserve_metadata_failures_and_reject_duplicate_tests_and_invalid_time",
    "root:test_test_framework.MetadataTests.test_shards_require_complete_disjoint_evidence_before_aggregate_budget_can_pass",
    "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
-   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
    "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
-   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
-   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
    "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
    "root:test_test_framework.WorkflowTests.test_ci_prepares_hashed_dependencies_and_combines_complete_shards",
-   "root:test_test_framework_integration.ReleaseIntegration.test_committed_release_versions_reject_tamper_growth_and_restoration",
    "root:test_test_framework_integration.ReleaseIntegration.test_exclusive_campaigns_wait_for_empty_pool_and_block_other_launches",
-   "root:test_test_framework_integration.ReleaseIntegration.test_versioned_debt_has_measured_ceilings_and_cannot_grow",
    "root:test_test_framework_r2.RoundTwo.test_M3_no_report_or_empty_plan_cannot_authorize_retirement",
    "root:test_test_framework_r3.RoundThree.test_p02_retirement_witness_rejects_each_status_blind_mutant"
   ],
   "source": "REQUIREMENTS-test-framework.md#TF-8",
-  "statement": "**TF-8 \u2014 Enforce module budgets, not worker-fragment budgets.** For each module sum actual elapsed seconds\nof every executed fragment (including import/setup/body/teardown), compare with the layer budget above, and\nname EVERY over-budget module with stage, layer, measured seconds, limit and fragment count. Apply\nowner-selected option A: generate and commit `scripts/test-budget-debt.json` from a1d25560's recorded\nmodule job-seconds, recording each module and its baseline ceiling. Every run names EVERY remaining debt\nentry as a warning (including unselected modules, explicitly marked not measured). A debt module fails if\nits complete measured total exceeds its unchanged recorded ceiling. A complete measurement at or below\nits layer budget requires removal from the debt file; afterward any excess over that budget fails. The\nfile may only shrink: no added/restored modules, increased ceilings, or baseline replacement. Validate\nagainst the immutable generated baseline and the explicit trusted review base. Partial shards cannot\nretire debt or certify a complete module. All new modules and modules absent from the debt file fail\nabove their layer budget. Do not bail out after the first offender.\nSeparate shards produce mergeable records; the combined gate enforces the aggregate module budget and\ndebt ceiling. A shard labels its measurement partial. Witness: two 20s component fragments fail its 30s\nbudget unless authorized baseline debt covers 40s; equality passes and a value just above fails; two\noffenders are both printed. A baseline debt warning appears even when unselected; ceiling regression,\nrestored debt, edited ceiling and debt retained after a complete under-budget result are rejected. Use an\ninjected clock for these tests, not real sleeps. Overall wall time has no five-minute failure threshold."
+  "statement": "**TF-8 \u2014 Enforce complete module budgets.** Sum actual worker-fragment job-seconds per\nmodule, report every offender, and preserve complete/disjoint shard validation. Keep the\ncurrent non-ceiling budget-debt files and their warnings, regression limits and complete-run\nretirement signal. New modules receive their layer budget. Historical Git replay, immutable\nbudget-ceiling files and trusted-base comparisons are retired (decision 126, test reset A);\nreplacement: current measured totals, ordinary review of debt changes, and CI run artifacts."
  },
  "TF-9": {
   "checks": [
@@ -2200,24 +2059,18 @@
    "root:test_test_framework.MetadataTests.test_module_budgets_sum_fragments_and_name_every_offender",
    "root:test_test_framework.MetadataTests.test_shards_preserve_metadata_failures_and_reject_duplicate_tests_and_invalid_time",
    "root:test_test_framework.ReviewCoreTests.test_A11_empty_method_rationale_falls_back_to_class",
-   "root:test_test_framework.ReviewCoreTests.test_A1_C3_constant_fingerprints_have_equality_and_independent_change_controls",
    "root:test_test_framework.ReviewCoreTests.test_A2_C4_dependency_scan_covers_shipped_roots_and_bad_pins",
-   "root:test_test_framework.ReviewCoreTests.test_A3_dynamic_helpers_need_explicit_source_dependencies",
-   "root:test_test_framework.ReviewCoreTests.test_A4_review_records_bind_digest_and_nonempty_revision",
    "root:test_test_framework.ReviewCoreTests.test_A5_A12_authority_ids_and_EOF_splitter",
    "root:test_test_framework.ReviewCoreTests.test_A6_imported_golden_path_cannot_bypass_helper",
    "root:test_test_framework.ReviewCoreTests.test_A7_mixed_invocations_cannot_combine",
    "root:test_test_framework.ReviewCoreTests.test_A8_incomplete_and_timed_out_modules_do_not_retire_debt",
    "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
-   "root:test_test_framework.ReviewEvidenceTests.test_B_note_stored_constant_hash_and_unresolved_dependencies_are_enforced",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_inactive_and_duplicate_requirements_are_rejected",
    "root:test_test_framework.ReviewEvidenceTests.test_C13_reason_codes_and_golden_diff_are_exact_and_bounded",
-   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_fail_preflight_by_full_id",
+   "root:test_test_framework.ReviewEvidenceTests.test_C6_overridden_and_generated_cases_keep_optional_requirement_tags",
    "root:test_test_framework.ReviewLifecycleTests.test_A12_unknown_registry_id_is_a_diagnostic_not_a_key_error",
-   "root:test_test_framework.ReviewLifecycleTests.test_A1_relocated_worktrees_keep_equal_fixture_hashes_without_hiding_constant_edits",
    "root:test_test_framework.ReviewLifecycleTests.test_B6_complete_shard_labels_cannot_hide_a_missing_worker",
    "root:test_test_framework.ReviewLifecycleTests.test_B6_stage_records_must_share_source_and_layer_plans",
-   "root:test_test_framework.ReviewLifecycleTests.test_C3_C13_cross_module_helper_is_found_by_source_path",
    "root:test_test_framework.ReviewLifecycleTests.test_C9_assertion_free_lifecycle_check_fails_the_real_gate",
    "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B5_workflow_has_validated_merge_base_and_no_parent_fallback",
    "root:test_test_framework.ReviewRunnerPolicyTests.test_review_B6_full_gate_rejects_not_run_and_incomplete_stage_evidence",

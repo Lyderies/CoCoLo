@@ -1,8 +1,0 @@
-{
- "status": "green",
- "witness": "root:test_release_bookkeeping.ReleaseBookkeeping.test_exact_primary_restoration_matches_installed_release",
- "positive_control": "The trusted record names installed 0.8.49 and all three current files equal primary 30bf1fa9 byte for byte.",
- "source_run": "green.run.json",
- "job_seconds": 10.371961709053721,
- "jobs": 16
-}

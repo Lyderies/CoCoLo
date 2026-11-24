@@ -1,5 +1,0 @@
-Supplementary baseline diagnostic: unchanged tests.test_account_billing_admission.AccountBillingAdmissionTests.test_B0_5_finished_probes_do_not_count_against_the_probe_cap_and_still_replay
-Interpreter: /private/tmp/cocolo-testfw-venv/bin/python -B; production learning_store module executed from git show 7783a899:packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py before loading the test. No production file was replaced.
-Observed: Ran 1 test in 20.252s; FAILED (failures=2).
-Failure 1: test_account_billing_admission.py:76, original signature return expired (10-second prepared() deadline).
-Failure 2: test_account_billing_admission.py:62, stop() cleanup exceeded its 10-second deadline.

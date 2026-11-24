@@ -1,7 +1,0 @@
-Traceback (most recent call last):
-  File "<stdin>", line 10, in <module>
-  File "<work>/cocolo-tf27/scripts/rebind_approved_edits.py", line 288, in build
-    tests = changed_proofs(before, after, seed)
-  File "<work>/cocolo-tf27/scripts/rebind_approved_edits.py", line 160, in changed_proofs
-    raise ValueError(name + ': trusted old proof differs from admitted baseline')
-ValueError: codex:tests.test_container_launch_journal.RealContainerLaunchTests.test_real_bridge_deadline_stops_the_container: trusted old proof differs from admitted baseline

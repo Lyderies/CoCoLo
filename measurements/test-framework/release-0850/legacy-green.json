@@ -1,8 +1,0 @@
-{
- "status": "green",
- "witness": "root:test_test_framework_integration.ReleaseIntegration.test_release_overlay_is_immutable_and_candidate_changes_are_rejected",
- "positive_control": "Reviewed fingerprints pass; changed implementation and untagged additions fail.",
- "jobs": 16,
- "job_seconds": 0.7942419989849441,
- "source_run": "testfw-integration-bindings-green.run.json"
-}
