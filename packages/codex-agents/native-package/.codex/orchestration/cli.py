@@ -2634,6 +2634,10 @@ def main() -> int:
                         {k: v for k, v in current_route.items() if k not in selection_fields}):
                     raise ContractError("supplied route does not match the installed route")
 
+            if current_route.get("dispatch") == "bridge" and supplied_route.get("dispatch") != "bridge":
+                # L6.2: a supplied route that the refresh resolved to a bridge route gets the same refusal.
+                committed_export_manifest(args.project_root, assignment_read_paths(
+                    assignment, worker_outcome_digest=task.get("verification_for_outcome")))
             if _host_driven(current_route):
                 _start_project_host(args)
                 if _host_client() == CLAUDE_HOST_CLIENT:
@@ -2681,6 +2685,10 @@ def main() -> int:
                 for name in ("model", "effort", "role", "verification_required"):
                     rebound[name] = route[name]
                 validate_assignment(rebound, task=task, route=route, parent_grant=parent_grant)
+                if route.get("dispatch") == "bridge":
+                    # L6.2: the route as resolved after refresh, before any admission.
+                    committed_export_manifest(args.project_root, assignment_read_paths(
+                        rebound, worker_outcome_digest=task.get("verification_for_outcome")))
                 if _host_driven(route):
                     _start_project_host(args)
                     host = _host_client()

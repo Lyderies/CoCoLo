@@ -5,6 +5,7 @@ from tests.support import SHORT_TMP
 import contextlib
 from copy import copy
 from dataclasses import asdict, replace
+import json
 import os
 from pathlib import Path
 import signal
@@ -473,3 +474,24 @@ class BridgeLivenessTests(unittest.TestCase):
                 self.assertIsNotNone(entry.process.returncode)
                 self.assertTrue(entry.cleanup_started)
                 self.assertFalse(supervisor.snapshot()["cleanup_confirmed"])
+
+    def test_l6_1_a_concurrent_stop_never_overwrites_an_observed_denial(self):
+        from codex_agents.codex_worker import CodexWorkerPacket
+        from codex_agents.learning_contracts import canonical_json
+        body = canonical_json({"denied": "body"})
+        report = canonical_json({"outcome": "claude_tool_not_allowed",
+                                 "permission_denials": {"count": 1, "tools": ["Write"]}})
+        packet = CodexWorkerPacket(("a", 1, None), body, report, True, True, "failed", None, None)
+        from codex_agents.codex_worker import CodexWorkerHandle
+        handle = CodexWorkerHandle()
+        pool = mock.Mock()
+        pool.packet.return_value = packet
+        pool.supervisor.return_value.snapshot.return_value = {"worker_returned": True}
+        owner = BridgeLivenessOwner(self.loop)
+        owner._monitor = mock.Mock()
+        owner._monitor.status.return_value = mock.Mock(stop_reason="absolute_deadline")
+        with mock.patch.object(owner, "_worker", return_value=object()), mock.patch.object(owner, "_synchronize"):
+            result = owner.result(None, pool, handle)
+        self.assertEqual(body, result.packet.body)
+        self.assertEqual("claude_tool_not_allowed", json.loads(result.packet.report)["outcome"])
+        self.assertEqual("failed", result.packet.terminal_state)

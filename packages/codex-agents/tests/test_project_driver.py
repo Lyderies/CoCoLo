@@ -1580,6 +1580,28 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
         for table in ('host_run_bindings', 'active_run_capacity'):
             self.assertEqual(0, connection.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0], table)
 
+    def test_l6_2_a_supplied_non_bridge_route_that_resolves_to_bridge_is_refused_before_admission(self):
+        task = self.write('l6b-task.json', self.task())
+        route = self.cli_for(self.project, 'learning-route', '--task', task)
+        (self.project / 'draft-l6b.txt').write_text('uncommitted\n')
+        assigned = self.assignment_for(route, context=['draft-l6b.txt'])
+        common = ('--task', task, '--assignment', self.write('l6b-assignment.json', assigned),
+                  '--parent-grant', self.write('l6b-grant.json', PARENT_GRANT))
+        route_path = self.write('l6b-route.json', {**route, 'dispatch': 'native'})
+        orchestration = self.cli_for(self.project, 'learning-open-orchestration')['orchestration_handle']
+        started = []
+        # The supplied route is accepted as supplied (shape checks and the changed-route comparison are stubbed);
+        # the installed route it is refreshed to is the bridge route.
+        with mock.patch.object(cli, '_start_project_host', side_effect=lambda *a, **k: started.append(a)), \
+                mock.patch.object(cli, 'validate_assignment'), mock.patch.object(cli, '_same_route', return_value=True):
+            opened = self.cli_for(self.project, 'learning-open-host-run', *common, '--route', route_path,
+                                  '--orchestration-handle', orchestration, expected=2)
+        self.assertEqual([], started)
+        self.assertEqual('dispatch refused', opened.get('error'), opened)
+        connection = self.collector_ledger._connection
+        for table in ('host_run_bindings', 'active_run_capacity'):
+            self.assertEqual(0, connection.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0], table)
+
     def test_a_running_claude_child_reports_live_status_and_stops_on_cancellation(self):
         context, route_path, orchestration, run_handle = self.open_claude_run()
         # The child starts and does some work, then goes quiet well inside every bound.

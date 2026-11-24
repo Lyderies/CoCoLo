@@ -1639,7 +1639,7 @@ def run_claude(
     # L6.1: denials are kept as they are seen (every result frame), so a later clean frame never erases one.
     # The client's frame does not tell a refused read/write/network call from a harmless prompt, so any
     # denial fails closed. Names are the client's known tools or "other", never an arbitrary string.
-    if state["denial_count"] > 0:
+    if isinstance(result_frame, dict):
         report["permission_denials"] = {"count": state["denial_count"], "tools": sorted(state["denied_tools"])}
     if state["denial_count"] > 0:
         # A denial wins over a concurrent stop: the stored reason never hides it.

@@ -135,7 +135,9 @@ class BridgeLivenessOwner:
         if not pool.supervisor(handle).snapshot()["worker_returned"]:
             raise ControlError("control_unavailable")
         status = self._monitor.status(binding)
-        if packet.body is not None and status.stop_reason is not None:
+        denied = packet.report is not None and b'"outcome":"claude_tool_not_allowed"' in packet.report
+        # L6.1: an observed client denial is never overwritten by a concurrent stop.
+        if packet.body is not None and status.stop_reason is not None and not denied:
             reason = {"cancel_requested": "cancelled", "absolute_deadline": "timed_out"}.get(
                 status.stop_reason, status.stop_reason)
             state = {"cancelled": "cancelled", "timed_out": "timed_out",
