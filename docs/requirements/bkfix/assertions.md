@@ -39,4 +39,4 @@ unlisted RuntimeError becomes "the backup could not be completed (<Type>)"; veri
 | test_backup_reply_private BK-6 (mine, round 2) | `reason(RuntimeError("fixed text")) == "fixed text"` | generic reason | allowlist, not RuntimeError type |
 New: BK-7..BK-10. Existing CLI tests that pinned printed exception text are listed below if any changed.
 | test_owner_backup_streamed F3-16 (conclude) | `final["error"] == "preflight refused"` | `== "the backup could not be completed (RuntimeError)"` | unlisted text |
-| test_project_driver while-a-child-runs (both classes) | `'a child run is active; nothing was changed' in refused['error']` | `refused['reason_code'] == 'ledger_refused'` and that text absent | CLI prints a fixed code, never exception text (decision 199) |
+| test_project_driver while-a-child-runs (both classes) | `'a child run is active; nothing was changed' in refused['error']` | `refused['reason_code'] == 'collector_refused'` and that text absent | CLI prints a fixed code, never exception text (decision 199) |
