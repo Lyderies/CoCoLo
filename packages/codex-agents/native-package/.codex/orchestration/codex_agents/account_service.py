@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .account_api import (
-    ACCOUNT_OPERATIONS, ACCOUNT_PROTOCOL_VERSION, MAX_ACCOUNT_FRAME_BYTES,
+    ACCOUNT_OPERATIONS, ACCOUNT_READ_OPERATIONS, ACCOUNT_PROTOCOL_VERSION, MAX_ACCOUNT_FRAME_BYTES,
     AccountError, AccountRequest, _DIGEST, _PROJECT, account_request_digest,
     decode_account_request, decode_account_response, encode_account_request, integer, matches,
 )
@@ -24,7 +24,9 @@ from .admission_inputs import (
     ADMISSION_CAPTURE_PUBLIC_REASONS, ADMISSION_CAPTURE_RECORD_TYPES, AdmissionCaptureError, AdmissionCaptureLimits,
     AdmissionInputPolicy, AdmissionInputSnapshot, admission_input_size, public_capture_reason,
 )
-from .learning_contracts import MAX_RECORD_BYTES, canonical_json
+from .contracts import ContractError
+from .collector_contracts import RUNTIME_UPDATE_COMMAND, RUNTIME_UPGRADE_MESSAGE
+from .learning_contracts import MAX_RECORD_BYTES, canonical_json, parse_bounded_json
 from .learning_store import (
     COLLECTOR_RUNTIME_DIGEST, OWNER_SIGNER_LINE, OWNER_SIGNERS_MAX_BYTES,
     LearningLedger, LedgerError, OwnerSignerNotConfigured, StateError,
@@ -790,6 +792,8 @@ class AccountService:
             "protocol_version": ACCOUNT_PROTOCOL_VERSION,
             **labels,
             "ready": reason is None, "result": result, "reason_code": reason,
+            **({"message": RUNTIME_UPGRADE_MESSAGE, "update_command": RUNTIME_UPDATE_COMMAND}
+               if reason == "runtime_upgrade_required" else {}),
         })
 
     def handle(self, raw: bytes, transport_context: object = None) -> bytes:
@@ -970,10 +974,34 @@ class AccountService:
         with ledger_waits.request():
             return self._handle_request(raw, transport_context, deferred=deferred, ingress=ingress)
 
+    def runtime_upgrade_reply(self, raw: bytes) -> bytes | None:
+        """RSF-S1: bounded, side-effect-free gate, also safe on the socket front thread."""
+        if type(raw) is not bytes or len(raw) + 1 > MAX_ACCOUNT_FRAME_BYTES:
+            return None  # retain the normal malformed/oversized refusal
+        try:
+            envelope = parse_bounded_json(raw, max_bytes=MAX_ACCOUNT_FRAME_BYTES - 1)
+        except (ContractError, TypeError, ValueError, RecursionError):
+            return None
+        if (type(envelope.get("operation")) is not str
+                or envelope["operation"] not in ACCOUNT_OPERATIONS - ACCOUNT_READ_OPERATIONS
+                or envelope.get("runtime_digest") == self._runtime):
+            return None
+        labels = {"request_id": None, "project_id": None, "runtime_digest": None, "request_digest": None}
+        try:
+            request = decode_account_request(raw)
+            labels = {"request_id": request.request_id, "project_id": request.project_id,
+                      "runtime_digest": request.runtime_digest, "request_digest": account_request_digest(request)}
+        except AccountError:
+            pass  # missing identity or invalid payload: never echo unchecked fields
+        return self._reply(labels, reason="runtime_upgrade_required")
+
     def _handle_request(self, raw: bytes, transport_context: object, *, deferred: bool, ingress=None):
         labels = {"request_id": None, "project_id": None, "runtime_digest": None, "request_digest": None}
         operation = None  # known once decoded; chooses the busy answer
         try:
+            upgrade = self.runtime_upgrade_reply(raw)
+            if upgrade is not None:
+                return upgrade
             request = decode_account_request(raw)
             digest = account_request_digest(request)
             operation = request.operation

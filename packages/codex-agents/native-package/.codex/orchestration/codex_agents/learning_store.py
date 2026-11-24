@@ -79,6 +79,9 @@ from .billing_probe_schema import (BILLING_PROBE_COLUMNS, BILLING_PROBE_ORIGIN_C
                                    BILLING_PROBE_OBJECTS, assert_billing_probe_schema,
                                    check_billing_probe_coverage, install_billing_probe_schema)
 from .collector_contracts import (
+    COLLECTOR_MUTATING_OPERATIONS,
+    RUNTIME_UPDATE_COMMAND,
+    RUNTIME_UPGRADE_MESSAGE,
     COLLECTOR_PROTOCOL_VERSION as COLLECTOR_PROTOCOL_VERSION,
     LEDGER_SCHEMA_VERSION as LEDGER_SCHEMA_VERSION,
     MAX_REQUEST_BYTES as MAX_REQUEST_BYTES,
@@ -12937,6 +12940,13 @@ class CollectorServer:
 
     def _dispatch(self, request: dict[str, Any]) -> dict[str, Any]:
         try:
+            if request.get("op") in COLLECTOR_MUTATING_OPERATIONS:
+                if request.get("runtime_digest") != COLLECTOR_RUNTIME_DIGEST:
+                    return {"ok": False, "code": "runtime_upgrade_required",
+                            "message": RUNTIME_UPGRADE_MESSAGE, "update_command": RUNTIME_UPDATE_COMMAND}
+                # Check the original envelope before any side effect, then retain the closed
+                # operation-specific shapes below. Never mutate the caller's request object.
+                request = {key: value for key, value in request.items() if key != "runtime_digest"}
             if request.get("op") == "bind" and set(request) == {
                 "protocol",
                 "op",

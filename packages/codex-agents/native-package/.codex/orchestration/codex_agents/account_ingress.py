@@ -217,6 +217,12 @@ class AccountIngress:
             if trailing:
                 self._drop(selector, token, peer)
                 return
+            upgrade = self._service.runtime_upgrade_reply(raw)
+            if upgrade is not None:
+                peer.outgoing = self._wire(upgrade) + b"\n"
+                peer.incoming.clear()
+                selector.modify(peer.connection, selectors.EVENT_WRITE, token)
+                return
             try:
                 request = decode_account_request(raw)
             except AccountError:

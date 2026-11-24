@@ -4,6 +4,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- RS-F S1 (RSF-S1-1/2, owner decision 129.3): every mutating collector/account request
+  must name the serving runtime's digest. Old-format repair requests and missing or
+  different runtime identities are refused before any write with `runtime_upgrade_required`
+  and a plain instruction to run `./setup.sh --update`. Before 1.0, older clients and
+  runtimes have no compatibility path; update each project to the serving runtime.
 - Package 0.8.55: an installed CLI reads the live provider state from its default state root (0.8.54 installed
   still routed "not_checked", with no reason: the checked default `--state-root` became "no state root"); a
   not_checked route always says why.

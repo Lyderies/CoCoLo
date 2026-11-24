@@ -242,9 +242,11 @@ class ServiceTransportTests(unittest.TestCase):
         self.assertEqual([
             {"protocol": learning_store.COLLECTOR_PROTOCOL_VERSION, "op": "bind",
              "project_root": str(root.resolve()), "session_id": "session-fixture",
-             "producer": "hook", "client_version": "codex-hooks-v1"},
+             "producer": "hook", "client_version": "codex-hooks-v1",
+             "runtime_digest": learning_store.COLLECTOR_RUNTIME_DIGEST},
             {"protocol": learning_store.COLLECTOR_PROTOCOL_VERSION, "op": "ingest",
-             "binding_token": "bnd_fixture", "record": record},
+             "binding_token": "bnd_fixture", "record": record,
+             "runtime_digest": learning_store.COLLECTOR_RUNTIME_DIGEST},
         ], [json.loads(call.args[1]) for call in exchange.call_args_list])
 
         for method, arguments, codes in (
