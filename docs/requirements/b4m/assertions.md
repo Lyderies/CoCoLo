@@ -13,3 +13,7 @@ no test assertion was weakened or changed to fit the implementation.
 - `test_reply_shape_live` DRIVERS: added `test_holds_report` to the account/history group so the new op is produced live.
 - RS-F S1 `runtime_upgrade_required` refusals are error replies (no `result`), so they do not pass the result guard;
   the client validates them separately (fixed extra fields `message`, `update_command`).
+- Integration fix (test_holds_report.py, B7a x RS-D S2): `UPDATE project_holds SET release_kind='retention'` (and the
+  later `='orchestration_closed'`) old: all rows -> new: `... WHERE kind='result_custody'`. Reason: RS-D S2 makes the
+  orchestration hold a real released row whose release_kind CHECK rejects 'retention'; the assertion only concerns custody rows.
+- tests/lifetime_caps.json: added `account_service.py::runtime_upgrade_reply` (RS-F S1, per-request bounded, nothing stored).

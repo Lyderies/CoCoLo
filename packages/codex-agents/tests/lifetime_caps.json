@@ -179,6 +179,10 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "account_service.py::runtime_upgrade_reply": {
+   "checks": 1,
+   "ends": "per-request frame-size check on one inbound request; stores nothing, so nothing accumulates (RS-F S1, integration 2026-11-24)"
+  },
   "account_service.py::_owner_key_view": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"

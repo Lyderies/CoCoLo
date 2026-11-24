@@ -300,11 +300,11 @@ class HoldsUpdateTests(unittest.TestCase):
                        (PROJECT_A, f'claim-{number}', run, f'{number:064x}', opened['orchestration_handle']))
         self.assertEqual(1, holds_report(fixture.store, runtime_digest='b' * 64)['result_custody']['ended_by_update_unrecorded'])
         self.assertEqual(0, holds_report(fixture.store, runtime_digest='a' * 64)['result_custody']['ended_by_update_unrecorded'])
-        db.execute("UPDATE project_holds SET release_kind='retention'")
+        db.execute("UPDATE project_holds SET release_kind='retention' WHERE kind='result_custody'")
         self.assertEqual(0, holds_report(fixture.store, runtime_digest='b' * 64)['result_custody']['ended_by_update_unrecorded'])
         # An adopted legacy context has no outcome association even if its old
         # primary recorded it: the durable admission receipt prevents miscounting.
-        db.execute("UPDATE project_holds SET release_kind='orchestration_closed'")
+        db.execute("UPDATE project_holds SET release_kind='orchestration_closed' WHERE kind='result_custody'")
         receipt = {'dispatch_result': {'bridge_run_id': 'claim-1'}}
         db.execute('INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?)',
             (PROJECT_A, 'legacy-admission', 'host_result_admission', 'host', 100, 1000, 1000,
