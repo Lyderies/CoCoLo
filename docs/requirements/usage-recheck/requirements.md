@@ -4,7 +4,7 @@ Analysis: `ANALYSIS.md` (this folder). Problem: a provider marked exhausted with
 re-read, and a fresh good reading would not clear it anyway, so an early provider reset (live: Claude, owner used
 an early reset, next_reset Sat 2026-11-28 01:00) leaves CoCoLo skipping that provider until the old reset time.
 
-Named constants (owner to confirm the numbers): `USAGE_RECHECK_INTERVAL_MS = 3_600_000` (60 min),
+Named constants (owner decision 134 (b): yes, 60 min): `USAGE_RECHECK_INTERVAL_MS = 3_600_000` (60 min),
 `USAGE_RECHECK_FAR_RESET_MS = 3_600_000` (a reset more than 1 h away is "far").
 
 ### USAGE-RECHECK-1 - When a re-check is due
@@ -26,7 +26,7 @@ Cost (flag for owner): one Haiku low-effort single turn per re-check, at most on
 `provider-observe --provider claude --billing-probe` launches one probe and stores its records; same with a
 reading 10 min old -> refused `provider_exhausted`, nothing launched.
 
-### USAGE-RECHECK-3 - An early reset clears a measured restriction (NEEDS OWNER DECISION: changes RT-RX-5)
+### USAGE-RECHECK-3 - An early reset clears a measured restriction (owner decision 134 (a): option A; changes RT-RX-5 only for a proven early reset)
 A later reading (strictly later `observed_at_ms`, at or before evaluation time) of the same provider, account and
 window (same `scope` and `window_minutes`, at least one of them known; review r1) that rates that window non-restrictive AND carries its own explicit
 `resets_at` (the one that reading reported, never one a merge lent it) different from the restrictive window's proves the window reset early: it supersedes that window's
