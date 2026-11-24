@@ -335,10 +335,10 @@ class OrchestrationCountsTests(unittest.TestCase):
     def counts_request(self):
         return HistoryRequest(1, 'history.orchestration_counts', 'orchestrations', PROJECT_A, RUNTIME, {})
 
-    def test_L14_1_only_the_owner_label_may_read_the_orchestration_counts(self):
+    def test_L14_1_the_owner_and_an_enrolled_primary_may_read_the_orchestration_counts(self):
         from codex_agents.service_host import ProjectServiceHost
         from codex_agents.hosts import CODEX_HOST_CLIENT, CLAUDE_HOST_CLIENT, OWNER_CLIENT
-        for client, allowed in ((OWNER_CLIENT, True), (CODEX_HOST_CLIENT, False), (CLAUDE_HOST_CLIENT, False)):
+        for client, allowed in ((OWNER_CLIENT, True), (CODEX_HOST_CLIENT, True), (CLAUDE_HOST_CLIENT, True)):  # decision 185
             host = ProjectServiceHost.__new__(ProjectServiceHost)
             enrolled = SimpleNamespace(role='host', host_client=client)
             host._frontend = SimpleNamespace(context=lambda token: SimpleNamespace(kind='project', enrolled=enrolled))
@@ -371,6 +371,15 @@ class OrchestrationCountsTests(unittest.TestCase):
         self.assertEqual({'active': 2, 'paused': 1, 'closed': 2}, counts)
         closed = {handles[0]['orchestration_handle'], handles[1]['orchestration_handle']}
         self.assertFalse(closed & set(verified), 'a closed orchestration was verified row by row')
+
+
+class OrchestrationCountsCostTests(unittest.TestCase):
+    @unittest.skip("decision 185.2: bounding the closed-row scan needs a NEW indexed status column on "
+                   "project_orchestrations (a schema step); schema steps ride B6 (decision 131). Until then SQLite "
+                   "still parses every closed checkpoint's content in open_counts.")
+    def test_L14_1_the_closed_count_parses_no_closed_checkpoint(self):
+        from codex_agents.orchestration_schema import ORCHESTRATION_COLUMNS
+        self.assertIn('status', ORCHESTRATION_COLUMNS['project_orchestrations'])
 
 
 class HoldsProtocolTests(dr.LeaseBackedFixture):

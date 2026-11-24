@@ -2491,7 +2491,7 @@ def main() -> int:
             # not running the counts are unknown (null, with the reason), never the ledger's.
             managed = (report.get('ingestion') or {}).get('managed_lifecycle')
             if type(managed) is dict and 'orchestrations_active' in managed:
-                counts = orchestration_counts_client(args.state_root, args.project_root, host_client=OWNER_CLIENT)  # owner-only
+                counts = orchestration_counts_client(args.state_root, args.project_root, host_client=label)  # subject-scoped (decision 185)
                 for name in ('active', 'paused', 'closed'):
                     managed['orchestrations_' + name] = None if counts is None else counts[name]
                 if counts is None:
@@ -2499,6 +2499,15 @@ def main() -> int:
                     managed['orchestrations_unknown_reason'] = (
                         "this project's service is not running, so its orchestrations cannot be counted now: "
                         "start it (learning-start-project-service) and ask again")
+            from codex_agents.project_service import pending_cleanups as _pending_cleanups
+            try:
+                waiting = _pending_cleanups(CollectorPaths(args.state_root))
+            except Exception:
+                waiting = []  # a diagnostic: it never stops learning-status
+            if waiting:
+                report['project_cleanup_pending'] = (
+                    f"{len(waiting)} deleted project(s) still have a history store to remove: run "
+                    "learning-delete-project again for each")
             # O0c M1, M3: the run slots this project's service can no longer free, said plainly.
             slots = (report['project_capacity'] or {}).pop('run_slots', None)
             if slots is not None:
@@ -2543,41 +2552,57 @@ def main() -> int:
             finally:
                 _close_ledger(ledger)
         elif args.command == "learning-delete-project":
-            ledger, project_id = _learning_ledger(args)
-            try:
-                if args.confirm_project_id != project_id:
-                    raise LedgerError("project deletion confirmation does not match")
-                report = {
-                    "ready": True,
-                    "project_id": project_id,
-                    "deletion_id": ledger.delete_project(project_id),
-                }
-                client_health_clear(ledger.state, args.project_root)
-            finally:
-                _close_ledger(ledger)
+            from codex_agents.project_service import (
+                clear_pending_cleanup, mark_pending_cleanup, pending_cleanups, remove_project_history)
+            pending = {name: root for name, root in pending_cleanups(CollectorPaths(args.state_root))}
+            resumed = pending.get(args.confirm_project_id) == str(Path(args.project_root).resolve())
+            if resumed:
+                # s2fix round 3 (185.4): the project's records were deleted earlier and its history store was not
+                # yet removable; the deletion's marker lets this run finish it though the root binding is gone.
+                project_id = args.confirm_project_id
+                report = {"ready": True, "project_id": project_id, "deletion_id": None, "resumed_cleanup": True}
+            else:
+                ledger, project_id = _learning_ledger(args)
+                try:
+                    if args.confirm_project_id != project_id:
+                        raise LedgerError("project deletion confirmation does not match")
+                    report = {
+                        "ready": True,
+                        "project_id": project_id,
+                        "deletion_id": ledger.delete_project(project_id),
+                    }
+                    client_health_clear(ledger.state, args.project_root)
+                    mark_pending_cleanup(CollectorPaths(args.state_root), project_id, Path(args.project_root).resolve())
+                finally:
+                    _close_ledger(ledger)
             # T7 S2 (L15.1): the project's records, its service AND its history store go (owner question 174: only
             # the tombstone and the path-free provider observations stay). The deletion refused any project still
             # holding a run, so its service is idle and stops by the ordinary withdrawal (bounded wait). The
             # withdrawal compares the hint's project id: a newer registration at this root keeps its service.
             from codex_agents.project_host_client import stop_project_host
-            from codex_agents.project_service import remove_project_history
             report["project_service"] = stop_project_host(args.state_root, args.project_root, project_id=project_id)
             if report["project_service"] in ("stopped", "not_running"):
                 report["project_history_removed"] = remove_project_history(CollectorPaths(args.state_root), project_id)
-                if not report["project_history_removed"]:
+                if report["project_history_removed"]:
+                    clear_pending_cleanup(CollectorPaths(args.state_root), project_id)
+                else:
                     report["ready"] = False
-                    report["reason"] = ("the deleted project's service still holds its history store, so that "
-                                        "store was not removed: check that no run of the project is active, then "
-                                        "run learning-delete-project again")
+                    report["cleanup_pending"] = True
+                    report["reason"] = ("the deleted project's history store could not be removed yet (its service "
+                                        "or a writer still holds it, or its folder is not safe to remove): the "
+                                        "cleanup is pending; run learning-delete-project again to finish it")
             elif report["project_service"] == "still_running":
+                report["cleanup_pending"] = True
                 report["ready"] = False
                 report["reason"] = ("the deleted project's service did not stop in time, so its history store was "
-                                    "not removed: it stops by itself once idle; then run learning-delete-project "
-                                    "again")
+                                    "not removed: the cleanup is pending; it stops by itself once idle; then run "
+                                    "learning-delete-project again")
             else:
+                report["cleanup_pending"] = True
                 report["ready"] = False
                 report["reason"] = ("the deleted project's service could not be checked just now, so its history "
-                                    "store was not removed: run learning-delete-project again in a moment")
+                                    "store was not removed: the cleanup is pending; run learning-delete-project "
+                                    "again in a moment")
         elif args.command == "learning-normalize-app":
             state = CollectorPaths(args.state_root)
             clients = load_client_capabilities(

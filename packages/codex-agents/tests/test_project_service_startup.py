@@ -406,6 +406,30 @@ class ProjectServiceStartupTests(unittest.TestCase):
         self.assertFalse((store / 'history.sqlite3').exists())
         self.assertEqual([], [path.name for path in store.glob('history.sqlite3*')] if store.exists() else [])
 
+    @__import__('test_framework').requirements('L15.1', why_not_scenario='Real host processes; the lifecycle check '
+                                               'L15.1 drives the unmodified CLI.')
+    def test_L15_1_a_busy_history_writer_leaves_a_pending_cleanup_that_a_later_deletion_finishes(self):
+        """s2fix round 3 (decision 185.4): the root binding is cleared by the first deletion, yet the retry works."""
+        import fcntl
+        store = history_directory(self.paths, self.project_id)
+        store.mkdir(parents=True, mode=0o700)
+        (store / 'history.sqlite3').write_bytes(b'x')
+        busy = os.open(store / 'history.lock', os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(busy, fcntl.LOCK_EX)
+        try:
+            code, first = self.delete_in_process(self.project, self.project_id)
+            self.assertIs(False, first['ready'])
+            self.assertTrue((store / 'history.sqlite3').exists())
+            self.assertIn('pending', first['reason'])
+        finally:
+            fcntl.flock(busy, fcntl.LOCK_UN)
+            os.close(busy)
+        code, second = self.delete_in_process(self.project, self.project_id)
+        self.assertEqual((0, True), (code, second['ready']), second)
+        self.assertFalse((store / 'history.sqlite3').exists())
+        from codex_agents.project_service import pending_cleanups
+        self.assertEqual([], pending_cleanups(self.paths))
+
 
 if __name__ == '__main__':
     unittest.main()

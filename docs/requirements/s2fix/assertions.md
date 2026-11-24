@@ -12,3 +12,8 @@ Primary decision needed: accept the new operation (and this pin), or choose anot
 | Test (file) | Old | New | Reason |
 |---|---|---|---|
 | tests/test_learning_cli.py `test_only_learning_register_creates_missing_runtime_authorization` (the learning-status check after `learning-register`) | `orchestrations_active == 1` (the ledger's older table, no project service running) | the three `orchestrations_*` are `None` and `orchestrations_unknown_reason` names the service | Review finding 2: with the project's service unavailable the counts are unknown (null + plain reason), never silently the legacy ledger's. Needs primary decision (stop-and-list rule): accept, or keep legacy counts when the service is down. |
+
+## Round 3 (decision 185)
+| Test (file) | Old | New | Reason |
+|---|---|---|---|
+| tests/test_holds_report.py `OrchestrationCountsTests.test_L14_1_only_the_owner_label_may_read_the_orchestration_counts` (renamed `..._the_owner_and_an_enrolled_primary_may_read_...`) | owner allowed; Codex and Claude host classes refused | owner, Codex and Claude host (the enrolled primary of this project) all allowed | Decision 185.1: counts are subject-scoped (own project's primary or owner); other projects' credentials are refused (new tests `OrchestrationCountsAccessTests` in test_b2_service_outcome_hosts.py). |

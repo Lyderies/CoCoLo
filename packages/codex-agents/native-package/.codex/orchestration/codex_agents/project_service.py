@@ -74,12 +74,15 @@ def history_directory(state, project_id):
     return state.root / 'projects' / project_id
 
 
-def _empty_directory(descriptor, depth=0):
-    """Remove everything under an open directory, never following a symlink (it goes itself, not its target)."""
+def _empty_directory(descriptor, depth=0, keep=()):
+    """Remove everything under an open directory, never following a symlink (it goes itself, not its target).
+    Names in `keep` are left in the top directory."""
     import stat
     flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
     try:
         for name in os.listdir(descriptor):
+            if name in keep:
+                continue
             if stat.S_ISDIR(os.stat(name, dir_fd=descriptor, follow_symlinks=False).st_mode):
                 if depth >= 4:
                     return False
@@ -97,21 +100,46 @@ def _empty_directory(descriptor, depth=0):
     return True
 
 
+def _safe_store_directory(state, project_id):
+    """The project's store directory opened component by component without following a link, each one a directory
+    of this user (s2fix round 3). The descriptor, or None when a component is a link, foreign or not a directory."""
+    import stat
+    flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        _assert_no_symlink_components(Path(state.root))
+        descriptor = os.open(state.root, flags)
+    except OSError:
+        return None
+    except StateError:
+        return None
+    try:
+        for name in ('projects', project_id):
+            child = os.open(name, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+            info = os.fstat(descriptor)
+            if not stat.S_ISDIR(info.st_mode) or (hasattr(os, 'getuid') and info.st_uid != os.getuid()):
+                raise OSError('foreign or not a directory')
+        return descriptor
+    except OSError:
+        os.close(descriptor)
+        return None
+
+
 def remove_project_history(state, project_id):
-    """s2fix round 2 (L15.1): a deleted project's own history store (`history.sqlite3` with its journals, lock and
-    older copies) removed, once no service holds its writer lock. True when nothing of it is left; False when a
-    service still holds it (the caller says so) or a file could not be removed."""
+    """s2fix round 2 (L15.1): a deleted project's own history store (`history.sqlite3` with its journals and older
+    copies) removed, once no service holds its writer lock. True when nothing of it is left; False when a service
+    still holds it (the caller says so), a path component is a link or not this user's, or a file could not be
+    removed. `history.lock` itself is kept (round 3): removing the file we hold would let another writer take a
+    replacement lock; an empty lock file is all that remains."""
     import fcntl
     import re
     if re.fullmatch(r'prj_[0-9a-f]{32}', project_id) is None:
         return False
-    directory = history_directory(state, project_id)
-    flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
-    try:
-        descriptor = os.open(directory, flags)
-    except FileNotFoundError:
+    if not os.path.lexists(Path(state.root) / 'projects' / project_id):
         return True
-    except OSError:
+    descriptor = _safe_store_directory(state, project_id)
+    if descriptor is None:
         return False
     try:
         try:
@@ -123,17 +151,54 @@ def remove_project_history(state, project_id):
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 return False
-            if not _empty_directory(descriptor):
-                return False
+            return _empty_directory(descriptor, keep=('history.lock',))
         finally:
             os.close(lock)
     finally:
         os.close(descriptor)
+
+
+def _pending_directory(state):
+    return Path(state.root) / 'pending-history-cleanup'
+
+
+def mark_pending_cleanup(state, project_id, project_root):
+    """A durable marker that this deleted project's history store is not yet removed (s2fix round 3, decision 185.4):
+    the deletion clears the root binding, so a retry cannot find the project by it; the marker keeps the way."""
+    import json
+    directory = _pending_directory(state)
+    _owned_directory(directory)
+    path = directory / project_id
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    with os.fdopen(descriptor, 'w') as handle:
+        handle.write(json.dumps({'project_root': str(project_root)}))
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def pending_cleanups(state):
+    """The (project id, project root) pairs whose history store removal is still pending."""
+    import json
+    directory = _pending_directory(state)
+    found = []
     try:
-        directory.rmdir()
+        names = sorted(os.listdir(directory))
     except OSError:
-        return False
-    return True
+        return found
+    for name in names:
+        try:
+            with open(directory / name) as handle:
+                found.append((name, json.load(handle)['project_root']))
+        except (OSError, ValueError, KeyError):
+            continue
+    return found
+
+
+def clear_pending_cleanup(state, project_id):
+    try:
+        os.unlink(_pending_directory(state) / project_id)
+    except OSError:
+        pass
 
 
 def _owned_directory(path):
