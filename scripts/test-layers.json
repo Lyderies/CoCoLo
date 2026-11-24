@@ -270,7 +270,7 @@
  "codex:tests.test_routing_risk": "unit",
  "codex:tests.test_rsa_step3": "scenario",
  "codex:tests.test_rsd_runtime_close": "scenario",
- "codex:tests.test_rsf_s1_ingress": "component",
+ "codex:tests.test_rsf_s1_ingress": "scenario",
  "codex:tests.test_rsf_s1_ingress_socket": "scenario",
  "codex:tests.test_run_driver_retries": "unit",
  "codex:tests.test_run_holds": "scenario",
