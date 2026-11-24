@@ -76,3 +76,12 @@ Red first: /tmp/claude-501/t7s3/red-first-fixround.txt (15 failures, 6 errors). 
 Results (`--flows L10,L11,L13 --jobs 2`, 4m47): L10.1, L10.2, L13.1, L13.2 green; L10.3 red (raw summary product finding) and L11.1 red
 only through G8 (backup reply path leak; all its own expectations pass) until fix/backup-path merges; L11.2 no check (S5).
 Fault learning_guard_broken: L10.1, L10.2, L13.1, L13.2 newly red, isolated true. Tests 163 green (learning_guard 100, requirements, strictness, run_control).
+
+## Decision 207 (2026-11-25): L10.2 proves history moves
+learn scene `migrate` section first makes real history through the installed product (S1 `Ctl`: open, dispatch, record one fake-child run; G1 judges
+each step). L10.2 now asserts: the run's records (a dispatch_result among them) are in the project store before the cycle and unchanged (id and content
+sha256) after; the cycle's analysis counts exactly that one trial; its case was mined (kept after the cycle); mined case ids and proposed candidate
+digests equal what newly persisted (ids, not counts). Finding: the case is mined at record time, so the cycle reports mined_case_ids [] and proposes none.
+Red first: /tmp/claude-501/t7s3/red-first-207.txt (6 failures, RealHistoryTests and exact-id tests). Tests 175 green. Run `--flows L10,L11,L13 --jobs 2`
+(4m27, r3.json): L10.1, L10.2, L13.1, L13.2 green; L10.3, L11.1 (G8) red as before. Fault learning_guard_broken (f3.json): isolated true.
+assertions.md: two rows corrected (candidate comparison; fault isolation defaults to selected flows) plus the decision 207 section.

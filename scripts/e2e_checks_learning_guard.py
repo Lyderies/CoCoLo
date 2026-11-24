@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))  # -I leaves the script's own folder off the path
 import e2e_support  # noqa: E402
 from e2e_checks_run import trusted_interpreter_checks  # noqa: E402
-from e2e_checks_run_control import add_project, project_view, set_up, write_patches  # noqa: E402
+from e2e_checks_run_control import Ctl, add_project, child_frames, project_view, set_up, write_patches  # noqa: E402
 from e2e_core import _SCENES, Phase, check  # noqa: E402
 
 S3_IDS = ("L10.1", "L10.2", "L10.3", "L11.1", "L13.1", "L13.2")
@@ -246,10 +246,11 @@ def checkout_project_ids(world) -> list[str]:
                   if root in roots)
 
 
-def persisted_ids(world, project_id: str, record_type: str) -> list[str] | None:
+def persisted_ids(world, project_id: str, record_type: str, field: str | None = None) -> list[str] | None:
     """The record ids of one type persisted for the project, in the shared ledger and in the project's own store (None:
-    a store could not be read)."""
-    found = [row[0] for row in _rows(world, "select record_id from records where project_id = ? and record_type = ?",
+    a store could not be read). With `field`, that field of each record's stored content instead of its id."""
+    column = f"json_extract(CAST(content AS TEXT), '$.{field}')" if field else "record_id"
+    found = [row[0] for row in _rows(world, f"select {column} from records where project_id = ? and record_type = ?",
                                      (project_id, record_type))]
     path = state_root(world) / "projects" / project_id / "history.sqlite3"
     if not path.is_file():
@@ -258,12 +259,41 @@ def persisted_ids(world, project_id: str, record_type: str) -> list[str] | None:
         connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
             found += [row[0] for row in connection.execute(
-                "select record_id from records where project_id = ? and record_type = ?", (project_id, record_type))]
+                f"select {column} from records where project_id = ? and record_type = ?", (project_id, record_type))]
         finally:
             connection.close()
     except sqlite3.Error:
         return None
     return sorted(found)
+
+
+def run_records(world, project_id: str, run_id: str | None) -> dict | None:
+    """The records of one run in the project's own store and in the shared ledger, by record id with the sha256 of the
+    stored content (None: a store could not be read). Read-only; never the command that made them."""
+    if not run_id:
+        return None
+    found = {"store": {}, "ledger": {}}
+    sources = [("ledger", state_root(world) / "learning.sqlite3"),
+               ("store", state_root(world) / "projects" / project_id / "history.sqlite3")]
+    for name, path in sources:
+        if not path.is_file():
+            return None
+        try:
+            connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            try:
+                for record_id, content in connection.execute(
+                        "select record_id, content from records where project_id = ?", (project_id,)):
+                    try:
+                        parsed = json.loads(content)
+                    except (TypeError, ValueError):
+                        continue
+                    if isinstance(parsed, dict) and parsed.get("run_id") == run_id:
+                        found[name][record_id] = hashlib.sha256(str(content).encode()).hexdigest()
+            finally:
+                connection.close()
+        except sqlite3.Error:
+            return None
+    return found
 
 
 def store_identity(world, project_id: str) -> int | None:
@@ -445,6 +475,16 @@ def build_migrate(scene) -> None:
     """L10.2: the project's history lives in its own store; the cycle runs there and leaves the shared ledger alone."""
     world, project_id = scene.world, scene.project_id
     migrate = SimpleNamespace()
+    # Real recorded history first, through the installed product: one fake-child run, opened, dispatched and recorded
+    # (every step judged by G1; the S1 helpers). The project then holds at least one outcome for the move and the cycle.
+    ctl = Ctl(world, "h")
+    child_frames(world)
+    run = ctl.child()
+    ctl.dispatch(run)
+    ctl.record(run)
+    migrate.history_run = run
+    migrate.history_run_id = (run.opened or {}).get("run_id")
+    migrate.history_before = run_records(world, project_id, migrate.history_run_id)
     migrate.status = step(world, "learning-migrate-project", "--status")
     code, status, _ = step(world, "learning-status")
     migrate.learning_status_state = (status or {}).get("learning_migration") if code == 0 else None
@@ -454,7 +494,7 @@ def build_migrate(scene) -> None:
     migrate.store_identity_ids = store_identity_ids(world, project_id)
     migrate.checkout_ids = checkout_project_ids(world)
     migrate.cases_before = persisted_ids(world, project_id, "evaluation_case")
-    migrate.candidates_before = persisted_ids(world, project_id, "candidate")
+    migrate.candidates_before = persisted_ids(world, project_id, "candidate", "candidate_digest")
     migrate.ledger_project_ids = ledger_project_ids(world)
     migrate.store_project_ids = store_project_ids(world)
     migrate.ledger_before = ledger_table_counts(world)
@@ -463,9 +503,10 @@ def build_migrate(scene) -> None:
     migrate.window = (started, now_ms())
     migrate.ledger_after = ledger_table_counts(world)
     migrate.cases_after = persisted_ids(world, project_id, "evaluation_case")
-    migrate.candidates_after = persisted_ids(world, project_id, "candidate")
+    migrate.candidates_after = persisted_ids(world, project_id, "candidate", "candidate_digest")
     migrate.store_integrity_after = store_integrity(world, project_id)
     migrate.store_identity_ids_after = store_identity_ids(world, project_id)
+    migrate.history_after = run_records(world, project_id, migrate.history_run_id)
     migrate.again = step(world, "learning-migrate-project")
     scene.migrate = migrate
 
@@ -616,8 +657,21 @@ def l10_2_history_lives_in_the_project_store_and_the_cycle_runs(phase: Phase) ->
     phase.expect(isinstance(migrate.store_identity_ids, list) and migrate.store_identity_ids == [scene.project_id]
                  and migrate.checkout_ids == [scene.project_id],
                  "the store's own identity row names the project the ledger registered for this checkout")
+    # Decision 207: the project holds KNOWN recorded history (one fake-child run made through the installed product).
+    # Every record of that run is in the project's own store, by id and content digest, before the cycle and unchanged after.
+    known_before, known_after = (migrate.history_before or {}).get("store"), (migrate.history_after or {}).get("store")
+    phase.expect(bool(migrate.history_run_id) and isinstance(known_before, dict)
+                 and any(key.startswith("dispatch_result:") for key in known_before),
+                 "the project's own store holds the recorded run (its dispatch result) before the cycle")
+    phase.expect(isinstance(known_before, dict) and bool(known_before) and isinstance(known_after, dict)
+                 and all(known_after.get(key) == value for key, value in known_before.items()),
+                 "every record of that run is still in the project's store afterwards with the same content")
     code, reply, _ = migrate.run
     phase.expect(code == 0 and isinstance(reply, dict) and reply.get("ready") is True, "learning-run-cycle runs")
+    trials = [(((c or {}).get("observations") or {}).get("trials")) for sl in (((reply or {}).get("analysis") or {}).get("slices") or {}).values()
+              for c in ((sl or {}).get("configurations") or {}).values()]
+    phase.expect(len(trials) > 0 and all(isinstance(t, int) for t in trials) and sum(trials) == 1,
+                 "the cycle's analysis counts the one recorded run")
     analysis = (reply or {}).get("analysis")
     as_of = (analysis or {}).get("as_of_ms")
     phase.expect(isinstance(analysis, dict) and analysis.get("schema_version") == 1 and isinstance(analysis.get("slices"), dict),
@@ -638,8 +692,10 @@ def l10_2_history_lives_in_the_project_store_and_the_cycle_runs(phase: Phase) ->
                  and sorted(set(cases[1]) - set(cases[0])) == sorted(mined),
                  "the cases the cycle reports mined are the cases that were persisted by it")
     phase.expect(all(isinstance(x, list) for x in (*cases, *candidates)) and isinstance(proposed, list)
-                 and len(candidates[1]) - len(candidates[0]) == len(proposed),
+                 and sorted(set(candidates[1]) - set(candidates[0])) == sorted(proposed),
                  "the candidates the cycle reports proposed are the candidates that were persisted by it")
+    phase.expect(isinstance(cases[0], list) and len(cases[0]) > 0 and set(cases[0]) <= set(cases[1] or []),
+                 "the recorded run was mined into a case, and the cycle kept it")
     phase.expect(migrate.store_integrity_after == "ok" and migrate.store_identity_ids_after == [scene.project_id],
                  "after the cycle the project store is sound and still holds the project's identity")
     code, reply, _ = migrate.again

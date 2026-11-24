@@ -63,13 +63,17 @@ def learn_scene(**changes):
             status=(0, {"ready": True, "state": "complete", "can_start_now": True}, ""),
             learning_status_state="complete", failure=None, again=(0, {"ready": True, "state": "complete",
                                                                       "ledger_retired": True, "imported_records": 0}, ""),
-            run=(0, {"ready": True, "analysis": {"as_of_ms": 1500, "schema_version": 1, "slices": {}},
+            history_run_id="run:r1",
+            history_before={"store": {"dispatch_result:a": "h1", "out:b": "h2"}, "ledger": {"admission_decision:c": "h3"}},
+            history_after={"store": {"dispatch_result:a": "h1", "out:b": "h2"}, "ledger": {"admission_decision:c": "h3"}},
+            run=(0, {"ready": True, "analysis": {"as_of_ms": 1500, "schema_version": 1, "slices": {
+                "s": {"configurations": {"c": {"observations": {"trials": 1}}}}}},
                      "mined_case_ids": [], "proposal_status": "complete", "proposed_candidate_digests": [],
                      "expired_records": 0}, ""),
             window=(1000, 2000), store_files=["history.sqlite3"], store_identity=1, ledger_project_ids=["prj_x"],
             store_project_ids=["prj_x"], ledger_before={"records": 9, "projects": 1, "stored_files": 1},
             ledger_after={"records": 9, "projects": 1, "stored_files": 1},
-            store_identity_ids=["prj_x"], checkout_ids=["prj_x"], cases_before=[], cases_after=[], candidates_before=[],
+            store_identity_ids=["prj_x"], checkout_ids=["prj_x"], cases_before=["case:1"], cases_after=["case:1"], candidates_before=[],
             candidates_after=[], store_integrity_after="ok", store_identity_ids_after=["prj_x"]),
         retention=SimpleNamespace(
             now=(0, {"ready": True, "expired_records": 0}, ""), past=(0, {"ready": True, "expired_records": 0}, ""),
@@ -699,9 +703,10 @@ class FixRoundCycleTests(CycleTests):
 
     def test_the_cycle_s_mined_cases_must_be_what_the_stores_persisted(self):
         run = learn_scene().migrate.run
-        self.assertFalse(self.judged(cases_after=["c1"]))  # persisted but never reported
+        self.assertFalse(self.judged(cases_after=["case:1", "c1"]))  # persisted but never reported
         self.assertFalse(self.judged(run=(0, {**run[1], "mined_case_ids": ["c1"]}, "")))  # reported but never persisted
-        self.assertTrue(self.judged(run=(0, {**run[1], "mined_case_ids": ["c1"]}, ""), cases_after=["c1"]))
+        self.assertTrue(self.judged(run=(0, {**run[1], "mined_case_ids": ["c1"]}, ""), cases_after=["case:1", "c1"]))
+        self.assertFalse(self.judged(run=(0, {**run[1], "mined_case_ids": ["c2"]}, ""), cases_after=["case:1", "c1"]))  # other id
         self.assertFalse(self.judged(cases_after=None))
         self.assertFalse(self.judged(cases_before=None))
 
@@ -709,7 +714,8 @@ class FixRoundCycleTests(CycleTests):
         run = learn_scene().migrate.run
         self.assertFalse(self.judged(candidates_after=["k1"]))
         self.assertFalse(self.judged(run=(0, {**run[1], "proposed_candidate_digests": ["d1"]}, "")))
-        self.assertTrue(self.judged(run=(0, {**run[1], "proposed_candidate_digests": ["d1"]}, ""), candidates_after=["k1"]))
+        self.assertTrue(self.judged(run=(0, {**run[1], "proposed_candidate_digests": ["d1"]}, ""), candidates_after=["d1"]))
+        self.assertFalse(self.judged(run=(0, {**run[1], "proposed_candidate_digests": ["d1"]}, ""), candidates_after=["k1"]))  # same count, other id
         self.assertFalse(self.judged(candidates_after=None))
 
     def test_the_store_must_be_sound_and_keep_its_identity_after_the_cycle(self):
@@ -717,6 +723,35 @@ class FixRoundCycleTests(CycleTests):
         self.assertFalse(self.judged(store_integrity_after=None))
         self.assertFalse(self.judged(store_identity_ids_after=[]))
         self.assertFalse(self.judged(store_identity_ids_after=["prj_other"]))
+
+
+class RealHistoryTests(CycleTests):
+    """Decision 207, L10.2: the project holds KNOWN recorded history; the move and the cycle must carry it."""
+
+    def test_a_project_with_no_recorded_history_fails(self):
+        self.assertFalse(self.judged(history_before={"store": {}, "ledger": {}}, history_after={"store": {}, "ledger": {}}))
+        self.assertFalse(self.judged(history_before=None))
+        self.assertFalse(self.judged(history_run_id=None))
+        self.assertFalse(self.judged(history_before={"store": {"out:b": "h2"}, "ledger": {}},
+                                     history_after={"store": {"out:b": "h2"}, "ledger": {}}))  # no dispatch result
+
+    def test_a_skipped_move_fails(self):
+        self.assertFalse(self.judged(history_after={"store": {}, "ledger": {}}))
+        self.assertFalse(self.judged(history_after=None))
+        self.assertFalse(self.judged(history_after={"store": {"dispatch_result:a": "h1"}, "ledger": {}}))  # one record lost
+
+    def test_a_record_that_changed_content_fails(self):
+        self.assertFalse(self.judged(history_after={"store": {"dispatch_result:a": "XX", "out:b": "h2"}, "ledger": {}}))
+
+    def test_a_no_op_cycle_fails(self):
+        run = learn_scene().migrate.run
+        self.assertFalse(self.judged(run=(0, {**run[1], "analysis": {**run[1]["analysis"], "slices": {}}}, "")))
+        self.assertFalse(self.judged(run=(0, {**run[1], "analysis": {**run[1]["analysis"], "slices": {
+            "s": {"configurations": {"c": {"observations": {"trials": 0}}}}}}}, "")))
+
+    def test_no_mined_case_for_the_history_fails(self):
+        self.assertFalse(self.judged(cases_before=[], cases_after=[]))
+        self.assertFalse(self.judged(cases_after=[]))  # a case the history had is gone after the cycle
 
 
 class FixRoundBackupTests(BackupTests):
