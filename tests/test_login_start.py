@@ -5,6 +5,7 @@ folder and every command goes to an injected runner.
 """
 
 import hashlib
+import json
 import os
 import plistlib
 import sys
@@ -637,6 +638,242 @@ class WiringTests(TempHome):
         body = source[start:source.index("# Step 6", start)]
         self.assertLess(body.index('"Collector status: ready'), body.index("self.login_start_step()"))
         self.assertNotIn("subprocess", (ROOT / "scripts" / "setup_wizard" / "login_start.py").read_text())
+
+
+DIGEST_A, DIGEST_B = "a" * 64, "b" * 64
+
+
+class RuntimeHome(TempHome):
+    """A temporary home with a state folder, the answer file and the authorization file the collector checks."""
+
+    def setUp(self):
+        super().setUp()
+        self.state = self.home / ".local" / "state" / "codex-agents"
+        (self.state / "projects").mkdir(parents=True)
+        self.answer = self.state / "projects" / "login-start"
+        self.logs = login_start.log_folder(self.state)
+
+    def authorize(self, digest, version="0.8.55"):
+        path = self.state / "collector-authorization.json"
+        path.unlink(missing_ok=True)
+        path.write_text(json.dumps({"schema_version": 1, "runtime_version": version, "runtime_digest": digest}))
+        os.chmod(path, 0o600)
+
+    def argv(self, project="project"):
+        return [PYTHON, "-I", "-B", "-S", "-X", "pycache_prefix=/dev/null",
+                str(self.home / project / ".codex" / "orchestration" / "cli.py"), "learning-serve",
+                "--state-root", str(self.state)]
+
+    def write_entry(self, argv, digest, kind="launchd"):
+        """An entry as an earlier setup left it: consent kept, entry loaded, runtime recorded."""
+        self.assertTrue(login_start.install(self.home, kind, argv, self.logs, Runner(), uid=501).ok)
+        self.assertTrue(login_start.write_answer(self.answer, "yes"))
+        self.assertTrue(login_start.write_record(self.answer, digest))
+
+    def status(self, argv=None, digest=DIGEST_A, kind="launchd"):
+        return login_start.entry_status(self.home, kind, argv or self.argv(), self.logs, self.answer, digest)
+
+
+class StatusTests(RuntimeHome):
+    @requirements('E1-8', why_not_scenario='Reads temporary files only; no process is started.')
+    def test_E1_8_status_is_on_off_or_stale_and_names_no_private_value(self):
+        self.assertEqual("off", self.status().state)  # no entry
+        self.assertEqual("off", login_start.entry_status(self.home, None, self.argv(), self.logs, self.answer,
+                                                         DIGEST_A).state)
+        for kind in ("launchd", "systemd"):
+            with self.subTest(kind=kind):
+                self.write_entry(self.argv(), DIGEST_A, kind)
+                self.assertEqual("on", self.status(kind=kind).state)
+                for label, kwargs in (
+                        ("the path moved", {"argv": self.argv("elsewhere")}),
+                        ("the digest changed", {"digest": DIGEST_B}),
+                        ("the runtime cannot be read", {"digest": None}),
+                        ("no command to compare", {"argv": []})):
+                    stale = self.status(kind=kind, **kwargs)
+                    self.assertEqual("stale", stale.state, label)
+                    self.assertTrue(stale.reason, label)
+                    for private in (DIGEST_A, DIGEST_B, str(self.home), str(self.state), "elsewhere"):
+                        self.assertNotIn(private, stale.reason, label)
+                # an entry with no record of its runtime cannot be shown to match
+                login_start.record_path(self.answer).unlink()
+                self.assertEqual("stale", self.status(kind=kind).state)
+                login_start.remove(self.home, kind, Runner(), uid=501)
+        self.assertEqual("off", self.status().state)
+
+    @requirements('E1-8', why_not_scenario='Reads temporary files only; no process is started.')
+    def test_E1_8_the_runtime_identity_is_read_only_from_a_private_plain_authorization_file(self):
+        self.assertIsNone(login_start.runtime_digest(self.state))
+        self.authorize(DIGEST_A)
+        self.assertEqual(DIGEST_A, login_start.runtime_digest(self.state))
+        path = self.state / "collector-authorization.json"
+        os.chmod(path, 0o644)
+        self.assertIsNone(login_start.runtime_digest(self.state))  # not owner-only
+        os.chmod(path, 0o600)
+        path.write_text(json.dumps({"schema_version": 1, "runtime_version": "0.8.55", "runtime_digest": "xyz"}))
+        self.assertIsNone(login_start.runtime_digest(self.state))  # not a digest
+        path.write_text("{" * 5000)
+        self.assertIsNone(login_start.runtime_digest(self.state))  # too large and not JSON
+        path.unlink()
+        other = self.home / "other.json"
+        other.write_text(json.dumps({"schema_version": 1, "runtime_version": "0.8.55", "runtime_digest": DIGEST_A}))
+        os.chmod(other, 0o600)
+        path.symlink_to(other)
+        self.assertIsNone(login_start.runtime_digest(self.state))  # a link is never followed
+        self.assertIsNone(login_start.runtime_digest(None))
+
+
+class UpgradeTests(RuntimeHome):
+    """The wizard's own login_start_step in an update: consent already kept, the runtime changed."""
+
+    def wizard(self, *, project="project", answers=None, picks=()):
+        from setup_wizard import flow
+        cli = self.home / project / ".codex" / "orchestration" / "cli.py"
+        cli.parent.mkdir(parents=True, exist_ok=True)
+        cli.write_text("")
+        self.screen = Screen(picks)
+        wizard = flow.Wizard(self.screen, start="", python=PYTHON, owner_path="/", bash_version="5",
+                             update=True, answers=answers)
+        wizard.home, wizard.project, wizard.straight = str(self.home), str(self.home / project), False
+        for patch in (mock.patch.object(wizard, "projects_file", return_value=self.state / "projects" / "list"),
+                      mock.patch.object(login_start, "terminal_runner", return_value=self.runner),
+                      mock.patch.object(flow.sys, "platform", "darwin")):
+            patch.start()
+            self.addCleanup(patch.stop)
+        return wizard
+
+    def argv(self, project="project"):
+        # as the wizard builds it: its trusted interpreter, isolated, then the resolved installed cli
+        cli = (self.home / project / ".codex" / "orchestration" / "cli.py").resolve()
+        return [PYTHON, "-I", "-B", "-S", "-X", "pycache_prefix=/dev/null", str(cli), "learning-serve",
+                "--state-root", str(self.state)]
+
+    def program(self):
+        path = login_start.entry_path(self.home, "launchd")
+        return plistlib.loads(path.read_bytes())["ProgramArguments"]
+
+    @requirements('E1-9', why_not_scenario='Runs the wizard step against a stand-in terminal and an injected runner.')
+    def test_E1_9_an_update_that_moves_the_collector_rewrites_the_entry_without_asking(self):
+        self.authorize(DIGEST_A)
+        self.wizard(project="old")  # the cli file the old entry points at
+        self.write_entry(self.argv("old"), DIGEST_A)
+        self.runner.calls.clear()
+        wizard = self.wizard(project="project")  # the update's project: another path, same runtime
+        wizard.login_start_step()
+        self.assertEqual([], self.screen.menus)  # never asked (E1-4)
+        self.assertEqual(self.argv("project"), self.program())
+        self.assertTrue(any("bootstrap" in call for call in self.runner.calls))
+        self.assertEqual("yes", login_start.read_answer(self.answer))
+        self.assertEqual("on", login_start.entry_status(self.home, "launchd", self.argv("project"), self.logs,
+                                                        self.answer, DIGEST_A).state)
+        self.assertIn("Login start: refreshed", " ".join(self.screen.lines))
+
+    @requirements('E1-9', why_not_scenario='Runs the wizard step against a stand-in terminal and an injected runner.')
+    def test_E1_9_an_update_that_changes_the_runtime_digest_rewrites_the_entry(self):
+        self.wizard()
+        self.write_entry(self.argv(), DIGEST_A)
+        self.authorize(DIGEST_B)  # the update authorized a new runtime at the same path
+        self.runner.calls.clear()
+        self.wizard().login_start_step()
+        self.assertEqual([], self.screen.menus)
+        self.assertTrue(any("bootstrap" in call for call in self.runner.calls))
+        self.assertEqual(DIGEST_B, login_start.read_record(self.answer))
+        self.assertIn("Login start: refreshed", " ".join(self.screen.lines))
+        self.runner.calls.clear()
+        self.wizard().login_start_step()  # nothing changed since: nothing rewritten
+        self.assertEqual([], self.runner.calls)
+        self.assertIn("Login start: on", " ".join(self.screen.lines))
+
+    @requirements('E1-9', why_not_scenario='Runs the wizard step against a stand-in terminal and an injected runner.')
+    def test_E1_9_an_entry_that_cannot_be_rewritten_is_reported_stale_with_a_reason(self):
+        self.wizard()
+        self.write_entry(self.argv(), DIGEST_A)
+        before = login_start.entry_path(self.home, "launchd").read_bytes()
+        self.authorize(DIGEST_B)
+        self.runner.fail = ("bootstrap",)  # the system's login tool refuses the new entry
+        self.wizard().login_start_step()
+        self.assertEqual([], self.screen.menus)
+        screen = " ".join(self.screen.lines)
+        self.assertIn("Login start: stale", screen)
+        self.assertNotIn("Login start: refreshed", screen)
+        self.assertEqual(before, login_start.entry_path(self.home, "launchd").read_bytes())  # the earlier one kept
+        self.assertEqual(DIGEST_A, login_start.read_record(self.answer))
+        self.assertNotIn(DIGEST_A, screen)
+        self.assertNotIn(DIGEST_B, screen)
+
+    @requirements('E1-9', why_not_scenario='Runs the wizard step against a stand-in terminal and an injected runner.')
+    def test_E1_9_a_current_entry_a_missing_entry_and_no_consent_write_nothing(self):
+        self.authorize(DIGEST_A)
+        self.wizard()
+        self.write_entry(self.argv(), DIGEST_A)
+        self.authorize(DIGEST_B)
+        login_start.write_answer(self.answer, "no")  # the owner said no: an entry that is there is left alone
+        self.runner.calls.clear()
+        before = login_start.entry_path(self.home, "launchd").read_bytes()
+        self.wizard().login_start_step()
+        self.assertEqual([], self.runner.calls)
+        self.assertEqual(before, login_start.entry_path(self.home, "launchd").read_bytes())
+        login_start.remove(self.home, "launchd", Runner(), uid=501)
+        login_start.write_answer(self.answer, "yes")  # consent but no entry (removed by hand): not recreated
+        self.runner.calls.clear()
+        self.wizard().login_start_step()
+        self.assertEqual([], self.runner.calls)
+        self.assertFalse(login_start.entry_path(self.home, "launchd").exists())
+        self.assertIn("Login start: off", " ".join(self.screen.lines))
+        self.answer.unlink()  # no answer at all: an update does not ask and writes nothing
+        self.wizard().login_start_step()
+        self.assertEqual([], self.runner.calls)
+        self.assertEqual([], self.screen.menus)
+
+
+class CommandAuthorizationTests(TempHome):
+    @requirements('E1-10', why_not_scenario='Runs the installed collector entry point in process with the exec injected; no process is started.')
+    def test_E1_10_the_rendered_command_passes_require_authorized_collector_runtime(self):
+        import contextlib
+        import io
+        import cli
+        from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST, PACKAGE_VERSION
+        from codex_agents.learning_store import LearningState
+        state = self.home / "collector-state"
+        state.mkdir(mode=0o700)
+        LearningState(state)  # a real, empty, owner-only collector state
+        cli_file = str(self.home / "project" / ".codex" / "orchestration" / "cli.py")
+        argv = [PYTHON, "-I", "-B", "-S", "-X", "pycache_prefix=/dev/null", cli_file, "learning-serve",
+                "--state-root", str(state)]
+        self.assertTrue(login_start.install(self.home, "launchd", argv, self.logs, self.runner, uid=501).ok)
+        self.assertTrue(login_start.install(self.home, "systemd", argv, self.logs, self.runner, uid=501).ok)
+        plist = plistlib.loads(login_start.entry_path(self.home, "launchd").read_bytes())["ProgramArguments"]
+        unit = login_start.entry_path(self.home, "systemd").read_text()
+        line = [row for row in unit.splitlines() if row.startswith("ExecStart=")][0]
+        self.assertEqual(plist, line[len("ExecStart="):].split(" "))  # the same command in both entries
+        arguments = plist[plist.index(cli_file) + 1:]  # what the interpreter hands cli.py
+        self.assertEqual(["learning-serve", "--state-root", str(state)], arguments)
+        authorization = state / "collector-authorization.json"
+        for digest, starts, refusal in ((COLLECTOR_RUNTIME_DIGEST, True, ""),
+                                        (DIGEST_B, False, "differs from the owner-authorized runtime"),
+                                        (None, False, "is not authorized")):
+            authorization.unlink(missing_ok=True)
+            if digest is not None:
+                authorization.write_text(json.dumps({"schema_version": 1, "runtime_version": PACKAGE_VERSION,
+                                                     "runtime_digest": digest}))
+                os.chmod(authorization, 0o600)
+            started, out, status = [], io.StringIO(), 0
+
+            def execv(program, args):  # the real exec never returns
+                started.append(list(args))
+                raise KeyboardInterrupt("collector host started")
+            with mock.patch.object(os, "execv", execv), mock.patch.object(sys, "argv", ["cli.py", *arguments]), \
+                    contextlib.redirect_stdout(out):
+                try:
+                    status = cli.main()
+                except KeyboardInterrupt:
+                    pass
+            if starts:
+                self.assertEqual(1, len(started), out.getvalue())  # past the check: the collector host is started
+                self.assertEqual(["--state-root", str(state)], started[0][-2:])
+            else:
+                self.assertEqual([], started)
+                self.assertNotEqual(0, status)
+                self.assertIn(refusal, out.getvalue())
 
 
 if __name__ == "__main__":
