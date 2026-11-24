@@ -1996,17 +1996,31 @@ def validate_admission_decision(data: Any) -> dict[str, Any]:
     return data
 
 
-def run_slot_confirmation(run_id):
-    material = {"schema_version": 1, "record_type": "run_slot_confirmation", "run_id": run_id,
-                "record_id": "run_slot_confirmation:" + content_digest({"run_id": run_id})}
+def _slot_confirmation_identity(data):
+    # A confirmation names a slot by (project, handle); an earlier record without a handle names a run id.
+    material = {"run_id": data["run_id"]}
+    if "handle_digest" in data:
+        material["handle_digest"] = data["handle_digest"]
+    return "run_slot_confirmation:" + content_digest(material)
+
+
+def run_slot_confirmation(run_id, handle_digest=None):
+    material = {"schema_version": 1, "record_type": "run_slot_confirmation", "run_id": run_id}
+    if handle_digest is not None:
+        material["handle_digest"] = handle_digest
+    material["record_id"] = _slot_confirmation_identity(material)
     return validate_run_slot_confirmation(material)
 
 
 def validate_run_slot_confirmation(data):
-    data = _closed(data, {"schema_version", "record_type", "record_id", "run_id"}, "run_slot_confirmation")
+    data = _closed_optional(data, {"schema_version", "record_type", "record_id", "run_id"},
+                            {"schema_version", "record_type", "record_id", "run_id", "handle_digest"},
+                            "run_slot_confirmation")
     _base(data, "run_slot_confirmation")
     _identifier(data["run_id"], "run_id")
-    if data["record_id"] != "run_slot_confirmation:" + content_digest({"run_id": data["run_id"]}):
+    if "handle_digest" in data:
+        _digest(data["handle_digest"], "handle_digest")
+    if data["record_id"] != _slot_confirmation_identity(data):
         raise ContractError("slot confirmation identity is invalid")
     return data
 

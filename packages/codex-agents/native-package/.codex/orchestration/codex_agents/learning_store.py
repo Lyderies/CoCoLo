@@ -2248,9 +2248,8 @@ class LearningLedger:
             connection.row_factory = sqlite3.Row
             # O0b RS-A (F5): the register's triggers record releases at the ledger's own clock.
             connection.create_function("ledger_now_ms", 0, lambda: self._clock_ms())
-            from .legacy_slots import dispatch_deadline, process_proof
+            from .legacy_slots import dispatch_deadline
             connection.create_function("legacy_dispatch_deadline", 4, dispatch_deadline, deterministic=True)
-            connection.create_function("legacy_process_gone", 4, lambda *args: bool(process_proof(self.state, *args)))
             version = connection.execute('PRAGMA user_version').fetchone()[0]
             if version > LEDGER_SCHEMA_VERSION:
                 raise LedgerError('ledger schema is newer than this package')
@@ -9595,9 +9594,13 @@ class LearningLedger:
             if not project or project["status"] != "active":
                 raise LedgerError("project binding is not active")
             if checked["record_type"] == "run_slot_confirmation":
-                slot = self._connection.execute(
-                    "SELECT * FROM active_run_capacity WHERE project_id=? AND run_id=? AND kind='legacy_unknown'",
-                    (project_id, checked["run_id"])).fetchone()
+                slots = self._connection.execute(
+                    "SELECT * FROM active_run_capacity WHERE project_id=? AND run_id=? AND kind='legacy_unknown'"
+                    + (" AND handle_digest=?" if "handle_digest" in checked else ""),
+                    (project_id, checked["run_id"], *((checked["handle_digest"],) if "handle_digest" in checked else ()))
+                ).fetchall()
+                # A record naming only a run id is honoured only when it names exactly one slot.
+                slot = slots[0] if len(slots) == 1 else None
                 if slot is None:
                     raise LedgerError("slot confirmation is unavailable")
                 if slot["released_at_ms"] is None:
@@ -11937,7 +11940,7 @@ class LearningLedger:
             # costs what is held, never the project's released history.
             from .legacy_slots import deadline_sql
             held = self._connection.execute(
-                "SELECT a.kind,a.run_id,a.claimed_at_ms,"
+                "SELECT a.kind,a.run_id,a.handle_digest,a.claimed_at_ms,"
                 f"CASE WHEN a.kind='legacy_unknown' THEN {deadline_sql('a')} ELSE a.deadline_at_ms END AS deadline_at_ms,"
                 "a.execution_deadline_ns,a.clock_reference_ns,"
                 "(SELECT h.client_version FROM host_run_bindings h WHERE h.project_id=a.project_id "
@@ -11975,18 +11978,24 @@ class LearningLedger:
                 continue
             if row["deadline_at_ms"] is not None:
                 reasons.add(DEADLINE_REASON)
-            elif row["client_version"] == "claude-host-v1":
-                reasons.add(OWNER_REASON)
+            else:
+                # Every held slot with no recorded deadline can be released by the owner's signed confirmation:
+                # a native slot waits on process evidence, any other (pruned intent, no binding row) lacks evidence.
+                reason = OWNER_REASON if row["client_version"] == "claude-host-v1" else MISSING_REASON
+                reasons.add(reason)
                 roots = self._registered_roots(project_id)
                 if not roots:
                     continue
-                command = ("python3 " + shlex.quote(str(roots[0] / '.codex/orchestration/cli.py'))
-                           + " learning-confirm-run-slot --project-root " + shlex.quote(str(roots[0]))
-                           + " --state-root " + shlex.quote(str(self.state.root))
-                           + " --run-id " + shlex.quote(row["run_id"]) + " --signature owner-signature.bin")
-                confirmations.append({"reason": OWNER_REASON, "command": command})
-            else:
-                reasons.add(MISSING_REASON)
+                # The owner screen (decision 36) shows the project and state paths and the run id. The first step
+                # prints the payload to sign; the second repeats it with the signature file. A child of the slot may
+                # still run: confirming is the owner's call.
+                step = ("python3 " + shlex.quote(str(roots[0] / '.codex/orchestration/cli.py'))
+                        + " learning-confirm-run-slot --project-root " + shlex.quote(str(roots[0]))
+                        + " --state-root " + shlex.quote(str(self.state.root))
+                        + " --run-id " + shlex.quote(row["run_id"])
+                        + " --handle-digest " + shlex.quote(row["handle_digest"]))
+                confirmations.append({"reason": reason, "command": step + " ; then with the signed payload: "
+                                      + step + " --signature owner-signature.bin"})
         if any(not row["due"] and row["deadline_at_ms"] is None for row in held):
             status["run_slot"]["next_eligible"] = None
         if any(row["kind"] == "legacy_unknown" for row in held):
@@ -12189,6 +12198,13 @@ class LearningLedger:
             f"AND h.binding_state='abandoned' AND h.abandoned_reason='{LOST_RUN_REASON}') AS lost "
             f"FROM active_run_capacity a WHERE a.released_at_ms IS NULL AND {crashed} LIMIT ?",
             (*parameters, limit)).fetchall()
+        # Process proof is read here and nowhere in a count: an earlier-version slot that is not yet past its
+        # deadline is examined too, and only a durable release changes what counts.
+        seen = {(row["project_id"], row["handle_digest"]) for row in slots}
+        slots = [*slots, *(row for row in self._connection.execute(
+            "SELECT a.project_id,a.handle_digest,a.run_id,a.bridge_run_id,a.kind,a.claimed_at_ms,0 AS lost "
+            "FROM active_run_capacity a WHERE a.released_at_ms IS NULL AND a.kind='legacy_unknown'").fetchall()
+            if (row["project_id"], row["handle_digest"]) not in seen)]
         for slot in slots:
             from .legacy_slots import process_proof
             proof = (process_proof(self.state, slot["project_id"], slot["handle_digest"], slot["run_id"],
@@ -12208,6 +12224,8 @@ class LearningLedger:
                                       "lost" if slot["lost"] else proof["kind"] if proof else "crashed",
                                       now, monotonic, proof=proof)
             released += 1
+            if released >= limit:
+                break
         if released < limit:
             # O0b RS-A-2: reserved probes past their deadline, closed as unlaunched denials.
             from .account_billing_admission import close_expired_reserved

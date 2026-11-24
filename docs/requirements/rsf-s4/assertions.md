@@ -74,3 +74,19 @@ tests/test_active_run_capacity.py (deadline/legacy test): old: `runs_held_withou
 claimed_at + LEGACY_RUN_MAX_MS (24 h). new: the bridged fixture carries a dispatch_intent deadline, so
 `runs_held_without_deadline == 0` throughout, and `earlier_version_runs()['holding']` is 1 at deadline+grace-1 and at
 the boundary, 0 at +1 ms. Same M4 R3 bridged rule as decision 164 (deadline + crash grace replaces the 24 h day).
+
+## Security review round (Claude review, ready-with-corrections)
+No assertion changed in value. One test renamed (nothing in scripts/test-requirements.json or other catalogues referenced
+its old name): tests/test_legacy_capacity_upgrade.py
+`test_RS_A_F8_a_recent_earlier_run_is_eligible_a_day_after_its_claim` -> `test_RS_A_F8_a_recent_earlier_run_has_no_finite_eligible_time`
+(it asserts `next_eligible is None`, which is what it already did).
+New tests: tests/test_rsf_s4_slots.py `LegacySlotCorrectionTests` (red first, then green).
+Behaviour (owner screen, decision 36): the shown command carries project root, state root, run id and handle digest, as
+two steps in one line (unsigned step prints the signing payload, then the same command with `--signature owner-signature.bin`).
+Every held slot without a recorded deadline has one (reason: waiting for process evidence or owner confirmation for a native
+slot, dispatch evidence is missing otherwise, including slots with no binding row). A confirmation names (run id, handle
+digest); a record naming only a run id is honoured only if it matches exactly one slot. Owner confirmation can release a
+slot whose child may still run; that is the owner's call. Process proof (journal, lock, process scan) is read only by the
+sweep/adoption (which writes a durable release); counts, status and admission use the deadline rule only, so a slot whose
+process ends later is released at the next adoption/sweep, not by a count. Not done: test_reply_shape_live DRIVERS covers
+only account/history service replies; confirm_legacy_slot is a collector op outside reply_shapes, so no driver was added.

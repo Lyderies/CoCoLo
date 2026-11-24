@@ -189,7 +189,8 @@ def crashed_claim(alias, now_ms, monotonic_ns):
     restarted below the claim's reference: the machine rebooted since, and no
     child survives that). A reservation an earlier version left (`legacy_unknown`,
     with no deadline column) requires a retained validated dispatch deadline plus
-    grace, or positive process/no-spawn evidence; claim age is never proof.
+    grace here; process/no-spawn evidence is read only by the sweep and adoption (which write a durable
+    release), never by a count; claim age is never proof.
     """
     from .legacy_slots import deadline_sql
 
@@ -199,8 +200,7 @@ def crashed_claim(alias, now_ms, monotonic_ns):
         f"(({column}deadline_at_ms IS NOT NULL AND {column}deadline_at_ms<? "
         f"AND {column}execution_deadline_ns IS NOT NULL "
         f"AND ({column}execution_deadline_ns<=? OR {column}clock_reference_ns>?)) "
-        f"OR ({column}kind='legacy_unknown' AND (COALESCE({deadline_sql(table)}<?,0) "
-        f"OR legacy_process_gone({table}.project_id,{table}.handle_digest,{table}.run_id,{table}.bridge_run_id))) "
+        f"OR ({column}kind='legacy_unknown' AND COALESCE({deadline_sql(table)}<?,0)) "
         f"OR EXISTS(SELECT 1 FROM host_run_bindings lost WHERE lost.project_id={table}.project_id "
         f"AND lost.handle_digest={table}.handle_digest AND lost.binding_state='abandoned' "
         f"AND lost.abandoned_reason='{LOST_RUN_REASON}'))",

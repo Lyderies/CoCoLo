@@ -1688,6 +1688,7 @@ def build_parser() -> argparse.ArgumentParser:
         "learning-confirm-run-slot", help="confirm release of exactly one historical slot with an owner signature")
     _add_learning_project(confirm_slot)
     confirm_slot.add_argument("--run-id", required=True)
+    confirm_slot.add_argument("--handle-digest")
     confirm_slot.add_argument("--signature", type=Path)
 
     learning_billing_attestation = subparsers.add_parser(
@@ -2769,7 +2770,7 @@ def main() -> int:
             return 0
         elif args.command == "learning-confirm-run-slot":
             from codex_agents.learning_contracts import run_slot_confirmation
-            record = run_slot_confirmation(args.run_id)
+            record = run_slot_confirmation(args.run_id, args.handle_digest)
             running = _compatible_collector(LearningState(args.state_root, create=False))
             if running is not None:
                 if args.signature is None:

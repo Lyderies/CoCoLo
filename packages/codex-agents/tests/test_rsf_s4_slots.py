@@ -238,3 +238,104 @@ class LegacySlotEvidenceTests(unittest.TestCase):
         with mock.patch.object(os, 'open', side_effect=unreadable):
             self.ledger.release_due_account_holds()
             self.assertEqual(1, self.count())
+
+
+class LegacySlotCorrectionTests(LegacySlotEvidenceTests):
+    """Security review round: every evidence-poor hold has a runnable owner command; no process work in counts."""
+
+    def commands(self):
+        return self.slot()['owner_confirmations']
+
+    def run_command(self, command):
+        """The command as shown: the unsigned step prints the payload, the signed step is the same command + file."""
+        import shlex
+        steps = command.split(' ; then ')
+        self.assertEqual(2, len(steps))
+        unsigned = shlex.split(steps[0])
+        self.assertNotIn('--signature', unsigned)
+        signed = shlex.split(steps[1].replace('with the signed payload: ', ''))
+        self.assertIn('--signature', signed)
+        return unsigned, signed
+
+    def argument(self, words, name):
+        return words[words.index(name) + 1]
+
+    def record_for(self, words):
+        from codex_agents.learning_contracts import run_slot_confirmation
+        return run_slot_confirmation(self.argument(words, '--run-id'), self.argument(words, '--handle-digest'))
+
+    def release_by(self, command, label):
+        _, signed = self.run_command(command)
+        record = self.record_for(signed)
+        signature = sign_owner_payload(self.fixture.owner_private_key,
+            OwnerGrantAuthority.owner_record_payload(self.project, record), label).read_bytes()
+        self.ledger.commit_owner_record(self.project, record=record, signature=signature)
+
+    def test_every_evidence_poor_slot_shows_a_runnable_command_that_releases_exactly_it(self):
+        self.seed(native=True, two=True)
+        # One of each: native (claude-host-v1), a codex-host-v1 binding with no evidence, and no binding row at all.
+        digests = self.digests
+        self.ledger._connection.execute("UPDATE host_run_bindings SET client_version='codex-host-v1' WHERE handle_digest=?", (digests[1],))
+        self.assertEqual(2, len(self.commands()))
+        self.ledger._connection.execute("DELETE FROM host_run_bindings WHERE handle_digest=?", (digests[1],))
+        commands = self.commands()
+        self.assertEqual(2, len(commands))
+        for item in commands:
+            self.assertIn(item['reason'], ('waiting for process evidence or owner confirmation', 'dispatch evidence is missing'))
+        for index in (0, 1):
+            self.assertEqual(2 - index, self.count())
+            shown = {self.argument(self.run_command(c['command'])[1], '--run-id'): c['command'] for c in self.commands()}
+            self.release_by(shown['legacy-run-' + str(index)], 's4-poor-%d' % index)
+            self.assertEqual(1 - index, self.count())
+            released = [r[0] for r in self.ledger._connection.execute(
+                "SELECT run_id FROM active_run_capacity WHERE released_at_ms IS NOT NULL")]
+            self.assertEqual(['legacy-run-%d' % i for i in range(index + 1)], sorted(released))
+
+    def test_codex_host_and_bridge_with_pruned_intent_get_commands(self):
+        self.seed(intent=True, prune=True)
+        self.assertEqual(1, len(self.commands()))
+        self.assertEqual('dispatch evidence is missing', self.commands()[0]['reason'])
+
+    def test_a_run_id_appearing_twice_releases_each_slot_by_handle(self):
+        self.seed(native=True, two=True)
+        # A run id kept twice by an earlier version (its binding rows are separate rows per handle).
+        self.ledger._connection.execute('PRAGMA foreign_keys=OFF')
+        self.ledger._connection.execute("UPDATE active_run_capacity SET run_id='legacy-run-0' WHERE handle_digest=?", (self.digests[1],))
+        self.ledger._connection.execute("DELETE FROM host_run_bindings WHERE handle_digest=?", (self.digests[1],))
+        self.ledger._connection.execute('PRAGMA foreign_keys=ON')
+        self.assertEqual(2, self.count())
+        for expected in (1, 0):
+            command = self.commands()[0]['command']
+            self.release_by(command, 's4-dup-%d' % expected)
+            self.assertEqual(expected, self.count())
+
+    def test_command_has_unsigned_step_then_signed_step_and_shows_paths(self):
+        self.seed(native=True)
+        unsigned, signed = self.run_command(self.commands()[0]['command'])
+        self.assertEqual(signed[:len(unsigned)], unsigned)
+        self.assertEqual('owner-signature.bin', self.argument(signed, '--signature'))
+        self.assertEqual(str(self.fixture.state.root), self.argument(unsigned, '--state-root'))
+        self.assertEqual('legacy-run-0', self.argument(unsigned, '--run-id'))
+
+    def test_capacity_counts_do_no_journal_or_process_work(self):
+        from codex_agents import legacy_slots
+        self.seed(native=True, two=True)
+        with mock.patch.object(legacy_slots, 'process_proof') as proof, \
+                mock.patch.object(launch_journal, 'tree_state') as tree, \
+                mock.patch.object(launch_journal, '_read_entry_or_none') as read, \
+                mock.patch('pathlib.Path.glob') as glob:
+            self.assertEqual(2, self.count())
+            self.slot()
+            self.ledger.account_holds_due()
+            self.ledger.earlier_version_runs()
+            for spy in (proof, tree, read, glob):
+                self.assertFalse(spy.called)
+
+    def test_process_gone_after_adoption_is_released_by_the_sweep_only(self):
+        with mock.patch.object(launch_journal, 'tree_state', return_value='alive'):
+            self.seed(native=True, journal='watched')
+        self.assertEqual(1, self.count())
+        with mock.patch.object(launch_journal, 'tree_state', return_value='gone'):
+            self.assertEqual(1, self.count())
+            self.assertEqual(1, self.ledger.release_due_account_holds())
+        self.assertEqual(0, self.count())

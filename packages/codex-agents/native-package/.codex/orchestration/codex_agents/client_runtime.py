@@ -325,7 +325,7 @@ def _status_account_holds(value):
                     or any(reason not in (DEADLINE_REASON, OWNER_REASON, MISSING_REASON) for reason in kind['reasons'])
                     or type(kind.get('owner_confirmations')) is not list
                     or any(type(item) is not dict or set(item) != {'reason', 'command'}
-                           or item['reason'] != OWNER_REASON or type(item['command']) is not str
+                           or item['reason'] not in (OWNER_REASON, MISSING_REASON) or type(item['command']) is not str
                            or '\n' in item['command'] for item in kind['owner_confirmations'])):
                 return None
         if (type(kind) is not dict or kind.keys() != fields

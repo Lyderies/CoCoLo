@@ -83,7 +83,7 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
         self.assertEqual(2, self.counted(ledger))
         self.assertFalse(ledger.drained())
 
-    def test_RS_A_F8_a_recent_earlier_run_is_eligible_a_day_after_its_claim(self):
+    def test_RS_A_F8_a_recent_earlier_run_has_no_finite_eligible_time(self):
         ledger = self.upgrade_with_runs(learning_store.HOUR if hasattr(learning_store, "HOUR") else HOUR)
         claimed = ledger._connection.execute(
             "SELECT claimed_at_ms FROM active_run_capacity WHERE kind='legacy_unknown' AND released_at_ms IS NULL"
