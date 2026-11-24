@@ -9,6 +9,9 @@ it), so the writer verifies the closure and records it (`ProjectHistory.record_a
 these data to the key holder; it does not authenticate a sender (claim_denial.py), and the account sends a closure
 only to the run's own enrolled project role. The closure names the outbox request's digest, so a closure fetched for
 another request is told apart. Built from the account's stored rows, it is the same bytes on every ask.
+
+B5a also answers a recorded `crashed` slot, after checking durable process evidence (or a never-spawned
+admission). The project writer independently requires the matching proof before its first register release.
 """
 import secrets
 
@@ -19,8 +22,8 @@ from .result_contracts import ResultLeaseBinding
 CLOSURE_OPERATION = 'account.lost_run_closure'
 # One closure fits one account frame (16 KiB) with its envelope; a real one is about 1 KiB.
 MAX_LOST_RUN_CLOSURE_BYTES = 8_192
-# settle_lost_run's state -> the release kind the project records.
-RELEASE_KINDS = {'settled': 'lost', 'released': 'released_unacknowledged'}
+# Account release state -> the kind the project records; B5a's crashed state additionally requires process proof.
+RELEASE_KINDS = {'settled': 'lost', 'released': 'released_unacknowledged', 'crashed': 'crashed'}
 _FIELDS = frozenset({'state', 'binding', 'lease_digest', 'assignment_digest', 'bridge_run_id', 'release_kind',
                      'released_at_ms', 'request_digest', 'receipt_digest'})
 _DOMAIN = 'account-lost-run-closure-v1'

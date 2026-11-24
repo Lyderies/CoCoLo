@@ -2637,6 +2637,14 @@ class ProjectHistory:
             self._connection.execute(
                 "UPDATE project_holds SET state='releasing',request_id=?,request_digest=? WHERE project_id=? AND kind=? "
                 "AND identity=? AND state<>'released'", (request_id, digest, self.project_id, kind, hold["identity"]))
+            if kind == "lease" and lease_row is not None and lease_row["state"] == "claim_pending":
+                from .launch_journal import process_settlement_evidence
+                proof = process_settlement_evidence(self._directory / "launches", self._lease(lease_row).binding,
+                                                    payload["bridge_run_id"], allow_unbound=True)
+                if proof is not None and proof["child"] is None:
+                    self._connection.execute(
+                        "UPDATE project_holds SET lease_case='admitted_unbound' WHERE project_id=? AND kind='lease' "
+                        "AND identity=?", (self.project_id, hold["identity"]))
         return {"state": "releasing", "request_id": request_id, "request_digest": digest}
 
     @_operation
@@ -2697,6 +2705,16 @@ class ProjectHistory:
                     or closure["released_at_ms"] < lease.created_at_ms
                     or hold["state"] != "releasing" or hold["request_digest"] != closure["request_digest"]):
                 raise HistoryError("history_conflict")
+            if kind == "crashed":
+                from .launch_journal import process_settlement_evidence
+                proof = process_settlement_evidence(self._directory / "launches", lease_binding,
+                                                    closure["bridge_run_id"], allow_unbound=(
+                                                        reservation is None and hold["lease_case"] == "admitted_unbound"))
+                if proof is None:
+                    raise HistoryError("history_conflict")  # needs_process_evidence; age/closure alone proves nothing
+                self._connection.execute(
+                    "UPDATE project_holds SET evidence=? WHERE project_id=? AND kind=? AND identity=?",
+                    (canonical_json(proof).decode(), self.project_id, hold_kind, hold["identity"]))
             now = self._hold_now()
             if reservation is not None:
                 value = self._reservation(reservation)

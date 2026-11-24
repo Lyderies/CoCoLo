@@ -1990,6 +1990,13 @@ class RunDriver:
                 journal.remove(token)
                 return 'removed'
             if receipt is not None:
+                # B5a A5/L6b: the fence's authenticated admission is durable before settlement. Nothing spawned
+                # from an intent; this claimed entry lets the writer mark its lease admitted_unbound.
+                journal.claimed(receipt['bridge_run_id'], run_handle=entry['run_handle'], attempt=entry['attempt'],
+                                host_client=entry['host_client'], lease=entry['lease'],
+                                identity_digest=entry['identity_digest'], claim_request_id=entry['claim_request_id'],
+                                storage_evidence=bytes.fromhex(entry['storage_evidence']), workspace=entry['workspace'],
+                                instance=entry['instance'])
                 outcome = self._settle_entry({**entry, 'bridge_run_id': receipt['bridge_run_id']})['state']
                 answer = 'settled'
             elif self._fenced.get(entry['run_handle']) is not None:
@@ -2004,7 +2011,11 @@ class RunDriver:
                         entry['host_client'])}
                 return None
             if not self._remove_workspace(entry['workspace']):
+                if receipt is not None:
+                    journal.remove(receipt['bridge_run_id'])  # the intent stays the single record; replay is identical
                 return None
+            if receipt is not None:
+                journal.settled(receipt['bridge_run_id'], outcome)
             journal.settled(token, outcome)
         except Exception:
             return None
@@ -2123,6 +2134,8 @@ class RunDriver:
         lease = ResultLeaseBinding(**entry['lease'])
         if lease.project_id != self._scope.project_id or entry['host_client'] not in HOST_CLIENTS:
             raise HistoryError('history_conflict')
+        if entry.get('version') == 1 and entry['state'] == 'watched':
+            self._journal.process_gone(entry['bridge_run_id'])
         self._arbitrate_publication(lease, entry)
         evidence = bytes.fromhex(entry['storage_evidence'])
         settle = SettleLostInput(entry['run_handle'], entry['identity_digest'], entry['claim_request_id'],

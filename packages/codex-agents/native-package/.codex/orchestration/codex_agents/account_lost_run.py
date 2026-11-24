@@ -196,12 +196,19 @@ def lost_run_closure(ledger, project_id, *, runtime_digest, caller_scope, settle
     if row['released_at_ms'] is None:
         raise ClaimError('claim_cleanup_unavailable')
     # As settle_lost_run answers: a lost settlement first (it also released the slot as `lost`), else its own
-    # release (`completed`). B4s r1 (MED 1): the slot's recorded release kind decides; a slot the timed rule released
-    # as `crashed` has no closure here (B5 settles `crashed`).
+    # release (`completed`). The slot's recorded release kind decides. B5a: a `crashed` slot also needs this
+    # lease's durable process proof; the timed account decision alone still has no project closure.
     if row['lost'] and row['slot_kind'] == 'lost':
         state = 'settled'
     elif not row['lost'] and row['slot_kind'] == 'completed':
         state = 'released'
+    elif row['slot_kind'] == 'crashed':
+        from .launch_journal import process_settlement_evidence
+        if process_settlement_evidence(ledger.state.root / 'projects' / project_id / 'launches', expected,
+                                       settle.bridge_run_id, identity_digest=settle.identity_digest,
+                                       allow_unbound=True) is None:
+            raise ClaimError('claim_cleanup_unavailable')
+        state = 'crashed'
     else:
         raise ClaimError('claim_cleanup_unavailable')
     from .lost_run_closure import RELEASE_KINDS

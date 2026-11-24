@@ -12,6 +12,8 @@ project's own state folder, and moves it forward as the run goes:
   and the per-run marker in its environment (`process_tree.RUN_TAG_VARIABLE`).
 - ``watched``: the detached watchdog's pid and birth time, once it has
   acknowledged that it tracks the child's tree.
+- ``gone`` (B5a): the watched child's exit and whole-tree cleanup were positively
+  confirmed by `tree_state` and recorded durably before requesting a crashed closure.
 
 Beside a watched entry the watchdog itself writes ``<bridge_run_id>.done``
 before it exits, but only once the process tree it tracked is confirmed
@@ -81,7 +83,7 @@ import time
 from .process_tree import (GONE, RUN_TAG, _born_before, process_gone, process_record, scan_until_stable,
                            session_reused_at, tagged_process_running)
 
-STATES = frozenset({'claimed', 'spawning', 'launched', 'watched', 'settled'})
+STATES = frozenset({'claimed', 'spawning', 'launched', 'watched', 'gone', 'settled'})
 CONTAINER_STATES = frozenset({'intent', 'started', 'stopping', 'gone', 'stop_failed', 'settled'})
 CONTAINER_KIND_LABELS = ('cocolo.project', 'cocolo.run', 'cocolo.kind')
 # C3: why a run's container was stopped: the liveness clock's reasons (`liveness_clock.LIVENESS_STOP_REASONS`),
@@ -249,10 +251,10 @@ def checked_entry(value):
                                                                and type(value['workspace']) is not str)):
         return None
     state = value['state']
-    if state in {'launched', 'watched'} and (not _identity(value['child'])
+    if state in {'launched', 'watched', 'gone'} and (not _identity(value['child'])
                                              or not _matches(value['run_tag'], RUN_TAG)):
         return None
-    if state == 'watched' and not _identity(value['watchdog']):
+    if state in {'watched', 'gone'} and not _identity(value['watchdog']):
         return None
     if state == 'settled' and (value['outcome'] not in {'settled', 'released'}
                                or type(value['settled_at_ms']) is not int):
@@ -537,11 +539,12 @@ class LaunchJournal:
             raise JournalError('recovery report was not written') from error
 
     def claimed(self, bridge_run_id, *, run_handle, attempt, host_client, lease, identity_digest, claim_request_id,
-                storage_evidence, workspace):
-        """The account admitted this run's claim; written before the run can reach its launch."""
+                storage_evidence, workspace, instance=None):
+        """The account admitted this claim, before launch; recovery retains the stopped intent's instance."""
         if type(storage_evidence) is not bytes:
             raise JournalError('storage evidence is invalid')
-        value = {'version': 1, 'state': 'claimed', 'instance': self.instance, 'bridge_run_id': bridge_run_id,
+        value = {'version': 1, 'state': 'claimed', 'instance': self.instance if instance is None else instance,
+                 'bridge_run_id': bridge_run_id,
                  'run_handle': run_handle, 'attempt': attempt, 'host_client': host_client, 'lease': lease,
                  'identity_digest': identity_digest, 'claim_request_id': claim_request_id,
                  'storage_evidence': storage_evidence.hex(), 'workspace': None if workspace is None else str(workspace),
@@ -567,6 +570,21 @@ class LaunchJournal:
 
     def watched(self, bridge_run_id, pid, birth):
         self._advance(bridge_run_id, 'launched', state='watched', watchdog={'pid': pid, 'birth': birth})
+
+    def process_gone(self, bridge_run_id):
+        """B5a: durably record the positive process-tree proof before asking for a crashed closure.
+
+        Only a watched child can have crashed. Claimed (never spawned), container and ambiguous entries
+        keep their existing recovery paths. A recorded gone entry cannot launch and is safe to replay.
+        """
+        value = self.entry(bridge_run_id)
+        if value is None or value.get('version') != 1:
+            raise JournalError('process exit is not confirmed')
+        if value['state'] == 'gone':
+            return
+        if value['state'] != 'watched' or tree_state(value) != 'gone':
+            raise JournalError('process exit is not confirmed')
+        self._write(bridge_run_id, {**value, 'state': 'gone'})
 
     def settled(self, bridge_run_id, outcome, *, now_ms=None):
         """The account no longer counts the run: keep a tombstone that never launches anything."""
@@ -1149,7 +1167,7 @@ def _kernel_empty(identities, run_tag, born):
 def tree_state(entry):
     """'gone', 'alive' or 'unknown' for a journal entry; only 'gone' is evidence.
 
-    Gone means: the run never spawned (still ``claimed``), or it was watched
+    Gone means: the proof was already recorded as ``gone``, the run never spawned (still ``claimed``), or it was watched
     and now the child and the watchdog are each reaped (or their pids belong
     to processes born later), the watchdog confirmed before it exited that
     the whole tree it tracked is empty, and, twice, a short interval apart,
@@ -1163,6 +1181,8 @@ def tree_state(entry):
     value = checked_entry({name: item for name, item in entry.items() if name != 'marker_path'})
     if value is None:
         return 'unknown'
+    if value['state'] == 'gone':
+        return 'gone'  # B5a: positive proof already recorded durably; this entry can never launch again.
     if value['state'] == 'claimed':
         return 'gone'
     if value['state'] != 'watched':
@@ -1189,3 +1209,41 @@ def tree_state(entry):
         return 'gone'
     except Exception:
         return 'unknown'
+
+
+def process_settlement_evidence(directory, binding, bridge_run_id, *, identity_digest=None, allow_unbound=False):
+    """B5a: this exact lease's recorded process proof, read without opening a journal instance or SQLite.
+
+    The trusted driver alone records `gone`, after the kernel check. Old process `settled` entries retain
+    the same proof identities. A closure/age or a container is never process evidence. `allow_unbound`
+    additionally accepts a durable admission with no child/watchdog/marker: proof that nothing spawned,
+    used only for a claim_pending lease's admitted_unbound exception at the writer.
+    The writer keeps this bounded snapshot in its released register row before the journal can be pruned.
+    """
+    directory = Path(directory)
+    if not _matches(bridge_run_id, _BRIDGE):
+        return None
+    try:
+        info = os.lstat(directory)
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077
+                or directory.resolve(strict=True) != directory):
+            return None
+        value = _read_entry_or_none(directory / (bridge_run_id + '.json'))
+        if (value is None or value['version'] != 1
+                or value['state'] not in ({'claimed', 'gone', 'settled'} if allow_unbound else {'gone', 'settled'})
+                or value['bridge_run_id'] != bridge_run_id or value['lease'] != binding.as_data()
+                or value['run_handle'] != binding.run_handle or value['attempt'] != binding.attempt
+                or value['claim_request_id'] != binding.claim_request_id
+                or (identity_digest is not None and value['identity_digest'] != identity_digest)):
+            return None
+        never_spawned = all(value[name] is None for name in ('child', 'watchdog', 'run_tag'))
+        if value['state'] == 'claimed' and not never_spawned:
+            return None
+        if never_spawned and allow_unbound:
+            return value
+        if (not _identity(value['child']) or not _identity(value['watchdog'])
+                or not _matches(value['run_tag'], RUN_TAG)):
+            return None
+        return value
+    except (OSError, ValueError):
+        return None
