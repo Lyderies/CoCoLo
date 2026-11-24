@@ -414,8 +414,10 @@ class InstallerTests(unittest.TestCase):
                     CollectorClient(LearningState(state_root, create=False).socket).health()
                 # PLAN F3: the streamed format-3 file (was format 2's JSON document).
                 self.assertEqual(3, report["format"])
-                self.assertEqual("preupdate_test.sqlite3", Path(report["path"]).name)
-                backup = sqlite3.connect(f"file:{report['path']}?mode=ro", uri=True)
+                self.assertEqual("preupdate_test.sqlite3", report["backup_name"])
+                self.assertNotIn("path", report)
+                backup_path = next(Path(state_root).rglob(report["backup_name"]))
+                backup = sqlite3.connect(f"file:{backup_path}?mode=ro", uri=True)
                 try:
                     self.assertEqual(
                         str(target.resolve()),

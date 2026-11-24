@@ -79,7 +79,7 @@ class OwnerBackupStreamedTests(unittest.TestCase):
     def test_F3_1_the_backup_is_a_registered_format_three_copy_equal_to_the_records(self):
         report = self.owner_backup()
         path = self.source.state.backups / self.project / "owner_backup.sqlite3"
-        self.assertEqual(str(path), report["path"])
+        self.assertEqual(path.name, report["backup_name"])
         self.assertEqual(3, report["format"])
         info = os.stat(path, follow_symlinks=False)
         self.assertTrue(stat.S_ISREG(info.st_mode))
@@ -145,7 +145,7 @@ class OwnerBackupStreamedTests(unittest.TestCase):
 
     def test_F3_5_the_report_keeps_its_fields_and_adds_the_format(self):
         report = self.owner_backup()
-        self.assertEqual({"ready", "project_id", "file_id", "path", "format", "ledger_schema_version",
+        self.assertEqual({"ready", "project_id", "file_id", "backup_name", "format", "ledger_schema_version",
                           "backup_sha256", "manifest_sha256", "counts", "isolated_restore_integrity",
                           "isolated_restore_foreign_keys"}, set(report))
         self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, report["ledger_schema_version"])

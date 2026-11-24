@@ -2536,7 +2536,7 @@ def main() -> int:
                 report = {
                     "ready": True,
                     "project_id": project_id,
-                    "path": str(path),
+                    "backup_name": Path(path).name,
                     **verified,
                 }
             finally:

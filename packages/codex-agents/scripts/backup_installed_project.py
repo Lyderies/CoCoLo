@@ -433,7 +433,7 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
             "ready": True,
             "project_id": project_id,
             "file_id": file_id,
-            "path": str(path),
+            "backup_name": path.name,
             "format": 3,
             "ledger_schema_version": schema_version,
             "backup_sha256": report["backup_sha256"],
