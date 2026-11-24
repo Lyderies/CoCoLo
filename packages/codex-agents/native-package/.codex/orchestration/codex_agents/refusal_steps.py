@@ -69,7 +69,10 @@ EXACT = {
                                               "its primary can record it: record it with the original inputs.",
     'history_result_expired': "This result's recording window has ended, so it can no longer be recorded: dispatch the "
                               "work again.",
-    'service_refused_busy': "The service is busy with other connections: wait a moment, then try again.",
+    # UX-HCU-1: a plain terminal is not a host; learning-status cannot fix that.
+    'host_client_unknown': "This command runs only from the project's host: run it inside the Claude Code or Codex "
+                           "session that runs CoCoLo for this project (or name a host that is running there).",
+    'service_refused_busy':"The service is busy with other connections: wait a moment, then try again.",
 }
 
 FAMILY = {
