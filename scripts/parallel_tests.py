@@ -310,24 +310,34 @@ def parse_shard(text: str) -> tuple[int, int]:
 
 
 
+def _group_gone(process, sig):
+    """Signal the worker's group; True when no member is left to signal.
+
+    macOS answers EPERM (not ESRCH) for a group whose members have all exited but are not
+    yet reaped. Every member is ours, so EPERM after the leader exited means the group is gone;
+    EPERM for a live leader is a real error and is raised (decision 224)."""
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        if process.poll() is None:
+            raise
+        return True
+    return False
+
+
 def reap_worker_group(process):
     """Only signal the process group created for this worker; teardown is bounded."""
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
+    if _group_gone(process, signal.SIGTERM):
         return
     deadline = time.monotonic() + .5
     while time.monotonic() < deadline:
         process.poll()
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
+        if _group_gone(process, 0):
             return
         time.sleep(.01)
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    _group_gone(process, signal.SIGKILL)
 
 def preflight_failure(message, jobs, save, started):
     elapsed = time.monotonic() - started
