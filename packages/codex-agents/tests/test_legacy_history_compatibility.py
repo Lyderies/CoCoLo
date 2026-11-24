@@ -87,7 +87,7 @@ class LegacyHistoryCompatibilityTests(unittest.TestCase):
         changed = {**record, "observed_at_ms": 101}
         timestamp = 201 + DEFAULT_RETENTION_MS
         self.assertEqual(
-            {"stored": True, "duplicate": False, "source_sequence": 1, "late": False},
+            {"stored": True, "duplicate": False, "source_sequence": 3, "late": False},
             self.ledger.append(project, changed, producer="host", now_ms=timestamp),
         )
         stored = self.row(project, record["record_id"])

@@ -2506,16 +2506,7 @@ class LearningLedger:
                         continue  # Left for the owner's learning-expire.
                     if len(readable) == batch:
                         break
-            groups: dict[tuple[str, str, str], dict[str, Any]] = {}
-            for row, run_id, code in readable:
-                observed = int(row["observed_at_ms"])
-                day = time.strftime("%Y-%m-%d", time.gmtime(observed / 1000))
-                group = groups.setdefault((str(row["project_id"]), run_id, day), {
-                    "ids": [], "codes": {}, "sources": {}, "first": observed, "last": observed})
-                group["ids"].append(str(row["record_id"]))
-                group["codes"][code] = group["codes"].get(code, 0) + 1
-                group["sources"][str(row["source"])] = group["sources"].get(str(row["source"]), 0) + 1
-                group["first"], group["last"] = min(group["first"], observed), max(group["last"], observed)
+            groups = self._group_events(readable)
             if not groups:
                 return 0
             return self._summarise_and_remove(groups, now)
@@ -2540,6 +2531,61 @@ class LearningLedger:
                 (now, after[0], after[0], after[1], batch),
             ).fetchall()
 
+    @staticmethod
+    def _group_events(readable) -> dict:
+        """Group (row, run_id, event_code) by project, run and UTC day: the one grouping both the collector's
+        sweep and learning-expire summarise by."""
+        groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for row, run_id, code in readable:
+            observed = int(row["observed_at_ms"])
+            day = time.strftime("%Y-%m-%d", time.gmtime(observed / 1000))
+            group = groups.setdefault((str(row["project_id"]), run_id, day), {
+                "ids": [], "codes": {}, "sources": {}, "first": observed, "last": observed})
+            group["ids"].append(str(row["record_id"]))
+            group["codes"][code] = group["codes"].get(code, 0) + 1
+            group["sources"][str(row["source"])] = group["sources"].get(str(row["source"]), 0) + 1
+            group["first"], group["last"] = min(group["first"], observed), max(group["last"], observed)
+        return groups
+
+    @staticmethod
+    def _event_summary_record(project_id: str, run_id: str, day: str, group: dict) -> dict[str, Any]:
+        from .learning_contracts import validate_learning_record
+
+        identity = hashlib.sha256(canonical_json(
+            [project_id, run_id, day, sorted(group["ids"])])).hexdigest()[:32]
+        return validate_learning_record({
+            "schema_version": 1, "record_type": "event_summary",
+            "record_id": "evsum-" + identity, "run_id": run_id, "day": day,
+            "observed_at_ms": group["last"], "first_observed_at_ms": group["first"],
+            "last_observed_at_ms": group["last"], "span_ms": group["last"] - group["first"],
+            "event_count": len(group["ids"]), "event_counts": group["codes"],
+            "source_counts": group["sources"]})
+
+    def _summarise_expiring_events(self, project_id: str, identifiers: set[str], now_ms: int) -> None:
+        """learning-expire (T7 L10.3): roll the expired raw hook and app-server events it is about to remove into
+        event summaries, through the sweep's own grouping and summary record, in the caller's transaction.
+        Events the sweep already summarised are gone, so none is counted twice. An event whose content cannot
+        be read is removed unsummarised."""
+        readable, after = [], ("", 0)
+        while True:
+            # The sweep's own query: expired and named by nothing else. Events removed only because a
+            # record links them (lineage deletion) are removed whole, as before, with no summary.
+            window = self._expired_event_window(now_ms, after, EVENT_SWEEP_BATCH)
+            if not window:
+                break
+            after = (str(window[-1]["project_id"]), int(window[-1]["source_sequence"]))
+            for row in window:
+                if str(row["project_id"]) != project_id or str(row["record_id"]) not in identifiers:
+                    continue
+                try:
+                    record = json.loads(bytes(row["content"]))
+                    readable.append((row, str(record["run_id"]), str(record["event_code"])))
+                except (ValueError, KeyError, TypeError):
+                    continue
+        for (group_project, run_id, day), group in self._group_events(readable).items():
+            summary = self._event_summary_record(group_project, run_id, day, group)
+            self._append_checked_locked(group_project, summary, producer="lifecycle", timestamp=now_ms)
+
     def _summarise_and_remove(self, groups: dict, now: int) -> int:
         """One transaction: each group's summary and removal under its own savepoint."""
         from .contracts import ContractError
@@ -2550,15 +2596,7 @@ class LearningLedger:
             for number, ((project_id, run_id, day), group) in enumerate(groups.items()):
                 self._connection.execute(f"SAVEPOINT summary_{number}")
                 try:
-                    identity = hashlib.sha256(canonical_json(
-                        [project_id, run_id, day, sorted(group["ids"])])).hexdigest()[:32]
-                    summary = validate_learning_record({
-                        "schema_version": 1, "record_type": "event_summary",
-                        "record_id": "evsum-" + identity, "run_id": run_id, "day": day,
-                        "observed_at_ms": group["last"], "first_observed_at_ms": group["first"],
-                        "last_observed_at_ms": group["last"], "span_ms": group["last"] - group["first"],
-                        "event_count": len(group["ids"]), "event_counts": group["codes"],
-                        "source_counts": group["sources"]})
+                    summary = self._event_summary_record(project_id, run_id, day, group)
                     self._append_checked_locked(project_id, summary, producer="lifecycle", timestamp=now)
                 except (ContractError, LedgerError, ValueError, KeyError, TypeError, sqlite3.Error):
                     # This group cannot be summarised: it stays, the others go.
@@ -12406,6 +12444,7 @@ class LearningLedger:
                         "DELETE FROM stored_files WHERE project_id=? AND relative_path=?",
                         (project_id, str(row["relative_path"])),
                     )
+                self._summarise_expiring_events(project_id, identifiers, now_ms)
                 for record_id in identifiers:
                     self._connection.execute(
                         "DELETE FROM records WHERE project_id=? AND record_id=?",

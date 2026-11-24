@@ -177,6 +177,48 @@ class EventRetentionTests(unittest.TestCase):
         self.assertEqual({"linked", "free"}, {row[0] for row in self.connection.execute(
             "SELECT record_id FROM records WHERE project_id=? AND record_type='event'", (self.project,))})
 
+    def _summaries(self):
+        return [json.loads(bytes(row[0])) for row in self.connection.execute(
+            "SELECT content FROM records WHERE project_id=? AND record_type='event_summary' ORDER BY record_id",
+            (self.project,))]
+
+    def _raw_ids(self):
+        return {row[0] for row in self.connection.execute(
+            "SELECT record_id FROM records WHERE project_id=? AND record_type='event'", (self.project,))}
+
+    def test_learning_expire_summarises_the_raw_events_it_removes_before_removing_them(self):
+        # L10.3 (T7 S3): raw events go, summaries stay, through the owner's real learning-expire.
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        for number in range(5):
+            self.append(event(f"e{number}", "tool_started", observed_at_ms=start + number), now_ms=start + number)
+        self.append(event("o", "tool_output_observed", observed_at_ms=start + 9, run_id="run_2"), now_ms=start + 9)
+        self.assertEqual([], self._summaries())
+        self.assertGreaterEqual(self.ledger.expire(self.project, now_ms=start + 8 * DAY), 6)
+        self.assertEqual(set(), self._raw_ids())
+        summaries = self._summaries()
+        totals = {}
+        for summary in summaries:
+            validate_learning_record(summary)
+            self.assertEqual("2026-10-01", summary["day"])
+            for code, count in summary["event_counts"].items():
+                totals[(summary["run_id"], code)] = count
+        self.assertEqual({("run_1", "tool_started"): 5, ("run_2", "tool_output_observed"): 1}, totals)
+
+    def test_learning_expire_and_the_sweep_never_summarise_the_same_events_twice(self):
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        for number in range(4):
+            self.append(event(f"s{number}", "tool_started", observed_at_ms=start + number), now_ms=start + number)
+        later = start + 8 * DAY
+        self.assertEqual(2, self.ledger.sweep_event_retention(now_ms=later, batch=2))
+        self.assertEqual(2, len(self._raw_ids()))
+        self.ledger.expire(self.project, now_ms=later)
+        self.assertEqual(set(), self._raw_ids())
+        self.assertEqual(4, sum(summary["event_count"] for summary in self._summaries()))
+        before = self._summaries()
+        self.ledger.expire(self.project, now_ms=later)
+        self.assertEqual(0, self.ledger.sweep_event_retention(now_ms=later))
+        self.assertEqual(before, self._summaries())
+
     def test_a_summary_is_only_written_with_the_removal_it_describes(self):
         now = 1_000_000_000_000
         for number in range(5):
