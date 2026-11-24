@@ -39,6 +39,14 @@ def g1_every_step_exits_zero_or_refuses_as_expected(phase: Phase) -> None:
                  "the check sees a bare run_unavailable")
     phase.expect(not e2e_support.bare_unavailable('{"reason_code": "run_unavailable_busy_probe"}'),
                  "the check leaves a reason that carries its cause")
+    # G1 is also judged at capture, for every World and every step (e2e_support.capture_breaks): the judge itself.
+    def judged(text, code, refuses=False, timed_out=False):
+        return e2e_support.capture_breaks(text, kind="output", private={}, code=code, refuses=refuses, timed_out=timed_out)
+    phase.expect(judged("", 2) == ["g1_unexpected_exit"], "an unexpected refusal breaks the rule at capture")
+    phase.expect(not judged("", 2, refuses=True), "an expected refusal does not")
+    phase.expect(judged("", -9, timed_out=True) == ["g1_step_timed_out"], "a step that waited for ever breaks it")
+    phase.expect(judged('{"reason_code": "probe_unavailable"}', 0) == ["g1_bare_probe_unavailable"],
+                 "a bare probe_unavailable breaks it")
 
 
 @check("G8", group="fresh")
@@ -63,3 +71,21 @@ def g8_no_private_value_in_any_output(phase: Phase) -> None:
     for name in sorted(secret):
         phase.reason("screen_leaks_" + name)
     phase.expect(not secret, "no owner screen shows the passphrase or the key material")
+    # The rule is also judged at capture, for every World and every step (e2e_support.capture_breaks; a break
+    # fails the check that captured it). The judge itself, on this World's real values:
+    private = world.private_values()
+    fingerprint, private_line = private.get("owner_key_fingerprint", ""), private.get("owner_private_key_0_1", "")
+    phase.expect(bool(fingerprint) and bool(private_line), "the run's key fingerprint and private key are known to the judge")
+
+    def judged(text, kind):
+        return e2e_support.capture_breaks(text, kind=kind, private=private, code=0, refuses=False, timed_out=False)
+    phase.expect(not judged("Fingerprint " + fingerprint + " in " + str(world.home), "screen"),
+                 "an owner screen may show the fingerprint and a path")
+    phase.expect(judged(fingerprint, "output") == ["g8_output_leaks_owner_key_fingerprint"],
+                 "a saved output with the fingerprint breaks the rule")
+    phase.expect("g8_screen_leaks_owner_private_key" in judged(private_line, "screen"),
+                 "an owner screen with a line of the private key breaks the rule")
+    phase.expect("g8_screen_leaks_private_key_material" in judged("-----BEGIN OPENSSH PRIVATE KEY-----", "screen"),
+                 "an owner screen with a private key block breaks the rule")
+    phase.expect("g8_screen_leaks_passphrase" in judged(world.passphrase, "screen"),
+                 "an owner screen with the passphrase breaks the rule")

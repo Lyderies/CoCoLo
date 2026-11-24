@@ -358,6 +358,11 @@ def l5_3_codex_primary_verifier_qa_accepted_and_close(phase: Phase) -> None:
 # verdict, criteria and QA the service stored in the project's own history (read-only), not what the record,
 # QA or close commands replied.
 
+def same_digest(first, second) -> bool:
+    """Two digests are the same only when both are there: two missing digests prove nothing (G3, G4)."""
+    return isinstance(first, str) and bool(first) and first == second
+
+
 def stored_outcome(scene, prefix: str) -> dict:
     """The project history's latest outcome record of the run whose host outcome digest `scene.digests[prefix]` is.
     It is found through the stored admission that names that digest, so the digest the record command answered
@@ -406,7 +411,8 @@ def verifier_answers_pass(phase: Phase, scene, verdict: str) -> None:
     phase.expect(bool(worker) and bool(verifier), "the worker's and the verifier's outcome digests exist")
     qa = stored_qa(scene)
     phase.expect(bool(qa), "the project history holds one QA record")
-    phase.expect(qa.get("host_outcome_digest") == worker and qa.get("verifier_host_outcome_digest") == verifier,
+    phase.expect(same_digest(qa.get("host_outcome_digest"), worker)
+                 and same_digest(qa.get("verifier_host_outcome_digest"), verifier),
                  "the stored QA names the worker's outcome and the verifier's that was opened for it")
     given = worker_result_as_given_to_verifier(scene)
     phase.expect(bool(given) and answered_values(given) == json.loads(
@@ -419,7 +425,8 @@ def verifier_answers_pass(phase: Phase, scene, verdict: str) -> None:
     # The verifier's own outcome keeps its pre-QA counts; the QA record holds the criteria the verifier passed.
     verifier_result = [row for row in scene.world.history_records("dispatch_result")
                        if row.get("run_id") == stored.get("run_id")]
-    phase.expect(len(verifier_result) == 1 and qa.get("verifier_result_digest") == verifier_result[0].get("result_digest"),
+    phase.expect(len(verifier_result) == 1
+                 and same_digest(qa.get("verifier_result_digest"), verifier_result[0].get("result_digest")),
                  "the stored QA judged exactly the result the history recorded for the verifier")
     phase.expect(qa.get("required_criteria_passed") == qa.get("required_criteria_total") == len(ORACLE),
                  "the stored QA counts every required criterion passed")
@@ -438,7 +445,8 @@ def qa_accepted(phase: Phase, scene) -> None:
                  "the stored QA passed its deterministic and security checks")
     stored = stored_outcome(scene, "")
     worker_result = [row for row in scene.world.history_records("dispatch_result") if row.get("run_id") == stored.get("run_id")]
-    phase.expect(len(worker_result) == 1 and qa.get("evaluator_result_digest") == worker_result[0].get("result_digest"),
+    phase.expect(len(worker_result) == 1
+                 and same_digest(qa.get("evaluator_result_digest"), worker_result[0].get("result_digest")),
                  "the stored QA accepted exactly the result the history recorded for the worker")
     phase.expect(stored.get("accepted") is True and stored.get("status") == "accepted",
                  "the worker's outcome in the history is accepted")

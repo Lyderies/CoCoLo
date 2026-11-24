@@ -458,7 +458,7 @@
  "G8": {
   "checks": [],
   "source": "PLAN-0.4.0.md T7",
-  "statement": "No private value appears in any output: keys, fingerprints, paths under the temporary HOME."
+  "statement": "No private value (keys, fingerprints, paths under the temporary HOME) appears in any output that is saved, logged, reported or read by an AI helper (including the status command); a screen shown to the owner may show one only when the owner needs it to proceed or troubleshoot (owner decision 36)."
  },
  "G9": {
   "checks": [],
@@ -473,7 +473,7 @@
  "L1.2": {
   "checks": [],
   "source": "PLAN-0.4.0.md T7",
-  "statement": "Setup run again on an installed project changes nothing: same files, same digests, no new records except its own checks."
+  "statement": "Setup run again on an installed project changes nothing: same files, same digests, no new records except its own checks; an answers-file re-run skips signing a billing statement that is already signed and current unless the answers ask to sign again (owner decision 37)."
  },
  "L10.1": {
   "checks": [],

@@ -13,7 +13,6 @@ import e2e_support  # noqa: E402
 from e2e_core import ORCHESTRATION_VERSION, _SCENES, Phase, check  # noqa: E402
 
 
-_SCENES: dict = {}
 SETUP_STEPS = {1: "Checks", 2: "Project", 3: "Providers", 4: "Install", 5: "Collector", 6: "Billing",
                7: "Profile", 8: "Commands", 9: "Done"}
 SUMMARY_LINE = re.compile(r"^\s*(OK|FAIL|SKIP)\s+([1-9])\. ([A-Za-z]+): ?(.*)$", re.MULTILINE)

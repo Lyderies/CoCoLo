@@ -319,7 +319,7 @@ jobs:
         with:
           name: lifecycle-e2e-report
           path: ${{ runner.temp }}/lifecycle-e2e.json
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   requirements:
     needs: [unit, integration, full, pr-e2e]

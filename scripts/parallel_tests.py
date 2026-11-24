@@ -187,6 +187,47 @@ def inventory():
 
 DISCOVERY_SECONDS = 0.
 
+def lifecycle_checks():
+    """{check name: requirement IDs} from the @check(...) tags of scripts/e2e_lifecycle.py and its
+    scripts/e2e_checks_<group>.py modules, read without running anything."""
+    found = {}
+    for lifecycle in (ROOT / 'scripts/e2e_lifecycle.py', *sorted((ROOT / 'scripts').glob('e2e_checks_*.py'))):
+        if lifecycle.exists():
+            for node in ast.walk(ast.parse(lifecycle.read_text())):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    for tag in node.decorator_list:
+                        if isinstance(tag, ast.Call) and isinstance(tag.func, ast.Name) and tag.func.id == 'check':
+                            if node.name in found:
+                                found[node.name] = found[node.name] + ['<duplicate check name>']
+                            else:
+                                found[node.name] = [arg.value for arg in tag.args if isinstance(arg, ast.Constant)]
+    return found
+
+
+def lifecycle_link_errors(declared=None, rows=None):
+    """Reciprocal links between the lifecycle checks and tests/e2e/requirements.json, the lifecycle authority."""
+    declared = lifecycle_checks() if declared is None else declared
+    if rows is None:
+        rows = framework.decode_json((ROOT / 'tests/e2e/requirements.json').read_text())['requirements']
+    by_id = {row['id']: row for row in rows}
+    errors = []
+    for name, ids in sorted(declared.items()):
+        if not ids:
+            errors.append(f'lifecycle:{name}: names no requirement')
+        for requirement in ids:
+            if requirement not in by_id:
+                errors.append(f'lifecycle:{name}: unknown lifecycle requirement {requirement!r}')
+            elif name not in by_id[requirement]['checks']:
+                errors.append(f'lifecycle:{name}: {requirement} does not list its check')
+    for row in rows:
+        if len(row['checks']) != len(set(row['checks'])):
+            errors.append(f"{row['id']}: duplicate lifecycle check")
+        for name in row['checks']:
+            if row['id'] not in declared.get(name, []):
+                errors.append(f"{row['id']}: missing or unlinked lifecycle check {name}")
+    return errors
+
+
 def metadata():
     global DISCOVERY_SECONDS
     DISCOVERY_SECONDS = 0.
@@ -200,23 +241,12 @@ def metadata():
         discovered = inventory()
     finally:
         DISCOVERY_SECONDS = time.monotonic() - discovery_started
-    # Lifecycle checks use the same catalogue and remain required even in a module-only run.
-    checked = {}
-    # The script and its scripts/e2e_checks_<group>.py modules declare the checks.
-    for lifecycle in (ROOT / 'scripts/e2e_lifecycle.py', *sorted((ROOT / 'scripts').glob('e2e_checks_*.py'))):
-        if lifecycle.exists():
-            for node in ast.walk(ast.parse(lifecycle.read_text())):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    for tag in node.decorator_list:
-                        if isinstance(tag, ast.Call) and isinstance(tag.func, ast.Name) and tag.func.id == 'check':
-                            checked['lifecycle:' + node.name] = {
-                                'requirements': [arg.value for arg in tag.args if isinstance(arg, ast.Constant)],
-                                'rationale': 'Canonical lifecycle scenario'}
+    # Lifecycle checks are linked in tests/e2e/requirements.json, their own authority, and validated against it
+    # apart from the shared catalogue: the required jobs never run them (the lifecycle CI job is advisory), so
+    # their links must not decide the required jobs' metadata validation (T7 S0 review finding 1).
     checked_inventory = dict(discovered)
     checked_stages, checked_layers = dict(stages), dict(layers)
-    if checked:
-        checked_inventory['lifecycle:checks'] = checked
-        checked_stages['lifecycle:checks'], checked_layers['lifecycle:checks'] = 'e2e', 'scenario'
+    errors += lifecycle_link_errors()
     registry_path = ROOT / 'scripts/test-checks.json'
     if registry_path.exists():
         registry = framework.decode_json(registry_path.read_text())

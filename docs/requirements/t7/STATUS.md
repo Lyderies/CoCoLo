@@ -18,3 +18,16 @@ Verified (2026-11-24): L1-L5 --jobs 4 full run green (report passed=true; G1-G4,
 tests.test_e2e_requirements/strictness/ci_stages (19) and test_test_framework ReviewLifecycleTests (4) green.
 Pending primary decisions: the 4 changes in assertions.md (L4.2, L2.2, G8, G9) are untouched.
 Next: first CI run of lifecycle-e2e decides if continue-on-error goes; G5-G7 checks belong to other slices.
+
+## Fix round 1 (Codex review NOT-READY, 2026-11-24)
+Fixed: (1) lifecycle links validated against tests/e2e/requirements.json by parallel_tests.lifecycle_link_errors()
+(not fed into the shared catalogue); G8/L1.2 statements synced into scripts/test-requirements.json; metadata()
+35 errors -> 0. (2) local _SCENES removed from e2e_checks_setup.py; SceneCleanupTests guard. (4) accept_worker():
+exactly one entry per name and exit 0, else every check of the group fails. (5) same_digest() in G3/G4. (6) G1/G8
+judged at capture for every World (e2e_support.capture_breaks, CAPTURE_BREAKS; _execute fails the capturing check
+and decides G1/G8); screens incl. record=False checked for passphrase, public blob and private key material.
+(7) redact_entries(): a leaking worker's entries replaced whole. (8) assertions.md baseline 342df324, rows fixed,
+L2.2 asserts no fingerprint after replacement. (9) lifecycle report upload if-no-files-found: error (G9 asserts it).
+Tests: tests.test_e2e_strictness (23, 15 new: red first, then green), test_e2e_requirements, test_ci_stages (34, 0.8 s).
+Verified: L1-L5 --jobs 4 run r2 passed=true, 33/33 checks, 6m13 wall; no ~/.cache/e2e-* left by the run (3 older ones from
+22:25-22:32 predate the _SCENES fix, left in place).

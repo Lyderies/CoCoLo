@@ -88,6 +88,7 @@ def _execute(wanted, home_root) -> list:
             entry["requirements"] = list(ids)
             with tempfile.TemporaryDirectory(prefix="cocolo-e2e-", dir=home_root) as home:
                 phase = Phase(name, Path(home))
+                mark = len(e2e_support.CAPTURE_BREAKS)
                 try:
                     function(phase)
                     if phase.expectations == 0:
@@ -100,6 +101,16 @@ def _execute(wanted, home_root) -> list:
                     entry["failure"] = "check_error: " + type(error).__name__
                     traceback.print_exc(file=sys.stderr)
                 entry["reasons"] = phase.reasons
+                # G1 and G8 at capture: a step this check ran broke a rule (in any World): the check fails and the
+                # rule's requirement is decided failed with it.
+                broken = sorted(set(e2e_support.CAPTURE_BREAKS[mark:]))
+                if broken:
+                    entry["passed"] = False
+                    entry["failure"] = entry["failure"] or "capture_rule_broken"
+                    entry["reasons"] = entry["reasons"] + broken
+                    for prefix, requirement in (("g1_", "G1"), ("g8_", "G8")):
+                        if any(code.startswith(prefix) for code in broken) and requirement not in entry["requirements"]:
+                            entry["requirements"].append(requirement)
         entry["seconds"] = round(time.monotonic() - started, 3)
         results.append(entry)
     return results
@@ -122,16 +133,35 @@ def _execute_in_processes(wanted, jobs: int) -> list:
                 entries = json.loads(out.read_text())
             except (OSError, ValueError):
                 entries = []
-            if not isinstance(entries, list) or {e.get("check") for e in entries} != set(names):
-                known = {e.get("check"): e for e in entries if isinstance(e, dict)} if isinstance(entries, list) else {}
-                entries = [known.get(name) or {"check": name, "requirements": list(CHECKS[name][0]) if name in CHECKS else [],
-                                               "passed": False, "seconds": 0.0, "reasons": [],
-                                               "failure": f"check_process_died_{done.returncode}".replace("-", "signal_")}
-                           for name in names]
-            return entries
+            return accept_worker(entries, names, done.returncode)
         with ThreadPoolExecutor(max_workers=jobs) as pool:
             gathered = [entry for entries in pool.map(run_group, queue) for entry in entries]
     return sorted(gathered, key=lambda entry: entry["check"])
+
+
+def _failed_entry(name: str, failure: str) -> dict:
+    return {"check": name, "requirements": list(CHECKS[name][0]) if name in CHECKS else [], "passed": False,
+            "seconds": 0.0, "reasons": [], "failure": failure}
+
+
+def accept_worker(entries, names: list[str], returncode: int) -> list:
+    """A --jobs worker's entries, taken only from a clean exit and only whole: exactly one well-formed entry per
+    check it was given. Anything else fails every check of the group (none is skipped or counted twice)."""
+    if returncode != 0:
+        failure = f"check_process_failed_{returncode}".replace("-", "signal_")
+        return [_failed_entry(name, failure) for name in names]
+    fields = {"check", "requirements", "passed", "seconds", "reasons", "failure"}
+    if (not isinstance(entries, list) or not all(isinstance(e, dict) and set(e) == fields for e in entries)
+            or sorted(e["check"] for e in entries) != sorted(names) or len(set(names)) != len(names)):
+        return [_failed_entry(name, "check_results_invalid") for name in names]
+    return entries
+
+
+def redact_entries(entries: list, names: list[str]) -> list:
+    """A worker's results that carried a private value are replaced whole: fixed fields, no reasons, no
+    requirements the parent would decide passed (G8; the parent never sees this worker's private values)."""
+    return [{"check": name, "requirements": [], "passed": False, "seconds": 0.0, "reasons": [],
+             "failure": "private_values_in_report"} for name in names]
 
 
 def _verdicts(flows, selected, results, decided) -> dict:
@@ -215,6 +245,9 @@ def g9_report_is_content_free_json_with_phases_seconds_reasons(phase: Phase) -> 
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     phase.expect("e2e_lifecycle.py" in workflow and "--report" in workflow, "CI runs the lifecycle script with a report")
     phase.expect("upload-artifact" in workflow.split("e2e_lifecycle.py", 1)[-1], "CI keeps the report as an artifact")
+    job = re.split(r"\n  \S", workflow.split("e2e_lifecycle.py", 1)[-1], maxsplit=1)[0]
+    phase.expect("if-no-files-found: error" in job.split("upload-artifact", 1)[-1],
+                 "a missing report fails its CI step")
 
 
 def write_report(report: dict, destination: Path | None) -> str:
@@ -266,7 +299,7 @@ def _worker(names: list[str], results: Path | None) -> int:
     text = json.dumps(entries)
     home_roots = [tempfile.gettempdir(), str(Path.home()), os.path.realpath(Path.home())]
     if private_values_in(text, home_roots, e2e_support.PRIVATE_VALUES):
-        entries = [dict(entry, passed=False, failure="private_values_in_report") for entry in entries]
+        entries = redact_entries(entries, names)
     if results:
         results.write_text(json.dumps(entries))
     return 0

@@ -97,6 +97,32 @@ CLIENT = '#!/bin/sh\nexec "%PYTHON%" "${0%/*}/fake_child.py" "${0%/*}" "${0##*/}
 PRIVATE_VALUES: set[str] = set()
 
 
+# G1 and G8, judged as each output is captured, in every World of the process (a World is one scene's machine;
+# a check that only reads one World would leave the others unjudged). Each entry is a fixed reason code; the
+# runner fails the check during which it was captured (scripts/e2e_lifecycle.py, _execute).
+CAPTURE_BREAKS: list[str] = []
+PRIVATE_KEY_BLOCK = re.compile(r"-----(BEGIN|END) [A-Z0-9 ]*PRIVATE KEY-----")
+# Owner decision 36: an owner's own screen may show the key tool's fingerprint line and file paths, never the
+# passphrase or key material; a saved or AI-read output carries no private value at all.
+SCREEN_SECRETS = ("passphrase", "owner_key_material", "owner_private_key")
+
+
+def capture_breaks(text: str, *, kind: str, private: dict, code: int, refuses: bool, timed_out: bool) -> list[str]:
+    """The rules one captured step breaks: `kind` is "output" (saved or AI-read) or "screen" (an owner's terminal).
+    `private` maps a value's name to the value (World.private_values); only names reach the result."""
+    found = set()
+    if timed_out:
+        found.add("g1_step_timed_out")
+    elif code != 0 and not refuses:
+        found.add("g1_unexpected_exit")
+    found.update("g1_bare_" + reason for reason in bare_unavailable(text))
+    found.update(f"g8_{kind}_leaks_" + re.sub(r"(_[0-9]+)+$", "", name) for name, value in private.items()
+                 if value and value in text and (kind == "output" or name.startswith(SCREEN_SECRETS)))
+    if PRIVATE_KEY_BLOCK.search(text):
+        found.add(f"g8_{kind}_leaks_private_key_material")
+    return sorted(found)
+
+
 class HarnessError(Exception):
     """The harness itself could not be built (a missing tool, a refused location): the check fails."""
 
@@ -351,6 +377,9 @@ class World:
             self.screens.append(text)
             self.steps.append({"step": label, "code": code, "refuses": refuses, "timed_out": timed_out})
         self.register_private_values()
+        # Every screen is judged, kept in `screens` or not (record=False only keeps a tool's screen out of the
+        # list one check reads; the screen rule still holds for it).
+        self._capture(text, kind="screen", code=code, refuses=refuses, timed_out=timed_out)
         return Run(code, text, round(time.monotonic() - started, 3), timed_out)
 
     def setup(self, answers: Path, *, refuses: bool = False) -> Run:
@@ -384,6 +413,7 @@ class World:
         text = done.stdout + done.stderr
         self.outputs.append(text)
         self.steps.append({"step": args[0], "code": done.returncode, "refuses": refuses, "timed_out": False})
+        self._capture(text, kind="output", code=done.returncode, refuses=refuses, timed_out=False)
         try:
             reply = json.loads(done.stdout)
         except ValueError:
@@ -427,6 +457,7 @@ class World:
         text = done.stdout + done.stderr
         self.outputs.append(text)
         self.steps.append({"step": "validate", "code": done.returncode, "refuses": False, "timed_out": False})
+        self._capture(text, kind="output", code=done.returncode, refuses=False, timed_out=False)
         try:
             reply = json.loads(done.stdout)
         except ValueError:
@@ -584,9 +615,26 @@ class World:
             suffix = f"_{number}" if number else ""
             values[f"owner_key_fingerprint{suffix}"] = fingerprint
             values[f"owner_key_material{suffix}"] = blob
+        for number, lines in enumerate(self.owner_private_keys()):
+            for line_number, line in enumerate(lines):
+                values[f"owner_private_key_{number}_{line_number}"] = line
         for number, other in enumerate(sorted(self.known_passphrases - {self.passphrase})):
             values[f"passphrase_other_{number}"] = other
         return values
+
+    def owner_private_keys(self) -> list[list[str]]:
+        """Every owner private key file's base64 body lines (a replacement makes the next key)."""
+        keys = []
+        for path in sorted((self.home / ".ssh").glob("codex-agents-owner*")):
+            if path.suffix == ".pub" or not path.is_file():
+                continue
+            keys.append([line.strip() for line in path.read_text(errors="replace").splitlines()
+                         if len(line.strip()) >= 16 and not line.startswith("-----")])
+        return keys
+
+    def _capture(self, text: str, *, kind: str, code: int, refuses: bool, timed_out: bool) -> None:
+        CAPTURE_BREAKS.extend(capture_breaks(text, kind=kind, private=self.private_values(), code=code,
+                                             refuses=refuses, timed_out=timed_out))
 
     def register_private_values(self) -> None:
         """Remember the values for the report's own scan (kept in memory only, never written)."""

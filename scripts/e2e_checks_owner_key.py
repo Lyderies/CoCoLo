@@ -187,6 +187,7 @@ def l2_2_replacing_owner_key_refuses_old_signatures_accepts_new(phase: Phase) ->
     phase.expect(code == 0 and after.get("state") == "ok", "after the replacement the owner key is configured (state ok)")
     phase.expect(after.get("replacements") == (before.get("replacements") or 0) + 1, "the replacement is counted once")
     phase.expect(isinstance(after.get("last_replaced_at_ms"), int), "the status says when the owner key was replaced")
+    phase.expect("fingerprint" not in after, "after the replacement the status still shows no key fingerprint (decision 36)")
     old_blob = scene.old_keys[0][1]
     new_blob = ""
     if scene.new_pubs:
