@@ -688,7 +688,7 @@ class ApprovedEditsLaterBinding(unittest.TestCase):
     fixture = ApprovedEditsR1.fixture
     migration = ApprovedEditsMigration.migration
 
-    def retired_first_generation(self, root, p, *, migrated=True):
+    def retired_first_generation(self, root, p, *, migrated=True, legacy='test-legacy.json'):
         import hashlib
         first_manifest, seed, active, retired = self.migration(
             root, p, None if migrated else 'undecorated', outside_manifest=True)
@@ -697,7 +697,8 @@ class ApprovedEditsLaterBinding(unittest.TestCase):
             # either raw list. Leave its changed proof unbound in generation 1.
             for name in ('test-legacy.json', 'test-legacy-0850.json'):
                 self.write_json(root / 'scripts' / name, {
-                    **active, 'tests': {n: r['fingerprint'] for n, r in seed.items()}})
+                    **active, 'tests': {n: r['fingerprint'] for n, r in seed.items()
+                                      if n != retired or name == legacy}})
             self.commit(root, 'keep changed unbound identity in legacy lists')
             self.enterContext(mock.patch.object(p, 'active_ids', return_value=set(seed) - {retired}))
         first = p.build(root, [first_manifest])
@@ -764,14 +765,168 @@ class ApprovedEditsLaterBinding(unittest.TestCase):
                 p.checked_bindings(root)
 
     def test_second_generation_still_checks_unbound_legacy_proof(self):
+        for legacy in ('test-legacy.json', 'test-legacy-0850.json'):
+            with self.subTest(legacy=legacy), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); p = self.policy()
+                _, _, unbound, _ = self.retired_first_generation(root, p, migrated=False, legacy=legacy)
+                for name in ('test-legacy.json', 'test-legacy-0850.json'):
+                    listed = p.fw.decode_json((root / 'scripts' / name).read_text())['tests']
+                    self.assertEqual(name == legacy, unbound in listed,
+                                     'TF-27c still-listed fixture must exercise each legacy list alone')
+                self.assertIn(unbound, p.listed_ids(root))
+                status, diagnostic = self.command(root, p)
+                self.assertEqual(1, status)
+                self.assertIn(unbound + ': trusted old proof differs from admitted baseline', diagnostic)
+                self.assertFalse((root / p.BINDINGS / '0.json').exists())
+
+    def test_sibling_binding_introductions_are_not_linear(self):
+        import hashlib
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder); p = self.policy()
-            _, _, unbound, _ = self.retired_first_generation(root, p, migrated=False)
-            self.assertIn(unbound, p.listed_ids(root))
+            _, first, _ = self.fixture(root, p)
+            first_bytes = (root / p.BINDINGS / '1.json').read_bytes()
+            first_manifest = p.read_manifests(root)[0]
+            subprocess.run(['git', 'reset', '--soft', 'HEAD^'], cwd=root, check=True)
+            (root / p.BINDINGS / '1.json').unlink()
+            common = self.commit(root, 'common source and first owner manifest')
+            (root / p.BINDINGS / '1.json').write_bytes(first_bytes)
+            first_introduction = self.commit(root, 'first binding on sibling branch')
+            self.assertEqual(first['tests'], p.checked_bindings(root))
+            subprocess.run(['git', 'checkout', '-qb', 'second', common], cwd=root, check=True)
+            path = root / 'tests/test_other.py'
+            path.write_text(path.read_text().replace('self.assertTrue(True)', 'self.assertTrue(False)'))
+            edit = self.commit(root, 'second source on independent branch')
+            manifest = dict(schema=1, decision='2', transitions=[dict(file='tests/test_other.py',
+                before_commit=common, edit_commit=edit, edits=[dict(line=4,
+                old='        self.assertTrue(True)\n', new='        self.assertTrue(False)\n')])])
+            self.write_json(root / p.MANIFESTS / '2.json', manifest)
+            approval = p.fw.decode_json((root / p.APPROVALS).read_text())
+            approval['decisions']['2'] = dict(binding='0',
+                manifest_sha256=hashlib.sha256((root / p.MANIFESTS / '2.json').read_bytes()).hexdigest())
+            self.write_json(root / p.APPROVALS, approval)
+            self.commit(root, 'second owner manifest')
+            second = p.build(root, [manifest], prior=[first_manifest], admitted=first['tests'])
+            self.write_json(root / p.BINDINGS / '0.json', second)
+            second_introduction = self.commit(root, 'second binding on sibling branch')
+            subprocess.run(['git', 'checkout', '-q', '--detach', first_introduction], cwd=root, check=True)
+            subprocess.run(['git', '-c', 'user.name=TF27', '-c', 'user.email=tf27@example.invalid',
+                            '-c', 'core.hooksPath=/dev/null', 'merge', '-q', '--no-edit', '--no-gpg-sign',
+                            second_introduction], cwd=root, check=True)
+            order = p.git(root, 'rev-list', '--reverse', '--topo-order', 'HEAD').decode().split()
+            self.assertLess(order.index(first_introduction), order.index(second_introduction))
+            self.assertEqual(1, subprocess.run(['git', 'merge-base', '--is-ancestor',
+                first_introduction, second_introduction], cwd=root).returncode)
+            with self.assertRaisesRegex(ValueError, 'approved-edit generations are not linear'):
+                p.checked_bindings(root)
+
+    def test_introduction_checks_earlier_only_source_even_after_restoration(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); p = self.policy()
+            _, _, _, first = self.retired_first_generation(root, p)
             status, diagnostic = self.command(root, p)
-            self.assertEqual(1, status)
-            self.assertIn(unbound + ': trusted old proof differs from admitted baseline', diagnostic)
+            self.assertEqual(0, status, diagnostic)
+            second = p.fw.decode_json((root / p.BINDINGS / '0.json').read_text())
+            self.assertEqual({'tests/test_other.py'}, set(second['after_sources']))
+            self.commit(root, 'valid second introduction')
+            expected = {**first['tests'], **second['tests']}
+            self.assertEqual(expected, p.checked_bindings(root))
+            subprocess.run(['git', 'reset', '--soft', 'HEAD^'], cwd=root, check=True)
+            earlier = root / 'tests/fixture.py'; admitted = earlier.read_bytes()
+            earlier.write_bytes(b'VALUE = 99\n')
+            self.commit(root, 'second introduction hides unlisted earlier-only source change')
+            earlier.write_bytes(admitted)
+            self.commit(root, 'restore earlier source after invalid introduction')
+            with self.assertRaisesRegex(ValueError, 'introduction source/algorithm differs from replay'):
+                p.checked_bindings(root)
+
+    def test_full_history_refuses_merge_hidden_independent_document_addition(self):
+        for directory in ('MANIFESTS', 'BINDINGS'):
+            with self.subTest(document=directory), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder); p = self.policy()
+                _, first, _ = self.fixture(root, p)
+                self.assertEqual(first['tests'], p.checked_bindings(root))
+                original = p.revision(root, 'HEAD')
+                common = p.revision(root, 'HEAD^')
+                name = getattr(p, directory) + '/1.json'
+                content = (root / name).read_bytes()
+                subprocess.run(['git', 'checkout', '-qb', 'independent', common], cwd=root, check=True)
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_bytes(content + b'\n')
+                hidden = self.commit(root, 'conflicting independent introduction')
+                subprocess.run(['git', 'checkout', '-q', '--detach', original], cwd=root, check=True)
+                merge = subprocess.run(['git', '-c', 'user.name=TF27', '-c', 'user.email=tf27@example.invalid',
+                                        '-c', 'core.hooksPath=/dev/null', 'merge', '--no-commit',
+                                        '--no-ff', hidden], cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                self.assertEqual(1, merge.returncode)
+                (root / name).write_bytes(content)
+                self.commit(root, 'merge keeps original bytes and hides the other addition')
+                simplified = p.git(root, 'log', '--format=%H', 'HEAD', '--', name).decode().split()
+                self.assertNotIn(hidden, simplified)
+                with self.assertRaisesRegex(ValueError, 'conflicting independent introductions'):
+                    p.checked_bindings(root)
+
+    def test_absent_undecorated_id_in_previously_untouched_suite_is_not_migrated(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); p = self.policy()
+            snapshot = self.snapshot
+            absent = 'codex:test_extra.Extra.test_absent'
+            def with_untouched_suite(repo, source=None):
+                ids = snapshot(repo, source)
+                package = repo / 'packages/codex-agents'
+                (package / 'tests').mkdir(parents=True)
+                (package / 'src').mkdir()
+                (package / 'tests/test_extra.py').write_text(
+                    'import unittest\nclass Extra(unittest.TestCase):\n    def test_absent(self):\n'
+                    '        self.assertEqual(1, 1)\n')
+                for name in ('test-layers.json', 'test-stages.json'):
+                    mapping = p.fw.decode_json((repo / 'scripts' / name).read_text())
+                    self.write_json(repo / 'scripts' / name, {**mapping, 'codex:test_extra': 'unit'})
+                for name in ('test-legacy.json', 'test-legacy-0850.json'):
+                    self.write_json(repo / 'scripts' / name,
+                                    {'baseline': 'fixture', 'tests': dict.fromkeys([*ids, absent], '')})
+                return {**ids, absent: {}}
+            with mock.patch.object(self, 'snapshot', side_effect=with_untouched_suite):
+                seed, _, _ = self.fixture(root, p)
+            self.assertIn(absent, seed)
+            subprocess.run(['git', 'reset', '--soft', 'HEAD^'], cwd=root, check=True)
+            for name in ('test-legacy.json', 'test-legacy-0850.json'):
+                path = root / 'scripts' / name
+                data = p.fw.decode_json(path.read_text()); del data['tests'][absent]
+                self.write_json(path, data)
+            introduction = self.commit(root, 'first introduction never inspects codex suite')
+            self.assertNotIn(absent, p.listed_ids(root))
+            self.assertTrue(p.checked_bindings(root))
+            path = root / 'packages/codex-agents/tests/test_extra.py'
+            path.write_text(path.read_text().replace('self.assertEqual(1, 1)', 'self.assertEqual(2, 1)'))
+            edit = self.commit(root, 'first approved edit in previously untouched suite')
+            manifest = dict(schema=1, decision='2', transitions=[dict(
+                file='packages/codex-agents/tests/test_extra.py', before_commit=introduction,
+                edit_commit=edit, edits=[dict(line=4, old='        self.assertEqual(1, 1)\n',
+                                             new='        self.assertEqual(2, 1)\n')])])
+            self.write_json(root / p.MANIFESTS / '2.json', manifest)
+            approval = p.fw.decode_json((root / p.APPROVALS).read_text())
+            approval['decisions']['2'] = dict(binding='0',
+                manifest_sha256=hashlib.sha256((root / p.MANIFESTS / '2.json').read_bytes()).hexdigest())
+            self.write_json(root / p.APPROVALS, approval)
+            self.commit(root, 'second manifest cannot grandfather an unverified migration')
+            status, diagnostic = self.command(root, p)
+            self.assertEqual(1, status, 'TF-27c absent undecorated ID was treated as migrated')
+            self.assertIn(absent + ': retired changed legacy proof has no requirement', diagnostic)
             self.assertFalse((root / p.BINDINGS / '0.json').exists())
+
+    def test_sole_binding_dirty_source_precedes_proof_rebuild(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); p = self.policy()
+            seed, first, _ = self.fixture(root, p)
+            self.assertEqual(first['tests'], p.checked_bindings(root))
+            path = root / 'tests/test_case.py'
+            path.write_bytes(path.read_bytes() + b'\nUNLISTED = 1\n')
+            stale = copy.deepcopy(seed)
+            stale['root:test_case.Case.test_changed']['fingerprint'] = 'stale'
+            with mock.patch.object(p, 'seed_records', return_value=stale), \
+                 self.assertRaisesRegex(ValueError, '^unlisted change in approved-edit files$'):
+                p.checked_bindings(root)
 
     def command(self, root, p, binding='0'):
         import contextlib

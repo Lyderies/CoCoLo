@@ -1,0 +1,30 @@
+{
+ "generations": [
+  {
+   "binding": "0851",
+   "introduction": "fcc66f9d2066c334630d678911488919a4214bd8",
+   "decisions": [
+    "107",
+    "109",
+    "112",
+    "114.1",
+    "119"
+   ],
+   "sha256": "dbfa3593939e5b83a2d032d2810d86e7be1e295653900bd75dc2dc8cae6f8705",
+   "proof_count": 2236
+  },
+  {
+   "binding": "0852",
+   "introduction": "cd82ce18cb7075bce0e6d66bdac6a25977be258e",
+   "decisions": [
+    "123"
+   ],
+   "sha256": "9fda1716ae1b1a3b3d3e0793b382e73ff6ab1c04ff56cf47e8a9c0ccd22f2091",
+   "proof_count": 523
+  }
+ ],
+ "strictly_linear": true,
+ "cumulative_introduction_sources_match": true,
+ "current_sources_match": true,
+ "full_proof_verification": "not claimed: runner stops at pre-existing 0851 dependency-value mismatch"
+}

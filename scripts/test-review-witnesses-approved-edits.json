@@ -268,5 +268,75 @@
   "red": "measurements/test-framework/approved-edits/tf27c/earlier-tampering-red.json",
   "requirement": "TF-27",
   "witness": "root:test_approved_edits.ApprovedEditsLaterBinding.test_first_binding_tampering_after_second_exists_is_refused"
+ },
+ {
+  "base": "cd82ce18cb7075bce0e6d66bdac6a25977be258e",
+  "diagnostic": "ValueError not raised",
+  "fix": "TF27c-r2-linear-generations",
+  "green": "measurements/test-framework/approved-edits/tf27c/r2/linear-generations-green.json",
+  "positive_control": "A real merge joins sibling binding introductions; the first binding alone verifies, but sibling ancestry must be refused.",
+  "red": "measurements/test-framework/approved-edits/tf27c/r2/linear-generations-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsLaterBinding.test_sibling_binding_introductions_are_not_linear"
+ },
+ {
+  "base": "cd82ce18cb7075bce0e6d66bdac6a25977be258e",
+  "diagnostic": "ValueError not raised",
+  "fix": "TF27c-r2-cumulative-introduction-sources",
+  "green": "measurements/test-framework/approved-edits/tf27c/r2/cumulative-introduction-sources-green.json",
+  "positive_control": "A valid second introduction verifies and hashes only its own file. An unlisted earlier-only source at a rewritten introduction remains invalid after a later source restoration.",
+  "red": "measurements/test-framework/approved-edits/tf27c/r2/cumulative-introduction-sources-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsLaterBinding.test_introduction_checks_earlier_only_source_even_after_restoration"
+ },
+ {
+  "base": "cd82ce18cb7075bce0e6d66bdac6a25977be258e",
+  "diagnostic": "ValueError not raised",
+  "fix": "TF27c-r2-full-history-origins",
+  "green": "measurements/test-framework/approved-edits/tf27c/r2/full-history-origins-green.json",
+  "positive_control": "Original manifest and binding each verify before the merge. A conflicting independent addition hidden by path-limited log is refused for each kind of document.",
+  "red": "measurements/test-framework/approved-edits/tf27c/r2/full-history-origins-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsLaterBinding.test_full_history_refuses_merge_hidden_independent_document_addition"
+ },
+ {
+  "base": "cd82ce18cb7075bce0e6d66bdac6a25977be258e",
+  "diagnostic": "TF-27c absent undecorated ID was treated as migrated",
+  "fix": "TF27c-r2-verified-migrations",
+  "green": "measurements/test-framework/approved-edits/tf27c/r2/verified-migrations-green.json",
+  "positive_control": "The first binding verifies without inspecting codex. An absent undecorated codex identity retains its original proof comparison when that suite is first edited.",
+  "red": "measurements/test-framework/approved-edits/tf27c/r2/verified-migrations-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsLaterBinding.test_absent_undecorated_id_in_previously_untouched_suite_is_not_migrated"
+ },
+ {
+  "base": "cd82ce18cb7075bce0e6d66bdac6a25977be258e",
+  "diagnostic": "\"^unlisted change in approved-edit files$\" does not match",
+  "fix": "TF27c-r2-sole-binding-source-diagnostic",
+  "green": "measurements/test-framework/approved-edits/tf27c/r2/sole-binding-source-diagnostic-green.json",
+  "positive_control": "A sole clean binding verifies; dirty source plus a stale proof must report the original source diagnostic before rebuilding.",
+  "red": "measurements/test-framework/approved-edits/tf27c/r2/sole-binding-source-diagnostic-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsLaterBinding.test_sole_binding_dirty_source_precedes_proof_rebuild"
+ },
+ {
+  "base": "cd82ce18cb7075bce0e6d66bdac6a25977be258e",
+  "diagnostic": "TF-27c still-listed fixture must exercise each legacy list alone",
+  "fix": "TF27c-r2-each-legacy-list-alone",
+  "green": "measurements/test-framework/approved-edits/tf27c/r2/each-legacy-list-alone-green.json",
+  "positive_control": "Both subcases assert membership in exactly one raw list; each then refuses the stale old proof even when effective eligibility excludes the identity.",
+  "red": "measurements/test-framework/approved-edits/tf27c/r2/each-legacy-list-alone-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsLaterBinding.test_second_generation_still_checks_unbound_legacy_proof"
+ },
+ {
+  "base": "1251e4a8ffedd0651b074413db5ef6c50a1156a0",
+  "diagnostic": "TF-27c-2 normally migrated proof blocked generation 2",
+  "fix": "TF27c-r2-round-one-normal-migration",
+  "green": "measurements/test-framework/approved-edits/tf27c/r2/round-one-normal-migration-green.json",
+  "positive_control": "The earlier normally migrated unbound identity is omitted in generation 2, current requirement validation still catches an unknown requirement, and a bound identity retired only later still requires normal migration.",
+  "red": "measurements/test-framework/approved-edits/tf27c/r2/round-one-normal-migration-red.json",
+  "requirement": "TF-27",
+  "witness": "root:test_approved_edits.ApprovedEditsLaterBinding.test_second_generation_excludes_previously_migrated_unbound_proof"
  }
 ]

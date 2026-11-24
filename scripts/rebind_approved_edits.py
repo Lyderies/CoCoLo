@@ -30,22 +30,45 @@ def revision(root, name):
     return git(root, 'rev-parse', '--verify', name + '^{commit}').decode().strip()
 
 
+def is_ancestor(root, ancestor, descendant):
+    result = subprocess.run(['git', 'merge-base', '--is-ancestor', ancestor, descendant], cwd=root)
+    if result.returncode == 1:
+        return False
+    result.check_returncode()
+    return True
+
+
 def immutable(root, path):
     name = path.relative_to(root).as_posix()
     try:
-        commits = git(root, 'log', '--reverse', '--format=%H', 'HEAD', '--', name).decode().split()
+        commits = git(root, 'log', '--full-history', '--root', '-m', '--no-renames',
+                      '--diff-filter=A', '--reverse', '--topo-order', '--format=%H',
+                      'HEAD', '--', name).decode().split()
     except subprocess.CalledProcessError:
         commits = []
-    if not commits:
+    origins = []
+    for commit in dict.fromkeys(commits):
+        parents = git(root, 'rev-list', '--parents', '-n', '1', commit).decode().split()[1:]
+        # A merge may add the path relative to one parent while inheriting it
+        # from another. It is not an independent original introduction.
+        if any(git(root, 'ls-tree', '--full-tree', parent, '--', name).strip() for parent in parents):
+            continue
+        # A deletion followed by restoration retains the original authority.
+        if any(is_ancestor(root, origin, commit) for origin in origins):
+            continue
+        origins.append(commit)
+        if len(origins) > 1:
+            raise ValueError(name + ': conflicting independent introductions of immutable approved-edit document')
+    if not origins:
         raise ValueError(name + ': immutable approved-edit document changed or uncommitted')
     try:
-        introduced = git(root, 'show', commits[0] + ':' + name)
+        introduced = git(root, 'show', origins[0] + ':' + name)
         committed = git(root, 'show', 'HEAD:' + name)
     except subprocess.CalledProcessError as error:
         raise ValueError(name + ': immutable approved-edit document missing from introduction or HEAD') from error
     if introduced != committed or path.read_bytes() != committed:
         raise ValueError(name + ': immutable approved-edit document changed or uncommitted')
-    return fw.decode_json(path.read_text()), commits[0]
+    return fw.decode_json(path.read_text()), origins[0]
 
 
 def read_manifests(root, *, require_committed=True):
@@ -299,7 +322,8 @@ def listed_ids(root, at=None):
     return result
 
 
-def build(root, manifests, active=None, *, at=None, prior=(), admitted=None, prior_legacy=None):
+def build(root, manifests, active=None, *, at=None, prior=(), admitted=None,
+          prior_migrated=(), migrated=None):
     active = active_ids(root) if active is None else active
     before_sources, after_sources = sources(root, manifests, prior=prior)
     _, prior_sources = sources(root, prior)
@@ -310,12 +334,10 @@ def build(root, manifests, active=None, *, at=None, prior=(), admitted=None, pri
     suites = {'codex' if name.startswith('packages/codex-agents/') else
               'claude' if name.startswith('packages/claude-agents/') else 'root' for name in after_sources}
     seed = {name: row for name, row in seed.items() if name.split(':', 1)[0] in suites}
-    # Earlier introductions already placed normally migrated identities outside
-    # the binding. Their replayed sources may have changed without producing an
-    # admitted proof row, so the original baseline is no longer their old proof.
-    # Current-generation retirements still receive the full old-proof check.
-    if prior_legacy is not None:
-        seed = {name: row for name, row in seed.items() if name in prior_legacy}
+    # Only identities whose normal migration was actually verified in an
+    # earlier affected suite can leave the old-proof comparison. Mere absence
+    # from the lists says nothing about a previously untouched suite.
+    seed = {name: row for name, row in seed.items() if name not in (prior_migrated or ())}
     with tempfile.TemporaryDirectory(prefix='approved-edit-proof-') as folder:
         snapshot = Path(folder).resolve(); extract(root, SOURCE_REVISION, snapshot)
         shutil.copyfile(root / 'scripts/test_framework.py', snapshot / 'scripts/test_framework.py')
@@ -336,8 +358,12 @@ def build(root, manifests, active=None, *, at=None, prior=(), admitted=None, pri
         candidate_revision = at or 'HEAD'
         extract(root, candidate_revision, candidate_tree)
         candidate = inventory(root, candidate_tree, seed)
-    tests = changed_proofs(before, after, seed, retired=seed.keys() - listed_ids(root, candidate_revision),
-                           candidate=candidate)
+        retired = seed.keys() - listed_ids(root, candidate_revision)
+        tests = changed_proofs(before, after, seed, retired=retired, candidate=candidate)
+        normal = {name for name in retired if candidate[name].get('requirements')}
+        check_later_retirements(candidate_tree, normal, current=candidate)
+        if migrated is not None:
+            migrated.update(normal)
     tests = {name: row for name, row in tests.items() if name in active}
     return dict(schema=1, source_revision=SOURCE_REVISION,
                 algorithm_sha256=hashlib.sha256((root / 'scripts/test_framework.py').read_bytes()).hexdigest(),
@@ -365,7 +391,10 @@ def verify_introduction(root, manifests, data, introduction, *, prior=()):
             if result.returncode == 1:
                 raise ValueError('approved-edit introduction lacks manifest/edit ancestry')
             result.check_returncode()
-    _, expected = sources(root, manifests, prior=prior)
+    # The introduction admits the whole replayed state, including files that
+    # only earlier generations edited. build() still hashes this generation's
+    # own source paths in its immutable record.
+    _, expected = sources(root, [*prior, *manifests])
     try:
         introduced = {name: git(root, 'show', introduction + ':' + name) for name in expected}
         algorithm = git(root, 'show', introduction + ':scripts/test_framework.py')
@@ -375,7 +404,7 @@ def verify_introduction(root, manifests, data, introduction, *, prior=()):
         raise ValueError('approved-edit introduction source/algorithm differs from replay')
 
 
-def binding_state(root, manifests=None):
+def binding_state(root, manifests=None, *, check_current=True):
     """Fully verify immutable generations before comparing cumulative live bytes."""
     # Disposable runner fixtures have neither admission documents nor Git
     # metadata. Do not invoke Git there; an actual repository must still check
@@ -395,9 +424,14 @@ def binding_state(root, manifests=None):
     # in introduction order even when a later name sorts before an earlier one.
     order = {commit: index for index, commit in enumerate(
         git(root, 'rev-list', '--reverse', '--topo-order', 'HEAD').decode().split())}
-    documents = [(path, *immutable(root, path)) for path in paths]
-    admitted = {}; covered = set(); prior = []; prior_legacy = None
-    for path, data, introduction in sorted(documents, key=lambda row: (order[row[2]], row[0])):
+    documents = sorted([(path, *immutable(root, path)) for path in paths],
+                       key=lambda row: (order[row[2]], row[0]))
+    for previous, current in zip(documents, documents[1:]):
+        earlier, later = previous[2], current[2]
+        if earlier == later or not is_ancestor(root, earlier, later):
+            raise ValueError('approved-edit generations are not linear')
+    admitted = {}; covered = set(); prior = []; migrated = set()
+    for path, data, introduction in documents:
         selected = [m for m in manifests if m['decision'] in data['manifests']]
         if {m['decision'] for m in selected} != set(data['manifests']):
             raise ValueError('missing admitted manifest')
@@ -405,17 +439,20 @@ def binding_state(root, manifests=None):
             raise ValueError('duplicate approved-edit binding')
         authorize(root, selected, path.stem)
         verify_introduction(root, selected, data, introduction, prior=prior)
+        if check_current and len(documents) == 1:
+            # Preserve 475958a0's source-before-proof failure diagnostics for
+            # the original single-generation gate.
+            _, expected = sources(root, selected)
+            exact_current(expected, {name: (root / name).read_bytes() for name in expected})
         # Eligibility is frozen at introduction; later shrink-only retirement
         # filters application, never changes the immutable derivation.
         introduced_active = active_ids(root, introduction)
         rebuilt = build(root, selected, introduced_active, at=introduction, prior=prior,
-                        admitted=admitted, prior_legacy=prior_legacy)
+                        admitted=admitted, prior_migrated=migrated, migrated=migrated)
         if rebuilt != data:
             raise ValueError('immutable approved-edit binding does not match replayed proofs')
         covered.update(data['manifests']); admitted.update(data['tests']); prior.extend(selected)
-        introduced_legacy = listed_ids(root, introduction)
-        prior_legacy = introduced_legacy if prior_legacy is None else prior_legacy & introduced_legacy
-    return admitted, prior, prior_legacy
+    return admitted, prior, migrated
 
 
 def checked_bindings(root):
@@ -429,11 +466,11 @@ def checked_bindings(root):
     return {name: row for name, row in admitted.items() if name in active}
 
 
-def check_later_retirements(root, retired):
+def check_later_retirements(root, retired, *, current=None):
     """Filtering an old binding requires a current, normally migrated identity."""
     if not retired:
         return
-    current = inventory(root, root, retired)
+    current = inventory(root, root, retired) if current is None else current
     listed = listed_ids(root)
     for name in retired:
         if name not in current:
@@ -475,7 +512,9 @@ def main():
         if path.exists():
             raise ValueError('immutable binding already exists')
         manifests = read_manifests(root, require_committed=not args.prepare)
-        admitted, prior, prior_legacy = binding_state(root, manifests)
+        # Preparation compares the complete proposed cumulative state below;
+        # the sole old generation may legitimately precede these new edits.
+        admitted, prior, migrated = binding_state(root, manifests, check_current=False)
         covered = {m['decision'] for m in prior}
         manifests = [m for m in manifests if m['decision'] not in covered]
         if not manifests:
@@ -485,7 +524,7 @@ def main():
         exact_current(expected, {name: (root / name).read_bytes() for name in expected})
         active = active_ids(root)
         check_later_retirements(root, {name: row for name, row in admitted.items() if name not in active})
-        data = build(root, manifests, active, prior=prior, admitted=admitted, prior_legacy=prior_legacy)
+        data = build(root, manifests, active, prior=prior, admitted=admitted, prior_migrated=migrated)
         write_new(path, data)
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
         parser.exit(1, str(error) + '\n')

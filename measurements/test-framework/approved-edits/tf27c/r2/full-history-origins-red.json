@@ -1,0 +1,16 @@
+{
+ "base": "cd82ce18cb7075bce0e6d66bdac6a25977be258e",
+ "diagnostic": "ValueError not raised",
+ "log": "/private/tmp/pt46fzcvgp/1.log",
+ "outcome": "failed",
+ "policy_sha256": "3a5efec165982fce4a87757361bcb5c9c17f99642c9e817a21786ab054dc420b",
+ "preflight_cache": "/tmp/tf27c-r2-preflight/sitecustomize.py",
+ "preflight_cache_sha256": "330e6b2a736bc45b5675b9c881ecb3d167755199fe712fc1f4c699b1a6058425",
+ "run_record": "/tmp/tf27c-r2-red.json.run.json",
+ "runner_base": "b531844030fa619c1f62ddd6c092ebc2ea4fca38",
+ "runner_log": "/tmp/tf27c-r2-red.log",
+ "runner_returncode": 1,
+ "status": "red",
+ "test_source_sha256": "a63539d06b8a3daaeb1eb3d4cb9a4e3cae3b0cdb9ccb10fbd3500d9db72386b0",
+ "witness": "root:test_approved_edits.ApprovedEditsLaterBinding.test_full_history_refuses_merge_hidden_independent_document_addition"
+}
