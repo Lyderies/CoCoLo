@@ -4122,6 +4122,8 @@ def main() -> int:
     except BridgeRefused as exc:
         # Refusal messages are fixed strings; they never carry prompts or paths.
         report = {"ready": False, "error": "dispatch refused", "reason": str(exc)}
+        if args.command == "dispatch-preflight":
+            report["admission_created"] = False  # a preflight refusal admitted nothing (decision 167)
         if str(exc) == "launch denied: billing_attestation_missing":
             report["hint"] = BILLING_ATTESTATION_HINT
         _print(report)
@@ -4146,6 +4148,8 @@ def main() -> int:
         report = {"ready": False, "error": "input validation failed"}
         if exc.field is not None:
             report["field"] = exc.field
+        if args.command == "dispatch-preflight":
+            report["admission_created"] = False
         _print(report)
         return 2
     except (

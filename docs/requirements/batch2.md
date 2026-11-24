@@ -40,3 +40,12 @@ Status: see the bottom of this file.
   holds_report: 127 tests 46 s OK; root test_test_stages/e2e_requirements/e2e_strictness/e2e_run_control: 68 tests 4 s OK.
 - test_project_driver alone: 93 tests 225 s OK. test_reply_shape_live alone (now replays test_account_settlement_driver
   too): 5 tests 596 s OK (over the 5-min single-run guide; it is one module replaying 31 drivers).
+
+## 4. Decision 167: dispatch-preflight refusals say admission_created false (L6.2)
+- Requirement: every refusal reply of `cli.py dispatch-preflight` (BridgeRefused, e.g. "assignment read path is not
+  committed", and ContractError input refusals) carries `admission_created: false`. Product fix in cli.py main(); the
+  e2e check is unchanged.
+- Test: tests/test_dispatch_preflight.py test_cli_refusal_of_an_uncommitted_read_path_says_it_admitted_nothing
+  (red KeyError 'admission_created', then green).
+- Assertions changed: none. reply_shapes.py has no table for the preflight refusal (checked); no other test pins that reply.
+- runtime-releases.json: only the 0.8.57 entry refreshed (ffc6ac85... -> 3f66f3ae...); 0.8.55/0.8.56 untouched.

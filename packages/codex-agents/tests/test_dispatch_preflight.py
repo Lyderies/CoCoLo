@@ -351,6 +351,26 @@ class DispatchPreflightTests(unittest.TestCase):
                 mock.patch.object(cli, "_learning_ledger", side_effect=AssertionError("state opened")):
             self.assertEqual(2, cli.main())
 
+    def test_cli_refusal_of_an_uncommitted_read_path_says_it_admitted_nothing(self) -> None:
+        # batch2 decision 167 (L6.2): every dispatch-preflight refusal carries admission_created false.
+        for name, data in (("task", self.task), ("assignment", self.assigned), ("grant", self.grant)):
+            (self.base / f"{name}.json").write_text(json.dumps(data))
+        argv = ["cli.py", "dispatch-preflight", "--project-root", str(self.root),
+                "--task", str(self.base / "task.json"), "--assignment", str(self.base / "assignment.json"),
+                "--parent-grant", str(self.base / "grant.json")]
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(output), \
+                mock.patch.object(cli, "_learning_ledger", return_value=(object(), "project-fixture")), \
+                mock.patch.object(cli, "_close_ledger"), \
+                mock.patch.object(cli, "_store_free_route", return_value=None), \
+                mock.patch.object(cli, "_trusted_host_route", return_value=(self.route, {})), \
+                mock.patch.object(cli, "dispatch_preflight", side_effect=bridge.BridgeRefused("assignment read path is not committed")):
+            self.assertEqual(2, cli.main())
+        report = json.loads(output.getvalue())
+        self.assertIs(False, report["ready"])
+        self.assertIn("not committed", report["reason"])
+        self.assertIs(False, report["admission_created"])
+
     def test_cli_refuses_policy_override_before_state_or_inputs_are_opened(self) -> None:
         argv = ["cli.py", "dispatch-preflight", "--project-root", str(self.root),
                 "--task", "missing-task.json", "--assignment", "missing-assignment.json",
