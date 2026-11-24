@@ -102,7 +102,7 @@
    "id": "L4.2",
    "flow": "L4",
    "source": "PLAN-0.4.0.md T7",
-   "statement": "A route edited after learning-route is refused.",
+   "statement": "A route edited after learning-route never takes effect: an edited worker/verifier provider is replaced by the fresh installed route at open (RT-RX re-route at open, decision 133); any other edit is refused.",
    "checks": [
     "l4_2_claude_primary_edited_route_refused",
     "l4_2_codex_primary_edited_route_refused"
