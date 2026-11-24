@@ -492,6 +492,9 @@ def _apply_health(report, health):
     return True
 
 
+LAUNCH_RECORD_MISSING = 'recovery pending: run setup to record the install'
+
+
 def status_client(state_root, project_root):
     """Observe existing collector/account APIs once each; never start or open a DB."""
     report = {'ready': False, 'active': False, 'client_failures': {},
@@ -515,7 +518,9 @@ def status_client(state_root, project_root):
               'container_holds': None,
               # HM-0: the health monitor's last pass and the findings this project may see (its own and the
               # machine's); each reported one is also an owner alert (attention). None: not reported.
-              'health_monitor': None}
+              'health_monitor': None,
+              # RS-E E2a-11: a plain line when setup's launch record is missing (null when it exists).
+              'recovery': None}
     try:
         state = CollectorPaths(state_root)
         report['client_failures'] = client_health_snapshot(state, project_root)
@@ -541,6 +546,11 @@ def status_client(state_root, project_root):
             report['earlier_version_runs'] = moved['earlier_version_runs']
         except (CollectorError, OSError):
             pass  # Only this field stays unavailable.
+        try:
+            if not CollectorClient(state.socket, timeout=1).launch_recorded(Path(project_root)):
+                report['recovery'] = LAUNCH_RECORD_MISSING
+        except (CollectorError, OSError):
+            pass  # Unknown here: no line.
     except CollectorError as error:
         reason = ('status_collector_transport_unavailable' if isinstance(error, CollectorTransportError)
                   else 'status_collector_unavailable')

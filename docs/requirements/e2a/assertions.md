@@ -1,4 +1,6 @@
-# E2a: existing assertions that must change (NOT edited; primary decides)
+# E2a: existing assertion changes
+
+Approved: decision 170 (applied exactly as listed below, plus the DRIVERS entry).
 
 Adding `account.publish_wake` (task scope: a PROJECT_OPERATIONS op, in the B4m reply-shape table and RS-F S1's gate)
 grows `ACCOUNT_OPERATIONS` by one. Four existing assertions pin the old set or its size. They were left unedited and

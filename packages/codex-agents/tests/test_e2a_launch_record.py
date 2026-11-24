@@ -4,6 +4,8 @@ Real ledgers, a real installed package and its protected copy, and the real coll
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -268,6 +270,59 @@ class PinningTests(CopyBase):
         with pin_runtime_copy(copy):
             with pin_runtime_copy(copy):  # shared: two launchers may hold it
                 pass
+
+
+class SetupRecordTests(CopyBase):
+    """Decision 171: setup's registration step records the launch target for every project, Codex or not."""
+
+    def setUp(self):
+        super().setUp()
+        self.fixture = store_tests.LearningStoreTests(methodName='runTest')
+        with mock.patch.object(store_tests, 'TEMP_ROOT', SHORT_TMP):
+            self.fixture.setUp()
+        self.addCleanup(self.fixture.tearDown)
+        self.ledger = self.fixture.ledger
+        self.server = CollectorServer(self.ledger, client_capabilities=self.fixture.clients)
+        self.server.start()
+        self.addCleanup(self.server.stop)
+
+    def register(self):
+        import cli
+        stdout = io.StringIO()
+        environment = {**{k: v for k, v in os.environ.items() if k != 'CODEX_HOME'}, **self.environ,
+                       'XDG_STATE_HOME': str(self.home / '.local' / 'state')}
+        with mock.patch.object(sys, 'argv', ['cli.py', 'learning-register', '--state-root',
+                                             str(self.fixture.state_root), '--project-root', str(self.project)]), \
+                mock.patch.dict(os.environ, environment, clear=True), contextlib.redirect_stdout(stdout):
+            code = cli.main()
+        self.assertEqual(0, code, stdout.getvalue())
+        return json.loads(stdout.getvalue())
+
+    @requirements('E2a-10', why_not_scenario='The real CLI registration step against the real collector socket, in process so the account home can be a test folder.')
+    def test_E2a_10_registration_records_the_launch_target_without_the_codex_rule(self):
+        report = self.register()
+        copy = expected_copy(self.codex_home, self.project)
+        self.assertEqual('recorded', report['launch_record'])
+        with self.ledger._lock:
+            self.assertEqual((str(copy), copy.name), self.ledger.launch_record(report['project_id']))
+        self.assertTrue((copy.parent / '.pins' / (copy.name + '.registered')).is_file())
+        self.assertFalse((self.codex_home / 'rules').exists())  # no Codex rule was written
+        self.assertEqual('recorded', self.register()['launch_record'])  # an update run records it again
+
+    @requirements('E2a-11', why_not_scenario='learning-status over the real collector socket; no project service is needed.')
+    def test_E2a_11_status_says_run_setup_when_no_launch_record_exists(self):
+        from codex_agents.client_runtime import status_client
+        project = self.register()['project_id']
+        recorded = status_client(self.fixture.state_root, self.project)
+        self.assertIsNone(recorded['recovery'])
+        # A project registered without setup's record (as a restored one is) is told to run setup.
+        missing = status_client(self.fixture.state_root, self.fixture.project_a)
+        self.assertEqual('recovery pending: run setup to record the install', missing['recovery'])
+        with self.ledger._lock:
+            self.ledger._connection.execute("UPDATE projects SET launch_copy=NULL,launch_digest=NULL WHERE project_id=?",
+                                            (project,))
+        self.assertEqual('recovery pending: run setup to record the install',
+                         status_client(self.fixture.state_root, self.project)['recovery'])
 
 
 if __name__ == '__main__':

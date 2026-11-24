@@ -298,6 +298,14 @@ class CollectorClient:
             raise CollectorError("collector response is invalid", code="response_invalid")
         return project_id
 
+    def launch_recorded(self, project_root: Path) -> bool:
+        """RS-E E2a-11: whether setup's launch record exists for this registered root."""
+        response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "launch_status",
+                                  "project_root": str(project_root.resolve())})
+        if type(response.get("recorded")) is not bool:
+            raise CollectorError("collector response is invalid", code="response_invalid")
+        return response["recorded"]
+
     def record_launch(self, project_root: Path, launch_copy: str, launch_digest: str) -> None:
         """RS-E E2a-3: record setup's validated launch target for this registered root (the owner's step)."""
         response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "record_launch",

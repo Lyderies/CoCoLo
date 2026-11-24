@@ -13483,6 +13483,10 @@ class CollectorServer:
                     from .collector_paths import CollectorPaths
                     issue_wake_capability(CollectorPaths(self.state.root), Path(request["project_root"]))
                 return {"ok": True, "project_id": project_id}
+            if request.get("op") == "launch_status" and set(request) == {"protocol", "op", "project_root"}:
+                # RS-E E2a-11: whether setup's launch record exists for this registered root (read only).
+                project_id = self.ledger.project_for_root(Path(request["project_root"]))
+                return {"ok": True, "recorded": self.ledger.launch_record(project_id) is not None}
             if request.get("op") == "record_launch" and set(request) == {
                 "protocol", "op", "project_root", "launch_copy", "launch_digest",
             }:

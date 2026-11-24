@@ -32,3 +32,12 @@ tests/test_e2a_wake_wire.py (14). Registered in scripts/test-{layers,stages,requ
 - Launch record is written only by install-codex-rule (the wizard's optional Codex rule step) through a running
   collector; Claude-only setups get no launch record (E2c would show `install changed`). Decide whether setup's
   registration/start step also installs the protected copy.
+
+## Round 2 (primary decisions 170, 171)
+- 170 applied: 4 assertions (assertions.md, "Approved: decision 170") + test_reply_shape_live DRIVERS entry (not run here).
+- 171: E2a-10 (learning-register installs the protected copy and records the launch target for every project;
+  host_commands.record_setup_launch, cli) and E2a-11 (learning-status `recovery` line via the new read-only collector
+  op `launch_status`; client_runtime). Red: SetupRecordTests 2 errors (KeyError launch_record / recovery), 0.5 s.
+  Green: test_e2a_launch_record + rsf_s1_ingress + admission_inputs + signature_job_intake + signature_inputs 105 OK
+  10 s; test_cli_status_client_boundary 12 OK 9 s; test_e2a_wake_wire 14 OK 18 s; test_host_commands 54 OK 60 s;
+  test_learning_cli 30 OK 63 s.

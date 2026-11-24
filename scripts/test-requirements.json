@@ -463,6 +463,20 @@
   "source": "docs/requirements/e2a.md#E2a-1",
   "statement": "**E2a-1 \u2014 Additive ledger schema.** (D:21, D:35, D:40, D:127) Opening the collector ledger adds, without changing\n`PRAGMA user_version` (16), the nullable columns `launch_copy` and `launch_digest` to `projects` and the table\n`project_wake` (one row per project: allocated epoch, published generation epoch + seq, state\n`pending|exact|clean_stop` or null when only reconciled, next due, a body digest, the collector's `due_at_ms`, a\nrefused count, the update time) with an index on `due_at_ms` for due rows. Reopening is idempotent. The launch columns are\nmachine-local: a project backup snapshot keeps its exact earlier format (the six original project columns) and a\nrestored row has no launch record. Tests: tests.test_e2a_launch_record.LedgerSchemaTests.test_E2a_1_additive_columns_and_wake_table_keep_the_schema_version,\ntests.test_e2a_launch_record.LedgerSchemaTests.test_E2a_1_backup_keeps_its_format_and_restore_has_no_launch_record."
  },
+ "E2a-10": {
+  "checks": [
+   "codex:tests.test_e2a_launch_record.SetupRecordTests.test_E2a_10_registration_records_the_launch_target_without_the_codex_rule"
+  ],
+  "source": "docs/requirements/e2a.md#E2a-10",
+  "statement": "**E2a-10 \u2014 Setup records the launch target for every project.** (primary decision 171) The setup and update\nregistration step (`learning-register`, which Codex and Claude-only setups alike run) installs the project's protected\nruntime copy, validates it as the launch target (E2a-3) and records it through the running collector, then marks it\nregistered (E2a-4); no Codex rule is written. It reports `launch_record: recorded` or `not_recorded`; a failure never\nfails the registration. `install-codex-rule` keeps recording too. Test:\ntests.test_e2a_launch_record.SetupRecordTests.test_E2a_10_registration_records_the_launch_target_without_the_codex_rule."
+ },
+ "E2a-11": {
+  "checks": [
+   "codex:tests.test_e2a_launch_record.SetupRecordTests.test_E2a_11_status_says_run_setup_when_no_launch_record_exists"
+  ],
+  "source": "docs/requirements/e2a.md#E2a-11",
+  "statement": "**E2a-11 \u2014 Status for a project with no launch record.** (primary decision 171) `learning-status` shows `recovery:\n\"recovery pending: run setup to record the install\"` for a registered project whose collector row has no launch record\n(never recorded, or restored from a backup, which excludes the machine-local launch columns), and null when the record\nexists. Test: tests.test_e2a_launch_record.SetupRecordTests.test_E2a_11_status_says_run_setup_when_no_launch_record_exists."
+ },
  "E2a-2": {
   "checks": [
    "codex:tests.test_e2a_launch_record.LedgerSchemaTests.test_E2a_2_registration_names_its_columns_and_writes_no_launch_record"

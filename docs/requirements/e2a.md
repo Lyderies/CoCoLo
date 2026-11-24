@@ -91,3 +91,15 @@ published due. The served check runs off the ledger lock; at most 64 projects pe
 between the check and the mark is not overwritten. Nothing is started or spawned. Tests:
 tests.test_e2a_wake_wire.WakeReconcileTests.test_E2a_9_unknown_projects_are_marked_due_at_collector_start_and_clean_stops_are_not,
 tests.test_e2a_wake_wire.WakeReconcileTests.test_E2a_9_a_newer_publication_is_not_overwritten_and_serving_projects_are_skipped.
+
+**E2a-10 — Setup records the launch target for every project.** (primary decision 171) The setup and update
+registration step (`learning-register`, which Codex and Claude-only setups alike run) installs the project's protected
+runtime copy, validates it as the launch target (E2a-3) and records it through the running collector, then marks it
+registered (E2a-4); no Codex rule is written. It reports `launch_record: recorded` or `not_recorded`; a failure never
+fails the registration. `install-codex-rule` keeps recording too. Test:
+tests.test_e2a_launch_record.SetupRecordTests.test_E2a_10_registration_records_the_launch_target_without_the_codex_rule.
+
+**E2a-11 — Status for a project with no launch record.** (primary decision 171) `learning-status` shows `recovery:
+"recovery pending: run setup to record the install"` for a registered project whose collector row has no launch record
+(never recorded, or restored from a backup, which excludes the machine-local launch columns), and null when the record
+exists. Test: tests.test_e2a_launch_record.SetupRecordTests.test_E2a_11_status_says_run_setup_when_no_launch_record_exists.

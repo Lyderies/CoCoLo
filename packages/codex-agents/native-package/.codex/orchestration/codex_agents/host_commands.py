@@ -1213,6 +1213,30 @@ def launch_target_problem(
     return runtime_copy_problem(copy, root)
 
 
+def _record_target(copy, project_root, record_launch, environ) -> str:
+    """RS-E E2a-3: the collector's launch record names this copy only once it is a valid launch target; then the
+    copy is marked registered (E2a-4), so no later prune removes it. A failure keeps the earlier record and mark."""
+    try:
+        if launch_target_problem(copy, project_root, environ) is None:
+            record_launch(copy, copy.name)
+            mark_registered_copy(copy)
+            return "recorded"
+    except Exception:
+        pass
+    return "not_recorded"
+
+
+def record_setup_launch(project_root: Path, record_launch, environ: Mapping[str, str] | None = None,
+                        clone_root: Path | None = None) -> str:
+    """RS-E E2a-10 (decision 171): setup's registration step, for every project (Codex rule or not): install the
+    protected runtime copy and record it as the launch target. `recorded` or `not_recorded`; never raises."""
+    try:
+        copy, _outcome = install_runtime_copy(project_root, environ, clone_root)
+    except Exception:
+        return "not_recorded"
+    return _record_target(copy, project_root, record_launch, environ)
+
+
 def prune_runtime_copies(
     project_root: Path, keep: Path, environ: Mapping[str, str] | None = None
 ) -> list[str]:
@@ -1266,19 +1290,7 @@ def install_rule(
 
     copy, copy_outcome = install_runtime_copy(project_root, environ, clone_root)
     outcome = write_rule(project_root, environ, interpreter, replace=replace)
-    launch = None
-    if record_launch is not None:
-        # RS-E E2a-3: the collector's launch record names this copy only once it is a valid launch target; then the
-        # copy is marked registered (E2a-4), so no later prune removes it. A failure keeps the earlier record and mark.
-        launch = "not_recorded"
-        try:
-            problem = launch_target_problem(copy, project_root, environ)
-            if problem is None:
-                record_launch(copy, copy.name)
-                mark_registered_copy(copy)
-                launch = "recorded"
-        except Exception:
-            launch = "not_recorded"
+    launch = None if record_launch is None else _record_target(copy, project_root, record_launch, environ)
     if outcome != "differs":
         try:
             prune_runtime_copies(project_root, copy, environ)

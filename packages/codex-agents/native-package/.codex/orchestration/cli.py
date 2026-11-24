@@ -182,6 +182,7 @@ from codex_agents.host_commands import (  # noqa: E402
     bound_project_root,
     configured_codex_home,
     install_rule as install_codex_rule,
+    record_setup_launch,
     installer_root,
     project_cli,
     remove_rule as remove_codex_rule,
@@ -2728,6 +2729,9 @@ def main() -> int:
                 return 2
             if type(report) is int:
                 return report
+            # RS-E E2a-10 (decision 171): every setup and update records this project's launch target.
+            report["launch_record"] = record_setup_launch(args.project_root, _launch_recorder(args),
+                                                          clone_root=installer_root(ORCHESTRATION_ROOT))
         elif args.command == "learning-serve":
             # The collector and the account services run from their own entry,
             # so this client imports none of the account persistence owners.
