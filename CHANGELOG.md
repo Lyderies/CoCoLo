@@ -4,6 +4,12 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.53: routes around a used-up provider (RT-ROUTE-EXHAUSTED, decision 124). Routing and admission share
+  one availability classifier; a provider at 90% or exhausted is skipped for workers and verifiers, in policy order;
+  a "rejected" reading with no reset time lasts five hours and a newer good reading clears it; a verifier on the
+  same provider as its worker is never independent; the verifier is chosen again when it opens; one re-route at
+  open; when no provider has allowance the route says so with the next reset time. Test framework reset (decisions
+  125/126): no fingerprint/approval machinery, affected tests by coverage, full run about 8 minutes.
 - Package 0.8.52: D4 recovers a stored result after a crash: a publication interrupted between
   its prepare and commit is replayed from the kept packet or settled lost, and only a held reservation may
   publish.
