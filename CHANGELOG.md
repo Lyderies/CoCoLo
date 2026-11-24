@@ -4,6 +4,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.60: release batch.
+  - RS-E E2a: a setup-bound launch record, copy pinning, and authenticated wake publishing and reconcile.
+  - RS-E E2c: the collector starts a stopped project service that has due holds, with budgets and backoff,
+    and parks after a 1-hour failure streak (owner decision 143); an owner-only status line shows it.
+
 - Package 0.8.59: release batch.
   - RS-B B6: an orchestration left idle closes unattended, on store schema 21.
   - RS-F S7: settlement replies replay across the store migration and attempt pruning, with bounded evidence.
