@@ -3353,11 +3353,11 @@ def main() -> int:
                 trusted_now_ms = time.time_ns() // 1_000_000
                 if args.now_ms is not None and args.now_ms > trusted_now_ms:
                     raise ContractError("retention time cannot be in the future")
-                expired = ledger.expire_report(
+                expired = ledger.expire(
                     project_id,
                     now_ms=args.now_ms if args.now_ms is not None else trusted_now_ms,
                 )
-                report = {"ready": True, "expired_records": expired["removed"], "more": expired["more"]}
+                report = {"ready": True, "expired_records": expired, "more": False}
             finally:
                 _close_ledger(ledger)
         elif args.command == "learning-migrate-project":

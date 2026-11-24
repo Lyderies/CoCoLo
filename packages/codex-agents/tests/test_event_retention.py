@@ -241,10 +241,10 @@ class EventRetentionTests(unittest.TestCase):
 
     def test_a_reused_event_id_never_shares_a_summary_with_its_predecessor_and_a_taken_id_is_refused(self):
         start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
-        for round_ in range(2):
-            self.append(event("same", "tool_started", observed_at_ms=start + round_ * DAY * 20),
-                        now_ms=start + round_ * DAY * 20)
-            self.ledger.expire(self.project, now_ms=start + round_ * DAY * 20 + 8 * DAY)
+        for round_ in range(2):  # The same id, run and UTC day both times.
+            self.append(event("same", "tool_started", observed_at_ms=start + round_ * 1000),
+                        now_ms=start + round_ * 1000)
+            self.ledger.expire(self.project, now_ms=start + round_ * 1000 + 8 * DAY)
         self.assertEqual([1, 1], [summary["event_count"] for summary in self._summaries()])
         record = self._summaries()[0]
         with self.assertRaisesRegex(LedgerError, "already taken"):
@@ -264,6 +264,55 @@ class EventRetentionTests(unittest.TestCase):
                 pass
         self.assertEqual(set(), self._raw_ids())
         self.assertEqual(5, sum(s["event_count"] for s in self._summaries()))
+
+    def _seed(self, count, start):
+        rows = []
+        for number in range(count):
+            record = validate_learning_record(event(f"m{number}", "tool_started", observed_at_ms=start + number))
+            rows.append((self.project, record["record_id"], "event", "hook", number + 1000, start + number,
+                         start + number, start + 1, json.dumps(record).encode(), "d%063d" % number, 0))
+        with self.connection:
+            self.connection.executemany(
+                "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,"
+                "ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,?)", rows)
+
+    def test_one_expire_call_drains_a_backlog_of_1501_events(self):
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        self._seed(1501, start)
+        self.assertEqual(1501, self.ledger.expire(self.project, now_ms=start + 8 * DAY))
+        self.assertEqual(set(), self._raw_ids())
+        self.assertEqual(1501, sum(s["event_count"] for s in self._summaries()))
+
+    def test_one_collector_sweep_pass_leaves_no_expired_events(self):
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        self._seed(1501, start)
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=start + 8 * DAY):
+            learning_store.CollectorServer(self.ledger)._sweep_cycle()
+        self.assertEqual(set(), self._raw_ids())
+        self.assertEqual(1501, sum(s["event_count"] for s in self._summaries()))
+
+    def test_the_work_of_one_expire_hold_does_not_grow_with_the_backlog(self):
+        start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        steps = []
+        for count in (1200, 4000):
+            self.connection.execute("DELETE FROM records WHERE project_id=?", (self.project,)).close()
+            self._seed(count, start)
+            calls = [0]
+
+            def tick():
+                calls[0] += 1
+                return 0
+            self.connection.set_progress_handler(tick, 100)
+            try:
+                # The reads that choose what one hold removes, up to the exclusive lock.
+                with mock.patch.object(self.ledger, "_begin_exclusive_maintenance",
+                                       side_effect=LedgerError("stop")), \
+                        self.assertRaisesRegex(LedgerError, "stop"):
+                    self.ledger.expire_report(self.project, now_ms=start + 8 * DAY)
+            finally:
+                self.connection.set_progress_handler(None, 0)
+            steps.append(calls[0])
+        self.assertLess(steps[1], steps[0] * 1.25, steps)
 
     def test_a_summary_is_only_written_with_the_removal_it_describes(self):
         now = 1_000_000_000_000

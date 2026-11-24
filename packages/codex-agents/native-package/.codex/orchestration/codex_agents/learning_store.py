@@ -2531,10 +2531,12 @@ class LearningLedger:
                 "AND a.subject_record_id=r.record_id) "
                 "AND NOT EXISTS (SELECT 1 FROM consumed_grants g WHERE g.project_id=r.project_id "
                 "AND (g.grant_id=r.record_id OR g.promotion_record_id=r.record_id)) "
-                "AND (r.project_id>? OR (r.project_id=? AND r.source_sequence>?)) "
-                "AND (? IS NULL OR r.project_id=?) "
-                "ORDER BY r.project_id,r.source_sequence LIMIT ?",
-                (now, after[0], after[0], after[1], project_id, project_id, batch),
+                + ("AND (r.project_id>? OR (r.project_id=? AND r.source_sequence>?)) "
+                   "ORDER BY r.project_id,r.source_sequence LIMIT ?" if project_id is None else
+                   # One project: walk its own (project, sequence) index, so work follows the page.
+                   "AND r.project_id=? AND r.source_sequence>? ORDER BY r.source_sequence LIMIT ?"),
+                ((now, after[0], after[0], after[1], batch) if project_id is None
+                 else (now, project_id, after[1], batch)),
             ).fetchall()
 
     @staticmethod
@@ -2578,14 +2580,19 @@ class LearningLedger:
             raise LedgerError("event summary identifier is already taken")
         self._append_checked_locked(project_id, summary, producer="lifecycle", timestamp=now)
 
-    def _expire_event_targets(self, project_id: str, now_ms: int):
-        """The next at most EXPIRE_SUMMARY_BATCH expired raw events learning-expire summarises (those the
-        sweep would take), the last sequence among them, and whether more wait. Read before any file
-        registration is removed, so an event a file names (erased with that file) is never taken."""
-        rows = self._expired_event_window(now_ms, (project_id, 0), EXPIRE_SUMMARY_BATCH + 1, project_id)
-        more = len(rows) > EXPIRE_SUMMARY_BATCH
-        rows = rows[:EXPIRE_SUMMARY_BATCH]
-        return rows, (int(rows[-1]["source_sequence"]) if rows else 0), more
+    def _expire_event_targets(self, project_id: str, now_ms: int, last_sequence: int):
+        """The expired raw events learning-expire summarises among its chosen page (those the sweep would
+        take, up to `last_sequence`, so at most the page's size). Read before any file registration is
+        removed, so an event a file names (erased with that file) is never taken."""
+        rows, after = [], (project_id, 0)
+        while True:
+            window = self._expired_event_window(now_ms, after, EXPIRE_SUMMARY_BATCH, project_id)
+            if not window:
+                return rows
+            after = (project_id, int(window[-1]["source_sequence"]))
+            rows.extend(row for row in window if int(row["source_sequence"]) <= last_sequence)
+            if after[1] > last_sequence:
+                return rows
 
     def _summarise_expiring_events(self, project_id: str, rows, identifiers: set[str], now_ms: int) -> None:
         """learning-expire (T7 L10.3): roll the chosen expired raw events into event summaries, through the
@@ -12376,7 +12383,14 @@ class LearningLedger:
         return snapshot
 
     def expire(self, project_id: str, *, now_ms: int) -> int:
-        return self.expire_report(project_id, now_ms=now_ms)["removed"]
+        """Apply retention and lineage deletion until nothing due is left: bounded batches, each its own
+        lock hold and transaction (the lock is released between them); returns how many records went."""
+        removed = 0
+        while True:
+            report = self.expire_report(project_id, now_ms=now_ms)
+            removed += report["removed"]
+            if not report["more"] or not report["removed"]:
+                return removed
 
     def expire_report(self, project_id: str, *, now_ms: int) -> dict[str, Any]:
         """Apply retention and lineage deletion; {'removed': count, 'more': True} when a bounded batch of
@@ -12410,21 +12424,29 @@ class LearningLedger:
                     if linked not in protected:
                         protected.add(linked)
                         protected_frontier.append(linked)
-            rows = self._connection.execute(
-                "SELECT record_id FROM records WHERE project_id=? AND expires_at_ms IS NOT NULL "
-                "AND expires_at_ms<=?",
-                (project_id, now_ms),
-            ).fetchall()
-            identifiers = {str(row[0]) for row in rows} - protected
-            event_rows, last_sequence, more = self._expire_event_targets(project_id, now_ms)
-            if more:
-                after = (project_id, last_sequence)
-                while True:  # Later eligible events wait for a next call, with their summary.
-                    window = self._expired_event_window(now_ms, after, EVENT_SWEEP_BATCH, project_id)
-                    if not window:
+            # One bounded page of due records (EXPIRE_SUMMARY_BATCH, in sequence order), never all of them.
+            identifiers: set[str] = set()
+            last_sequence, after, more = 0, 0, False
+            while len(identifiers) < EXPIRE_SUMMARY_BATCH:
+                page = self._connection.execute(
+                    "SELECT record_id,source_sequence FROM records WHERE project_id=? "
+                    "AND expires_at_ms IS NOT NULL AND expires_at_ms<=? AND source_sequence>? "
+                    "ORDER BY source_sequence LIMIT ?",
+                    (project_id, now_ms, after, EXPIRE_SUMMARY_BATCH)).fetchall()
+                if not page:
+                    break
+                for row in page:
+                    after = int(row[1])
+                    if str(row[0]) not in protected:
+                        identifiers.add(str(row[0]))
+                        last_sequence = after
+                    if len(identifiers) == EXPIRE_SUMMARY_BATCH:
+                        more = self._connection.execute(
+                            "SELECT 1 FROM records WHERE project_id=? AND expires_at_ms IS NOT NULL "
+                            "AND expires_at_ms<=? AND source_sequence>? LIMIT 1",
+                            (project_id, now_ms, after)).fetchone() is not None
                         break
-                    after = (project_id, int(window[-1]["source_sequence"]))
-                    identifiers.difference_update(str(row["record_id"]) for row in window)
+            event_rows = self._expire_event_targets(project_id, now_ms, last_sequence)
             frontier = list(identifiers)
             adjacency: dict[str, set[str]] = {}
             for row in links:
@@ -12967,8 +12989,12 @@ class CollectorServer:
             # at a time; finished account rows past their retention go too (0.3.4 R6).
             # O0b RS-A-4: due account holds are released here, with no client action, in batches of 64. Until
             # M4b E1b's owner thread exists this runs where the other account sweeps run, under the ledger lock.
+            def drain_event_retention():
+                # Continue in this pass while a full batch went (more may be due), unless stopping.
+                while not self._sweeps_stop.is_set() and self.ledger.sweep_event_retention() >= EVENT_SWEEP_BATCH:
+                    pass
             sweeps = [(self.ledger.sweep_worker_results, (LedgerError, OSError, sqlite3.Error)),
-                      (self.ledger.sweep_event_retention, loose),
+                      (drain_event_retention, loose),
                       (self.ledger.sweep_learning_retention, loose),  # O0c P8: cases and candidates past the window
                       (self.ledger.sweep_superseded_attestations, loose),  # O0c P9: only the latest attestation stays
                       (self.ledger.sweep_account_retention, loose),
