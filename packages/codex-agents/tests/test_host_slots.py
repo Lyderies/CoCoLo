@@ -172,6 +172,19 @@ class HostSlotLifecycleTests(HostSlotHarness):
                                               'executions': 0, 'monitor': 0}, seconds=30)
 
 
+class HostWarmUpStatusTests(HostSlotHarness):
+    """LRS-7: learning-status shows whether the project service finished its start-up checks."""
+
+    def test_LRS_7_a_service_that_finished_its_start_up_checks_says_ready(self):
+        def warm():
+            service = self.cli('learning-status').get('project_service') or {}
+            return service.get('warm_up', {}).get('state') == 'ready'
+        self.wait_for(warm, seconds=30)
+        service = self.cli('learning-status')['project_service']
+        self.assertEqual({'state', 'since_ms', 'failed_phase', 'last_failure_code'}, set(service['warm_up']))
+        self.assertEqual((None, None), (service['warm_up']['failed_phase'], service['warm_up']['last_failure_code']))
+
+
 class HostReplacementTests(HostSlotHarness):
     """A hold nothing here can free keeps its slot; the host is replaced once idle."""
     IDLE_SECONDS = 4

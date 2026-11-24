@@ -881,6 +881,42 @@ class LifecycleBoundaryTests(DriverHarness):
         self.assertEqual(preview['capabilities']['sandbox'], 'read-only')
 
 
+class WarmUpGateTests(unittest.TestCase):
+    """LRS-6, LRS-7: a final answer never changes; the start-up checks are visible. No service is started."""
+
+    def driver(self, *, listed, swept, lost=None, fenced=None, failures=None, now=5.0):
+        driver = object.__new__(project_driver.RunDriver)
+        driver._earlier_listed, driver._swept = listed, swept
+        driver._lost, driver._fenced, driver._earlier_fences = lost or {}, fenced or {}, {}
+        driver._clock, driver._warm_started, driver._warm_failures = (lambda: now), 2.0, failures or {}
+        return driver
+
+    def test_LRS_6_each_start_up_condition_alone_keeps_run_settling_before_any_known_entry(self):
+        for listed, swept in ((False, True), (True, False), (False, False)):
+            for known in ({'lost': {'h': ('codex', 'released')}}, {'fenced': {'h': 'codex'}}, {}):
+                with self.subTest(listed=listed, swept=swept, known=sorted(known)):
+                    reply = self.driver(listed=listed, swept=swept, **known)._unheld_reply('h', 'codex')
+                    self.assertEqual({'state': 'failed', 'reason_code': 'run_settling'}, reply)
+
+    def test_LRS_6_after_both_conditions_the_known_answers_are_unchanged(self):
+        both = dict(listed=True, swept=True)
+        self.assertEqual('run_lost', self.driver(**both, lost={'h': ('codex', 'released')})._unheld_reply('h', 'codex')['reason_code'])
+        self.assertEqual('run_lost_held', self.driver(**both, lost={'h': ('codex', 'held')})._unheld_reply('h', 'codex')['reason_code'])
+        self.assertEqual('run_closed', self.driver(**both, fenced={'h': 'codex'})._unheld_reply('h', 'codex')['reason_code'])
+        self.assertEqual('history_not_authorized', self.driver(**both, fenced={'h': 'claude'})._unheld_reply('h', 'codex')['reason_code'])
+        self.assertEqual({'state': 'refused', 'reason_code': 'history_orchestration_unavailable'},
+                         self.driver(**both)._unheld_reply('h', 'codex'))
+
+    def test_LRS_7_the_warm_up_report_names_state_phase_and_fixed_code(self):
+        self.assertEqual(('warming', 3000, None, None), self.driver(listed=False, swept=False).warm_up())
+        self.assertEqual(('ready', 3000, None, None), self.driver(listed=True, swept=True).warm_up())
+        self.assertEqual(('failing', 3000, 'sweep', 'sweep_failed'),
+                         self.driver(listed=True, swept=False, failures={'sweep': 'sweep_failed'}).warm_up())
+        self.assertEqual(('failing', 3000, 'listing', 'history_service_unavailable'),
+                         self.driver(listed=False, swept=False, failures={'sweep': 'sweep_failed',
+                                                                          'listing': 'history_service_unavailable'}).warm_up())
+
+
 class HostRestartTests(DriverHarness):
     """The project host stops mid-run and starts again: nothing is claimed that is not known."""
 
@@ -897,6 +933,9 @@ class HostRestartTests(DriverHarness):
         self.restart_host()
         process.communicate(timeout=60)
         # The new host does not know the old run: it is lost (abandoned, outcome unknown), never an outcome.
+        # LRS-3 (setup only): while the new host warms up it answers run_settling; wait, bounded, for it to know.
+        self.wait_for(lambda: self.cli('learning-run-status', *target, expected=2)['reason_code'] != 'run_settling',
+                      seconds=30)
         after = self.cli('learning-run-status', *target, expected=2)
         self.assertFalse(after['ready'])
         self.assertNotIn('health', after)
@@ -935,6 +974,81 @@ class HostRestartTests(DriverHarness):
         self.assertEqual(2, len(claims))
         self.assertEqual((1, 'lost'), claims[0])
         self.assertEqual(2, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
+
+    def test_LRS_2_a_fresh_host_still_warming_up_says_run_settling_never_the_generic_refusal(self):
+        """LRS-1/LRS-2: before the new host's first sweep is collected, an earlier host's run is not 'not found'."""
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'orphan'}, {'sleep': 30},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        process = self.separate_dispatch(context, route_path, run_handle)
+        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
+        target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
+        host = [t for t in self.threads if t.name.startswith('test-project-host-')][0]
+        self._host_stop.set()
+        host.join(20)
+        self.assertFalse(host.is_alive())
+        self.threads.remove(host)
+        process.communicate(timeout=60)
+        # The new host's first sweep is held: it has not been collected, so nothing is known about earlier runs.
+        original, gate, entered = project_driver.RunDriver._settle_lost, threading.Event(), threading.Event()
+
+        def held(driver, own):
+            if not own:
+                entered.set()
+                gate.wait(60)
+            return original(driver, own)
+        try:
+            with mock.patch.object(project_driver.RunDriver, '_settle_lost', held):
+                self.start_project_host(self.project)
+                self.wait_for(entered.is_set, seconds=30)
+                during = self.cli('learning-run-status', *target, expected=2)
+                self.assertEqual(('run_settling', False), (during['reason_code'], during['ready']))
+                self.assertNotIn('terminal_state', during)
+                self.assertNotIn('outcome', during)
+                self.assertIn('again', during['error'])
+                gate.set()
+                self.wait_for(lambda: self.cli('learning-run-status', *target, expected=2)['reason_code']
+                              != 'run_settling', seconds=30)
+        finally:
+            gate.set()
+        after = self.cli('learning-run-status', *target, expected=2)
+        self.assertEqual(('run_lost', 'abandoned', 'unknown'),
+                         (after['reason_code'], after['terminal_state'], after['outcome']))
+
+    def test_LRS_7_a_failing_first_sweep_is_shown_in_status_with_its_phase_and_fixed_code(self):
+        host = [t for t in self.threads if t.name.startswith('test-project-host-')][0]
+        self._host_stop.set()
+        host.join(20)
+        self.assertFalse(host.is_alive())
+        self.threads.remove(host)
+        with mock.patch.object(project_driver.RunDriver, '_settle_lost', side_effect=RuntimeError('/secret/path boom')):
+            self.start_project_host(self.project)
+            self.wait_for(lambda: ((self.cli('learning-status').get('project_service') or {}).get('warm_up') or {})
+                          .get('state') == 'failing', seconds=30)
+            service = self.cli('learning-status')['project_service']
+        self.assertEqual(('failing', 'sweep', 'sweep_failed'), tuple(service['warm_up'][k] for k in (
+            'state', 'failed_phase', 'last_failure_code')))
+        self.assertIn('last check failed (sweep_failed)', service['summary'])
+        self.assertNotIn('secret', json.dumps(service))
+
+    def test_LRS_5_a_failed_first_sweep_keeps_the_host_warming_up(self):
+        """Decision 228: only a collected sweep result ends the warm-up."""
+        from concurrent.futures import Future
+        driver = object.__new__(project_driver.RunDriver)
+        driver._clock, driver._next_sweep, driver._lost, driver._swept = (lambda: 0.0), 1e9, {}, False
+        driver._warm_failures = {}  # LRS-7 state the sweep step now also keeps (setup only)
+        failed = Future()
+        failed.set_exception(RuntimeError('sweep failed'))
+        driver._sweep = failed
+        driver._sweep_lost()
+        self.assertFalse(driver._swept)
+        done = Future()
+        done.set_result({'h': ('host', 'released')})
+        driver._sweep = done
+        driver._sweep_lost()
+        self.assertTrue(driver._swept)
+        self.assertEqual({'h': ('host', 'released')}, driver._lost)
 
     def restart_host(self):
         """Stop the running project host and start a fresh one for the same project."""

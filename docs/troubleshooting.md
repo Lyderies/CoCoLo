@@ -285,7 +285,9 @@ Usually six children are already running on this machine, or on the same provide
 release's limit (a project may run three of them; a fourth from one project is `preparation_full`). Wait for one to finish (or ask the primary to stop one), then ask
 again. A place held by a run whose project service stopped or crashed is freed by that project's next
 service, which starts with the project's next command, as soon as nothing of the run is still running;
-`learning-run-status` then reports that run as `run_lost` (abandoned, outcome unknown). Only when the
+`learning-run-status` then reports that run as `run_lost` (abandoned, outcome unknown); in the first moments of
+the new service it may answer `run_settling` (`ready: false`, no outcome yet): ask again shortly. If it keeps saying so for minutes, `learning-status` shows `project_service.warm_up`: `failing` names the check
+(`listing` or `sweep`) and a fixed failure code; the service retries by itself, and stopping it so the next command starts a fresh one is safe. Only when the
 service cannot tell (its records of the run are missing or damaged) is the place freed one hour after
 that run's deadline. After an upgrade from 0.2.x, runs that version left can hold slots for a day; see
 `earlier_version_runs` under `learning_migration` stays `pending`, below.

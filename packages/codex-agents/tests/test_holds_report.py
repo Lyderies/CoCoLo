@@ -315,6 +315,7 @@ class HoldsUpdateTests(unittest.TestCase):
         from codex_agents.service_host import ProjectServiceHost
         from codex_agents.hosts import OWNER_CLIENT
         host = ProjectServiceHost.__new__(ProjectServiceHost)
+        host._driver = None  # __init__ sets it (service_host.py); LRS-7 reads it in _authorize_history
         enrolled = SimpleNamespace(role='host', host_client=OWNER_CLIENT)
         host._frontend = SimpleNamespace(context=lambda token: SimpleNamespace(kind='project', enrolled=enrolled))
         authorized = host._authorize_history(command(), object())
@@ -340,6 +341,7 @@ class OrchestrationCountsTests(unittest.TestCase):
         from codex_agents.hosts import CODEX_HOST_CLIENT, CLAUDE_HOST_CLIENT, OWNER_CLIENT
         for client, allowed in ((OWNER_CLIENT, True), (CODEX_HOST_CLIENT, True), (CLAUDE_HOST_CLIENT, True)):  # decision 185
             host = ProjectServiceHost.__new__(ProjectServiceHost)
+            host._driver = None  # __init__ sets it (service_host.py); LRS-7 reads it in _authorize_history
             enrolled = SimpleNamespace(role='host', host_client=client)
             host._frontend = SimpleNamespace(context=lambda token: SimpleNamespace(kind='project', enrolled=enrolled))
             authorized = host._authorize_history(self.counts_request(), object())

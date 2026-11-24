@@ -549,7 +549,9 @@ class ProjectServiceHost:
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
                                         frozenset({request.operation}),
                                         run_slots=self.stuck_run_slots()
-                                        if request.operation == 'history.capacity_report' else None)
+                                        if request.operation == 'history.capacity_report' else None,
+                                        warm_up=None if self._driver is None or request.operation != 'history.capacity_report'
+                                        else self._driver.warm_up())
         if request.operation == 'history.learning_feedback':
             # The authority is the owner's signature over this record, checked by the
             # account owner that holds the owner key; this process never reads that key.

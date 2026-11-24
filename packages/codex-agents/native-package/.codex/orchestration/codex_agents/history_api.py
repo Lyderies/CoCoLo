@@ -72,6 +72,15 @@ class HistoryRequest:
         encode_history_request(self)
 
 
+def _warm_up_shape(value):
+    """LRS-7: the project service's start-up report: fixed words and one fixed failure code, nothing else."""
+    return (type(value) is dict and set(value) == {'state', 'since_ms', 'failed_phase', 'last_failure_code'}
+            and value['state'] in {'warming', 'ready', 'failing'} and valid_integer(value['since_ms'], maximum=1 << 40)
+            and value['failed_phase'] in {None, 'listing', 'sweep'}
+            and (value['last_failure_code'] is None
+                 or (type(value['last_failure_code']) is str and re.fullmatch(r'[a-z0-9_]{1,64}', value['last_failure_code']) is not None)))
+
+
 def _closed(value: object, fields: set[str]) -> bool:
     return type(value) is dict and value.keys() == fields
 
@@ -354,9 +363,10 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
                        or not valid_integer(value['live'], maximum=1 << 32)
                        or (value['limit'] is not None and not valid_integer(value['limit'], minimum=1, maximum=1 << 32))
                        for name, value in result.items() if name != 'run_slots')
-                or ('run_slots' in result and (type(slots) is not dict or set(slots) != {'stuck', 'limit'}
+                or ('run_slots' in result and (type(slots) is not dict or set(slots) - {'warm_up'} != {'stuck', 'limit'}
                                                or not valid_integer(slots['stuck'], maximum=64)
-                                               or not valid_integer(slots['limit'], minimum=1, maximum=64)))):
+                                               or not valid_integer(slots['limit'], minimum=1, maximum=64)
+                                               or ('warm_up' in slots and not _warm_up_shape(slots['warm_up']))))):
             raise HistoryError('history_invalid_response')
     elif operation == 'history.orchestration_report':
         if (type(result) is not dict or result.get('orchestration_id') != request.payload['orchestration_id']

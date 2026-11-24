@@ -100,14 +100,20 @@ class LostRunHarness(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled({**result(), 'assignment_id': name})))
         return self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
 
+    def run_status(self, orchestration, run_handle):
+        """Run-status once the new host is past run_settling (LRS-4, setup only; bounded 30 s)."""
+        replies = []
+        self.wait_for(lambda: replies.append(self.cli('learning-run-status', '--orchestration-handle', orchestration,
+                                                      '--run-handle', run_handle, expected=2))
+                      or replies[-1].get('reason_code') != 'run_settling', seconds=30)
+        return replies[-1]
+
     def lost_capacity(self, orchestration, run_handle):
         """The capacity state run-status reports for this lost run ('held' until the sweep settles it)."""
-        return self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle,
-                        expected=2)['capacity_state']
+        return self.run_status(orchestration, run_handle)['capacity_state']
 
     def assert_lost_status(self, orchestration, run_handle, capacity_state):
-        status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle,
-                          expected=2)
+        status = self.run_status(orchestration, run_handle)
         self.assertEqual((False, 'run_lost', 'abandoned', 'unknown', capacity_state),
                          (status['ready'], status['reason_code'], status['terminal_state'], status['outcome'],
                           status['capacity_state']))
