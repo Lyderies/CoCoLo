@@ -68,7 +68,9 @@ def learn_scene(**changes):
                      "expired_records": 0}, ""),
             window=(1000, 2000), store_files=["history.sqlite3"], store_identity=1, ledger_project_ids=["prj_x"],
             store_project_ids=["prj_x"], ledger_before={"records": 9, "projects": 1, "stored_files": 1},
-            ledger_after={"records": 9, "projects": 1, "stored_files": 1}),
+            ledger_after={"records": 9, "projects": 1, "stored_files": 1},
+            store_identity_ids=["prj_x"], checkout_ids=["prj_x"], cases_before=[], cases_after=[], candidates_before=[],
+            candidates_after=[], store_integrity_after="ok", store_identity_ids_after=["prj_x"]),
         retention=SimpleNamespace(
             now=(0, {"ready": True, "expired_records": 0}, ""), past=(0, {"ready": True, "expired_records": 0}, ""),
             future=refused, events_before=5, events_after_now=5, events_after_past=5, events_after_future=5,
@@ -78,7 +80,7 @@ def learn_scene(**changes):
             create=(0, {"ready": True, "verified": True, "project_id": "prj_x", "path": "/b/e2eb1.sqlite3",
                         "backup_sha256": "a" * 64, "manifest_sha256": "b" * 64,
                         "counts": {"records": 20}, "isolated_restore_integrity": "ok"}, ""),
-            file_sha="a" * 64, file_exists=True, file_integrity="ok", file_records=20, ledger_records=20,
+            file_sha="a" * 64, file_manifest_sha="b" * 64, from_registry=True, file_exists=True, file_integrity="ok", file_records=20, ledger_records=20,
             stored=[{"file_id": "e2eb1", "kind": "backup", "content_digest": "a" * 64, "expires_at_ms": 9_999_999_999_999}],
             verify=(0, {"ready": True, "verified": True, "backup_sha256": "a" * 64, "manifest_sha256": "b" * 64,
                         "counts": {"records": 20}, "isolated_restore_integrity": "ok"}, ""),
@@ -387,7 +389,7 @@ class BackupTests(SceneTest):
 
     def test_a_reply_missing_a_field_or_not_verified_fails(self):
         create = learn_scene().backup.create
-        for field in ("verified", "backup_sha256", "counts", "path", "isolated_restore_integrity"):
+        for field in ("verified", "backup_sha256", "counts", "manifest_sha256", "isolated_restore_integrity"):
             reply = {k: v for k, v in create[1].items() if k != field}
             with self.subTest(field=field):
                 self.assertFalse(self.judged(create=(0, reply, "")))
@@ -433,6 +435,8 @@ def guard_scene(**changes):
             "home": refusal("This Codex session can write to your home folder; open Codex on the project folder instead"),
             "above_home": refusal("This Codex session can write to a folder that holds your home folder; open Codex on "
                                   "the project folder instead"),
+            "project_parent": refusal("This Codex session was opened on a folder that contains this project, where it "
+                                      "could change the project's Codex settings and hooks"),
         },
         ledger_before={"projects": 2, "records": 30}, ledger_after={"projects": 2, "records": 30},
         other={"project": refusal("--project-root is refused: an installed CLI serves only its own project"),
@@ -469,14 +473,14 @@ class GuardTests(SceneTest):
                                      cases={"control": (0, None, "")}))
 
     def test_an_unsafe_session_that_is_admitted_fails(self):
-        for name in ("danger", "unknown_sandbox", "no_thread", "no_record", "home", "above_home"):
+        for name in ("danger", "unknown_sandbox", "no_thread", "no_record", "home", "above_home", "project_parent"):
             with self.subTest(name=name):
                 self.assertFalse(self.judged(lg.l13_1_session_guard_refuses_each_unsafe_session_with_its_reason,
                                              cases={name: (0, {"ready": True}, "")}))
 
     def test_a_refusal_for_another_reason_fails(self):
         other = (2, {"ready": False, "error": "a protected runtime copy runs only the primary-host commands"}, "")
-        for name in ("danger", "unknown_sandbox", "no_thread", "no_record", "home", "above_home"):
+        for name in ("danger", "unknown_sandbox", "no_thread", "no_record", "home", "above_home", "project_parent"):
             with self.subTest(name=name):
                 self.assertFalse(self.judged(lg.l13_1_session_guard_refuses_each_unsafe_session_with_its_reason,
                                              cases={name: other}))
@@ -559,15 +563,16 @@ class FaultTests(SceneTest):
         ids = lg.S3_IDS
         normal = {"requirements": {**{i: {"passed": i != "L10.3"} for i in ids}, "G1": {"passed": True}, "G3": {"passed": True}}}
         fault = {"requirements": {**{i: {"passed": False} for i in ids}, "G1": {"passed": True}, "G3": {"passed": True}}}
-        self.assertTrue(lg.fault_isolated(normal, fault)["isolated"])
+        everything = set(normal["requirements"])
+        self.assertTrue(lg.fault_isolated(normal, fault, expected_ids=everything)["isolated"])
         outside = {"requirements": {**fault["requirements"], "G3": {"passed": False}}}
-        self.assertFalse(lg.fault_isolated(normal, outside)["isolated"])
+        self.assertFalse(lg.fault_isolated(normal, outside, expected_ids=everything)["isolated"])
         g1 = {"requirements": {**fault["requirements"], "G1": {"passed": False}}}
-        self.assertFalse(lg.fault_isolated(normal, g1)["isolated"])
+        self.assertFalse(lg.fault_isolated(normal, g1, expected_ids=everything)["isolated"])
         one_green = {"requirements": {**fault["requirements"], "L13.2": {"passed": True}}}
-        self.assertFalse(lg.fault_isolated(normal, one_green)["isolated"])
+        self.assertFalse(lg.fault_isolated(normal, one_green, expected_ids=everything)["isolated"])
         missing = {"requirements": {i: v for i, v in fault["requirements"].items() if i != "L11.1"}}
-        self.assertFalse(lg.fault_isolated(normal, missing)["isolated"])
+        self.assertFalse(lg.fault_isolated(normal, missing, expected_ids=everything)["isolated"])
         self.assertEqual({"L10.1", "L10.2", "L10.3", "L11.1", "L13.1", "L13.2"}, set(lg.S3_IDS))
 
     def test_no_scene_rewrites_a_clock_or_a_billing_constant(self):
@@ -679,3 +684,195 @@ class SectionTests(SceneTest):
             lg.section("short")
         self.assertEqual(["hooks", "short"], order)
         self.assertEqual({"hooks", "migrate", "retention", "backup", "short"}, set(lg.SECTION_FIELDS))
+
+
+class FixRoundCycleTests(CycleTests):
+    """S3 fix round, L10.2: the store's identity and the cycle's results are read from what is persisted."""
+
+    def test_the_stores_own_identity_rows_must_be_the_checkouts_project(self):
+        self.assertFalse(self.judged(store_identity_ids=[]))
+        self.assertFalse(self.judged(store_identity_ids=["prj_other"]))
+        self.assertFalse(self.judged(store_identity_ids=["prj_x", "prj_y"]))
+        self.assertFalse(self.judged(checkout_ids=["prj_other"]))
+        self.assertFalse(self.judged(checkout_ids=[]))
+        self.assertFalse(self.judged(store_identity_ids=None))
+
+    def test_the_cycle_s_mined_cases_must_be_what_the_stores_persisted(self):
+        run = learn_scene().migrate.run
+        self.assertFalse(self.judged(cases_after=["c1"]))  # persisted but never reported
+        self.assertFalse(self.judged(run=(0, {**run[1], "mined_case_ids": ["c1"]}, "")))  # reported but never persisted
+        self.assertTrue(self.judged(run=(0, {**run[1], "mined_case_ids": ["c1"]}, ""), cases_after=["c1"]))
+        self.assertFalse(self.judged(cases_after=None))
+        self.assertFalse(self.judged(cases_before=None))
+
+    def test_the_cycle_s_proposals_must_be_what_the_stores_persisted(self):
+        run = learn_scene().migrate.run
+        self.assertFalse(self.judged(candidates_after=["k1"]))
+        self.assertFalse(self.judged(run=(0, {**run[1], "proposed_candidate_digests": ["d1"]}, "")))
+        self.assertTrue(self.judged(run=(0, {**run[1], "proposed_candidate_digests": ["d1"]}, ""), candidates_after=["k1"]))
+        self.assertFalse(self.judged(candidates_after=None))
+
+    def test_the_store_must_be_sound_and_keep_its_identity_after_the_cycle(self):
+        self.assertFalse(self.judged(store_integrity_after="malformed"))
+        self.assertFalse(self.judged(store_integrity_after=None))
+        self.assertFalse(self.judged(store_identity_ids_after=[]))
+        self.assertFalse(self.judged(store_identity_ids_after=["prj_other"]))
+
+
+class FixRoundBackupTests(BackupTests):
+    """S3 fix round, L11.1: the file comes from the registry, the manifest digest from the stored manifest."""
+
+    def test_the_file_must_be_the_registered_one(self):
+        self.assertFalse(self.judged(from_registry=False))
+
+    def test_the_manifest_digest_must_be_present_and_the_stored_manifests(self):
+        create = learn_scene().backup.create
+        verify = learn_scene().backup.verify
+        self.assertFalse(self.judged(file_manifest_sha=None))
+        self.assertFalse(self.judged(create=(0, {**create[1], "manifest_sha256": None}, ""),
+                                     verify=(0, {**verify[1], "manifest_sha256": None}, "")))
+        self.assertFalse(self.judged(create=(0, {k: v for k, v in create[1].items() if k != "manifest_sha256"}, ""),
+                                     verify=(0, {k: v for k, v in verify[1].items() if k != "manifest_sha256"}, "")))
+        self.assertFalse(self.judged(create=(0, {**create[1], "manifest_sha256": "c" * 64}, ""),
+                                     verify=(0, {**verify[1], "manifest_sha256": "c" * 64}, "")))  # both replies agree, file does not
+        self.assertFalse(self.judged(verify=(0, {**verify[1], "manifest_sha256": "c" * 64}, "")))
+
+    def test_the_reply_need_not_name_a_path(self):
+        create = learn_scene().backup.create
+        self.assertTrue(self.judged(create=(0, {k: v for k, v in create[1].items() if k != "path"}, "")))
+
+
+class FixRoundReadTests(unittest.TestCase):
+    def world(self, folder):
+        home = Path(folder) / "h"
+        (lg.state_root(SimpleNamespace(home=home))).mkdir(parents=True)
+        return SimpleNamespace(home=home)
+
+    def test_the_privacy_scan_fails_a_file_it_cannot_read(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            world = self.world(folder)
+            good = lg.state_root(world) / "good.bin"
+            good.write_bytes(b"nothing here")
+            self.assertEqual([], lg.state_files_holding(world, ("SECRET",)))
+            hidden = lg.state_root(world) / "hidden.bin"
+            hidden.write_bytes(b"SECRET")
+            hidden.chmod(0)
+            try:
+                self.assertEqual(["unreadable:hidden.bin"], lg.state_files_holding(world, ("SECRET",)))
+            finally:
+                hidden.chmod(0o600)
+
+    def test_the_privacy_scan_streams_and_still_finds_a_token_across_a_chunk_boundary(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            world = self.world(folder)
+            (lg.state_root(world) / "x.bin").write_bytes(b"aaaaaaSEC" + b"RETbbbbbb")
+            with mock.patch.object(lg, "READ_CHUNK", 8):
+                self.assertEqual(["x.bin"], lg.state_files_holding(world, ("SECRET",)))
+            (lg.state_root(world) / "x.bin").write_bytes(b"a" * 100)
+            with mock.patch.object(lg, "READ_CHUNK", 8):
+                self.assertEqual([], lg.state_files_holding(world, ("SECRET",)))
+
+    def test_the_file_hash_streams_and_an_unreadable_file_has_no_hash(self):
+        import hashlib
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "f"
+            data = bytes(range(256)) * 100
+            path.write_bytes(data)
+            with mock.patch.object(lg, "READ_CHUNK", 1000):
+                self.assertEqual(hashlib.sha256(data).hexdigest(), lg.sha256_file(path))
+            path.chmod(0)
+            try:
+                self.assertIsNone(lg.sha256_file(path))
+            finally:
+                path.chmod(0o600)
+            self.assertIsNone(lg.sha256_file(Path(folder) / "missing"))
+
+    def test_the_manifest_digest_is_the_digest_of_the_stored_manifest(self):
+        import hashlib
+        import sqlite3
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "b.sqlite3"
+            connection = sqlite3.connect(path)
+            connection.execute("create table cocolo_backup_manifest(manifest blob)")
+            connection.execute("insert into cocolo_backup_manifest values (?)", (b'{"x":1}',))
+            connection.commit()
+            connection.close()
+            self.assertEqual(hashlib.sha256(b'{"x":1}').hexdigest(), lg.backup_manifest_sha256(path))
+            self.assertIsNone(lg.backup_manifest_sha256(Path(folder) / "missing"))
+
+
+class FixRoundCliTimeoutTests(unittest.TestCase):
+    def test_world_cli_itself_captures_a_timeout_with_its_partial_output(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            script = Path(folder) / "cli.py"
+            script.write_text("import sys, time\nprint('partial output', flush=True)\ntime.sleep(5)\n")
+            captured = []
+            world = SimpleNamespace(shim=sys.executable, installed_cli=script, env=dict(os.environ), project=Path(folder),
+                                    base=Path(folder), outputs=[], steps=[],
+                                    _capture=lambda text, **kw: captured.append((text, kw)))
+            code, reply, text = e2e_support.World.cli(world, "provider-observe", timeout=0.5)
+            self.assertEqual((-1, None), (code, reply))
+            self.assertIn("partial output", text)
+            self.assertTrue(captured and captured[0][1]["timed_out"] and captured[0][1]["code"] == -1)
+            self.assertTrue(world.steps[0]["timed_out"] and world.steps[0]["step"] == "provider-observe")
+            self.assertNotIn(folder, text)
+
+
+class FixRoundFaultTests(SceneTest):
+    def test_an_id_missing_from_both_reports_is_not_isolation(self):
+        registry = json.loads((ROOT / "tests" / "e2e" / "requirements.json").read_text())["requirements"]
+        every = {item["id"] for item in registry}
+        both = {i: {"passed": True} for i in every}
+        fault = {i: {"passed": i not in lg.S3_IDS} for i in every}
+        self.assertTrue(lg.fault_isolated({"requirements": both}, {"requirements": fault})["isolated"])
+        gone = "G2"
+        self.assertIn(gone, every)
+        for side in ("normal", "fault"):
+            with self.subTest(side=side):
+                n = {i: v for i, v in both.items() if i != gone}
+                f = {i: v for i, v in fault.items() if i != gone}
+                self.assertFalse(lg.fault_isolated({"requirements": n}, {"requirements": f})["isolated"])
+        self.assertFalse(lg.fault_isolated({"requirements": {}}, {"requirements": {}})["isolated"])
+        # a partial run judges the IDs of the flows it ran (and the every-flow ones), not the whole registry
+        part = {i["id"] for i in registry if (i["flow"] in ("L10", "L11", "L13") or (i["flow"] == "all" and i["checks"]))}
+        n = {"flows": ["L10", "L11", "L13"], "requirements": {i: {"passed": True} for i in part}}
+        f = {"flows": ["L10", "L11", "L13"], "requirements": {i: {"passed": i not in lg.S3_IDS} for i in part}}
+        self.assertTrue(lg.fault_isolated(n, f)["isolated"])
+
+    def test_the_two_guard_protection_faults_turn_only_l13_1_red(self):
+        for name in ("guard_disabled_profile_refusal_removed", "guard_project_parent_refusal_removed"):
+            with self.subTest(fault=name):
+                self.assertIn(name, lg.FAULTS)
+                self.assertEqual(("L13.1",), lg.FAULT_TARGETS[name])
+                ids = ["L13.1", "L13.2", "G1"]
+                normal = {"requirements": {i: {"passed": True} for i in ids}}
+                red = {"requirements": {**normal["requirements"], "L13.1": {"passed": False}}}
+                self.assertTrue(lg.fault_isolated(normal, red, name, expected_ids=ids)["isolated"])
+
+
+class FixRoundSessionTests(unittest.TestCase):
+    def test_a_disabled_profile_session_is_written_as_codex_writes_it(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder) / "h"
+            (home / ".codex").mkdir(parents=True)
+            world = SimpleNamespace(home=home, SESSION_ROLLOUT=e2e_support.World.SESSION_ROLLOUT)
+            thread = "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5c"
+            path = e2e_support.World.codex_session(world, Path("/w/project"), thread=thread,
+                                                   sandbox="danger-full-access", disabled_profile=True)
+            context = json.loads(path.read_text().splitlines()[-1])["payload"]
+            self.assertEqual("danger-full-access", context["sandbox_policy"]["type"])
+            self.assertEqual({"type": "disabled"}, context["permission_profile"])
+            self.assertNotIn("file_system_sandbox_policy", context)
+
+    def test_the_guard_scene_uses_the_disabled_profile_and_a_checkout_nested_under_a_parent_that_excludes_home(self):
+        source = (ROOT / "scripts" / "e2e_checks_learning_guard.py").read_text()
+        self.assertIn("disabled_profile=True", source)
+        self.assertNotIn("entries=[]", source)
+        self.assertIn('"project_parent"', source)
+        self.assertIn('"nest"', source)

@@ -237,7 +237,7 @@
    "id": "L10.1",
    "flow": "L10",
    "source": "PLAN-0.4.0.md T7",
-   "statement": "Hook events are ingested with recording on and not with it off (S2).",
+   "statement": "Hook events are recorded for a registered project's checkout and not for an unregistered project or from outside the checkout (the owner dropped the recording switch, PLAN-0.4.0.md decision at line 1363).",
    "checks": [
     "l10_1_hook_events_are_ingested_for_the_registered_checkout",
     "l10_1_events_outside_the_checkout_or_for_an_unregistered_project_are_not_recorded"

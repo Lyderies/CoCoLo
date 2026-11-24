@@ -59,3 +59,20 @@ Scene `retain` (group retain, about 35 s): World with `retention_patch` (raw-eve
 (events expired, removed by learning-expire) and FAILS the last: `learning-expire` keeps NO event summary (summaries come only from the
 collector's background sweep, `sweep_event_retention`); L10.3 stays red = product finding. Fault run (fault2.json): isolated true.
 Tests 133 green (RawRetentionTests, BootHookTests red first). Decision 192: the G8 check stays strict until fix/backup-path merges.
+
+## Fix round (Codex review NOT-READY, 2026-11-25; harness and checks only, no product code)
+Red first: /tmp/claude-501/t7s3/red-first-fixround.txt (15 failures, 6 errors). Every changed assertion: assertions.md "S3 fix round".
+- L10.2: store identity read from the stores' own identity rows and matched to the ledger's project for THIS checkout (canonical_root);
+  the cycle's mined cases and proposed candidates are compared with what newly persisted in the ledger/store; store sound after.
+  Limit: a fresh project has no outcomes, so the cycle persists nothing (0 = 0); real moved history needs S4.
+- L13.1: danger session written as Codex writes it (`permission_profile` disabled, no filesystem entries); new `project_parent` case with a
+  third project under base/nest (parent excludes HOME). Faults `guard_disabled_profile_refusal_removed` and
+  `guard_project_parent_refusal_removed` (run with `--flows L13 --fault NAME`) each turn L13.1 red alone (L13.2 green).
+- L11.1: file found by the registry's relative_path under the state root; `path` no longer required in the reply (decision 192);
+  manifest_sha256 must be present and equal the digest of the manifest stored in the backup file.
+- G8: World.cli itself captures a timeout (partial output, exit -1, no traceback). Privacy scan and backup hash stream; unreadable
+  file fails the scan (`unreadable:NAME`). `fault_isolated` requires every registry ID of the run's flows in both reports.
+- L10.1 statement reworded (tests/e2e/requirements.json, scripts/test-requirements.json) to the registration scope (decision 198).
+Results (`--flows L10,L11,L13 --jobs 2`, 4m47): L10.1, L10.2, L13.1, L13.2 green; L10.3 red (raw summary product finding) and L11.1 red
+only through G8 (backup reply path leak; all its own expectations pass) until fix/backup-path merges; L11.2 no check (S5).
+Fault learning_guard_broken: L10.1, L10.2, L13.1, L13.2 newly red, isolated true. Tests 163 green (learning_guard 100, requirements, strictness, run_control).

@@ -439,10 +439,20 @@ class World:
         program = program or self.installed_cli
         if Path(os.path.realpath(program)) != Path(os.path.realpath(self.installed_cli)):
             raise HarnessError("a check ran a CLI that is not the project's installed one (decision 128d)")
-        done = subprocess.run([str(self.shim), "-I", "-B", "-S", str(program), *args,
-                               "--project-root", str(self.project)],
-                              capture_output=True, text=True, env={**self.env, **(environment or {})},
-                              stdin=subprocess.DEVNULL, timeout=timeout, cwd=str(cwd or self.base))
+        try:
+            done = subprocess.run([str(self.shim), "-I", "-B", "-S", str(program), *args,
+                                   "--project-root", str(self.project)],
+                                  capture_output=True, text=True, env={**self.env, **(environment or {})},
+                                  stdin=subprocess.DEVNULL, timeout=timeout, cwd=str(cwd or self.base))
+        except subprocess.TimeoutExpired as expired:
+            # Any caller (a check or the shared setup): the partial output is captured for G1 and G8 like any step and
+            # the command answers exit -1; no exception, so no traceback carries the arguments or the paths.
+            text = "".join(part.decode("utf-8", "replace") if isinstance(part, bytes) else (part or "")
+                           for part in (expired.stdout, expired.stderr))
+            self.outputs.append(text)
+            self.steps.append({"step": args[0], "code": -1, "refuses": refuses, "timed_out": True})
+            self._capture(text, kind="output", code=-1, refuses=refuses, timed_out=True)
+            return -1, None, text
         text = done.stdout + done.stderr
         self.outputs.append(text)
         self.steps.append({"step": args[0], "code": done.returncode, "refuses": refuses, "timed_out": False})
@@ -664,7 +674,8 @@ class World:
                                   stdin=json.dumps(event), cwd=cwd, timeout=timeout)
 
     def codex_session(self, workspace: Path, *, thread: str, sandbox: str = "workspace-write",
-                      entries: list[dict] | None = None, roots: list[str] | None = None) -> Path:
+                      entries: list[dict] | None = None, roots: list[str] | None = None,
+                      disabled_profile: bool = False) -> Path:
         """Write the record a Codex 0.164 session leaves under the account's ~/.codex/sessions (what the session
         guard reads): the session's workspace, its sandbox policy and the folders it can write."""
         def entry(path: Path, access: str = "write", **extra) -> dict:
@@ -673,7 +684,9 @@ class World:
         def special(kind: str, access: str = "write") -> dict:
             return {"path": {"type": "special", "value": {"kind": kind}}, "access": access}
 
-        if entries is None:
+        if disabled_profile:
+            entries = None  # Codex omits the filesystem entries when its sandbox is disabled, and writes the profile instead
+        elif entries is None:
             entries = [special("root", "read"), entry(workspace), special("slash_tmp"), special("tmpdir"),
                        *(entry(workspace / name, "read", missing_path_behavior="skip")
                          for name in (".git", ".agents", ".codex"))]
@@ -689,7 +702,8 @@ class World:
             record("session_meta", {"id": thread, "cwd": str(workspace),
                                     "runtime_workspace_roots": roots if roots is not None else [str(workspace)]})
             + record("turn_context", {"cwd": str(workspace), "sandbox_policy": {"type": sandbox},
-                                      "file_system_sandbox_policy": {"entries": entries}}))
+                                      **({"permission_profile": {"type": "disabled"}} if disabled_profile
+                                         else {"file_system_sandbox_policy": {"entries": entries}})}))
         path.chmod(0o600)
         return path
 

@@ -59,8 +59,20 @@ FAULTS = {
          "old": "class OwnRootRefused(HostCommandError):\n",
          "new": "class OwnRootRefused(HostCommandError):\n    def __init__(self, *args):\n        super().__init__(\"a refusal\")\n"},
     ]}
-FAULT_TARGETS = {"learning_guard_broken": S3_IDS}
-FAULT_ALSO_RED: dict[str, tuple] = {"learning_guard_broken": ()}
+FAULTS["guard_disabled_profile_refusal_removed"] = [
+    # L13.1 only: the guard's own early refusal of a session that runs without its sandbox (Codex then omits the
+    # filesystem entries) is removed; the later check on the sandbox kind remains, which an entries-less record never reaches.
+    {"module": "codex_agents.session_guard",
+     "old": "    if refuse_unsandboxed and sandbox_type in UNSANDBOXED_TYPES:\n",
+     "new": "    if False and refuse_unsandboxed and sandbox_type in UNSANDBOXED_TYPES:\n"}]
+FAULTS["guard_project_parent_refusal_removed"] = [
+    # L13.1 only: a session opened on a folder that holds the project (and not the home folder) is no longer refused.
+    {"module": "codex_agents.session_guard",
+     "old": "            key = _project_problem(written, project)\n",
+     "new": "            key = None\n"}]
+FAULT_TARGETS = {"learning_guard_broken": S3_IDS, "guard_disabled_profile_refusal_removed": ("L13.1",),
+                 "guard_project_parent_refusal_removed": ("L13.1",)}
+FAULT_ALSO_RED: dict[str, tuple] = {name: () for name in FAULT_TARGETS}
 
 
 RETAIN_WINDOW_MS = 8000
@@ -78,7 +90,13 @@ def fault_patches() -> list:
     return FAULTS[FAULT] if FAULT else []
 
 
-def fault_isolated(normal: dict, fault: dict, name: str = "learning_guard_broken") -> dict:
+def registry_ids(flows=None) -> set:
+    """Every requirement ID of the registry that a run of `flows` judges (every-flow requirements that have a check; all of the registry when None)."""
+    items = json.loads((ROOT / "tests" / "e2e" / "requirements.json").read_text())["requirements"]
+    return {item["id"] for item in items if flows is None or item["flow"] in flows or (item["flow"] == "all" and item["checks"])}
+
+
+def fault_isolated(normal: dict, fault: dict, name: str = "learning_guard_broken", expected_ids=None) -> dict:
     """Compare a normal report with a fault report over EVERY requirement ID: the fault run must hold the same IDs,
     leave every S3 ID red and change no other ID (a newly red ID outside the declared targets is not isolation)."""
     before, after = normal.get("requirements") or {}, fault.get("requirements") or {}
@@ -86,7 +104,9 @@ def fault_isolated(normal: dict, fault: dict, name: str = "learning_guard_broken
     allowed = set(FAULT_TARGETS[name]) | set(FAULT_ALSO_RED.get(name, ()))
     outside = [i for i in changed if i not in allowed]
     not_red = sorted(i for i in FAULT_TARGETS[name] if (after.get(i) or {}).get("passed") is not False)
-    missing = sorted(set(before) ^ set(after)) + sorted(i for i in S3_IDS if i not in after)
+    wanted = set(registry_ids(normal.get("flows") or None) if expected_ids is None else expected_ids)
+    # an ID missing from either report (also one missing from both) is not isolation: every registered ID must be judged
+    missing = sorted(set(before) ^ set(after)) + sorted(i for i in wanted if i not in before or i not in after)
     return {"isolated": not outside and not not_red and not missing, "changed": changed,
             "changed_outside_targets": outside, "targets_not_red": not_red, "ids_differ": missing}
 
@@ -103,6 +123,7 @@ EXPECTED_REFUSALS = {
     "guard_no_session_record": "a Codex session with no record: `no record of this session was found`",
     "guard_opened_on_home": "a session opened on the home folder: `can write to your home folder`",
     "guard_opened_above_home": "a session opened above the home folder: `holds your home folder`",
+    "guard_opened_above_project": "a session opened on a parent that holds the project but not the home folder: `contains this project`",
     "copy_other_project": "the copy of project A asked about project B: `--project-root is refused`",
     "copy_other_state": "the copy asked to use another state root: `--state-root is refused`",
     "copy_of_b_asked_about_a": "the copy of project B asked about project A: `--project-root is refused`",
@@ -188,6 +209,63 @@ def store_files(world, project_id: str) -> list[str]:
     return sorted(path.name for path in folder.iterdir()) if folder.is_dir() else []
 
 
+def store_identity_ids(world, project_id: str) -> list[str] | None:
+    """The project ids the project store's own identity rows hold (None: the store cannot be read)."""
+    path = state_root(world) / "projects" / project_id / "history.sqlite3"
+    if not path.is_file():
+        return None
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            return sorted(row[0] for row in connection.execute("select project_id from history_identity"))
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return None
+
+
+def store_integrity(world, project_id: str) -> str | None:
+    path = state_root(world) / "projects" / project_id / "history.sqlite3"
+    if not path.is_file():
+        return None
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            return connection.execute("pragma integrity_check").fetchone()[0]
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return None
+
+
+def checkout_project_ids(world) -> list[str]:
+    """The ledger's project ids registered for this World's checkout, by its root (never by a directory name)."""
+    import os
+    roots = {str(world.project), os.path.realpath(world.project)}
+    return sorted(pid for pid, root in _rows(world, "select project_id, canonical_root from projects where status = 'active'")
+                  if root in roots)
+
+
+def persisted_ids(world, project_id: str, record_type: str) -> list[str] | None:
+    """The record ids of one type persisted for the project, in the shared ledger and in the project's own store (None:
+    a store could not be read)."""
+    found = [row[0] for row in _rows(world, "select record_id from records where project_id = ? and record_type = ?",
+                                     (project_id, record_type))]
+    path = state_root(world) / "projects" / project_id / "history.sqlite3"
+    if not path.is_file():
+        return None
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            found += [row[0] for row in connection.execute(
+                "select record_id from records where project_id = ? and record_type = ?", (project_id, record_type))]
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return None
+    return sorted(found)
+
+
 def store_identity(world, project_id: str) -> int | None:
     path = state_root(world) / "projects" / project_id / "history.sqlite3"
     if not path.is_file():
@@ -200,21 +278,67 @@ def store_identity(world, project_id: str) -> int | None:
 
 
 def store_project_ids(world) -> list[str]:
+    """The project ids the stores on disk say they hold (their own identity rows, not their directory names)."""
     folder = state_root(world) / "projects"
-    return sorted(path.name for path in folder.iterdir() if (path / "history.sqlite3").is_file()) if folder.is_dir() else []
+    found: list[str] = []
+    for path in sorted(folder.iterdir()) if folder.is_dir() else []:
+        found += store_identity_ids(world, path.name) or []
+    return sorted(found)
+
+
+READ_CHUNK = 1 << 20
+
+
+def sha256_file(path: Path) -> str | None:
+    """The digest of a file, read in chunks; None when it cannot be read completely (never a digest of a part)."""
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            while chunk := handle.read(READ_CHUNK):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def backup_manifest_sha256(path: Path) -> str | None:
+    """The digest of the manifest a backup file stores in itself (its own `cocolo_backup_manifest` row); None if absent."""
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        rows = connection.execute("select manifest from cocolo_backup_manifest").fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        connection.close()
+    if len(rows) != 1 or not isinstance(rows[0][0], bytes):
+        return None
+    return hashlib.sha256(rows[0][0]).hexdigest()
 
 
 def state_files_holding(world, tokens) -> list[str]:
-    """The names of the state's files that hold any planted token (names only)."""
+    """The names of the state's files that hold any planted token (names only), read in chunks. A file that cannot be
+    read completely is reported as `unreadable:NAME` (an incomplete scan is never a clean one)."""
     found = []
     wanted = [token.encode() for token in tokens]
+    overlap = max(len(token) for token in wanted) - 1
     for path in sorted(state_root(world).rglob("*")):
         if path.is_file() and not path.is_symlink():
+            hit, tail = False, b""
             try:
-                data = path.read_bytes()
+                with open(path, "rb") as handle:
+                    while chunk := handle.read(READ_CHUNK):
+                        window = tail + chunk
+                        if any(token in window for token in wanted):
+                            hit = True
+                            break
+                        tail = window[-overlap:] if overlap else b""
             except OSError:
+                found.append("unreadable:" + path.name)
                 continue
-            if any(token in data for token in wanted):
+            if hit:
                 found.append(path.name)
     return found
 
@@ -224,17 +348,9 @@ def now_ms() -> int:
 
 
 def step(world, *args: str, refuses: bool = False, timeout: float = 90) -> tuple[int, dict | None, str]:
-    """An owner command of the installed CLI, judged like any step even when it times out (G1, G8): a timeout is
-    captured with its partial output and answers exit -1."""
-    try:
-        return world.cli(*args, refuses=refuses, timeout=timeout)
-    except subprocess.TimeoutExpired as expired:
-        text = "".join(part.decode("utf-8", "replace") if isinstance(part, bytes) else (part or "")
-                       for part in (expired.stdout, expired.stderr))
-        world.outputs.append(text)
-        world.steps.append({"step": args[0], "code": -1, "refuses": refuses, "timed_out": True})
-        world._capture(text, kind="output", code=-1, refuses=refuses, timed_out=True)
-        return -1, None, text
+    """An owner command of the installed CLI, judged like any step; World.cli itself captures a timeout with its
+    partial output (G1, G8) and answers exit -1."""
+    return world.cli(*args, refuses=refuses, timeout=timeout)
 
 
 def hook_reads(world, project_id: str) -> dict:
@@ -335,6 +451,10 @@ def build_migrate(scene) -> None:
     migrate.failure = (status or {}).get("learning_migration_failure") if code == 0 else "status_unreadable"
     migrate.store_files = store_files(world, project_id)
     migrate.store_identity = store_identity(world, project_id)
+    migrate.store_identity_ids = store_identity_ids(world, project_id)
+    migrate.checkout_ids = checkout_project_ids(world)
+    migrate.cases_before = persisted_ids(world, project_id, "evaluation_case")
+    migrate.candidates_before = persisted_ids(world, project_id, "candidate")
     migrate.ledger_project_ids = ledger_project_ids(world)
     migrate.store_project_ids = store_project_ids(world)
     migrate.ledger_before = ledger_table_counts(world)
@@ -342,6 +462,10 @@ def build_migrate(scene) -> None:
     migrate.run = step(world, "learning-run-cycle")
     migrate.window = (started, now_ms())
     migrate.ledger_after = ledger_table_counts(world)
+    migrate.cases_after = persisted_ids(world, project_id, "evaluation_case")
+    migrate.candidates_after = persisted_ids(world, project_id, "candidate")
+    migrate.store_integrity_after = store_integrity(world, project_id)
+    migrate.store_identity_ids_after = store_identity_ids(world, project_id)
     migrate.again = step(world, "learning-migrate-project")
     scene.migrate = migrate
 
@@ -371,21 +495,27 @@ def build_backup(scene) -> None:
     world, project_id = scene.world, scene.project_id
     backup = SimpleNamespace()
     backup.create = step(world, "learning-backup-project", "--file-id", BACKUP_ID)
-    path = Path(str((backup.create[1] or {}).get("path") or "/nonexistent"))
+    # The file is found through the registry's relative path under the state root, never through a path in a reply.
+    backup.stored = stored_backups(world, project_id)
+    rows = [row for row in backup.stored if row["file_id"] == BACKUP_ID]
+    relative = Path(rows[0]["relative_path"]) if len(rows) == 1 else None
+    backup.from_registry = relative is not None and not relative.is_absolute() and ".." not in relative.parts
+    path = state_root(world) / relative if backup.from_registry else Path("/nonexistent")
     backup.file_exists = path.is_file()
-    backup.file_sha = hashlib.sha256(path.read_bytes()).hexdigest() if backup.file_exists else None
+    backup.file_sha = sha256_file(path) if backup.file_exists else None
+    backup.file_manifest_sha = backup_manifest_sha256(path) if backup.file_exists else None
     backup.file_integrity, backup.file_records = None, None
     if backup.file_exists:
-        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
-            backup.file_integrity = connection.execute("pragma integrity_check").fetchone()[0]
-            backup.file_records = connection.execute("select count(*) from records").fetchone()[0]
+            connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            try:
+                backup.file_integrity = connection.execute("pragma integrity_check").fetchone()[0]
+                backup.file_records = connection.execute("select count(*) from records").fetchone()[0]
+            finally:
+                connection.close()
         except sqlite3.Error:
             backup.file_integrity = "unreadable"
-        finally:
-            connection.close()
     backup.ledger_records = ledger_scalar(world, "select count(*) from records where project_id = ?", (project_id,))
-    backup.stored = stored_backups(world, project_id)
     backup.verify = step(world, "learning-verify-backup", "--file-id", BACKUP_ID)
     backup.unknown = step(world, "learning-verify-backup", "--file-id", "e2enever", refuses=True)
     backup.real_now = now_ms()
@@ -483,6 +613,9 @@ def l10_2_history_lives_in_the_project_store_and_the_cycle_runs(phase: Phase) ->
     phase.expect(len(migrate.ledger_project_ids or []) == 1 and migrate.ledger_project_ids == migrate.store_project_ids
                  and migrate.ledger_project_ids == [scene.project_id],
                  "the one project of the shared ledger is the one with its own store")
+    phase.expect(isinstance(migrate.store_identity_ids, list) and migrate.store_identity_ids == [scene.project_id]
+                 and migrate.checkout_ids == [scene.project_id],
+                 "the store's own identity row names the project the ledger registered for this checkout")
     code, reply, _ = migrate.run
     phase.expect(code == 0 and isinstance(reply, dict) and reply.get("ready") is True, "learning-run-cycle runs")
     analysis = (reply or {}).get("analysis")
@@ -496,6 +629,19 @@ def l10_2_history_lives_in_the_project_store_and_the_cycle_runs(phase: Phase) ->
                  "the cycle finished its proposals and expired nothing from the project store")
     phase.expect(isinstance(migrate.ledger_before, dict) and migrate.ledger_before == migrate.ledger_after,
                  "the cycle did not touch the shared ledger")
+    # What the cycle persisted is read from the stores, not from its reply: the cases and candidates it reports are
+    # exactly the ones that appeared in the ledger or the project store, and the store is still sound.
+    cases, candidates = (migrate.cases_before, migrate.cases_after), (migrate.candidates_before, migrate.candidates_after)
+    phase.expect(all(isinstance(x, list) for x in (*cases, *candidates)), "the persisted cases and candidates were read")
+    mined, proposed = (reply or {}).get("mined_case_ids"), (reply or {}).get("proposed_candidate_digests")
+    phase.expect(all(isinstance(x, list) for x in (*cases, *candidates)) and isinstance(mined, list)
+                 and sorted(set(cases[1]) - set(cases[0])) == sorted(mined),
+                 "the cases the cycle reports mined are the cases that were persisted by it")
+    phase.expect(all(isinstance(x, list) for x in (*cases, *candidates)) and isinstance(proposed, list)
+                 and len(candidates[1]) - len(candidates[0]) == len(proposed),
+                 "the candidates the cycle reports proposed are the candidates that were persisted by it")
+    phase.expect(migrate.store_integrity_after == "ok" and migrate.store_identity_ids_after == [scene.project_id],
+                 "after the cycle the project store is sound and still holds the project's identity")
     code, reply, _ = migrate.again
     phase.expect(code == 0 and isinstance(reply, dict) and reply.get("ready") is True and reply.get("state") == "complete"
                  and reply.get("imported_records") == 0 and reply.get("ledger_retired") is True,
@@ -612,9 +758,12 @@ def l11_1_backup_verifies_and_matches_the_ledger(phase: Phase) -> None:
     code, reply, _ = b.create
     phase.expect(code == 0 and isinstance(reply, dict) and reply.get("ready") is True and reply.get("verified") is True,
                  "learning-backup-project makes a backup and verifies it")
-    phase.expect(isinstance(reply.get("path"), str) and b.file_exists is True, "the backup file is on the disk")
+    phase.expect(b.from_registry is True and b.file_exists is True,
+                 "the backup file registered under its relative path is on the disk (found through the registry, not the reply)")
     phase.expect(isinstance(b.file_sha, str) and reply.get("backup_sha256") == b.file_sha,
                  "the reply's digest is the digest of the file on the disk")
+    phase.expect(isinstance(b.file_manifest_sha, str) and reply.get("manifest_sha256") == b.file_manifest_sha,
+                 "the reply's manifest digest is the digest of the manifest stored in the file")
     phase.expect(reply.get("isolated_restore_integrity") == "ok" and b.file_integrity == "ok",
                  "the isolated restore and the file itself are sound")
     counts = reply.get("counts")
@@ -629,8 +778,8 @@ def l11_1_backup_verifies_and_matches_the_ledger(phase: Phase) -> None:
     code, again, _ = b.verify
     phase.expect(code == 0 and isinstance(again, dict) and again.get("ready") is True and again.get("verified") is True,
                  "learning-verify-backup succeeds")
-    phase.expect(again.get("backup_sha256") == b.file_sha and again.get("manifest_sha256") == reply.get("manifest_sha256")
-                 and again.get("counts") == counts, "verifying again agrees with the file and the backup's own manifest")
+    phase.expect(again.get("backup_sha256") == b.file_sha and isinstance(b.file_manifest_sha, str)
+                 and again.get("manifest_sha256") == b.file_manifest_sha and again.get("counts") == counts, "verifying again agrees with the file and the backup's own manifest")
     phase.expect(refused_for(b.unknown, "project backup is unavailable"), "a backup that was never made is refused")
     phase.reason("backup_verified")
 
@@ -639,7 +788,7 @@ def l11_1_backup_verifies_and_matches_the_ledger(phase: Phase) -> None:
 # Scene 2: the session guard and the protected copy (L13.1, L13.2)
 
 THREADS = {name: f"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a{number:02x}" for number, name in enumerate(
-    ("control_a", "control_b", "danger", "unknown_sandbox", "no_record", "home", "above_home"))}
+    ("control_a", "control_b", "danger", "unknown_sandbox", "no_record", "home", "above_home", "project_parent"))}
 REASON_TEXT = {
     "danger": "runs without its sandbox (danger-full-access)",
     "unknown_sandbox": "not in the format the orchestrator knows",
@@ -647,6 +796,7 @@ REASON_TEXT = {
     "no_record": "no record of this session was found",
     "home": "can write to your home folder",
     "above_home": "holds your home folder",
+    "project_parent": "opened on a folder that contains this project",
 }
 
 
@@ -660,7 +810,10 @@ def guard_scene():
     write_patches(world, fault_patches())
     a = project_view(world)
     b = add_project(world, "project-b")
-    for view in (a, b):  # every setup first: a later setup restarts the shared collector
+    nest = world.base / "nest"  # a parent folder that holds a checkout and NOT the home folder (project_parent)
+    nest.mkdir()
+    c = add_project(world, "nest/project-c")
+    for view in (a, b, c):  # every setup first: a later setup restarts the shared collector
         set_up(view)
     copies = world.protected_copies()
     import os
@@ -676,16 +829,19 @@ def guard_scene():
                    "b_own": world.copy_cli(b.project, *status_b, thread=THREADS["control_b"])}
     scene.cases = {"control": scene.other["own"]}
     scene.ledger_before = ledger_table_counts(world, ("projects", "records"))
-    world.codex_session(a.project, thread=THREADS["danger"], sandbox="danger-full-access", entries=[])
+    world.codex_session(a.project, thread=THREADS["danger"], sandbox="danger-full-access", disabled_profile=True)
     world.codex_session(a.project, thread=THREADS["unknown_sandbox"], sandbox="external-sandbox")
     world.codex_session(world.home, thread=THREADS["home"])
     world.codex_session(world.base, thread=THREADS["above_home"])
+    world.codex_session(nest, thread=THREADS["project_parent"])
     scene.cases["danger"] = world.copy_cli(a.project, *status_a, thread=THREADS["danger"], refuses=True)
     scene.cases["unknown_sandbox"] = world.copy_cli(a.project, *status_a, thread=THREADS["unknown_sandbox"], refuses=True)
     scene.cases["no_thread"] = world.copy_cli(a.project, *status_a, thread=None, refuses=True)
     scene.cases["no_record"] = world.copy_cli(a.project, *status_a, thread=THREADS["no_record"], refuses=True)
     scene.cases["home"] = world.copy_cli(a.project, *status_a, thread=THREADS["home"], refuses=True)
     scene.cases["above_home"] = world.copy_cli(a.project, *status_a, thread=THREADS["above_home"], refuses=True)
+    scene.cases["project_parent"] = world.copy_cli(c.project, "learning-status", "--project-root", str(c.project),
+                                                   thread=THREADS["project_parent"], refuses=True)
     scene.other["project"] = world.copy_cli(a.project, *status_b, thread=THREADS["control_a"], refuses=True)
     scene.other["state"] = world.copy_cli(a.project, *status_a, "--state-root", str(world.base / "other-state"),
                                           thread=THREADS["control_a"], refuses=True)
