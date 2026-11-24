@@ -325,5 +325,177 @@ class SetupRecordTests(CopyBase):
                          status_client(self.fixture.state_root, self.project)['recovery'])
 
 
+
+class LaunchAuthorityTests(StoreBase):
+    """Review round 1 (HIGH launch authority, MED collector status): the collector records a launch target only for
+    the owner and only a copy it verifies itself; launch status authorizes its subject before any lookup."""
+
+    def setUp(self):
+        super().setUp()
+        self.server = CollectorServer(self.ledger, client_capabilities=self.fixture.clients)
+        self.server.start()
+        self.addCleanup(self.server.stop)
+
+    def send(self, request):
+        return json.loads(exchange_frame(self.fixture.state.socket, canonical_json(request), timeout=2.0,
+                                         request_limit=65_536, response_limit=16_384))
+
+    @requirements('E2a-3', why_not_scenario='Crosses the real collector socket in process; no project service is needed.')
+    def test_E2a_3_record_launch_needs_the_owner_and_a_copy_the_collector_verifies(self):
+        root, project = self.fixture.project_b, self.fixture.project_b_id
+        copy = self.a_copy(root)
+        # A caller with only the socket (no owner proof) cannot redirect another project's launch record.
+        reply = self.send({'protocol': 1, 'op': 'record_launch', 'project_root': str(root), 'launch_copy': copy,
+                           'launch_digest': DIGEST, 'runtime_digest': COLLECTOR_RUNTIME_DIGEST})
+        self.assertFalse(reply['ok'])
+        with self.ledger._lock:
+            self.assertIsNone(self.ledger.launch_record(project))
+        # The owner's own request for a well-formed copy that does not verify at the trusted copy root is refused.
+        with self.assertRaises(learning_store_errors()):
+            CollectorClient(self.fixture.state.socket, timeout=2).record_launch(root, copy, DIGEST)
+        with self.ledger._lock:
+            self.assertIsNone(self.ledger.launch_record(project))
+
+    @requirements('E2a-11', why_not_scenario='Crosses the real collector socket in process; no project service is needed.')
+    def test_E2a_11_launch_status_authorizes_its_subject_before_any_lookup(self):
+        self.ledger.record_launch(self.fixture.project_a_id, self.a_copy(self.fixture.project_a), DIGEST)
+        unknown = Path(self.fixture.temporary.name) / 'unregistered'
+        unknown.mkdir()
+        replies = [self.send({'protocol': 1, 'op': 'launch_status', 'project_root': str(root)})
+                   for root in (self.fixture.project_a, self.fixture.project_b, unknown)]
+        self.assertEqual(1, len({canonical_json(reply) for reply in replies}), replies)
+        self.assertFalse(replies[0]['ok'])
+        # The owner's own status still reads it.
+        client = CollectorClient(self.fixture.state.socket, timeout=2)
+        self.assertEqual((True, False), (client.launch_recorded(self.fixture.project_a),
+                                         client.launch_recorded(self.fixture.project_b)))
+
+
+def learning_store_errors():
+    from codex_agents.collector_contracts import CollectorError
+    return CollectorError
+
+
+class PinOrderTests(CopyBase):
+    """Review round 1 (HIGH copy pins): a stable per-project lock, the new copy pinned before the record commits,
+    the old pin cleared only after it, and replacement and removal honouring pins."""
+
+    def marks(self, copy):
+        pins = Path(copy).parent / '.pins'
+        return sorted(name for name in os.listdir(pins) if name.endswith('.registered')) if pins.is_dir() else []
+
+    @requirements('E2a-4', why_not_scenario='Filesystem pins and locks on a real protected copy; no service process.')
+    def test_E2a_4_setup_pins_the_new_copy_before_the_record_and_clears_the_old_pin_after(self):
+        copy = Path(self.install()['runtime_copy'])
+        older = self.sibling('a' * 64)
+        mark_registered_copy(older)  # the copy the ledger's record names now
+        seen = []
+
+        def record(target, digest):
+            seen.append(self.marks(copy))
+        self.assertEqual('recorded', self.install(record_launch=record)['launch_record'])
+        self.assertEqual([sorted([older.name + '.registered', copy.name + '.registered'])], seen)
+        self.assertEqual([copy.name + '.registered'], self.marks(copy))
+        # A record that fails leaves the earlier pin, and no pin on the copy it did not record.
+        older = self.sibling('b' * 64)
+        mark_registered_copy(older)
+
+        def refuse(target, digest):
+            raise HostCommandError('collector unavailable')
+        self.assertEqual([older.name + '.registered'], self.marks(copy))
+        self.assertEqual('not_recorded', self.install(record_launch=refuse)['launch_record'])
+        self.assertEqual([older.name + '.registered'], self.marks(copy))
+        self.assertTrue(older.is_dir())
+
+    @requirements('E2a-4', why_not_scenario='Filesystem pins and locks on a real protected copy; no service process.')
+    def test_E2a_4_a_copy_pinned_while_a_prune_runs_is_never_removed(self):
+        copy = Path(self.install()['runtime_copy'])
+        older = self.sibling('a' * 64)
+        real, marker = host_commands._registered, []
+
+        def registered(container, name):
+            found = real(container, name)
+            if name == older.name and not marker:
+                def mark():
+                    try:
+                        mark_registered_copy(older)
+                        marker.append('marked')
+                    except HostCommandError:
+                        marker.append('refused')
+                worker = threading.Thread(target=mark)
+                marker.append(worker)
+                worker.start()
+                worker.join(0.5)
+            return found
+        with mock.patch.object(host_commands, '_registered', registered):
+            prune_runtime_copies(self.project, copy, self.environ)
+        marker[0].join(5)
+        pinned = older.name + '.registered' in self.marks(copy)
+        self.assertFalse(pinned and not older.is_dir(), 'a pinned copy was removed')
+
+    @requirements('E2a-4', why_not_scenario='Filesystem pins and locks on a real protected copy; no service process.')
+    def test_E2a_4_a_pin_on_a_lock_file_a_replacement_dropped_never_lets_a_second_replacement_in(self):
+        copy = Path(self.install()['runtime_copy'])
+        stray = copy / '.codex' / 'orchestration' / 'stray.pyc'
+        stray.write_bytes(b'')  # a problem: setup replaces the copy
+        real, state = host_commands.fcntl.flock, {'busy': False, 'done': False}
+
+        def flock(descriptor, operation):
+            if operation & host_commands.fcntl.LOCK_SH and not state['busy'] and not state['done']:
+                state['busy'] = True
+                try:
+                    self.install()  # a whole replacement between the launcher's open and its lock
+                finally:
+                    state['busy'], state['done'] = False, True
+            return real(descriptor, operation)
+        pinned = None
+        with mock.patch.object(host_commands.fcntl, 'flock', flock):
+            try:
+                pinned = pin_runtime_copy(copy)
+                pinned.__enter__()
+            except HostCommandError:
+                pinned = None
+        try:
+            (copy / '.codex' / 'orchestration' / 'stray.pyc').write_bytes(b'')
+            replaced = True
+            try:
+                self.install()
+            except HostCommandError:
+                replaced = False
+            self.assertFalse(pinned is not None and replaced, 'a copy held in use was replaced')
+        finally:
+            if pinned is not None:
+                pinned.__exit__(None, None, None)
+
+    @requirements('E2a-4', why_not_scenario='Filesystem pins and locks on a real protected copy; no service process.')
+    def test_E2a_4_owner_removal_keeps_the_registered_copy(self):
+        copy = Path(self.install(record_launch=lambda target, digest: None)['runtime_copy'])
+        removed = remove_rule(self.project, self.environ)
+        self.assertNotIn(str(copy.parent), removed)
+        self.assertTrue(copy.is_dir())
+
+
+class SetupOfflineTests(CopyBase):
+    """Review round 1 (MED offline setup): with no collector running, setup records under exclusive owner
+    maintenance, directly in the ledger."""
+
+    @requirements('E2a-3', why_not_scenario='The real CLI recorder, owner maintenance and ledger, with no collector.')
+    def test_E2a_3_with_no_collector_running_setup_records_in_the_ledger(self):
+        import argparse
+        import cli
+        fixture = store_tests.LearningStoreTests(methodName='runTest')
+        with mock.patch.object(store_tests, 'TEMP_ROOT', SHORT_TMP):
+            fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        project_id = fixture.ledger.register_project(self.project)
+        fixture.ledger.close()
+        args = argparse.Namespace(state_root=fixture.state_root, project_root=self.project)
+        self.assertEqual('recorded', host_commands.record_setup_launch(self.project, cli._launch_recorder(args),
+                                                                       self.environ))
+        fixture.ledger = store_tests.LearningLedger(fixture.state, client_capabilities=fixture.clients)
+        copy = expected_copy(self.codex_home, self.project)
+        self.assertEqual((str(copy), copy.name), fixture.ledger.launch_record(project_id))
+
+
 if __name__ == '__main__':
     unittest.main()

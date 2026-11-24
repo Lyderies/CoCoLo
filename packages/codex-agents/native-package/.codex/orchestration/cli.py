@@ -478,19 +478,39 @@ def _start_collector_quietly(args: argparse.Namespace) -> None:
 
 
 def _launch_recorder(args):
-    """RS-E E2a-3: setup's launch record, through the running collector of this runtime; never creates state.
+    """RS-E E2a-3: setup's launch record, through the running collector of this runtime (signed as the owner);
+    never creates state.
 
-    With no such collector the record is not written (`launch_record: not_recorded`); setup's registration step
-    starts the collector first, and the next setup run records it.
+    Review round 1: with no collector running at all, it is recorded directly in the ledger under exclusive owner
+    maintenance. A collector of another runtime is never stopped for it: the record is not written
+    (`launch_record: not_recorded`) and the next setup run records it.
     """
 
     def record(copy, digest):
         from codex_agents.collector_paths import CollectorPaths
         state = CollectorPaths(args.state_root) if getattr(args, "state_root", None) else CollectorPaths()
         running = _compatible_collector(state)
-        if running is None:
-            raise CollectorError("no compatible collector is running")
-        running.record_launch(args.project_root, str(copy), digest)
+        if running is not None:
+            running.timeout = 30  # the collector verifies the whole copy before it records it
+            running.record_launch(args.project_root, str(copy), digest)
+            return
+        from codex_agents.collector_client import COLLECTOR_PROTOCOL_VERSION
+        try:
+            CollectorClient(state.socket)._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "health"})
+        except CollectorError:
+            pass  # nothing answers: the offline path below
+        else:
+            raise CollectorError("a collector of another runtime is running")
+        ledger_state = LearningState(state.root, create=False)
+        maintenance = CollectorMaintenance.acquire(ledger_state, ORCHESTRATION_ROOT / "cli.py", args.project_root)
+        try:
+            ledger = LearningLedger(ledger_state)
+            try:
+                ledger.record_launch(ledger.project_for_root(Path(args.project_root)), str(copy), digest)
+            finally:
+                ledger.close()
+        finally:
+            maintenance.resume()
 
     return record
 

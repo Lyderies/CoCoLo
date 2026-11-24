@@ -733,5 +733,7 @@ class ProjectServiceHost:
         A host whose threads did not stop keeps the lock until its process
         ends, so no later host settles a run one of them may still launch.
         """
-        if self._driver is not None and self.threads_stopped():
-            self._driver.settle_on_exit()
+        if not self.threads_stopped():
+            return False
+        # RS-E E2a-8: True only once every thread stopped and final settlement ran to its end.
+        return self._driver is None or self._driver.settle_on_exit() is True

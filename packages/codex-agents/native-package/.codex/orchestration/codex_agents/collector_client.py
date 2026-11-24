@@ -298,19 +298,34 @@ class CollectorClient:
             raise CollectorError("collector response is invalid", code="response_invalid")
         return project_id
 
+    def _owner_signed(self, request: dict[str, Any]) -> dict[str, Any]:
+        """RS-E E2a-3/11 (review round 1): the request with the owner's proof for exactly its fields (subject: its
+        project root). Needs the owner's state folder: a caller who cannot write it cannot sign."""
+        from .collector_paths import CollectorPaths, StateError
+        from .service_enrollment import EnrollmentError, collector_owner_preamble
+        message = {key: value for key, value in request.items() if key != "protocol"}
+        try:
+            line = collector_owner_preamble(CollectorPaths(Path(self.socket_path).parent), canonical_json(message),
+                                            request["project_root"])
+        except (EnrollmentError, StateError, OSError):
+            raise CollectorError("the owner's collector credential is unavailable", code="operation_rejected") from None
+        return {**request, "owner": line.decode("ascii")}
+
     def launch_recorded(self, project_root: Path) -> bool:
-        """RS-E E2a-11: whether setup's launch record exists for this registered root."""
-        response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "launch_status",
-                                  "project_root": str(project_root.resolve())})
+        """RS-E E2a-11: whether setup's launch record exists for this registered root (the owner's read)."""
+        response = self._request(self._owner_signed({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "launch_status",
+                                                     "project_root": str(project_root.resolve())}))
         if type(response.get("recorded")) is not bool:
             raise CollectorError("collector response is invalid", code="response_invalid")
         return response["recorded"]
 
     def record_launch(self, project_root: Path, launch_copy: str, launch_digest: str) -> None:
-        """RS-E E2a-3: record setup's validated launch target for this registered root (the owner's step)."""
-        response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "record_launch",
-                                  "project_root": str(project_root.resolve()), "launch_copy": str(launch_copy),
-                                  "launch_digest": launch_digest})
+        """RS-E E2a-3: record setup's validated launch target for this registered root (the owner's step; the
+        collector verifies the copy itself, so this may take longer than the default timeout)."""
+        response = self._request(self._owner_signed({
+            "protocol": COLLECTOR_PROTOCOL_VERSION, "op": "record_launch",
+            "project_root": str(project_root.resolve()), "launch_copy": str(launch_copy),
+            "launch_digest": launch_digest}))
         if response.get("ok") is not True:
             raise CollectorError("collector response is invalid", code="response_invalid")
 

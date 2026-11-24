@@ -1954,6 +1954,8 @@ class ProjectHistory:
             request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.withdraw_open', request_id,
                                      project_id, runtime_digest, value.payload())
             evidence.update(reason=reason, payload=value.payload(), project_id=project_id, runtime_digest=runtime_digest)
+            # RS-E E2a-7 (review round 1): releasing makes the row due at its withdrawal retry, earlier than before.
+            project_holds_schema.wake_before(self.project_id, int(row['next_check_ms']))
             self._connection.execute("UPDATE project_holds SET state='releasing',request_id=?,request_digest=?,"
                     "evidence=? WHERE project_id=? AND kind='open_binding' AND identity=?",
                     (request_id, account_request_digest(request), project_holds_schema.evidence_json(**evidence),
@@ -1987,6 +1989,7 @@ class ProjectHistory:
                 "AND identity=? AND state='releasing'",
                 (now_ms + min(max_ms, base_ms * 2 ** min(failures - 1, 32)),
                  project_holds_schema.evidence_json(**evidence), self.project_id, identity))
+            project_holds_schema.wake_touch(self.project_id)  # E2a-7: the retry moves later
 
     @_operation
     def release_open_binding(self, run_handle, attempt, release_kind, *, receipt=None, request_digest=None):

@@ -34,7 +34,7 @@ from .learning_contracts import keyed_digest, parse_bounded_json
 from .owned_execution import OwnedExecutionRegistry
 from .service_enrollment import (
     EnrollmentError, EnrollmentVerifier, account_endpoint_path, issue_capability, issue_wake_capability,
-    prepare_proof_directory, proof_directory, read_wake_capability, revoke_capability,
+    prepare_proof_directory, proof_directory, revoke_capability, wake_keys,
 )
 from .service_host import EnrolledFrontend, ServiceHostLimits
 from .signature_job_intake import SignatureIntakeLimits
@@ -158,9 +158,9 @@ class AccountServiceHost:
             key = issue_capability(state, None, 'account')
             self._issued = True
             # RS-E E2a-5: a fresh wake key per active project (registration issues one for a project added later).
-            for _project, root in ledger.active_project_roots():
+            for project, root in ledger.active_project_roots():
                 try:
-                    issue_wake_capability(state, Path(root))
+                    issue_wake_capability(state, Path(root), project)
                 except EnrollmentError:
                     pass  # a project whose folder is gone cannot publish; reconcile counts it unknown
             self._frontend = EnrolledFrontend(EnrollmentVerifier(key, frozenset({'account', 'project'}), GENERATION, proofs,
@@ -179,11 +179,8 @@ class AccountServiceHost:
             raise
 
     def _wake_key(self, subject):
-        """E2a-5: the subject's own wake key, or None (any failure is the verifier's ordinary refusal)."""
-        try:
-            return read_wake_capability(self._state, Path(subject))
-        except EnrollmentError:
-            return None
+        """E2a-5: (project id, key) of the wake key issued for this subject, or a dummy key; in memory only."""
+        return wake_keys(self._state).lookup(subject)
 
     def _owner(self):
         if self._pid != os.getpid() or self._thread is not threading.current_thread():
@@ -212,6 +209,13 @@ class AccountServiceHost:
                 return None
             if observation.run_handle is not None or observation.phase is not None:
                 return None
+        if bound:
+            # E2a-5: the verifier bound the key to the immutable id it was issued for; nothing is looked up first.
+            if entry.enrolled.bound_project != request.project_id:
+                return None
+            caller = keyed_digest(self._state.digest_key(), 'account-wake\0' + request.project_id)
+            return AccountAuthorization(request.project_id, COLLECTOR_RUNTIME_DIGEST, account_request_digest(request),
+                                        'project', WAKE_OPERATIONS, caller, wake_bound=True)
         root = entry.enrolled.subject
         try:
             if self._views._ledger.project_for_root(Path(root)) != request.project_id:
@@ -222,11 +226,6 @@ class AccountServiceHost:
             return None
         except Exception:
             return None
-        if bound:
-            # The verifier chose the key by this subject, so its registered project is the only target.
-            caller = keyed_digest(self._state.digest_key(), 'account-wake\0' + request.project_id)
-            return AccountAuthorization(request.project_id, COLLECTOR_RUNTIME_DIGEST, account_request_digest(request),
-                                        'project', WAKE_OPERATIONS, caller, wake_bound=True)
         # One context object per connection: the owner compares its identity
         # across the reauthorizations of a single request.
         context = self._contexts.get(token)

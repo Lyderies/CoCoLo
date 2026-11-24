@@ -291,7 +291,7 @@ class AccountOwnerViews:
         self._project_locked(project_id)
         try:
             result = self._ledger.publish_wake(project_id, epoch=wake.epoch, seq=wake.seq, state=wake.state,
-                                               next_due_at_ms=wake.next_due_at_ms)
+                                               next_due_at_ms=wake.next_due_at_ms, instance=wake.instance)
         except ProjectNotRegisteredError:
             raise AccountError('account_project_not_found') from None
         if result['outcome'] == 'stale':

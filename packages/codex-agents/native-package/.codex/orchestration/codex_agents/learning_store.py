@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -208,7 +209,17 @@ _WAKE_SCHEMA = (
     "next_due_at_ms INTEGER,body_digest TEXT,due_at_ms INTEGER,"
     "refused INTEGER NOT NULL DEFAULT 0 CHECK(refused>=0),updated_at_ms INTEGER NOT NULL)",
     "CREATE INDEX IF NOT EXISTS project_wake_due ON project_wake(due_at_ms) WHERE due_at_ms IS NOT NULL",
+    # E2a-6 (review round 1): the service instance the project's last epoch was allocated to, so a retry of an
+    # allocation whose acknowledgement was lost gets the same epoch (one row per project, machine-local).
+    "CREATE TABLE IF NOT EXISTS project_wake_instances("
+    "project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,"
+    "instance TEXT NOT NULL,epoch INTEGER NOT NULL CHECK(epoch>=1))",
 )
+# E2a-9 (review round 1): a reconcile pass reads pages of WAKE_RECONCILE_BATCH project rows (rows examined, not
+# rows matched), each in its own short ledger hold; the startup pass before ready probes for at most this long and
+# the wake thread finishes the rest at once.
+WAKE_STARTUP_SECONDS = 1.0
+WAKE_PASS_SECONDS = 5.0
 SWEEP_BATCH_GAP_SECONDS = 0.01
 SWEEP_BUSY_RETRY_SECONDS = 1.0
 # O0b RS-A round 2 G6: while idle, due account holds are checked this often (one indexed read, no
@@ -4057,12 +4068,16 @@ class LearningLedger:
         return str(row["launch_copy"]), str(row["launch_digest"])
 
     def publish_wake(self, project_id: str, *, epoch: int | None, seq: int, state: str,
-                     next_due_at_ms: int | None, now_ms: int | None = None) -> dict:
-        """E2a-6: one wake publication. A null epoch allocates the next durable epoch; a strictly newer generation
-        replaces the row; the same generation and body is a duplicate; anything else is `stale` and only counted."""
+                     next_due_at_ms: int | None, now_ms: int | None = None, instance: str | None = None) -> dict:
+        """E2a-6: one wake publication. A null epoch allocates the next durable epoch, unless the project's last
+        allocation went to this same `instance` (its acknowledgement was lost): that epoch again. A strictly newer
+        generation replaces the row; the same generation and body is a duplicate; anything else is `stale` and only
+        counted."""
         if (state not in WAKE_STATES or type(seq) is not int or seq < 1
                 or (epoch is not None and (type(epoch) is not int or epoch < 0))
-                or (next_due_at_ms is not None and (type(next_due_at_ms) is not int or next_due_at_ms < 0))):
+                or (next_due_at_ms is not None and (type(next_due_at_ms) is not int or next_due_at_ms < 0))
+                or (instance is not None and (epoch is not None or type(instance) is not str
+                                              or re.fullmatch(r"[0-9a-f]{32}", instance) is None))):
             raise LedgerError("wake publication is invalid")
         now = time.time_ns() // 1_000_000 if now_ms is None else now_ms
         body = hashlib.sha256(canonical_json({"state": state, "next_due_at_ms": next_due_at_ms})).hexdigest()
@@ -4076,10 +4091,25 @@ class LearningLedger:
             row = self._connection.execute("SELECT * FROM project_wake WHERE project_id=?", (project_id,)).fetchone()
             current = None if row["epoch"] is None else (int(row["epoch"]), int(row["seq"]))
             outcome = "accepted"
-            if epoch is None:
+            last = None if instance is None else self._connection.execute(
+                "SELECT epoch FROM project_wake_instances WHERE project_id=? AND instance=?",
+                (project_id, instance)).fetchone()
+            if epoch is None and last is not None:
+                epoch = int(last["epoch"])  # this instance's own epoch, allocated before its reply was lost
+                current_check = current
+                if current_check is not None and (epoch, seq) == current_check:
+                    outcome = "duplicate" if row["body_digest"] == body else "stale"
+                elif current_check is not None and (epoch, seq) < current_check:
+                    outcome = "stale"
+            elif epoch is None:
                 epoch = int(row["allocated_epoch"]) + 1
                 self._connection.execute("UPDATE project_wake SET allocated_epoch=? WHERE project_id=?",
                                          (epoch, project_id))
+                if instance is not None:
+                    self._connection.execute(
+                        "INSERT INTO project_wake_instances(project_id,instance,epoch) VALUES(?,?,?) "
+                        "ON CONFLICT(project_id) DO UPDATE SET instance=excluded.instance,epoch=excluded.epoch",
+                        (project_id, instance, epoch))
             elif epoch < 1 or epoch > int(row["allocated_epoch"]):
                 outcome = "stale"
             elif current is not None and (epoch, seq) == current:
@@ -4099,7 +4129,8 @@ class LearningLedger:
     def wake_reconcile_candidates(self, *, now_ms: int, limit: int = WAKE_RECONCILE_BATCH,
                                   after: str = "") -> list[tuple[str, str, int | None, int | None]]:
         """E2a-9: active projects whose wake state is unknown and not yet due, from `after` in project order:
-        (project_id, root, epoch, seq). Bounded; the served check is the caller's, off this lock."""
+        (project_id, root, epoch, seq). A matched-rows read for callers that want only candidates; the collector's
+        own pass pages by rows examined instead (`wake_reconcile_page`)."""
         with self._held():
             return [(str(row["project_id"]), str(row["canonical_root"]), row["epoch"], row["seq"])
                     for row in self._connection.execute(
@@ -4109,11 +4140,29 @@ class LearningLedger:
                         "AND (w.due_at_ms IS NULL OR w.due_at_ms>?) ORDER BY p.project_id LIMIT ?",
                         (after, now_ms, limit))]
 
+    def wake_reconcile_page(self, *, after: str = "", limit: int = WAKE_RECONCILE_BATCH
+                            ) -> tuple[list[tuple], str | None]:
+        """E2a-9: one page of at most `limit` project rows from `after` in project order (rows examined, by the
+        primary key: inactive and settled rows count too), with their wake columns, and the cursor for the next
+        page (None once the last page is read). The caller decides off this lock which rows are unknown."""
+        with self._held():
+            rows = self._connection.execute(
+                "SELECT p.project_id,p.canonical_root,p.status,w.epoch,w.seq,w.state,w.due_at_ms FROM projects p "
+                "LEFT JOIN project_wake w ON w.project_id=p.project_id WHERE p.project_id>? "
+                "ORDER BY p.project_id LIMIT ?", (after, limit)).fetchall()
+        page = [(str(row["project_id"]), str(row["canonical_root"]), str(row["status"]), row["epoch"], row["seq"],
+                 row["state"], row["due_at_ms"]) for row in rows]
+        return page, (page[-1][0] if len(page) == limit else None)
+
     def mark_wakes_due(self, candidates, *, now_ms: int) -> int:
-        """E2a-9: mark these unknown projects due now, unless a publication landed since they were read."""
+        """E2a-9: mark these unknown projects due now, unless a publication landed since they were read. A
+        candidate is (project_id, root, epoch, seq) or, for a clean stop whose service left an unpublished-write
+        marker, (project_id, root, epoch, seq, True)."""
         marked = 0
         with self._account_transaction():
-            for project_id, _root, epoch, seq in candidates:
+            for candidate in candidates:
+                project_id, _root, epoch, seq = candidate[:4]
+                marked_stop = len(candidate) > 4 and candidate[4] is True
                 if epoch is None:
                     inserted = self._connection.execute(
                         "INSERT OR IGNORE INTO project_wake(project_id,allocated_epoch,refused,due_at_ms,updated_at_ms) "
@@ -4125,8 +4174,8 @@ class LearningLedger:
                 else:
                     marked += self._connection.execute(
                         "UPDATE project_wake SET due_at_ms=?,updated_at_ms=? WHERE project_id=? AND epoch=? AND seq=? "
-                        "AND (state IS NULL OR state<>'clean_stop')",
-                        (now_ms, now_ms, project_id, epoch, seq)).rowcount
+                        "AND (state IS NULL OR state<>'clean_stop' OR ?) AND (due_at_ms IS NULL OR due_at_ms>?)",
+                        (now_ms, now_ms, project_id, epoch, seq, 1 if marked_stop else 0, now_ms)).rowcount
         return marked
 
     def _learning_moved_locked(self, project_id: str) -> bool:
@@ -13131,9 +13180,17 @@ class CollectorServer:
         listener.listen(16)
         listener.settimeout(0.1)
         self._started_at_ms = time.time_ns() // 1_000_000
-        # RS-E E2a-9: unknown projects are marked due before this collector reports ready (nothing starts here).
+        # RS-E E2a-3/11 (review round 1): the owner's credential for record_launch and launch_status.
+        self._owner_verifier = None
+        with contextlib.suppress(Exception):
+            from .service_enrollment import issue_collector_owner
+            from .collector_paths import CollectorPaths
+            self._owner_verifier = issue_collector_owner(CollectorPaths(self.state.root))
+        # RS-E E2a-9: unknown projects are marked due before this collector reports ready (nothing starts here),
+        # for at most WAKE_STARTUP_SECONDS; the wake thread finishes the rest at once.
         try:
-            self._reconcile_wakes()
+            self._wake_cursor = ""
+            self._reconcile_wakes(WAKE_STARTUP_SECONDS)
         except Exception as error:
             self.sweep_error = type(error).__name__
         # S1-H1a-6b: the sweeps run on their own thread, so no request waits behind one. G5: one that
@@ -13220,35 +13277,70 @@ class CollectorServer:
             full, draining = False, outcome == "more"
             wait = SWEEP_BATCH_GAP_SECONDS if draining else min(SWEEP_IDLE_CHECK_SECONDS, due - time.monotonic())
 
+    def _owner_request(self, request: dict[str, Any], fields: tuple[str, ...]) -> bool:
+        """E2a-3/11 (review round 1): whether the request carries the owner's proof for exactly these fields, its
+        project root as the subject. Checked before anything is looked up; every failure is the same refusal."""
+        verifier = getattr(self, "_owner_verifier", None)
+        line = request.get("owner")
+        if verifier is None or type(line) is not str:
+            return False
+        try:
+            from .hosts import OWNER_CLIENT
+            enrolled = verifier.verify(line.encode("ascii"))
+            message = canonical_json({name: request[name] for name in fields})
+        except Exception:
+            return False
+        return (enrolled.role == "account" and enrolled.host_client == OWNER_CLIENT
+                and enrolled.subject == request["project_root"]
+                and hmac.compare_digest(enrolled.request_digest, hashlib.sha256(message).hexdigest()))
+
     def _wake_loop(self) -> None:
-        while not self._sweeps_stop.wait(WORKER_RESULT_SWEEP_SECONDS):
+        # A startup pass that ran out of time is finished at once; then once per sweep interval.
+        wait = 0.0 if getattr(self, "_wake_cursor", "") else WORKER_RESULT_SWEEP_SECONDS
+        while not self._sweeps_stop.wait(wait):
             try:
                 self._reconcile_wakes()
             except Exception as error:
                 self.sweep_error = type(error).__name__
+            wait = 0.0 if getattr(self, "_wake_cursor", "") else WORKER_RESULT_SWEEP_SECONDS
 
-    def _reconcile_wakes(self) -> int:
-        """RS-E E2a-9: one bounded pass. The candidates are read and marked under the ledger lock, each in its own
-        short hold; whether a live host serves a candidate is checked between, off the lock. Returns how many
-        were marked due. Nothing is started."""
-        now = time.time_ns() // 1_000_000
-        after = getattr(self, "_wake_cursor", "")
-        candidates = self.ledger.wake_reconcile_candidates(now_ms=now, after=after)
-        if len(candidates) < WAKE_RECONCILE_BATCH:
-            self._wake_cursor = ""
-            if after:
-                candidates += self.ledger.wake_reconcile_candidates(
-                    now_ms=now, limit=WAKE_RECONCILE_BATCH - len(candidates))
-        else:
-            self._wake_cursor = candidates[-1][0]
-        seen, unserved = set(), []
-        for row in candidates:
-            if row[0] in seen:
-                continue
-            seen.add(row[0])
-            if not project_host_serving(self.state.root, row[1]):
-                unserved.append(row)
-        return self.ledger.mark_wakes_due(unserved, now_ms=now) if unserved else 0
+    def _reconcile_wakes(self, budget_seconds: float = WAKE_PASS_SECONDS) -> int:
+        """RS-E E2a-9: one pass over the active projects from the saved cursor, page by page. Each page is read and
+        its unknown rows marked under the ledger lock, each in its own short hold; whether a live host serves a
+        candidate (and whether a clean stop's service left an unpublished-write marker) is checked between, off the
+        lock. Past `budget_seconds` the pass stops and keeps its cursor for the next pass. Returns how many were
+        marked due. Nothing is started."""
+        from .wake_contracts import WAKE_MARKER
+        end = time.monotonic() + budget_seconds
+        cursor, marked = getattr(self, "_wake_cursor", "") or "", 0
+        while True:
+            now = time.time_ns() // 1_000_000
+            page, following = self.ledger.wake_reconcile_page(after=cursor)
+            unserved, stopped = [], False
+            for project_id, root, status, epoch, seq, state, due in page:
+                if time.monotonic() >= end:
+                    stopped = True
+                    break
+                cursor = project_id
+                if status != "active" or (due is not None and due <= now):
+                    continue  # not a project, or already due
+                marker = False
+                if state == "clean_stop":
+                    # A clean stop is trusted unless its service wrote with no acknowledged publication.
+                    marker = os.path.lexists(self.state.root / "projects" / project_id / WAKE_MARKER)
+                    if not marker:
+                        continue
+                if not project_host_serving(self.state.root, root):
+                    unserved.append((project_id, root, epoch, seq, marker))
+            if unserved:
+                marked += self.ledger.mark_wakes_due(unserved, now_ms=now)
+            if stopped:
+                self._wake_cursor = cursor  # the next pass resumes after the last row handled
+                return marked
+            if following is None:
+                self._wake_cursor = ""
+                return marked
+            cursor = following
 
     def _run_health_pass(self) -> None:
         """HM-0: one bounded health pass, never under the ledger lock. A failure of the runner itself is
@@ -13481,16 +13573,28 @@ class CollectorServer:
                 with contextlib.suppress(Exception):
                     from .service_enrollment import issue_wake_capability
                     from .collector_paths import CollectorPaths
-                    issue_wake_capability(CollectorPaths(self.state.root), Path(request["project_root"]))
+                    issue_wake_capability(CollectorPaths(self.state.root), Path(request["project_root"]), project_id)
                 return {"ok": True, "project_id": project_id}
-            if request.get("op") == "launch_status" and set(request) == {"protocol", "op", "project_root"}:
-                # RS-E E2a-11: whether setup's launch record exists for this registered root (read only).
+            if request.get("op") == "launch_status" and set(request) == {"protocol", "op", "project_root", "owner"}:
+                # RS-E E2a-11: whether setup's launch record exists for this registered root (read only). Review
+                # round 1: only for the owner's proof naming this root, checked before any lookup.
+                if not self._owner_request(request, ("op", "project_root")):
+                    return {"ok": False, "code": "operation_rejected"}
                 project_id = self.ledger.project_for_root(Path(request["project_root"]))
                 return {"ok": True, "recorded": self.ledger.launch_record(project_id) is not None}
             if request.get("op") == "record_launch" and set(request) == {
-                "protocol", "op", "project_root", "launch_copy", "launch_digest",
+                "protocol", "op", "project_root", "launch_copy", "launch_digest", "owner",
             }:
-                # RS-E E2a-3: setup's launch record for its registered project (the owner's step).
+                # RS-E E2a-3: setup's launch record for its registered project. Review round 1: the owner's proof
+                # first, then the collector verifies the whole target itself at its trusted copy root (this
+                # project's protected copy under the account's ~/.codex, bound to it, byte for byte), off the lock.
+                if not self._owner_request(request, ("op", "project_root", "launch_copy", "launch_digest")):
+                    return {"ok": False, "code": "operation_rejected"}
+                from .host_commands import launch_target_problem
+                if (type(request["launch_copy"]) is not str or type(request["project_root"]) is not str
+                        or launch_target_problem(Path(request["launch_copy"]), Path(request["project_root"]))
+                        is not None):
+                    return {"ok": False, "code": "operation_rejected"}
                 project_id = self.ledger.project_for_root(Path(request["project_root"]))
                 self.ledger.record_launch(project_id, request["launch_copy"], request["launch_digest"])
                 return {"ok": True}

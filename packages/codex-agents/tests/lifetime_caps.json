@@ -1932,6 +1932,21 @@
   "write_merge.py::_merge_prepared": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::wake_reconcile_candidates": {
+   "checks": 1,
+   "ends": "RS-E E2a-9: a page of at most 64 unknown, not yet due projects per read; the next read resumes after the last one returned, and a project leaves the set once marked due or published clean_stop",
+   "test": "test_E2a_9_a_newer_publication_is_not_overwritten_and_serving_projects_are_skipped"
+  },
+  "learning_store.py::wake_reconcile_page": {
+   "checks": 1,
+   "ends": "RS-E E2a-9 (review round 1): at most 64 project rows examined per locked read; the pass continues from its cursor page by page, so every project is reached however many there are",
+   "test": "test_E2a_9_reconcile_reaches_every_project_past_one_page"
+  },
+  "project_wake.py::send_wake": {
+   "checks": 1,
+   "ends": "RS-E E2a-7: one reply frame of at most 16 KiB per publication; a reply past it ends that exchange (WakeUnavailable, the write keeps its unpublished flag and retries)",
+   "test": "test_E2a_7_a_reply_past_the_limit_is_refused_and_flagged"
   }
  }
 }

@@ -2274,8 +2274,10 @@ class RunDriver:
             return
         install_enrollment(self._preamble, owner=self._owner_name)
         self._exiting = True  # D4: the writer has stopped; each settlement arbitrates on a store opened for it
+        settled = False
         try:
             self._settle_lost(True)
+            settled = True
         except Exception:
             pass
         finally:
@@ -2283,6 +2285,7 @@ class RunDriver:
             if self._containers is not None:
                 self._containers.close()
         self._journal.release()
+        return settled  # RS-E E2a-8: whether final settlement ran to its end (a clean stop may then be published)
 
     @staticmethod
     def _id(run):

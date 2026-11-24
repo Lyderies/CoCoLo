@@ -239,13 +239,15 @@ def install_wake_guard(project_id: str, guard) -> None:
 
 
 def wake_before(project_id: str, due_at_ms: int | None) -> None:
-    """Before a hold write with this deadline (never raises: a publication failure lets the write proceed)."""
+    """Before a hold write with this deadline. A publication failure lets the write proceed; only a first write the
+    publisher could neither publish nor mark for the collector's reconcile (`WakeRefused`) is refused."""
     guard = _WAKE_GUARDS.get(project_id)
     if guard is not None:
         try:
             guard.before_due(due_at_ms)
-        except Exception:
-            pass
+        except Exception as error:
+            if type(error).__name__ == 'WakeRefused':
+                raise HistoryError('history_service_unavailable') from None
 
 
 def wake_touch(project_id: str) -> None:
@@ -265,7 +267,8 @@ def wake_settled(project_id: str, connection) -> None:
 
 
 def next_hold_due(connection) -> int | None:
-    """The earliest deadline of a held or releasing hold, by index seeks per kind (never the tombstones)."""
+    """The earliest deadline of a held or releasing hold, by index seeks per kind (never the tombstones), or the
+    withdrawal retry (`next_check_ms`) of a releasing open binding, whichever is earlier."""
     found = None
     for kind in HOLD_KINDS:
         for state in ("held", "releasing"):
@@ -274,6 +277,11 @@ def next_hold_due(connection) -> int | None:
                 (kind, state)).fetchone()[0]
             if value is not None and (found is None or value < found):
                 found = int(value)
+    # Review round 1: a releasing open binding is retried at its next_check_ms (its due_at_ms stays null).
+    value = connection.execute("SELECT MIN(next_check_ms) FROM project_holds WHERE state='releasing' "
+                               "AND kind='open_binding'").fetchone()[0]
+    if value is not None and (found is None or value < found):
+        found = int(value)
     return found
 
 

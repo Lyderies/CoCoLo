@@ -41,3 +41,24 @@ tests/test_e2a_wake_wire.py (14). Registered in scripts/test-{layers,stages,requ
   Green: test_e2a_launch_record + rsf_s1_ingress + admission_inputs + signature_job_intake + signature_inputs 105 OK
   10 s; test_cli_status_client_boundary 12 OK 9 s; test_e2a_wake_wire 14 OK 18 s; test_host_commands 54 OK 60 s;
   test_learning_cli 30 OK 63 s.
+
+## Review round 1 (Codex security review NOT-READY at 5a024c5e: scratchpad e2a-review-result.md)
+Red first on 5a024c5e (17 new tests; 15 red on assertions, not imports; 2 boundary tests green by design; the cap
+guard was already red): `Ran 17 tests, failures=14, errors=1 (fixture), 6 s`, then paging red `5471 not less than 2266`.
+Fixes (modules): learning_store (record_launch/launch_status owner proof + collector-side launch_target_problem;
+project_wake_instances; wake_reconcile_page by rows examined, marker-aware, budgeted startup pass, wake thread resumes),
+service_enrollment (WakeKeys in-memory table + dummy key, Enrolled.bound_project, collector owner key/proofs in
+`<state>/collector-owner/`), account_host (table, bound auth by id before any lookup), collector_client (owner-signed
+record_launch/launch_recorded), cli (offline record under CollectorMaintenance; 30 s timeout), host_commands (stable
+project lock = copies folder flock, inode-checked pins, pin-before-commit, removal keeps registered), wake_contracts
+(instance, WAKE_MARKER), account_service (instance), project_wake (marker/WakeRefused, invalidate queued exact,
+finish(final_due)), project_holds_schema (refusal propagates; next due counts releasing open-binding next_check_ms),
+project_history (withdrawal transitions guarded), project_driver/service_host (verified settlement bool),
+project_service (final read-only due read), tests/lifetime_caps.json (3 sites).
+Green: test_e2a_wake_wire 24 OK 20 s; test_e2a_launch_record 20, 1 error = the unlisted assertion (assertions.md, NOT
+applied, primary decision); test_host_commands 54 OK; contract batch (holds_schema, account_api, reply_shape_compat,
+b4m, lifetime_cap_guard, rsf_s1_ingress, admission/signature x3, project_service, collector_stale) 207 OK 16 s;
+cli_status_client_boundary OK; project_service_startup+ledger_lock_limits+account_host+holds_report 62 OK 54 s;
+learning_cli 30 OK 62 s; open_withdrawal+hold_lifecycle 58 OK 54 s; lost_run_settlement+container_recovery+
+publication_replay_driver 63 OK 107 s. Not run: test_reply_shape_live (> 5 min), --affected (primary).
+Open for the primary: the one unlisted assertion above; runtime digest refresh (not done, as instructed).

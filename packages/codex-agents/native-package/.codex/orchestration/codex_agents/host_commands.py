@@ -1029,7 +1029,10 @@ def install_runtime_copy(
     aside = f".{copy.name}.{token}.old"
     clone = Path(os.path.realpath(clone_root)) if clone_root is not None else root
     held = None
+    project_lock = None
     try:
+        # RS-E E2a-4 (review round 1): a replacement takes the project's stable lock, as prune, removal and pins do.
+        project_lock = _take_project_lock(container)
         if os.path.lexists(copy):
             if runtime_copy_problem(copy, root) is None and _bound_clone(copy) == clone:
                 return copy, "unchanged"
@@ -1067,6 +1070,8 @@ def install_runtime_copy(
                 pass
         if held is not None:
             _unpin(container, copy.name, held)
+        if project_lock is not None:
+            os.close(project_lock)
         os.close(container)
     problem = runtime_copy_problem(copy, root)
     if problem is not None:
@@ -1080,9 +1085,13 @@ def _bound_clone(copy: Path) -> Path | None:
     return None if raw is None else Path(_parse_binding(raw)["clone_root"])
 
 
-# RS-E E2a-4: pins beside the copies. `<digest>.lock` is held shared by a launcher from its verification until its
-# child serves, and exclusive (never waited for) by a prune, replacement or removal of that copy; `<digest>.registered`
-# marks the copy the collector's launch record names (one per project).
+# RS-E E2a-4: pins beside the copies, in `.pins` (removed once empty). The project's stable lock is its copies'
+# folder itself (a directory is never replaced while its project's copies exist): prune, replacement, removal and
+# the registered marks take it, exclusive and in turn, so a mark and a removal never interleave. `<digest>.lock` is held shared by a launcher from its
+# verification until its child serves, and exclusive (never waited for) by a prune, replacement or removal of that
+# copy; an acquirer checks that the path still names the inode it locked, so a lock file a remover dropped is never
+# taken as a pin. `<digest>.registered` marks the copy the collector's launch record names: setup adds the new mark
+# before its record commits and drops the earlier one only after it.
 PINS = ".pins"
 
 
@@ -1101,23 +1110,58 @@ def _pins_directory(container: int, *, create: bool) -> int | None:
     return descriptor
 
 
-def _lock_copy(container: int, name: str, *, exclusive: bool) -> int | None:
-    """The copy's pin lock, taken without waiting; its descriptor holds it, or None when someone else holds it."""
-    pins = _pins_directory(container, create=True)
+def _take_project_lock(container: int) -> int:
+    """The project's stable lock (its copies' folder), exclusive (a short wait for another setup step); the
+    returned descriptor holds it."""
+    descriptor = os.open(".", os.O_RDONLY | os.O_DIRECTORY, dir_fd=container)
     try:
-        descriptor = os.open(name + ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=pins)
-    finally:
-        os.close(pins)
-    try:
-        fcntl.flock(descriptor, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
     except OSError:
         os.close(descriptor)
-        return None
+        raise
     return descriptor
 
 
+@contextlib.contextmanager
+def _project_locked(container: int):
+    descriptor = _take_project_lock(container)
+    try:
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _lock_copy(container: int, name: str, *, exclusive: bool) -> int | None:
+    """The copy's pin lock, taken without waiting; its descriptor holds it, or None when someone else holds it or
+    the lock file this opened was dropped meanwhile."""
+    pins = _pins_directory(container, create=True)
+    if pins is None:
+        return None  # its pins folder was removed between its creation and its open
+    try:
+        try:
+            descriptor = os.open(name + ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=pins)
+        except FileNotFoundError:
+            return None  # its pins folder was just emptied and removed
+        try:
+            fcntl.flock(descriptor, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+            try:
+                named = os.stat(name + ".lock", dir_fd=pins, follow_symlinks=False)
+            except FileNotFoundError:
+                named = None
+            opened = os.fstat(descriptor)
+            if named is None or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino):
+                raise BlockingIOError()
+        except OSError:
+            os.close(descriptor)
+            return None
+        return descriptor
+    finally:
+        os.close(pins)
+
+
 def _unpin(container: int, name: str, held: int) -> None:
-    """Drop a removed or replaced copy's lock (still holding it), and the pins folder once it is empty."""
+    """Drop a removed or replaced copy's lock file while still holding it (a later acquirer sees the new inode),
+    and the pins folder once it is empty."""
     try:
         pins = _pins_directory(container, create=False)
         if pins is not None:
@@ -1143,6 +1187,40 @@ def _registered(container: int, name: str) -> bool:
         return False
     finally:
         os.close(pins)
+
+
+def _set_mark(container: int, name: str) -> None:
+    """Under the project lock: mark an existing copy registered (durably)."""
+    try:
+        os.stat(name, dir_fd=container, follow_symlinks=False)
+    except FileNotFoundError:
+        raise HostCommandError("the runtime copy is gone") from None
+    pins = _pins_directory(container, create=True)  # under the project lock: nothing removes it meanwhile
+    if pins is None:
+        raise HostCommandError("the runtime copy pins are unavailable")
+    try:
+        os.close(os.open(name + ".registered", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=pins))
+        os.fsync(pins)
+    finally:
+        os.close(pins)
+
+
+def _drop_marks(container: int, *, keep: str | None = None, only: str | None = None) -> None:
+    """Under the project lock: drop every mark but `keep`'s, or only `only`'s."""
+    pins = _pins_directory(container, create=False)
+    if pins is None:
+        return
+    try:
+        for entry in os.listdir(pins):
+            if entry.endswith(".registered") and entry != f"{keep}.registered" and (
+                    only is None or entry == f"{only}.registered"):
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(entry, dir_fd=pins)
+        os.fsync(pins)
+    finally:
+        os.close(pins)
+    with contextlib.suppress(OSError):
+        os.rmdir(PINS, dir_fd=container)
 
 
 def _copy_container(copy: Path, *, create: bool = False) -> int:
@@ -1179,18 +1257,9 @@ def mark_registered_copy(copy: Path) -> None:
     """Mark `copy` as the one the collector's launch record names; the project's earlier mark goes."""
     container = _copy_container(copy)
     try:
-        pins = _pins_directory(container, create=True)
-        try:
-            name = Path(copy).name + ".registered"
-            descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=pins)
-            os.close(descriptor)
-            for entry in os.listdir(pins):
-                if entry.endswith(".registered") and entry != name:
-                    with contextlib.suppress(FileNotFoundError):
-                        os.unlink(entry, dir_fd=pins)
-            os.fsync(pins)
-        finally:
-            os.close(pins)
+        with _project_locked(container):
+            _set_mark(container, Path(copy).name)
+            _drop_marks(container, keep=Path(copy).name)
     finally:
         os.close(container)
 
@@ -1214,16 +1283,34 @@ def launch_target_problem(
 
 
 def _record_target(copy, project_root, record_launch, environ) -> str:
-    """RS-E E2a-3: the collector's launch record names this copy only once it is a valid launch target; then the
-    copy is marked registered (E2a-4), so no later prune removes it. A failure keeps the earlier record and mark."""
+    """RS-E E2a-3: the collector's launch record names this copy only once it is a valid launch target. E2a-4: the
+    copy is marked registered before the record commits and the earlier mark dropped only after, so no prune ever
+    removes the copy a record names. A failure keeps the earlier record and mark (and drops only a mark it added)."""
     try:
-        if launch_target_problem(copy, project_root, environ) is None:
-            record_launch(copy, copy.name)
-            mark_registered_copy(copy)
-            return "recorded"
-    except Exception:
-        pass
-    return "not_recorded"
+        container = _copy_container(copy)
+    except HostCommandError:
+        return "not_recorded"
+    try:
+        with _project_locked(container):
+            earlier = _registered(container, copy.name)
+            _set_mark(container, copy.name)
+        recorded = False
+        try:
+            if launch_target_problem(copy, project_root, environ) is None:
+                record_launch(copy, copy.name)
+                recorded = True
+        except Exception:
+            pass
+        with _project_locked(container):
+            if recorded:
+                _drop_marks(container, keep=copy.name)
+            elif not earlier:
+                _drop_marks(container, only=copy.name)
+        return "recorded" if recorded else "not_recorded"
+    except (OSError, HostCommandError):
+        return "not_recorded"
+    finally:
+        os.close(container)
 
 
 def record_setup_launch(project_root: Path, record_launch, environ: Mapping[str, str] | None = None,
@@ -1253,7 +1340,9 @@ def prune_runtime_copies(
     if container is None:
         return []
     removed = []
+    project_lock = None
     try:
+        project_lock = _take_project_lock(container)
         with os.scandir(container) as entries:
             names = sorted(entry.name for entry in entries)
         for name in names:
@@ -1268,6 +1357,8 @@ def prune_runtime_copies(
             finally:
                 _unpin(container, name, held)
     finally:
+        if project_lock is not None:
+            os.close(project_lock)
         os.close(container)
     return removed
 
@@ -1363,7 +1454,8 @@ def _remove_from(home: Path, digest: str) -> list[str]:
     if container is None:
         return removed
     try:
-        # RS-E E2a-4: a copy held in use is left in place (and so is its folder); the others go.
+        # RS-E E2a-4: a copy held in use, or the registered one, is left in place (and so is its folder); the others
+        # go. All under the project's stable lock.
         held, busy = [], []
         project = None
         try:
@@ -1372,9 +1464,13 @@ def _remove_from(home: Path, digest: str) -> list[str]:
             project = None
         if project is not None:
             try:
+                held.append(_take_project_lock(project))
                 with os.scandir(project) as entries:
                     names = sorted(entry.name for entry in entries if entry.name != PINS)
                 for name in names:
+                    if _registered(project, name):
+                        busy.append(name)
+                        continue
                     descriptor = _lock_copy(project, name, exclusive=True)
                     if descriptor is None:
                         busy.append(name)

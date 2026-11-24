@@ -260,6 +260,17 @@ def service_history(directory, project_id, **options):
     return ProjectHistory(directory, project_id, allow_schema_upgrade=True, **options)
 
 
+def _final_next_due(directory):
+    """RS-E E2a-8: the store's next due, read once more after settlement on a read-only connection of its own."""
+    import sqlite3
+    from .project_holds_schema import next_hold_due
+    connection = sqlite3.connect((Path(directory) / 'history.sqlite3').as_uri() + '?mode=ro', uri=True, timeout=1)
+    try:
+        return next_hold_due(connection)
+    finally:
+        connection.close()
+
+
 def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_STOP_NS, bundle_root=None,
                   liveness=LIVENESS):
     """Run the host until a signal, idleness, withdrawal or a writer fault; return a closed report."""
@@ -301,7 +312,7 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
         wake.close()
         project_holds_schema.install_wake_guard(project_id, None)
         return {'ready': False, 'reason_code': error.reason_code}
-    stopping, checked, faulted = [], [0.0], []
+    stopping, checked, faulted, settled = [], [0.0], [], False
     if stopped is None:
         for signum in (signal.SIGTERM, signal.SIGINT):
             signal.signal(signum, lambda *_: stopping.append(True))
@@ -346,11 +357,13 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
         else:
             # A run it still held (a running child it stopped, a finished one not yet
             # released) is settled now on kernel evidence, or by the next host.
-            host.settle_lost_runs()
-        # RS-E E2a-8: after final settlement, clean_stop within 2 s, best effort; after a writer fault nothing,
-        # so the collector keeps this project's wake state unknown.
+            settled = host.settle_lost_runs()
+        # RS-E E2a-8: only after verified final settlement (every thread stopped, settlement run to its end) and a
+        # successful final read of the store's next due, clean_stop within 2 s, best effort; otherwise, and after
+        # a writer fault, nothing, so the collector keeps this project's wake state unknown.
         try:
-            wake.finish(faulted=bool(faulted))
+            wake.finish(faulted=bool(faulted),
+                        final_due=(lambda: _final_next_due(directory)) if not faulted and settled else None)
         finally:
             project_holds_schema.install_wake_guard(project_id, None)
     if faulted:

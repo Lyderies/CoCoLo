@@ -227,7 +227,17 @@ class WakePublisherTests(unittest.TestCase):
         sender = FakeSender()
         sender.fail = True
         publisher = self.publisher(sender, start_sender=False)
-        publisher.before_due(100)  # never raises: the write proceeds
+        # Review round 1 (assertions.md): a first write with no acknowledged publication and no marker the
+        # collector's reconcile can see is refused (the collector may still hold a clean stop).
+        with self.assertRaises(project_wake.WakeRefused):
+            publisher.before_due(100)
+        base = Path(tempfile.mkdtemp(dir=SHORT_TMP))
+        self.addCleanup(lambda: subprocess.run(['rm', '-rf', str(base)], check=False))
+        publisher = project_wake.WakePublisher(CollectorPaths(LearningState(base / 'state').root), None,
+                                               'prj_' + 'a' * 32, send=sender, start_sender=False)
+        self.addCleanup(publisher.close)
+        publisher.before_due(100)  # with the marker kept, the write proceeds
+        self.assertTrue(publisher.marker.exists())
         self.assertTrue(publisher.unpublished)
         publisher.after_settle(100)
         publisher.drain()
@@ -235,6 +245,7 @@ class WakePublisherTests(unittest.TestCase):
         sender.fail = False
         publisher.drain()  # the retry publishes it
         self.assertFalse(publisher.unpublished)
+        self.assertFalse(publisher.marker.exists())  # the acknowledgement removes the marker
         self.assertEqual(('exact', 100), (sender.sent[-1]['state'], sender.sent[-1]['next_due_at_ms']))
 
     @requirements('E2a-8', why_not_scenario='The publisher ordering rules with a recording sender; the wire is WakeServiceTests.')
@@ -532,6 +543,278 @@ class WakeServiceTests(WireBase):
                 with connection:
                     connection.execute("DELETE FROM project_holds WHERE identity='orc_kill'")
                 connection.close()
+
+
+
+class NeverAnswers:
+    """A real account endpoint under a state root that accepts and never answers (or answers `reply` unframed)."""
+
+    def __init__(self, case, reply=None):
+        self.base = Path(tempfile.mkdtemp(dir=SHORT_TMP))
+        case.addCleanup(lambda: subprocess.run(['rm', '-rf', str(self.base)], check=False))
+        self.state = LearningState(self.base / 'state')
+        self.paths = CollectorPaths(self.state.root)
+        self.root = self.base / 'project'
+        self.root.mkdir()
+        issue_wake_capability(self.paths, self.root)
+        endpoint = account_endpoint_path(self.paths)
+        endpoint.parent.mkdir(parents=True, mode=0o700)
+        proof_directory(endpoint).mkdir(mode=0o700)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(endpoint))
+        listener.listen(4)
+        case.addCleanup(listener.close)
+        held = []
+
+        def accept():
+            connection, _ = listener.accept()
+            held.append(connection)
+            if reply is not None:
+                with __import__('contextlib').suppress(OSError):
+                    connection.sendall(reply)
+        threading.Thread(target=accept, daemon=True).start()
+        case.addCleanup(lambda: [connection.close() for connection in held])
+
+
+class RecordingGuard:
+    def __init__(self):
+        self.calls, self.dirty = [], False
+
+    def before_due(self, due):
+        self.dirty = True
+        self.calls.append(('before', due))
+
+    def touch(self):
+        self.dirty = True
+
+    def after_settle(self, due):
+        self.dirty = False
+        self.calls.append(('settled', due))
+
+
+class WakeRoundOneTests(StoreBase):
+    """Review round 1: the first write after a clean stop, exact and stop ordering, the withdrawal deadline, the
+    epoch of one instance, the verifier's privacy and the reconcile's budgets."""
+
+    def marked_publisher(self, sender, project=None):
+        project = project or self.fixture.project_a_id
+        publisher = project_wake.WakePublisher(CollectorPaths(self.fixture.state_root), self.fixture.project_a,
+                                               project, send=sender, start_sender=False)
+        self.addCleanup(publisher.close)
+        return publisher
+
+    @requirements('E2a-7', why_not_scenario='The real ledger and collector reconcile in process with a failing sender.')
+    def test_E2a_7_a_first_write_unpublished_after_a_clean_stop_is_still_reconciled(self):
+        project = self.fixture.project_a_id
+        self.ledger.publish_wake(project, epoch=None, seq=1, state='clean_stop', next_due_at_ms=None)
+        sender = FakeSender()
+        sender.fail = True
+        self.marked_publisher(sender).before_due(5_000)  # the write proceeds; the host dies before any publish
+        server = CollectorServer(self.ledger, client_capabilities=self.fixture.clients)
+        before = time.time_ns() // 1_000_000
+        with mock.patch.object(learning_store, 'project_host_serving', return_value=False):
+            server._reconcile_wakes()
+        row = self.row(project)
+        self.assertIsNotNone(row['due_at_ms'], row)
+        self.assertGreaterEqual(row['due_at_ms'], before)
+
+    @requirements('E2a-7', why_not_scenario='The publisher ordering rules with a recording sender.')
+    def test_E2a_7_a_write_while_pending_invalidates_the_queued_exact(self):
+        sender = FakeSender()
+        publisher = project_wake.WakePublisher(None, None, 'prj_' + 'a' * 32, send=sender, start_sender=False)
+        self.addCleanup(publisher.close)
+        publisher.before_due(None)  # pending acknowledged
+        publisher.after_settle(1_000)  # an exact queued for the transaction that ended ...
+        publisher.before_due(500)  # ... and a new write, while the collector's state is still pending
+        publisher.drain()
+        self.assertNotIn(('exact', 1_000), [(s['state'], s['next_due_at_ms']) for s in sender.sent])
+        publisher.after_settle(500)
+        publisher.drain()
+        self.assertEqual(('exact', 500), (sender.sent[-1]['state'], sender.sent[-1]['next_due_at_ms']))
+
+    @requirements('E2a-8', why_not_scenario='The publisher stop rules with a recording sender and a real endpoint.')
+    def test_E2a_8_clean_stop_needs_settlement_and_a_final_due_read(self):
+        sender = FakeSender()
+        publisher = project_wake.WakePublisher(None, None, 'prj_' + 'a' * 32, send=sender, start_sender=False)
+        self.addCleanup(publisher.close)
+        publisher.before_due(None)
+        publisher.after_settle(None)
+        publisher.drain()
+        publisher.before_due(100)  # a write whose transaction-end read then failed: no after_settle
+        self.assertFalse(publisher.finish(faulted=False))  # nothing verified: no clean stop
+        self.assertNotIn('clean_stop', [s['state'] for s in sender.sent])
+        read = project_wake.WakePublisher(None, None, 'prj_' + 'a' * 32, send=sender, start_sender=False)
+        self.addCleanup(read.close)
+        self.assertFalse(read.finish(faulted=False, final_due=mock.Mock(side_effect=sqlite3.OperationalError())))
+        self.assertNotIn('clean_stop', [s['state'] for s in sender.sent])
+        done = project_wake.WakePublisher(None, None, 'prj_' + 'a' * 32, send=sender, start_sender=False)
+        self.addCleanup(done.close)
+        self.assertTrue(done.finish(faulted=False, final_due=lambda: 100))
+        self.assertEqual(('clean_stop', 100), (sender.sent[-1]['state'], sender.sent[-1]['next_due_at_ms']))
+        # Bounded: a collector that accepts and never answers does not hold the stop past its deadline.
+        silent = NeverAnswers(self)
+        bounded = project_wake.WakePublisher(silent.paths, silent.root, 'prj_' + 'b' * 32, start_sender=False)
+        self.addCleanup(bounded.close)
+        began = time.monotonic()
+        self.assertFalse(bounded.finish(faulted=False, deadline=1.0, final_due=lambda: None))
+        self.assertLess(time.monotonic() - began, 2.0)
+
+    @requirements('E2a-7', why_not_scenario='A real project store with the withdrawal transitions; the guard records.')
+    def test_E2a_7_a_releasing_open_binding_counts_by_its_withdrawal_retry(self):
+        from tests import test_open_withdrawal as withdrawals
+        from tests import test_result_leases as leases
+        base = leases.ResultLeaseTests(methodName='runTest')
+        base.setUp()
+        self.addCleanup(base.doCleanups)
+        store, guard = base.store, RecordingGuard()
+        project_holds_schema.install_wake_guard(store.project_id, guard)
+        self.addCleanup(project_holds_schema.install_wake_guard, store.project_id, None)
+        binding = withdrawals.binding(1)
+        store.record_open_binding(binding.run_handle, 1, binding.run_id, withdrawals.INPUTS, 'codex',
+                                  instance='svc-' + 'a' * 32, now_ms=1000)
+        guard.calls.clear()
+        store.mark_open_withdrawing(binding.run_handle, 1, 'cancelled_before_claim', project_id=withdrawals.PROJECT,
+                                    runtime_digest=COLLECTOR_RUNTIME_DIGEST)
+        row = store._connection.execute("SELECT identity,next_check_ms FROM project_holds WHERE kind='open_binding'"
+                                        ).fetchone()
+        retry = int(row[1])
+        self.assertEqual(retry, project_holds_schema.next_hold_due(store._connection))
+        self.assertIn(('before', retry), guard.calls)  # the earlier deadline was published before the write
+        self.assertEqual(('settled', retry), guard.calls[-1])
+        store.defer_open_withdrawal(row[0], now_ms=5_000, base_ms=100, max_ms=1_000)
+        self.assertEqual(5_100, project_holds_schema.next_hold_due(store._connection))
+
+    @requirements('E2a-6', why_not_scenario='The real account owner view and ledger, with a reply lost once.')
+    def test_E2a_6_a_lost_first_acknowledgement_does_not_allocate_a_second_epoch(self):
+        from codex_agents.wake_contracts import decode_wake_publish
+        views, project, lost = AccountOwnerViews(self.ledger), self.fixture.project_a_id, [True]
+
+        def send(payload, timeout):
+            result = views.publish_wake(project, decode_wake_publish(payload))
+            if lost[0]:
+                lost[0] = False
+                raise AccountError('account_unavailable')  # applied; its reply never arrived
+            return result
+        publisher = self.marked_publisher(send)
+        publisher.before_due(None)
+        publisher.before_due(None)  # the retry of this same instance
+        row = self.row(project)
+        self.assertEqual((1, 1), (row['allocated_epoch'], row['epoch']), row)
+        # Another instance still gets a new epoch.
+        other = self.marked_publisher(lambda payload, timeout: views.publish_wake(project, decode_wake_publish(payload)))
+        other.before_due(None)
+        self.assertEqual(2, self.row(project)['epoch'])
+
+    @requirements('E2a-5', why_not_scenario='The real account host verifier in process; the wire is WakeWireTests.')
+    def test_E2a_5_the_verifier_probes_no_caller_named_path_and_binds_the_project_id(self):
+        from codex_agents.account_host import AccountServiceHost
+        from codex_agents.service_enrollment import EnrollmentError
+        paths = CollectorPaths(self.fixture.state_root)
+        host = AccountServiceHost(self.ledger, paths)
+        self.addCleanup(host.close)
+        verifier = host._frontend._verifier
+        proofs = proof_directory(account_endpoint_path(paths))
+        probed = (Path(self.fixture.temporary.name) / 'probe-me').resolve()
+        known = self.fixture.project_a.resolve()
+        lines = [enrollment_preamble(os.urandom(32), 'project', CODEX_HOST_CLIENT, 1, b'frame', proofs,
+                                     subject=str(subject)) for subject in (probed, known)]
+        touched = []
+
+        def watch(real):
+            def inner(path, *args, **kwargs):
+                touched.append(os.fsdecode(path) if isinstance(path, (str, bytes, os.PathLike)) else str(path))
+                return real(path, *args, **kwargs)
+            return inner
+        with mock.patch('os.lstat', watch(os.lstat)), mock.patch('os.stat', watch(os.stat)), \
+                mock.patch('os.open', watch(os.open)):
+            for line in lines:
+                with self.assertRaises(EnrollmentError):
+                    verifier.verify(line)
+        self.assertEqual([], [path for path in touched if str(probed) in path or str(known) in path])
+        good = enrollment_preamble(read_wake_capability(paths, known), 'project', CODEX_HOST_CLIENT, 1, b'frame',
+                                   proofs, subject=str(known))
+        self.assertEqual(self.fixture.project_a_id, verifier.verify(good).bound_project)
+
+    def register(self, count):
+        projects = []
+        for number in range(count):
+            root = Path(self.fixture.temporary.name) / f'many-{len(projects)}-{os.urandom(4).hex()}'
+            root.mkdir()
+            projects.append(self.ledger.register_project(root, now_ms=1))
+        return projects
+
+    def held_work(self, server):
+        """The most SQLite steps any one ledger hold of one reconcile pass took."""
+        counts, held, transaction = [], self.ledger._held, self.ledger._account_transaction
+        steps = [0]
+
+        def counted(real):
+            @__import__('contextlib').contextmanager
+            def inner(*args, **kwargs):
+                steps[0] = 0
+                self.ledger._connection.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1) or 0, 1)
+                try:
+                    with real(*args, **kwargs) as value:
+                        yield value
+                finally:
+                    self.ledger._connection.set_progress_handler(None, 1)
+                    counts.append(steps[0])
+            return inner
+        server._wake_cursor = ''
+        with mock.patch.object(self.ledger, '_held', counted(held)), \
+                mock.patch.object(self.ledger, '_account_transaction', counted(transaction)), \
+                mock.patch.object(learning_store, 'project_host_serving', return_value=True):
+            server._reconcile_wakes()
+        return max(counts)
+
+    @requirements('E2a-9', why_not_scenario='The real collector reconcile and ledger in process; nothing is spawned.')
+    def test_E2a_9_one_locked_read_examines_at_most_one_page_of_projects(self):
+        for project in [self.fixture.project_a_id, self.fixture.project_b_id] + self.register(62):
+            self.ledger.publish_wake(project, epoch=None, seq=1, state='clean_stop', next_due_at_ms=None)
+        server = CollectorServer(self.ledger, client_capabilities=self.fixture.clients)
+        page = self.held_work(server)
+        for project in self.register(4 * 64):
+            self.ledger.publish_wake(project, epoch=None, seq=1, state='clean_stop', next_due_at_ms=None)
+        self.assertLess(self.held_work(server), 2 * page)
+
+    @requirements('E2a-9', why_not_scenario='The real collector reconcile and ledger in process; nothing is spawned.')
+    def test_E2a_9_reconcile_reaches_every_project_past_one_page(self):
+        projects = [self.fixture.project_a_id, self.fixture.project_b_id] + self.register(3 * 64)
+        server = CollectorServer(self.ledger, client_capabilities=self.fixture.clients)
+        with mock.patch.object(learning_store, 'project_host_serving', return_value=False):
+            for _ in range(8):
+                server._reconcile_wakes()
+        unmarked = [project for project in projects if (self.row(project) or {}).get('due_at_ms') is None]
+        self.assertEqual([], unmarked)
+
+    @requirements('E2a-9', why_not_scenario='The real collector start in process; nothing is spawned.')
+    def test_E2a_9_the_startup_pass_is_bounded_and_the_rest_follows(self):
+        projects = [self.fixture.project_a_id, self.fixture.project_b_id] + self.register(10)
+
+        def slow(state_root, root):
+            time.sleep(0.25)
+            return False
+        with mock.patch.object(learning_store, 'project_host_serving', slow):
+            server = CollectorServer(self.ledger, client_capabilities=self.fixture.clients)
+            began = time.monotonic()
+            server.start()
+            self.addCleanup(server.stop)
+            self.assertLess(time.monotonic() - began, 2.0)
+            end = time.monotonic() + 15
+            while time.monotonic() < end:
+                with self.ledger._lock:
+                    if all((self.row(project) or {}).get('due_at_ms') is not None for project in projects):
+                        break
+                time.sleep(0.1)
+        with self.ledger._lock:
+            self.assertEqual([], [p for p in projects if (self.row(p) or {}).get('due_at_ms') is None])
+
+    @requirements('E2a-7', why_not_scenario='A real endpoint that answers past the reply limit.')
+    def test_E2a_7_a_reply_past_the_limit_is_refused_and_flagged(self):
+        oversized = NeverAnswers(self, reply=b'x' * (project_wake.MAX_REPLY_BYTES + 10))
+        with self.assertRaises(project_wake.WakeUnavailable):
+            project_wake.send_wake(oversized.paths, oversized.root, 'prj_' + 'c' * 32,
+                                   wake_payload(state='pending'), 2.0)
 
 
 if __name__ == '__main__':
