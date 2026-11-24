@@ -549,6 +549,8 @@ def status_client(state_root, project_root):
         try:
             if not CollectorClient(state.socket, timeout=1).launch_recorded(Path(project_root)):
                 report['recovery'] = LAUNCH_RECORD_MISSING
+            else:  # RS-E E2c-9: the collector starter's line (null when nothing is due or outstanding)
+                report['recovery'] = CollectorClient(state.socket, timeout=1).start_status(Path(project_root))
         except (CollectorError, OSError):
             pass  # Unknown here: no line.
     except CollectorError as error:

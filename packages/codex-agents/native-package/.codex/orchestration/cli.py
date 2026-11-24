@@ -613,6 +613,17 @@ def _service_slots(slots):
     return report
 
 
+def _unpark_start(args):
+    """RS-E E2c-4: ask the running collector of this runtime to end this project's start park; best effort (a
+    caller who cannot sign as the owner, or no collector, changes nothing)."""
+    try:
+        client = _compatible_collector(CollectorPaths(args.state_root))
+        if client is not None:
+            client.start_unpark(Path(args.project_root))
+    except Exception:
+        pass
+
+
 def _start_project_host(args):
     """Start this project's service unless one serves; first settle where its learning lives.
 
@@ -2763,6 +2774,8 @@ def main() -> int:
         elif args.command == "learning-start-project-service":
             # As every command that needs it: an idle earlier version's service is replaced and a
             # project with history is moved first when nothing runs (S1-U8).
+            # RS-E E2c-4 (owner decision 143): the owner's start command ends a crash-loop park and its streak.
+            _unpark_start(args)
             serving = _start_project_host(args) is True
             report = _start_reply(serving, getattr(args, "learning_migration_failure", None))
             if not serving:

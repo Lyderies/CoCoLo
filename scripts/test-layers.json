@@ -245,6 +245,7 @@
  "codex:tests.test_project_runtime": "scenario",
  "codex:tests.test_project_service": "scenario",
  "codex:tests.test_project_service_startup": "scenario",
+ "codex:tests.test_project_start": "scenario",
  "codex:tests.test_project_store_removal": "unit",
  "codex:tests.test_project_worker_result": "scenario",
  "codex:tests.test_provider_restrictions": "scenario",

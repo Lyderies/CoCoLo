@@ -1947,6 +1947,21 @@
    "checks": 1,
    "ends": "RS-E E2a-7: one reply frame of at most 16 KiB per publication; a reply past it ends that exchange (WakeUnavailable, the write keeps its unpublished flag and retries)",
    "test": "test_E2a_7_a_reply_past_the_limit_is_refused_and_flagged"
+  },
+  "learning_store.py::<module>": {
+   "checks": 1,
+   "ends": "RS-E E2c-2: START_CLAIM_SQL reads at most one claim batch (64) of due rows per locked step; the starter claims again every STARTER_CHECK_SECONDS while due rows remain, and a claimed row leaves the set until its attempt ends",
+   "test": "test_E2c_3_a_collector_drains_1000_due_projects_within_60_seconds_and_starts_no_later"
+  },
+  "learning_store.py::outstanding_starts": {
+   "checks": 1,
+   "ends": "RS-E E2c-10: one page of at most 64 outstanding claims per read; the stranded pass reads page after page from its cursor, and a claim leaves the set once released or ended",
+   "test": "test_E2c_10_the_stranded_pass_reaches_every_claim_past_one_page"
+  },
+  "project_start.py::_reconcile_stranded": {
+   "checks": 1,
+   "ends": "RS-E E2c-10: a page shorter than START_CLAIM_BATCH ends the pass; a full page continues after its last claim, so every outstanding claim is reached",
+   "test": "test_E2c_10_the_stranded_pass_reaches_every_claim_past_one_page"
   }
  }
 }

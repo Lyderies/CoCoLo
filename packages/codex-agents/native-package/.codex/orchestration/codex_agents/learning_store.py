@@ -216,6 +216,41 @@ _WAKE_SCHEMA = (
     "project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,"
     "instance TEXT NOT NULL,epoch INTEGER NOT NULL CHECK(epoch>=1),PRIMARY KEY(project_id,instance))",
 )
+# RS-E E2c: the starter's own row per project (machine-local, never in a backup): the outstanding claim (attempt id,
+# claim time, child pid), the failure streak and backoff (E2c-4), the park (owner decision 143) and the last outcome
+# the status line reads (E2c-9). Additive; no schema version change.
+_START_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS project_starts("
+    "project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,"
+    "attempt TEXT,claimed_at_ms INTEGER,child_pid INTEGER CHECK(child_pid IS NULL OR child_pid>1),"
+    "failures INTEGER NOT NULL DEFAULT 0 CHECK(failures>=0),streak_first_ms INTEGER,next_start_at_ms INTEGER,"
+    "parked_reason TEXT,parked_digest TEXT,outcome TEXT,reason TEXT,outcome_at_ms INTEGER,started_at_ms INTEGER,"
+    "updated_at_ms INTEGER NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS project_starts_outstanding ON project_starts(attempt) WHERE attempt IS NOT NULL",
+)
+# E2c-2: the starter's one locked read: due rows by the due index, not parked (unless setup recorded a new launch
+# digest since), not backing off and with no start outstanding. Parameters: now, now, limit.
+START_CLAIM_SQL = (
+    "SELECT w.project_id,p.canonical_root,p.launch_copy,p.launch_digest,s.parked_reason FROM project_wake w "
+    "JOIN projects p ON p.project_id=w.project_id LEFT JOIN project_starts s ON s.project_id=w.project_id "
+    "WHERE w.due_at_ms IS NOT NULL AND w.due_at_ms<=? AND p.status='active' AND (s.project_id IS NULL OR "
+    "(s.attempt IS NULL AND (s.next_start_at_ms IS NULL OR s.next_start_at_ms<=?) AND (s.parked_reason IS NULL "
+    "OR s.parked_digest IS NOT p.launch_digest))) ORDER BY w.due_at_ms,w.project_id LIMIT ?"
+)
+
+
+@dataclass(frozen=True)
+class StartClaim:
+    """E2c-2: one claimed start: the project, its root and launch record (None when setup recorded none)."""
+    project_id: str
+    root: str
+    copy: str | None
+    digest: str | None
+    attempt: str
+
+
+START_OUTCOMES = frozenset({"failed", "started", "no_record", "install_changed", "handover", "migration", "serving",
+                            "unauthorized"})
 # E2a-9 (review round 1): a reconcile pass reads pages of WAKE_RECONCILE_BATCH project rows (rows examined, not
 # rows matched), each in its own short ledger hold; the startup pass before ready probes for at most this long and
 # the wake thread finishes the rest at once.
@@ -4036,6 +4071,8 @@ class LearningLedger:
             self._connection.execute("DROP TABLE project_wake_instances")
         for statement in _WAKE_SCHEMA:
             self._connection.execute(statement)
+        for statement in _START_SCHEMA:  # RS-E E2c
+            self._connection.execute(statement)
 
     def active_project_roots(self) -> list[tuple[str, str]]:
         """(project_id, canonical root) of every active project, in project order."""
@@ -4187,6 +4224,148 @@ class LearningLedger:
                         "AND (state IS NULL OR state<>'clean_stop' OR ?) AND (due_at_ms IS NULL OR due_at_ms>?)",
                         (now_ms, now_ms, project_id, epoch, seq, 1 if marked_stop else 0, now_ms)).rowcount
         return marked
+
+    # RS-E E2c: the starter's ledger steps. Each is one short hold of the ledger lock; nothing here probes, hashes,
+    # spawns or waits (E2c-2).
+
+    def claim_due_starts(self, *, now_ms: int, limit: int) -> list[StartClaim]:
+        """E2c-2: claim at most `limit` due projects (one indexed read), each marked outstanding with a fresh attempt
+        id and its claim time in the same transaction. A parked project is claimed again only once setup recorded a
+        new launch digest, which also starts a fresh streak (owner decision 143)."""
+        if type(limit) is not int or not 0 < limit <= 64:
+            raise LedgerError("start claim limit is invalid")
+        claims = []
+        with self._account_transaction():
+            for row in self._connection.execute(START_CLAIM_SQL, (now_ms, now_ms, limit)).fetchall():
+                attempt = secrets.token_hex(16)
+                self._connection.execute(
+                    "INSERT OR IGNORE INTO project_starts(project_id,failures,updated_at_ms) VALUES(?,0,?)",
+                    (row["project_id"], now_ms))
+                unpark = row["parked_reason"] is not None
+                self._connection.execute(
+                    "UPDATE project_starts SET attempt=?,claimed_at_ms=?,child_pid=NULL,outcome='starting',"
+                    "reason=NULL,outcome_at_ms=?,updated_at_ms=?" + (
+                        ",parked_reason=NULL,parked_digest=NULL,failures=0,streak_first_ms=NULL,next_start_at_ms=NULL"
+                        if unpark else "") + " WHERE project_id=?",
+                    (attempt, now_ms, now_ms, now_ms, row["project_id"]))
+                claims.append(StartClaim(str(row["project_id"]), str(row["canonical_root"]),
+                                         None if row["launch_copy"] is None else str(row["launch_copy"]),
+                                         None if row["launch_digest"] is None else str(row["launch_digest"]), attempt))
+        return claims
+
+    def set_start_child(self, project_id: str, attempt: str, pid: int) -> None:
+        """E2c-10: the claim's spawned child, kept so a later collector can reconcile a claim this one left."""
+        with self._account_transaction():
+            self._connection.execute("UPDATE project_starts SET child_pid=? WHERE project_id=? AND attempt=?",
+                                     (int(pid), project_id, attempt))
+
+    def _start_row(self, project_id: str) -> dict | None:
+        row = self._connection.execute("SELECT * FROM project_starts WHERE project_id=?", (project_id,)).fetchone()
+        return None if row is None else dict(row)
+
+    def _count_start_failure(self, project_id: str, reason: str, now_ms: int, *, backoff_first_ms: int,
+                             backoff_max_ms: int, park_after_ms: int) -> None:
+        """E2c-4: one failure of the streak; past park_after_ms from its first failure, the project parks."""
+        row = self._start_row(project_id)
+        failures = int(row["failures"]) + 1
+        first = now_ms if row["streak_first_ms"] is None else int(row["streak_first_ms"])
+        if now_ms - first >= park_after_ms:
+            digest = self._connection.execute("SELECT launch_digest FROM projects WHERE project_id=?",
+                                              (project_id,)).fetchone()
+            self._connection.execute(
+                "UPDATE project_starts SET failures=?,streak_first_ms=?,next_start_at_ms=NULL,parked_reason=?,"
+                "parked_digest=?,outcome='failed',reason=?,outcome_at_ms=?,updated_at_ms=? WHERE project_id=?",
+                (failures, first, reason, None if digest is None else digest["launch_digest"], reason, now_ms, now_ms,
+                 project_id))
+            return
+        wait = min(backoff_max_ms, backoff_first_ms * (2 ** min(failures - 1, 32)))
+        self._connection.execute(
+            "UPDATE project_starts SET failures=?,streak_first_ms=?,next_start_at_ms=?,outcome='failed',reason=?,"
+            "outcome_at_ms=?,updated_at_ms=? WHERE project_id=?",
+            (failures, first, now_ms + wait, reason, now_ms, now_ms, project_id))
+
+    def finish_start(self, project_id: str, attempt: str, *, outcome: str, reason: str | None, now_ms: int,
+                     backoff_first_ms: int, backoff_max_ms: int, park_after_ms: int, recheck_ms: int) -> dict | None:
+        """E2c-2/4: end this attempt (no other attempt's claim is touched). `failed` counts one failure; `started`
+        keeps the streak until its probation ends (`start_probation`); every other outcome (no record, install
+        changed, handover, migration, serving) is looked at again after recheck_ms and counts nothing. Returns the
+        row, or None when the attempt is not outstanding."""
+        if outcome not in START_OUTCOMES:
+            raise LedgerError("start outcome is invalid")
+        with self._account_transaction():
+            row = self._start_row(project_id)
+            if row is None or row["attempt"] != attempt:
+                return None
+            self._connection.execute(
+                "UPDATE project_starts SET attempt=NULL,claimed_at_ms=NULL,child_pid=NULL WHERE project_id=?",
+                (project_id,))
+            if outcome == "failed":
+                self._count_start_failure(project_id, reason or "service_ended", now_ms,
+                                          backoff_first_ms=backoff_first_ms, backoff_max_ms=backoff_max_ms,
+                                          park_after_ms=park_after_ms)
+            elif outcome == "started":
+                self._connection.execute(
+                    "UPDATE project_starts SET next_start_at_ms=NULL,outcome='started',reason=NULL,outcome_at_ms=?,"
+                    "started_at_ms=?,updated_at_ms=? WHERE project_id=?", (now_ms, now_ms, now_ms, project_id))
+            else:
+                self._connection.execute(
+                    "UPDATE project_starts SET next_start_at_ms=?,outcome=?,reason=?,outcome_at_ms=?,updated_at_ms=? "
+                    "WHERE project_id=?", (now_ms + recheck_ms, outcome, reason, now_ms, now_ms, project_id))
+            return self._start_row(project_id)
+
+    def release_start(self, project_id: str, attempt: str, *, now_ms: int) -> None:
+        """E2c-10: an attempt that never spawned (a stopping collector, or a claim a dead collector left with no
+        child) is released as it was claimed: no outcome, no failure."""
+        with self._account_transaction():
+            self._connection.execute(
+                "UPDATE project_starts SET attempt=NULL,claimed_at_ms=NULL,child_pid=NULL,outcome=NULL,"
+                "updated_at_ms=? WHERE project_id=? AND attempt=?", (now_ms, project_id, attempt))
+
+    def start_probation(self, project_id: str, *, survived: bool, now_ms: int, backoff_first_ms: int,
+                        backoff_max_ms: int, park_after_ms: int, recheck_ms: int = 0) -> dict | None:
+        """E2c-4: a started host that served START_PROBATION_SECONDS ends the streak; one that ended sooner counts
+        one failure. Only for the last outcome `started` with no attempt outstanding."""
+        with self._account_transaction():
+            row = self._start_row(project_id)
+            if row is None or row["attempt"] is not None or row["outcome"] != "started":
+                return row
+            if survived:
+                self._connection.execute(
+                    "UPDATE project_starts SET failures=0,streak_first_ms=NULL,updated_at_ms=? WHERE project_id=?",
+                    (now_ms, project_id))
+            else:
+                self._count_start_failure(project_id, "service_ended_early", now_ms,
+                                          backoff_first_ms=backoff_first_ms, backoff_max_ms=backoff_max_ms,
+                                          park_after_ms=park_after_ms)
+            return self._start_row(project_id)
+
+    def outstanding_starts(self, *, after: str = "", limit: int = 64) -> list[dict]:
+        """E2c-10: one page of outstanding claims after `after` in project order (the partial index), for the
+        starter's reconcile, which reads page after page."""
+        with self._held():
+            return [dict(row) for row in self._connection.execute(
+                "SELECT s.project_id,s.attempt,s.claimed_at_ms,s.child_pid,p.canonical_root FROM project_starts s "
+                "JOIN projects p ON p.project_id=s.project_id WHERE s.attempt IS NOT NULL AND s.project_id>? "
+                "ORDER BY s.project_id LIMIT ?", (after, limit))]
+
+    def unpark_start(self, project_id: str, *, now_ms: int) -> None:
+        """E2c-4 (owner decision 143): the owner's start command ends the park and the streak."""
+        with self._account_transaction():
+            if self._connection.execute("SELECT 1 FROM projects WHERE project_id=? AND status='active'",
+                                        (project_id,)).fetchone() is None:
+                raise ProjectNotRegisteredError("project is not registered")
+            self._connection.execute(
+                "UPDATE project_starts SET parked_reason=NULL,parked_digest=NULL,failures=0,streak_first_ms=NULL,"
+                "next_start_at_ms=NULL,outcome=CASE WHEN attempt IS NULL THEN NULL ELSE outcome END,updated_at_ms=? "
+                "WHERE project_id=?", (now_ms, project_id))
+
+    def start_record(self, project_id: str) -> dict:
+        """E2c-9: what the status line reads: the start row (or {}) and the wake row's due time. No content."""
+        with self._held():
+            row = self._start_row(project_id) or {}
+            wake = self._connection.execute("SELECT due_at_ms FROM project_wake WHERE project_id=?",
+                                            (project_id,)).fetchone()
+        return {**row, "due_at_ms": None if wake is None else wake["due_at_ms"]}
 
     def _learning_moved_locked(self, project_id: str) -> bool:
         return self._connection.execute(
@@ -13232,6 +13411,12 @@ class CollectorServer:
         with contextlib.suppress(Exception):
             self._wakes = threading.Thread(target=self._wake_loop, name="collector-wakes", daemon=True)
             self._wakes.start()
+        # RS-E E2c: the starter (its own thread and workers; nothing of it runs before ready, E2c-3).
+        self._starter = None
+        with contextlib.suppress(Exception):
+            from .project_start import ProjectStarter
+            self._starter = ProjectStarter(self)
+            self._starter.start()
         self._ready.set()
         try:
             while not self._stop.is_set():
@@ -13253,6 +13438,8 @@ class CollectorServer:
             self._sweeps.join(5)
             if getattr(self, "_wakes", None) is not None:
                 self._wakes.join(5)
+            if getattr(self, "_starter", None) is not None:
+                self._starter.join(5)
             listener.close()
             self._socket = None
             with contextlib.suppress(FileNotFoundError):
@@ -13611,6 +13798,20 @@ class CollectorServer:
                     return {"ok": False, "code": "operation_rejected"}
                 project_id = self.ledger.project_for_root(Path(request["project_root"]))
                 return {"ok": True, "recorded": self.ledger.launch_record(project_id) is not None}
+            if request.get("op") in {"start_status", "start_unpark"} and set(request) == {
+                "protocol", "op", "project_root", "owner",
+            }:
+                # RS-E E2c-9/E2c-4: the starter's status line for this root (read only), or the owner's start
+                # command ending its park. Only for the owner's proof naming this root, checked before any lookup.
+                if not self._owner_request(request, ("op", "project_root")):
+                    return {"ok": False, "code": "operation_rejected"}
+                project_id = self.ledger.project_for_root(Path(request["project_root"]))
+                if request["op"] == "start_unpark":
+                    self.ledger.unpark_start(project_id, now_ms=time.time_ns() // 1_000_000)
+                    return {"ok": True}
+                from .project_start import recovery_line
+                return {"ok": True, "recovery": recovery_line(self.ledger.start_record(project_id),
+                                                              request["project_root"], time.time_ns() // 1_000_000)}
             if request.get("op") == "record_launch" and set(request) == {
                 "protocol", "op", "project_root", "launch_copy", "launch_digest", "owner",
             }:

@@ -319,6 +319,22 @@ class CollectorClient:
             raise CollectorError("collector response is invalid", code="response_invalid")
         return response["recorded"]
 
+    def start_status(self, project_root: Path) -> str | None:
+        """RS-E E2c-9: the collector starter's status line for this registered root (the owner's read), or None."""
+        response = self._request(self._owner_signed({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "start_status",
+                                                     "project_root": str(project_root.resolve())}))
+        line = response.get("recovery")
+        if line is not None and (type(line) is not str or len(line) > 4096):
+            raise CollectorError("collector response is invalid", code="response_invalid")
+        return line
+
+    def start_unpark(self, project_root: Path) -> None:
+        """RS-E E2c-4 (owner decision 143): the owner's start command ends this root's crash-loop park."""
+        response = self._request(self._owner_signed({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "start_unpark",
+                                                     "project_root": str(project_root.resolve())}))
+        if response.get("ok") is not True:
+            raise CollectorError("collector response is invalid", code="response_invalid")
+
     def record_launch(self, project_root: Path, launch_copy: str, launch_digest: str) -> None:
         """RS-E E2a-3: record setup's validated launch target for this registered root (the owner's step; the
         collector verifies the copy itself, so this may take longer than the default timeout)."""

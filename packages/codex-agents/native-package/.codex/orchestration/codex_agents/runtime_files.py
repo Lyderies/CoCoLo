@@ -175,6 +175,7 @@ RUNTIME_FILES = (
     "codex_agents/project_routing_evidence.py",
     "codex_agents/project_runtime.py",
     "codex_agents/project_service.py",
+    "codex_agents/project_start.py",
     "codex_agents/project_usage_report.py",
     "codex_agents/project_wake.py",
     "codex_agents/project_worker_result.py",

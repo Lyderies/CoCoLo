@@ -1,0 +1,60 @@
+{
+ "authority": "docs/requirements/e2c/requirements.md",
+ "requirements": [
+  {
+   "id": "E2c-1",
+   "statement": "### E2c-1 - A stopped project with due holds starts by itself (E2-1, T1)\nA registered project with a launch record, no live host and a due wake row (`project_wake.due_at_ms <= now`:\npublished by its last service, or marked due by E2a-9's reconcile because its state is unknown) is started by the\ncollector within one sweep interval (`STARTER_CHECK_SECONDS` apart), with no owner or client action. A project that\nis not due is not started. **Acceptance (real collector and project host processes):** a project that never ran\n(unknown: due at collector start) and one whose service published `clean_stop` with a past next due are both\nserving within the interval, without any client command.",
+   "source": "tests/requirements/e2c.json#E2c-1"
+  },
+  {
+   "id": "E2c-2",
+   "statement": "### E2c-2 - Limits and lock discipline (E2-2, T2, T3)\nOnly the collector's starter thread starts projects. Its locked step only claims: one indexed read of due rows\n(not parked, not backing off, no start outstanding; at most `START_CLAIM_BATCH`), each claimed row marked\noutstanding with an attempt id and its claim time in the same transaction (`project_starts`), queued in memory\n(at most `START_QUEUE_LIMIT`, a project at most once). Probing, verifying, hashing, spawning, waiting and reaping\nrun on the starter's own workers, off the ledger lock and never on the collector's request thread. At most one\nstart is outstanding per project and `START_SLOTS` overall; slots are refilled from the queue in claim order (due\norder), so every due project is tried before any project is tried again (round robin). **Acceptance:** three due\nprojects, two of them ending at once: never more than 2 starts at once, never 2 for one project, the first three\nstarts name three different projects and retries alternate; while a start is blocked in its spawn, a collector\nrequest that takes the ledger lock and a direct ledger read both complete, and the start then finishes.",
+   "source": "tests/requirements/e2c.json#E2c-2"
+  },
+  {
+   "id": "E2c-3",
+   "statement": "### E2c-3 - Budgets (E2-2, T10; decision 150)\nWith 1,000 due projects the starter drains them (every one claimed and its attempt ended with an outcome) within\n60 s; no claim step holds the ledger lock 750 ms or more and a 64-row claim batch takes under 50 ms; 1,000 due rows\nadd under 200 ms to collector start-up (nothing of the starter runs before ready); and the claim step's work does\nnot grow with 100,000 settled wake rows (rows with no due time). **Acceptance:** measured on a real ledger and a\nreal collector.",
+   "source": "tests/requirements/e2c.json#E2c-3"
+  },
+  {
+   "id": "E2c-4",
+   "statement": "### E2c-4 - Backoff and the crash-loop park (E2-2, owner decision 143, T2)\nA failed start (the host ended without serving, did not serve by twice `START_TIMEOUT_SECONDS`, or served but\nended within `START_PROBATION_SECONDS`) counts one failure of the project's streak; the first failure starts the\nstreak. The next attempt waits `START_BACKOFF_FIRST_SECONDS * 2^(failures-1)`, at most\n`START_BACKOFF_MAX_SECONDS`. Failures and the streak are kept in the ledger (`project_starts`), so a collector\nrestart keeps them, and a publish never resets them. Once a start fails while the streak's first failure is\n`START_PARK_AFTER_SECONDS` old, the project parks: `recovery failed: <reason_code>` and no further attempt. Only a\nuser action unparks: a new launch digest (setup ran again: a new install or update) or the owner's\n`learning-start-project-service --project-root <root>` (owner-signed collector operation `start_unpark`, which also\nends the streak). A project reporting again (a publish) does not unpark it. A start that serves for\n`START_PROBATION_SECONDS` ends the streak. **Acceptance:** a broken project backs off with growing waits; once\nits streak is old enough it parks after its next failure; a republish leaves it parked; the owner command unparks;\na project that is fixed and serves ends its streak; a host killed within probation counts as failed.",
+   "source": "tests/requirements/e2c.json#E2c-4"
+  },
+  {
+   "id": "E2c-5",
+   "statement": "### E2c-5 - What is launched (E2-3, T6)\nThe child is the launch record's copy only: entry `<launch_copy>/.codex/orchestration/project_host.py`, run with\n`PYTHON_ISOLATION_FLAGS`, environment exactly `{PATH: os.defpath, xcrun_nocache: \"1\"}`, its own session\n(process group), stdin/stderr to /dev/null and stdout to a private report file. The copy is pinned\n(`pin_runtime_copy`) from its verification until the child serves or ends. **Acceptance:** the running child's\narguments name the copy's entry and the isolation flags, and a variable planted in the collector's environment is\nabsent from the child's.",
+   "source": "tests/requirements/e2c.json#E2c-5"
+  },
+  {
+   "id": "E2c-6",
+   "statement": "### E2c-6 - Install changed (E2-4, T4)\nBefore each start, off the lock, the copy's name must equal `launch_digest` and `launch_target_problem(copy, root,\n{})` (the account's own home) must be None; otherwise nothing starts and the status is\n`recovery pending: install changed`, checked again every `START_RECHECK_SECONDS` (no failure counted).\nA project with no launch record is not started and keeps E2a-11's line. **Acceptance:** a changed copy file, a\nchanged project runtime file and a missing copy each give `recovery pending: install changed` and no spawn.",
+   "source": "tests/requirements/e2c.json#E2c-6"
+  },
+  {
+   "id": "E2c-7",
+   "statement": "### E2c-7 - Another version's live service (E2-5, T5)\nWhen a live host of another runtime serves the project, nothing starts, no maintenance is taken and the collector\ndoes not stop; the status is `recovery: needs update handover: run learning-start-project-service --project-root\n<root>`, checked again every `START_RECHECK_SECONDS`. **Acceptance:** with another runtime's live host, the line\nand command shown, no spawn, the same collector process still serving and no maintenance marker.",
+   "source": "tests/requirements/e2c.json#E2c-7"
+  },
+  {
+   "id": "E2c-8",
+   "statement": "### E2c-8 - Unattended pre-start steps (E2-8, T12)\nBefore spawning, the starter does the CLI's pre-start steps that need no collector maintenance: a project whose\nlearning is not moved and has no history is marked moved (the ledger's `mark_learning_moved_if_empty`); one with\nhistory to migrate, or a pending activation, is not started (`recovery pending: learning migration: run\nlearning-start-project-service --project-root <root>`, checked again every `START_RECHECK_SECONDS`, no failure);\nthe collector never migrates, never takes maintenance and never stops itself for a start. A host that ends at once\nkeeps its fixed `SERVICE_START_REASONS` code from its private report file as the failure reason. A live compatible\nhost is never started again (E2b handles an unresponsive one). **Acceptance:** an empty project is marked moved and\nthen serves; a project with a pending activation is not started and shows the migration line; a host that ends at\nonce shows its own reason code in the status.",
+   "source": "tests/requirements/e2c.json#E2c-8"
+  },
+  {
+   "id": "E2c-9",
+   "statement": "### E2c-9 - Status, scoped to its subject (E2-7 status part)\nThe owner-signed, read-only collector operation `start_status` (checked before any lookup, as E2a-11's\n`launch_status`) answers `{\"ok\": true, \"recovery\": <line or null>}` for exactly the project its proof names, never\nhold or result content: null when nothing is due or outstanding; `recovery: starting`; `recovery: started <UTC\ntime>`; `recovery: backing off (<n> failed: <reason_code>, next <UTC time>)`; `recovery failed: <reason_code>; stopped trying\nafter an hour of failed starts: run learning-start-project-service --project-root <root>`; `recovery pending:\ninstall changed`; `recovery: needs update handover: <command>`; `recovery pending: learning migration:\n<command>`; `recovery pending: service unresponsive` (a live compatible host whose due time is\n`START_RECHECK_SECONDS` past). `learning-status` shows it as `recovery` when a launch record exists (E2a-11's line\notherwise). A request without the owner's proof gets the same refusal whether the root is registered or not; a\nproject session (no owner proof) sees null. attest has no status surface (unchanged). **Acceptance:** each line\nover the real collector; unsigned requests for a registered and an unknown root get byte-identical refusals.",
+   "source": "tests/requirements/e2c.json#E2c-9"
+  },
+  {
+   "id": "E2c-10",
+   "statement": "### E2c-10 - Stranded claims, timeouts and restarts (T11, T14; decision 150)\nA claim carries its attempt id, claim time and, once spawned, the child's pid. At collector start (on the\nstarter's thread, before its first claim) and once per sweep interval, every outstanding claim that is not one of\nthis starter's own is reconciled: no child, or a child gone, releases it (a child gone without serving counts\nfailed); a surviving child keeps it until it serves or ends, and past twice the start timeout it is released as\nfailed without being signalled (its identity cannot be proved after a restart). A claim never stays outstanding\nafter a collector crash. The starter's own child still alive at twice `START_TIMEOUT_SECONDS` gets SIGKILL to its\nprocess group and counts failed. A service killed between its pending acknowledgement and its commit, or between\nits commit and `exact`, is started within one interval; a collector restart keeps a project's failures and\nbackoff and reconciles unknown projects as due. **Acceptance:** a claim left by a dead collector with a dead child\nis released and the project started; one with a live child is kept until that child ends; a host that never serves\nis killed at twice the timeout; E2a's killed service is started; the backoff survives a collector restart.",
+   "source": "tests/requirements/e2c.json#E2c-10"
+  },
+  {
+   "id": "E2c-11",
+   "statement": "### E2c-11 - Clean stop with the collector's intake closed (T13)\nA project service stopping while the collector's account intake is closed (its socket gone or refusing) finishes\nits best-effort `clean_stop` within the 2 s deadline and its stop is not delayed past it. **Acceptance:** a real\nproject host stopped after the collector is gone exits within the deadline plus its own stop.",
+   "source": "tests/requirements/e2c.json#E2c-11"
+  }
+ ]
+}
