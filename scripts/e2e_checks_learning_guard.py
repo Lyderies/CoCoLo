@@ -63,6 +63,17 @@ FAULT_TARGETS = {"learning_guard_broken": S3_IDS}
 FAULT_ALSO_RED: dict[str, tuple] = {"learning_guard_broken": ()}
 
 
+RETAIN_WINDOW_MS = 8000
+
+
+def retention_patch() -> dict:
+    """Decision 193 (test only, same class as decision 128's silence limits): the raw-event retention window, scaled for
+    the one scene that judges real expiry. Every raw event then lives RETAIN_WINDOW_MS instead of its 7 to 90 days; nothing
+    else changes (the summary window and every other limit are untouched)."""
+    return {"module": "codex_agents.learning_store", "old": "            keep[code] = period\n",
+            "new": f"            keep[code] = {RETAIN_WINDOW_MS}\n"}
+
+
 def fault_patches() -> list:
     return FAULTS[FAULT] if FAULT else []
 
@@ -533,20 +544,63 @@ def l10_3_an_expired_backup_is_removed_by_retention(phase: Phase) -> None:
     phase.reason("retention_removes_expired_backup")
 
 
-@check("L10.3", group="learn")
+def retain_scene():
+    """Decision 193: a World whose raw-event window is scaled (retention_patch); real expiry through `learning-expire`."""
+    if "retain" in _SCENES:
+        return _SCENES["retain"]
+    world = e2e_support.World().__enter__()
+    scene = SimpleNamespace(world=world)
+    _SCENES["retain"] = scene
+    trusted_interpreter_checks(world)
+    write_patches(world, [retention_patch(), *fault_patches()])
+    set_up(world)
+    scene.project_id = ledger_project_ids(world)[0]
+    for name, extra in HOOK_EVENTS:
+        world.run_hook(hook_event(name, world.project, **extra))
+    rows = event_rows(world)
+    scene.expiries = [row["expires_at_ms"] for row in rows]
+    scene.ingested = [row["ingested_at_ms"] for row in rows]
+    deadline = time.monotonic() + 60
+    while scene.expiries and all(isinstance(e, int) for e in scene.expiries) and now_ms() <= max(scene.expiries) \
+            and time.monotonic() < deadline:
+        time.sleep(0.5)
+    scene.events_before = len(event_rows(world))
+    scene.codes_before = ledger_event_codes(world, scene.project_id)
+    scene.summaries_before = summary_count(world)
+    scene.real_now = now_ms()
+    scene.expire = step(world, "learning-expire", "--now-ms", str(scene.real_now))
+    scene.events_after = len(event_rows(world))
+    scene.summaries_after = summary_count(world)
+    scene.summary_events, scene.summary_codes = 0, {}
+    for (content,) in _rows(world, "select content from records where record_type = 'event_summary'"):
+        record = json.loads(bytes(content))
+        scene.summary_events += record.get("event_count") or 0
+        for code, count in (record.get("event_counts") or {}).items():
+            scene.summary_codes[code] = scene.summary_codes.get(code, 0) + count
+    return scene
+
+
+@check("L10.3", group="retain")
 def l10_3_expired_raw_events_are_removed_and_their_summary_kept(phase: Phase) -> None:
-    r = section("retention").retention
-    # A raw event expires seven days after it is ingested and `learning-expire --now-ms` refuses a clock in the future
-    # (retention time cannot be in the future): within a run no raw event can be expired. The requirement's
-    # "controllable clock" has no product control to use; this stays red until the primary decides (report).
-    expired = [e for e in (r.expiries or []) if isinstance(e, int) and e <= r.real_now]
-    phase.expect(len(expired) > 0, "a raw event is expired at the real clock for retention to remove")
-    code, reply, _ = r.now
-    phase.expect(code == 0 and isinstance(reply, dict) and reply.get("expired_records", 0) >= len(expired),
+    r = retain_scene()
+    stamps = list(zip(r.expiries or [], r.ingested or []))
+    phase.expect(len(stamps) > 0 and all(isinstance(e, int) and isinstance(i, int) for e, i in stamps),
+                 "raw events exist and carry an expiry")
+    phase.expect(all(0 < e - i < 60_000 for e, i in stamps), "the raw-event window is the test-scaled one (decision 193)")
+    phase.expect(all(e <= r.real_now for e, _ in stamps), "every raw event is expired at the real clock")
+    phase.expect(isinstance(r.events_before, int) and r.events_before == len(stamps) and r.events_before > 0
+                 and isinstance(r.codes_before, dict) and sum(r.codes_before.values()) == r.events_before,
+                 "the raw events are in the ledger just before the command")
+    code, reply, _ = r.expire
+    phase.expect(code == 0 and isinstance(reply, dict) and reply.get("ready") is True
+                 and isinstance(reply.get("expired_records"), int) and reply["expired_records"] >= r.events_before,
                  "learning-expire reports the expired raw events removed")
-    phase.expect(r.events_after_now == r.events_before - len(expired), "the expired raw events are gone from the ledger")
+    phase.expect(r.events_after == 0, "the expired raw events are gone from the ledger")
     phase.expect(isinstance(r.summaries_after, int) and r.summaries_after > r.summaries_before,
-                 "their event summary was kept")
+                 "an event summary was kept")
+    phase.expect(r.summary_events == r.events_before and r.summary_codes == r.codes_before,
+                 "the kept summaries account for every removed event, by kind")
+    phase.reason("raw_events_removed_summary_kept")
 
 
 # ---------------------------------------------------------------------------------------------

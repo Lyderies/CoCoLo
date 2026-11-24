@@ -20,7 +20,7 @@ CHECK_GROUPS: dict[str, str] = {}
 # Rough seconds each scene group takes in a run (the longest start first under --jobs; a guess only orders the work).
 GROUP_SECONDS = {"default": 20, "fresh": 50, "key": 25, "replace": 35, "observe": 30, "paid": 25,
                  "route_claude": 35, "route_codex": 35, "life_claude": 55, "life_codex": 55, "life_claude_ready": 55,
-                 "run_ctl": 90, "run_silence": 40, "run_capacity": 150, "learn": 110, "guard": 80}
+                 "run_ctl": 90, "run_silence": 40, "run_capacity": 150, "learn": 110, "guard": 80, "retain": 70}
 REASON = re.compile(r"[a-z][a-z0-9_]{0,79}")
 
 

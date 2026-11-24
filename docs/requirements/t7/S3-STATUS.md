@@ -52,3 +52,10 @@ test_e2e_run_control green.
 5. Interpretations (assertions.md): no recording switch exists, so "off" is the two real no-record paths; "unknown host" is a command
    with no Codex session / an unknown sandbox kind; `project_parent` cannot be reached in a World (the project's parent holds the
    home folder), `above_home` is what a session opened above the project gets.
+
+## Decision 193 (2026-11-25)
+Scene `retain` (group retain, about 35 s): World with `retention_patch` (raw-event window 8 s); five hook events, wait past expiry,
+`learning-expire --now-ms now`. Normal (/tmp/claude-501/t7s3/r2.json): the raw-removal check passes its first seven expectations
+(events expired, removed by learning-expire) and FAILS the last: `learning-expire` keeps NO event summary (summaries come only from the
+collector's background sweep, `sweep_event_retention`); L10.3 stays red = product finding. Fault run (fault2.json): isolated true.
+Tests 133 green (RawRetentionTests, BootHookTests red first). Decision 192: the G8 check stays strict until fix/backup-path merges.

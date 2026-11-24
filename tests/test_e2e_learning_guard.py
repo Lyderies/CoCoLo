@@ -239,19 +239,87 @@ class RetentionTests(SceneTest):
         self.assertFalse(self.judged(now=(0, {"ready": True}, "")))
         self.assertFalse(self.judged(summaries_after=1))
 
-    def test_the_raw_event_removal_check_fails_while_no_event_can_be_expired(self):
-        # Every raw event expires seven days after it is ingested and `learning-expire --now-ms` refuses a clock in
-        # the future: no event is expired, so removal cannot be shown (reported to the primary, decision needed).
-        self.assertFalse(self.judged(lg.l10_3_expired_raw_events_are_removed_and_their_summary_kept))
 
-    def test_the_raw_event_removal_check_passes_for_an_expired_event_that_went_with_its_summary(self):
-        self.assertTrue(self.judged(lg.l10_3_expired_raw_events_are_removed_and_their_summary_kept,
-                                    expiries=[999_000] * 5, ingested=[900_000] * 5, summaries_before=0,
-                                    summaries_after=1, events_after_now=0,
-                                    now=(0, {"ready": True, "expired_records": 5}, "")))
-        self.assertFalse(self.judged(lg.l10_3_expired_raw_events_are_removed_and_their_summary_kept,
-                                     expiries=[999_000] * 5, ingested=[900_000] * 5, summaries_after=0,
-                                     events_after_now=0, now=(0, {"ready": True, "expired_records": 5}, "")))
+def retain_scene(**changes):
+    codes = {"turn_started": 1, "tool_started": 1, "tool_output_observed": 1, "session_started": 1, "turn_stop_observed": 1}
+    scene = SimpleNamespace(
+        world=None, project_id="prj_x", expiries=[1_008_000] * 5, ingested=[1_000_000] * 5, real_now=1_009_000,
+        events_before=5, codes_before=dict(codes), expire=(0, {"ready": True, "expired_records": 5}, ""),
+        events_after=0, summaries_before=0, summaries_after=1, summary_events=5, summary_codes=dict(codes),
+        summary_runs_ok=True)
+    for name, value in changes.items():
+        setattr(scene, name, value)
+    return scene
+
+
+class RawRetentionTests(SceneTest):
+    """Decision 193: the raw-event window is scaled by the test-only BOOT hook; removal is judged through learning-expire."""
+
+    def judged(self, **changes):
+        self.put("retain", retain_scene(**changes))
+        return run_check(lg.l10_3_expired_raw_events_are_removed_and_their_summary_kept)
+
+    def test_the_honest_scene_passes(self):
+        self.assertTrue(self.judged())
+
+    def test_an_event_that_is_not_expired_at_the_clock_fails(self):
+        self.assertFalse(self.judged(expiries=[1_008_000, 1_008_000, 1_008_000, 1_008_000, 1_010_000]))
+        self.assertFalse(self.judged(expiries=[]))
+        self.assertFalse(self.judged(expiries=[None] * 5))
+
+    def test_the_window_must_be_the_scaled_one_not_the_seven_days(self):
+        self.assertFalse(self.judged(expiries=[1_000_000 + lg.SEVEN_DAYS_MS] * 5, real_now=1_000_000 + lg.SEVEN_DAYS_MS))
+
+    def test_events_must_exist_before_the_command_and_be_gone_after_it(self):
+        self.assertFalse(self.judged(events_before=0, events_after=0, codes_before={}))
+        self.assertFalse(self.judged(events_after=1))
+        self.assertFalse(self.judged(events_after=None))
+
+    def test_the_command_must_succeed_and_report_the_removal(self):
+        self.assertFalse(self.judged(expire=(2, {"ready": False}, "")))
+        self.assertFalse(self.judged(expire=(0, None, "")))
+        self.assertFalse(self.judged(expire=(0, {"ready": True, "expired_records": 0}, "")))
+
+    def test_the_summary_must_be_kept_and_account_for_every_removed_event(self):
+        self.assertFalse(self.judged(summaries_after=0))
+        self.assertFalse(self.judged(summaries_after=None))
+        self.assertFalse(self.judged(summary_events=4))
+        self.assertFalse(self.judged(summary_codes={"turn_started": 5}))
+
+
+class BootHookTests(unittest.TestCase):
+    """Decision 193 (and 128): the stand-in Python's rewrites change only the silence limits and the raw-event window."""
+
+    def test_the_only_scene_rewrites_are_the_silence_limits_the_retention_window_and_a_fault(self):
+        allowed = {"liveness_patch", "retention_patch", "fault_patches"}
+        found = set()
+        for path in sorted((ROOT / "scripts").glob("e2e_checks_*.py")):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "write_patches":
+                    for inner in ast.walk(node.args[1]):
+                        if isinstance(inner, ast.Call):
+                            found.add(getattr(inner.func, "id", ""))
+        self.assertTrue(found and found <= allowed, found)
+        self.assertIn("retention_patch", found)
+
+    def test_the_retention_rewrite_changes_only_the_raw_event_window(self):
+        patch = lg.retention_patch()
+        self.assertEqual("codex_agents.learning_store", patch["module"])
+        source = (ORCHESTRATION / "learning_store.py").read_text()
+        self.assertEqual(1, source.count(patch["old"]))
+        changed = source.replace(patch["old"], patch["new"])
+        import difflib
+        diff = [line for line in difflib.unified_diff(source.splitlines(), changed.splitlines(), lineterm="", n=0)
+                if line[:1] in "+-" and line[:3] not in ("+++", "---")]
+        self.assertEqual(2, len(diff), diff)
+        self.assertIn("keep[code]", diff[0])
+        self.assertNotIn("summary", diff[1])
+
+    def test_the_boot_hook_itself_rewrites_nothing_unless_a_patch_file_lists_it(self):
+        boot = e2e_support.BOOT
+        self.assertEqual(1, boot.count('"/.e2e-bin/patches.json"'))
+        for word in ("time", "LIVENESS", "keep_", "RETENTION", "PROBE_"):
+            self.assertNotIn(word, boot)
 
 
 class ShortBackupTests(SceneTest):
