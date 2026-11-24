@@ -63,6 +63,31 @@ def which(cmd, mode=os.F_OK | os.X_OK, path=None):
     return _which(cmd, mode, path)
 shutil.which = which
 sys.executable = %SHIM%
+# T7 S1 (test only, decision 128): source rewrites listed in HOME/.e2e-bin/patches.json, applied to the named
+# product module as it is imported (a scaled liveness limit, an injected fault). One that does not apply raises.
+import importlib.machinery, json as _json
+_patch_file = HOME + "/.e2e-bin/patches.json"
+if os.path.exists(_patch_file):
+    _patches = _json.load(open(_patch_file))
+    class _Patched(importlib.machinery.SourceFileLoader):
+        def get_code(self, fullname):
+            source = self.get_data(self.path).decode()
+            for item in _patches:
+                if item["module"] == fullname:
+                    if source.count(item["old"]) != 1:
+                        raise ImportError("e2e patch does not apply: " + fullname)
+                    source = source.replace(item["old"], item["new"])
+            return compile(source, self.path, "exec")
+    class _Finder:
+        @classmethod
+        def find_spec(cls, name, path=None, target=None):
+            if not any(item["module"] == name for item in _patches):
+                return None
+            spec = importlib.machinery.PathFinder.find_spec(name, path)
+            if spec is not None and isinstance(spec.loader, importlib.machinery.SourceFileLoader):
+                spec.loader = _Patched(spec.loader.name, spec.loader.path)
+            return spec
+    sys.meta_path.insert(0, _Finder)
 args = sys.argv[1:]
 if args[0] == "-c":
     code = args[1]

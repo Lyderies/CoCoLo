@@ -40,6 +40,7 @@ import e2e_checks_billing  # noqa: E402,F401
 import e2e_checks_routing  # noqa: E402,F401
 import e2e_checks_run  # noqa: E402,F401
 import e2e_checks_general  # noqa: E402,F401
+import e2e_checks_run_control  # noqa: E402,F401
 
 REQUIREMENTS = ROOT / "tests" / "e2e" / "requirements.json"
 
