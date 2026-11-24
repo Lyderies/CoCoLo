@@ -40,6 +40,12 @@ FIVE_HOUR_WINDOW_MINUTES = 300
 FIVE_HOURS_MS = FIVE_HOUR_WINDOW_MINUTES * 60 * 1000
 
 
+# USAGE-RECHECK-1 (decision 134 pending): an exhausted provider whose reset is far away (or unmeasured) is
+# re-read at most once per interval, so an early provider reset is seen. Owner to confirm both numbers.
+USAGE_RECHECK_INTERVAL_MS = 3_600_000
+USAGE_RECHECK_FAR_RESET_MS = 3_600_000
+
+
 def api_keys_present(environ: Mapping[str, str]) -> bool:
     return any(environ.get(name) for name in API_KEY_VARIABLES)
 
@@ -295,7 +301,8 @@ def evaluate_admission(
     state, state_digest = headroom_state(provider, fingerprint, headroom, billing, now_ms)
     if state_digest is not None:
         evidence.append(state_digest)
-    if state == "exhausted":
+    if state == "exhausted" and not (probe and usage_recheck_due(provider, fingerprint, headroom, billing, now_ms)):
+        # USAGE-RECHECK-2: only a due re-check probe passes an exhausted account; every other gate still applies.
         return decision("provider_exhausted", fingerprint, evidence)
     if run_cap is not None:
         # A backstop on run count per usage window, whatever headroom says.
@@ -394,12 +401,15 @@ class ProviderStateSnapshot:
     project_id: str
     evaluated_at_ms: int
     providers: dict[str, Any]
+    # USAGE-RECHECK-5: the route's own re-check audit, added by the CLI after its fresh reading; never on the wire.
+    recheck: Any = None
 
     def audit(self) -> dict[str, Any]:
         from .learning_contracts import content_digest
         body = {"format_version": 1, "classifier": "RT-RX-1", "project_id": self.project_id,
                 "evaluated_at_ms": self.evaluated_at_ms, "providers": deepcopy(self.providers)}
-        return {**body, "snapshot_ref": content_digest(body), "status": "checked"}
+        return {**body, "snapshot_ref": content_digest(body), "status": "checked",
+                **({"recheck": deepcopy(self.recheck)} if self.recheck else {})}
 
 
 def _headroom_components(record):
@@ -438,6 +448,25 @@ def classify_provider_state(provider, fingerprint, headroom, billing, now_ms):
                 for window in component["windows"]
             ]
             own.append(({**component, "windows": windows}, digest))
+    def reset_early(record, window):
+        # USAGE-RECHECK-3 (decision 134 pending): a strictly later reading of the same window that rates it
+        # clear and reports its own, different reset proves the provider reset that window early.
+        # Only a far reset (more than USAGE_RECHECK_FAR_RESET_MS away) can be proved early; a near one is waited
+        # for, as RT-RX-5 and the fixed admission order (test_providers) require.
+        if window["resets_at"] - now_ms <= USAGE_RECHECK_FAR_RESET_MS:
+            return False
+        key = (window.get("scope"), window.get("window_minutes"))
+        for later, _ in own:
+            if not record["observed_at_ms"] < later["observed_at_ms"] <= now_ms:
+                continue
+            for candidate in later["windows"]:
+                if ((candidate.get("scope"), candidate.get("window_minutes")) == key
+                        and candidate["resets_at"] is not None and candidate["resets_at"] != window["resets_at"]
+                        and _headroom_state(provider, {**later, "windows": [candidate]}, now_ms,
+                                            unknown_when_unmeasured=True) in {"ample", "constrained"}):
+                    return True
+        return False
+
     clearing = [(record, digest) for record, digest in own
                 if record["observed_at_ms"] <= now_ms
                 and _headroom_state(provider, record, now_ms, unknown_when_unmeasured=True) in {"ample", "constrained"}]
@@ -446,6 +475,12 @@ def classify_provider_state(provider, fingerprint, headroom, billing, now_ms):
     cleared = []
     for record, digest in own:
         explicit = [w for w in record["windows"] if w["resets_at"] is not None]
+        if explicit:
+            remaining = [w for w in explicit if not reset_early(record, w)]
+            if not remaining and _headroom_state(provider, {**record, "windows": explicit}, now_ms,
+                                                 unknown_when_unmeasured=True) in {"exhausted", "constrained"}:
+                cleared.append(digest)
+            explicit = remaining
         resetless = [w for w in record["windows"] if w["resets_at"] is None]
         components = []
         if explicit:
@@ -483,11 +518,25 @@ def classify_provider_state(provider, fingerprint, headroom, billing, now_ms):
         digests = list(dict.fromkeys([*digests, cleared[-1], newest_clear[1]]))
     resets = sorted({reset for item in deciding for reset in item[2]})
     expiries = [item[3] for item in deciding if item[3] is not None]
+    # USAGE-RECHECK-1: the newest reading of this account (any window, or Codex billing) starts the interval.
+    readings = [r["observed_at_ms"] for r, _ in own if r["observed_at_ms"] <= now_ms] + [
+        r["observed_at_ms"] for r, _ in billing
+        if r["provider"] == provider and r["account_fingerprint"] == fingerprint and r["observed_at_ms"] <= now_ms]
+    recheck_due = None
+    if (state == "exhausted" and readings
+            and (not resets or min(resets) - now_ms > USAGE_RECHECK_FAR_RESET_MS)):
+        recheck_due = max(readings) + USAGE_RECHECK_INTERVAL_MS
     return {"state": state, "known": state != "unknown", "evidence_digests": digests,
             "reasons": list(dict.fromkeys(item[4] for item in deciding)),
             "next_reset_ms": min(resets, default=None), "blocking_resets_ms": resets,
             "fallback_expiry_ms": max(expiries, default=None),
-            "decision_digest": deciding[-1][1] if deciding else None}
+            "decision_digest": deciding[-1][1] if deciding else None, "recheck_due_at_ms": recheck_due}
+
+
+def usage_recheck_due(provider, fingerprint, headroom, billing, now_ms):
+    """USAGE-RECHECK-1: whether an exhausted account is due its bounded fresh reading."""
+    due = classify_provider_state(provider, fingerprint, headroom, billing, now_ms)["recheck_due_at_ms"]
+    return due is not None and due <= now_ms
 
 
 def headroom_state(provider, fingerprint, headroom, billing, now_ms):

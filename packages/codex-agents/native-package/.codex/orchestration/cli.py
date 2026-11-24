@@ -1311,7 +1311,7 @@ def _service_snapshot(state_root, project_root):
     snapshot = provider_state_snapshot_client(state_root, project_root, host_client=_host_client(),
                                               unavailable=unavailable)
     if snapshot is not None:
-        return None, snapshot
+        return None, _usage_recheck(state_root, project_root, snapshot)
     return "snapshot_unavailable:" + (unavailable[0] if unavailable else "unknown")[:72], None
 
 
@@ -1325,6 +1325,46 @@ def _names_state(state_root) -> bool:
     default state implicitly (tests run there).
     """
     return state_root is not None or os.path.lexists(INSTALL_MANIFEST)
+
+
+def _usage_recheck(state_root, project_root, snapshot):
+    """USAGE-RECHECK-2/4/5: one bounded fresh reading for each provider the snapshot says is due one.
+
+    Codex is read with the non-spending observation; Claude with one billing probe (a single Haiku
+    low-effort turn). Routing then uses only the snapshot read afterwards, so no work goes to a provider
+    that is still exhausted. A refused or failed re-check never fails the route: it keeps the snapshot.
+    The stored reading starts the next interval (decision 134 pending).
+    """
+    import dataclasses
+    due = [provider for provider in ("codex", "claude")
+           if snapshot.providers[provider].get("state") == "exhausted"
+           and type(snapshot.providers[provider].get("recheck_due_at_ms")) is int
+           and snapshot.providers[provider]["recheck_due_at_ms"] <= snapshot.evaluated_at_ms]
+    if not due:
+        return snapshot
+    failures = {}
+    for provider in due:
+        try:
+            if provider == "codex":
+                observe_provider_client(state_root, project_root, "codex")
+            else:
+                billing_probe_client(state_root, project_root)
+        except (RuntimeBillingProbeError, RuntimeObservationError, DispatchError, StateError, OSError,
+                ContractError) as error:
+            reason = getattr(error, "reason_code", None)
+            failures[provider] = "failed:" + (reason if type(reason) is str and reason else type(error).__name__)[:64]
+    fresh = provider_state_snapshot_client(state_root, project_root, host_client=_host_client())
+    current = snapshot if fresh is None else fresh
+    audit = {}
+    for provider in due:
+        after = None if fresh is None else fresh.providers[provider].get("recheck_due_at_ms")
+        # A probe the provider stopped (e.g. still rejected) can still store its reading: judge by the fresh state.
+        read = fresh is not None and (after is None or after > fresh.evaluated_at_ms)
+        outcome = (("still_exhausted" if current.providers[provider]["state"] == "exhausted" else "cleared")
+                   if read else failures.get(provider)
+                   or ("failed:snapshot_unavailable" if fresh is None else "failed:no_reading"))
+        audit[provider] = {"outcome": outcome, "observed_at_ms": None if fresh is None else fresh.evaluated_at_ms}
+    return dataclasses.replace(current, recheck=audit)
 
 
 def _route_snapshot(state_root, project_root):

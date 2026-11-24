@@ -30,7 +30,10 @@ reading 10 min old -> refused `provider_exhausted`, nothing launched.
 A later reading (strictly later `observed_at_ms`, at or before evaluation time) of the same provider, account and
 window (same `scope` and `window_minutes`) that rates that window non-restrictive AND carries its own explicit
 `resets_at` different from the restrictive window's proves the window reset early: it supersedes that window's
-restriction (and a Claude `rejected` status bound to that window). A later reading with no reset time, for another
+restriction (and a Claude `rejected` status bound to that window). This applies only while the restrictive
+window's reset is more than `USAGE_RECHECK_FAR_RESET_MS` away: a near reset is waited for, so RT-RX-5 and
+`tests/test_providers.py:1171-1173` ("a later, favourable read does not clear a window that has not reset", reset
+5 s away) are unchanged. A later reading with no reset time, for another
 window, for another account, or older/equal in time does not clear it; RT-RX-5 is otherwise unchanged.
 **Acceptance:** Claude `rejected` seven_day window (reset +3 days) at t1, later `allowed` seven_day 2% (reset +7
 days) at t2 -> not exhausted; later five_hour-only reading -> still exhausted; later resetless reading -> still
