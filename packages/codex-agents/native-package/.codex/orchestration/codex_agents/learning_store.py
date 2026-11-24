@@ -12128,7 +12128,7 @@ class LearningLedger:
         session that opened it) is checked by the account.
 
         O0b RS-A round 1 F13 (design draft 4 item 2, draft 4b item 2): the receipt is stored with the request's
-        digest and the generation it named. A request whose digest matches the stored receipt gets it back,
+        digest and the generation it named. A request whose digest and supplied generation match gets it back,
         `known`, whatever the row's generation is now (through restart and pruning: the tombstone answers). A
         new transition must name the row's current generation (else `stale`); one naming none (an older
         client) is refused `generation_required`.
@@ -12164,6 +12164,10 @@ class LearningLedger:
                     # receipt, whether its request is the stored one or an altered one.
                     raise LedgerError("withdrawal is not authorized")
                 if stored.get("request_digest") == request_digest:
+                    # RS-13: a matching digest cannot authorize a substituted generation.
+                    # Legacy digest-only retries still name no generation (F13).
+                    if generation is not None and generation != stored.get("generation"):
+                        raise LedgerError("withdrawal is stale")
                     if owner is not None and any(stored.get(name) != owner[name] for name in ('attempt', 'reason')):
                         raise LedgerError("withdrawal is not authorized")
                     return {**stored["answer"], "run_handle": run_handle, "receipt": hold["receipt"], "known": True}

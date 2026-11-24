@@ -1349,8 +1349,8 @@
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
   "project_history.py::candidates": {
-   "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "checks": 3,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR RSF-S7: settlement evidence candidate reads are bounded by limit * PURGE_SCAN_FACTOR, scalar positions only, with a fair cursor; at most limit expired closures are cleared per pass."
   },
   "project_history.py::learning_outcome_page": {
    "checks": 3,
@@ -1368,6 +1368,14 @@
   "project_history.py::record_registered_run": {
    "checks": 2,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::record_account_settlement": {
+   "checks": 0,
+   "max_closure_bytes": 8192,
+   "ends": "RSF-S7 decision 214 rejects the former 'no total bound' policy. BOUNDED evidence: one authenticated canonical ASCII closure per settled attempt, at most 8192 bytes inclusive, on its reservation hold if bound or lease hold if unbound; retries reuse the row. Rows have evidence cleared strictly after released_at_ms + max(MAX_RESULT_RETENTION_MS, TOMBSTONE_MS) + TOMBSTONE_MS (eight days); permanent hold identity and other fields remain. expire_results runs _purge_settlement_evidence each pass, reading at most limit * PURGE_SCAN_FACTOR scalar candidate positions and clearing at most limit evidence rows, limit 1..100, with a fair cursor. Attempt pruning removes the settlement-table copy and never backfills expired evidence. Replay after the window refuses with history_result_not_reserved, including before the purge. See docs/requirements/rsf-s7.md for constant file:line references.",
+   "test": "test_retained_hold_closure_has_an_inclusive_byte_ceiling_and_a_bounded_window",
+   "boundary_test": "test_retained_closure_window_boundary_and_fixed_refusal",
+   "purge_test": "test_evidence_expiry_pass_is_bounded_and_eventually_clears_all_rows"
   },
   "project_history.py::replay_candidates": {
    "checks": 1,

@@ -36,6 +36,7 @@ from .history_contracts import (
     _DIGEST, _ID, _PROJECT, _RUN, matches, valid_integer,
 )
 from .host_result_contracts import HostResultReference, decode_host_result_reference
+from .launch_journal import TOMBSTONE_MS
 from .orchestration_api import OrchestrationLimits
 from .run_failure_reasons import FAILED_BEFORE_OPEN_REASONS, MAX_REGISTERED_RUNS
 from .orchestration_schema import (ORCHESTRATION_SCHEMA, ORCHESTRATION_COLUMNS, ORCHESTRATION_STATE_COLUMN,
@@ -71,6 +72,8 @@ MAX_DELIVERY_PAGE_BYTES = 16_384
 # The account's crash grace (active_run_capacity.CRASHED_CLAIM_GRACE_MS): after a result's hard deadline
 # plus this, the account refuses its binding, so nothing can present that attempt again (0.3.4 R1c).
 RESULT_PURGE_GRACE_MS = 3_600_000
+# RSF-S7 / decision 214: outlive both payload and journal retention, then the tombstone margin.
+SETTLEMENT_REPLAY_WINDOW_MS = max(MAX_RESULT_RETENTION_MS, TOMBSTONE_MS) + TOMBSTONE_MS
 # How many lease rows, live or finished, a reservation verifies at most (0.3.4 R1d).
 MAX_LEASE_ROWS = 4_096
 REPLAY_PASS_LIMIT = 4  # D4 (RS-D draft 3 §6): stored publications completed by one pass, each at most 1 MiB of body
@@ -343,7 +346,7 @@ class ProjectHistory:
         self._replay_cursor: int | None = None  # D4: where the next replay pass reads from (scheduling only)
         # Where the finished-row purge goes on from (0.3.4 R1g): scheduling state only, like the above.
         self._purge_cursors: dict[str, int | None] = {"reservations": None, "leases": None, "orchestrations": None, "earlier": None,
-                                                          "record": None}
+                                                          "record": None, "settlement_evidence": None}
         # B2: the recording sweep's in-memory state (a restart starts over) and the test-only barrier between an
         # admission's body I/O and its transaction.
         self._record_sweep = {"permanent": {}, "backoff": {}, "health": set()}
@@ -2798,6 +2801,14 @@ class ProjectHistory:
         return self._connection.execute("SELECT * FROM project_account_settlements WHERE project_id=? AND run_handle=? "
                                         "AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
 
+    def _settlement_replay_expired(self, hold) -> bool:
+        """The permanent identity outlives its finite reply evidence; reads never extend the window."""
+        from .lost_run_closure import RELEASE_KINDS
+
+        return (hold is not None and hold["state"] == "released"
+                and hold["release_kind"] in (*RELEASE_KINDS.values(), self._SETTLED_LEASE_KIND)
+                and self._hold_now() > hold["released_at_ms"] + SETTLEMENT_REPLAY_WINDOW_MS)
+
     @_operation
     def open_account_settlement(self, run_handle: str, attempt: int, request_id: str, payload: dict, *,
                                 runtime_digest: str) -> dict:
@@ -2805,7 +2816,8 @@ class ProjectHistory:
         `releasing` with the request id and the digest of the exact `account.lost_run_closure` request; a row already
         `releasing` keeps its first complete request, and the identical one is answered alike (a crash replay); another
         request is `history_conflict`. A reservation still `reserved` and `held` was not arbitrated (D4, S-3) and is
-        refused. `settled` once the settlement is recorded (or its tombstone remains). An attempt with nothing left
+        refused. Within the replay window, `settled` once the settlement is recorded (or its tombstone remains).
+        Expired replay evidence is refused with `history_result_not_reserved`. An attempt with nothing left
         to settle here (no register row, a row released some other way, a lease never claimed or already ended) is
         `history_result_not_reserved`: the account is then only asked to settle, as before B4s."""
         from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountError, AccountRequest, account_request_digest
@@ -2828,6 +2840,30 @@ class ProjectHistory:
         with self._transaction():
             reservation, kind, hold = self._settlement_hold(run_handle, attempt)
             settled = self._settlement_row(run_handle, attempt) is not None
+            if self._settlement_replay_expired(hold):
+                raise HistoryError("history_result_not_reserved")
+            if reservation is None and not settled:
+                # RS-13: a bound attempt's reservation payload may be gone. Its
+                # hold keeps the verified closure within the replay window, including the attempt
+                # and generation; locate it by the original request's claim id.
+                tombstone = self._connection.execute(
+                    "SELECT * FROM project_holds WHERE project_id=? AND kind='reservation' AND identity=? "
+                    "AND state='released'", (self.project_id, payload.get("bridge_run_id"))).fetchone()
+                if self._settlement_replay_expired(tombstone):
+                    raise HistoryError("history_result_not_reserved")
+                if tombstone is not None and tombstone["evidence"] is not None:
+                    from .lost_run_closure import verify_lost_run_closure
+                    try:
+                        closure = verify_lost_run_closure(self._result_key, tombstone["evidence"].encode('ascii'),
+                                                          project_id=self.project_id)
+                    except (ClaimError, AttributeError, UnicodeError):
+                        raise HistoryError("history_conflict") from None
+                    if (closure["binding"]["run_handle"] != run_handle or closure["binding"]["attempt"] != attempt
+                            or closure["receipt_digest"] != tombstone["receipt"]
+                            or closure["request_digest"] != tombstone["request_digest"]
+                            or closure["release_kind"] != tombstone["release_kind"]):
+                        raise HistoryError("history_conflict")
+                    kind, hold = "reservation", tombstone
             if hold is None:
                 # B4s confirming check (MED 3): a settlement row whose register row is absent is not "nothing to
                 # settle" (that answer lets the driver complete its journal on the account's word alone).
@@ -2843,6 +2879,8 @@ class ProjectHistory:
                 verified = (lease_row is not None and self._attempt_settled(self._lease(lease_row)) if settled
                             else lease_row is None)
                 if not verified:
+                    raise HistoryError("history_conflict")
+                if hold["request_id"] != request_id or hold["request_digest"] != digest:
                     raise HistoryError("history_conflict")
                 return {"state": "settled", "request_id": hold["request_id"], "request_digest": hold["request_digest"],
                         "release_kind": hold["release_kind"]}
@@ -2868,7 +2906,8 @@ class ProjectHistory:
         released with the closure's kind and receipt; unfinished custody released `lost_with_reservation`. Nothing is
         written to the terminal outbox, execution consumptions, cleanup receipts or records. The closure must name the
         outbox request the register row holds (RS-B-B4-2). An identical closure again is answered from the settlement
-        row, or after the purge from the register tombstone (`known`); any other is refused with nothing written."""
+        row, or after the purge from the register tombstone (`known`), within the replay window; after it,
+        `history_result_not_reserved`. Any other closure is refused with nothing written."""
         from .lost_run_closure import MAX_LOST_RUN_CLOSURE_BYTES, verify_lost_run_closure
 
         lease_binding = self._lease_binding(lease_binding)
@@ -2890,6 +2929,8 @@ class ProjectHistory:
         with self._transaction():
             stored = self._settlement_row(run_handle, attempt)
             if stored is not None:
+                if self._hold_now() > stored["settled_at_ms"] + SETTLEMENT_REPLAY_WINDOW_MS:
+                    raise HistoryError("history_result_not_reserved")
                 if self._stored_blob(stored["closure"], maximum=MAX_LOST_RUN_CLOSURE_BYTES) != raw:
                     raise HistoryError("history_conflict")
                 return answer
@@ -2902,6 +2943,8 @@ class ProjectHistory:
                     hold_kind, hold = "reservation", bound
             if hold is None:
                 raise HistoryError("history_conflict")
+            if self._settlement_replay_expired(hold):
+                raise HistoryError("history_result_not_reserved")
             expected_kind = kind if hold_kind == "reservation" else self._SETTLED_LEASE_KIND
             lease_row = self._connection.execute("SELECT 1 FROM result_leases WHERE project_id=? AND run_handle=? "
                                                  "AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
@@ -2944,7 +2987,7 @@ class ProjectHistory:
                 "INSERT INTO project_account_settlements(project_id,run_handle,attempt,claim_id,release_kind,closure,"
                 "settled_at_ms) VALUES(?,?,?,?,?,?,?)", (self.project_id, run_handle, attempt, claim_id, kind, raw, now))
             project_holds_schema.release_hold(self._connection, self.project_id, hold_kind, hold["identity"],
-                                              expected_kind, now_ms=now, receipt=receipt)
+                                              expected_kind, now_ms=now, receipt=receipt, evidence=raw.decode('ascii'))
         if ending:
             project_result_contexts.finish_quietly(self, run_handle, attempt)
         return {**answer, "known": False}
@@ -3194,7 +3237,8 @@ class ProjectHistory:
         from .project_qa_checks import purge_old_qa
         # Each removal has its turn whatever another one meets (0.3.4 R1g).
         for purge in (lambda now, limit: project_result_contexts.sweep(self, limit),  # D3: context-only custody
-                      self._purge_finished_results, self._orchestration_owner().purge_closed,
+                      self._purge_finished_results, self._purge_settlement_evidence,
+                      self._orchestration_owner().purge_closed,
                       lambda now, limit: purge_old_qa(self, now, limit),
                       # Cases and candidates past the learning retention, in batches of their own (O0c P7).
                       lambda now, limit: purge_old_learning(self, now, LEARNING_PURGE_BATCH)):
@@ -3211,6 +3255,40 @@ class ProjectHistory:
             # details, after other selected rows have had their cleanup turn.
             raise HistoryError(failure)
         return retired
+
+    def _purge_settlement_evidence(self, now: int, limit: int) -> int:
+        """RSF-S7: clear expired closures, keeping holds, with the ordinary purge scan/removal bounds."""
+        from .lost_run_closure import RELEASE_KINDS
+
+        after = self._purge_cursors["settlement_evidence"]
+        statement = (
+            "SELECT rowid,released_at_ms FROM project_holds WHERE project_id=? AND state='released' "
+            "AND kind IN ('reservation','lease') AND release_kind IN (?,?,?) AND evidence IS NOT NULL"
+        )
+        arguments = (self.project_id, *RELEASE_KINDS.values(), self._SETTLED_LEASE_KIND)
+
+        def candidates(position):
+            return self._connection.execute(
+                statement + ("" if position is None else " AND rowid>?") + " ORDER BY rowid LIMIT ?",
+                (*arguments, *(() if position is None else (position,)), limit * PURGE_SCAN_FACTOR)).fetchall()
+
+        rows = candidates(after)
+        if not rows and after is not None:
+            self._purge_cursors["settlement_evidence"] = None
+            rows = candidates(None)
+        cleared = 0
+        with self._transaction():
+            for row in rows:
+                if cleared >= limit:
+                    break
+                self._purge_cursors["settlement_evidence"] = row["rowid"]
+                if (not valid_integer(row["released_at_ms"])
+                        or now <= row["released_at_ms"] + SETTLEMENT_REPLAY_WINDOW_MS):
+                    continue
+                cleared += self._connection.execute(
+                    "UPDATE project_holds SET evidence=NULL WHERE project_id=? AND rowid=?",
+                    (self.project_id, row["rowid"])).rowcount
+        return cleared
 
     def _purge_finished_results(self, now: int, limit: int) -> int:
         """Remove finished result rows once nothing can present their attempt again (0.3.4 R1c, R1f, R1g).
@@ -3322,10 +3400,28 @@ class ProjectHistory:
     def _delete_attempt_rows(self, run_handle: str, attempt: int, claim_id: str | None) -> None:
         """One finished attempt's rows, children first (foreign keys are on)."""
         attempt_key = (self.project_id, run_handle, attempt)
+        # RS-13: older writers kept the authenticated reply only in the settlement
+        # row. Backfill a missing/adopted hold before pruning that row, without
+        # replacing evidence already retained by another writer or restoring an expired closure.
+        lease_row = self._connection.execute(
+            "SELECT * FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?", attempt_key).fetchone()
+        if lease_row is not None and self._attempt_settled(self._lease(lease_row)):
+            settlement = self._settlement_row(run_handle, attempt)
+            kind, identity = (("reservation", settlement["claim_id"]) if settlement["claim_id"] is not None
+                              else ("lease", attempt_identity(run_handle, attempt)))
+            hold = self._connection.execute(
+                "SELECT * FROM project_holds WHERE project_id=? AND kind=? AND identity=?",
+                (self.project_id, kind, identity)).fetchone()
+            if not self._settlement_replay_expired(hold):
+                self._connection.execute(
+                    "UPDATE project_holds SET evidence=? WHERE project_id=? AND kind=? AND identity=? AND state='released' "
+                    "AND (evidence IS NULL OR evidence=?)",
+                    (bytes(settlement["closure"]).decode('ascii'), self.project_id, kind, identity,
+                     project_holds_schema.ADOPTED))
         for table in ("project_cleanup_acknowledgements", "project_cleanup_receipts", "project_cleanup_reservations",
                       "project_host_opens", "project_registered_runs",  # with its registration (R6-13)
                       "project_result_contexts",  # D1: only a finished one (`purgeable`); its custody stays
-                      "project_account_settlements"):  # B4s: its register tombstones answer a retry from now on
+                      "project_account_settlements"):  # B4s: register tombstones answer within the replay window
             self._connection.execute(f"DELETE FROM {table} WHERE project_id=? AND run_handle=? AND attempt=?",
                                      attempt_key)
         if claim_id is not None:
