@@ -2712,9 +2712,12 @@ class ProjectHistory:
                                                         reservation is None and hold["lease_case"] == "admitted_unbound"))
                 if proof is None:
                     raise HistoryError("history_conflict")  # needs_process_evidence; age/closure alone proves nothing
+                evidence = {name: proof[name] for name in ("state", "child", "watchdog")}
+                evidence["run_marker_digest"] = (None if proof["run_tag"] is None
+                                                  else content_digest(proof["run_tag"]))
                 self._connection.execute(
                     "UPDATE project_holds SET evidence=? WHERE project_id=? AND kind=? AND identity=?",
-                    (canonical_json(proof).decode(), self.project_id, hold_kind, hold["identity"]))
+                    (canonical_json(evidence).decode(), self.project_id, hold_kind, hold["identity"]))
             now = self._hold_now()
             if reservation is not None:
                 value = self._reservation(reservation)

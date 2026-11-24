@@ -80,6 +80,26 @@ class CrashedSettlementTests(fixtures.SettlementFixture):
         self.assertTrue(self.store._attempt_settled(self.store.result_lease(self.lease())))
         self.consistent()
 
+    def test_stored_crash_proof_has_only_public_process_fields(self):
+        from pathlib import Path
+        from codex_agents.learning_contracts import content_digest
+
+        self.bound()
+        self.open()
+        workspace = str(Path.home() / 'PRIVATE-WORKSPACE')
+        journal = self.journal(changes={'workspace': workspace,
+                                        'storage_evidence': b'PRIVATE-STORAGE-EVIDENCE'.hex()})
+        entry = journal.entry(replay.claim_binding().claim_id)
+        self.record_settlement(kind='crashed')
+        raw = self.store._connection.execute(
+            "SELECT evidence FROM project_holds WHERE kind='reservation'").fetchone()[0]
+        self.assertNotIn(workspace, raw)
+        self.assertNotIn(str(Path.home()), raw)
+        self.assertNotIn(entry['storage_evidence'], raw)
+        self.assertEqual({'state': entry['state'], 'child': entry['child'],
+                          'watchdog': entry['watchdog'], 'run_marker_digest': content_digest(entry['run_tag'])},
+                         json.loads(raw))
+
     def test_X4_committed_crash_preserves_body_and_custody(self):
         self.bound()
         self.commit()

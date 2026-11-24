@@ -675,17 +675,7 @@ class LaunchJournal:
             return False
         if instance == self.instance:
             return False
-        try:
-            descriptor = os.open(self._lock_path(instance), os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0))
-        except OSError:
-            return False
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            return False
-        finally:
-            os.close(descriptor)
-        return True
+        return instance_stopped(self.directory, instance)
 
     def forget_instance(self, instance):
         """Remove a stopped instance's lock file once none of its runs is left unsettled."""
@@ -1014,6 +1004,23 @@ def _entry_name(name):
     """An entry file's name: a process entry's bridge run id or a container entry's token, then .json."""
     return name.endswith('.json') and (_matches(name[:-5], _BRIDGE) or _matches(name[:-5], _TOKEN)
                                        or _matches(name[:-5], _PROCESS_TOKEN))
+
+
+def instance_stopped(directory, instance):
+    """Positive lock evidence that an instance can no longer spawn its admitted child."""
+    if not _matches(instance, _INSTANCE):
+        return False
+    try:
+        descriptor = os.open(Path(directory) / (instance + '.lock'), os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0))
+    except OSError:
+        return False
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
+    return True
 
 
 def _lock_held(path):

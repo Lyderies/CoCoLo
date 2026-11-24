@@ -79,12 +79,23 @@ class CrashedAccountTests(unittest.TestCase):
         with self.assertRaises(ClaimError):
             self.closure()
 
+    def test_live_instance_never_spawned_entry_cannot_authorize_crashed_closure(self):
+        bridge = self.receipt['bridge_run_id']
+        entry = self.journal.entry(bridge)
+        self.journal._write(bridge, {**entry, 'state': 'claimed', 'child': None, 'watchdog': None, 'run_tag': None})
+        with self.assertRaises(ClaimError) as caught:
+            self.closure()
+        self.assertEqual('claim_cleanup_unavailable', caught.exception.reason_code)
+
     def test_never_spawned_admission_gets_same_closure_after_journal_settlement(self):
         bridge = self.receipt['bridge_run_id']
         entry = self.journal.entry(bridge)
         self.journal._write(bridge, {**entry, 'state': 'claimed', 'child': None, 'watchdog': None, 'run_tag': None})
+        self.journal.release()
         first = self.closure()
         self.assertEqual('crashed', first['release_kind'])
+        self.journal = launch_journal.LaunchJournal(self.directory)
+        self.addCleanup(self.journal.release)
         self.journal.settled(bridge, 'released')
         self.assertEqual(first, self.closure())
 
