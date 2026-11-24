@@ -1374,6 +1374,7 @@
    "codex:tests.test_reply_shape_compatibility.ReplyShapeCompatibilityTests.test_every_existing_reply_matches_previous_release_catalogue",
    "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_operation_in_both_tables_was_produced_live",
    "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_optional_field_was_seen_on_a_real_reply",
+   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_replayed_driver_group_passed",
    "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_real_reply_matches_the_table",
    "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_real_replies_carry_no_field_outside_the_table"
   ],

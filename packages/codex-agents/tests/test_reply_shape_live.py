@@ -52,6 +52,7 @@ class Recorder:
         self.bad = collections.defaultdict(set)
         self.operations = {}
         self.thread = ThreadSlot()
+        self.driver_failures = []
 
     def note(self, operation, result):
         if operation is None or type(result) is not dict:
@@ -119,14 +120,22 @@ class LiveReplyShapeTests(unittest.TestCase):
                 patch.start()
             try:
                 loader = unittest.defaultTestLoader
-                for _, modules in DRIVERS:
+                for group, modules in DRIVERS:
                     suite = loader.loadTestsFromNames([f'tests.{name}' for name in modules])
-                    unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
+                    stream = io.StringIO()
+                    result = unittest.TextTestRunner(stream=stream, verbosity=0).run(suite)
+                    if not result.wasSuccessful():
+                        recorder.driver_failures.append((group, stream.getvalue()[-4000:]))
             finally:
                 for patch in reversed(patches):
                     patch.stop()
             cls.recorder = recorder
         return cls.recorder
+
+    def test_every_replayed_driver_group_passed(self):
+        # A driver that fails after producing a reply must not let the shape proof pass (B4m confirming check).
+        self.assertEqual([], [group for group, _ in self.observed().driver_failures],
+                         '\n'.join(output for _, output in self.observed().driver_failures))
 
     def test_every_real_reply_matches_the_table(self):
         self.assertEqual({}, {k: sorted(v) for k, v in self.observed().bad.items()})
