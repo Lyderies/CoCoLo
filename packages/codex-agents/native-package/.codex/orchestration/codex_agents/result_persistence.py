@@ -1261,9 +1261,11 @@ class ResultPersistenceLane:
                 # A failure here never stops the result cleanup below (review 034-r10).
                 with contextlib.suppress(HistoryError, sqlite3.Error):
                     history._orchestration_owner().end_earlier(self._service_scope, 10)
-                # O0c P5: an orchestration idle for 24 hours with no run left is ended interrupted.
+                # O0c P5 / B6 (RS-B-B6-4): an orchestration idle for 24 hours with no run left is ended interrupted
+                # unattended, at most UNATTENDED_CLOSE_BATCH a pass, fairly by each one's next check.
+                from .orchestration_store import UNATTENDED_CLOSE_BATCH
                 with contextlib.suppress(HistoryError, sqlite3.Error):
-                    history._orchestration_owner().end_idle(history._result_now(), 10)
+                    history._orchestration_owner().end_idle(history._result_now(), UNATTENDED_CLOSE_BATCH)
                 with contextlib.suppress(HistoryError, sqlite3.Error):  # S1-R6-8, reporting only
                     history.settle_earlier_registrations(self._service_instance, now_ms=history._result_now())
                 # RS-B L1 (the start pass, and every pass after it): an unarmed lease no live job of this

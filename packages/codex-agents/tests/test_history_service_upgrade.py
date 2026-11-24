@@ -39,7 +39,7 @@ class HistoryServiceUpgradeTests(ProjectOrchestrationTests):
     def copies(self):
         """HS-10: the copies made so far (a fresh one per upgrade attempt), never a temporary one."""
         # (requirement) SB: the copy is named for the format it upgrades to, now 20
-        return sorted(path for path in self.directory.glob('history.sqlite3.before-20.*')
+        return sorted(path for path in self.directory.glob('history.sqlite3.before-21.*')  # B6: schema 21 (decision 131)
                       if not path.name.endswith('.partial'))
 
     def version(self, path):
@@ -52,7 +52,7 @@ class HistoryServiceUpgradeTests(ProjectOrchestrationTests):
     def test_HS_1_the_service_upgrades_a_format_16_store_whether_or_not_learning_moved(self):
         before = self.format_16_store()
         self.store = self.service_history()
-        self.assertEqual(20, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) SB: schema 20
+        self.assertEqual(21, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) B6: schema 21 (decision 131)
         self.assertEqual(before, self.store._connection.execute(
             'SELECT * FROM project_orchestration_checkpoints').fetchall())  # nothing lost
         self.assertEqual(0, self.store._connection.execute('SELECT COUNT(*) FROM project_registered_runs').fetchone()[0])
@@ -112,7 +112,7 @@ class HistoryServiceUpgradeTests(ProjectOrchestrationTests):
     def test_HS_10_an_existing_copy_is_never_reused(self):
         before = self.format_16_store()
         # An impostor in a copy's place: version 16 and this project's id, but not the store (round 2).
-        impostor = self.directory / 'history.sqlite3.before-20.1'  # (requirement) SB: format 20
+        impostor = self.directory / 'history.sqlite3.before-21.1'  # (requirement) B6: format 21 (decision 131)
         connection = sqlite3.connect(impostor)
         connection.execute('CREATE TABLE history_identity(project_id TEXT)')
         connection.execute('INSERT INTO history_identity VALUES(?)', (PROJECT_A,))
@@ -164,7 +164,7 @@ class HistoryServiceUpgradeTests(ProjectOrchestrationTests):
         import time as time_module
         before = self.format_16_store()
         fixed = 1_700_000_000_000_000_000
-        existing = self.directory / f'history.sqlite3.before-20.{fixed}'  # (requirement) SB: format 20
+        existing = self.directory / f'history.sqlite3.before-21.{fixed}'  # (requirement) B6: format 21 (decision 131)
         existing.write_bytes(b'keep me')
         with mock.patch.object(time_module, 'time_ns', return_value=fixed):
             self.store = self.service_history()

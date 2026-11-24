@@ -135,8 +135,14 @@ _REGISTER_INCONSISTENT = (
     "AND l.state IN ('reserved','claim_pending'))) "
     "OR (r.kind='reservation' AND NOT EXISTS(SELECT 1 FROM result_reservations s "
     "WHERE s.project_id=r.project_id AND s.claim_id=r.identity)) "
+    # B6 (RS-B-B6-1): a held orchestration row's orchestration exists and is open.
     "OR (r.kind='orchestration' AND NOT EXISTS(SELECT 1 FROM project_orchestrations o "
-    "WHERE o.project_id=r.project_id AND o.orchestration_handle=r.identity))) LIMIT 1",
+    "WHERE o.project_id=r.project_id AND o.orchestration_handle=r.identity AND o.state='open'))) LIMIT 1",
+    # B6 (RS-B-B6-1): every open orchestration has its held row (one lookup per open orchestration, by its index).
+    "SELECT 1 FROM project_orchestrations o INDEXED BY project_orchestrations_state LEFT JOIN project_holds r "
+    "ON r.project_id=o.project_id AND r.kind='orchestration' AND r.identity=o.orchestration_handle "
+    "WHERE o.project_id=(SELECT project_id FROM history_identity) AND o.state='open' "
+    "AND (r.kind IS NULL OR r.state<>'held') LIMIT 1",
     # RS-B draft 3 §6: `completed` only for a reservation past `reserved` whose release ack exists; a settlement
     # release only with its settlement row, of the same kind and claim.
     "SELECT 1 FROM result_reservations s JOIN project_holds r ON r.project_id=s.project_id "
@@ -182,16 +188,50 @@ def evidence_json(**facts) -> str:
     return json.dumps(facts, sort_keys=True, separators=(",", ":"))
 
 
+# B6 (RS-B-B6-2, B6-4): the unattended close's timing. An orchestration with no activity (open, checkpoint, pause,
+# resume, or an execution hold taken against it) for this long is due (O0c P5, owner 2026-11-21: 24 hours); a due row
+# that is refused waits 10 s, doubling to 5 min; releasing an execution hold of it makes it checked again at once.
+ORCHESTRATION_IDLE_MS = 24 * 60 * 60 * 1000
+UNATTENDED_BACKOFF_MS = 10_000
+UNATTENDED_BACKOFF_MAX_MS = 300_000
+ORCHESTRATION_CHECK_INDEX_SCHEMA = """
+CREATE INDEX project_holds_orchestration_check ON project_holds(project_id,next_check_ms)
+ WHERE kind='orchestration' AND state='held';
+"""
+
+
+def _orchestration_of(connection, project_id: str, kind: str, identity: str):
+    """The orchestration handle an execution hold (lease or reservation) belongs to, from its source row; None for
+    another kind. Scheduling only: the sealed binding is what any close decision verifies."""
+    if kind == "reservation":
+        row = connection.execute("SELECT orchestration_handle FROM result_reservations WHERE project_id=? "
+                                 "AND claim_id=?", (project_id, identity)).fetchone()
+    elif kind == "lease":
+        run_handle, _, attempt = identity.rpartition(":")
+        row = connection.execute("SELECT json_extract(CAST(binding AS TEXT),'$.orchestration_handle') "
+                                 "FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
+                                 (project_id, run_handle, attempt)).fetchone()
+    else:
+        return None
+    return None if row is None or type(row[0]) is not str else row[0]
+
+
 def take_hold(connection, project_id: str, kind: str, identity: str, *, now_ms: int, lease_case: str | None = None,
               due_at_ms: int | None = None, evidence: str | None = None) -> None:
     """Take one hold. An identity is taken once: its tombstone (a released row, kept for good) or a row still held
-    refuses the take (RS-B R2, S4), so a purged attempt can never be presented again."""
+    refuses the take (RS-B R2, S4), so a purged attempt can never be presented again. B6: an execution hold taken
+    against an orchestration is its activity (its due time moves to at least now + ORCHESTRATION_IDLE_MS)."""
     if connection.execute("SELECT 1 FROM project_holds WHERE project_id=? AND kind=? AND identity=?",
                           (project_id, kind, identity)).fetchone() is not None:
         raise HistoryError("history_conflict")
     connection.execute(
         "INSERT INTO project_holds(project_id,kind,identity,state,lease_case,taken_at_ms,due_at_ms,evidence) "
         "VALUES(?,?,?,'held',?,?,?,?)", (project_id, kind, identity, lease_case, now_ms, due_at_ms, evidence))
+    handle = _orchestration_of(connection, project_id, kind, identity)
+    if handle is not None:
+        connection.execute("UPDATE project_holds SET due_at_ms=MAX(COALESCE(due_at_ms,0),?) WHERE project_id=? "
+                           "AND kind='orchestration' AND identity=? AND state='held'",
+                           (now_ms + ORCHESTRATION_IDLE_MS, project_id, handle))
 
 
 def arm_hold(connection, project_id: str, identity: str) -> None:
@@ -210,6 +250,30 @@ def release_hold(connection, project_id: str, kind: str, identity: str, release_
             "evidence=COALESCE(?,evidence) WHERE project_id=? AND kind=? AND identity=? AND state<>'released'",
             (now_ms, release_kind, receipt, evidence, project_id, kind, identity)).rowcount != 1:
         raise HistoryError("history_incompatible")
+    # B6 (RS-B-B6-4): releasing an execution hold of an orchestration has its unattended close checked again at once.
+    handle = _orchestration_of(connection, project_id, kind, identity)
+    if handle is not None:
+        connection.execute("UPDATE project_holds SET next_check_ms=0,evidence=NULL WHERE project_id=? "
+                           "AND kind='orchestration' AND identity=? AND state='held'", (project_id, handle))
+
+
+def adopt_orchestrations(connection, project_id: str, orchestrations) -> None:
+    """B6 (RS-B-B6-1, B6-7), inside the 20 -> 21 step before both validators: each orchestration's state column from
+    its latest checkpoint, and each open one without a register row its held row (evidence `{"adopted":21}`, taken at
+    its start, due 24 h after its last activity). A closed one and an existing row are left as they are (a pre-B6
+    close wrote none; RS-D N1's update closes wrote their tombstones). `orchestrations` holds (handle, open,
+    started_at_ms, last_activity_ms) for every row."""
+    if not connection.in_transaction:
+        raise HistoryError("history_unavailable")
+    for handle, is_open, started_at_ms, activity_ms in orchestrations:
+        connection.execute("UPDATE project_orchestrations SET state=? WHERE project_id=? AND orchestration_handle=?",
+                           ("open" if is_open else "closed", project_id, handle))
+        if is_open and connection.execute("SELECT 1 FROM project_holds WHERE project_id=? AND kind='orchestration' "
+                                          "AND identity=?", (project_id, handle)).fetchone() is None:
+            connection.execute(
+                "INSERT INTO project_holds(project_id,kind,identity,state,taken_at_ms,due_at_ms,evidence) "
+                "VALUES(?,'orchestration',?,'held',?,?,?)",
+                (project_id, handle, started_at_ms, activity_ms + ORCHESTRATION_IDLE_MS, ADOPTED_21))
 
 
 # B1 adoption (SH-1, RS-9), inside the 17 -> 18 step before both validators. Each class follows from the source row's
@@ -221,6 +285,7 @@ def release_hold(connection, project_id: str, kind: str, identity: str, release_
 # `reserved` (`completed`, RS-B draft 3 §6). Each insert skips an identity already in the register: adoption is
 # idempotent, and an ordinary open never adopts (a missing row is refused there, R3).
 ADOPTED = evidence_json(adopted=18)
+ADOPTED_21 = evidence_json(adopted=21)  # B6: an open orchestration adopted by the 20 -> 21 step
 _ADOPT = (
     "INSERT INTO project_holds(project_id,kind,identity,state,lease_case,taken_at_ms,due_at_ms,released_at_ms,"
     "release_kind,evidence) SELECT l.project_id,'lease',l.run_handle||':'||l.attempt,"

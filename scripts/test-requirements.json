@@ -1313,6 +1313,11 @@
   "source": "REQUIREMENTS-merge-review.md#ML-R91",
   "statement": "**ML-R91 \u2014 Recorded empty folder trees.** Owner decision 91=A: a folder that holds only other empty folders CoCoLo itself made counts as empty, provided there is nothing else inside and every folder matches the device/inode identity CoCoLo recorded. Foreign files, unrecorded folders, and replaced folder identities do not qualify. The two C-3 checks must enforce this rule without accepting foreign contents."
  },
+ "P4-REPORT": {
+  "checks": [],
+  "source": "docs/requirements/rsd-s3/requirements.md#P4-REPORT",
+  "statement": "**P4-REPORT \u2014 Measure the pre-handoff window.**\nA script under scripts/ measures packet return to the directory fsync under load\nand prints p99. It is a report with no numeric acceptance gate."
+ },
  "RS-B-5": {
   "checks": [
    "codex:tests.test_hold_lifecycle.HoldLifecycleTests.test_B0_1_a_run_refused_before_launch_frees_its_account_binding_by_itself",
@@ -1389,59 +1394,6 @@
   ],
   "source": "REQUIREMENTS-open-withdrawal.md#RS-B-5",
   "statement": "**RS-B-5 \u2014 Authenticated withdrawal of an unclaimed open.**\nThe project service and the opening host class may withdraw an unclaimed open with matching enrolled project,\ncaller scope, run id, inputs digest, attempt custody and current binding generation. Authentication precedes\nimmutable receipt replay; an exact replay remains available after the binding is pruned. Different callers receive\nno receipt. New transitions refuse claimed, fenced, withdrawn or stale bindings; missing generations are refused.\nWithdrawal evidence is retained for the tombstone's life. The project records its withdrawal duty before registration,\nmarks the complete request releasing before dropping memory, retries identical requests after lost replies, and\nwithdraws never-claimed cancellations, pre-preparation failures, idle registrations (one hour, owner decision 90.7)\nand stopped-service registrations. A registration refusal preserves the duty; a faulted writer gets one memory\nwithdrawal, otherwise account expiry. Armed leases belong to the fence path.\nSource: DESIGN-0.4.0-RS-B.md draft 3 \u00a74, \u00a77 and rows W1-W5 (W4a-e), M7; PLAN-0.4.0-supervisor-slices.md B3."
- },
- "RS-B-B4m-1": {
-  "checks": [
-   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_missing_local_record_does_not_guess_a_clone",
-   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_newer_client_older_collector_names_command",
-   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_old_client_newer_collector_names_command",
-   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_project_service_version_comes_from_local_hint_and_release_record",
-   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_registration_from_clone_keeps_the_project_in_the_command",
-   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_three_sites_share_the_command"
-  ],
-  "source": "docs/requirements/b4m.md#RS-B-B4m-1",
-  "statement": "**RS-B-B4m-1 \u2014 One local update command.** One function builds the exact terminal command\nfrom the local install record: change into the installing clone, then run `./setup.sh <project>`\nand choose Configure. All three compatibility refusal sites use it, name the version holding\nthe state, and use plain words. Collector replies never supply command paths or executable text."
- },
- "RS-B-B4m-2": {
-  "checks": [
-   "codex:tests.test_batch2_b4s_integration.LostRunClosureReplyTableTests.test_settle_lost_runs_row_is_unchanged",
-   "codex:tests.test_batch2_b4s_integration.LostRunClosureReplyTableTests.test_the_table_row_is_exactly_the_producers_closure_fields",
-   "codex:tests.test_batch2_b4s_integration.LostRunClosureRuntimeGateTests.test_a_missing_or_wrong_runtime_is_refused_before_the_authorizer_with_nothing_written",
-   "codex:tests.test_batch2_b4s_integration.LostRunClosureRuntimeGateTests.test_the_closure_is_a_gated_account_mutation",
-   "codex:tests.test_reply_shape_compatibility.ReplyShapeCompatibilityTests.test_added_and_removed_fields_are_refused_for_every_operation",
-   "codex:tests.test_reply_shape_compatibility.ReplyShapeCompatibilityTests.test_both_apis_apply_the_shape_guard_before_value_checks",
-   "codex:tests.test_reply_shape_compatibility.ReplyShapeCompatibilityTests.test_every_existing_reply_matches_previous_release_catalogue",
-   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_operation_in_both_tables_was_produced_live",
-   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_optional_field_was_seen_on_a_real_reply",
-   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_real_reply_matches_the_table",
-   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_replayed_driver_group_passed",
-   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_real_replies_carry_no_field_outside_the_table"
-  ],
-  "source": "docs/requirements/b4m.md#RS-B-B4m-2",
-  "statement": "**RS-B-B4m-2 \u2014 Preserve existing reply fields.** A newer collector/account never adds or removes\nfields of an existing account/history operation's reply. New data requires a new operation.\nThe guard compares every existing operation with the previous-release field catalogue, retaining\nthe optional field variants already allowed by that release."
- },
- "RS-B-B4m-3": {
-  "checks": [
-   "codex:tests.test_b4m_compatibility.CompatibilityDocsTests.test_old_installs_have_the_codes_and_terminal_command_in_docs"
-  ],
-  "source": "docs/requirements/b4m.md#RS-B-B4m-3",
-  "statement": "**RS-B-B4m-3 \u2014 Help already-installed clients.** Troubleshooting and release notes name\n`status_collector_unavailable` and `runtime_newer`, show the clone/project terminal command,\nand direct already-installed 0.3.x users to Configure."
- },
- "RS-D-2-N1": {
-  "checks": [
-   "codex:tests.test_rsd_runtime_close.RuntimeCloseServiceTests.test_N1_N2_real_release_then_update_counts_unrecorded_once_across_restart",
-   "codex:tests.test_rsd_runtime_close.RuntimeCloseTests.test_N1_recorded_closes_and_releases_custody_without_counting_unrecorded"
-  ],
-  "source": "docs/requirements/rsd-runtime-close.md#RS-D-2-N1",
-  "statement": "**RS-D-2-N1 \u2014 Eligible changed-runtime closure.**\nAfter a runtime change, the real `end_earlier` sweep closes an eligible orchestration as\ninterrupted. Recorded results and verified account releases permit closure. The ordinary\nexpiry pass releases committed custody `orchestration_closed`. Count each update-ended\norchestration with any unrecorded result once as `ended_by_update_unrecorded`, including\nafter restart and result retirement/purge. Expose only a count, never result content.\nSame-runtime and other-service sweeps do nothing. The close and its count commit atomically."
- },
- "RS-D-2-N2": {
-  "checks": [
-   "codex:tests.test_rsd_runtime_close.RuntimeCloseServiceTests.test_N1_N2_real_release_then_update_counts_unrecorded_once_across_restart",
-   "codex:tests.test_rsd_runtime_close.RuntimeCloseTests.test_N2_unrecorded_without_verified_release_stays_open_until_custody_deadline"
-  ],
-  "source": "docs/requirements/rsd-runtime-close.md#RS-D-2-N2",
-  "statement": "**RS-D-2-N2 \u2014 Unfinished changed-runtime custody.**\nWithout verified account release, an unrecorded result prevents close. Keep the orchestration\nopen and committed body/context custody charged until its retention deadline; at that deadline\nrelease custody `retention`, without inventing release evidence or counting an update closure.\nCorrupt release evidence cannot close it. No pre-commit deadline retires reserved custody (SH-4)."
  },
  "RS-B-B4": {
   "checks": [
@@ -1520,6 +1472,150 @@
   ],
   "source": "REQUIREMENTS-account-settlement.md#RS-B-B4",
   "statement": "**RS-B-B4 \u2014 Lost-run settlement reaches the project store.**\nA run whose service was lost after its claim was admitted is settled at the account (`account.settle_lost_run`, reply\nshape unchanged) and its settlement then reaches the project store as a closure the project writer verifies with its own\nresult key: a NEW account operation, `account.lost_run_closure`, answers a settled (`lost`) or released\n(`released_unacknowledged`) run with a closure bound to the project, run handle, attempt, lease digest, assignment digest,\nbridge run id (the claim id), release kind, the account's release time and the outbox request's digest (RS-B-B4-1).\nBefore any account call the attempt's register row (its reservation hold, or its lease hold when the claim was never bound)\nis `releasing` with the request id and request digest; after any crash the identical request is re-sent until the closure\nis stored, and a closure naming another request digest is refused with nothing written; account calls stay one at a time\non the driver's helper thread (RS-B-B4-2). `record_account_settlement(lease_binding, closure)` verifies the closure and, in\none writer transaction, inserts the settlement row, expires a `claim_pending` lease and releases its hold `lost_unbound`,\nmoves a `reserved` reservation to `retiring` (a committed body is left to retention), releases the reservation hold with\nthe closure's kind and receipt, and releases unfinished custody `lost_with_reservation`; it writes nothing to the terminal\noutbox, execution consumptions, cleanup receipts or admission records, and its two register writes are the ones D2/D4\nplanted (RS-B-B4-3). At every driver caller the order is: account reply, settlement committed, workspace removed, journal\n`settled`; a stop between steps leaves the journal entry unsettled and the next sweep replays the identical request\n(RS-B-B4-4). A reservation with a verified settlement row is finished for `_unfinished` (checked before the consumption\ncheck) and released for the purge (`_attempt_released`); no reader counts it as a successful run (RS-B-B4-5). An\nidentical retry after settlement returns the stored receipt, also from the register tombstone after the purge; another\nproject, lease digest, claim id or attempt is refused with every table unchanged; a purged identity can never be taken\nagain (RS-B-B4-6). The register validator refuses a settlement row whose hold is not released with the same kind, and a\nheld reservation with a settlement row; `releasing` without one is legal (RS-B-B4-7). With every bound set to 2, three\nruns lost after their claim are settled, their orchestrations close, their rows purge, and a fourth run dispatches,\nrecords and closes (RS-B-B4-8). RC-3 runs un-skipped (RS-B-B4-9).\nPrerequisite (\u00a79): the account's digest key and the project writer's result key are the same file\n(`<state root>/digest.key`) in every install path, and a run can only be claimed after the account verified the\nproject's sealed lease with its key, so every closure is verifiable at the project.\nSource: ANALYSIS-0.4.0-rsb-b4-b7.md \u00a70, \u00a72, \u00a79; DESIGN-0.4.0-RS-B.md draft 2 \u00a74, draft 3 \u00a76, \u00a714; DESIGN-0.4.0-RS-BD-shared.md SH-3, SH-5, SH-7; docs/requirements/b4s.md."
+ },
+ "RS-B-B4m-1": {
+  "checks": [
+   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_missing_local_record_does_not_guess_a_clone",
+   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_newer_client_older_collector_names_command",
+   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_old_client_newer_collector_names_command",
+   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_project_service_version_comes_from_local_hint_and_release_record",
+   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_registration_from_clone_keeps_the_project_in_the_command",
+   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_three_sites_share_the_command"
+  ],
+  "source": "docs/requirements/b4m.md#RS-B-B4m-1",
+  "statement": "**RS-B-B4m-1 \u2014 One local update command.** One function builds the exact terminal command\nfrom the local install record: change into the installing clone, then run `./setup.sh <project>`\nand choose Configure. All three compatibility refusal sites use it, name the version holding\nthe state, and use plain words. Collector replies never supply command paths or executable text."
+ },
+ "RS-B-B4m-2": {
+  "checks": [
+   "codex:tests.test_batch2_b4s_integration.LostRunClosureReplyTableTests.test_settle_lost_runs_row_is_unchanged",
+   "codex:tests.test_batch2_b4s_integration.LostRunClosureReplyTableTests.test_the_table_row_is_exactly_the_producers_closure_fields",
+   "codex:tests.test_batch2_b4s_integration.LostRunClosureRuntimeGateTests.test_a_missing_or_wrong_runtime_is_refused_before_the_authorizer_with_nothing_written",
+   "codex:tests.test_batch2_b4s_integration.LostRunClosureRuntimeGateTests.test_the_closure_is_a_gated_account_mutation",
+   "codex:tests.test_reply_shape_compatibility.ReplyShapeCompatibilityTests.test_added_and_removed_fields_are_refused_for_every_operation",
+   "codex:tests.test_reply_shape_compatibility.ReplyShapeCompatibilityTests.test_both_apis_apply_the_shape_guard_before_value_checks",
+   "codex:tests.test_reply_shape_compatibility.ReplyShapeCompatibilityTests.test_every_existing_reply_matches_previous_release_catalogue",
+   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_operation_in_both_tables_was_produced_live",
+   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_optional_field_was_seen_on_a_real_reply",
+   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_real_reply_matches_the_table",
+   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_every_replayed_driver_group_passed",
+   "codex:tests.test_reply_shape_live.LiveReplyShapeTests.test_real_replies_carry_no_field_outside_the_table"
+  ],
+  "source": "docs/requirements/b4m.md#RS-B-B4m-2",
+  "statement": "**RS-B-B4m-2 \u2014 Preserve existing reply fields.** A newer collector/account never adds or removes\nfields of an existing account/history operation's reply. New data requires a new operation.\nThe guard compares every existing operation with the previous-release field catalogue, retaining\nthe optional field variants already allowed by that release."
+ },
+ "RS-B-B4m-3": {
+  "checks": [
+   "codex:tests.test_b4m_compatibility.CompatibilityDocsTests.test_old_installs_have_the_codes_and_terminal_command_in_docs"
+  ],
+  "source": "docs/requirements/b4m.md#RS-B-B4m-3",
+  "statement": "**RS-B-B4m-3 \u2014 Help already-installed clients.** Troubleshooting and release notes name\n`status_collector_unavailable` and `runtime_newer`, show the clone/project terminal command,\nand direct already-installed 0.3.x users to Configure."
+ },
+ "RS-B-B6-1": {
+  "checks": [
+   "codex:tests.test_b6_unattended_close.RegisterRowTests.test_B6_1_a_failed_release_write_rolls_the_close_back",
+   "codex:tests.test_b6_unattended_close.RegisterRowTests.test_B6_1_end_earlier_releases_the_row_taken_at_open_closed_and_the_unattended_close_interrupted_unattended",
+   "codex:tests.test_b6_unattended_close.RegisterRowTests.test_B6_1_open_takes_a_held_row_activity_moves_its_due_time_and_the_primary_close_releases_it_closed",
+   "codex:tests.test_b6_unattended_close.RegisterRowTests.test_B6_1_the_validator_refuses_an_open_orchestration_without_its_held_row_and_a_held_row_of_a_closed_one"
+  ],
+  "source": "docs/requirements/b6.md#RS-B-B6-1",
+  "statement": "**RS-B-B6-1 \u2014 Every orchestration has a register row.**\n> Every orchestration has a register row: taken when created, released `closed` by the primary's close or\n> `end_earlier`, `interrupted_unattended` by the unattended close, each in the close's own transaction. Existing open\n> orchestrations are adopted in a 20 -> 21 step only; the validator then refuses an open orchestration without a held row.\n\nAcceptance: `orchestration.open` writes, in its own transaction, a held `orchestration` row (identity = handle,\n`taken_at_ms` = open time, `due_at_ms` = open time + ORCHESTRATION_IDLE_MS). Every later non-close mutation\n(checkpoint, pause, resume) moves `due_at_ms` to its own time + ORCHESTRATION_IDLE_MS. The primary's close releases it\n`closed` (evidence `{\"by\":\"primary\"}`), `end_earlier` releases it `closed` (evidence `ended_by_update_unrecorded`, as\nRS-D N1), the unattended close releases it `interrupted_unattended` (evidence `{\"by\":\"unattended\"}`). A failure writing\nthe release rolls the close back (the orchestration stays open, its row held). The register validator (SH-7, run at\nopen, at restore and inside the step) refuses: an open orchestration without a held row; a held row whose orchestration\nis closed or missing. An ordinary open never adopts."
+ },
+ "RS-B-B6-2": {
+  "checks": [
+   "codex:tests.test_b6_unattended_close.EligibilityTests.test_B6_2_effective_now_is_the_persisted_floor_when_the_wall_clock_went_back",
+   "codex:tests.test_b6_unattended_close.EligibilityTests.test_B6_2_the_eligibility_is_checked_inside_the_close_transaction",
+   "codex:tests.test_b6_unattended_close.EligibilityTests.test_B6_2_the_unattended_close_waits_for_its_due_time_and_then_refuses_new_work",
+   "codex:tests.test_b6_unattended_close.EligibilityWithRunsTests.test_B6_2_a_recorded_result_whose_reservation_is_still_held_blocks_the_unattended_close_not_the_primarys",
+   "codex:tests.test_b6_unattended_close.EligibilityWithRunsTests.test_B6_2_an_unfinished_attempt_keeps_it_open",
+   "codex:tests.test_b6_unattended_close.LeaseTests.test_B6_2_a_live_lease_keeps_it_open",
+   "codex:tests.test_b6_unattended_close.LeaseTests.test_B6_2_taking_an_execution_hold_is_activity_releasing_one_is_not"
+  ],
+  "source": "docs/requirements/b6.md#RS-B-B6-2",
+  "statement": "**RS-B-B6-2 \u2014 Eligibility of the unattended close, inside its transaction.**\n> No held lease or reservation of that orchestration, `_unfinished` false, effective now (`max(wall, floor)`) >=\n> `due_at_ms` (24 h after last activity). Memory kinds are not checked: a live registered run with no lease is refused\n> new work by the existing `active_for` gates after the close.\n\nAcceptance: inside the close's transaction the unattended close refuses (`history_orchestration_pending`, nothing\nwritten) when any reservation of the orchestration has a held or releasing register row, when `_unfinished` is true\n(covers held leases: a held lease row is exactly a live lease, SH-7), or when effective now < `due_at_ms`. Effective now\nis `max(wall, persisted floor)` read without moving the floor: a wall clock moved back below the floor still closes at\nthe floor. Taking an execution hold (lease or reservation) of the orchestration is activity: `due_at_ms` moves to at\nleast its time + ORCHESTRATION_IDLE_MS, in the take's own transaction (releasing one is not activity, B6-4). After the\nclose, `active_for` refuses new work for that orchestration\n(`history_orchestration_state`)."
+ },
+ "RS-B-B6-3": {
+  "checks": [
+   "codex:tests.test_b6_unattended_close.ReplayAndFairnessTests.test_B6_3_the_request_is_derived_so_a_replay_is_the_identical_request_and_answers_known"
+  ],
+  "source": "docs/requirements/b6.md#RS-B-B6-3",
+  "statement": "**RS-B-B6-3 \u2014 A crash-replay of the unattended close is the identical request.**\nAcceptance: the unattended close's request id is derived from (orchestration handle, expected sequence) with the\nstore's key (`end-idle-<32 hex>`), never random. Applying the same derived request again answers `known: true` with the\nsame receipt and writes nothing; two passes or two stores built from the same state derive the same id."
+ },
+ "RS-B-B6-4": {
+  "checks": [
+   "codex:tests.test_b6_unattended_close.EligibilityWithRunsTests.test_B6_4_releasing_a_reservation_of_the_orchestration_resets_its_next_check",
+   "codex:tests.test_b6_unattended_close.LeaseTests.test_B6_4_a_blocked_row_never_stops_a_later_due_row",
+   "codex:tests.test_b6_unattended_close.LeaseTests.test_B6_4_releasing_a_lease_of_the_orchestration_resets_its_next_check",
+   "codex:tests.test_b6_unattended_close.ReplayAndFairnessTests.test_B6_4_a_blocked_row_backs_off_from_10_seconds_doubling_to_5_minutes",
+   "codex:tests.test_b6_unattended_close.ReplayAndFairnessTests.test_B6_4_at_most_four_close_per_pass_and_the_service_asks_for_four"
+  ],
+  "source": "docs/requirements/b6.md#RS-B-B6-4",
+  "statement": "**RS-B-B6-4 \u2014 Fairness: next check, back-off, reset.**\nAcceptance: one pass selects held orchestration rows by `next_check_ms` (ascending, at most UNATTENDED_CLOSE_BATCH = 4\nper pass; the service passes 4), only rows with `next_check_ms <= now` and `due_at_ms <= now`, through a partial index\n(`project_holds_orchestration_check`). A row that is due but refused (B6-2) backs off: its first refusal sets\n`next_check_ms = now + 10 s`, each later one doubles the wait, capped at 5 min. Releasing any execution hold (lease or\nreservation) of that orchestration resets its `next_check_ms` to 0 (and the back-off) in the release's own transaction.\nA blocked row never stops a later due row from closing in the same pass."
+ },
+ "RS-B-B6-5": {
+  "checks": [
+   "codex:tests.test_b6_unattended_close.EligibilityWithRunsTests.test_B6_5_K2_an_admitted_attempt_without_release_or_settlement_is_never_purged",
+   "codex:tests.test_b6_unattended_close.LeaseTests.test_B6_5_K1_a_never_admitted_attempt_of_a_closed_orchestration_purges_through_its_register_release"
+  ],
+  "source": "docs/requirements/b6.md#RS-B-B6-5",
+  "statement": "**RS-B-B6-5 \u2014 Cleanup rows of closed orchestrations (K1, K2).**\nAcceptance K1: a never-admitted attempt (lease released `withdrawn_unsent`, no reservation) of a closed orchestration,\npast its reserved time + RESULT_PURGE_GRACE_MS, has its lease and cleanup rows purged by the expiry pass, through its\nregister release: the lease row's released tombstone stays, and the orchestration's row stays released.\nK2: an admitted attempt (reservation exists, committed and recorded) of a closed orchestration with no account release\nacknowledgement and no settlement is never purged, however late: its reservation, lease and cleanup rows stay and its\nreservation register row stays held."
+ },
+ "RS-B-B6-6": {
+  "checks": [],
+  "source": "docs/requirements/b6.md#RS-B-B6-6",
+  "statement": "**RS-B-B6-6 \u2014 Changed runtime (RS-D N1, N2).**\nBuilt by RS-D S2 (`docs/requirements/rsd-runtime-close.md`); re-run green here on the new step: eligible -> closed and\ncustody `orchestration_closed`, unrecorded ones counted; unfinished stays open with custody kept."
+ },
+ "RS-B-B6-7": {
+  "checks": [
+   "codex:tests.test_b6_unattended_close.SchemaStepTests.test_B6_7_a_failure_inside_the_step_leaves_20_and_removes_its_copy_then_a_later_attempt_upgrades",
+   "codex:tests.test_b6_unattended_close.SchemaStepTests.test_B6_7_a_real_step_20_store_upgrades_its_records_unchanged_and_adopts_its_open_orchestrations",
+   "codex:tests.test_b6_unattended_close.SchemaStepTests.test_B6_7_an_unknown_object_in_a_step_20_store_is_refused_before_any_write",
+   "codex:tests.test_b6_unattended_close.SchemaStepTests.test_B6_7_process_death_inside_the_step_leaves_20_and_a_later_attempt_upgrades",
+   "codex:tests.test_b6_unattended_close.SchemaStepTests.test_B6_7_the_step_adds_the_retirement_partial_index"
+  ],
+  "source": "docs/requirements/b6.md#RS-B-B6-7",
+  "statement": "**RS-B-B6-7 \u2014 Schema step 20 -> 21 (decision 131).**\nAcceptance: the store format is 21. The step is additive: it adds `project_orchestrations.state`\n(`TEXT NOT NULL DEFAULT 'open'`, `open` or `closed`), the index `project_orchestrations_state(project_id,state)`, the\npartial index `result_reservations_live(project_id) WHERE state<>'expired'` (RS-D S3) and the partial index\n`project_holds_orchestration_check(project_id,next_check_ms) WHERE kind='orchestration' AND state='held'` (B6-4). It\nruns only on the authorized upgrade path (an ordinary open of a 20 store is refused, `history_incompatible`, the file\nunchanged), as ONE transaction with the existing step machinery: copy kept first (`history.sqlite3.before-21.*`, same\nbackup format), every DDL, the state backfill, the adoption (each open orchestration without a row gets a held row,\nevidence `{\"adopted\":21}`, `due_at_ms` = last activity + 24 h; closed ones and existing tombstones are left as they are)\nand both validators before commit. Any failure (process death included) leaves the store at 20, its rows unchanged\nand the copy removed; a later attempt upgrades. A repeated open of the 21 store changes nothing. A 20 store with an\nunknown object (trigger, table, index) is refused before any write. Records-upgrade: a real store written by the\nstep-20 runtime (0.8.57, `tests/fixtures/history_step20/store.sql`, generated by `make_store.py` with that runtime)\nupgrades with every pre-existing row byte-identical (orchestrations gain only `state`), its orchestrations' states\nmatch their checkpoints, the active and paused ones are adopted held, and the closed ones still close-, purge- and\nreport- as before."
+ },
+ "RS-B-B6-8": {
+  "checks": [
+   "codex:tests.test_b6_unattended_close.OrchestrationStateTests.test_B6_8_counting_open_orchestrations_reads_the_indexed_state_not_the_checkpoints"
+  ],
+  "source": "docs/requirements/b6.md#RS-B-B6-8",
+  "statement": "**RS-B-B6-8 \u2014 Indexed orchestration state (decisions 185, 187).**\nAcceptance: every open/close writes `state` in the same statement as the checkpoint pointer. Counting open\norchestrations (`_open_count`, the open limit) reads only `project_orchestrations_state`, never a checkpoint blob\n(work equal at 0 and 1,000 closed orchestrations, measured as SQLite VM steps). Integration note: batch 3's\n`OrchestrationCountsCostTests` (not on this base) is to be un-skipped against this column when batches merge."
+ },
+ "RS-D-2-N1": {
+  "checks": [
+   "codex:tests.test_rsd_runtime_close.RuntimeCloseServiceTests.test_N1_N2_real_release_then_update_counts_unrecorded_once_across_restart",
+   "codex:tests.test_rsd_runtime_close.RuntimeCloseTests.test_N1_recorded_closes_and_releases_custody_without_counting_unrecorded"
+  ],
+  "source": "docs/requirements/rsd-runtime-close.md#RS-D-2-N1",
+  "statement": "**RS-D-2-N1 \u2014 Eligible changed-runtime closure.**\nAfter a runtime change, the real `end_earlier` sweep closes an eligible orchestration as\ninterrupted. Recorded results and verified account releases permit closure. The ordinary\nexpiry pass releases committed custody `orchestration_closed`. Count each update-ended\norchestration with any unrecorded result once as `ended_by_update_unrecorded`, including\nafter restart and result retirement/purge. Expose only a count, never result content.\nSame-runtime and other-service sweeps do nothing. The close and its count commit atomically."
+ },
+ "RS-D-2-N2": {
+  "checks": [
+   "codex:tests.test_rsd_runtime_close.RuntimeCloseServiceTests.test_N1_N2_real_release_then_update_counts_unrecorded_once_across_restart",
+   "codex:tests.test_rsd_runtime_close.RuntimeCloseTests.test_N2_unrecorded_without_verified_release_stays_open_until_custody_deadline"
+  ],
+  "source": "docs/requirements/rsd-runtime-close.md#RS-D-2-N2",
+  "statement": "**RS-D-2-N2 \u2014 Unfinished changed-runtime custody.**\nWithout verified account release, an unrecorded result prevents close. Keep the orchestration\nopen and committed body/context custody charged until its retention deadline; at that deadline\nrelease custody `retention`, without inventing release evidence or counting an update closure.\nCorrupt release evidence cannot close it. No pre-commit deadline retires reserved custody (SH-4)."
+ },
+ "RS-D-9-S2": {
+  "checks": [
+   "root:test_rsd_budget.RsdBudgetTests.test_S2_lookup_equal_work",
+   "root:test_rsd_budget.RsdBudgetTests.test_S2_retirement_equal_work",
+   "root:test_rsd_budget.RsdBudgetTests.test_S2_sweep_equal_work"
+  ],
+  "source": "docs/requirements/rsd-s3/requirements.md#RS-D-9-S2",
+  "statement": "**RS-D-9-S2 \u2014 History-independent selection work.**\nOn equivalent live data, the retirement selector, stored worker context lookup by\noutcome, and context sweep visit equal rows with zero and 100,000 retired\ntombstones. Count SQLite work, not elapsed time."
+ },
+ "RS-D-9-S3": {
+  "checks": [
+   "codex:tests.test_b6_unattended_close.SchemaStepTests.test_B6_7_the_step_adds_the_retirement_partial_index",
+   "root:test_rsd_budget.RsdBudgetTests.test_S3_lookup_partial_plan",
+   "root:test_rsd_budget.RsdBudgetTests.test_S3_retirement_partial_plan",
+   "root:test_rsd_budget.RsdBudgetTests.test_S3_sweep_partial_plan"
+  ],
+  "source": "docs/requirements/rsd-s3/requirements.md#RS-D-9-S3",
+  "statement": "**RS-D-9-S3 \u2014 Partial query indexes.**\nEXPLAIN QUERY PLAN for those production statements uses the relevant partial\nindexes and never scans the tombstone table. Check both the first page and the\ncursor page of the two fair selectors."
  },
  "RS-D-D2": {
   "checks": [

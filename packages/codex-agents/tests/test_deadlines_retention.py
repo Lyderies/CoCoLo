@@ -513,8 +513,10 @@ class OrchestrationCloseTests(rc.RecordedContextFixture):
     def unattended(self):
         """What B6 will record: the orchestration released `interrupted_unattended` in the register."""
         connection = self.store._connection
-        project_holds_schema.take_hold(connection, self.binding.project_id, 'orchestration',
-                                       self.binding.orchestration_handle, now_ms=self.fixture.base.stamp)
+        if connection.execute("SELECT 1 FROM project_holds WHERE kind='orchestration' AND identity=?",
+                              (self.binding.orchestration_handle,)).fetchone() is None:  # B6: the open took it
+            project_holds_schema.take_hold(connection, self.binding.project_id, 'orchestration',
+                                           self.binding.orchestration_handle, now_ms=self.fixture.base.stamp)
         project_holds_schema.release_hold(connection, self.binding.project_id, 'orchestration',
                                           self.binding.orchestration_handle, 'interrupted_unattended',
                                           now_ms=self.fixture.base.stamp)

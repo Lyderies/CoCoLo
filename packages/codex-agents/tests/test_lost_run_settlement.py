@@ -434,6 +434,8 @@ class LostRunAfterStopTests(LostRunHarness):
                                        "ORDER BY rowid LIMIT 1").fetchone()[0]
             connection.execute("DELETE FROM project_orchestration_checkpoints WHERE orchestration_handle=?", (first,))
             connection.execute("DELETE FROM project_orchestrations WHERE orchestration_handle=?", (first,))
+            # B6 (RS-B-B6-1): its register row goes too (a 0.8.23 store had none; one left held is refused at open).
+            connection.execute("DELETE FROM project_holds WHERE kind='orchestration' AND identity=?", (first,))
         connection.close()
         self.start_host()
         self.wait_for(lambda: self.bindings() == ['pending', 'abandoned'], seconds=60)

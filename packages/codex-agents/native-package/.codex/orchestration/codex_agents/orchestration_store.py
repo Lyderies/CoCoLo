@@ -22,8 +22,11 @@ MAX_JOURNAL_EVENTS = 65_536
 # the ledger's own retention (client_runtime.LEARNING_MAX_AGE_MS).
 ORCHESTRATION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 # An open or paused orchestration with no checkpoint and no run registered for this long is abandoned and
-# is ended interrupted by the service's cleanup (O0c P5, owner 2026-11-21: 24 hours idle).
-ORCHESTRATION_IDLE_MS = 24 * 60 * 60 * 1000
+# is ended interrupted by the service's cleanup (O0c P5, owner 2026-11-21: 24 hours idle). B6: kept in its register row
+# (`due_at_ms`), with the unattended close's back-off (project_holds_schema).
+ORCHESTRATION_IDLE_MS = project_holds_schema.ORCHESTRATION_IDLE_MS
+# B6 (RS-B-B6-4): at most this many unattended closes are tried per pass (the service asks for this many).
+UNATTENDED_CLOSE_BATCH = 4
 
 class OrchestrationOwner:
     def __init__(self, history):
@@ -124,14 +127,11 @@ class OrchestrationOwner:
         return view['snapshot'] if view['checkpoint_digest'] == row['checkpoint_digest'] else None
 
     def _open_count(self):
-        """Orchestrations not yet closed. One whose latest checkpoint cannot be verified counts as
-        open, so a changed row never frees a place."""
-        count = 0
-        for row in self._db.execute('SELECT orchestration_handle,sequence,checkpoint_digest FROM project_orchestrations '
-                                    'WHERE project_id=?', (self._history.project_id,)).fetchall():
-            snapshot = self._latest_snapshot(row)
-            count += snapshot is None or snapshot['status'] not in ORCHESTRATION_TERMINAL_STATES
-        return count
+        """Orchestrations not yet closed. B6 (RS-B-B6-8, decisions 185/187): read from the indexed state column,
+        written with each checkpoint pointer, so no checkpoint is parsed however many closed ones are kept. Only a
+        close sets it `closed`, so a changed or unverifiable row never frees a place."""
+        return self._db.execute("SELECT COUNT(*) FROM project_orchestrations INDEXED BY project_orchestrations_state "
+                                "WHERE project_id=? AND state='open'", (self._history.project_id,)).fetchone()[0]
 
     def end_earlier(self, current, limit):
         """End, as interrupted, the open or paused orchestrations an earlier runtime of this same service
@@ -178,43 +178,66 @@ class OrchestrationOwner:
             ended += 1
         return ended
 
-    def end_idle(self, now, limit):
-        """End, as interrupted, the open or paused orchestrations idle for ORCHESTRATION_IDLE_MS (O0c P5):
-        no checkpoint and no run reserved against them since. The ordinary close does it, under each
-        one's own sealed scope, so an orchestration with a run not yet over stays open. Each pass tries at
-        most `limit`, from where the last one stopped. Returns how many ended."""
+    _UNATTENDED_SELECT = (
+        "SELECT identity FROM project_holds INDEXED BY project_holds_orchestration_check WHERE project_id=? "
+        "AND kind='orchestration' AND state='held' AND next_check_ms<=? AND due_at_ms<=? ORDER BY next_check_ms LIMIT ?")
+
+    def _unattended_request(self, handle, sequence, scope):
+        """B6 (RS-B-B6-3): the unattended close of (handle, expected sequence), with a request id derived from both
+        under the store's key, so a crash-replay is the identical request (answered `known`) and no client can have
+        used it before (review 034-r10)."""
+        digest = keyed_digest(self._key(), b'project-orchestration-unattended-close-v1\0'
+                              + canonical_json({'orchestration_handle': handle, 'expected_sequence': sequence}))
+        return OrchestrationRequest(1, 'orchestration.close', 'end-idle-' + digest[:32], OrchestrationScope(**scope), {
+            'orchestration_handle': handle, 'expected_sequence': sequence, 'status': 'interrupted',
+            'goal_tokens_used': None, 'goal_time_used_seconds': None})
+
+    def _back_off(self, handle, now):
+        """B6 (RS-B-B6-4): a due row that was refused waits 10 s, then twice as long each time, at most 5 min."""
+        row = self._db.execute("SELECT evidence FROM project_holds WHERE project_id=? AND kind='orchestration' "
+                               "AND identity=? AND state='held'", (self._history.project_id, handle)).fetchone()
+        if row is None:
+            return
+        previous = None
+        try:
+            previous = parse_bounded_json(row[0].encode(), max_bytes=256).get('backoff_ms')
+        except (AttributeError, HistoryError, TypeError, ValueError):
+            previous = None
+        wait = (project_holds_schema.UNATTENDED_BACKOFF_MS if not valid_integer(previous, minimum=1)
+                else min(previous * 2, project_holds_schema.UNATTENDED_BACKOFF_MAX_MS))
+        with self._history._transaction():
+            self._db.execute("UPDATE project_holds SET next_check_ms=?,evidence=? WHERE project_id=? "
+                             "AND kind='orchestration' AND identity=? AND state='held'",
+                             (now + wait, project_holds_schema.evidence_json(backoff_ms=wait),
+                              self._history.project_id, handle))
+
+    def end_idle(self, now, limit=UNATTENDED_CLOSE_BATCH):
+        """The unattended close (RS-B-B6, O0c P5): end, as interrupted, the open or paused orchestrations with no
+        activity for ORCHESTRATION_IDLE_MS. Selected fairly from their register rows by next check (at most `limit`,
+        UNATTENDED_CLOSE_BATCH for the service); each is closed by the ordinary close, under its own sealed scope, with
+        its eligibility checked inside the close's transaction (no held reservation, nothing unfinished, due). A
+        refused one backs off. Effective now is max(wall, persisted floor). Returns how many ended."""
         project = self._history.project_id
-        after = self._history._purge_cursors.get('idle')
-        rows = self._db.execute('SELECT rowid,orchestration_handle,sequence,checkpoint_digest,scope_digest '
-                                'FROM project_orchestrations WHERE project_id=?' + ('' if after is None else ' AND rowid>?') + ' ORDER BY rowid LIMIT ?',
-                                (project, *(() if after is None else (after,)), limit * 16)).fetchall()
-        if not rows and after is not None:
-            self._history._purge_cursors['idle'] = None
-            return self.end_idle(now, limit)
-        ended = tried = 0
-        for row in rows:
-            if tried >= limit:
-                break
-            self._history._purge_cursors['idle'] = row['rowid']
-            snapshot = self._latest_snapshot(row)
-            if snapshot is None or snapshot['status'] in ORCHESTRATION_TERMINAL_STATES:
+        floor = self._history._hold_now()
+        now = max(now, floor) if valid_integer(now) else floor
+        ended = 0
+        for row in self._db.execute(self._UNATTENDED_SELECT, (project, now, now, limit)).fetchall():
+            handle = row['identity']
+            orchestration = self._db.execute('SELECT orchestration_handle,sequence,checkpoint_digest,scope_digest '
+                                             'FROM project_orchestrations WHERE project_id=? AND orchestration_handle=?',
+                                             (project, handle)).fetchone()
+            snapshot = None if orchestration is None else self._latest_snapshot(orchestration)
+            if (snapshot is None or snapshot['status'] in ORCHESTRATION_TERMINAL_STATES
+                    or self._scope_digest(OrchestrationScope(**snapshot['scope'])) != orchestration['scope_digest']):
+                self._back_off(handle, now)  # It does not verify: left as it is, and asked about again later.
                 continue
-            latest = self._db.execute('SELECT MAX(created_at_ms) FROM result_reservations WHERE project_id=? '
-                                      'AND orchestration_handle=?', (project, row['orchestration_handle'])).fetchone()[0]
-            since = max(snapshot['observed_at_ms'], latest if valid_integer(latest, minimum=0) else 0)
-            if now - since < ORCHESTRATION_IDLE_MS:
-                continue
-            scope = OrchestrationScope(**snapshot['scope'])
-            if self._scope_digest(scope) != row['scope_digest']:
-                continue  # The row does not belong to the scope its checkpoint names: left as it is.
-            tried += 1
-            request = OrchestrationRequest(1, 'orchestration.close', 'end-idle-' + secrets.token_hex(16), scope, {
-                'orchestration_handle': row['orchestration_handle'], 'expected_sequence': snapshot['sequence'],
-                'status': 'interrupted', 'goal_tokens_used': None, 'goal_time_used_seconds': None})
+            request = self._unattended_request(handle, snapshot['sequence'], snapshot['scope'])
             try:
-                self.apply(request, client_version=snapshot['client_version'], before_commit=lambda: None)
+                self.apply(request, client_version=snapshot['client_version'], before_commit=lambda: None,
+                           _unattended=True)
             except HistoryError:
-                continue  # A run not yet over, or anything else: it stays open for a later pass.
+                self._back_off(handle, now)  # A run not yet over, or anything else: it stays open for a later pass.
+                continue
             ended += 1
         return ended
 
@@ -387,8 +410,23 @@ class OrchestrationOwner:
             self._history._host_result_receipt(entry)
         return False
 
+    def _unattended_eligible(self, handle, now):
+        """B6 (RS-B-B6-2), inside the close's transaction: the register row is held and due, and no reservation of
+        the orchestration is held or releasing (read through the held reservation rows, never the tombstones). A held
+        lease is `_unfinished`'s (SH-7: a held lease row is exactly a live lease); memory kinds are not checked."""
+        project = self._history.project_id
+        row = self._db.execute("SELECT due_at_ms FROM project_holds WHERE project_id=? AND kind='orchestration' "
+                               "AND identity=? AND state='held'", (project, handle)).fetchone()
+        if row is None or not valid_integer(row[0]) or now < row[0]:
+            return False
+        return self._db.execute(
+            "SELECT 1 FROM project_holds r INDEXED BY project_holds_kind_due JOIN result_reservations s "
+            "ON s.project_id=r.project_id AND s.claim_id=r.identity WHERE r.kind='reservation' "
+            "AND r.state<>'released' AND r.project_id=? AND s.orchestration_handle=? LIMIT 1",
+            (project, handle)).fetchone() is None
+
     @_operation
-    def apply(self, request, *, client_version, before_commit, _runtime_update=False):
+    def apply(self, request, *, client_version, before_commit, _runtime_update=False, _unattended=False):
         if type(request) is not OrchestrationRequest or client_version not in HOST_CLIENT_VERSIONS or not callable(before_commit):
             raise HistoryError('history_invalid_input')
         request = decode_orchestration_request(encode_orchestration_request(request))
@@ -420,7 +458,10 @@ class OrchestrationOwner:
         limits = self._history._orchestration_limits
         if limits is None:
             raise HistoryError('history_orchestration_unavailable')
-        now = self._history._result_now()
+        if _unattended and operation != 'orchestration.close':
+            raise HistoryError('history_invalid_input')
+        # B6 (RS-B-B6-2): the unattended close judges at max(wall, persisted floor), read without moving the floor.
+        now = self._history._hold_now() if _unattended else self._history._result_now()
         with self._history._transaction():
             if operation == 'orchestration.open':
                 # Only open or paused ones count (0.3.4 R6); in 0.8.29 every one ever opened did.
@@ -459,6 +500,8 @@ class OrchestrationOwner:
                                 raise HistoryError('history_orchestration_state')
                             snapshot[name] = value
                 if operation == 'orchestration.close':
+                    if _unattended and not self._unattended_eligible(handle, now):
+                        raise HistoryError('history_orchestration_pending')
                     if self._unfinished(scope, handle, unrecorded=unrecorded):
                         raise HistoryError('history_orchestration_pending')
                     snapshot['status'], snapshot['ended_at_ms'] = payload['status'], now
@@ -471,28 +514,41 @@ class OrchestrationOwner:
                 raise HistoryError('history_orchestration_unavailable')
             checkpoint_digest = keyed_digest(self._key(), b'project-orchestration-checkpoint-v1\0' + raw)
             checked_orchestration_view({'snapshot': snapshot, 'checkpoint_digest': checkpoint_digest})
+            closed = snapshot['status'] in ORCHESTRATION_TERMINAL_STATES
             if operation == 'orchestration.open':
-                self._db.execute('INSERT INTO project_orchestrations VALUES(?,?,?,?,?)',
+                self._db.execute('INSERT INTO project_orchestrations(project_id,orchestration_handle,scope_digest,'
+                                 "sequence,checkpoint_digest,state) VALUES(?,?,?,?,?,'open')",
                                  (scope.project_id, handle, scope_digest, 1, checkpoint_digest))
+                # B6 (RS-B-B6-1): its register row, in the open's own transaction, due 24 h from now.
+                project_holds_schema.take_hold(self._db, scope.project_id, 'orchestration', handle, now_ms=now,
+                                               due_at_ms=now + ORCHESTRATION_IDLE_MS)
             else:
-                self._db.execute('UPDATE project_orchestrations SET sequence=?,checkpoint_digest=? '
+                self._db.execute('UPDATE project_orchestrations SET sequence=?,checkpoint_digest=?,state=? '
                                  'WHERE project_id=? AND orchestration_handle=?',
-                                 (snapshot['sequence'], checkpoint_digest, scope.project_id, handle))
+                                 (snapshot['sequence'], checkpoint_digest, 'closed' if closed else 'open',
+                                  scope.project_id, handle))
+                if not closed and self._db.execute(  # B6: activity moves the due time (and asks again at once)
+                        "UPDATE project_holds SET due_at_ms=?,next_check_ms=0,evidence=NULL WHERE project_id=? "
+                        "AND kind='orchestration' AND identity=? AND state='held'",
+                        (now + ORCHESTRATION_IDLE_MS, scope.project_id, handle)).rowcount != 1:
+                    raise HistoryError('history_incompatible')
             self._db.execute('INSERT INTO project_orchestration_checkpoints VALUES(?,?,?,?,?)',
                              (scope.project_id, handle, snapshot['sequence'], raw, checkpoint_digest))
             self._db.execute('INSERT INTO project_orchestration_requests VALUES(?,?,?,?,?)',
                              (scope.project_id, request_key, digest, handle, snapshot['sequence']))
-            if _runtime_update:
-                # RS-D-2 N1: keep the classification with the close, before result retirement
-                # can remove the evidence used by _unfinished. One orchestration, one tombstone;
-                # no result content, and no marker if eligibility or the commit fails.
-                if self._db.execute("SELECT 1 FROM project_holds WHERE project_id=? AND kind='orchestration' "
-                                    "AND identity=?", (scope.project_id, handle)).fetchone() is None:
-                    project_holds_schema.take_hold(self._db, scope.project_id, 'orchestration', handle,
-                                                   now_ms=snapshot['started_at_ms'])
-                project_holds_schema.release_hold(self._db, scope.project_id, 'orchestration', handle, 'closed',
-                    now_ms=now, receipt=checkpoint_digest,
-                    evidence=project_holds_schema.evidence_json(ended_by_update_unrecorded=bool(unrecorded)))
+            if operation == 'orchestration.close':
+                # B6 (RS-B-B6-1): the register row is released in the close's own transaction: `closed` by the
+                # primary or by an update (RS-D-2 N1 keeps its classification with it, before result retirement can
+                # remove the evidence used by _unfinished; no result content), `interrupted_unattended` unattended.
+                if _runtime_update:
+                    kind, evidence = 'closed', project_holds_schema.evidence_json(
+                        ended_by_update_unrecorded=bool(unrecorded))
+                elif _unattended:
+                    kind, evidence = 'interrupted_unattended', project_holds_schema.evidence_json(by='unattended')
+                else:
+                    kind, evidence = 'closed', project_holds_schema.evidence_json(by='primary')
+                project_holds_schema.release_hold(self._db, scope.project_id, 'orchestration', handle, kind,
+                                                  now_ms=now, receipt=checkpoint_digest, evidence=evidence)
             # Recheck independent current authority after the complete mutation,
             # inside the transaction and immediately before its actual commit.
             before_commit()

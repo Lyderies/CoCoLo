@@ -38,7 +38,9 @@ from .history_contracts import (
 from .host_result_contracts import HostResultReference, decode_host_result_reference
 from .orchestration_api import OrchestrationLimits
 from .run_failure_reasons import FAILED_BEFORE_OPEN_REASONS, MAX_REGISTERED_RUNS
-from .orchestration_schema import ORCHESTRATION_SCHEMA, ORCHESTRATION_COLUMNS
+from .orchestration_schema import (ORCHESTRATION_SCHEMA, ORCHESTRATION_COLUMNS, ORCHESTRATION_STATE_COLUMN,
+                                   ORCHESTRATION_STATE_COLUMNS, ORCHESTRATION_STATE_INDEX_SCHEMA,
+                                   with_orchestration_state)
 from .project_qa_checks import CHECK_SCHEMA, CHECK_COLUMNS
 from .project_qa_commit import QA_SCHEMA, QA_COLUMNS
 from .project_learning_corpus import LEARNING_SCHEMA, LEARNING_COLUMNS
@@ -61,7 +63,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 20
+_SCHEMA_VERSION = 21
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
@@ -201,7 +203,16 @@ CREATE INDEX project_registered_runs_run ON project_registered_runs(project_id,r
 """
 _SCHEMA_V19 = _SCHEMA_V18 + OPEN_BINDING_INDEX_SCHEMA
 # B2 (decision 92.3 A), step 19 -> 20: who recorded a result's outcome (service_record.RECORDER_SCHEMA).
-_SCHEMA = _SCHEMA_V19 + service_record.RECORDER_SCHEMA
+_SCHEMA_V20 = _SCHEMA_V19 + service_record.RECORDER_SCHEMA
+# RS-B B6 (decisions 131, 185, 187), step 20 -> 21, additive: the orchestration state column and its index; RS-D S3's
+# partial index for the retirement pass, over the reservations not yet expired only (no tombstone is visited); and the
+# partial index of the unattended close's fair selection (project_holds_schema).
+RESULT_LIVE_INDEX_SCHEMA = """
+CREATE INDEX result_reservations_live ON result_reservations(project_id) WHERE state<>'expired';
+"""
+STEP_21_SCHEMA = (ORCHESTRATION_STATE_INDEX_SCHEMA + RESULT_LIVE_INDEX_SCHEMA
+                  + project_holds_schema.ORCHESTRATION_CHECK_INDEX_SCHEMA)
+_SCHEMA = with_orchestration_state(_SCHEMA_V20) + STEP_21_SCHEMA
 _COLUMNS = {
     **PROJECT_HOLDS_COLUMNS,
     **service_record.RECORDER_COLUMNS,
@@ -214,6 +225,7 @@ _COLUMNS = {
     **ACK_COLUMNS,
     **CLEANUP_COLUMNS,
     **ORCHESTRATION_COLUMNS,
+    **ORCHESTRATION_STATE_COLUMNS,  # B6: step 21's column
     **CHECK_COLUMNS,
     **QA_COLUMNS,
     "history_identity": ("project_id", "next_source_sequence", "next_delivery_sequence"),
@@ -466,13 +478,14 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19} and application == _APPLICATION_ID
+        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+              and application == _APPLICATION_ID
               and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4,
                                                5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7, 8: _SCHEMA_V8,
                                                9: _SCHEMA_V9, 10: _SCHEMA_V10, 11: _SCHEMA_V11,
                                                12: _SCHEMA_V12, 13: _SCHEMA_V13, 14: _SCHEMA_V14,
                                                15: _SCHEMA_V15, 16: _SCHEMA_V16, 17: _SCHEMA_V17, 18: _SCHEMA_V18,
-                                               19: _SCHEMA_V19}[version])):
+                                               19: _SCHEMA_V19, 20: _SCHEMA_V20}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
@@ -482,7 +495,8 @@ class ProjectHistory:
             omitted = {*(service_record.RECORDER_COLUMNS if version < 20 else set()), *(PROJECT_HOLDS_COLUMNS if version < 18 else set()), *(REGISTERED_RUN_COLUMNS if version < 17 else set()), *(ACTIVATION_COLUMNS if version < 16 else set()), *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
             old_columns = {name: (columns[:-1] if ((name == 'result_leases' and version < 9)
-                                                 or (name == 'project_cleanup_reservations' and version == 9)) else columns)
+                                                 or (name == 'project_cleanup_reservations' and version == 9)
+                                                 or (name == 'project_orchestrations' and version < 21)) else columns)
                            for name, columns in _COLUMNS.items() if name not in omitted}
             self._check_schema_identity(old_columns)
             # O10 HS-5/HS-6: every check passes before anything is written, and the store is kept as it
@@ -541,13 +555,43 @@ class ProjectHistory:
                               + (service_record.RECORDER_SCHEMA if version < 20 else '')).split(';'):
                 if statement.strip():
                     connection.execute(statement)
+            # B6 (step 20 -> 21): the orchestration state column, then the three indexes; additive only.
+            connection.execute('ALTER TABLE project_orchestrations ADD COLUMN ' + ORCHESTRATION_STATE_COLUMN)
+            for statement in STEP_21_SCHEMA.split(';'):
+                if statement.strip():
+                    connection.execute(statement)
             # B1: every lease and reservation gets its register row by class, idempotently, before the validators.
             if version < 18:
                 project_holds_schema.adopt_project_holds(connection, self._hold_now())
+            # B6: every orchestration's state from its latest checkpoint; every open one its held register row.
+            project_holds_schema.adopt_orchestrations(connection, self.project_id, self._orchestrations_to_adopt())
             # SH-1: both validators inside the step, before it commits; a failure rolls everything back to the
             # earlier format (and the copy made for it goes, O10 HS-18).
             self._check_project_holds()
             connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+
+    def _orchestrations_to_adopt(self) -> list:
+        """B6 (step 20 -> 21): (handle, open, started_at_ms, last activity) of every orchestration, from its latest
+        checkpoint verified by its own keyed seal. One that does not verify is taken as open (it never frees a place,
+        as before), from now. A store with orchestrations and no result key cannot be classified: refused."""
+        rows = self._connection.execute("SELECT orchestration_handle,sequence,checkpoint_digest FROM "
+                                        "project_orchestrations WHERE project_id=?", (self.project_id,)).fetchall()
+        if rows and self._result_key is None:
+            raise HistoryError("history_incompatible")
+        from .orchestration_api import ORCHESTRATION_TERMINAL_STATES
+        owner, now, adopted = self._orchestration_owner(), self._hold_now(), []
+        for row in rows:
+            snapshot = owner._latest_snapshot(row)
+            if snapshot is None:
+                adopted.append((row["orchestration_handle"], True, now, now))
+                continue
+            latest = self._connection.execute(
+                "SELECT MAX(created_at_ms) FROM result_reservations WHERE project_id=? AND orchestration_handle=?",
+                (self.project_id, row["orchestration_handle"])).fetchone()[0]
+            activity = max(snapshot["observed_at_ms"], latest if valid_integer(latest) else 0)
+            adopted.append((row["orchestration_handle"], snapshot["status"] not in ORCHESTRATION_TERMINAL_STATES,
+                            snapshot["started_at_ms"], activity))
+        return adopted
 
     def _check_schema_identity(self, tables: dict) -> None:
         for name, columns in tables.items():
@@ -2917,7 +2961,9 @@ class ProjectHistory:
             # D2 (SH-4): a lease-born reserved row is a candidate only once its obligation is released (RS-B); a
             # deadline alone selects nothing before the commit. Every other row keeps its deadline and close rules.
             statement = (
-                "SELECT rowid FROM result_reservations WHERE project_id=? AND state!='expired' AND CASE "
+                # B6 (RS-D-9-S3, decision 131): only the reservations not yet expired, never a tombstone.
+                "SELECT rowid FROM result_reservations INDEXED BY result_reservations_live "
+                "WHERE project_id=? AND state!='expired' AND CASE "
                 "WHEN state='reserved' AND EXISTS(SELECT 1 FROM result_leases AS born "
                 "WHERE born.project_id=result_reservations.project_id AND born.claim_id=result_reservations.claim_id) "
                 "THEN EXISTS(SELECT 1 FROM project_holds AS obligation "

@@ -351,7 +351,7 @@ class ResultLifetimeTests(DriverHarness):
         self.open_run()  # The project service is running.
         with mock.patch.object(orchestration_store.OrchestrationOwner, 'end_idle', recorded):
             self.wait_for(lambda: calls, seconds=30)
-        self.assertEqual(10, calls[0][1])
+        self.assertEqual(4, calls[0][1])  # B6 (RS-B-B6-4): at most UNATTENDED_CLOSE_BATCH (4) per pass; was 10
 
 
 class ResultLimitTests(DriverHarness):
