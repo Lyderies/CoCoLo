@@ -20,6 +20,11 @@ RETRY_REPAIR = {
     'action': 'Wait for the next cleanup pass; if this persists, check storage permissions and free space.',
     'operator_needed': False,
 }
+OPERATOR_REPAIR = {
+    'reason': 'Result cleanup requires operator attention.',
+    'action': 'Inspect this project service store and resolve the cleanup obstruction, then run learning-status again.',
+    'operator_needed': True,
+}
 
 
 def _closed(value, fields):
@@ -64,7 +69,7 @@ def checked_holds_report(value):
     retry_seen = False
     for entry in repairs['entries']:
         require(_closed(entry, {'reason', 'action', 'operator_needed'}) and type(entry['operator_needed']) is bool)
-        require(entry == (DIRECTORY_REPAIR if entry['operator_needed'] else RETRY_REPAIR))
+        require(entry in (DIRECTORY_REPAIR, OPERATOR_REPAIR) if entry['operator_needed'] else entry == RETRY_REPAIR)
         require(not (retry_seen and entry['operator_needed']))
         retry_seen |= not entry['operator_needed']
     return value

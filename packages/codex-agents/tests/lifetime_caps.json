@@ -1337,8 +1337,8 @@
   },
   "project_holds_report.py::_repairs": {
    "checks": 3,
-   "ends": "B7a output and temporary-memory bound: 20 repairs shown plus one lookahead per priority; extra repairs remain discoverable through D3, never block work; truncated is explicit.",
-   "test": "test_B7_3_operator_needed_beyond_first_D3_page_precedes_all_retries"
+   "ends": "B7a per-report bounds: at most 20 output entries, at most 21 retained entries per priority, and at most 5 D3 pages of at most 20 entries each. D3 also reads bounded lookahead rows per page. Unread pages or more than 20 entries set truncated; extra repairs remain discoverable through D3 and never block work.",
+   "test": "test_B7_3_retry_backlog_reads_at_most_five_D3_pages"
   },
   "project_holds_schema.py::custody_consistent": {
    "checks": 1,

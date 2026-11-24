@@ -49,6 +49,28 @@ Read-only syntax QA parsed the seven changed runtime Python files, the socket te
 scripts without executing socket code. The new limit sites are registered in tests/lifetime_caps.json; the new unit
 module verifies those scoped registry entries and their named past-the-limit tests.
 
+## B7a review corrections
+
+Each regression test was added before its implementation. Each row below used exactly
+`python3 -B -m unittest tests.test_holds_report` from `packages/codex-agents`.
+Existing assertions were unchanged; no git or sockets were used.
+
+| Correction / new test | Red | Green | Seconds (red → green) |
+|---|---|---|---|
+| Five-page D3 cap: `test_B7_3_retry_backlog_reads_at_most_five_D3_pages` | 21 tests, one failure: six pages read | 21 tests pass | 0.209 → 0.203 |
+| Missing/null slice: `test_B7_2_missing_or_null_task_slice_still_awaits_verifier` | 22 tests, one failure: zero awaiting instead of two | 22 tests pass | 0.211 → 0.219 |
+| Stored repair reasons: `test_B7_3_other_stored_repair_reasons_need_operator_and_remain_private` | 23 tests, one failure: both operator flags false | 23 tests pass | 0.205 → 0.207 |
+
+The repair snapshot reads at most five D3 pages of twenty entries, retaining at most twenty-one entries per
+priority and returning at most twenty. Unread pages set `truncated`; directories discovered within the page
+window precede retries. D3's separate cursor API still exposes the remaining backlog.
+
+D3's current writer only stores `directory` for `repair_required`, but the schema permits other non-null
+reasons. The report now uses a state-derived `operator_needed` flag supplied by D3 context entries, so an
+unknown stored reason (even the literal `retrying`) receives generic operator guidance. Raw reasons remain
+private, and the closed response validator accepts the new generic guidance. The regression exercises both
+unknown and `retrying` stored reasons through the real D3 reader and validates the resulting response.
+
 ## Stop required by an existing assertion
 
 Final read-only compatibility review found `AuthorityTests.test_operation_set_unchanged` at

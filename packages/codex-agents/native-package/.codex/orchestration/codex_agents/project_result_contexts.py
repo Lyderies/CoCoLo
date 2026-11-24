@@ -563,7 +563,8 @@ def repairs(history, limit: int = 20, cursor=None) -> RepairReport:
     path; `directory` is derived from the fixed names, since a reservation has no repair column and there is no
     schema step), then a context still `retiring` (an unlink or fsync error, or a stop, that the next pass retries;
     shown as `retrying`). So persistent retries never hide an entry an operator must repair. A page that does not
-    reach the end is `truncated` and carries a `cursor` for the next page."""
+    reach the end is `truncated` and carries a `cursor` for the next page. Context entries carry
+    `operator_needed` from their state, independently of the stored repair reason."""
     report = RepairReport()
     tier, after = _parse_cursor(cursor)
 
@@ -595,6 +596,7 @@ def repairs(history, limit: int = 20, cursor=None) -> RepairReport:
                 pass
         return {"run_handle": row["run_handle"], "attempt": row["attempt"],
                 "reason": row["repair_reason"] if row["state"] == "repair_required" else "retrying",
+                "operator_needed": row["state"] == "repair_required",
                 "names": directories(fixed)}
 
     def reservation_rows(room):

@@ -4,8 +4,10 @@ Read only, on the history writer thread. Deadlines never imply an evidence-only
 release. Memory holds remain explicitly untracked until their writer slice exists.
 """
 from .holds_report_contracts import (HOLD_KINDS, UNTRACKED_KINDS, TIMER_KINDS, MAX_REPAIR_ENTRIES,
-                                      DIRECTORY_REPAIR, RETRY_REPAIR)
+                                      DIRECTORY_REPAIR, OPERATOR_REPAIR, RETRY_REPAIR)
 from .project_result_contexts import MAX_LIVE_CONTEXT_BYTES
+
+MAX_REPAIR_PAGES = 5
 
 
 def _holds(history):
@@ -76,7 +78,7 @@ def _custody(history, runtime_digest):
         "WHERE c.project_id=? AND c.state NOT IN ('ended','expired') AND c.state='recorded' "
         "AND EXISTS(SELECT 1 FROM records r WHERE r.project_id=c.project_id AND r.record_type='outcome' "
         "AND r.content_digest=c.outcome_digest "
-        "AND json_extract(CAST(r.content AS TEXT),'$.task_slice') NOT LIKE 'verification-%') "
+        "AND COALESCE(json_extract(CAST(r.content AS TEXT),'$.task_slice'), '') NOT LIKE 'verification-%') "
         "AND NOT EXISTS(SELECT 1 FROM project_operational_qa q WHERE q.project_id=c.project_id "
         "AND q.worker_outcome_digest=c.outcome_digest) "
         "AND NOT EXISTS(SELECT 1 FROM records v WHERE v.project_id=c.project_id "
@@ -90,15 +92,20 @@ def _custody(history, runtime_digest):
 
 def _repairs(history):
     # D3's context repairs precede reservation-only entries, which can themselves
-    # mix directories and retries. Walk its pages with bounded retained memory so
-    # even a directory beyond the first page takes priority over every retry.
+    # mix directories and retries. Bound both retained entries and pages read;
+    # directories found within that window take priority over retries.
     needed, retrying = [], []
     cursor, total, more = None, 0, False
-    while True:
+    for _ in range(MAX_REPAIR_PAGES):
         page = history.result_retirement_repairs(MAX_REPAIR_ENTRIES, cursor)
         total += len(page)
         for entry in page:
-            target, plain = (needed, DIRECTORY_REPAIR) if entry['reason'] == 'directory' else (retrying, RETRY_REPAIR)
+            if entry['reason'] == 'directory':
+                target, plain = needed, DIRECTORY_REPAIR
+            elif entry.get('operator_needed', False):
+                target, plain = needed, OPERATOR_REPAIR
+            else:
+                target, plain = retrying, RETRY_REPAIR
             if len(target) <= MAX_REPAIR_ENTRIES:
                 target.append(dict(plain))
         more = page.truncated

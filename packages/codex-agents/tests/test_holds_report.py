@@ -49,6 +49,54 @@ def service_for(store):
 
 
 class HoldsReportTests(dr.LeaseBackedFixture):
+    def test_B7_3_other_stored_repair_reasons_need_operator_and_remain_private(self):
+        from codex_agents.holds_report_contracts import checked_holds_report
+        db = self.store._connection
+        for number, reason in enumerate(('PRIVATE-REPAIR-REASON', 'retrying'), 1):
+            db.execute("INSERT INTO project_result_contexts(project_id,run_handle,attempt,state,context_size,"
+                       "lease_deadline_ms,repair_reason) VALUES(?,?,1,'repair_required',7,1000,?)",
+                       (PROJECT_A, f'hrn_{number:048x}', reason))
+        value = report(self.store)
+        entries = value['result_retirement_repairs']['entries']
+        self.assertEqual([True, True], [entry['operator_needed'] for entry in entries])
+        for entry in entries:
+            self.assertIn('Inspect', entry['action'])
+            self.assertNotIn('directory', entry['reason'])
+        self.assertNotIn('PRIVATE-REPAIR-REASON', json.dumps(value))
+        self.assertEqual(value, checked_holds_report(value))
+
+    def test_B7_2_missing_or_null_task_slice_still_awaits_verifier(self):
+        db = self.store._connection
+        for number in (1, 2):
+            self.bound(number)
+            self.publish(number)
+            record = verification_outcome(f'worker-no-slice-{number}')
+            record.pop('task_slice', None)
+            if number == 2:
+                record['task_slice'] = None
+            db.execute('INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?)',
+                (PROJECT_A, record['record_id'], 'outcome', 'host', number + 100, 1000, 1000,
+                 canonical_json(record), f'{number:064x}', 0))
+            self.record(f'{number:064x}', number)
+        self.assertEqual(2, report(self.store)['result_custody']['awaiting_verifier'])
+
+    def test_B7_3_retry_backlog_reads_at_most_five_D3_pages(self):
+        from codex_agents.project_result_contexts import RepairReport
+        pages = []
+        for number in range(6):
+            page = RepairReport([{'reason': 'retrying'} for _ in range(20)])
+            page.truncated = number < 5
+            page.cursor = f'2:{(number + 1) * 20}' if page.truncated else None
+            pages.append(page)
+        with mock.patch.object(self.store, 'result_retirement_repairs', side_effect=pages) as reader:
+            repairs = report(self.store)['result_retirement_repairs']
+        self.assertEqual(5, reader.call_count)
+        self.assertEqual([mock.call(20, None)] + [mock.call(20, f'2:{number * 20}')
+                                               for number in range(1, 5)], reader.call_args_list)
+        self.assertTrue(repairs['truncated'])
+        self.assertEqual(20, len(repairs['entries']))
+        self.assertTrue(all(not entry['operator_needed'] for entry in repairs['entries']))
+
     def test_B7_1_empty_has_every_kind_and_explicit_zero_null_fields(self):
         value = report(self.store)
         self.assertEqual({'project_holds', 'result_custody', 'result_retirement_repairs'}, set(value))
