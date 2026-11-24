@@ -1023,6 +1023,18 @@ def owner_learning_client(state_root, project_root, operation, **arguments):
     return history.learning_review_case(**arguments)
 
 
+def holds_report_client(state_root, project_root, *, host_client):
+    """B7a counts from this project's enrolled service, or None while unavailable."""
+    try:
+        state = CollectorPaths(state_root)
+        scope, _, endpoint = read_runtime_hint(state, project_root)
+        history = HistoryClient(endpoint, scope.project_id, scope.runtime_digest, timeout=2)
+        enroll_clients(state, project_root, scope, (endpoint,), host_client=host_client)
+        return history.holds_report()
+    except Exception:
+        return None  # A diagnostic; no database fallback or private error text.
+
+
 def capacity_report_client(state_root, project_root, *, host_client):
     """Each limit of this project's store with its live count, or None when its service is not running."""
     try:

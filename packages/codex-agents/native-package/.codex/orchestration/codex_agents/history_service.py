@@ -402,6 +402,10 @@ class HistoryService:
                     result = {'stored': False, 'refused': refusal.owner_reason,
                               'detail': None if refusal.detail is None else refusal.detail[:200],
                               **({'record': None} if review else {})}
+            elif request.operation == 'history.holds_report':
+                from .project_holds_report import holds_report
+                self._history()
+                result = holds_report(self._store, runtime_digest=self._runtime)
             elif request.operation == 'history.capacity_report':
                 from .project_capacity_report import capacity_report
                 self._history()

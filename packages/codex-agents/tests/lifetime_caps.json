@@ -696,6 +696,11 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "holds_report_contracts.py::checked_holds_report": {
+   "checks": 1,
+   "ends": "B7a wire presentation bound: at most 20 repair entries; no retained state or admission cap; a 21-entry reply is refused.",
+   "test": "test_B7_6_nested_missing_extra_types_text_bounds_and_order_refused"
+  },
   "hook_config.py::parse_local_manifest": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
@@ -1314,6 +1319,26 @@
   "project_history.py::window": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_holds_report.py::_custody": {
+   "checks": 2,
+   "ends": "B7a snapshot aggregation only: current contexts remain charged until ended/expired; 21 contexts still count even past the 20-entry presentation bound.",
+   "test": "test_B7_3_more_than_twenty_repairs_are_bounded_with_truncated"
+  },
+  "project_holds_report.py::_ended_by_update": {
+   "checks": 1,
+   "ends": "B7a snapshot aggregation only: COUNT of unrecorded contexts ended by an update, no admission bound; source rows retain their existing purge rules.",
+   "test": "test_B7_2_ended_by_update_unrecorded_uses_verified_checkpoint_and_release"
+  },
+  "project_holds_report.py::_holds": {
+   "checks": 1,
+   "ends": "B7a snapshot aggregation only: COUNT of current held/releasing register rows, no count-based refusal or retained counter.",
+   "test": "test_B7_1_mixed_states_evidence_deadlines_and_oldest_are_exact"
+  },
+  "project_holds_report.py::_repairs": {
+   "checks": 3,
+   "ends": "B7a output and temporary-memory bound: 20 repairs shown plus one lookahead per priority; extra repairs remain discoverable through D3, never block work; truncated is explicit.",
+   "test": "test_B7_3_operator_needed_beyond_first_D3_page_precedes_all_retries"
   },
   "project_holds_schema.py::custody_consistent": {
    "checks": 1,

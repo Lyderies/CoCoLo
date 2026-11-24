@@ -40,7 +40,7 @@ HISTORY_OPERATIONS = frozenset({
     "history.commit_qa", "history.qa_details", "history.open_scope", "history.worker_input",
     "history.learning_cycle", "history.learning_report", "history.routing_evidence",
     "history.learning_feedback", "history.learning_review_case", "history.orchestration_report",
-    "history.capacity_report",
+    "history.capacity_report", "history.holds_report",
     # D1: a published attempt's terminal reference, found in the store from its run handle, attempt and inputs.
     "history.result_reference",
 })
@@ -122,6 +122,9 @@ def _validate_request(request: HistoryRequest) -> None:
     elif operation == 'history.worker_input':
         if (not _closed(payload, {'host_outcome_digest'}) or not matches(payload['host_outcome_digest'], _DIGEST)
                 or request.request_id != payload['host_outcome_digest']):
+            raise HistoryError('history_invalid_request')
+    elif operation == 'history.holds_report':
+        if not _closed(payload, set()) or request.request_id != 'holds':
             raise HistoryError('history_invalid_request')
     elif operation == 'history.capacity_report':
         if not _closed(payload, set()) or request.request_id != 'capacity':
@@ -327,6 +330,9 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
     elif operation == 'history.routing_evidence':
         if not _closed(result, {'trusted'}) or type(result['trusted']) is not bool:
             raise HistoryError('history_invalid_response')
+    elif operation == 'history.holds_report':
+        from .holds_report_contracts import checked_holds_report
+        checked_holds_report(result)
     elif operation == 'history.capacity_report':
         from .project_capacity_report import CAPACITY_NAMES
         # O0c M1, M3: a host's service also names the run slots it can no longer free.
@@ -609,6 +615,10 @@ class HistoryClient:
     def learning_report(self, cycle_id: str, offset: int) -> dict:
         """One slice of a finished cycle's full report."""
         return self._call('history.learning_report', cycle_id, {'offset': offset})
+
+    def holds_report(self) -> dict:
+        """This project's holds, custody and plain retirement repairs (B7a)."""
+        return self._call('history.holds_report', 'holds', {})
 
     def capacity_report(self) -> dict:
         """Each limit of this project's store with its live count (0.3.4 R9)."""
