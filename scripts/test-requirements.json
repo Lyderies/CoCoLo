@@ -648,7 +648,7 @@
  "L9.1": {
   "checks": [],
   "source": "PLAN-0.4.0.md T7",
-  "statement": "Two children at once run; a third is refused with claim_busy and the probe with probe_busy."
+  "statement": "Children run at once up to the installed limits (3 per project, 6 per machine); one over a limit is refused with its reason (preparation_full in the project, claim_busy across projects) and the probe with probe_busy (decision 151)."
  },
  "L9.2": {
   "checks": [],

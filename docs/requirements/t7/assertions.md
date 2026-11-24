@@ -38,3 +38,10 @@ check (main ruleset's 9 required checks unchanged).
 - G9: added "a missing report fails its CI step" (`if-no-files-found: error`).
 - scripts/test-requirements.json: G8 and L1.2 statements copied from tests/e2e/requirements.json (their
   authority, already changed by the e2e-t7-l1 merge); they had drifted and failed validate_sources.
+
+## T7 S1 (primary decision 151)
+L9.1 statement old: "Two children at once run; a third is refused with claim_busy and the probe with probe_busy."
+-> new: "Children run at once up to the installed limits (3 per project, 6 per machine); one over a limit is refused
+with its reason (preparation_full in the project, claim_busy across projects) and the probe with probe_busy." Reason: the
+installed policy limits are 6/3 (configurable limits are 0.5.0); the check proves the installed numbers.
+L6.1 and L6.2 stay as written: their red/inconsistent results are product bugs fixed in their own unit.
