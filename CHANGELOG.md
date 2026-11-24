@@ -4,6 +4,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.55: an installed CLI reads the live provider state from its default state root (0.8.54 installed
+  still routed "not_checked", with no reason: the checked default `--state-root` became "no state root"); a
+  not_checked route always says why.
 - Package 0.8.54: routing reads the live provider state on a real install (0.8.53 always routed "not_checked":
   the runtime hint is written before the account socket exists); a not_checked route says why.
 - Package 0.8.53: routes around a used-up provider (RT-ROUTE-EXHAUSTED, decision 124). Routing and admission share
