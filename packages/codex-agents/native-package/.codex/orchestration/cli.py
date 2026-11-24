@@ -390,6 +390,13 @@ _FIXED_EXCEPTION_CODES = {
 }
 
 
+def _path_free(text: str) -> bool:
+    """True for a short message with no path-like segment: no slash, backslash, tilde, home folder or drive."""
+    home = os.path.expanduser("~")
+    return (0 < len(text) <= 300 and not any(mark in text for mark in ("/", "\\", "~", "..", "://"))
+            and home not in text and not text.startswith(("file:", "sqlite:")))
+
+
 def _close_ledger(ledger: LearningLedger | _RestartingLedger) -> None:
     if isinstance(ledger, _RestartingLedger):
         ledger.close(operation_completed=sys.exc_info()[0] is None)
@@ -4193,7 +4200,11 @@ def main() -> int:
         json.JSONDecodeError,
     ) as exc:
         # Never the exception's text: it can hold a path or a private value (decisions 36, 192).
-        report = {"ready": False, "error": "the command was refused", "reason_code": _FIXED_EXCEPTION_CODES.get(
+        # The product's own fixed refusal texts are shown (owner: plain reasons on screen); a text that could
+        # carry a path or the home folder is replaced by the generic refusal.
+        text = str(exc)
+        shown = text if _path_free(text) else "the command was refused"
+        report = {"ready": False, "error": shown, "reason_code": _FIXED_EXCEPTION_CODES.get(
             type(exc).__name__, "command_refused")}
         _print(_with_codex_hint(args.command, report))
         return 2

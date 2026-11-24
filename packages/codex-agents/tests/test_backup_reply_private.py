@@ -129,6 +129,25 @@ class BackupReplyPrivateTests(unittest.TestCase):
         self.assertNotIn(secret, out.getvalue())
         self.assertFalse(json.loads(out.getvalue())["ready"])
 
+    def test_BK_11_the_cli_shows_a_fixed_refusal_message_with_its_reason_code(self):
+        argv = ["cli.py", "learning-verify-backup", "--state-root", str(self.source.state.root),
+                "--project-root", "/x", "--file-id", "bk_x"]
+        out = io.StringIO()
+        with mock.patch.object(cli, "_learning_ledger",
+                               side_effect=cli.LedgerError("a child run is active; nothing was changed")), \
+                mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(out):
+            self.assertEqual(2, cli.main())
+        report = json.loads(out.getvalue())
+        self.assertEqual("a child run is active; nothing was changed", report["error"])
+        self.assertEqual("ledger_refused", report["reason_code"])
+        # the same exception carrying a path is replaced (BK-10), and so is one naming the home folder
+        out = io.StringIO()
+        with mock.patch.object(cli, "_learning_ledger",
+                               side_effect=cli.LedgerError("cannot open " + os.path.expanduser("~") + "/db")), \
+                mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(out):
+            cli.main()
+        self.assertNotIn(os.path.expanduser("~"), out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

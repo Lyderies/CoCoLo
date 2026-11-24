@@ -320,8 +320,7 @@ class ProjectDriverTests(DriverHarness):
         # shared services and the child keep running.
         refused = self.cli_for(self.project, 'learning-backup-project', '--file-id', 'while_running',
                                '--expires-in-seconds', '3600', expected=2)
-        self.assertEqual('collector_refused', refused['reason_code'])  # decision 199: a fixed code, not the exception text
-        self.assertNotIn('a child run is active', refused['error'])
+        self.assertIn('a child run is active; nothing was changed', refused['error'])
         still_running()
 
         gate.write_text('go')
