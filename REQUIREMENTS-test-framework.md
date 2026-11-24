@@ -85,13 +85,13 @@ Registered planned checks remain declarations, not evidence that a test ran.
 
 
 **TF-5 — Coverage metadata is not a passing outcome.** Requirements without checks are reported as unchecked and do not fail a run. A full gate reports a requirement passing only when
-every registered required check has run and passed. Skipped, missing, errored, assertion-free lifecycle checks,
+every registered required check has run and passed. A requirement whose only results are passes and skips is reported as `skipped` (not proved here) and does not fail the run (decision 126.2: a skip is environmental, e.g. no disk image or socket). Missing, errored, assertion-free lifecycle checks,
 and unexpected successes cannot establish a passing requirement. Partial runs report unselected requirements
 as not run, never green; global structural validation still runs, and the selected checks determine runtime
 results. Expected failures also cannot count as a passing proof. Preserve `Phase.expect` assertion counting and requirement-level AND across all scenario parts,
 including G1–G9 checks selected for every affected flow. Witness: two checks for one ID, one failing or
-missing from a shard result, cannot aggregate to pass; skipped-only and expected-failure-only proofs are
-not coverage. An assertion-free lifecycle proof and an unexpected success both fail the coverage gate. Assertion counting
+missing from a shard result, cannot aggregate to pass; skipped-only proofs report `skipped` and expected-failure-only proofs fail;
+neither is coverage. An assertion-free lifecycle proof and an unexpected success both fail the coverage gate. Assertion counting
 is not proof of semantic correctness: review against the statement and fault sensitivity are also required.
 
 **TF-6 — Make duplicate slow proof reviewable.** Every non-unit new or migrated test declares a nonempty

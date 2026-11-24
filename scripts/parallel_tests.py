@@ -482,6 +482,9 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
     if not failed and not keep and not metadata_errors and not detail['budget_failures'] and not requirement_failures:
         shutil.rmtree(base, ignore_errors=True)
     print(f'Unchecked requirements ({len(unchecked)}): ' + ', '.join(unchecked), flush=True)
+    skipped = sorted(key for key, value in detail['requirements'].items() if value == 'skipped')
+    if skipped:
+        print(f'Requirements proved only by skipped checks here ({len(skipped)}): ' + ', '.join(skipped), flush=True)
     return 1 if failed or metadata_errors or detail['budget_failures'] or detail['debt_retirement_required'] or requirement_failures else 0
 
 

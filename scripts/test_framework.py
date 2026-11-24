@@ -130,8 +130,10 @@ def coverage(catalogue, outcomes):
     result = {}
     for requirement, row in catalogue.items():
         states = [outcomes.get(name, 'not_run') for name in row['checks']]
+        # A skip proves nothing here but is not a failure: it is reported as 'skipped' (test reset, decision 126).
         result[requirement] = ('unchecked' if not states else
-                               'failed' if any(s not in ('passed', 'not_run') for s in states) else
+                               'failed' if any(s not in ('passed', 'not_run', 'skipped') for s in states) else
+                               'skipped' if 'skipped' in states else
                                'not_run' if 'not_run' in states else 'passed')
     return result
 

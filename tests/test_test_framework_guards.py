@@ -357,8 +357,9 @@ class RunnerIntegrationTests(unittest.TestCase):
     @requirements('TF-5', why_not_scenario='Verify skipped only requirement is not a passing run using isolated framework fixtures.')
     def test_skipped_only_requirement_is_not_a_passing_run(self):
         code, output, report = self.run_fixture('self.skipTest("fixture unavailable")')
-        self.assertNotEqual(0, code, output)
-        self.assertEqual('failed', report['requirements']['TF-1'])
+        self.assertEqual(0, code, output)
+        self.assertEqual('skipped', report['requirements']['TF-1'])
+        self.assertIn('proved only by skipped checks here (1): TF-1', output)
 
     @requirements('TF-9', why_not_scenario='Verify preflight failure writes zero job seconds and discovery time using isolated framework fixtures.')
     def test_preflight_failure_writes_zero_job_seconds_and_discovery_time(self):
