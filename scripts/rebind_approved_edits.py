@@ -299,7 +299,7 @@ def listed_ids(root, at=None):
     return result
 
 
-def build(root, manifests, active=None, *, at=None, prior=(), admitted=None):
+def build(root, manifests, active=None, *, at=None, prior=(), admitted=None, prior_legacy=None):
     active = active_ids(root) if active is None else active
     before_sources, after_sources = sources(root, manifests, prior=prior)
     _, prior_sources = sources(root, prior)
@@ -310,6 +310,12 @@ def build(root, manifests, active=None, *, at=None, prior=(), admitted=None):
     suites = {'codex' if name.startswith('packages/codex-agents/') else
               'claude' if name.startswith('packages/claude-agents/') else 'root' for name in after_sources}
     seed = {name: row for name, row in seed.items() if name.split(':', 1)[0] in suites}
+    # Earlier introductions already placed normally migrated identities outside
+    # the binding. Their replayed sources may have changed without producing an
+    # admitted proof row, so the original baseline is no longer their old proof.
+    # Current-generation retirements still receive the full old-proof check.
+    if prior_legacy is not None:
+        seed = {name: row for name, row in seed.items() if name in prior_legacy}
     with tempfile.TemporaryDirectory(prefix='approved-edit-proof-') as folder:
         snapshot = Path(folder).resolve(); extract(root, SOURCE_REVISION, snapshot)
         shutil.copyfile(root / 'scripts/test_framework.py', snapshot / 'scripts/test_framework.py')
@@ -379,18 +385,18 @@ def binding_state(root, manifests=None):
                   or os.environ.get('GIT_DIR') or os.environ.get('GIT_COMMON_DIR')
                   or ((root / 'HEAD').is_file() and (root / 'objects').is_dir()))
     if not documents and not repository:
-        return {}, []
+        return {}, [], None
     paths = admitted_paths(root, BINDINGS)
     admitted_paths(root, MANIFESTS)
     if not paths:
-        return {}, []
+        return {}, [], None
     manifests = read_manifests(root) if manifests is None else manifests
     # Binding names convey authority, not chronology. Reconstruct generations
     # in introduction order even when a later name sorts before an earlier one.
     order = {commit: index for index, commit in enumerate(
         git(root, 'rev-list', '--reverse', '--topo-order', 'HEAD').decode().split())}
     documents = [(path, *immutable(root, path)) for path in paths]
-    admitted = {}; covered = set(); prior = []
+    admitted = {}; covered = set(); prior = []; prior_legacy = None
     for path, data, introduction in sorted(documents, key=lambda row: (order[row[2]], row[0])):
         selected = [m for m in manifests if m['decision'] in data['manifests']]
         if {m['decision'] for m in selected} != set(data['manifests']):
@@ -402,15 +408,18 @@ def binding_state(root, manifests=None):
         # Eligibility is frozen at introduction; later shrink-only retirement
         # filters application, never changes the immutable derivation.
         introduced_active = active_ids(root, introduction)
-        rebuilt = build(root, selected, introduced_active, at=introduction, prior=prior, admitted=admitted)
+        rebuilt = build(root, selected, introduced_active, at=introduction, prior=prior,
+                        admitted=admitted, prior_legacy=prior_legacy)
         if rebuilt != data:
             raise ValueError('immutable approved-edit binding does not match replayed proofs')
         covered.update(data['manifests']); admitted.update(data['tests']); prior.extend(selected)
-    return admitted, prior
+        introduced_legacy = listed_ids(root, introduction)
+        prior_legacy = introduced_legacy if prior_legacy is None else prior_legacy & introduced_legacy
+    return admitted, prior, prior_legacy
 
 
 def checked_bindings(root):
-    admitted, prior = binding_state(root)
+    admitted, prior, _ = binding_state(root)
     if not prior:
         return {}
     _, expected = sources(root, prior)
@@ -466,7 +475,7 @@ def main():
         if path.exists():
             raise ValueError('immutable binding already exists')
         manifests = read_manifests(root, require_committed=not args.prepare)
-        admitted, prior = binding_state(root, manifests)
+        admitted, prior, prior_legacy = binding_state(root, manifests)
         covered = {m['decision'] for m in prior}
         manifests = [m for m in manifests if m['decision'] not in covered]
         if not manifests:
@@ -476,7 +485,8 @@ def main():
         exact_current(expected, {name: (root / name).read_bytes() for name in expected})
         active = active_ids(root)
         check_later_retirements(root, {name: row for name, row in admitted.items() if name not in active})
-        data = build(root, manifests, active, prior=prior, admitted=admitted); write_new(path, data)
+        data = build(root, manifests, active, prior=prior, admitted=admitted, prior_legacy=prior_legacy)
+        write_new(path, data)
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
         parser.exit(1, str(error) + '\n')
     print(f'{path.relative_to(root)}: {len(data["tests"])} existing proofs rebound; commit manifests and binding together')

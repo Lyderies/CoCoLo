@@ -686,6 +686,92 @@ class ApprovedEditsLaterBinding(unittest.TestCase):
     write_json = ApprovedEditsR1.write_json
     snapshot = ApprovedEditsR1.snapshot
     fixture = ApprovedEditsR1.fixture
+    migration = ApprovedEditsMigration.migration
+
+    def retired_first_generation(self, root, p, *, migrated=True):
+        import hashlib
+        first_manifest, seed, active, retired = self.migration(
+            root, p, None if migrated else 'undecorated', outside_manifest=True)
+        if not migrated:
+            # Effective eligibility alone cannot retire an identity still in
+            # either raw list. Leave its changed proof unbound in generation 1.
+            for name in ('test-legacy.json', 'test-legacy-0850.json'):
+                self.write_json(root / 'scripts' / name, {
+                    **active, 'tests': {n: r['fingerprint'] for n, r in seed.items()}})
+            self.commit(root, 'keep changed unbound identity in legacy lists')
+            self.enterContext(mock.patch.object(p, 'active_ids', return_value=set(seed) - {retired}))
+        first = p.build(root, [first_manifest])
+        self.assertNotIn(retired, first['tests'])
+        self.assertEqual({'root:test_case.Case.test_active'}, set(first['tests']))
+        self.write_json(root / p.BINDINGS / '1.json', first)
+        introduction = self.commit(root, 'first binding after normal migration' if migrated else
+                                   'first binding with still-listed unbound proof')
+        self.assertEqual(first['tests'], p.checked_bindings(root))
+        path = root / 'tests/test_other.py'
+        path.write_text(path.read_text().replace('self.assertTrue(True)', 'self.assertTrue(False)'))
+        edit = self.commit(root, 'second generation edits another source')
+        manifest = dict(schema=1, decision='2', transitions=[dict(file='tests/test_other.py',
+            before_commit=introduction, edit_commit=edit, edits=[dict(line=4,
+            old='        self.assertTrue(True)\n', new='        self.assertTrue(False)\n')])])
+        self.write_json(root / p.MANIFESTS / '2.json', manifest)
+        approval = p.fw.decode_json((root / p.APPROVALS).read_text())
+        approval['decisions']['2'] = dict(binding='0',
+            manifest_sha256=hashlib.sha256((root / p.MANIFESTS / '2.json').read_bytes()).hexdigest())
+        self.write_json(root / p.APPROVALS, approval)
+        self.commit(root, 'second owner manifest and approval')
+        return seed, active, retired, first
+
+    def test_second_generation_excludes_previously_migrated_unbound_proof(self):
+        import parallel_tests as runner
+        import test_owned_baseline as owned
+        import rebind_approved_edits as live_policy
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); p = self.policy()
+            seed, active, retired, first = self.retired_first_generation(root, p)
+            first_bytes = (root / p.BINDINGS / '1.json').read_bytes()
+            status, diagnostic = self.command(root, p)
+            self.assertEqual(0, status, 'TF-27c-2 normally migrated proof blocked generation 2: ' + diagnostic)
+            second = p.fw.decode_json((root / p.BINDINGS / '0.json').read_text())
+            self.assertEqual({'root:test_other.Other.test_unrelated'}, set(second['tests']))
+            self.assertNotIn(retired, second['tests'])
+            self.assertEqual(first_bytes, (root / p.BINDINGS / '1.json').read_bytes())
+            self.commit(root, 'second binding introduction')
+            self.assertEqual({**first['tests'], **second['tests']}, p.checked_bindings(root))
+            current = p.inventory(root, root, seed)
+            discovered = {module: {n: r for n, r in current.items() if n.rsplit('.', 2)[0] == module}
+                          for module in ('root:test_case', 'root:test_other')}
+            with mock.patch.object(runner, 'ROOT', root), \
+                 mock.patch.object(runner, 'SUITES', {'root': root}), \
+                 mock.patch.object(runner, 'inventory', return_value=discovered), \
+                 mock.patch.object(runner, 'legacy_versions', side_effect=lambda *args: (copy.deepcopy(active), copy.deepcopy(active), [])), \
+                 mock.patch.object(runner.framework, 'validate_sources', return_value=[]), \
+                 mock.patch.object(owned, 'checked', return_value=seed), \
+                 mock.patch.object(live_policy, 'checked_bindings', side_effect=p.checked_bindings):
+                self.assertEqual([], runner.metadata()[-1])
+                catalogue = root / 'scripts/test-requirements.json'
+                catalogue_bytes = catalogue.read_bytes()
+                self.write_json(catalogue, {})
+                self.assertEqual([retired + ": unknown requirement 'TF-27'"], runner.metadata()[-1])
+                catalogue.write_bytes(catalogue_bytes)
+            # A proof retired only after these introductions retains the
+            # independent current-identity and normal-migration checks.
+            later = 'root:test_case.Case.test_active'
+            for name in ('test-legacy.json', 'test-legacy-0850.json'):
+                self.write_json(root / 'scripts' / name, {
+                    **active, 'tests': {n: f for n, f in active['tests'].items() if n != later}})
+            self.commit(root, 'later undecorated retirement of a bound proof')
+            with self.assertRaisesRegex(ValueError, later + ': retired bound test has no requirement'):
+                p.checked_bindings(root)
+
+    def test_second_generation_still_checks_unbound_legacy_proof(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); p = self.policy()
+            _, _, unbound, _ = self.retired_first_generation(root, p, migrated=False)
+            self.assertIn(unbound, p.listed_ids(root))
+            status, diagnostic = self.command(root, p)
+            self.assertEqual(1, status)
+            self.assertIn(unbound + ': trusted old proof differs from admitted baseline', diagnostic)
+            self.assertFalse((root / p.BINDINGS / '0.json').exists())
 
     def command(self, root, p, binding='0'):
         import contextlib
