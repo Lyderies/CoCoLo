@@ -259,6 +259,32 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(0, code, output)
 
 
+class ReaperTests(unittest.TestCase):
+    """Decision 224: on macOS killpg answers EPERM for a group whose members have all exited
+    (zombies awaiting reap). That group is gone; the runner must not crash on it."""
+
+    class Exited:
+        pid = 424242
+        def poll(self):
+            return 0
+
+    class Running:
+        pid = 424243
+        def poll(self):
+            return None
+
+    def test_reap_treats_eperm_on_an_exited_group_as_gone(self):
+        from unittest import mock
+        with mock.patch.object(parallel_tests.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')):
+            parallel_tests.reap_worker_group(self.Exited())  # must not raise
+
+    def test_reap_still_raises_eperm_for_a_live_worker(self):
+        from unittest import mock
+        with mock.patch.object(parallel_tests.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')):
+            with self.assertRaises(PermissionError):
+                parallel_tests.reap_worker_group(self.Running())
+
+
 class RunnerIntegrationTests(unittest.TestCase):
     def run_fixture(self, body='self.assertEqual(2, 1 + 1)', tagged=True, timeout='600', extra_module=False, malformed=False, layer='scenario', extra_args=(), siblings=False, module_import='', interrupt=False, fixture_source=None, fixture_checks=None, estimates=None):
         with tempfile.TemporaryDirectory(prefix='tf-run-') as folder:
