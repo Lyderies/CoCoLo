@@ -44,3 +44,19 @@ Removed assertions: none. New tests: 17 (docs/requirements/e2a.md, "Review round
 Existing assertions changed: the E2a-3 row above, applied 2026-11-25 by the primary after owner decision 176 ("yes"): both
 success assertions -> refusal + no record; runtime-gate and bad-digest assertions unchanged; module 24/24 green. New tests: 11 (FinalFixTests 3, FinalWireTests 1,
 WakeFinalFixTests 7).
+
+## Rebase onto 0.8.59 (be3eb53f)
+
+Conflict union only (both sides added one op to the same pins: base B4s `account.lost_run_closure`, E2a
+`account.publish_wake`). Nothing dropped; no other assertion changed.
+
+| Test | Old (base be3eb53f) | New (rebased) |
+|---|---|---|
+| tests.test_rsf_s1_ingress ...test_RSF_S1_2_every_account_mutation_refuses_missing_or_wrong_runtime_before_authorizer | `assertEqual(16, len(mutations))` | `assertEqual(17, len(mutations))` (+ publish_wake) |
+| tests.test_admission_inputs ...test_exact_six_family_raw_capture_without_crypto_connections_or_writes | exact 22-name ACCOUNT_OPERATIONS set (incl. lost_run_closure) | same 22 + `account.publish_wake` = 23 |
+| tests.test_signature_job_intake ...test_capacity_is_reserved_before_capture_without_extra_database_secret_or_crypto | exact 22-name set | same 22 + `account.publish_wake` = 23 |
+| tests.test_signature_inputs ...test_capture_matches_legacy_inputs_without_crypto_connections_or_writes | exact 22-name set | same 22 + `account.publish_wake` = 23 |
+
+Runtime (not assertions): account_service's project-source op set = base set (with lost_run_closure) + publish_wake, the
+E2a wake_bound/source guard kept; account_api/account_host op lists keep both entries. Schema: no new step (E2a adds
+no project-holds schema version; only wake hooks), B6 step 21 unchanged.

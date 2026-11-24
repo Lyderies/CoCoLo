@@ -1,6 +1,7 @@
 # E2a status (resume notes)
 
 Worktree ~/Code/temp/cocolo-e2a, branch feat/rse-e2a, base ace235a4 (0.8.56).
+REBASED: ~/Code/temp/cocolo-e2a-rb, branch rebase/e2a-0859, onto be3eb53f (0.8.59 batch head); see the last section.
 Requirements: docs/requirements/e2a.md (E2a-1..9). Tests: tests/test_e2a_launch_record.py (11),
 tests/test_e2a_wake_wire.py (14). Registered in scripts/test-{layers,stages,requirements}.json (scenario/integration).
 
@@ -79,3 +80,22 @@ unknown-outcome rule: test_remove_codex_rule_reports_what_it_removed rerun OK); 
 container_recovery+project_service_startup+ledger_lock_limits 90 OK 126 s; host_commands+learning_cli+holds_report+
 project_holds_schema+collector_stale 163 OK 125 s. Not run: --affected, test_reply_shape_live (primary).
 Digests not refreshed (as instructed).
+
+## Rebase onto 0.8.59 (be3eb53f, 2026-11-25)
+Method: `git rebase --onto be3eb53f ace235a4` (5 commits; conflicts only in commits 1 and 2; one whitespace fixup squashed
+into commit 1). Resolutions (all unions): account_api.py / account_host.py op lists keep lost_run_closure + publish_wake;
+account_service.py keeps lost_run_closure() and publish_wake(), the project op set gains both, the E2a wake_bound/source
+guard and both dispatch branches kept; project_holds_schema.py keeps B6 (timing constants, LEASE/CONSUMPTION
+expressions, _orchestration_of, adopt_orchestrations, release recheck) and E2a's wake hooks/next_hold_due, release_hold
+runs B6's recheck then wake_touch. No schema step added (E2a has none); step 21 untouched. 4 test pins: union (assertions.md).
+runtime-releases.json 0.8.59 digest refreshed to the computed COLLECTOR_RUNTIME_DIGEST.
+Tests (named, 3 batches in parallel): batch A (e2a x2, lifetime_cap_guard, admission/signature x3, rsf_s1_ingress,
+holds_schema, account_api, reply_shape_compat, b4m, collector_stale, project_service, runtime_release, upgrade_handover,
+learning_store) 377, 1 failure = lifetime_cap_guard admission_metadata classify_provider_state/reset_early unlisted,
+PRE-EXISTING at be3eb53f (reproduced on an archive of the base), 81 s; batch B (host_commands, open_withdrawal,
+hold_lifecycle, holds_report, cli_status_client_boundary) 150 OK 122 s; batch C (lost_run_settlement, container_recovery,
+project_service_startup, ledger_lock_limits, account_host, rsf_s1_ingress_socket) 105, 1 error under parallel load
+(LostRunAfterStopTests lost-reply KeyError terminal_state); alone: class 18 OK x2 (45 s), module 26 OK 74 s.
+Open: wake next_hold_due reads due_at_ms only; B6 orchestration rows are selected at max(due_at_ms, next_check_ms), so a
+refused-and-backed-off due orchestration makes the wake early (never late). Not run: test_learning_cli,
+test_publication_replay_driver, test_reply_shape_live, --affected (primary).
