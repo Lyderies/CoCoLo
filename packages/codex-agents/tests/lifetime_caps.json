@@ -1070,6 +1070,16 @@
    "checks": 2,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "lost_run_closure.py::checked_lost_run_closure": {
+   "checks": 1,
+   "ends": "BOUNDED: a size check on one message (the account's lost-run closure, at most MAX_LOST_RUN_CLOSURE_BYTES); it counts bytes of a single reply, nothing accumulates (B4s, RS-B-B4-1)",
+   "test": "test_B4_1_the_closure_is_bounded"
+  },
+  "lost_run_closure.py::verify_lost_run_closure": {
+   "checks": 1,
+   "ends": "BOUNDED: a size check on one message (the account's lost-run closure, at most MAX_LOST_RUN_CLOSURE_BYTES); it counts bytes of a single reply, nothing accumulates (B4s, RS-B-B4-1)",
+   "test": "test_B4_1_the_closure_past_the_size_limit_is_refused"
+  },
   "merge_library.py::_validate": {
    "checks": 3,
    "ends": "per-merge size and path limits on one landing's inputs (MAX_FILE_BYTES, MAX_PATHS, MAX_LANDING_BYTES); the counted files and events belong to a single merge operation and end with it, nothing accumulates across merges (0.8.50 merge library)"

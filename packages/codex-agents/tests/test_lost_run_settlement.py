@@ -593,6 +593,9 @@ class LostRunAfterStopTests(LostRunHarness):
             self.restart_host()
             dispatch.communicate(timeout=30)
             self.wait_for(lambda: len(replies) >= 2, seconds=30)
+            # B4s (RS-B-B4-4): the run is settled once its journal says so (after the closure is recorded and the
+            # workspace removed); a stop before that replays the identical request, by design.
+            self.wait_for(lambda: self.journal_states() in ([], ['settled']), seconds=30)
             for _ in range(2):
                 self.restart_host()
         self.assertEqual([False, True], [reply['known'] for reply in replies[:2]])

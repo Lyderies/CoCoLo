@@ -128,7 +128,19 @@ class SettlementThroughTheDriverTests(SettlementHarness):
         self.wait_for(lambda: self.journal_states() in ([], ['settled']), seconds=30)
 
     def test_A2_a_claim_admitted_but_never_bound_releases_its_lease_lost_unbound(self):
-        context, route_path, orchestration, run_handle = self.lose('binding')
+        # Hold the run before its lease is bound: the store's bind fails once, so the account holds the
+        # claim while the lease stays claim_pending (at 'binding' a successful bind has already happened).
+        from codex_agents.project_history import ProjectHistory
+        original, failed = ProjectHistory.bind_result_lease, []
+
+        def fail_once(history, *arguments, **options):
+            if not failed:
+                failed.append(True)
+                raise result_persistence.HistoryError('history_service_unavailable')
+            return original(history, *arguments, **options)
+
+        with mock.patch.object(ProjectHistory, 'bind_result_lease', fail_once):
+            context, route_path, orchestration, run_handle = self.lose('binding')
         self.wait_for(lambda: self.settlements() == [(run_handle, 0, 'lost')], seconds=30)
         self.assertEqual([('expired', 'released', 'lost_unbound')], self.store(
             "SELECT l.state,h.state,h.release_kind FROM result_leases l JOIN project_holds h ON h.kind='lease' "
