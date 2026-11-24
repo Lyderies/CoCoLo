@@ -107,3 +107,24 @@ No existing assertion changed, removed or weakened. Added (each written red firs
   test_learning_source_image `test_generated_columns_on_wake_and_projects_refuse` (STORED on project_wake, VIRTUAL on projects).
 - LOW: `refusal_steps.EXACT['wake_stale']` no longer claims another service runs. Test: test_refusal_steps
   `test_E2a_6_the_wake_stale_step_does_not_claim_another_service_is_running`.
+
+## 0.8.60 final targeted fix (decision 249 + 248)
+No existing assertion changed or removed. New tests (red first, then green):
+- HIGH native backups: `learning_store.create_sanitized_backup` / `_write_streamed_backup` (also the upgrade backups) now call
+  `project_backup.check_inventory` before creating anything: same complete inventory, exact local and extra-table columns,
+  hidden/generated column rule and fixed reason as the owner script. Tests: test_owner_backup_streamed
+  `test_F3_18_native_backups_refuse_what_the_owner_script_refuses` (unknown populated table, extra column, STORED and
+  VIRTUAL generated columns: refused, nothing written or registered; fresh ledger backs up before and after) and
+  `test_F3_18_a_ledger_from_the_released_0_8_59_backs_up_natively`. The owner script cannot import the runtime safely (its
+  parent loads the installed, possibly older runtime), so two implementations stay; item (a) pins them.
+- (a) parity: `test_F3_18_the_owner_scripts_table_definitions_equal_the_runtimes` compares the script's LOCAL_TABLE_COLUMNS,
+  OTHER_TABLE_COLUMNS, project columns and extra-table set with learning_store's.
+- (c) extra tables: `learning_store.OTHER_TABLE_COLUMNS` is derived from the product's own CREATE statements (new constants
+  `_OWNER_KEY_HISTORY_SCHEMA`, `_ADDITIVE_MIGRATIONS_SCHEMA`, `ADMISSION_EVIDENCE_SCHEMA`; the ledger's own scripts use the
+  same constants). Both validators (script `check_inventory`, `learning_source_image._schema`) check them exactly. Tests:
+  `test_F3_18_an_extra_column_on_an_allowed_extra_table_is_refused_by_both_validators` and test_learning_source_image
+  `test_an_extra_column_on_an_allowed_extra_table_refuses`.
+- 248 (test-only): tests/test_upgrade_handover.py `Fixture.stop_collector` now waits (30 s) until the state root's writer
+  lock `collector.lock` can be taken (non-blocking flock probe, released at once) and fails otherwise; a health error no
+  longer counts as stopped. test_project_start's stop_collector terminates its own child and waits for it, so it has no
+  health-based pattern and is unchanged.

@@ -5,6 +5,7 @@ Real processes: the earlier collector is a git archive of an earlier release (0.
 `learning-register` must stop it and register. UPG-5 checks this build's own collector the same way.
 Needs git and those commits in this repository.
 """
+import fcntl
 import json
 import os
 import socket
@@ -59,7 +60,9 @@ class Fixture:
         try:
             health = self.frame({"protocol": 1, "op": "health"})
         except Exception:
-            return  # nothing is answering
+            # Not answering is not stopped: a loaded collector answers slowly while it still holds the writer lock.
+            self.wait_writer_lock_free()
+            return
         accepted = False
         for extra in ({"runtime_digest": health.get("runtime_digest")}, {}):
             try:
@@ -72,6 +75,29 @@ class Fixture:
         end = time.monotonic() + 15
         while self.socket.exists() or self.alive():
             self.assertLess(time.monotonic(), end, "the leftover collector did not exit")
+            time.sleep(.1)
+        self.wait_writer_lock_free()
+
+    def wait_writer_lock_free(self, seconds=30):
+        """Decision 248: a slow or failed health reply is not "stopped". The collector holds the state root's writer
+        lock (collector.lock) until it has exited, so the only proof it is gone is taking that lock."""
+        path = self.state / "collector.lock"
+        end = time.monotonic() + seconds
+        while True:
+            try:
+                descriptor = os.open(path, os.O_RDWR)
+            except FileNotFoundError:
+                return  # no collector ever created it
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                return
+            except OSError:
+                pass
+            finally:
+                os.close(descriptor)
+            self.assertLess(time.monotonic(), end,
+                            f"the leftover collector still holds the state root's writer lock after {seconds} s")
             time.sleep(.1)
 
     def alive(self):

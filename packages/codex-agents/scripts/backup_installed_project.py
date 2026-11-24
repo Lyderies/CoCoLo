@@ -188,7 +188,15 @@ LOCAL_TABLE_COLUMNS = {
                        "next_start_at_ms", "parked_reason", "parked_digest", "outcome", "reason", "outcome_at_ms",
                        "started_at_ms", "probation_attempt", "probation_pid", "probation_until_ms", "updated_at_ms"),
 }
-_OTHER_TABLES = frozenset({"additive_migrations", "owner_key_history", "admission_evidence"})
+# Decision 249: those other tables by exact columns too (the runtime derives them from its own CREATE statements as
+# learning_store.OTHER_TABLE_COLUMNS; a test pins this copy equal to it).
+OTHER_TABLE_COLUMNS = {
+    "additive_migrations": ("feature_key",),
+    "owner_key_history": ("sequence", "signer_line", "reason", "recorded_at_ms"),
+    "admission_evidence": ("project_id", "record_id", "record_type", "source", "observed_at_ms", "provider",
+                           "account_fingerprint", "live_until_ms", "claude_pass"),
+}
+_OTHER_TABLES = frozenset(OTHER_TABLE_COLUMNS)
 _PROJECT_COLUMNS = (
     "project_id", "canonical_root", "root_digest", "status", "created_at_ms",
     "deleted_at_ms",
@@ -402,9 +410,10 @@ def check_inventory(connection, schema_version: int, *, exact_columns: bool = Tr
              if not str(row[0]).startswith("sqlite_")}
     if found - backed - {"projects"} - set(LOCAL_TABLE_COLUMNS) - _OTHER_TABLES:
         raise RuntimeError("project backup cannot represent the ledger's tables exactly")
-    for table in sorted(found & set(LOCAL_TABLE_COLUMNS)):
+    exact = {**LOCAL_TABLE_COLUMNS, **OTHER_TABLE_COLUMNS}
+    for table in sorted(found & set(exact)):
         columns = named(table)
-        if tuple(name for name, _ in columns) != LOCAL_TABLE_COLUMNS[table] or any(hidden for _, hidden in columns):
+        if tuple(name for name, _ in columns) != exact[table] or any(hidden for _, hidden in columns):
             raise RuntimeError(f"project backup cannot represent {table} exactly")
     projects = named("projects")
     names = {name for name, _ in projects}

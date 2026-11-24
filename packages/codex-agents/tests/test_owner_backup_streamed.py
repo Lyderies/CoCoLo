@@ -359,6 +359,72 @@ class OwnerBackupStreamedTests(unittest.TestCase):
             db.execute("ALTER TABLE projects DROP COLUMN " + column)
         self.owner_backup("released")
 
+    def native_backup(self, file_id):
+        return self.source.create_sanitized_backup(self.project, file_id=file_id,
+                                                   expires_at_ms=self.source._clock_ms() + 3_600_000)
+
+    def refused_native(self, file_id, pattern):
+        before = self.partition_files(all_files=True)
+        with self.assertRaisesRegex(learning_store.LedgerError, pattern):
+            self.native_backup(file_id)
+        self.assertEqual(before, self.partition_files(all_files=True))
+        self.assertIsNone(self.registered(file_id))
+
+    def test_F3_18_native_backups_refuse_what_the_owner_script_refuses(self):
+        """0.8.60 final fix (decision 249): the runtime's own backup runs the same inventory and column check."""
+        db = self.source._connection
+        self.earlier_files = self.partition_files(all_files=True)
+        self.native_backup("native_fresh")  # a fresh ledger backs up natively
+        db.execute("CREATE TABLE hidden_project_rows(project_id TEXT, content BLOB)")
+        db.execute("INSERT INTO hidden_project_rows VALUES('p', x'00')")
+        self.refused_native("native_unknown", "ledger's tables")
+        db.execute("DROP TABLE hidden_project_rows")
+        db.execute("ALTER TABLE project_wake ADD COLUMN extra TEXT")
+        self.refused_native("native_extra", "project_wake exactly")
+        db.execute("ALTER TABLE project_wake DROP COLUMN extra")
+        wake = db.execute("SELECT sql FROM sqlite_master WHERE name='project_wake'").fetchone()[0]
+        db.execute("DROP TABLE project_wake")
+        db.execute(wake[:-1] + ",gen INTEGER GENERATED ALWAYS AS (allocated_epoch+1) STORED)")
+        self.refused_native("native_generated", "project_wake exactly")
+        db.execute("DROP TABLE project_wake")
+        db.execute(wake)
+        db.execute("ALTER TABLE projects ADD COLUMN gen INTEGER GENERATED ALWAYS AS (created_at_ms+1) VIRTUAL")
+        self.refused_native("native_generatedp", "projects exactly")
+        db.execute("ALTER TABLE projects DROP COLUMN gen")
+        self.native_backup("native_again")
+
+    def test_F3_18_a_ledger_from_the_released_0_8_59_backs_up_natively(self):
+        db = self.source._connection
+        for table in ("project_starts", "project_wake_instances", "project_wake"):
+            db.execute("DROP TABLE " + table)
+        for column in ("launch_digest", "launch_copy"):
+            db.execute("ALTER TABLE projects DROP COLUMN " + column)
+        self.native_backup("native_released")
+
+    def test_F3_18_the_owner_scripts_table_definitions_equal_the_runtimes(self):
+        """Decision 249 (a): the script's copy can never drift from the runtime's definition."""
+        self.assertEqual(learning_store.LOCAL_TABLE_COLUMNS, SCRIPT_GLOBALS["LOCAL_TABLE_COLUMNS"])
+        self.assertEqual(frozenset(learning_store.OTHER_TABLE_COLUMNS), SCRIPT_GLOBALS["_OTHER_TABLES"])
+        self.assertEqual(learning_store.OTHER_TABLE_COLUMNS, SCRIPT_GLOBALS["OTHER_TABLE_COLUMNS"])
+        self.assertEqual(frozenset(learning_store._BACKUP_PROJECT_COLUMNS), frozenset(SCRIPT_GLOBALS["_PROJECT_COLUMNS"]))
+        self.assertEqual(learning_store.LOCAL_PROJECT_COLUMNS, SCRIPT_GLOBALS["LOCAL_PROJECT_COLUMNS"])
+
+    def test_F3_18_an_extra_column_on_an_allowed_extra_table_is_refused_by_both_validators(self):
+        """Decision 249 (c): additive_migrations, owner_key_history and admission_evidence have exact columns."""
+        db = self.source._connection
+        self.earlier_files = self.partition_files(all_files=True)
+        for table in ("additive_migrations", "owner_key_history", "admission_evidence"):
+            self.assertEqual(tuple(row[1] for row in db.execute(f"PRAGMA table_xinfo({table})")),
+                             learning_store.OTHER_TABLE_COLUMNS[table])
+        # owner_key_history is append-only by trigger, but a column can still be added to the table.
+        for table in ("additive_migrations", "owner_key_history", "admission_evidence"):
+            db.execute(f"ALTER TABLE {table} ADD COLUMN extra TEXT")
+            self.refused_inventory("owner_" + table, table + " exactly")
+            self.refused_native("native_" + table, table + " exactly")
+            db.execute(f"ALTER TABLE {table} DROP COLUMN extra")
+        self.owner_backup("owner_ok")
+        self.native_backup("native_ok")
+
     def test_F3_7_a_partition_planned_over_the_limit_is_refused_before_it_is_written(self):
         add_events(self.source, self.project, 2_000)
         with mock.patch.dict(SCRIPT_GLOBALS, {"BACKUP_LIMIT_BYTES": 256 * 1024}), \

@@ -53,6 +53,41 @@ def _file_schema(schema_version: int) -> str:
             + "".join(f"DROP TABLE {table};\n" for table in later))
 
 
+def check_inventory(connection: sqlite3.Connection) -> None:
+    """Refuse a ledger this backup cannot represent exactly, before anything is written (decision 249).
+
+    Every table the ledger holds is a backed-up table, the projects table, a known machine-local table, another
+    known non-partition table (sqlite_ internal tables aside), and each of those but the backed-up ones has exactly
+    its own columns, generated and hidden columns included (table_xinfo). The owner script's own check
+    (scripts/backup_installed_project.py) is the same rule; a test pins the two definitions equal.
+    """
+    store = _store()
+
+    def named(table):
+        return [(str(row[1]), int(row[6])) for row in sorted(
+            connection.execute(f"PRAGMA table_xinfo({table})").fetchall(), key=lambda row: row[0])]
+    found = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+             if not str(row[0]).startswith("sqlite_")}
+    backed = set(store._BACKUP_TABLE_COLUMNS)  # any version's backed-up table is known
+    if found - backed - {"projects"} - set(store.LOCAL_TABLE_COLUMNS) - set(store.OTHER_TABLE_COLUMNS):
+        raise _error("project backup cannot represent the ledger's tables exactly")
+    for table, expected in {**store.LOCAL_TABLE_COLUMNS, **store.OTHER_TABLE_COLUMNS}.items():
+        if table not in found:
+            continue
+        columns = named(table)
+        if tuple(name for name, _ in columns) != expected or any(hidden for _, hidden in columns):
+            raise _error(f"project backup cannot represent {table} exactly")
+    projects = named("projects")
+    names = {name for name, _ in projects}
+    if store.LOCAL_PROJECT_COLUMNS <= names:
+        names -= store.LOCAL_PROJECT_COLUMNS
+    if names != set(store._BACKUP_PROJECT_COLUMNS) or any(hidden for _, hidden in projects):
+        raise _error("project backup cannot represent projects exactly")
+    for table in sorted(found & backed):
+        if any(hidden for _, hidden in named(table)):
+            raise _error(f"project backup cannot represent {table} exactly")
+
+
 def _store():
     from . import learning_store
 

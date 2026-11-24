@@ -75,7 +75,7 @@ from .run_holds_schema import (  # O0b RS-A
     DECISION_RELEASED, RUN_HOLDS_OBJECTS, assert_run_holds_schema, check_run_holds_consistency, install_run_holds_schema,
 )
 from .admission_evidence_schema import (
-    assert_admission_evidence_schema, check_admission_evidence_coverage, install_admission_evidence_schema,
+    ADMISSION_EVIDENCE_SCHEMA, assert_admission_evidence_schema, check_admission_evidence_coverage, install_admission_evidence_schema,
 )
 from .billing_probe_schema import (BILLING_PROBE_COLUMNS, BILLING_PROBE_ORIGIN_COLUMNS,
                                    BILLING_PROBE_OBJECTS, assert_billing_probe_schema,
@@ -211,6 +211,33 @@ LOCAL_TABLE_COLUMNS = {
                        "next_start_at_ms", "parked_reason", "parked_digest", "outcome", "reason", "outcome_at_ms",
                        "started_at_ms", "probation_attempt", "probation_pid", "probation_until_ms", "updated_at_ms"),
 }
+# 0.8.60 final fix (decision 249): the tables a ledger holds outside the backup and the learning move besides the
+# machine-local ones, by the exact columns of the product's own CREATE statements (derived, never retyped).
+_OWNER_KEY_HISTORY_SCHEMA = (  # the exact text SQLite stores in the ledger: a layout check compares it
+    "CREATE TABLE IF NOT EXISTS owner_key_history (\n"
+    "                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+    "                    signer_line BLOB NOT NULL,\n"
+    "                    reason TEXT NOT NULL CHECK(reason IN ('enrolled','replaced')),\n"
+    "                    recorded_at_ms INTEGER NOT NULL\n"
+    "                )")
+_ADDITIVE_MIGRATIONS_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS additive_migrations (\n"
+    "                        feature_key TEXT PRIMARY KEY\n"
+    "                    )")
+
+
+def _other_table_columns() -> dict[str, tuple[str, ...]]:
+    reference = sqlite3.connect(":memory:")
+    try:
+        for statement in (_OWNER_KEY_HISTORY_SCHEMA, _ADDITIVE_MIGRATIONS_SCHEMA, ADMISSION_EVIDENCE_SCHEMA):
+            reference.execute(statement)
+        return {table: tuple(row[1] for row in reference.execute(f"PRAGMA table_xinfo({table})"))
+                for table in ("additive_migrations", "owner_key_history", "admission_evidence")}
+    finally:
+        reference.close()
+
+
+OTHER_TABLE_COLUMNS = _other_table_columns()
 _WAKE_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS project_wake("
     "project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,"
@@ -2372,13 +2399,7 @@ class LearningLedger:
 
         with self._held(), self._connection:
             self._connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS owner_key_history (
-                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                    signer_line BLOB NOT NULL,
-                    reason TEXT NOT NULL CHECK(reason IN ('enrolled','replaced')),
-                    recorded_at_ms INTEGER NOT NULL
-                );
+                _OWNER_KEY_HISTORY_SCHEMA + """;
                 CREATE TRIGGER IF NOT EXISTS owner_key_history_no_update
                 BEFORE UPDATE ON owner_key_history
                 BEGIN SELECT RAISE(ABORT,'owner key history is append-only'); END;
@@ -2952,6 +2973,7 @@ class LearningLedger:
 
         if not file_id or len(file_id) > 160 or not file_id.replace("_", "").isalnum():
             raise LedgerError("stored file identifier is invalid")
+        project_backup.check_inventory(self._connection)  # 0.8.60 final fix (decision 249): before anything is created
         partition = self.state.backups / project_id
         partition.mkdir(mode=0o700, parents=True, exist_ok=True)
         _assert_no_symlink_components(partition)
@@ -3722,9 +3744,7 @@ class LearningLedger:
                         PRIMARY KEY(project_id, event_code),
                         FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
                     );
-                    CREATE TABLE IF NOT EXISTS additive_migrations (
-                        feature_key TEXT PRIMARY KEY
-                    );
+                    """ + _ADDITIVE_MIGRATIONS_SCHEMA + """;
                     CREATE INDEX IF NOT EXISTS hook_event_latest
                     ON records(
                         project_id,

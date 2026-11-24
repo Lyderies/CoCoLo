@@ -229,6 +229,13 @@ class LearningSourceImageTests(unittest.TestCase):
         self.connection.execute('ALTER TABLE projects ADD COLUMN extra2 INTEGER GENERATED ALWAYS AS (created_at_ms+1) VIRTUAL').close()
         self.refuse('history_incompatible')
 
+    def test_an_extra_column_on_an_allowed_extra_table_refuses(self):
+        """Decision 249 (c): additive_migrations, owner_key_history and admission_evidence have exact columns."""
+        for table in ('additive_migrations', 'owner_key_history', 'admission_evidence'):
+            self.connection.execute(f'ALTER TABLE {table} ADD COLUMN extra TEXT').close()
+            self.refuse('history_incompatible')
+            self.connection.execute(f'ALTER TABLE {table} DROP COLUMN extra').close()
+
     def test_changed_primary_key_is_not_inferred_from_columns(self):
         self.connection.execute('DROP TABLE sessions').close()
         self.connection.execute('CREATE TABLE sessions(project_id TEXT NOT NULL, session_digest TEXT NOT NULL,'

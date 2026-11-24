@@ -126,3 +126,14 @@ split). test-timings 85 -> 130.
 HIGH backup inventory (also pre-existing in 0.8.59), MED table_xinfo, LOW wake_stale text: see
 docs/requirements/e2a/assertions.md "round after the Codex check". 0.8.60 digest refreshed
 (6584d0171da272eddc16b09cf2e2b4849939155a39079f410789c333faae4130); 0.8.59 unchanged.
+
+## 0.8.60 final targeted fix (decisions 249 + 248)
+Native backups run the same inventory/column check (project_backup.check_inventory), parity test for the owner script's
+copies, exact columns for the three extra tables in both validators, upgrade-handover stop waits on collector.lock
+(mechanism: the old fixture treated a slow 3 s health reply as "stopped" and returned while the archived collector still
+held the state-root writer flock, so the next ledger open failed with "another learning writer owns this state root").
+See docs/requirements/e2a/assertions.md. 0.8.60 digest refreshed (a7176a83...); 0.8.59 unchanged.
+Evidence: 32-module named run via parallel_tests --module (the 12 round-1 modules, test_upgrade_handover, every module calling
+create_sanitized_backup/learning-backup-project): failed_units [], metadata_errors [] (only the pre-existing OVER BUDGET
+notes for test_learning_cli, test_project_driver, test_project_start). ReleasedLedgerUpgradeTests x5 beside a 9-module
+parallel_tests run (project_driver, learning_cli, host_commands, installer, learning_store, ...): 5 of 5 OK (5-6 s each).

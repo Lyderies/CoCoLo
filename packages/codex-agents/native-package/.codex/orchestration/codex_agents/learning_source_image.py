@@ -219,13 +219,14 @@ def _schema(connection, store):
     if found - local != {*_KEYS, "projects", "additive_migrations",
                          "owner_key_history", "sqlite_sequence", "admission_evidence"}:
         raise HistoryError("history_incompatible")
-    for table in sorted(local):
+    exact = {**store.LOCAL_TABLE_COLUMNS, **store.OTHER_TABLE_COLUMNS}  # decision 249: the extra tables too
+    for table in sorted(found & set(exact)):
         cursor = connection.execute("PRAGMA table_xinfo(" + table + ")")  # xinfo also lists generated columns
         try:
             rows = cursor.fetchmany(65)
         finally:
             cursor.close()
-        if tuple(r[1] for r in rows) != store.LOCAL_TABLE_COLUMNS[table] or any(r[6] for r in rows):
+        if tuple(r[1] for r in rows) != exact[table] or any(r[6] for r in rows):
             raise HistoryError("history_incompatible")
     for table in ("projects", *_KEYS):
         row = _one(connection, "SELECT type FROM sqlite_master WHERE name=?", (table,))
