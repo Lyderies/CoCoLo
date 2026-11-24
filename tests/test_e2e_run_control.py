@@ -379,7 +379,7 @@ class DispatchExitJudgingTests(SceneTest):
         self.assertIn("scene.probe_full = probe_as_second_account(world, views[2], refuses=True)", source)
 
     def test_the_dispatch_helper_has_no_blanket_refuses(self):
-        source = (ROOT / "scripts" / "e2e_checks_run_control.py").read_text()
+        source = (ROOT / "scripts" / "e2e_checks_shared.py").read_text()  # Ctl.dispatch moved there (batch3)
         body = source.split("def dispatch(self, run", 1)[1].split("def record", 1)[0]
         self.assertNotIn("refuses=True", body)
 

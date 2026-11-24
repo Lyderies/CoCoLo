@@ -438,10 +438,20 @@ class World:
         program = program or self.installed_cli
         if Path(os.path.realpath(program)) != Path(os.path.realpath(self.installed_cli)):
             raise HarnessError("a check ran a CLI that is not the project's installed one (decision 128d)")
-        done = subprocess.run([str(self.shim), "-I", "-B", "-S", str(program), *args,
-                               "--project-root", str(self.project)],
-                              capture_output=True, text=True, env={**self.env, **(environment or {})},
-                              stdin=subprocess.DEVNULL, timeout=timeout, cwd=str(cwd or self.base))
+        try:
+            done = subprocess.run([str(self.shim), "-I", "-B", "-S", str(program), *args,
+                                   "--project-root", str(self.project)],
+                                  capture_output=True, text=True, env={**self.env, **(environment or {})},
+                                  stdin=subprocess.DEVNULL, timeout=timeout, cwd=str(cwd or self.base))
+        except subprocess.TimeoutExpired as expired:
+            # G1/G8: a step that waited too long is captured (partial output judged, a fixed reason) and answered
+            # as a failed step; the exception (it carries the arguments and paths) is never raised or printed.
+            text = "".join(part.decode("utf-8", "replace") if isinstance(part, bytes) else (part or "")
+                           for part in (expired.stdout, expired.stderr))
+            self.outputs.append(text)
+            self.steps.append({"step": args[0], "code": -1, "refuses": False, "timed_out": True})
+            self._capture(text, kind="output", code=-1, refuses=False, timed_out=True)
+            return -1, None, text
         text = done.stdout + done.stderr
         self.outputs.append(text)
         self.steps.append({"step": args[0], "code": done.returncode, "refuses": refuses, "timed_out": False})

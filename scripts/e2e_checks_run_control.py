@@ -23,9 +23,10 @@ sys.path.insert(0, str(ROOT / "scripts"))  # -I leaves the script's own folder o
 import e2e_support  # noqa: E402
 from e2e_checks_run import child_answer, WORK_EVIDENCE, WORK_GRANT, WORK_PATH, trusted_interpreter_checks  # noqa: E402
 from e2e_core import CLAUDE_MODEL, PROBE, ROUTE_TASK, _SCENES, Phase, check  # noqa: E402
+import e2e_checks_shared as shared  # noqa: E402
+from e2e_checks_shared import (INIT, add_project, bridge_run, capacity_read, child_frames, ledger_slots,  # noqa: E402,F401
+                               project_records, project_view, slot_of, write_patches)
 
-INIT = {"type": "system", "subtype": "init", "session_id": "s", "apiKeySource": "none", "model": CLAUDE_MODEL,
-        "plugins": [], "claude_code_version": "2.1.311", "mcp_servers": [], "tools": ["StructuredOutput"]}
 SECOND = 1_000_000_000
 # The run-control scenes' fault (a fault injected into the installed product, to show the slice goes red). It is
 # chosen ONLY by the runner's explicit `--fault NAME` argument (e2e_lifecycle.py sets FAULT in the process that runs
@@ -78,10 +79,6 @@ def fault_isolated(normal: dict, fault: dict, name: str = "slot_not_released") -
 # ---------------------------------------------------------------------------------------------
 # Building blocks
 
-def write_patches(world, patches: list) -> None:
-    """Test-only source rewrites the stand-in Python applies as the named module is imported (e2e_support.BOOT)."""
-    (world.home / ".e2e-bin" / "patches.json").write_text(json.dumps(patches))
-
 
 def liveness_patch(startup: int, quiet: int, stale: int, silence: int) -> dict:
     """Decision 128: the project service's silence limits, scaled for the run by the stand-in Python (test only)."""
@@ -90,192 +87,28 @@ def liveness_patch(startup: int, quiet: int, stale: int, silence: int) -> dict:
             "new": f"LIVENESS = LivenessLimits({startup} * SECOND, {quiet} * SECOND, {stale} * SECOND, {silence} * SECOND)"}
 
 
-def project_view(world, name: str | None = None):
-    """A view of `world` for one project (the first, or another made on it): the commands, files and records of
-    the world are shared; only the project differs."""
-    view = copy.copy(world)
-    if name is not None:
-        view.project = world.base / name
-    return view
-
-
-def add_project(world, name: str):
-    """A second or third fake project in the same HOME (one collector), committed and ready for setup."""
-    view = project_view(world, name)
-    view.project.mkdir()
-    view.project.chmod(0o755)
-    view.git("init", "-q")
-    (view.project / "fixture").mkdir()
-    (view.project / "fixture" / "facts.txt").write_text("alpha 3\nbeta 5\n")
-    (view.project / "fixture" / "oracle.json").write_text(json.dumps({"alpha": 3, "beta": 5}, sort_keys=True))
-    view.git("add", ".")
-    view.git("commit", "-qm", "fixture")
-    trusted_interpreter_checks(view)
-    return view
-
-
-def set_up(view) -> None:
-    """Scripted setup of the view's project, then the provider observations the Claude admission rests on."""
-    done = view.setup(view.answers(providers={"codex": "on", "claude": "on", "claude_models": CLAUDE_MODEL,
-                                              "bridge": "off"}))
-    if done.code != 0:
-        raise e2e_support.HarnessError("the scripted setup of a run-control project did not finish")
-    view.claude_frames(e2e_support.claude_probe_frames())
-    view.cli("provider-observe", "--provider", "codex")
-    view.cli("provider-observe", "--provider", "claude")
-    view.host_cli("claude", *PROBE)
-
-
-def child_frames(world, *frames) -> None:
-    world.claude_frames([INIT, *frames])
-
-
 def stray(tool: str) -> dict:
     """What a fake client prints for a child that calls a tool the run does not allow."""
     return {"type": "assistant", "message": {"model": CLAUDE_MODEL,
                                              "content": [{"type": "tool_use", "name": tool, "input": {}}]}}
 
 
-class Ctl:
-    """One project's orchestration and the runs made on it, as a primary session drives them."""
+def set_up(view) -> None:
+    shared.set_up(view, "run-control")
 
-    def __init__(self, view, tag: str):
-        self.view, self.tag, self.count, self.runs = view, tag, 0, []
-        self.lock = threading.Lock()
-        self.host = lambda *args, **kw: view.host_cli("claude", *args, **kw)
-        self.orchestration = self.host("learning-open-orchestration")[1] or {}
-        self.handle = self.orchestration.get("orchestration_handle", "")
-        self.project_id = (self.orchestration.get("scope") or {}).get("project_id")
-        self.runtime_digest = (self.orchestration.get("scope") or {}).get("runtime_digest")
-        self.grant = self.save("parent", WORK_GRANT)
 
-    def save(self, name: str, data) -> str:
-        path = self.view.base / f"{self.tag}-{name}.json"
-        path.write_text(json.dumps(data))
-        return str(path)
-
-    def child(self, *, bounds: dict | None = None, path: str = WORK_PATH, open_run: bool = True,
-              probe: bool = True) -> SimpleNamespace:
-        """Route a task, build its assignment and (by default) open its run: everything before the dispatch."""
-        with self.lock:
-            self.count += 1
-            number = self.count
-        name = f"c{number}"
-        task = {**ROUTE_TASK, "id": f"{self.tag}-task-{number}", "owned_paths": [path]}
-        task_file = self.save(name + "-task", task)
-        route = self.host("learning-route", "--task", task_file)[1] or {}
-        route_file = self.save(name + "-route", route)
-        permissions = {**WORK_GRANT, "filesystem": [f"{path}:read"]}
-        assignment = {
-            "assignment_id": task["id"] + "-a1", "task_id": task["id"], "objective": "Read the fixture",
-            "role": route.get("role"), "model": route.get("model"), "effort": route.get("effort"), "attempt": 1,
-            "meaningful": True, "owned_paths": [path], "context": [path], "permissions": permissions,
-            "expected_output": "Each value, as name=value, in its evidence entry", "required_evidence": WORK_EVIDENCE,
-            "verification_required": route.get("verification_required"),
-            "bounds": {**(route.get("bounds") or {}), **(bounds or {})},
-            "stopping_conditions": ["every value found"], "prohibited_actions": ["network"]}
-        assignment_file = self.save(name + "-assignment", assignment)
-        grant = self.save(name + "-grant", permissions)
-        common = ["--task", task_file, "--assignment", assignment_file, "--parent-grant", grant]
-        run = SimpleNamespace(project_id=self.project_id, common=common, route_file=route_file, route=route, opened=None, open_code=None,
-                              reply=None, code=None, recorded=None, started=None, seconds=None, thread=None, name=name)
-        if open_run:
-            self.open(run, probe=probe)
-        return run
-
-    def open(self, run, *, probe: bool = True, refuses: bool = False) -> None:
-        if probe:
-            self.host("provider-observe", "--provider", "claude", "--billing-probe")
-        run.open_code, run.opened, _ = self.host("learning-open-host-run", *run.common, "--route", run.route_file,
-                                                 "--orchestration-handle", self.handle, refuses=refuses)
-        self.runs.append(run)
-
-    def dispatch(self, run, *, refuses: bool = False) -> None:
-        """A dispatch. Only a dispatch EXPECTED to refuse passes the refuses flag (its reason is asserted by the check);
-        every other dispatch is judged by G1 (exit 0) at capture, and its S1 check asserts `run.code` too."""
-        started = time.monotonic()
-        run.code, run.reply, _ = self.host("dispatch", *run.common, "--route", run.route_file,
-                                           "--run-handle", (run.opened or {}).get("run_handle", ""), refuses=refuses)
-        run.seconds = time.monotonic() - started
-
-    def record(self, run) -> None:
-        """Record the run's result as the primary does: it is what frees the project's preparation slot."""
-        result = (run.reply or {}).get("result")
-        if result is None:
-            return
-        terminal = ((run.reply or {}).get("bridge_report") or {}).get("terminal_state")
-        observation = {"run_handle": (run.opened or {}).get("run_handle"),
-                       "result_attempts": [{"status": "accepted", "reason_code": None, "receipt_id": None}]}
-        if terminal:
-            observation["terminal_state"] = terminal
-        run.recorded = self.host("learning-record-host-result", *run.common,
-                                 "--result", self.save(run.name + "-result", result),
-                                 "--observation", self.save(run.name + "-observation", observation))
-
-    def dispatch_in_background(self, run) -> None:
-        run.thread = threading.Thread(target=self.dispatch, args=(run,), daemon=True)
-        run.thread.start()
-
-    def finish(self, run, timeout: float = 90) -> None:
-        run.thread.join(timeout)
-
-    def status(self, run, *, refuses: bool = False) -> dict:
-        return self.host("learning-run-status", "--orchestration-handle", self.handle,
-                         "--run-handle", (run.opened or {}).get("run_handle", ""), refuses=refuses)[1] or {}
-
-    def wait_running(self, run, timeout: float = 40) -> dict:
-        """The project service's own live status, until the child has started (its init frame was seen)."""
-        deadline = time.monotonic() + timeout
-        status = {}
-        while time.monotonic() < deadline:
-            status = self.status(run, refuses=True)  # until the child has started the service may refuse
-            if (status.get("liveness") or {}).get("last_activity_category") and not status.get("stop_requested"):
-                return status
-            time.sleep(0.4)
-        return status
-
-    def cancel(self, run) -> dict:
-        return self.host("learning-cancel-run", "--orchestration-handle", self.handle,
-                         "--run-handle", (run.opened or {}).get("run_handle", ""))[1] or {}
-
-    def close(self) -> dict:
-        self.host("learning-close-orchestration", "--orchestration-handle", self.handle, "--status", "completed")
-        return self.host("learning-orchestration-report", "--orchestration-id",
-                         self.orchestration.get("orchestration_id", ""))[1] or {}
+class Ctl(shared.Ctl):
+    """S1's primary-session driver (e2e_checks_shared.Ctl): the harness's default dispatch timeout, 90 s to finish."""
+    DISPATCH_TIMEOUT = None
+    FINISH_TIMEOUT = 90
 
 
 # The reads that do not go through the command that made the run --------------------------------
-
-def bridge_run(run) -> str | None:
-    return ((run.reply or {}).get("bridge_report") or {}).get("bridge_run_id")
-
-
-def project_records(world, project_id: str | None, record_type: str) -> list[dict]:
-    """One project's own history, read-only (the World's helper assumes one project in the HOME)."""
-    path = world.home / ".local" / "state" / "codex-agents" / "projects" / str(project_id) / "history.sqlite3"
-    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    try:
-        return [json.loads(row[0]) for row in connection.execute(
-            "select content from records where record_type = ? order by source_sequence", (record_type,))]
-    finally:
-        connection.close()
 
 
 def history_rows(world, run, record_type: str) -> list[dict]:
     run_id = (run.opened or {}).get("run_id")
     return [row for row in project_records(world, run.project_id, record_type) if run_id and row.get("run_id") == run_id]
-
-
-def ledger_slots(world) -> list[dict]:
-    """The account ledger's capacity table, read-only: one row per claimed run (never content)."""
-    path = world.home / ".local" / "state" / "codex-agents" / "learning.sqlite3"
-    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    try:
-        connection.row_factory = sqlite3.Row
-        return [dict(row) for row in connection.execute(
-            "select project_id, bridge_run_id, run_id, released_at_ms from active_run_capacity")]
-    finally:
-        connection.close()
 
 
 def settled_slots(world, timeout: float = 20) -> list[dict]:
@@ -287,65 +120,6 @@ def settled_slots(world, timeout: float = 20) -> list[dict]:
         if all(row["released_at_ms"] is not None for row in rows) or time.monotonic() >= deadline:
             return rows
         time.sleep(0.3)
-
-
-def slot_of(world, run) -> dict | None:
-    rows = [row for row in ledger_slots(world) if row["bridge_run_id"] == bridge_run(run)]
-    return rows[0] if len(rows) == 1 else None
-
-
-ACCOUNT_READ = """\
-import json, sys
-sys.path.insert(0, {orchestration!r})
-from pathlib import Path
-from codex_agents.account_api import AccountClient
-from codex_agents.client_runtime import _account_target, enroll_clients
-from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST
-from codex_agents.collector_paths import CollectorPaths
-state, project = CollectorPaths(Path({state!r})), Path({project!r})
-project_id, endpoint = _account_target(state, project)
-enroll_clients(state, project, None, account=endpoint)
-print(json.dumps(AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=20)
-                 .capacity_status({handle!r}, {bridge!r})))
-"""
-
-
-def _text(value) -> str:
-    if value is None:
-        return ""
-    return value.decode("utf-8", "replace") if isinstance(value, bytes) else value
-
-
-def capacity_read(view, run, *, timeout: float = 60) -> dict:
-    """The supported per-run capacity read: the account service's `account.capacity_status` for this run, asked over
-    its own socket by the installed client library (state held, released or unknown; never the dispatch reply).
-
-    A read that times out is judged like any step (its partial output through capture, G1 and G8) and answers the
-    fixed failure `capacity_read_timed_out`; the command, HOME and run handle never reach a traceback."""
-    bridge = bridge_run(run)
-    if not bridge or not (run.opened or {}).get("run_handle"):
-        return {}
-    code = ACCOUNT_READ.format(orchestration=str(view.project / ".codex" / "orchestration"),
-                               state=str(view.home / ".local" / "state" / "codex-agents"),
-                               project=str(view.project), handle=run.opened["run_handle"], bridge=bridge)
-    try:
-        done = subprocess.run([str(view.shim), "-I", "-B", "-S", "-c", code], capture_output=True, text=True,
-                              env={**view.env, **view.CLAUDE_HOST}, stdin=subprocess.DEVNULL, timeout=timeout,
-                              cwd=str(view.project))
-    except subprocess.TimeoutExpired as expired:
-        text = _text(expired.stdout) + _text(expired.stderr)
-        view.outputs.append(text)
-        view.steps.append({"step": "capacity-read", "code": -1, "refuses": False, "timed_out": True})
-        view._capture(text, kind="output", code=-1, refuses=False, timed_out=True)
-        return {"failure": "capacity_read_timed_out"}
-    text = done.stdout + done.stderr
-    view.outputs.append(text)
-    view.steps.append({"step": "capacity-read", "code": done.returncode, "refuses": False, "timed_out": False})
-    view._capture(text, kind="output", code=done.returncode, refuses=False, timed_out=False)
-    try:
-        return json.loads(done.stdout)
-    except ValueError:
-        return {}
 
 
 def released_everywhere(view, run) -> dict:

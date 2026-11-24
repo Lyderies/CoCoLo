@@ -41,6 +41,20 @@ import e2e_checks_routing  # noqa: E402,F401
 import e2e_checks_run  # noqa: E402,F401
 import e2e_checks_general  # noqa: E402,F401
 import e2e_checks_run_control  # noqa: E402,F401
+import e2e_checks_recovery  # noqa: E402,F401
+
+# Every slice's test-only product faults (T7 S1 run control, T7 S2 recovery). A fault is chosen ONLY by the runner's
+# explicit --fault argument; it is handed to the one module that owns it, every other module runs with none.
+FAULT_MODULES = (e2e_checks_run_control, e2e_checks_recovery)
+FAULTS = sorted(name for module in FAULT_MODULES for name in module.FAULTS)
+
+
+def select_fault(fault: str | None) -> None:
+    """Hand `fault` (or None) to the checks module that declares it; clear it everywhere else."""
+    if fault is not None and fault not in FAULTS:
+        raise ValueError("unknown fault")
+    for module in FAULT_MODULES:
+        module.FAULT = fault if fault in module.FAULTS else None
 
 REQUIREMENTS = ROOT / "tests" / "e2e" / "requirements.json"
 
@@ -63,11 +77,11 @@ def run_checks(flows: set[str], *, home_root: Path | None = None, keep_scenes: b
     if jobs > 1:
         results = _execute_in_processes(wanted, jobs, fault=fault)
     else:
-        e2e_checks_run_control.FAULT = fault
+        select_fault(fault)
         try:
             results = _execute(wanted, home_root)
         finally:
-            e2e_checks_run_control.FAULT = None
+            select_fault(None)
             if not keep_scenes:
                 close_scenes()
     decided = {}
@@ -278,8 +292,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", type=Path)
     parser.add_argument("--results", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--jobs", type=int, default=1, help="processes to run the scene groups in (default 1)")
-    parser.add_argument("--fault", choices=sorted(e2e_checks_run_control.FAULTS),
-                        help="inject this test-only product fault into the run-control scenes (T7 S1)")
+    parser.add_argument("--fault", choices=FAULTS,
+                        help="inject this test-only product fault into its slice's scenes (T7 S1 run control, T7 S2 recovery)")
     args = parser.parse_args(argv)
     if args.execute is not None:
         return _worker(args.execute.split(","), args.results, fault=args.fault)
@@ -301,11 +315,11 @@ def main(argv: list[str] | None = None) -> int:
 def _worker(names: list[str], results: Path | None, *, fault: str | None = None) -> int:
     """One --jobs process: run the named checks and write their entries (content-free, scanned for private values).
     `fault` is the runner's explicit --fault argument, the only way a fault is selected."""
-    e2e_checks_run_control.FAULT = fault
+    select_fault(fault)
     try:
         entries = _execute(names, None)
     finally:
-        e2e_checks_run_control.FAULT = None
+        select_fault(None)
         close_scenes()
     text = json.dumps(entries)
     home_roots = [tempfile.gettempdir(), str(Path.home()), os.path.realpath(Path.home())]

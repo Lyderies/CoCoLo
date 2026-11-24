@@ -673,7 +673,7 @@
  "L8.2": {
   "checks": [],
   "source": "PLAN-0.4.0.md T7",
-  "statement": "Killing the collector mid-run: the same, once it is back."
+  "statement": "After the collector is killed, the project service survives: the run either completes normally with capacity released once the collector returns, or settles run_lost; never in limbo, never counted twice."
  },
  "L8.3": {
   "checks": [],
