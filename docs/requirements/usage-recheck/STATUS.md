@@ -1,6 +1,6 @@
 # usage-recheck status
 
-State: RECOMMENDATION BUILT (option A + bounded re-check), owner decision 134 pending. No release bookkeeping.
+State: BUILT (option A + bounded re-check), rebased onto b6eb186e (0.8.59). Owner decision 134 answered: (a) option A, (b) yes, 60 min - exactly what is built. No release bookkeeping of its own; the 0.8.59 runtime digest was refreshed because runtime files changed.
 
 - Analysis: ANALYSIS.md. Requirements: requirements.md (USAGE-RECHECK-1..5, UX-HCU-1).
 - Commit 1 (ca9a0537): docs, red tests, UX-HCU-1 fix. Commit 2: the implementation (tests green).
