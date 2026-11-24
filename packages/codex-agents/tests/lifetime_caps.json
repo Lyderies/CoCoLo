@@ -1129,7 +1129,7 @@
   },
   "orchestration_store.py::end_earlier": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED. RS-D S2 (2026-11-24): each update-closed orchestration leaves one released project_holds tombstone (kind orchestration, release closed), one per orchestration ever closed, like every other hold tombstone; tombstone purge is RS-B's (B4s/B6, decision 131 index)"
   },
   "orchestration_store.py::end_idle": {
    "checks": 2,
@@ -1268,6 +1268,10 @@
   "project_history.py::_result_binding": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_history.py::runtime_close_status": {
+   "checks": 1,
+   "ends": "RS-D S2 (2026-11-24): a read-only COUNT of update-closed orchestration tombstones (project_holds kind orchestration, release closed), not a limit; nothing is refused by it. The counted tombstones are bounded like every hold tombstone, one per orchestration ever closed; purge is RS-B's (B4s/B6, decision 131 index)"
   },
   "project_history.py::_result_counts": {
    "checks": 2,

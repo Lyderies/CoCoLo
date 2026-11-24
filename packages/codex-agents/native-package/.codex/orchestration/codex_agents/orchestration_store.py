@@ -439,6 +439,7 @@ class OrchestrationOwner:
                     if snapshot['status'] != expected:
                         raise HistoryError('history_orchestration_state')
                     snapshot['status'] = 'paused' if expected == 'active' else 'active'
+                unrecorded = []  # filled by the close's _unfinished check; read by the update-close hold write
                 if operation in {'orchestration.checkpoint', 'orchestration.close'}:
                     for name in ('goal_tokens_used', 'goal_time_used_seconds'):
                         value = payload[name]
@@ -447,7 +448,6 @@ class OrchestrationOwner:
                                 raise HistoryError('history_orchestration_state')
                             snapshot[name] = value
                 if operation == 'orchestration.close':
-                    unrecorded = []
                     if self._unfinished(scope, handle, unrecorded=unrecorded):
                         raise HistoryError('history_orchestration_pending')
                     snapshot['status'], snapshot['ended_at_ms'] = payload['status'], now
