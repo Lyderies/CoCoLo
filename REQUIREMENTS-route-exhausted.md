@@ -202,6 +202,30 @@ The regression inventory below shall remain the preservation baseline. Tests who
 
 **Keeps/changes:** Keeps the behaviors exercised at the file:line locations below; permits only the exceptions stated below. Especially preserve `routing.py:1603` and `routing.py:1759`, while applying 124.2/124.4 to their affected outputs.
 
+### RT-RX-LIVE-ROOT-1 — Installed CLI reads the account snapshot from the default state root
+
+On an installed CLI (its install manifest present), a route command given the default `--state-root`, or none, reads the advisory provider-state snapshot from `default_state_root()`: `_require_own_roots` turns the checked default into None, and None there means the default, never "no state root". With the account service answering, availability is `checked`.
+
+**Acceptance:** On the installed layout with real account and project services, `learning-route --state-root <default>`, `learning-route` without it, and `route` (which has no `--state-root` option) all return availability `checked` with the service's per-provider states and no `reason_code`.
+
+**Keeps/changes:** Changes the `state_root is not None` gates at `cli.py` `_store_free_route` (snapshot and routing-evidence reads), the `route` command and `_validated_assignment_route`. Found live on the installed 0.8.54 (route not_checked with no reason, 2026-11-24); the source-tree tests have no install manifest and never took this path.
+
+### RT-RX-LIVE-ROOT-2 — A not_checked route always says why
+
+A route whose availability ends `not_checked` always carries `reason_code` `snapshot_unavailable:<reason>`, on every route call site, including when no state root resolves at all: the source tree run without `--state-root` (`snapshot_unavailable:no_state_root`; the developer's own default state is never read implicitly there) and an installed CLI whose default state root cannot be resolved.
+
+**Acceptance:** Source tree without `--state-root`: `learning-route` and `route` return `not_checked` with `snapshot_unavailable:no_state_root`. Installed with a refused XDG_STATE_HOME: both return `not_checked` with a `snapshot_unavailable:` reason. No route returns `not_checked` without `reason_code`.
+
+**Keeps/changes:** Extends RT-RX-7/RT-RX-18 (98f18967 gave reasons only where a state root was given). Keeps decision 3 (no service, no snapshot, selection unchanged); the reason is advisory and never changes a refusal or an admission.
+
+### RT-RX-LIVE-ROOT-3 — The installed trust pin on the state root is unchanged
+
+An installed CLI still refuses a non-default `--state-root` for its primary-host commands (`OwnRootRefused`), before any route or service work; the RT-RX-LIVE-ROOT-1 fix resolves only the default and gives a caller no way to move the state root.
+
+**Acceptance:** On the installed layout, `learning-route --state-root <another folder>` exits 2 with the fixed refusal `--state-root is refused: an installed CLI uses only the default learning state`, and nothing is written in that folder.
+
+**Keeps/changes:** Keeps `_require_own_roots` (`cli.py`) as it is, including `args.state_root = None` for the accepted default, which LearningState/CollectorPaths and the legacy-state move read as the default.
+
 ## Existing tests found by grep (not executed)
 
 Inventory method: `rg -n 'def test_' packages/codex-agents/tests/test_routing*.py packages/codex-agents/tests/test_admission_metadata.py packages/codex-agents/tests/test_providers.py`, plus targeted name searches across `packages/codex-agents/tests` for exhaustion, caps, headroom, launch and account scope.

@@ -1143,8 +1143,7 @@ def _validated_assignment_route(
             _close_ledger(ledger)
     elif project_root is not None:
         # The caller's effective policy, with the service's advisory snapshot when one is running (124f).
-        unavailable, snapshot = (_service_snapshot(args.state_root, project_root)
-                                 if getattr(args, "state_root", None) is not None else (None, None))
+        unavailable, snapshot = _route_snapshot(getattr(args, "state_root", None), project_root)
         route = _available_route(task, policy, provider_snapshot=snapshot,
                                  project_id=snapshot.project_id if snapshot else None,
                                  primary_provider=_host_primary_provider(), snapshot_unavailable=unavailable)
@@ -1297,6 +1296,26 @@ def _service_snapshot(state_root, project_root):
     return "snapshot_unavailable:" + (unavailable[0] if unavailable else "unknown")[:72], None
 
 
+def _names_state(state_root) -> bool:
+    """Whether a route has a state root whose services it may ask (RT-RX-LIVE-ROOT-1).
+
+    None is the default state root wherever a state root is opened (CollectorPaths,
+    LearningState). An installed CLI's `_require_own_roots` turns the checked default
+    `--state-root` into None, so there None is the default, not "no state root". In the
+    source tree None means none was given, and a route never reads the developer's own
+    default state implicitly (tests run there).
+    """
+    return state_root is not None or os.path.lexists(INSTALL_MANIFEST)
+
+
+def _route_snapshot(state_root, project_root):
+    """`_service_snapshot` for a route, and why there is none when no state root is named
+    (RT-RX-LIVE-ROOT-2): a not_checked route always carries its reason."""
+    if not _names_state(state_root):
+        return "snapshot_unavailable:no_state_root", None
+    return _service_snapshot(state_root, project_root)
+
+
 def _store_free_route(project_root: Path, task: dict, client_version: str | None = None,
                       state_root: Path | None = None, *, provider_snapshot=_FRESH_SNAPSHOT):
     """The route when it needs nothing from the ledger, else None.
@@ -1310,10 +1329,10 @@ def _store_free_route(project_root: Path, task: dict, client_version: str | None
     """
     trusted = frozenset()
     if validate_task(task)["routing_evidence_refs"]:
-        trusted = None if state_root is None else routing_evidence_client(
+        trusted = None if not _names_state(state_root) else routing_evidence_client(
             state_root, project_root, validate_task(task), host_client=_host_client())
         if trusted is None:
-            if state_root is not None and _project_moved(state_root, project_root):
+            if _names_state(state_root) and _project_moved(state_root, project_root):
                 # The project's own store is the authority on what its owner has
                 # rejected since; the ledger's frozen copy cannot vouch for a run.
                 raise ContractError("routing evidence is not held by this project's service")
@@ -1331,8 +1350,7 @@ def _store_free_route(project_root: Path, task: dict, client_version: str | None
     snapshot = provider_snapshot
     unavailable = None
     if snapshot is _FRESH_SNAPSHOT:
-        unavailable, snapshot = (_service_snapshot(state_root, project_root) if state_root is not None
-                                 else (None, None))
+        unavailable, snapshot = _route_snapshot(state_root, project_root)
     route = _available_route(task, policy, trusted_routing_evidence_refs=trusted,
                        provider_snapshot=snapshot, project_id=snapshot.project_id if snapshot else None,
                        primary_provider=_host_primary_provider(), snapshot_unavailable=unavailable)
@@ -2144,8 +2162,7 @@ def main() -> int:
         elif args.command == "inventory":
             report = discover(args.root, load_discovery_policy(args.policy))
         elif args.command == "route":
-            unavailable, snapshot = (_service_snapshot(args.state_root, args.root)
-                                     if getattr(args, "state_root", None) else (None, None))
+            unavailable, snapshot = _route_snapshot(getattr(args, "state_root", None), args.root)
             report = _available_route(
                 _json_input(args.task),
                 load_effective_policy(

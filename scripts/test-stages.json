@@ -259,6 +259,7 @@
  "codex:tests.test_route_exhausted": "unit",
  "codex:tests.test_route_exhausted_live": "integration",
  "codex:tests.test_route_exhausted_open": "integration",
+ "codex:tests.test_route_live_root": "integration",
  "codex:tests.test_routing": "integration",
  "codex:tests.test_routing_judgment": "unit",
  "codex:tests.test_routing_risk": "unit",

@@ -1734,6 +1734,27 @@
   "source": "tests/requirements/route-exhausted.json#RT-RX-9",
   "statement": "### RT-RX-9 \u2014 Exhaustion outranks every escalation or fallback choice\n\nEvery retry/escalation candidate shall pass the same exhaustion filter as the first worker pick. No ladder step, risk floor, legacy model fallback, or retry may restore an exhausted provider. A usage-driven provider switch shall not itself create a failed attempt, a semantic failure, evidence of independent verification, or entitlement to an additional attempt.\n\n**Acceptance:** With the preferred/strongest ladder provider exhausted, attempts 1\u20133 never select it; an eligible surviving provider can continue even where the unavailable preferred setting was stronger. A usage switch leaves task failure count and failure evidence unchanged. If every provider is exhausted, return RT-RX-16 rather than forcing a ladder choice. Existing legacy-fallback authorization remains necessary and cannot bypass usage exclusion.\n\n**Keeps/changes:** Keeps escalation's `first_eligible` use at `routing.py:1573` and fallback authorization contract at `routing.py:1853`; extends eligibility at `routing.py:1652` and fallback configuration check at `routing.py:1711`. Authority: 124.3."
  },
+ "RT-RX-LIVE-ROOT-1": {
+  "checks": [
+   "codex:tests.test_route_live_root.InstalledRootRouteTests.test_installed_route_reads_the_default_state_roots_account_snapshot"
+  ],
+  "source": "tests/requirements/route-exhausted.json#RT-RX-LIVE-ROOT-1",
+  "statement": "### RT-RX-LIVE-ROOT-1 \u2014 Installed CLI reads the account snapshot from the default state root\n\nOn an installed CLI (its install manifest present), a route command given the default `--state-root`, or none, reads the advisory provider-state snapshot from `default_state_root()`: `_require_own_roots` turns the checked default into None, and None there means the default, never \"no state root\". With the account service answering, availability is `checked`.\n\n**Acceptance:** On the installed layout with real account and project services, `learning-route --state-root <default>`, `learning-route` without it, and `route` (which has no `--state-root` option) all return availability `checked` with the service's per-provider states and no `reason_code`.\n\n**Keeps/changes:** Changes the `state_root is not None` gates at `cli.py` `_store_free_route` (snapshot and routing-evidence reads), the `route` command and `_validated_assignment_route`. Found live on the installed 0.8.54 (route not_checked with no reason, 2026-11-24); the source-tree tests have no install manifest and never took this path."
+ },
+ "RT-RX-LIVE-ROOT-2": {
+  "checks": [
+   "codex:tests.test_route_live_root.InstalledRootRouteTests.test_a_not_checked_route_always_says_why"
+  ],
+  "source": "tests/requirements/route-exhausted.json#RT-RX-LIVE-ROOT-2",
+  "statement": "### RT-RX-LIVE-ROOT-2 \u2014 A not_checked route always says why\n\nA route whose availability ends `not_checked` always carries `reason_code` `snapshot_unavailable:<reason>`, on every route call site, including when no state root resolves at all: the source tree run without `--state-root` (`snapshot_unavailable:no_state_root`; the developer's own default state is never read implicitly there) and an installed CLI whose default state root cannot be resolved.\n\n**Acceptance:** Source tree without `--state-root`: `learning-route` and `route` return `not_checked` with `snapshot_unavailable:no_state_root`. Installed with a refused XDG_STATE_HOME: both return `not_checked` with a `snapshot_unavailable:` reason. No route returns `not_checked` without `reason_code`.\n\n**Keeps/changes:** Extends RT-RX-7/RT-RX-18 (98f18967 gave reasons only where a state root was given). Keeps decision 3 (no service, no snapshot, selection unchanged); the reason is advisory and never changes a refusal or an admission."
+ },
+ "RT-RX-LIVE-ROOT-3": {
+  "checks": [
+   "codex:tests.test_route_live_root.InstalledRootRouteTests.test_an_installed_cli_still_refuses_another_state_root"
+  ],
+  "source": "tests/requirements/route-exhausted.json#RT-RX-LIVE-ROOT-3",
+  "statement": "### RT-RX-LIVE-ROOT-3 \u2014 The installed trust pin on the state root is unchanged\n\nAn installed CLI still refuses a non-default `--state-root` for its primary-host commands (`OwnRootRefused`), before any route or service work; the RT-RX-LIVE-ROOT-1 fix resolves only the default and gives a caller no way to move the state root.\n\n**Acceptance:** On the installed layout, `learning-route --state-root <another folder>` exits 2 with the fixed refusal `--state-root is refused: an installed CLI uses only the default learning state`, and nothing is written in that folder.\n\n**Keeps/changes:** Keeps `_require_own_roots` (`cli.py`) as it is, including `args.state_root = None` for the accepted default, which LearningState/CollectorPaths and the legacy-state move read as the default."
+ },
  "TERM-13": {
   "checks": [],
   "source": "PLAN-0.4.0-terminal.md section 4",
