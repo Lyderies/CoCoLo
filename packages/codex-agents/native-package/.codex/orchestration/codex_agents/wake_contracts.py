@@ -15,9 +15,10 @@ WAKE_REPLY_FIELDS = frozenset({'epoch', 'seq', 'outcome'})
 # Review round 1: a publication with a null epoch may name its service instance (32 hex, fresh per instance, bound by
 # the request's MAC), so a retry after a lost acknowledgement is given the same epoch.
 WAKE_INSTANCE_FIELD = 'instance'
-# Review round 1: a project service that wrote with no acknowledged publication keeps this file in its project
+# Review round 1: a project service that wrote with no acknowledged publication keeps a marker in its project
 # folder (`<state>/projects/<project id>/`) until a publication is acknowledged; the collector's reconcile treats
-# a clean stop with it as unknown.
+# a clean stop with one as unknown. Decision 179: this is a folder of one file per service instance (named by its
+# instance, locked while it lives); an acknowledgement removes its own and those of instances that are gone.
 WAKE_MARKER = 'wake-unpublished'
 _MAX = (1 << 63) - 1
 

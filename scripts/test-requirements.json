@@ -488,6 +488,7 @@
  "E2a-3": {
   "checks": [
    "codex:tests.test_e2a_launch_record.CollectorRecordTests.test_E2a_3_record_launch_over_the_collector_wire_and_its_runtime_gate",
+   "codex:tests.test_e2a_launch_record.FinalWireTests.test_E2a_3_record_launch_and_launch_status_refuse_a_wrong_key_and_a_replayed_proof",
    "codex:tests.test_e2a_launch_record.LaunchAuthorityTests.test_E2a_3_record_launch_needs_the_owner_and_a_copy_the_collector_verifies",
    "codex:tests.test_e2a_launch_record.LaunchTargetTests.test_E2a_3_a_copy_bound_elsewhere_or_changed_is_not_a_launch_target",
    "codex:tests.test_e2a_launch_record.LaunchTargetTests.test_E2a_3_a_valid_copy_is_a_launch_target_whatever_clone_ran_setup",
@@ -500,6 +501,9 @@
  },
  "E2a-4": {
   "checks": [
+   "codex:tests.test_e2a_launch_record.FinalFixTests.test_E2a_4_a_lost_record_reply_keeps_the_new_copy_pinned",
+   "codex:tests.test_e2a_launch_record.FinalFixTests.test_E2a_4_concurrent_setups_never_clear_the_mark_of_the_record_that_won",
+   "codex:tests.test_e2a_launch_record.FinalFixTests.test_E2a_4_setup_never_replaces_the_registered_copy_that_verifies",
    "codex:tests.test_e2a_launch_record.PinOrderTests.test_E2a_4_a_copy_pinned_while_a_prune_runs_is_never_removed",
    "codex:tests.test_e2a_launch_record.PinOrderTests.test_E2a_4_a_pin_on_a_lock_file_a_replacement_dropped_never_lets_a_second_replacement_in",
    "codex:tests.test_e2a_launch_record.PinOrderTests.test_E2a_4_owner_removal_keeps_the_registered_copy",
@@ -522,6 +526,7 @@
  },
  "E2a-6": {
   "checks": [
+   "codex:tests.test_e2a_wake_wire.WakeFinalFixTests.test_E2a_6_an_older_instance_retrying_after_its_successor_never_supersedes_it",
    "codex:tests.test_e2a_wake_wire.WakeLedgerTests.test_E2a_6_ledger_generation_rules",
    "codex:tests.test_e2a_wake_wire.WakeProtocolTests.test_E2a_6_reply_shape_row_and_closed_reply",
    "codex:tests.test_e2a_wake_wire.WakeProtocolTests.test_E2a_6_runtime_gate_refuses_an_old_caller_before_authorization",
@@ -533,6 +538,9 @@
  },
  "E2a-7": {
   "checks": [
+   "codex:tests.test_e2a_wake_wire.WakeFinalFixTests.test_E2a_7_a_deferral_that_moves_the_retry_earlier_is_guarded",
+   "codex:tests.test_e2a_wake_wire.WakeFinalFixTests.test_E2a_7_a_touch_invalidates_the_queued_exact",
+   "codex:tests.test_e2a_wake_wire.WakeFinalFixTests.test_E2a_7_an_overlapping_publisher_s_acknowledgement_keeps_the_other_s_marker",
    "codex:tests.test_e2a_wake_wire.WakePublisherTests.test_E2a_7_earlier_deadlines_need_a_pending_ack_and_exact_never_overtakes_it",
    "codex:tests.test_e2a_wake_wire.WakePublisherTests.test_E2a_7_unreachable_collector_lets_the_write_proceed_flagged",
    "codex:tests.test_e2a_wake_wire.WakeRoundOneTests.test_E2a_7_a_first_write_unpublished_after_a_clean_stop_is_still_reconciled",
@@ -547,6 +555,8 @@
  },
  "E2a-8": {
   "checks": [
+   "codex:tests.test_e2a_wake_wire.WakeFinalFixTests.test_E2a_8_a_stop_signal_never_bypasses_the_writer_fault_check",
+   "codex:tests.test_e2a_wake_wire.WakeFinalFixTests.test_E2a_8_settlement_is_verified_only_when_every_run_is_released",
    "codex:tests.test_e2a_wake_wire.WakePublisherTests.test_E2a_8_clean_stop_is_bounded_and_a_writer_fault_publishes_nothing",
    "codex:tests.test_e2a_wake_wire.WakeRoundOneTests.test_E2a_8_clean_stop_needs_settlement_and_a_final_due_read",
    "codex:tests.test_e2a_wake_wire.WakeServiceTests.test_E2a_8_a_normal_stop_publishes_clean_stop"
@@ -556,6 +566,7 @@
  },
  "E2a-9": {
   "checks": [
+   "codex:tests.test_e2a_wake_wire.WakeFinalFixTests.test_E2a_9_the_last_startup_probe_is_bounded_by_the_remaining_budget",
    "codex:tests.test_e2a_wake_wire.WakeReconcileTests.test_E2a_9_a_newer_publication_is_not_overwritten_and_serving_projects_are_skipped",
    "codex:tests.test_e2a_wake_wire.WakeReconcileTests.test_E2a_9_unknown_projects_are_marked_due_at_collector_start_and_clean_stops_are_not",
    "codex:tests.test_e2a_wake_wire.WakeRoundOneTests.test_E2a_9_one_locked_read_examines_at_most_one_page_of_projects",

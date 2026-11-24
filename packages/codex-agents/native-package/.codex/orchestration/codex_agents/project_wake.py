@@ -24,6 +24,7 @@ A process killed between a `pending` acknowledgement and the commit, or between 
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import os
 import secrets
 import socket
@@ -106,10 +107,11 @@ class WakePublisher:
         self.unpublished = False
         self.dirty = False
         self._instance = secrets.token_hex(16)  # this service instance: a lost epoch reply is retried idempotently
-        self.marker = None
+        self.marker = None  # decision 179: this instance's own marker, a file named by it in the WAKE_MARKER folder
         if state is not None and type(project_id) is str and project_id.startswith('prj_'):
-            self.marker = Path(state.root) / 'projects' / project_id / WAKE_MARKER
-        self._marked = True  # an earlier instance may have left one: the first acknowledgement removes it
+            self.marker = Path(state.root) / 'projects' / project_id / WAKE_MARKER / self._instance
+        self._marker_lock = None  # held (flock) while this instance lives: no other instance removes its marker
+        self._marked = True  # an earlier instance may have left one: the first acknowledgement removes stale ones
         self._opened = self._closed = False
         self._thread = None
         if start_sender:
@@ -132,30 +134,59 @@ class WakePublisher:
         self.acknowledged = (state, due)
         self.unpublished = False
         if self._marked and self.marker is not None:
-            with contextlib.suppress(OSError):
-                os.unlink(self.marker)
+            self._clear_markers()
             self._marked = False
         return True
 
+    def _clear_markers(self):
+        """After an acknowledgement: this instance's own marker, and any whose instance is gone (its lock free);
+        never a live instance's (decision 179: an overlapping publisher's acknowledgement says nothing of its
+        writes)."""
+        if self._marker_lock is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(self.marker)
+            os.close(self._marker_lock)
+            self._marker_lock = None
+        try:
+            names = os.listdir(self.marker.parent)  # a dot name is one being created (locked once it counts)
+        except OSError:
+            return
+        for name in names:
+            with contextlib.suppress(OSError):
+                descriptor = os.open(self.marker.parent / name, os.O_RDONLY | os.O_NOFOLLOW)
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)  # its instance is gone
+                    os.unlink(self.marker.parent / name)
+                finally:
+                    os.close(descriptor)
+
     def _leave_marker(self):
-        """Under self._lock: the marker the collector's reconcile reads, durably, or WakeRefused."""
+        """Under self._lock: this instance's marker the collector's reconcile reads, durably and locked for this
+        instance's life (created under a dot name, locked, then renamed into place), or WakeRefused."""
         if self.marker is None:
             raise WakeRefused()
+        if self._marker_lock is not None:
+            self._marked = True
+            return
+        staging = self.marker.parent / ('.' + self.marker.name)
+        descriptor = None
         try:
-            for folder in (self.marker.parent.parent, self.marker.parent):
+            for folder in (self.marker.parent.parent.parent, self.marker.parent.parent, self.marker.parent):
                 folder.mkdir(mode=0o700, exist_ok=True)
-            descriptor = os.open(self.marker, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
+            descriptor = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.fsync(descriptor)
+            os.rename(staging, self.marker)
             directory = os.open(self.marker.parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
                 os.fsync(directory)
             finally:
                 os.close(directory)
         except OSError:
+            if descriptor is not None:
+                os.close(descriptor)
             raise WakeRefused() from None
+        self._marker_lock = descriptor
         self._marked = True
 
     def open(self, connection):
@@ -173,7 +204,11 @@ class WakePublisher:
             self.dirty = True
 
     def touch(self):
+        """Before a hold write that can only move the next due later: an exact queued before it is dropped too
+        (decision 179), as before_due does; this write's own transaction queues the next."""
         self.dirty = True
+        with self._wakeup:
+            self._version += 1
 
     def before_due(self, due_at_ms):
         """Before a hold write with this deadline: a pending, acknowledged, when the collector's view may be later.
@@ -261,3 +296,12 @@ class WakePublisher:
         with self._wakeup:
             self._closed = True
             self._wakeup.notify_all()
+        # The marker stays (the collector's reconcile reads it); only its lock goes with this instance, so a later
+        # instance's acknowledgement may clear it.
+        if self._lock.acquire(blocking=False):  # never waits: a publication in flight keeps it until exit
+            try:
+                if self._marker_lock is not None:
+                    os.close(self._marker_lock)
+                    self._marker_lock = None
+            finally:
+                self._lock.release()

@@ -350,6 +350,10 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
         end = time.monotonic() + 10
         while not host.threads_stopped() and time.monotonic() < end:
             time.sleep(0.01)
+        if host.faulted() and not faulted:
+            # Decision 179: a stop signal ends the serve loop before its own fault check; the writer fault is
+            # checked once more here, so it is never settled or published as a normal stop.
+            faulted.append(True)
         if faulted:
             # Nothing is settled or released by a service whose writer faulted: what its store
             # committed is not known here. The next host settles its runs and reconciles the store.
@@ -358,7 +362,7 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
             # A run it still held (a running child it stopped, a finished one not yet
             # released) is settled now on kernel evidence, or by the next host.
             settled = host.settle_lost_runs()
-        # RS-E E2a-8: only after verified final settlement (every thread stopped, settlement run to its end) and a
+        # RS-E E2a-8: only after verified final settlement (every thread stopped, every run released) and a
         # successful final read of the store's next due, clean_stop within 2 s, best effort; otherwise, and after
         # a writer fault, nothing, so the collector keeps this project's wake state unknown.
         try:

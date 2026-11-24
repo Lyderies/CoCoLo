@@ -108,7 +108,7 @@ from .contracts import (
     validate_result,
     validate_task,
 )
-from .project_host_client import project_host_serving
+from .project_host_client import probe_deadline, project_host_serving
 from .learning_contracts import (
     validate_outcome,
     PRODUCER_AUTHORITY as PRODUCER_AUTHORITY,
@@ -209,11 +209,12 @@ _WAKE_SCHEMA = (
     "next_due_at_ms INTEGER,body_digest TEXT,due_at_ms INTEGER,"
     "refused INTEGER NOT NULL DEFAULT 0 CHECK(refused>=0),updated_at_ms INTEGER NOT NULL)",
     "CREATE INDEX IF NOT EXISTS project_wake_due ON project_wake(due_at_ms) WHERE due_at_ms IS NOT NULL",
-    # E2a-6 (review round 1): the service instance the project's last epoch was allocated to, so a retry of an
-    # allocation whose acknowledgement was lost gets the same epoch (one row per project, machine-local).
+    # E2a-6 (review round 1, decision 179): each service instance's own allocated epoch, so a retry of an
+    # allocation whose acknowledgement was lost gets that same epoch, and an older instance retrying after its
+    # successor never gets a newer one (machine-local). A row goes once its instance publishes with its epoch.
     "CREATE TABLE IF NOT EXISTS project_wake_instances("
-    "project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,"
-    "instance TEXT NOT NULL,epoch INTEGER NOT NULL CHECK(epoch>=1))",
+    "project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,"
+    "instance TEXT NOT NULL,epoch INTEGER NOT NULL CHECK(epoch>=1),PRIMARY KEY(project_id,instance))",
 )
 # E2a-9 (review round 1): a reconcile pass reads pages of WAKE_RECONCILE_BATCH project rows (rows examined, not
 # rows matched), each in its own short ledger hold; the startup pass before ready probes for at most this long and
@@ -4029,6 +4030,10 @@ class LearningLedger:
         for name in ("launch_copy", "launch_digest"):
             if name not in columns:
                 self._connection.execute(f"ALTER TABLE projects ADD COLUMN {name} TEXT")
+        # Decision 179: the review-round-1 form kept one instance per project (never released): replaced.
+        if any(row[1] == "instance" and row[5] == 0 for row in self._connection.execute(
+                "PRAGMA table_info(project_wake_instances)")):
+            self._connection.execute("DROP TABLE project_wake_instances")
         for statement in _WAKE_SCHEMA:
             self._connection.execute(statement)
 
@@ -4095,7 +4100,9 @@ class LearningLedger:
                 "SELECT epoch FROM project_wake_instances WHERE project_id=? AND instance=?",
                 (project_id, instance)).fetchone()
             if epoch is None and last is not None:
-                epoch = int(last["epoch"])  # this instance's own epoch, allocated before its reply was lost
+                # This instance's own epoch, allocated before its reply was lost; an older instance's is older than
+                # its successor's, so its retry is stale once the successor published (decision 179).
+                epoch = int(last["epoch"])
                 current_check = current
                 if current_check is not None and (epoch, seq) == current_check:
                     outcome = "duplicate" if row["body_digest"] == body else "stale"
@@ -4107,8 +4114,7 @@ class LearningLedger:
                                          (epoch, project_id))
                 if instance is not None:
                     self._connection.execute(
-                        "INSERT INTO project_wake_instances(project_id,instance,epoch) VALUES(?,?,?) "
-                        "ON CONFLICT(project_id) DO UPDATE SET instance=excluded.instance,epoch=excluded.epoch",
+                        "INSERT INTO project_wake_instances(project_id,instance,epoch) VALUES(?,?,?)",
                         (project_id, instance, epoch))
             elif epoch < 1 or epoch > int(row["allocated_epoch"]):
                 outcome = "stale"
@@ -4116,6 +4122,10 @@ class LearningLedger:
                 outcome = "duplicate" if row["body_digest"] == body else "stale"
             elif current is not None and (epoch, seq) < current:
                 outcome = "stale"
+            if instance is None and outcome != "stale":
+                # Its instance learned its epoch (it publishes with it): it never asks with a null epoch again.
+                self._connection.execute("DELETE FROM project_wake_instances WHERE project_id=? AND epoch=?",
+                                         (project_id, epoch))
             if outcome == "accepted":
                 self._connection.execute(
                     "UPDATE project_wake SET epoch=?,seq=?,state=?,next_due_at_ms=?,body_digest=?,due_at_ms=?,"
@@ -13101,6 +13111,16 @@ def _passing_refusal(error: BaseException) -> bool:
             and code & 255 in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED})
 
 
+def _wake_marked(folder: Path) -> bool:
+    """E2a-9 (decision 179): whether any service instance left its unpublished-write marker (one file per instance
+    in the project's marker folder; a dot name is one being created)."""
+    try:
+        with os.scandir(folder) as entries:
+            return any(not entry.name.startswith(".") for entry in entries)
+    except OSError:
+        return os.path.lexists(folder)
+
+
 class CollectorServer:
     """Sequential AF_UNIX collector. Only this loop calls the ledger writer."""
 
@@ -13321,16 +13341,25 @@ class CollectorServer:
                 if time.monotonic() >= end:
                     stopped = True
                     break
-                cursor = project_id
                 if status != "active" or (due is not None and due <= now):
+                    cursor = project_id
                     continue  # not a project, or already due
                 marker = False
                 if state == "clean_stop":
-                    # A clean stop is trusted unless its service wrote with no acknowledged publication.
-                    marker = os.path.lexists(self.state.root / "projects" / project_id / WAKE_MARKER)
+                    # A clean stop is trusted unless a service wrote with no acknowledged publication.
+                    marker = _wake_marked(self.state.root / "projects" / project_id / WAKE_MARKER)
                     if not marker:
+                        cursor = project_id
                         continue
-                if not project_host_serving(self.state.root, root):
+                # Decision 179: each probe waits at most what is left of the pass, and one the budget cut short
+                # is not counted: the next pass (the wake thread, at once) probes that project again.
+                with probe_deadline(end):
+                    serving = project_host_serving(self.state.root, root)
+                if time.monotonic() >= end:
+                    stopped = True
+                    break
+                cursor = project_id
+                if not serving:
                     unserved.append((project_id, root, epoch, seq, marker))
             if unserved:
                 marked += self.ledger.mark_wakes_due(unserved, now_ms=now)

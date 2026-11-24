@@ -2276,8 +2276,9 @@ class RunDriver:
         self._exiting = True  # D4: the writer has stopped; each settlement arbitrates on a store opened for it
         settled = False
         try:
-            self._settle_lost(True)
-            settled = True
+            lost = self._settle_lost(True)
+            # Decision 179: verified only when every run it knows of is released, not just when the pass ran.
+            settled = all(status == 'released' for _client, status in lost.values())
         except Exception:
             pass
         finally:
@@ -2285,7 +2286,7 @@ class RunDriver:
             if self._containers is not None:
                 self._containers.close()
         self._journal.release()
-        return settled  # RS-E E2a-8: whether final settlement ran to its end (a clean stop may then be published)
+        return settled  # RS-E E2a-8: whether final settlement released every run (a clean stop may then be published)
 
     @staticmethod
     def _id(run):

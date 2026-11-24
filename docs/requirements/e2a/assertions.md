@@ -37,3 +37,10 @@ NOT applied, needs a primary decision (not on the approved list; the test fails 
 | tests.test_e2a_launch_record.CollectorRecordTests.test_E2a_3_record_launch_over_the_collector_wire_and_its_runtime_gate (lines 125-133) | `client.record_launch(root, copy, DIGEST)` succeeds and `assertEqual((copy, DIGEST), launch_record(a))`, twice | `assertRaises(CollectorError)` on that call and `assertIsNone(launch_record(a))`, twice (the runtime-gate and bad-digest assertions unchanged) | HIGH launch authority: `copy` is the fixture path `/var/empty/owner/.codex/agent-orchestration/<pd>/ccc...`, which no collector can verify at its trusted copy root, so the old assertion IS the unsafe behaviour. A real owner-signed recording over the wire is covered by E2a-10's test (green). |
 
 Removed assertions: none. New tests: 17 (docs/requirements/e2a.md, "Review round 1" sentences).
+
+
+## Decision 179 (the one final fix)
+
+Existing assertions changed: none. Removed: none. CollectorRecordTests.test_E2a_3_record_launch_over_the_collector_wire_and_its_runtime_gate
+left untouched (owner question 176 pending; it still fails as before). New tests: 11 (FinalFixTests 3, FinalWireTests 1,
+WakeFinalFixTests 7).

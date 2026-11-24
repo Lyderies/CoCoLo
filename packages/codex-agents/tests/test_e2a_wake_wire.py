@@ -817,5 +817,181 @@ class WakeRoundOneTests(StoreBase):
                                    wake_payload(state='pending'), 2.0)
 
 
+class WakeFinalFixTests(StoreBase):
+    """Primary decision 179 (the one final fix): per-instance epochs, per-instance markers, touch and stop ordering,
+    the withdrawal deferral guard and the startup probe budget."""
+
+    def state_publisher(self, sender, base=None):
+        publisher = project_wake.WakePublisher(CollectorPaths(self.fixture.state_root), self.fixture.project_a,
+                                               self.fixture.project_a_id, send=sender, start_sender=False)
+        self.addCleanup(publisher.close)
+        return publisher
+
+    @requirements('E2a-6', why_not_scenario='Generation rules on a real ledger; the wire is WakeWireTests.')
+    def test_E2a_6_an_older_instance_retrying_after_its_successor_never_supersedes_it(self):
+        project, older, newer = self.fixture.project_a_id, 'a' * 32, 'b' * 32
+        lost = self.ledger.publish_wake(project, epoch=None, seq=1, state='pending', next_due_at_ms=None,
+                                        instance=older)  # applied; its reply was lost
+        self.assertEqual(1, lost['epoch'])
+        successor = self.ledger.publish_wake(project, epoch=None, seq=1, state='pending', next_due_at_ms=None,
+                                             instance=newer)  # its reply was lost too
+        self.assertEqual(2, successor['epoch'])
+        # The successor's own lost-acknowledgement retry still gets its epoch.
+        self.assertEqual(2, self.ledger.publish_wake(project, epoch=None, seq=2, state='pending', next_due_at_ms=None,
+                                                     instance=newer)['epoch'])
+        self.ledger.publish_wake(project, epoch=2, seq=3, state='exact', next_due_at_ms=900)
+        before = self.row(project)
+        retry = self.ledger.publish_wake(project, epoch=None, seq=2, state='pending', next_due_at_ms=None,
+                                         instance=older)
+        self.assertEqual((1, 'stale'), (retry['epoch'], retry['outcome']))
+        after = self.row(project)
+        self.assertEqual((2, 3, 'exact', 900, 2), (after['epoch'], after['seq'], after['state'], after['due_at_ms'],
+                                                   after['allocated_epoch']))
+        self.assertEqual(before['refused'] + 1, after['refused'])
+
+    @requirements('E2a-7', why_not_scenario='Two publishers on one real state folder; the real collector reconcile.')
+    def test_E2a_7_an_overlapping_publisher_s_acknowledgement_keeps_the_other_s_marker(self):
+        project = self.fixture.project_a_id
+        self.ledger.publish_wake(project, epoch=None, seq=1, state='clean_stop', next_due_at_ms=None)
+        failing = FakeSender()
+        failing.fail = True
+        first = self.state_publisher(failing)
+        first.before_due(5_000)  # unacknowledged: its marker stays
+        self.assertTrue(first.marker.exists())
+        second = self.state_publisher(FakeSender())
+        second.before_due(None)  # an overlapping instance's first write, acknowledged
+        self.assertTrue(first.marker.exists(), "another publisher's acknowledgement removed this one's marker")
+        server = CollectorServer(self.ledger, client_capabilities=self.fixture.clients)
+        with mock.patch.object(learning_store, 'project_host_serving', return_value=False):
+            server._reconcile_wakes()
+        self.assertIsNotNone(self.row(project)['due_at_ms'])
+        # Once that instance is gone, a later instance's acknowledgement clears its stale marker.
+        first.close()
+        third = self.state_publisher(FakeSender())
+        third.before_due(None)
+        self.assertFalse(first.marker.exists())
+
+    @requirements('E2a-7', why_not_scenario='The publisher ordering rules with a recording sender.')
+    def test_E2a_7_a_touch_invalidates_the_queued_exact(self):
+        sender = FakeSender()
+        publisher = project_wake.WakePublisher(None, None, 'prj_' + 'a' * 32, send=sender, start_sender=False)
+        self.addCleanup(publisher.close)
+        publisher.before_due(None)
+        publisher.after_settle(1_000)  # an exact queued for the transaction that ended ...
+        publisher.touch()  # ... and a write that moves the next due later, in a new transaction
+        publisher.drain()
+        self.assertNotIn(('exact', 1_000), [(s['state'], s['next_due_at_ms']) for s in sender.sent])
+        publisher.after_settle(2_000)
+        publisher.drain()
+        self.assertEqual(('exact', 2_000), (sender.sent[-1]['state'], sender.sent[-1]['next_due_at_ms']))
+
+    @requirements('E2a-8', why_not_scenario="The driver's own exit settlement with its journal pass stubbed.")
+    def test_E2a_8_settlement_is_verified_only_when_every_run_is_released(self):
+        from codex_agents.project_driver import RunDriver
+
+        def driver(lost):
+            stub = mock.Mock(_containers=None, _preamble=None, _owner_name='test-e2a')
+            stub._settle_lost.return_value = lost
+            return stub
+        held = {'hrn_a': ('codex', 'held'), 'hrn_b': ('codex', 'released')}
+        self.assertFalse(RunDriver.settle_on_exit(driver(held)))
+        self.assertTrue(RunDriver.settle_on_exit(driver({'hrn_b': ('codex', 'released')})))
+        self.assertTrue(RunDriver.settle_on_exit(driver({})))
+
+    @requirements('E2a-8', why_not_scenario='serve_project with its host and publisher stubbed; the wire is WakeServiceTests.')
+    def test_E2a_8_a_stop_signal_never_bypasses_the_writer_fault_check(self):
+        from codex_agents import project_service
+        finished = []
+
+        class Host:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def serve(self, done):
+                done()
+
+            def faulted(self):
+                return True  # the writer faulted as the stop signal arrived
+
+            def close(self):
+                pass
+
+            def threads_stopped(self):
+                return True
+
+            def settle_lost_runs(self):
+                return True
+
+            def settle_lost_runs_later(self):
+                pass
+
+        class Wake:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def finish(self, **options):
+                finished.append(options)
+
+        client = mock.Mock()
+        client.return_value.project.return_value = self.fixture.project_a_id
+        with mock.patch.object(project_service, 'CollectorClient', client), \
+                mock.patch.object(project_service, 'ProjectServiceHost', Host), \
+                mock.patch.object(project_service, '_owned_directory'), \
+                mock.patch.object(project_wake, 'WakePublisher', Wake), \
+                mock.patch.object(project_service.CollectorPaths, 'digest_key', lambda self: b'k' * 32):
+            report = project_service.serve_project(self.fixture.state_root, self.fixture.project_a,
+                                                   stopped=lambda: True, bundle_root=self.fixture.project_a)
+        self.assertEqual('writer_fault', report.get('reason_code'), report)
+        self.assertEqual([True], [options['faulted'] for options in finished])
+        self.assertIsNone(finished[0]['final_due'])
+
+    @requirements('E2a-7', why_not_scenario='A real project store with the withdrawal transitions; the guard records.')
+    def test_E2a_7_a_deferral_that_moves_the_retry_earlier_is_guarded(self):
+        from tests import test_open_withdrawal as withdrawals
+        from tests import test_result_leases as leases
+        base = leases.ResultLeaseTests(methodName='runTest')
+        base.setUp()
+        self.addCleanup(base.doCleanups)
+        store, guard = base.store, RecordingGuard()
+        project_holds_schema.install_wake_guard(store.project_id, guard)
+        self.addCleanup(project_holds_schema.install_wake_guard, store.project_id, None)
+        binding = withdrawals.binding(1)
+        store.record_open_binding(binding.run_handle, 1, binding.run_id, withdrawals.INPUTS, 'codex',
+                                  instance='svc-' + 'a' * 32, now_ms=1000)
+        store.mark_open_withdrawing(binding.run_handle, 1, 'cancelled_before_claim', project_id=withdrawals.PROJECT,
+                                    runtime_digest=COLLECTOR_RUNTIME_DIGEST)
+        row = store._connection.execute("SELECT identity,next_check_ms FROM project_holds WHERE kind='open_binding'"
+                                        ).fetchone()
+        store.defer_open_withdrawal(row[0], now_ms=5_000, base_ms=100, max_ms=1_000)  # one failed try: 5_100
+        self.assertEqual(5_100, project_holds_schema.next_hold_due(store._connection))
+        guard.calls.clear()
+        store.defer_open_withdrawal(row[0], now_ms=0, base_ms=1, max_ms=1)  # a clock that went back: earlier
+        self.assertEqual(1, project_holds_schema.next_hold_due(store._connection))
+        self.assertIn(('before', 1), guard.calls)  # published (pending) before the write, like take_hold
+
+    @requirements('E2a-9', why_not_scenario='The real collector startup pass in process; nothing is spawned.')
+    def test_E2a_9_the_last_startup_probe_is_bounded_by_the_remaining_budget(self):
+        self.register_many = [self.ledger.register_project(self._root(number), now_ms=1) for number in range(6)]
+
+        from codex_agents import project_host_client
+        allowed = getattr(project_host_client, 'probe_wait_seconds', lambda: project_host_client.HINT_READ_WAIT_SECONDS)
+
+        def busy(state_root, root):
+            time.sleep(min(allowed(), 0.7))  # its hint lock is busy: the probe waits as long as it is allowed
+            return False
+        server = CollectorServer(self.ledger, client_capabilities=self.fixture.clients)
+        with mock.patch.object(learning_store, 'project_host_serving', busy):
+            began = time.monotonic()
+            server._reconcile_wakes(learning_store.WAKE_STARTUP_SECONDS)
+            spent = time.monotonic() - began
+        self.assertLess(spent, learning_store.WAKE_STARTUP_SECONDS + 0.15)
+        self.assertTrue(server._wake_cursor)  # the rest follows on the wake thread
+
+    def _root(self, number):
+        root = Path(self.fixture.temporary.name) / f'budget-{number}'
+        root.mkdir()
+        return root
+
+
 if __name__ == '__main__':
     unittest.main()

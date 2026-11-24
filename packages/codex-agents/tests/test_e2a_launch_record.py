@@ -497,5 +497,144 @@ class SetupOfflineTests(CopyBase):
         self.assertEqual((str(copy), copy.name), fixture.ledger.launch_record(project_id))
 
 
+class FinalFixTests(CopyBase):
+    """Primary decision 179 (the one final fix): concurrent setups, a registered copy's replacement, a lost
+    record_launch reply, and the owner proof's wrong key and replay over the collector wire."""
+
+    def marks(self, copy):
+        pins = Path(copy).parent / '.pins'
+        return sorted(name for name in os.listdir(pins) if name.endswith('.registered')) if pins.is_dir() else []
+
+    def collector(self):
+        self.fixture = store_tests.LearningStoreTests(methodName='runTest')
+        with mock.patch.object(store_tests, 'TEMP_ROOT', SHORT_TMP):
+            self.fixture.setUp()
+        self.addCleanup(self.fixture.tearDown)
+        self.ledger = self.fixture.ledger
+        self.server = CollectorServer(self.ledger, client_capabilities=self.fixture.clients)
+        self.server.start()
+        self.addCleanup(self.server.stop)
+
+    @requirements('E2a-4', why_not_scenario='Two setup record steps on real threads over a real protected copy folder.')
+    def test_E2a_4_concurrent_setups_never_clear_the_mark_of_the_record_that_won(self):
+        copy = Path(self.install()['runtime_copy'])
+        first, second = self.sibling('a' * 64), self.sibling('b' * 64)
+        ledger, first_recorded, second_done = {}, threading.Event(), threading.Event()
+
+        def record_first(target, digest):
+            ledger['copy'] = target  # committed; its cleanup comes after the other setup ran (or waited)
+            first_recorded.set()
+            second_done.wait(1.0)
+
+        def record_second(target, digest):
+            ledger['copy'] = target
+        with mock.patch.object(host_commands, 'launch_target_problem', lambda *args: None):
+            worker = threading.Thread(target=host_commands._record_target,
+                                      args=(first, self.project, record_first, self.environ))
+            worker.start()
+            self.assertTrue(first_recorded.wait(5))
+            other = threading.Thread(target=lambda: (host_commands._record_target(
+                second, self.project, record_second, self.environ), second_done.set()))
+            other.start()
+            worker.join(10)
+            other.join(10)
+        self.assertEqual(second, ledger['copy'])
+        self.assertEqual([second.name + '.registered'], self.marks(copy))
+
+    @requirements('E2a-4', why_not_scenario='Setup over a real protected copy; no service process.')
+    def test_E2a_4_setup_never_replaces_the_registered_copy_that_verifies(self):
+        copy = Path(self.install(record_launch=lambda target, digest: None)['runtime_copy'])
+        inode = copy.stat().st_ino
+        elsewhere = self.base / 'another-clone'
+        elsewhere.mkdir()
+        self.assertEqual('unchanged', self.install(clone_root=elsewhere)['runtime_copy_status'])
+        self.assertEqual(inode, copy.stat().st_ino)
+        self.assertIsNone(launch_target_problem(copy, self.project, self.environ))
+
+    @requirements('E2a-4', why_not_scenario='The real CLI recorder, the real collector socket and a real copy folder.')
+    def test_E2a_4_a_lost_record_reply_keeps_the_new_copy_pinned(self):
+        import argparse
+        import cli
+        from codex_agents import collector_client
+        from codex_agents.service_transport import ServiceTransportError
+        self.collector()
+        project_id = self.ledger.register_project(self.project)
+        copy, _status = host_commands.install_runtime_copy(self.project, self.environ)
+        older = self.sibling('a' * 64)
+        mark_registered_copy(older)  # the copy an earlier record named
+        real = collector_client.exchange_frame
+
+        def lost(path, frame, **options):
+            raw = real(path, frame, **options)
+            if b'"op":"record_launch"' in frame:
+                raise ServiceTransportError('transport_unavailable')  # committed; the reply never arrived
+            return raw
+        args = argparse.Namespace(state_root=self.fixture.state_root, project_root=self.project)
+        environment = {**{k: v for k, v in os.environ.items() if k != 'CODEX_HOME'}, **self.environ}
+        with mock.patch.object(collector_client, 'exchange_frame', lost), \
+                mock.patch.dict(os.environ, environment, clear=True):
+            host_commands.record_setup_launch(self.project, cli._launch_recorder(args), self.environ)
+        with self.ledger._lock:
+            self.assertEqual((str(copy), copy.name), self.ledger.launch_record(project_id))
+        self.assertIn(copy.name + '.registered', self.marks(copy))
+        prune_runtime_copies(self.project, older, self.environ)
+        self.assertTrue(copy.is_dir(), 'the copy the record names was pruned')
+
+
+class FinalWireTests(StoreBase):
+    """Primary decision 179 item 8: the owner proof's wrong key and replay, over the collector wire."""
+
+    def collector(self):
+        self.server = CollectorServer(self.ledger, client_capabilities=self.fixture.clients)
+        self.server.start()
+        self.addCleanup(self.server.stop)
+
+    @requirements('E2a-3', why_not_scenario='Crosses the real collector socket in process; no project service is needed.')
+    def test_E2a_3_record_launch_and_launch_status_refuse_a_wrong_key_and_a_replayed_proof(self):
+        from codex_agents.collector_paths import CollectorPaths
+        from codex_agents.hosts import OWNER_CLIENT
+        from codex_agents.service_enrollment import collector_owner_paths, collector_owner_preamble, enrollment_preamble
+        self.collector()
+        root, project = self.fixture.project_a, self.fixture.project_a_id
+        paths = CollectorPaths(self.fixture.state_root)
+        _key, proofs = collector_owner_paths(paths)
+
+        def send(request):
+            return json.loads(exchange_frame(self.fixture.state.socket, canonical_json(request), timeout=5.0,
+                                             request_limit=65_536, response_limit=16_384))
+
+        def record(copy, line=None, key=None):
+            body = {'op': 'record_launch', 'project_root': str(Path(root).resolve()), 'launch_copy': str(copy),
+                    'launch_digest': Path(copy).name}
+            if line is None:
+                message = canonical_json(body)
+                line = (collector_owner_preamble(paths, message, body['project_root']) if key is None else
+                        enrollment_preamble(key, 'account', OWNER_CLIENT, 1, message, proofs,
+                                            subject=body['project_root'])).decode('ascii')
+            return send({'protocol': 1, **body, 'owner': line, 'runtime_digest': COLLECTOR_RUNTIME_DIGEST}), line
+        first, second = self.a_copy(root, 'a' * 64), self.a_copy(root, 'b' * 64)
+        with mock.patch.object(host_commands, 'launch_target_problem', lambda *args: None):
+            wrong, _line = record(first, key=os.urandom(32))
+            self.assertEqual((False, 'operation_rejected'), (wrong['ok'], wrong.get('code')))
+            with self.ledger._lock:
+                self.assertIsNone(self.ledger.launch_record(project))
+            accepted, line = record(first)
+            self.assertTrue(accepted['ok'], accepted)
+            self.assertTrue(record(second)[0]['ok'])
+            replayed, _line = record(first, line=line)  # the first request's own proof, sent again
+            self.assertEqual((False, 'operation_rejected'), (replayed['ok'], replayed.get('code')))
+            with self.ledger._lock:
+                self.assertEqual((second, 'b' * 64), self.ledger.launch_record(project))
+        status = {'op': 'launch_status', 'project_root': str(Path(root).resolve())}
+        message = canonical_json(status)
+        wrong = send({'protocol': 1, **status, 'owner': enrollment_preamble(
+            os.urandom(32), 'account', OWNER_CLIENT, 1, message, proofs, subject=status['project_root']).decode()})
+        self.assertEqual((False, 'operation_rejected'), (wrong['ok'], wrong.get('code')))
+        line = collector_owner_preamble(paths, message, status['project_root']).decode()
+        self.assertEqual({'ok': True, 'recorded': True}, send({'protocol': 1, **status, 'owner': line}))
+        replayed = send({'protocol': 1, **status, 'owner': line})
+        self.assertEqual((False, 'operation_rejected'), (replayed['ok'], replayed.get('code')))
+
+
 if __name__ == '__main__':
     unittest.main()

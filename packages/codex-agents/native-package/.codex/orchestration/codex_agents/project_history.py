@@ -1984,12 +1984,14 @@ class ProjectHistory:
             evidence = json.loads(row['evidence'])
             failures = int(evidence.get('failures', 0)) + 1
             evidence['failures'] = failures
+            retry = now_ms + min(max_ms, base_ms * 2 ** min(failures - 1, 32))
+            # E2a-7 (decision 179): the retry is wall-clock derived and may move earlier, so it is guarded like
+            # take_hold (a pending published first when the collector's view may be later).
+            project_holds_schema.wake_before(self.project_id, retry)
             self._connection.execute(
                 "UPDATE project_holds SET next_check_ms=?,evidence=? WHERE project_id=? AND kind='open_binding' "
                 "AND identity=? AND state='releasing'",
-                (now_ms + min(max_ms, base_ms * 2 ** min(failures - 1, 32)),
-                 project_holds_schema.evidence_json(**evidence), self.project_id, identity))
-            project_holds_schema.wake_touch(self.project_id)  # E2a-7: the retry moves later
+                (retry, project_holds_schema.evidence_json(**evidence), self.project_id, identity))
 
     @_operation
     def release_open_binding(self, run_handle, attempt, release_kind, *, receipt=None, request_digest=None):

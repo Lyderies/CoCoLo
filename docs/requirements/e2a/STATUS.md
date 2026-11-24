@@ -62,3 +62,20 @@ cli_status_client_boundary OK; project_service_startup+ledger_lock_limits+accoun
 learning_cli 30 OK 62 s; open_withdrawal+hold_lifecycle 58 OK 54 s; lost_run_settlement+container_recovery+
 publication_replay_driver 63 OK 107 s. Not run: test_reply_shape_live (> 5 min), --affected (primary).
 Open for the primary: the one unlisted assertion above; runtime digest refresh (not done, as instructed).
+
+## Decision 179: one final targeted fix (confirm check NOT-READY at 6f6931d2: scratchpad e2a-confirm-result.md)
+Red first on 6f6931d2 runtime (runtime files stashed, new tests only): `Ran 11 tests, failures=10, 3 s`; the
+item-8 wire test (wrong key, replay) passes at base: coverage for the round-1 fix.
+Fixes: host_commands (lock held mark->record->cleanup; registered verifying copy never replaced; unknown record
+outcome keeps both marks), learning_store (project_wake_instances keyed by (project, instance), row dropped on the
+instance's first explicit-epoch publication, old round-1 form dropped; marker folder check; probes bounded by
+probe_deadline, a cut-short probe not counted), project_host_client (probe_deadline/probe_wait_seconds),
+project_wake (per-instance flocked markers, touch invalidates queued exact, close releases the marker lock),
+wake_contracts (comment), project_driver (settled = every run released), project_service (final host.faulted()
+check), project_history (deferral guarded by wake_before).
+Green: test_e2a_launch_record + test_e2a_wake_wire + lifetime_cap_guard 59, 1 error = the owner-question-176 test
+(unchanged), 29 s; host_commands+open_withdrawal+hold_lifecycle+project_service 123 OK 105 s (after narrowing the
+unknown-outcome rule: test_remove_codex_rule_reports_what_it_removed rerun OK); lost_run_settlement+
+container_recovery+project_service_startup+ledger_lock_limits 90 OK 126 s; host_commands+learning_cli+holds_report+
+project_holds_schema+collector_stale 163 OK 125 s. Not run: --affected, test_reply_shape_live (primary).
+Digests not refreshed (as instructed).

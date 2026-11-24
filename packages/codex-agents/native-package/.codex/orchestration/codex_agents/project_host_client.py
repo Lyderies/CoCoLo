@@ -3,6 +3,8 @@
 Imports no persistence owner: the host runs as its own process from
 ``project_host.py``, and this module only decides whether one must be started.
 """
+import contextlib
+import contextvars
 import fcntl
 import os
 from pathlib import Path
@@ -30,6 +32,27 @@ HOST_LOCK = 'host.lock'
 HINT_LOCK = 'hint.lock'
 # How long a client waits for that lock before it counts the project as not served now.
 HINT_READ_WAIT_SECONDS = 1.0
+# RS-E E2a-9 (decision 179): a caller with a budget (the collector's startup reconcile pass) bounds every probe it
+# makes by what is left of it (`probe_deadline`, per thread), so its last probe cannot run past it.
+_PROBE_DEADLINE = contextvars.ContextVar('project_probe_deadline', default=None)
+
+
+@contextlib.contextmanager
+def probe_deadline(deadline):
+    """Within it, this thread's probes wait for a busy hint lock at most until `deadline` (time.monotonic)."""
+    token = _PROBE_DEADLINE.set(deadline)
+    try:
+        yield
+    finally:
+        _PROBE_DEADLINE.reset(token)
+
+
+def probe_wait_seconds():
+    """How long a probe may wait for a busy hint lock now: HINT_READ_WAIT_SECONDS, or less under a deadline."""
+    deadline = _PROBE_DEADLINE.get()
+    if deadline is None:
+        return HINT_READ_WAIT_SECONDS
+    return min(HINT_READ_WAIT_SECONDS, max(0.0, deadline - time.monotonic()))
 
 
 def _host_alive(directory):
@@ -82,7 +105,7 @@ def _hinted_host(state, root, *, any_runtime=False, hint_locked=False):
         except FileNotFoundError:
             # No product host published here: only the hint can be believed (as `_host_alive`).
             return scope, endpoints, _host_alive(endpoints[0].parent)
-        deadline = time.monotonic() + HINT_READ_WAIT_SECONDS
+        deadline = time.monotonic() + probe_wait_seconds()
         while True:
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)

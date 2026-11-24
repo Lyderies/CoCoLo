@@ -36,6 +36,7 @@ tests.test_e2a_launch_record.LaunchTargetTests.test_E2a_3_setup_records_the_laun
 tests.test_e2a_launch_record.LaunchAuthorityTests.test_E2a_3_record_launch_needs_the_owner_and_a_copy_the_collector_verifies,
 tests.test_e2a_launch_record.SetupOfflineTests.test_E2a_3_with_no_collector_running_setup_records_in_the_ledger.
 Review round 1: `record_launch` is the owner's only: the request carries an `owner-cli-v1` preamble under the key the collector issues at each start (`<state>/collector-owner/owner.cap`, proof written in its owner-only proof folder) naming exactly this request with the project root as subject, checked before anything else; then the collector itself verifies the whole target with `launch_target_problem` (its trusted copy root: the account's `~/.codex/agent-orchestration/<project digest>/<digest>`, bound to this project, byte for byte); any failure is `operation_rejected` and changes nothing. With no collector answering at all, setup records directly in the ledger under exclusive owner maintenance (`CollectorMaintenance`); a collector of another runtime is never stopped for it (`not_recorded`).
+Decision 179: the owner proof's wrong key and a replayed proof are refused over the collector wire for both `record_launch` and `launch_status` (tests.test_e2a_launch_record.FinalWireTests.test_E2a_3_record_launch_and_launch_status_refuse_a_wrong_key_and_a_replayed_proof).
 
 **E2a-4 — Copy pinning.** (D:115-116) The registered copy (marked by setup once its launch record is written; one per
 project) and any copy held in use (`pin_runtime_copy`, a shared lock a launcher holds from verification until its child
@@ -50,6 +51,7 @@ tests.test_e2a_launch_record.PinOrderTests.test_E2a_4_a_copy_pinned_while_a_prun
 tests.test_e2a_launch_record.PinOrderTests.test_E2a_4_a_pin_on_a_lock_file_a_replacement_dropped_never_lets_a_second_replacement_in,
 tests.test_e2a_launch_record.PinOrderTests.test_E2a_4_owner_removal_keeps_the_registered_copy.
 Review round 1: the project's stable lock (its copies' folder, flocked exclusive) serializes prune, replacement, removal and the registered marks; a launcher's shared pin checks the lock file it locked is the one the path names (a dropped lock file is never a pin). Setup marks the new copy before its record commits and drops the earlier mark only after; a failed record keeps the earlier mark and drops only one it added; a mark is refused for a copy already gone. Owner removal also leaves the registered copy (and its folder) in place.
+Decision 179: setup holds the project lock from its mark through the record to its cleanup, so concurrent setups take turns and none clears the mark of the record that won; setup never replaces the registered copy while it verifies (only where setup ran would differ); a record whose outcome is unknown (the collector exchange failed after delivery: transport failure, unreadable or oversized reply) keeps both marks until the next record that succeeds. Tests: tests.test_e2a_launch_record.FinalFixTests.test_E2a_4_concurrent_setups_never_clear_the_mark_of_the_record_that_won, tests.test_e2a_launch_record.FinalFixTests.test_E2a_4_setup_never_replaces_the_registered_copy_that_verifies, tests.test_e2a_launch_record.FinalFixTests.test_E2a_4_a_lost_record_reply_keeps_the_new_copy_pinned.
 
 **E2a-5 — Publish credential bound to one project.** (D:31-33, D:117-118) `account.publish_wake` is a
 PROJECT_OPERATIONS operation. Its credential is a per-project wake key (`client-runtimes/<root digest>.wake.cap`), issued
@@ -77,6 +79,7 @@ tests.test_e2a_wake_wire.WakeProtocolTests.test_E2a_6_reply_shape_row_and_closed
 tests.test_e2a_wake_wire.WakeProtocolTests.test_E2a_6_runtime_gate_refuses_an_old_caller_before_authorization,
 tests.test_e2a_wake_wire.WakeRoundOneTests.test_E2a_6_a_lost_first_acknowledgement_does_not_allocate_a_second_epoch.
 Review round 1: a null-epoch payload may also carry `instance` (32 hex, fresh per service instance, MAC-bound); a retry from the instance the last epoch was allocated to gets that epoch again, not a new one.
+Decision 179: epochs are per instance (`project_wake_instances` keyed by project and instance): an older instance retrying after its successor gets its own older epoch (stale once the successor published), never a newer one; a row goes once its instance publishes with its epoch. Test: tests.test_e2a_wake_wire.WakeFinalFixTests.test_E2a_6_an_older_instance_retrying_after_its_successor_never_supersedes_it.
 
 **E2a-7 — Crash-safe wake from the project service.** (D:37-39, D:119-120) A project service, once its store is open,
 publishes `pending` (allocating its epoch) and then `exact` with its store's next due (the earliest `due_at_ms` of a
@@ -95,6 +98,7 @@ tests.test_e2a_wake_wire.WakeRoundOneTests.test_E2a_7_a_write_while_pending_inva
 tests.test_e2a_wake_wire.WakeRoundOneTests.test_E2a_7_a_releasing_open_binding_counts_by_its_withdrawal_retry,
 tests.test_e2a_wake_wire.WakeRoundOneTests.test_E2a_7_a_reply_past_the_limit_is_refused_and_flagged.
 Review round 1: (a) a first write with no acknowledged publication (the collector may still hold `clean_stop`) first leaves the durable marker `<state>/projects/<id>/wake-unpublished`, which reconcile reads, and is refused (`history_service_unavailable`) when even that cannot be written; the first acknowledged publication removes it. (b) every hold write invalidates a queued `exact`. (c) the next due also counts a releasing open binding's withdrawal retry (`next_check_ms`), and marking a withdrawal (which moves it earlier) is guarded like `take_hold`. A reply past 16 KiB ends the exchange (flagged, retried).
+Decision 179: (a) the marker is a folder `wake-unpublished/` of one file per instance (named by it, created under a dot name, flocked for the instance's life, then renamed into place); an acknowledgement removes its own and those whose lock is free (instance gone), never a live overlapping instance's. (b) `touch()` invalidates a queued `exact` too. (c) a withdrawal deferral's retry goes through the same guard as `take_hold` (it may move earlier). Tests: tests.test_e2a_wake_wire.WakeFinalFixTests.test_E2a_7_an_overlapping_publisher_s_acknowledgement_keeps_the_other_s_marker, tests.test_e2a_wake_wire.WakeFinalFixTests.test_E2a_7_a_touch_invalidates_the_queued_exact, tests.test_e2a_wake_wire.WakeFinalFixTests.test_E2a_7_a_deferral_that_moves_the_retry_earlier_is_guarded.
 
 **E2a-8 — Stop.** (D:42-43, D:123) A normal stop publishes `clean_stop` with the next due after final settlement,
 best effort within a 2 s deadline (a collector that accepts and never answers does not delay the stop past it). A
@@ -103,6 +107,7 @@ tests.test_e2a_wake_wire.WakeServiceTests.test_E2a_8_a_normal_stop_publishes_cle
 tests.test_e2a_wake_wire.WakePublisherTests.test_E2a_8_clean_stop_is_bounded_and_a_writer_fault_publishes_nothing,
 tests.test_e2a_wake_wire.WakeRoundOneTests.test_E2a_8_clean_stop_needs_settlement_and_a_final_due_read.
 Review round 1: `clean_stop` is attempted only after verified final settlement (every thread stopped and settlement ran to its end) and a successful final read of the store's next due (its own read-only connection), and carries that value, never a cached one.
+Decision 179: verified settlement means every run the exit pass knows of is released (not only that the pass ran); the writer fault is checked once more after the serve loop, so a stop signal never turns a writer-fault stop into a normal one. Tests: tests.test_e2a_wake_wire.WakeFinalFixTests.test_E2a_8_settlement_is_verified_only_when_every_run_is_released, tests.test_e2a_wake_wire.WakeFinalFixTests.test_E2a_8_a_stop_signal_never_bypasses_the_writer_fault_check.
 
 **E2a-9 — Reconcile marks unknown projects due; nothing starts.** (D:40-41) At collector start (before it reports
 ready) and once per sweep interval (on a thread of its own, outside the sweep cycle's ledger hold), each active project with no wake row, a null or `pending` state, or a state other
@@ -115,6 +120,7 @@ tests.test_e2a_wake_wire.WakeRoundOneTests.test_E2a_9_one_locked_read_examines_a
 tests.test_e2a_wake_wire.WakeRoundOneTests.test_E2a_9_reconcile_reaches_every_project_past_one_page,
 tests.test_e2a_wake_wire.WakeRoundOneTests.test_E2a_9_the_startup_pass_is_bounded_and_the_rest_follows.
 Review round 1: a pass pages by rows examined (at most 64 project rows per locked read, by primary key, inactive and settled rows included), page after page from a saved cursor; a `clean_stop` row whose service left the unpublished-write marker counts unknown; the startup pass probes for at most 1 s and the wake thread finishes the rest at once.
+Decision 179: each probe of a pass waits for a busy hint lock at most what is left of the pass's budget (`project_host_client.probe_deadline`), and a probe the budget cut short is not counted (the next pass probes that project again). Test: tests.test_e2a_wake_wire.WakeFinalFixTests.test_E2a_9_the_last_startup_probe_is_bounded_by_the_remaining_budget.
 
 **E2a-10 — Setup records the launch target for every project.** (primary decision 171) The setup and update
 registration step (`learning-register`, which Codex and Claude-only setups alike run) installs the project's protected

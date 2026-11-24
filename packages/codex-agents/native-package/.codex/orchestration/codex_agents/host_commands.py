@@ -1034,7 +1034,10 @@ def install_runtime_copy(
         # RS-E E2a-4 (review round 1): a replacement takes the project's stable lock, as prune, removal and pins do.
         project_lock = _take_project_lock(container)
         if os.path.lexists(copy):
-            if runtime_copy_problem(copy, root) is None and _bound_clone(copy) == clone:
+            if runtime_copy_problem(copy, root) is None and (
+                    _bound_clone(copy) == clone or _registered(container, copy.name)):
+                # Decision 179: the registered copy (the one the launch record names) is never replaced while it
+                # verifies; only where setup ran differs, which a launch target does not consult (E2a-3).
                 return copy, "unchanged"
             # RS-E E2a-4: never replace a copy a launcher holds in use.
             held = _lock_copy(container, copy.name, exclusive=True)
@@ -1285,7 +1288,10 @@ def launch_target_problem(
 def _record_target(copy, project_root, record_launch, environ) -> str:
     """RS-E E2a-3: the collector's launch record names this copy only once it is a valid launch target. E2a-4: the
     copy is marked registered before the record commits and the earlier mark dropped only after, so no prune ever
-    removes the copy a record names. A failure keeps the earlier record and mark (and drops only a mark it added)."""
+    removes the copy a record names. A refused record keeps the earlier record and mark (and drops only a mark it
+    added). Decision 179: the project lock is held from the mark to the cleanup, so concurrent setups take turns and
+    none clears the mark of the record that won; a record whose outcome is unknown (its reply lost after a possible
+    commit) keeps both marks until the next record that succeeds."""
     try:
         container = _copy_container(copy)
     except HostCommandError:
@@ -1294,23 +1300,32 @@ def _record_target(copy, project_root, record_launch, environ) -> str:
         with _project_locked(container):
             earlier = _registered(container, copy.name)
             _set_mark(container, copy.name)
-        recorded = False
-        try:
-            if launch_target_problem(copy, project_root, environ) is None:
-                record_launch(copy, copy.name)
-                recorded = True
-        except Exception:
-            pass
-        with _project_locked(container):
-            if recorded:
+            outcome = "refused"
+            try:
+                if launch_target_problem(copy, project_root, environ) is None:
+                    record_launch(copy, copy.name)
+                    outcome = "recorded"
+            except Exception as error:
+                outcome = "unknown" if _outcome_unknown(error) else "refused"
+            if outcome == "recorded":
                 _drop_marks(container, keep=copy.name)
-            elif not earlier:
+            elif outcome == "refused" and not earlier:
                 _drop_marks(container, only=copy.name)
-        return "recorded" if recorded else "not_recorded"
+        return "recorded" if outcome == "recorded" else "not_recorded"
     except (OSError, HostCommandError):
         return "not_recorded"
     finally:
         os.close(container)
+
+
+def _outcome_unknown(error: Exception) -> bool:
+    """Decision 179: whether a failed record may still have committed: the collector exchange failed after the
+    request may have been delivered (a transport failure, or a reply it could not read: invalid or oversized).
+    A refusal the collector named, setup's own check and a failure before any write are known to change nothing."""
+    from .collector_contracts import CollectorError, CollectorTransportError
+    if isinstance(error, CollectorTransportError):
+        return True
+    return isinstance(error, CollectorError) and error.code in {None, "response_invalid", "transport_unavailable"}
 
 
 def record_setup_launch(project_root: Path, record_launch, environ: Mapping[str, str] | None = None,
