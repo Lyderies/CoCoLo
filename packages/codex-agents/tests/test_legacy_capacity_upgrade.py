@@ -117,7 +117,8 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
         server = learning_store.CollectorServer.__new__(learning_store.CollectorServer)
         server.ledger = ledger
         server._stop = mock.Mock()
-        frame = json.dumps({"protocol": learning_store.COLLECTOR_PROTOCOL_VERSION, "op": "shutdown_if_drained"})
+        frame = json.dumps({"protocol": learning_store.COLLECTOR_PROTOCOL_VERSION, "op": "shutdown_if_drained",
+                            "runtime_digest": learning_store.COLLECTOR_RUNTIME_DIGEST})
 
         class Connection:
             sent = [(frame + "\n").encode(), b""]

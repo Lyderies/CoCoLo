@@ -10,6 +10,17 @@ LEDGER_SCHEMA_VERSION = 16  # PC-4: nullable probe provenance
 COLLECTOR_PROTOCOL_VERSION = 1
 MAX_REQUEST_BYTES = MAX_RECORD_BYTES + 16_384
 
+# Owner decision 129.3: pre-1.0 callers must use the serving runtime's identity.
+COLLECTOR_MUTATING_OPERATIONS = frozenset({
+    "bind", "ingest", "issue_result_repair", "register", "commit_owner_record",
+    "learning_moved_if_empty", "shutdown", "shutdown_if_drained",
+})
+RUNTIME_UPDATE_COMMAND = "./setup.sh --update"
+RUNTIME_UPGRADE_MESSAGE = (
+    "This client and the collector must use the same runtime. "
+    f"Update this project with: {RUNTIME_UPDATE_COMMAND}"
+)
+
 
 def _version_tuple(value: Any) -> tuple[int, int, int] | None:
     if not isinstance(value, str):

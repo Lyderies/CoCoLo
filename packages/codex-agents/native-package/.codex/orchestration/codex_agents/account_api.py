@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .contracts import ContractError
+from .collector_contracts import RUNTIME_UPDATE_COMMAND, RUNTIME_UPGRADE_MESSAGE
 from .learning_contracts import canonical_json, parse_bounded_json
 from .owner_key_contracts import checked_public_key
 from .service_transport import MAX_TIMEOUT_SECONDS, SERVICE_REFUSALS, ServiceTransportError, exchange_frame
@@ -67,6 +68,7 @@ ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
     "account_not_authorized", "account_wrong_owner", "account_unavailable",
     "account_incompatible", "account_project_not_found",
+    "runtime_upgrade_required",
     # The account closed the connection without replying: it may have restarted (0.3.3, C11).
     "account_closed_without_reply",
     # The account's connection limit is reached (an attach refusal, said as service_refused_busy on the wire).
@@ -88,7 +90,7 @@ class AccountError(RuntimeError):
         if type(reason_code) is not str or reason_code not in ACCOUNT_REASON_CODES:
             reason_code = "account_invalid_request"
         self.reason_code = reason_code
-        super().__init__(reason_code)
+        super().__init__(RUNTIME_UPGRADE_MESSAGE if reason_code == "runtime_upgrade_required" else reason_code)
 
 
 def matches(value: object, pattern: re.Pattern[str]) -> bool:
@@ -395,8 +397,13 @@ def decode_account_response(raw: bytes, request: AccountRequest) -> dict:
         if type(raw) is not bytes or len(raw) + 1 > MAX_ACCOUNT_FRAME_BYTES:
             raise AccountError("account_invalid_response")
         data = parse_bounded_json(raw, max_bytes=MAX_ACCOUNT_FRAME_BYTES - 1)
+        fields = _RESPONSE_FIELDS
+        if type(data) is dict and data.get("reason_code") == "runtime_upgrade_required":
+            fields = fields | {"message", "update_command"}
+            if data.get("message") != RUNTIME_UPGRADE_MESSAGE or data.get("update_command") != RUNTIME_UPDATE_COMMAND:
+                raise AccountError("account_invalid_response")
         if (
-            set(data) != _RESPONSE_FIELDS or type(data["protocol_version"]) is not int
+            set(data) != fields or type(data["protocol_version"]) is not int
             or data["protocol_version"] != ACCOUNT_PROTOCOL_VERSION
             or data["request_id"] != request.request_id or data["project_id"] != request.project_id
             or data["runtime_digest"] != request.runtime_digest

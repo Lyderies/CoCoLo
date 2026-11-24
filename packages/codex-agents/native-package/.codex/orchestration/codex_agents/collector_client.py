@@ -15,6 +15,7 @@ from typing import Any
 
 from .collector_contracts import (
     COLLECTOR_PROTOCOL_VERSION,
+    COLLECTOR_MUTATING_OPERATIONS,
     LEDGER_SCHEMA_VERSION,
     MAX_REQUEST_BYTES,
     CollectorBuildConflictError,
@@ -22,6 +23,7 @@ from .collector_contracts import (
     CollectorTransportError,
     CollectorNewerVersionError,
     CollectorUpgradeRequired,
+    RUNTIME_UPGRADE_MESSAGE,
     _version_tuple,
 )
 from .learning_contracts import canonical_json
@@ -168,6 +170,8 @@ class CollectorClient:
         self.timeout = timeout
 
     def _request(self, request: dict[str, Any]) -> dict[str, Any]:
+        if request.get("op") in COLLECTOR_MUTATING_OPERATIONS:
+            request = {**request, "runtime_digest": COLLECTOR_RUNTIME_DIGEST}
         reason = None
         try:
             raw = exchange_frame(
@@ -191,6 +195,8 @@ class CollectorClient:
             raise CollectorError("collector response is invalid", code="response_invalid")
         if not isinstance(response, dict) or response.get("ok") is not True:
             code = response.get("code", "unknown") if isinstance(response, dict) else "unknown"
+            if code == "runtime_upgrade_required":
+                raise CollectorUpgradeRequired(RUNTIME_UPGRADE_MESSAGE, code=code)
             raise CollectorError(f"collector rejected request: {code}", code=code)
         return response
 
