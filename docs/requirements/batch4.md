@@ -36,3 +36,14 @@ Test change (decisions 185/187/195 cover it; batch 3 left it skipped "until B6")
   -> stage integration, layer scenario (one test starts a real Python child process; same as its sibling
   test_owner_backup_streamed).
 - Assertion changes: only bkfix's own, listed in docs/requirements/bkfix/assertions.md (decisions 194/197/202/205).
+
+## 3. Merge of fix/expire-summary (expfix; decisions 200/201/203/204)
+Conflict and resolution:
+- `packages/codex-agents/tests/lifetime_caps.json`: expfix re-sorted the file while B6 moved and reworded
+  `project_history.py::runtime_close_status`; git kept both copies (B6's new text at B6's place, the old text at
+  expfix's sorted place: a duplicate JSON key). Kept ONE entry with B6's text (B6 review r1 correction), removed the
+  old duplicate; every expfix entry (`_expired_event_window`, `drain_event_retention`, `expire_report`, ...) kept.
+  Verified no duplicate key; test_lifetime_cap_guard green.
+- cli.py / learning_store.py auto-merged with bkfix.
+- No new op; test_event_retention came registered. Assertion changes: only expfix's own
+  (docs/requirements/expfix/assertions.md; decisions 200/204).

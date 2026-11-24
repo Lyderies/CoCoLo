@@ -179,13 +179,13 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
-  "account_service.py::runtime_upgrade_reply": {
-   "checks": 1,
-   "ends": "per-request frame-size check on one inbound request; stores nothing, so nothing accumulates (RS-F S1, integration 2026-11-24)"
-  },
   "account_service.py::_owner_key_view": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "account_service.py::runtime_upgrade_reply": {
+   "checks": 1,
+   "ends": "per-request frame-size check on one inbound request; stores nothing, so nothing accumulates (RS-F S1, integration 2026-11-24)"
   },
   "admission_input_decode.py::_preflight": {
    "checks": 3,
@@ -916,8 +916,8 @@
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
   "learning_store.py::_expired_event_window": {
-   "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "checks": 2,
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR; one-project form (learning-expire) added 2026-11-25, LIMIT = EXPIRE_SUMMARY_BATCH page"
   },
   "learning_store.py::_fence_claim_request_locked": {
    "checks": 1,
@@ -1016,9 +1016,19 @@
    "checks": 2,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "learning_store.py::drain_event_retention": {
+   "checks": 1,
+   "ends": "loops sweep_event_retention while a full EVENT_SWEEP_BATCH went, ending when a batch comes back short or the sweeps stop; BOUNDED",
+   "test": "test_one_collector_sweep_pass_leaves_no_expired_events"
+  },
   "learning_store.py::earlier_version_runs": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::expire_report": {
+   "checks": 2,
+   "ends": "each lock hold fetches one page of at most EXPIRE_SUMMARY_BATCH due records (LIMIT ?) and removes at most that many plus their lineage; more=true asks the caller (expire, the CLI, learning-run-cycle) for the next hold, so a backlog drains in bounded holds; BOUNDED",
+   "test": "test_one_expire_call_drains_a_backlog_of_1501_events"
   },
   "learning_store.py::ingestion_snapshot": {
    "checks": 4,

@@ -265,6 +265,9 @@ MAX_EVENT_KEEP_DAYS = 365
 MAX_SUMMARY_KEEP_DAYS = 3650
 # The collector removes at most this many expired raw events per sweep.
 EVENT_SWEEP_BATCH = 500
+# One learning-expire call summarises at most this many expired raw events (its work under the exclusive
+# lock is bounded); the rest wait for the next call, which the report's `more` asks for.
+EXPIRE_SUMMARY_BATCH = 500
 # How many windows of rows it cannot summarise a sweep reads past before it stops.
 EVENT_SWEEP_SCAN_FACTOR = 20
 
@@ -2509,24 +2512,17 @@ class LearningLedger:
                         continue  # Left for the owner's learning-expire.
                     if len(readable) == batch:
                         break
-            groups: dict[tuple[str, str, str], dict[str, Any]] = {}
-            for row, run_id, code in readable:
-                observed = int(row["observed_at_ms"])
-                day = time.strftime("%Y-%m-%d", time.gmtime(observed / 1000))
-                group = groups.setdefault((str(row["project_id"]), run_id, day), {
-                    "ids": [], "codes": {}, "sources": {}, "first": observed, "last": observed})
-                group["ids"].append(str(row["record_id"]))
-                group["codes"][code] = group["codes"].get(code, 0) + 1
-                group["sources"][str(row["source"])] = group["sources"].get(str(row["source"]), 0) + 1
-                group["first"], group["last"] = min(group["first"], observed), max(group["last"], observed)
+            groups = self._group_events(readable)
             if not groups:
                 return 0
             return self._summarise_and_remove(groups, now)
 
-    def _expired_event_window(self, now: int, after: tuple[str, int], batch: int):
-        """The next expired raw events nothing else names, after `after` (project, sequence)."""
+    def _expired_event_window(self, now: int, after: tuple[str, int], batch: int, project_id: str | None = None):
+        """The next expired raw events nothing else names, after `after` (project, sequence), of one project
+        when `project_id` is given."""
         return self._connection.execute(
-                "SELECT r.project_id,r.record_id,r.source,r.source_sequence,r.observed_at_ms,r.content FROM records r "
+                "SELECT r.project_id,r.record_id,r.source,r.source_sequence,r.observed_at_ms,r.content,"
+                "r.content_digest FROM records r "
                 "JOIN projects p ON p.project_id=r.project_id AND p.status='active' "
                 "WHERE r.record_type='event' AND r.source IN ('hook','app_server') "
                 "AND r.expires_at_ms IS NOT NULL AND r.expires_at_ms<=? "
@@ -2538,10 +2534,85 @@ class LearningLedger:
                 "AND a.subject_record_id=r.record_id) "
                 "AND NOT EXISTS (SELECT 1 FROM consumed_grants g WHERE g.project_id=r.project_id "
                 "AND (g.grant_id=r.record_id OR g.promotion_record_id=r.record_id)) "
-                "AND (r.project_id>? OR (r.project_id=? AND r.source_sequence>?)) "
-                "ORDER BY r.project_id,r.source_sequence LIMIT ?",
-                (now, after[0], after[0], after[1], batch),
+                + ("AND (r.project_id>? OR (r.project_id=? AND r.source_sequence>?)) "
+                   "ORDER BY r.project_id,r.source_sequence LIMIT ?" if project_id is None else
+                   # One project: walk its own (project, sequence) index, so work follows the page.
+                   "AND r.project_id=? AND r.source_sequence>? ORDER BY r.source_sequence LIMIT ?"),
+                ((now, after[0], after[0], after[1], batch) if project_id is None
+                 else (now, project_id, after[1], batch)),
             ).fetchall()
+
+    @staticmethod
+    def _group_events(readable) -> dict:
+        """Group (row, run_id, event_code) by project, run and UTC day: the one grouping both the collector's
+        sweep and learning-expire summarise by."""
+        groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for row, run_id, code in readable:
+            observed = int(row["observed_at_ms"])
+            day = time.strftime("%Y-%m-%d", time.gmtime(observed / 1000))
+            group = groups.setdefault((str(row["project_id"]), run_id, day), {
+                "ids": [], "keys": [], "codes": {}, "sources": {}, "first": observed, "last": observed})
+            group["ids"].append(str(row["record_id"]))
+            # The exact rows, so ids reused after an expiry never share a summary id with their predecessors.
+            group["keys"].append([str(row["record_id"]), int(row["source_sequence"]), str(row["content_digest"])])
+            group["codes"][code] = group["codes"].get(code, 0) + 1
+            group["sources"][str(row["source"])] = group["sources"].get(str(row["source"]), 0) + 1
+            group["first"], group["last"] = min(group["first"], observed), max(group["last"], observed)
+        return groups
+
+    @staticmethod
+    def _event_summary_record(project_id: str, run_id: str, day: str, group: dict) -> dict[str, Any]:
+        from .learning_contracts import validate_learning_record
+
+        identity = hashlib.sha256(canonical_json(
+            [project_id, run_id, day, sorted(group["keys"])])).hexdigest()[:32]
+        return validate_learning_record({
+            "schema_version": 1, "record_type": "event_summary",
+            "record_id": "evsum-" + identity, "run_id": run_id, "day": day,
+            "observed_at_ms": group["last"], "first_observed_at_ms": group["first"],
+            "last_observed_at_ms": group["last"], "span_ms": group["last"] - group["first"],
+            "event_count": len(group["ids"]), "event_counts": group["codes"],
+            "source_counts": group["sources"]})
+
+    def _write_event_summary(self, project_id: str, summary: dict[str, Any], now: int) -> None:
+        """Append one summary; an id already taken (by anything) is refused loudly, never merged or recounted."""
+        taken = self._connection.execute(
+            "SELECT 1 FROM records WHERE project_id=? AND record_id=?",
+            (project_id, summary["record_id"])).fetchone()
+        if taken is not None:
+            raise LedgerError("event summary identifier is already taken")
+        self._append_checked_locked(project_id, summary, producer="lifecycle", timestamp=now)
+
+    def _expire_event_targets(self, project_id: str, now_ms: int, last_sequence: int):
+        """The expired raw events learning-expire summarises among its chosen page (those the sweep would
+        take, up to `last_sequence`, so at most the page's size). Read before any file registration is
+        removed, so an event a file names (erased with that file) is never taken."""
+        rows, after = [], (project_id, 0)
+        while True:
+            window = self._expired_event_window(now_ms, after, EXPIRE_SUMMARY_BATCH, project_id)
+            if not window:
+                return rows
+            after = (project_id, int(window[-1]["source_sequence"]))
+            rows.extend(row for row in window if int(row["source_sequence"]) <= last_sequence)
+            if after[1] > last_sequence:
+                return rows
+
+    def _summarise_expiring_events(self, project_id: str, rows, identifiers: set[str], now_ms: int) -> None:
+        """learning-expire (T7 L10.3): roll the chosen expired raw events into event summaries, through the
+        sweep's own grouping and summary record, in the caller's transaction. An event whose content cannot
+        be read is removed unsummarised."""
+        readable = []
+        for row in rows:
+            if str(row["record_id"]) not in identifiers:
+                continue
+            try:
+                record = json.loads(bytes(row["content"]))
+                readable.append((row, str(record["run_id"]), str(record["event_code"])))
+            except (ValueError, KeyError, TypeError):
+                continue
+        for (group_project, run_id, day), group in self._group_events(readable).items():
+            self._write_event_summary(
+                group_project, self._event_summary_record(group_project, run_id, day, group), now_ms)
 
     def _summarise_and_remove(self, groups: dict, now: int) -> int:
         """One transaction: each group's summary and removal under its own savepoint."""
@@ -2553,16 +2624,8 @@ class LearningLedger:
             for number, ((project_id, run_id, day), group) in enumerate(groups.items()):
                 self._connection.execute(f"SAVEPOINT summary_{number}")
                 try:
-                    identity = hashlib.sha256(canonical_json(
-                        [project_id, run_id, day, sorted(group["ids"])])).hexdigest()[:32]
-                    summary = validate_learning_record({
-                        "schema_version": 1, "record_type": "event_summary",
-                        "record_id": "evsum-" + identity, "run_id": run_id, "day": day,
-                        "observed_at_ms": group["last"], "first_observed_at_ms": group["first"],
-                        "last_observed_at_ms": group["last"], "span_ms": group["last"] - group["first"],
-                        "event_count": len(group["ids"]), "event_counts": group["codes"],
-                        "source_counts": group["sources"]})
-                    self._append_checked_locked(project_id, summary, producer="lifecycle", timestamp=now)
+                    summary = self._event_summary_record(project_id, run_id, day, group)
+                    self._write_event_summary(project_id, summary, now)
                 except (ContractError, LedgerError, ValueError, KeyError, TypeError, sqlite3.Error):
                     # This group cannot be summarised: it stays, the others go.
                     self._connection.execute(f"ROLLBACK TO summary_{number}")
@@ -10447,6 +10510,8 @@ class LearningLedger:
         producer: str,
         timestamp: int,
     ) -> dict[str, Any]:
+        if checked["record_type"] != "event_summary" and str(checked["record_id"]).startswith("evsum-"):
+            raise LedgerError("the evsum- identifier prefix is kept for event summaries")
         if checked["record_type"] in LEARNING_MOVED_TYPES and self._learning_moved_locked(
             project_id
         ):
@@ -12427,6 +12492,18 @@ class LearningLedger:
         return snapshot
 
     def expire(self, project_id: str, *, now_ms: int) -> int:
+        """Apply retention and lineage deletion until nothing due is left: bounded batches, each its own
+        lock hold and transaction (the lock is released between them); returns how many records went."""
+        removed = 0
+        while True:
+            report = self.expire_report(project_id, now_ms=now_ms)
+            removed += report["removed"]
+            if not report["more"] or not report["removed"]:
+                return removed
+
+    def expire_report(self, project_id: str, *, now_ms: int) -> dict[str, Any]:
+        """Apply retention and lineage deletion; {'removed': count, 'more': True} when a bounded batch of
+        event summaries left expired raw events for a next call."""
         with self._held():
             if self._readers():
                 raise LedgerError("expiry requires closed scoped readers")
@@ -12456,12 +12533,29 @@ class LearningLedger:
                     if linked not in protected:
                         protected.add(linked)
                         protected_frontier.append(linked)
-            rows = self._connection.execute(
-                "SELECT record_id FROM records WHERE project_id=? AND expires_at_ms IS NOT NULL "
-                "AND expires_at_ms<=?",
-                (project_id, now_ms),
-            ).fetchall()
-            identifiers = {str(row[0]) for row in rows} - protected
+            # One bounded page of due records (EXPIRE_SUMMARY_BATCH, in sequence order), never all of them.
+            identifiers: set[str] = set()
+            last_sequence, after, more = 0, 0, False
+            while len(identifiers) < EXPIRE_SUMMARY_BATCH:
+                page = self._connection.execute(
+                    "SELECT record_id,source_sequence FROM records WHERE project_id=? "
+                    "AND expires_at_ms IS NOT NULL AND expires_at_ms<=? AND source_sequence>? "
+                    "ORDER BY source_sequence LIMIT ?",
+                    (project_id, now_ms, after, EXPIRE_SUMMARY_BATCH)).fetchall()
+                if not page:
+                    break
+                for row in page:
+                    after = int(row[1])
+                    if str(row[0]) not in protected:
+                        identifiers.add(str(row[0]))
+                        last_sequence = after
+                    if len(identifiers) == EXPIRE_SUMMARY_BATCH:
+                        more = self._connection.execute(
+                            "SELECT 1 FROM records WHERE project_id=? AND expires_at_ms IS NOT NULL "
+                            "AND expires_at_ms<=? AND source_sequence>? LIMIT 1",
+                            (project_id, now_ms, after)).fetchone() is not None
+                        break
+            event_rows = self._expire_event_targets(project_id, now_ms, last_sequence)
             frontier = list(identifiers)
             adjacency: dict[str, set[str]] = {}
             for row in links:
@@ -12498,9 +12592,10 @@ class LearningLedger:
                         "WHERE project_id=? AND expires_at_ms<=?",
                         (project_id, now_ms),
                     )
-                return 0
+                return {"removed": 0, "more": more}
             self._begin_exclusive_maintenance()
             try:
+                self._summarise_expiring_events(project_id, event_rows, identifiers, now_ms)
                 self._connection.execute(
                     "DELETE FROM repair_receipts WHERE project_id=? AND expires_at_ms<=?",
                     (project_id, now_ms),
@@ -12532,7 +12627,7 @@ class LearningLedger:
             for root in (self.state.artifacts, self.state.exports, self.state.backups):
                 with contextlib.suppress(OSError):
                     (root / project_id).rmdir()
-        return len(identifiers)
+        return {"removed": len(identifiers), "more": more}
 
     def _holds_account_restrictions_locked(self, project_id: str, now_ms: int) -> bool:
         """Whether a project holds a record that still restricts its account.
@@ -13003,8 +13098,12 @@ class CollectorServer:
             # at a time; finished account rows past their retention go too (0.3.4 R6).
             # O0b RS-A-4: due account holds are released here, with no client action, in batches of 64. Until
             # M4b E1b's owner thread exists this runs where the other account sweeps run, under the ledger lock.
+            def drain_event_retention():
+                # Continue in this pass while a full batch went (more may be due), unless stopping.
+                while not self._sweeps_stop.is_set() and self.ledger.sweep_event_retention() >= EVENT_SWEEP_BATCH:
+                    pass
             sweeps = [(self.ledger.sweep_worker_results, (LedgerError, OSError, sqlite3.Error)),
-                      (self.ledger.sweep_event_retention, loose),
+                      (drain_event_retention, loose),
                       (self.ledger.sweep_learning_retention, loose),  # O0c P8: cases and candidates past the window
                       (self.ledger.sweep_superseded_attestations, loose),  # O0c P9: only the latest attestation stays
                       (self.ledger.sweep_account_retention, loose),
