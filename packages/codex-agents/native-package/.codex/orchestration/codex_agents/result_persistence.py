@@ -1162,6 +1162,36 @@ class ResultPersistenceLane:
         return self._queue_counted(_EarlierLeases('open_binding', arguments=(operation, arguments, options)),
                                    '_earlier_held', EARLIER_SLOTS)
 
+    SETTLEMENT_STEPS = frozenset({'open_account_settlement', 'record_account_settlement'})
+
+    def account_settlement(self, operation, *arguments, **options):
+        """B4s (RS-B-B4-2/-3): one step of a lost run's settlement on the writer, the outbox (`releasing` with the
+        account request) or the verified closure's record; poll `state`, then read `result`."""
+        if operation not in self.SETTLEMENT_STEPS:
+            raise HistoryError('history_invalid_input')
+        return self._queue_counted(_EarlierLeases('settlement', arguments=(operation, arguments, options)),
+                                   '_earlier_held', EARLIER_SLOTS)
+
+    def account_settlement_after_stop(self, operation, *arguments, **options):
+        """The same step for the owner's thread once this lane's writer has stopped (this service's own exit), on a
+        store opened for this call alone, as `arbitrate_after_stop`."""
+        if operation not in self.SETTLEMENT_STEPS:
+            raise HistoryError('history_invalid_input')
+        with self._lock:
+            if self._fault or not self._closed:
+                raise HistoryError('history_service_unavailable')
+        self._writer.join(10)
+        if self._writer.is_alive():
+            raise HistoryError('history_service_unavailable')
+        store = self._open()
+        try:
+            if type(store) is not ProjectHistory or store.project_id != self._project:
+                raise HistoryError('history_service_unavailable')
+            return getattr(store, operation)(*arguments, **options)
+        finally:
+            if type(store) is ProjectHistory:
+                store.close()
+
     def report_registered_run(self, orchestration_handle, run_handle, run_id, attempt):
         """S1-R6: record that the driver registered this run, under this service process's own instance (O10 D2);
         poll its `state`. `history_writer_busy` when every reporting slot is in use: ask again later."""
@@ -1204,7 +1234,7 @@ class ResultPersistenceLane:
         """Writer step: the history's own checked leases, or one settled with its closure."""
         try:
             history = self._history()
-            if request.kind == 'open_binding':
+            if request.kind in {'open_binding', 'settlement'}:
                 operation, arguments, options = request.arguments
                 result = getattr(history, operation)(*arguments, **options)
             elif request.kind == 'expire':

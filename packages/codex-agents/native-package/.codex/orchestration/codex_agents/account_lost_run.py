@@ -77,3 +77,55 @@ def settle_lost_run(ledger, project_id, *, runtime_digest, caller_scope, settle,
                                      'lease_digest': settle.lease_digest, 'state': state})
     return {'state': state, 'run_handle': settle.run_handle, 'bridge_run_id': settle.bridge_run_id,
             'receipt_digest': digest, 'known': not first}
+
+
+def lost_run_closure(ledger, project_id, *, runtime_digest, caller_scope, settle, storage_binding, storage_evidence,
+                     request_digest):
+    """B4s (RS-B-B4-1): the closure of a run `settle_lost_run` settled (`lost`) or found released by its own service
+    (`released_unacknowledged`), for the project writer to verify with its result key. The same custody checks as
+    the settlement; nothing is written, and the closure is built from the stored rows (the same bytes on every ask).
+    A run neither settled nor released has none (`claim_cleanup_unavailable`)."""
+    from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
+    from .claim_storage import capture_storage_evidence, verify_pending_storage_evidence
+    from .lost_run_closure import lost_run_closure as closure
+    from .account_claim_contracts import _DIGEST, matches
+
+    if type(settle) is not SettleLostInput or not matches(request_digest, _DIGEST):
+        raise ClaimError('claim_cleanup_invalid')
+    settle = decode_settle_lost(settle.payload())
+    expected, raw = capture_storage_evidence(storage_binding, storage_evidence)
+    if expected is None or raw is None:
+        raise ClaimError('claim_storage_required')
+    launch = LaunchClaimInput(settle.run_handle, settle.identity_digest)
+    original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.claim_launch', settle.claim_request_id,
+                              project_id, runtime_digest, launch.payload())
+    if (expected.project_id != project_id or expected.runtime_digest != runtime_digest
+            or expected.run_handle != settle.run_handle or expected.claim_request_id != settle.claim_request_id
+            or expected.claim_request_digest != account_request_digest(original)):
+        raise ClaimError('claim_cleanup_invalid')
+    key = ledger.state.digest_key()
+    lease = verify_pending_storage_evidence(key, expected, raw)
+    if lease.lease_digest != settle.lease_digest:
+        raise ClaimError('claim_cleanup_invalid')
+    context, known, _, _ = ledger._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                                  request_id=settle.claim_request_id, launch=launch,
+                                                  storage_binding=expected)
+    if (known is None or known['state'] != 'claimed' or known['bridge_run_id'] != settle.bridge_run_id
+            or known['run_id'] != expected.run_id):
+        raise ClaimError('claim_cleanup_unavailable')
+    with ledger._account_transaction():
+        row = ledger._connection.execute(
+            'SELECT a.kind,a.run_id,a.bridge_run_id,a.released_at_ms,h.run_id AS binding_run_id,'
+            'h.binding_state,h.abandoned_reason FROM active_run_capacity a '
+            'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest '
+            'WHERE a.project_id=? AND a.handle_digest=?', (project_id, context.handle)).fetchone()
+    if (row is None or row['kind'] != 'claimed' or row['run_id'] != expected.run_id
+            or row['binding_run_id'] != expected.run_id or row['bridge_run_id'] != settle.bridge_run_id
+            or row['released_at_ms'] is None):
+        raise ClaimError('claim_cleanup_unavailable')
+    # As settle_lost_run answers: a lost settlement first (it also released the slot), else its own release.
+    state = 'settled' if row['binding_state'] == 'abandoned' and row['abandoned_reason'] == LOST_RUN_REASON else 'released'
+    from .lost_run_closure import RELEASE_KINDS
+    return closure(key, expected, lease_digest=lease.lease_digest, assignment_digest=lease.assignment_digest,
+                   bridge_run_id=settle.bridge_run_id, release_kind=RELEASE_KINDS[state],
+                   released_at_ms=int(row['released_at_ms']), request_digest=request_digest)

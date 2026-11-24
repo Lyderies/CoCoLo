@@ -1893,8 +1893,33 @@ class RunDriver:
             raise HistoryError(request.reason or 'history_service_unavailable')
         return request.result
 
+    def _settlement_step(self, operation, *arguments, **options):
+        """Helper thread, B4s: one settlement step on the project writer (the outbox, or the closure's record); at
+        this service's own exit its writer has stopped, and the step runs on a store opened for it. An unanswered
+        step raises: the whole settlement is asked again, identically, on the next sweep."""
+        persistence = self._runtime.persistence
+        if persistence is None:
+            raise HistoryError('history_service_unavailable')
+        if self._exiting:
+            return persistence.account_settlement_after_stop(operation, *arguments, **options)
+        request = persistence.account_settlement(operation, *arguments, **options)
+        end = time.monotonic() + SETTLE_TIMEOUT_SECONDS
+        while request.state == 'queued':
+            if time.monotonic() >= end:
+                raise HistoryError('history_service_unavailable')
+            time.sleep(0.01)
+        if request.state != 'done':
+            raise HistoryError(request.reason or 'history_service_unavailable')
+        return request.result
+
     def _settle_entry(self, entry):
-        """Helper thread: the account's settlement of this run, sent with the run's own custody."""
+        """Helper thread: the account's settlement of this run, sent with the run's own custody.
+
+        B4s (RS-B-B4-2..4): D4's arbitration first; then the outbox (the run's register row `releasing` with the
+        exact closure request); then the account settles the run (`settle_lost_run`, its reply unchanged) and gives
+        its closure (`lost_run_closure`), and the project writer records the closure. Only then does it return, so
+        each caller removes the workspace and writes the journal `settled` after the settlement is committed. Any
+        failure raises before the journal is written: the next sweep sends the identical requests again."""
         lease = ResultLeaseBinding(**entry['lease'])
         if lease.project_id != self._scope.project_id or entry['host_client'] not in HOST_CLIENTS:
             raise HistoryError('history_conflict')
@@ -1902,6 +1927,14 @@ class RunDriver:
         evidence = bytes.fromhex(entry['storage_evidence'])
         settle = SettleLostInput(entry['run_handle'], entry['identity_digest'], entry['claim_request_id'],
                                  entry['bridge_run_id'], parse_bounded_json(evidence)['lease']['lease_digest'])
+        request_id = 'lost-' + hashlib.sha256(entry['bridge_run_id'].encode()).hexdigest()[:32]
+        try:
+            outbox = self._settlement_step('open_account_settlement', lease.run_handle, lease.attempt, request_id,
+                                           settle.payload(), runtime_digest=COLLECTOR_RUNTIME_DIGEST)['state']
+        except HistoryError as error:
+            if error.reason_code != 'history_result_not_reserved':
+                raise
+            outbox = None  # Nothing of this attempt is left to settle in the store: the account settles it alone.
         custody = canonical_json({'purpose': 'run', 'lease': entry['lease'], 'storage_evidence': entry['storage_evidence'],
                                   'terminal_evidence': None, 'cleanup_evidence': None})
         call = self._call
@@ -1909,10 +1942,13 @@ class RunDriver:
         try:
             client = AccountClient(self._account, self._scope.project_id, COLLECTOR_RUNTIME_DIGEST,
                                    timeout=SETTLE_TIMEOUT_SECONDS)
-            return client.settle_lost_run(
-                settle, request_id='lost-' + hashlib.sha256(entry['bridge_run_id'].encode()).hexdigest()[:32])
+            reply = client.settle_lost_run(settle, request_id=request_id)
+            closure = None if outbox != 'releasing' else client.lost_run_closure(settle, request_id=request_id)
         finally:
             call.role = call.host_client = call.context = None
+        if closure is not None:
+            self._settlement_step('record_account_settlement', lease, canonical_json(closure))
+        return reply
 
     def _fence_entry(self, entry):
         """Helper thread (C4): the account's fence for a recovered intent's own claim request, with the run's

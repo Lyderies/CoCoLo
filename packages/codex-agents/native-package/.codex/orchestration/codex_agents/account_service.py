@@ -272,6 +272,14 @@ class AccountOwnerViews:
         return settle_lost_run(self._ledger, project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
                                settle=settle, storage_binding=storage_binding, storage_evidence=storage_evidence)
 
+    def lost_run_closure(self, project_id, *, runtime_digest, caller_scope, settle, storage_binding, storage_evidence,
+                         request_digest):
+        self._guard()
+        from .account_lost_run import lost_run_closure
+        return lost_run_closure(self._ledger, project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                settle=settle, storage_binding=storage_binding, storage_evidence=storage_evidence,
+                                request_digest=request_digest)
+
     def withdraw_open(self, project_id, *, caller_scope, withdrawal, request_digest):
         """B3: the ledger's withdrawal for an authenticated caller, its refusals as public reasons."""
         self._guard()
@@ -991,7 +999,8 @@ class AccountService:
             closure = decode_close_denied(request.payload) if operation == 'account.close_denied_attempt' else None
             fence = decode_fence_claim(request.payload) if operation == 'account.fence_claim' else None
             from .lost_run_contracts import decode_settle_lost
-            lost = decode_settle_lost(request.payload) if operation == 'account.settle_lost_run' else None
+            lost = (decode_settle_lost(request.payload)
+                    if operation in {'account.settle_lost_run', 'account.lost_run_closure'} else None)
             from .open_withdrawal import decode_withdraw_open
             withdrawal = decode_withdraw_open(request.payload) if operation == 'account.withdraw_open' else None
             provenance = decode_run_provenance_input(request.payload) if operation == 'account.run_provenance' else None
@@ -1027,13 +1036,13 @@ class AccountService:
                 or (authorization.source in {"hook", "app_server"} and request.operation != "account.health")
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
                 or (authorization.source == "project" and operation not in {
-                    "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable",
+                    "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.lost_run_closure", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable",
                     "account.record_rate_limit_event", "account.withdraw_open"})
                 # B3: a withdrawal comes from the run's project service or the host that opened it, each with the
                 # caller scope of the run's host class (the ledger matches it to the open's receipt).
                 or (operation == "account.withdraw_open" and (authorization.source not in {"project", "host"}
                                                               or authorization.caller_scope is None))
-                or (operation in {"account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.run_provenance", "account.open_provenance",
+                or (operation in {"account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.lost_run_closure", "account.run_provenance", "account.open_provenance",
                                   "account.record_rate_limit_event"} and
                     (authorization.source != "project" or authorization.caller_scope is None))
                 or (operation in {"account.claim_launch", "account.capacity_status", 'account.open_host_run'} and
@@ -1280,6 +1289,12 @@ class AccountService:
                 result = self._views.settle_lost_run(project, runtime_digest=runtime, caller_scope=authorization.caller_scope,
                                                      settle=lost, storage_binding=storage_binding,
                                                      storage_evidence=storage_evidence)
+            elif operation == 'account.lost_run_closure':
+                from .claim_storage import capture_storage_evidence
+                storage_binding, storage_evidence = capture_storage_evidence(authorization.storage_binding, authorization.storage_evidence)
+                result = self._views.lost_run_closure(project, runtime_digest=runtime, caller_scope=authorization.caller_scope,
+                                                      settle=lost, storage_binding=storage_binding,
+                                                      storage_evidence=storage_evidence, request_digest=digest)
             elif operation == 'account.withdraw_open':
                 result = self._views.withdraw_open(project, caller_scope=authorization.caller_scope,
                                                    withdrawal=withdrawal, request_digest=digest)
