@@ -69,4 +69,4 @@ See REMOVED-CHECKS-test-reset.md for the complete removal/replacement ledger.
 Known limits of affected selection (review of step 4): tests that only read source files as text (scanners) are
 selected through their own file or an "unseen file" full run, not through coverage; modules that fail under
 coverage or start children with a reduced environment are selected on every Python change. Any non-Python change
-except Markdown outside tests/ runs everything. The full run before every merge and install stays the backstop.
+except Markdown outside tests/ runs everything. The reduced-environment check reads only the module's own source: an env dict built in a helper is not seen. The full run before every merge and install stays the backstop.
