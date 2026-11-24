@@ -12,6 +12,7 @@ import re
 import secrets
 import shutil
 import socket
+import collections.abc
 import sqlite3
 import stat
 import sys
@@ -237,7 +238,29 @@ def _other_table_columns() -> dict[str, tuple[str, ...]]:
         reference.close()
 
 
-OTHER_TABLE_COLUMNS = _other_table_columns()
+class _LazyTableColumns(collections.abc.Mapping):
+    """The extra tables' exact columns, derived on first use: importing this module must not touch
+    any database (a normal client's import is checked for persistence access; decision 251)."""
+
+    def __init__(self) -> None:
+        self._value: dict[str, tuple[str, ...]] | None = None
+
+    def _resolved(self) -> dict[str, tuple[str, ...]]:
+        if self._value is None:
+            self._value = _other_table_columns()
+        return self._value
+
+    def __getitem__(self, key: str) -> tuple[str, ...]:
+        return self._resolved()[key]
+
+    def __iter__(self):
+        return iter(self._resolved())
+
+    def __len__(self) -> int:
+        return len(self._resolved())
+
+
+OTHER_TABLE_COLUMNS = _LazyTableColumns()
 _WAKE_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS project_wake("
     "project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,"
