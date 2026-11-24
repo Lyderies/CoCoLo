@@ -68,3 +68,37 @@ See the batch commit message and the report to the primary for runs and timings.
   red, `the scripted setup of a ... project did not finish`). Fix: the owner row of learning-producers.json gains
   `run_slot_confirmation` (config follows the decided S4 requirement, decision 166). Green: install verify ready.
   No test asserted the old matrix. The defect is on feat/rsf-s4-slots itself (not a merge artefact).
+
+## 5. Lifecycle run (S1 + S2 flows) and the open L14.1 / G1 finding
+`e2e_lifecycle.py --flows L6,L7,L8,L9,L14,L15 --jobs 3` (203 s): L6.1 L6.2 L7.1 L7.2 L7.3 L9.1 L9.2 L9.3 G5 (S1) and
+L8.1 L8.2 L8.3 L15.1 (S2) PASS, G2-G4 G8 G9 PASS. RED: L14.1 and G1, one cause (`capture_rule_broken:
+g1_unexpected_exit` in the rec_service scene). Four `learning-run-status` steps not marked as expected refusals exit 2:
+- phase "lost" (phase_view) and `status_second` (ctl.status): a lost run's status answers `ready: false,
+  reason_code run_lost, terminal_state abandoned, capacity released` with exit 2. The check asserts exactly that
+  content; only the exit code trips G1.
+- phases "next" and "closed" (phase_view after the run is recorded): `ready: false, reason_code
+  control_attempt_not_found` (a recorded run is forgotten), exit 2. No check asserts these replies.
+NOT a merge artefact: the same four exits occur with the s2fix product (fix/t7s2-findings tree) and the pre-merge
+feat/t7-s2 scripts in a scratch copy. The s2fix STATUS's green S2 run predates the S2 final G1 tightening.
+Not changed here (needs a decision): either (a) the product exits 0 for a status read whose answer is the run's state
+(lost; recorded/forgotten), or (b) the S2 check marks those four reads expected-to-refuse - lost-run reads arguably fall
+under fix round 1's "run-status polls of a run that may ... be lost", the next/closed reads of a recorded run are
+covered by no decision, and `test_refusal_is_expected_only_at_named_call_sites` (pinned 5 sites) would change.
+
+## 6. Fault runs (same flows, --jobs 3)
+- `--fault recovery_broken`: fault_isolated TRUE (changed L8.1 L8.2 L8.3 L15.1; nothing outside S2). Caveat: G1 and
+  L14.1 are already red in the normal run, so they cannot show a change.
+- `--fault slot_not_released`: fault_isolated FALSE only because `s1_not_red: [L6.2]` (changed G5 L6.1 L7.1 L7.2 L7.3
+  L9.2 L9.3, nothing outside the targets). L6.2 (refused before admission: no slot is ever claimed) cannot be reached
+  by a release fault, like L9.1; it was red in earlier fault runs only because the product bug kept it red in the
+  normal run too (fixed in 0.8.57, L6 fix). Making it isolated means dropping L6.2 from
+  `FAULT_TARGETS["slot_not_released"]` (and the pinned `set(S1_IDS) - {"L9.1"}` in test_e2e_run_control): an
+  assertion change no decision covers. Not changed.
+
+## Status
+- Commits: S4 merge, s2fix merge, T7 S2 merge (fault union, shared helpers, registrations), producer-matrix fix,
+  this doc. Named modules (235 tests, 114 s OK, 1 skip known: OrchestrationCountsCostTests), test_project_driver
+  (99 tests, 254 s OK), root e2e/stage tests (107 tests, 4 s OK).
+- Open for the primary: section 5 (L14.1/G1) and section 6 (L6.2 fault target). test_reply_shape_live (soak, not
+  run) should confirm `history.orchestration_counts` is produced live by a DRIVERS module (test_b2_service_outcome_hosts
+  drives it but is not listed).
