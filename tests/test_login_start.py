@@ -671,7 +671,8 @@ class RuntimeHome(TempHome):
         self.assertTrue(login_start.write_record(self.answer, digest))
 
     def status(self, argv=None, digest=DIGEST_A, kind="launchd"):
-        return login_start.entry_status(self.home, kind, argv or self.argv(), self.logs, self.answer, digest)
+        return login_start.entry_status(self.home, kind, self.argv() if argv is None else argv, self.logs,
+                                        self.answer, digest)
 
 
 class StatusTests(RuntimeHome):

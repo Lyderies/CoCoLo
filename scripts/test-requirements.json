@@ -341,6 +341,13 @@
   "source": "docs/requirements/e1.md#E1-1",
   "statement": "**E1-1 \u2014 Consent first.** RS-11, decision 90.11 A. Setup asks once, in plain words with the real reason, with a pick-list (yes / not now) and a details view, before the collector gets a login-start entry. Nothing is written or run without a yes; not now writes and runs nothing; a failed install is reported and not remembered. Tests: tests.test_login_start.OfferTests.test_E1_1_asks_once_with_reason_pick_list_and_details_and_installs_only_on_yes, tests.test_login_start.OfferTests.test_E1_1_a_failed_install_is_reported_and_not_remembered."
  },
+ "E1-10": {
+  "checks": [
+   "root:test_login_start.CommandAuthorizationTests.test_E1_10_the_rendered_command_passes_require_authorized_collector_runtime"
+  ],
+  "source": "docs/requirements/e1.md#E1-10",
+  "statement": "**E1-10 \u2014 The entry's command passes the runtime check.** The command the rendered entry holds (launchd ProgramArguments, systemd ExecStart), run as given, reaches require_authorized_collector_runtime and starts only when the state's authorized runtime is the installed one; with a different authorized digest it is refused with runtime_unauthorized. Test: tests.test_login_start.CommandAuthorizationTests.test_E1_10_the_rendered_command_passes_require_authorized_collector_runtime. The real launchd and systemd back-off on a real install stays an owner check."
+ },
  "E1-2": {
   "checks": [
    "root:test_login_start.InstallTests.test_E1_2_launchd_plist_and_load"
@@ -401,6 +408,24 @@
   ],
   "source": "docs/requirements/e1.md#E1-7",
   "statement": "**E1-7 \u2014 Wired into setup.** The collector step offers login start after the collector is ready, in setup (an update never asks), through the audited terminal runner; the existing Configure menu is unchanged. Test: tests.test_login_start.WiringTests.test_E1_7_setup_offers_login_start_after_the_collector_is_ready."
+ },
+ "E1-8": {
+  "checks": [
+   "root:test_login_start.StatusTests.test_E1_8_status_is_on_off_or_stale_and_names_no_private_value",
+   "root:test_login_start.StatusTests.test_E1_8_the_runtime_identity_is_read_only_from_a_private_plain_authorization_file"
+  ],
+  "source": "docs/requirements/e1.md#E1-8",
+  "statement": "**E1-8 \u2014 Status reports the entry.** Setup's status lines report the login entry as on, off or stale. Stale means the entry's command no longer matches the installed collector's path, or the installed runtime's identity (the digest the owner authorized) is not the one the entry was last written for, or that identity cannot be read. A status line holds no private value: no digest, key or folder path. Tests: tests.test_login_start.StatusTests.test_E1_8_status_is_on_off_or_stale_and_names_no_private_value, tests.test_login_start.StatusTests.test_E1_8_the_runtime_identity_is_read_only_from_a_private_plain_authorization_file."
+ },
+ "E1-9": {
+  "checks": [
+   "root:test_login_start.UpgradeTests.test_E1_9_a_current_entry_a_missing_entry_and_no_consent_write_nothing",
+   "root:test_login_start.UpgradeTests.test_E1_9_an_entry_that_cannot_be_rewritten_is_reported_stale_with_a_reason",
+   "root:test_login_start.UpgradeTests.test_E1_9_an_update_that_changes_the_runtime_digest_rewrites_the_entry",
+   "root:test_login_start.UpgradeTests.test_E1_9_an_update_that_moves_the_collector_rewrites_the_entry_without_asking"
+  ],
+  "source": "docs/requirements/e1.md#E1-9",
+  "statement": "**E1-9 \u2014 An update keeps the entry current.** When consent is already recorded (E1-4: an update never asks), an update that changes the collector's path or the authorized runtime digest rewrites the existing entry through the runner and records what it was written for; when it cannot, the entry is reported stale with a plain reason and the earlier entry is kept. An entry that is current is not rewritten; with no recorded yes, or with no entry, nothing is written. Tests: tests.test_login_start.UpgradeTests.test_E1_9_an_update_that_moves_the_collector_rewrites_the_entry_without_asking, tests.test_login_start.UpgradeTests.test_E1_9_an_update_that_changes_the_runtime_digest_rewrites_the_entry, tests.test_login_start.UpgradeTests.test_E1_9_an_entry_that_cannot_be_rewritten_is_reported_stale_with_a_reason, tests.test_login_start.UpgradeTests.test_E1_9_a_current_entry_a_missing_entry_and_no_consent_write_nothing."
  },
  "E1-WS": {
   "checks": [

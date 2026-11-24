@@ -5,8 +5,12 @@ when the owner logs in and restarts it after a crash, with a wait between restar
 it only when the owner says yes; the owner can remove it later (Configure). This module writes and
 removes the entry and runs the system's own tool through a runner handed in by the caller, so a
 test never touches the real home or the real launchctl or systemctl. It starts no process itself.
+
+S6 (E1-8, E1-9): the entry's status is on, off or stale (its command or the authorized runtime it was written for
+no longer matches the installed one); an update with consent already kept rewrites a stale entry, never asking.
 """
 
+import json
 import os
 import plistlib
 import re
@@ -294,6 +298,119 @@ def terminal_runner(term):
     return run
 
 
+RECORD_NAME = "login-start-runtime"
+AUTHORIZATION_NAME = "collector-authorization.json"  # in the state folder: the runtime the owner authorized
+_DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
+class Status(NamedTuple):
+    state: str  # "on", "off" or "stale"
+    reason: str = ""  # plain words and no private value; only for "stale"
+
+
+def record_path(answer_file) -> Path:
+    """Where the runtime identity the entry was last written for is kept: beside the answer."""
+    return Path(answer_file).with_name(RECORD_NAME)
+
+
+def read_record(answer_file) -> str | None:
+    """The runtime digest the entry was last written for; None when none or not a plain private file."""
+    if answer_file is None:
+        return None
+    try:
+        path = record_path(answer_file)
+        if path.is_symlink() or not path.is_file():
+            return None
+        value = path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    return value if _DIGEST.fullmatch(value) else None
+
+
+def write_record(answer_file, digest) -> bool:
+    """Keep the digest in one step: a new owner-only file renamed into place."""
+    if answer_file is None or not isinstance(digest, str) or not _DIGEST.fullmatch(digest):
+        return False
+    path = record_path(answer_file)
+    try:
+        descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    except OSError:
+        return False
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            handle.write(digest + "\n")
+        os.replace(temporary, path)
+    except OSError:
+        Path(temporary).unlink(missing_ok=True)
+        return False
+    return True
+
+
+def runtime_digest(state_root) -> str | None:
+    """The digest of the runtime the owner authorized (the collector's own authorization file); None when it
+    is missing, not a plain owner-only file, too large or not a digest. Read only, never followed through a link."""
+    if state_root is None:
+        return None
+    path = Path(state_root) / AUTHORIZATION_NAME
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            return None
+        raw = os.read(descriptor, 1025)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+    try:
+        value = json.loads(raw) if len(raw) <= 1024 else None
+    except ValueError:
+        return None
+    digest = value.get("runtime_digest") if isinstance(value, dict) else None
+    return digest if isinstance(digest, str) and _DIGEST.fullmatch(digest) else None
+
+
+def entry_status(home, kind: str | None, argv, log_dir, answer_file, digest) -> Status:
+    """E1-8: is the entry on, off, or stale? Stale: its command is not the installed collector's, or it was
+    written for another authorized runtime than the one now installed (or this cannot be told). The reason
+    is plain words, never a digest, a key or a folder."""
+    if not is_installed(home, kind):
+        return Status("off")
+    if _command_problem(argv) or _has_control(log_dir):
+        return Status("stale", "the installed collector's command is not available here to compare it with")
+    path = entry_path(home, kind)
+    readable, old = _read_old(path)
+    wanted = render_plist(argv, log_dir) if kind == "launchd" else render_unit(argv, log_dir).encode("utf-8")
+    if not readable or old != wanted:
+        return Status("stale", "its command no longer matches the installed collector")
+    if digest is None:
+        return Status("stale", "the installed runtime could not be read to compare it with")
+    if read_record(answer_file) != digest:
+        return Status("stale", "the installed runtime changed since the entry was written")
+    return Status("on")
+
+
+def refresh(*, home, kind, answer_file, argv, log_dir, runner, uid: int, digest) -> tuple[Status, bool]:
+    """E1-9: with consent already kept and the entry there but stale, write it again for the installed
+    collector (never asking, E1-4). Returns the status afterwards and whether it was rewritten; when it
+    cannot be rewritten the status is stale with the plain reason and the earlier entry is kept."""
+    status = entry_status(home, kind, argv, log_dir, answer_file, digest)
+    if status.state != "stale" or read_answer(answer_file) != "yes":
+        return status, False
+    if digest is None:
+        return status, False
+    result = install(home, kind, argv, log_dir, runner, uid=uid)
+    if not result.ok:
+        return Status("stale", "the entry could not be rewritten for the installed collector: " + result.reason), False
+    if not write_record(answer_file, digest):
+        return Status("stale", "the entry was rewritten, but setup could not keep a record of the runtime it is "
+                               "for, so it may be rewritten again next time"), True
+    return Status("on"), True
+
+
 REASON = ("The CoCoLo collector is the small local service that records run outcomes on this machine. If it stops "
           "(a crash, or you log out or restart), nothing records until something starts it again. Login start "
           "makes your computer start it when you log in, and restart it after a crash, waiting between restarts.")
@@ -315,7 +432,8 @@ def details(kind: str, home, argv, log_dir) -> list[str]:
     ]
 
 
-def offer(*, home, kind, answer_file, argv, log_dir, runner, uid: int, ask, show, configure: bool) -> str:
+def offer(*, home, kind, answer_file, argv, log_dir, runner, uid: int, ask, show, configure: bool,
+          digest=None) -> str:
     """The question, once. ask(items) -> index of the chosen item (None when nobody can be asked); show(text)
     puts a line or paragraph on the screen. Returns what happened: installed, declined, answered, kept,
     removed, left_off, failed, unsupported, no_place, no_command, not_remembered, cancelled or not_asked."""
@@ -370,6 +488,7 @@ def offer(*, home, kind, answer_file, argv, log_dir, runner, uid: int, ask, show
         if not result.ok:
             show(result.reason)
             return "failed"
+        record_path(answer_file).unlink(missing_ok=True)
         return "removed" if keep("no") else "not_remembered"
     show(REASON)
     if configure and answer is not None:
@@ -387,4 +506,6 @@ def offer(*, home, kind, answer_file, argv, log_dir, runner, uid: int, ask, show
     if not result.ok:
         show(result.reason)
         return "failed"
+    if digest is not None:
+        write_record(answer_file, digest)  # what the entry was written for; a miss only means a later rewrite
     return "installed" if keep("yes") else "not_remembered"

@@ -1267,16 +1267,26 @@ class Wizard:
         argv = []
         if state is not None and cli.is_file():
             argv = self.python_argv(str(cli.resolve()), "learning-serve", "--state-root", str(state))
+        digest = login_start.runtime_digest(state)
         ask = None
         if not self.update:
             ask = lambda items: t.menu(0, items)  # noqa: E731 - consent is never an implied answer
         elif self.answers is not None and "login_start" in self.answers:
             ask = lambda items: 0 if self.answers["login_start"] else 1  # noqa: E731
+        answer_file = projects.parent / "login-start" if projects is not None else None
+        log_dir = login_start.log_folder(state) if state is not None else ""
         outcome = login_start.offer(
-            home=self.home, kind=kind, answer_file=projects.parent / "login-start" if projects is not None else None,
-            argv=argv, log_dir=login_start.log_folder(state) if state is not None else "",
+            home=self.home, kind=kind, answer_file=answer_file, argv=argv, log_dir=log_dir,
             runner=login_start.terminal_runner(t), uid=os.getuid(), ask=ask, show=t.body,
-            configure=not self.update and not self.straight)
+            configure=not self.update and not self.straight, digest=digest)
+        # E1-8/E1-9: consent kept and the runtime or its path changed: the entry is written again, never asked about;
+        # an entry that cannot be brought up to date is reported stale with the reason.
+        if outcome in ("unsupported", "no_place", "failed"):
+            status, rewrote = login_start.Status("off"), False
+        else:
+            status, rewrote = login_start.refresh(
+                home=self.home, kind=kind, answer_file=answer_file, argv=argv, log_dir=log_dir,
+                runner=login_start.terminal_runner(t), uid=os.getuid(), digest=digest)
         lines = {"installed": ("ok", "Login start: on. The collector starts when you log in and restarts after a crash."),
                  "declined": ("skip", "Login start: not now. Choose Configure -> Configure step by step to turn it on."),
                  "kept": ("ok", "Login start: kept on."),
@@ -1289,7 +1299,14 @@ class Wizard:
                  "no_place": ("skip", "Login start: not offered (no private place to keep your answer)."),
                  "cancelled": ("skip", "Login start: left as it was."),
                  "not_asked": ("skip", "Login start: not asked about during an update.")}.get(outcome)
-        if lines is not None:
+        if rewrote:
+            t.list_add("ok", "Login start: refreshed for the updated collector.")
+        elif status.state == "stale":
+            t.list_add("warn", f"Login start: stale ({status.reason}). The collector still works; run ./setup.sh and "
+                               "choose Configure -> Configure step by step to refresh it.")
+        elif outcome == "answered":
+            t.list_add("ok" if status.state == "on" else "skip", f"Login start: {status.state}.")
+        elif lines is not None:
             t.list_add(*lines)
 
     # Step 6: billing and the owner key ------------------------------------------------------
