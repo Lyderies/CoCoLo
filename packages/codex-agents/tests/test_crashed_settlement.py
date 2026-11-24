@@ -96,9 +96,12 @@ class CrashedSettlementTests(fixtures.SettlementFixture):
         self.assertNotIn(workspace, raw)
         self.assertNotIn(str(Path.home()), raw)
         self.assertNotIn(entry['storage_evidence'], raw)
+        stored = json.loads(raw)
+        closure = self.store._connection.execute('SELECT closure FROM project_account_settlements').fetchone()[0]
+        self.assertEqual(bytes(closure).decode('ascii'), stored.pop('closure'))  # batch 4, decision 219: S7's closure
         self.assertEqual({'state': entry['state'], 'child': entry['child'],
                           'watchdog': entry['watchdog'], 'run_marker_digest': content_digest(entry['run_tag'])},
-                         json.loads(raw))
+                         stored)
 
     def test_X4_committed_crash_preserves_body_and_custody(self):
         self.bound()

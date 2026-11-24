@@ -1525,6 +1525,8 @@
  },
  "RS-B-B5a": {
   "checks": [
+   "codex:tests.test_batch4_crashed_replay.CrashedEvidenceReplayTests.test_D219_closure_and_proof_together_must_fit_the_closure_bound",
+   "codex:tests.test_batch4_crashed_replay.CrashedEvidenceReplayTests.test_D219_the_crashed_hold_keeps_the_closure_and_the_proof_and_replays_it_after_pruning",
    "codex:tests.test_batch4_crashed_replay.CrashedEvidenceReplayTests.test_after_the_replay_window_the_crashed_tombstone_refuses_and_the_purge_clears_its_proof",
    "codex:tests.test_batch4_crashed_replay.CrashedEvidenceReplayTests.test_crashed_proof_survives_pruning_and_the_open_replays_settled_in_the_window",
    "codex:tests.test_crashed_settlement.CrashedSettlementTests.test_A5_L6b_crashed_admitted_unbound_claim_releases_lease_only_with_never_spawned_evidence",

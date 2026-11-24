@@ -1,4 +1,5 @@
-"""Batch 4 (RSF-S7-1 with RS-B-B5a-3/4): a crashed hold retains B5a's process proof as its one bounded evidence value.
+"""Batch 4 (RSF-S7-1 with RS-B-B5a-3/4; decision 219): a crashed hold's one bounded evidence value keeps BOTH S7's
+authenticated closure and B5a's minimal process proof, within the 8 KiB closure bound.
 
 The merge of RS-F S7 (retained closure evidence) and RS-B B5a (crashed proof in the released hold's evidence): the proof
 is never overwritten by the closure or by S7's attempt-pruning backfill, the identical open request after the attempt
@@ -7,11 +8,12 @@ clears the proof with the other expired evidence. Real temporary project stores,
 """
 import json
 import unittest
+from unittest import mock
 
 from tests import test_account_settlement as fixtures
 from tests import test_crashed_settlement as crashed
 from tests import test_publication_replay as replay
-from codex_agents import project_history
+from codex_agents import lost_run_closure, project_history
 from codex_agents.history_contracts import HistoryError
 
 
@@ -71,6 +73,37 @@ class CrashedEvidenceReplayTests(fixtures.SettlementFixture):
             self.record_settlement(raw=raw)
         self.store.expire_results()
         self.assertIsNone(self.evidence())
+
+    def test_D219_the_crashed_hold_keeps_the_closure_and_the_proof_and_replays_it_after_pruning(self):
+        opened, raw, first, retained = self.purged_crash()
+        value = json.loads(retained)
+        self.assertEqual(raw.decode('ascii'), value['closure'])  # S7's authenticated closure, exact bytes
+        self.assertEqual('gone', value['state'])  # B5a's minimal proof beside it
+        self.assertEqual({'state', 'child', 'watchdog', 'run_marker_digest', 'closure'}, set(value))
+        self.assertLessEqual(len(retained.encode('ascii')), lost_run_closure.MAX_LOST_RUN_CLOSURE_BYTES)
+        self.assertEqual(retained, self.evidence())  # pruning's backfill replaced neither
+        target = replay.claim_binding()
+        before = self.snapshot()
+        with mock.patch.object(lost_run_closure, 'verify_lost_run_closure',
+                               wraps=lost_run_closure.verify_lost_run_closure) as verify:
+            again = self.store.open_account_settlement(target.run_handle, target.attempt, self.request_id(),
+                                                       self.request, runtime_digest=fixtures.RUNTIME)
+        self.assertIn(raw, [call.args[1] for call in verify.call_args_list])  # answered from the retained closure
+        self.assertEqual({'state': 'settled', 'request_id': self.request_id(),
+                          'request_digest': opened['request_digest'], 'release_kind': 'crashed'}, again)
+        self.assertEqual({**first, 'known': True}, self.record_settlement(raw=raw))
+        self.assertEqual(before, self.snapshot())
+
+    def test_D219_closure_and_proof_together_must_fit_the_closure_bound(self):
+        self.bound()
+        self.open()
+        self.journal()
+        raw = self.closure(kind='crashed')
+        before = self.snapshot()
+        with mock.patch.object(lost_run_closure, 'MAX_LOST_RUN_CLOSURE_BYTES', len(raw)):
+            with self.assertRaisesRegex(HistoryError, '^history_invalid_input$'):
+                self.record_settlement(raw=raw)
+        self.assertEqual(before, self.snapshot())
 
 
 if __name__ == '__main__':

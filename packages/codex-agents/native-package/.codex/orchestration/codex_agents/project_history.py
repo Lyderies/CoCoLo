@@ -2801,14 +2801,21 @@ class ProjectHistory:
         return self._connection.execute("SELECT * FROM project_account_settlements WHERE project_id=? AND run_handle=? "
                                         "AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
 
-    @staticmethod
-    def _crash_proof(evidence: str) -> bool:
-        """Batch 4: whether retained hold evidence is B5a's minimal process proof (its four public fields only)."""
-        try:
-            value = json.loads(evidence)
-        except (TypeError, ValueError):
-            return False
-        return type(value) is dict and set(value) == {"state", "child", "watchdog", "run_marker_digest"}
+    _CRASH_EVIDENCE = frozenset({"state", "child", "watchdog", "run_marker_digest", "closure"})
+
+    @classmethod
+    def _retained_closure(cls, hold) -> bytes:
+        """Batch 4 (decision 219): the closure a released hold retains: its evidence, or for `crashed` the closure kept
+        beside B5a's process proof. Anything else is returned as stored, and fails the closure's verification."""
+        evidence = hold["evidence"]
+        if hold["release_kind"] == "crashed":
+            try:
+                value = json.loads(evidence)
+            except (TypeError, ValueError):
+                value = None
+            if type(value) is dict and set(value) == cls._CRASH_EVIDENCE and type(value["closure"]) is str:
+                evidence = value["closure"]
+        return evidence.encode('ascii')
 
     def _settlement_replay_expired(self, hold) -> bool:
         """The permanent identity outlives its finite reply evidence; reads never extend the window."""
@@ -2860,16 +2867,10 @@ class ProjectHistory:
                     "AND state='released'", (self.project_id, payload.get("bridge_run_id"))).fetchone()
                 if self._settlement_replay_expired(tombstone):
                     raise HistoryError("history_result_not_reserved")
-                if (tombstone is not None and tombstone["evidence"] is not None
-                        and tombstone["release_kind"] == RELEASE_KINDS["crashed"]
-                        and self._crash_proof(tombstone["evidence"])):
-                    # Batch 4: a crashed hold retains B5a's process proof, not the closure; the identical request
-                    # is matched below by the request id and the digest of the complete original request.
-                    kind, hold = "reservation", tombstone
-                elif tombstone is not None and tombstone["evidence"] is not None:
+                if tombstone is not None and tombstone["evidence"] is not None:
                     from .lost_run_closure import verify_lost_run_closure
                     try:
-                        closure = verify_lost_run_closure(self._result_key, tombstone["evidence"].encode('ascii'),
+                        closure = verify_lost_run_closure(self._result_key, self._retained_closure(tombstone),
                                                           project_id=self.project_id)
                     except (ClaimError, AttributeError, UnicodeError):
                         raise HistoryError("history_conflict") from None
@@ -2984,9 +2985,9 @@ class ProjectHistory:
                     or closure["released_at_ms"] < lease.created_at_ms
                     or hold["state"] != "releasing" or hold["request_digest"] != closure["request_digest"]):
                 raise HistoryError("history_conflict")
-            # Batch 4 (RSF-S7-1 with RS-B-B5a-3): the released hold keeps ONE bounded evidence value, written once
-            # by release_hold below: S7's authenticated closure, or for `crashed` B5a's minimal process proof (the
-            # closure itself stays in the settlement row; a crashed tombstone answers by its request digest).
+            # Batch 4 (RSF-S7-1 with RS-B-B5a-3, decision 219): the released hold keeps ONE bounded evidence value,
+            # written once by release_hold below: S7's authenticated closure; for `crashed`, B5a's minimal process
+            # proof with that same closure beside it, together within MAX_LOST_RUN_CLOSURE_BYTES.
             retained = raw.decode('ascii')
             if kind == "crashed":
                 from .launch_journal import process_settlement_evidence
@@ -2998,7 +2999,9 @@ class ProjectHistory:
                 evidence = {name: proof[name] for name in ("state", "child", "watchdog")}
                 evidence["run_marker_digest"] = (None if proof["run_tag"] is None
                                                   else content_digest(proof["run_tag"]))
-                retained = canonical_json(evidence).decode()
+                retained = canonical_json({**evidence, "closure": retained}).decode()
+                if len(retained) > MAX_LOST_RUN_CLOSURE_BYTES:
+                    raise HistoryError("history_invalid_input")  # decision 219: closure + proof share the bound
             now = self._hold_now()
             if reservation is not None:
                 value = self._reservation(reservation)

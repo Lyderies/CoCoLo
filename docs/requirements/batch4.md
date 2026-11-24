@@ -146,8 +146,27 @@ Assertion changes in sections 5-6: none (one fixture helper line, one new module
 - Root: test_test_stages + test_e2e_* (5) + test_rsd_budget 226 tests 7 s OK. Metadata: 0 errors.
 - Lifecycle: `--flows L6,L7,L8,L9,L10,L11,L13,L14,L15 --jobs 3 --report /tmp/claude-501/batch4/r2.json` (280 s):
   every S1/S2/S3 ID PASSES; runner exit 1 only from L11.2 `no_check` (unchanged).
-- Release 0.8.59: VERSION, runtime-releases.json 0.8.59 = 8a333f07...efa6 (0.8.55-0.8.58 untouched),
+- Release 0.8.59: VERSION, runtime-releases.json 0.8.59 = 5b7d2289...b7ee (refreshed for decision 219) (0.8.55-0.8.58 untouched),
   previous-releases.json 0.8.58 record (source 1c293c44, same bundle eb34209d), packaging.py comment, catalogue
   count 18 -> 19, CHANGELOG. No new runtime file (S7/B5a add tests only); learning-producers.json unchanged
   (test_providers green); no tracked .pyc. test_runtime_release + test_lifetime_cap_guard + test_providers 113 tests
   22 s; claude-agents test_previous_release(_catalogue,_recorded) + test_packaging 36 tests 1 s OK.
+
+## Decision 219 (primary): crashed holds keep the closure AND the proof
+- Requirement: RSF-S7-1 holds for crashed attempts too. A crashed hold's evidence is ONE canonical JSON value:
+  B5a's four proof fields plus `closure` (S7's exact closure text), written once by `release_hold` in the settlement
+  transaction, total <= MAX_LOST_RUN_CLOSURE_BYTES (8192; not changed, a real closure plus proof is about 1.5 KiB),
+  else `history_invalid_input` with nothing written. The open-path tombstone replay verifies the retained closure
+  (`_retained_closure`) for every kind; the earlier digest-only crashed branch (`_crash_proof`) is removed. The purge
+  clears the whole value after the 8-day window.
+- Tests first (red -> green), tests/test_batch4_crashed_replay.py:
+  `test_D219_the_crashed_hold_keeps_the_closure_and_the_proof_and_replays_it_after_pruning` (KeyError 'closure' ->
+  pass) and `test_D219_closure_and_proof_together_must_fit_the_closure_bound` (not raised -> pass); the window
+  refusal test stays green.
+- Assertion change (decision 219), tests/test_crashed_settlement.py
+  `test_stored_crash_proof_has_only_public_process_fields`: old `assertEqual({state, child, watchdog,
+  run_marker_digest}, json.loads(raw))` -> new: `closure` popped and asserted equal to the settlement row's closure,
+  then the same four-field `assertEqual` on the rest (the privacy `assertNotIn` checks are unchanged).
+- lifetime_caps.json `record_account_settlement`: checks 0 -> 1 (the new combined-size check), `ends` text names it.
+- Rerun: S7 + B5a + batch4 + account_settlement + publication_replay + reply shapes + cap guard 133 tests 14 s;
+  test_lost_run_settlement alone 26 tests 77 s.
