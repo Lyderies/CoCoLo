@@ -31,3 +31,11 @@ L2.2 asserts no fingerprint after replacement. (9) lifecycle report upload if-no
 Tests: tests.test_e2e_strictness (23, 15 new: red first, then green), test_e2e_requirements, test_ci_stages (34, 0.8 s).
 Verified: L1-L5 --jobs 4 run r2 passed=true, 33/33 checks, 6m13 wall; no ~/.cache/e2e-* left by the run (3 older ones from
 22:25-22:32 predate the _SCENES fix, left in place).
+
+## Review closure (primary, decision 137, 2026-11-24)
+Codex review not-ready -> fix round e8e7b69c -> confirming check ready-with-corrections, no new HIGH, no assertion
+removed or weakened. ACCEPTED by the primary (rule 126). LOWs carried to T7 S1+: (a) G9 checks report format and
+workflow text, no product run (by design: G9 is the CI/report requirement); (b) a CLI timeout raises before capture
+(the check fails, nothing is saved); (c) private-key body lines under 16 chars are not matched; (d) helper tests would
+miss a caller bypassing accept_worker/redact_entries/capture; (e) no G3 caller test; (f) no guard on deleting the
+post-replacement L2.2 assertion. Merge: in the next batch after the primary's affected run.
