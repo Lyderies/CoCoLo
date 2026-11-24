@@ -276,6 +276,7 @@
  "codex:tests.test_rsd_runtime_close": "scenario",
  "codex:tests.test_rsf_s1_ingress": "scenario",
  "codex:tests.test_rsf_s1_ingress_socket": "scenario",
+ "codex:tests.test_rsf_s5_probe": "scenario",
  "codex:tests.test_run_driver_retries": "unit",
  "codex:tests.test_run_holds": "scenario",
  "codex:tests.test_run_network": "scenario",

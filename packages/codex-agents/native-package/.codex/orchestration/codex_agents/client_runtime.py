@@ -309,6 +309,8 @@ def _status_account_holds(value):
     """O0b RS-A round 1 F14 (RS-A-6, design draft 4 item 4): this project's account holds by kind, with one
     plain line for the owner. None without a capacity report or with a malformed one; an earlier collector's
     report, without holds, is accepted and shown as not reported."""
+    from .billing_probe_contracts import PROBE_NO_LAUNCH_EVIDENCE_REASON, PROBE_NO_LAUNCH_EVIDENCE_STATE
+
     if _status_account_capacity(value) is None:
         return None
     if 'holds' not in value:
@@ -318,12 +320,22 @@ def _status_account_holds(value):
         return None
     for name, kind in holds.items():
         fields = _HOLD_FIELDS | ({'release_by_evidence'} if name == 'probe' else set())
+        details = kind.get('admitted_no_launch_evidence') if type(kind) is dict and name == 'probe' else None
+        if details is not None:
+            fields = fields | {'admitted_no_launch_evidence'}
         if (type(kind) is not dict or kind.keys() != fields
                 or not all(account_integer(kind[n]) for n in ('held', 'past_due'))
                 or kind['past_due'] > kind['held']
                 or any(kind[n] is not None and not account_integer(kind[n]) for n in ('next_eligible', 'deadline'))
                 or (name == 'probe' and not (account_integer(kind['release_by_evidence'])
                                              and kind['release_by_evidence'] <= kind['held']))):
+            return None
+        if details is not None and (type(details) is not list or not details
+                or len(details) > kind['held'] - kind['release_by_evidence']
+                or any(type(detail) is not dict or detail.keys() != {'state', 'reason', 'release_after_ms'}
+                       or detail['state'] != PROBE_NO_LAUNCH_EVIDENCE_STATE
+                       or detail['reason'] != PROBE_NO_LAUNCH_EVIDENCE_REASON
+                       or not account_integer(detail['release_after_ms']) for detail in details)):
             return None
     kinds = {name: dict(kind) for name, kind in holds.items()}
     return {'reported': True, 'kinds': kinds,
@@ -346,6 +358,9 @@ def _hold_words(name, kind):
         notes.append(f"{kind['past_due']} past due, freed at the next check")
     if name == 'probe' and kind['release_by_evidence']:
         notes.append(f"{kind['release_by_evidence']} freed only by its result")
+    for detail in kind.get('admitted_no_launch_evidence', ()):
+        cutoff = datetime.fromtimestamp(detail['release_after_ms'] / 1000, timezone.utc).isoformat(timespec='milliseconds')
+        notes.append(f"{detail['state']}: {detail['reason']} Release after {cutoff}, at the next check")
     if kind['next_eligible'] is not None:
         notes.append(f"next can be freed at {at(kind['next_eligible'])}")
     if name == 'run_slot' and kind['deadline'] is not None:  # draft 4 item 4: the execution deadline beside it

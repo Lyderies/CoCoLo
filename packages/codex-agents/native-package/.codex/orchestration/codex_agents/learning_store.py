@@ -11910,6 +11910,8 @@ class LearningLedger:
         own predicate says release, the sweep has not run yet), and when the next can be released by time
         (`next_eligible`, wall ms; None when none is held or only evidence can release it)."""
         from .active_run_capacity import crashed_claim
+        from .account_billing_admission import PROBE_ORPHAN_GRACE_MS
+        from .billing_probe_contracts import PROBE_NO_LAUNCH_EVIDENCE_REASON, PROBE_NO_LAUNCH_EVIDENCE_STATE
 
         with self._held():
             now = self._clock_ms()
@@ -11930,12 +11932,29 @@ class LearningLedger:
                 "CROSS JOIN host_run_bindings h ON h.project_id=r.project_id AND h.handle_digest=r.identity "
                 "WHERE r.state<>'released' AND r.state='held' AND r.kind='binding' AND r.project_id=?",
                 (now, project_id)).fetchone()
-            probe = self._connection.execute(
-                "SELECT COUNT(*),COALESCE(SUM(CASE WHEN p.state='reserved' AND p.deadline_at_ms<? THEN 1 ELSE 0 END),0),"
-                "MIN(CASE WHEN p.state='reserved' THEN p.deadline_at_ms+1 END),MIN(p.deadline_at_ms),"
-                "COALESCE(SUM(p.state='admitted'),0) FROM run_holds r INDEXED BY run_holds_due "
+            probes = self._connection.execute(
+                "SELECT p.request_key,p.state,p.deadline_at_ms FROM run_holds r INDEXED BY run_holds_due "
                 "CROSS JOIN account_billing_probe_requests p ON p.project_id=r.project_id AND p.request_key=r.identity "
-                "WHERE r.state<>'released' AND r.state='held' AND r.kind='probe' AND r.project_id=?", (now, project_id)).fetchone()
+                "WHERE r.state<>'released' AND r.state='held' AND r.kind='probe' AND r.project_id=?", (project_id,)).fetchall()
+            # Decision 188 keeps P6: only current originals require evidence; an earlier
+            # collector's admission is time-bound. Read the same custody map as the sweep.
+            owner = getattr(self, "_billing_admission_owner", None)
+            originals = set(getattr(owner, "_pending", ())) if owner is not None else set()
+            probe_times, no_launch_evidence = [], []
+            evidence_only = 0
+            for row in probes:
+                if row["state"] == "reserved":
+                    probe_times.append(row["deadline_at_ms"] + 1)
+                elif (project_id, row["request_key"]) in originals:
+                    evidence_only += 1
+                else:
+                    cutoff = row["deadline_at_ms"] + PROBE_ORPHAN_GRACE_MS
+                    probe_times.append(cutoff + 1)  # P6: held at the exact cutoff.
+                    no_launch_evidence.append({"state": PROBE_NO_LAUNCH_EVIDENCE_STATE,
+                                              "reason": PROBE_NO_LAUNCH_EVIDENCE_REASON,
+                                              "release_after_ms": cutoff})
+            probe = (len(probes), sum(at <= now for at in probe_times), min(probe_times, default=None),
+                     min((row["deadline_at_ms"] for row in probes), default=None), evidence_only)
         eligible = [t for t in (self._slot_eligible(row, now, monotonic) for row in held if not row["due"])
                     if t is not None]
         deadlines = [row["deadline_at_ms"] for row in held if row["deadline_at_ms"] is not None]
@@ -11944,7 +11963,10 @@ class LearningLedger:
                          "next_eligible": None if row[2] is None else int(row[2]),
                          "deadline": None if row[3] is None else int(row[3])}
                   for name, row in (("run_slot", slot), ("binding", binding), ("probe", probe))}
-        status["probe"]["release_by_evidence"] = int(probe[4])  # admitted: no timer frees it in RS-A
+        status["probe"]["release_by_evidence"] = int(probe[4])
+        if no_launch_evidence:
+            status["probe"]["admitted_no_launch_evidence"] = sorted(
+                no_launch_evidence, key=lambda detail: detail["release_after_ms"])
         return status
 
     @staticmethod
