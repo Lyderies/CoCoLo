@@ -257,6 +257,7 @@
  "codex:tests.test_review_runner_provenance": "unit",
  "codex:tests.test_review_verdict_required": "unit",
  "codex:tests.test_route_exhausted": "unit",
+ "codex:tests.test_route_exhausted_live": "integration",
  "codex:tests.test_route_exhausted_open": "integration",
  "codex:tests.test_routing": "integration",
  "codex:tests.test_routing_judgment": "unit",

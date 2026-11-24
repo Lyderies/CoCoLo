@@ -1598,8 +1598,8 @@
  "RT-RX-14": {
   "checks": [
    "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_one_reroute_after_a_real_exhaustion_denial_and_verifier_repick",
-   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_second_exhaustion_stops_and_other_denials_never_retry",
-   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_real_cli_service_exhaustion_recovery_and_2026_11_24_stale_block"
+   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_real_cli_service_exhaustion_recovery_and_2026_11_24_stale_block",
+   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_second_exhaustion_stops_and_other_denials_never_retry"
   ],
   "source": "tests/requirements/route-exhausted.json#RT-RX-14",
   "statement": "### RT-RX-14 \u2014 At most one exhaustion-triggered re-route at open\n\nFor each logical child open (worker or verifier), a fresh open denial whose reason is exactly `provider_exhausted` may cause one automatic refresh of the trusted snapshot, re-route, and alternative open. This is at most two open attempts total for that logical child, including across replay/recovery; it is not an unbounded provider ping-pong. The replacement still uses normal admission, account-wide run caps, task attempt limits and execution bounds. A second exhaustion denial terminates recovery with an explicit unsuccessful outcome; both exhausted uses RT-RX-16. Non-exhaustion denials do not trigger this mechanism.\n\n**Acceptance:** A provider becoming exhausted between route and open causes zero launches there and at most one alternative open. Inject a second exhaustion denial: no third open occurs, including after a replay. A survivor at its cap returns `window_run_cap_reached` and is not launched or retried via another provider under this mechanism. Passing admissions are counted normally and never charged twice; denied opens do not create admitted runs. Keep logical task/parent/outcome lineage and link both attempts in audit. Durable retry ownership is OPEN-5.\n\n**Keeps/changes:** Adds bounded recovery around `admission_metadata.py:287`; keeps account cap at `admission_metadata.py:289`, future-admission counting at `admission_metadata.py:296`, route bounds at `routing.py:1751`, and authoritative original-open evaluation at `account_open_admission.py:44`. Authority: analysis lines 14\u201315 and standing rule."
@@ -1616,8 +1616,8 @@
  "RT-RX-16": {
   "checks": [
    "codex:tests.test_route_exhausted.RouteExhaustedTests.test_unsatisfied_configuration_and_offline_audit_are_distinct",
-   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_second_exhaustion_stops_and_other_denials_never_retry",
-   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_real_cli_service_exhaustion_recovery_and_2026_11_24_stale_block"
+   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_real_cli_service_exhaustion_recovery_and_2026_11_24_stale_block",
+   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_second_exhaustion_stops_and_other_denials_never_retry"
   ],
   "source": "tests/requirements/route-exhausted.json#RT-RX-16",
   "statement": "### RT-RX-16 \u2014 Structured result when both providers are exhausted\n\nWhen both provider states are exhausted, return a structured, non-executable unsatisfied routing result instead of `ContractError`, for worker selection and verifier selection, including refresh/re-route paths. Its observable contract shall contain an unsatisfied discriminator, cause `provider_exhausted`, task identity, selection phase (worker/verifier), snapshot evaluation time/reference, and entries keyed by both `codex` and `claude`, each with state `exhausted`, account scope, deciding evidence/reason and next known reset or explicit null. Do not fill successful execution fields with a fake selected worker/verifier. Exact wire names/version are OPEN-6; these semantic fields are required.\n\n**Acceptance:** Both exhausted yields an inspectable result naming both providers and their states, never either no-candidate exception. Known future reset times are surfaced; absent reset stays null, with fallback expiry separate. With multiple blocking explicit windows, the next known reset is the earliest future reset among the applicable blocking windows, not a guarantee that all restrictions end then; later blockers remain inspectable. Consumers stop without launch or a success/verified claim. A successful worker whose verifier is unsatisfied retains its worker result and an unsatisfied verification phase.\n\n**Keeps/changes:** Changes usage-caused no-candidate behavior at `routing.py:1683` and `routing.py:1510`; extends successful-only output at `routing.py:1773`. Authority: 124.5; resolves the missing shape noted at analysis line 9 at the semantic level."
@@ -1632,9 +1632,10 @@
  "RT-RX-18": {
   "checks": [
    "codex:tests.test_route_exhausted.RouteExhaustedTests.test_unsatisfied_configuration_and_offline_audit_are_distinct",
+   "codex:tests.test_route_exhausted_live.LiveSnapshotRouteTests.test_learning_route_reads_the_running_account_services_snapshot",
    "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_one_reroute_after_a_real_exhaustion_denial_and_verifier_repick",
-   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_verifier_configuration_and_containment_skips_are_audited",
-   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_real_cli_service_exhaustion_recovery_and_2026_11_24_stale_block"
+   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_real_cli_service_exhaustion_recovery_and_2026_11_24_stale_block",
+   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_verifier_configuration_and_containment_skips_are_audited"
   ],
   "source": "tests/requirements/route-exhausted.json#RT-RX-18",
   "statement": "### RT-RX-18 \u2014 Availability audit coexists with v5 selection identity\n\nRecord a separately identifiable provider-availability audit alongside the existing selection audit: classifier/snapshot format identity, evaluation time and snapshot reference, per-provider account/state/evidence/reset/fallback expiry, candidates considered in policy order and their skip causes, actual worker/verifier choice, usage-driven switch, and re-route count/trigger with original and replacement open references. Preserve policy/configuration/mapping digests and existing risk/escalation/failure lineage. For unopted v6 cells, keep `selection.policy_version=5` and the existing selection identity; do not relabel those cells v6 or conflate availability with policy/model selection.\n\n**Acceptance:** Audit reconstructs why a worker/verifier skipped each provider and distinguishes `unknown` from `ample`, usage from bridge exclusion, quality escalation from usage switch, and initial route from open recovery. For an unaffected unopted cell, the legacy selection subtree is identical and its policy version remains 5; added availability data lives outside that subtree. Requested settings remain distinct from observed execution and verdicts. Same-provider marking required by 124.4 is still present even when it changes the full route serialization.\n\n**Keeps/changes:** Keeps explicit v5 identity at `routing.py:1754`\u2013`routing.py:1760`, provider config digest at `routing.py:1792`, mapping digest at `routing.py:1824`, and observed/verdict placeholders at `routing.py:1809`\u2013`routing.py:1815`; adds availability audit outside `_selection_metadata` use at `routing.py:1753`. Authority: analysis line 10, 124.2/124.4/124.5."
@@ -1642,6 +1643,7 @@
  "RT-RX-19": {
   "checks": [
    "codex:tests.test_route_exhausted.RouteExhaustedTests.test_unsatisfied_configuration_and_offline_audit_are_distinct",
+   "codex:tests.test_route_exhausted_live.LiveSnapshotRouteTests.test_learning_route_reads_the_running_account_services_snapshot",
    "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_service_builds_account_scoped_snapshot_from_foreign_project_evidence"
   ],
   "source": "tests/requirements/route-exhausted.json#RT-RX-19",
@@ -1711,8 +1713,9 @@
  "RT-RX-7": {
   "checks": [
    "codex:tests.test_route_exhausted.RouteExhaustedTests.test_unsatisfied_configuration_and_offline_audit_are_distinct",
-   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_service_builds_account_scoped_snapshot_from_foreign_project_evidence",
-   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_real_cli_service_exhaustion_recovery_and_2026_11_24_stale_block"
+   "codex:tests.test_route_exhausted_live.LiveSnapshotRouteTests.test_learning_route_reads_the_running_account_services_snapshot",
+   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_real_cli_service_exhaustion_recovery_and_2026_11_24_stale_block",
+   "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_service_builds_account_scoped_snapshot_from_foreign_project_evidence"
   ],
   "source": "tests/requirements/route-exhausted.json#RT-RX-7",
   "statement": "### RT-RX-7 \u2014 Trusted route input with time and evidence\n\nLive routing shall receive a trusted provider-state snapshot built with RT-RX-1, separate from task data and from the existing task-shape `trusted_routing_evidence_refs`. The snapshot shall identify its evaluation time, project/context binding, each provider and selected account fingerprint (or explicitly unavailable identity), identity evidence, usage state, deciding evidence references, reasons, known reset information and fallback expiry where applicable. Equal inputs and evaluation time shall produce deterministic results. A supplied state label alone is not trusted evidence. Snapshot transport, validation limits and freshness policy are OPEN-3.\n\n**Acceptance:** A live route's recorded states and references match the builder's classification at the recorded time. Injecting an exhausted/ample label, fingerprint or evidence reference through task JSON cannot alter availability. A snapshot from another context cannot be treated as the current trusted snapshot. The snapshot grants no launch/admission authority. Offline behavior must explicitly distinguish unavailable live state; it must not claim ample (OPEN-3).\n\n**Keeps/changes:** Keeps metadata's authority limitation at `admission_metadata.py:3` and trusted original-open boundary at `account_open_admission.py:3`; extends `routing.py:1587`/`routing.py:1836` and state-free callers such as `cli.py:1283`/`cli.py:2085`. Authority: analysis lines 10\u201315 and 124.2."

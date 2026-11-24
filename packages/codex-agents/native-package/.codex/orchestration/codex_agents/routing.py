@@ -1605,6 +1605,7 @@ def _route_task(
     primary_provider: str = "codex",
     provider_snapshot: ProviderStateSnapshot | None = None,
     project_id: str | None = None,
+    snapshot_unavailable: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(use_legacy_fallback, bool):
         raise ContractError("legacy fallback selection must be boolean")
@@ -1623,6 +1624,11 @@ def _route_task(
     else:
         availability = {"status": "not_checked", "providers": {
             provider: {"state": "not_checked", "known": False} for provider in PROVIDERS}}
+        if snapshot_unavailable is not None:
+            # Why there was no snapshot (e.g. snapshot_unavailable:account_not_authorized); advisory only.
+            if type(snapshot_unavailable) is not str or not 0 < len(snapshot_unavailable) <= 96:
+                raise ContractError("snapshot unavailability reason is invalid")
+            availability["reason_code"] = snapshot_unavailable
     availability.update(candidates=[], reroute_count=0, usage_switch=False)
     _, provider_config_digest = _provider_settings(policy)
     codex_role = policy["roles"][routed_family]
@@ -1887,6 +1893,7 @@ def route_task(
     primary_provider: str = "codex",
     provider_snapshot: ProviderStateSnapshot | None = None,
     project_id: str | None = None,
+    snapshot_unavailable: str | None = None,
 ) -> dict[str, Any]:
     """Select the primary policy route; fallback requires trusted lifecycle evidence."""
 
@@ -1897,6 +1904,7 @@ def route_task(
         primary_provider=primary_provider,
         provider_snapshot=provider_snapshot,
         project_id=project_id,
+        snapshot_unavailable=snapshot_unavailable,
     )
 
 

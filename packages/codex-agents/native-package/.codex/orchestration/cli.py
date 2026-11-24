@@ -1143,11 +1143,11 @@ def _validated_assignment_route(
             _close_ledger(ledger)
     elif project_root is not None:
         # The caller's effective policy, with the service's advisory snapshot when one is running (124f).
-        snapshot = (provider_state_snapshot_client(args.state_root, project_root, host_client=_host_client())
-                    if getattr(args, "state_root", None) is not None else None)
+        unavailable, snapshot = (_service_snapshot(args.state_root, project_root)
+                                 if getattr(args, "state_root", None) is not None else (None, None))
         route = _available_route(task, policy, provider_snapshot=snapshot,
                                  project_id=snapshot.project_id if snapshot else None,
-                                 primary_provider=_host_primary_provider())
+                                 primary_provider=_host_primary_provider(), snapshot_unavailable=unavailable)
     else:
         route = _available_route(task, policy, primary_provider=_host_primary_provider())
     assigned = validate_assignment(
@@ -1283,6 +1283,20 @@ def _same_route(left, right):
 _FRESH_SNAPSHOT = object()
 
 
+def _service_snapshot(state_root, project_root):
+    """The account services' advisory snapshot (124f), or None and why there is none.
+
+    The reason goes into the route's not_checked availability audit, so a missing snapshot is
+    never silent; it never changes a refusal or an admission.
+    """
+    unavailable = []
+    snapshot = provider_state_snapshot_client(state_root, project_root, host_client=_host_client(),
+                                              unavailable=unavailable)
+    if snapshot is not None:
+        return None, snapshot
+    return "snapshot_unavailable:" + (unavailable[0] if unavailable else "unknown")[:72], None
+
+
 def _store_free_route(project_root: Path, task: dict, client_version: str | None = None,
                       state_root: Path | None = None, *, provider_snapshot=_FRESH_SNAPSHOT):
     """The route when it needs nothing from the ledger, else None.
@@ -1315,12 +1329,13 @@ def _store_free_route(project_root: Path, task: dict, client_version: str | None
         ORCHESTRATION_ROOT / "config" / "discovery-policy.json",
     )
     snapshot = provider_snapshot
+    unavailable = None
     if snapshot is _FRESH_SNAPSHOT:
-        snapshot = (provider_state_snapshot_client(state_root, project_root, host_client=_host_client())
-                    if state_root is not None else None)
+        unavailable, snapshot = (_service_snapshot(state_root, project_root) if state_root is not None
+                                 else (None, None))
     route = _available_route(task, policy, trusted_routing_evidence_refs=trusted,
                        provider_snapshot=snapshot, project_id=snapshot.project_id if snapshot else None,
-                       primary_provider=_host_primary_provider())
+                       primary_provider=_host_primary_provider(), snapshot_unavailable=unavailable)
     clients = load_client_capabilities(ORCHESTRATION_ROOT / "config" / "learning-clients.json")
     capability = clients[client_version or _host_client_for(route)]
     route["execution_configuration"] = installed_execution_configuration(
@@ -2129,7 +2144,8 @@ def main() -> int:
         elif args.command == "inventory":
             report = discover(args.root, load_discovery_policy(args.policy))
         elif args.command == "route":
-            snapshot = provider_state_snapshot_client(args.state_root, args.root, host_client=_host_client()) if getattr(args, "state_root", None) else None
+            unavailable, snapshot = (_service_snapshot(args.state_root, args.root)
+                                     if getattr(args, "state_root", None) else (None, None))
             report = _available_route(
                 _json_input(args.task),
                 load_effective_policy(
@@ -2139,6 +2155,7 @@ def main() -> int:
                 ),
                 primary_provider=_host_primary_provider(),
                 provider_snapshot=snapshot, project_id=snapshot.project_id if snapshot else None,
+                snapshot_unavailable=unavailable,
             )
         elif args.command == "learning-route":
             task = _json_input(args.task)
@@ -2602,8 +2619,11 @@ def main() -> int:
                 if api_keys_present(os.environ):
                     raise AdmissionDenied('provider_api_key_present')
 
+            unavailable = []
+
             def snapshot():
-                value = provider_state_snapshot_client(args.state_root, args.project_root, host_client=_host_client())
+                reason, value = _service_snapshot(args.state_root, args.project_root)
+                unavailable[:] = [reason] if reason is not None else []
                 if value is not None or _host_driven(current_route):
                     return value
                 ledger, project_id = _learning_ledger(args)
@@ -2615,7 +2635,10 @@ def main() -> int:
             def resolve(current):
                 if current is None and _host_driven(current_route):
                     # No live account service: preserve its open refusal, without a ledger takeover.
-                    return {**current_route, "availability": dict(current_route["availability"])}
+                    availability = dict(current_route["availability"])
+                    if unavailable and availability.get("status") == "not_checked":
+                        availability["reason_code"] = unavailable[0]
+                    return {**current_route, "availability": availability}
                 try:
                     # Fast route uses the same installed policy and execution configuration.
                     fast = _store_free_route(args.project_root, task, state_root=args.state_root,
