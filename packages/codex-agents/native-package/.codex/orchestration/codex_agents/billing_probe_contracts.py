@@ -7,6 +7,9 @@ from .history_contracts import valid_integer
 from .learning_contracts import ADMISSION_REASON_CODES, canonical_json, content_digest, validate_learning_record
 
 MAX_BILLING_REPLY_BYTES = 12_288
+PROBE_NO_LAUNCH_EVIDENCE_STATE = 'probe_admitted_no_launch_evidence'
+PROBE_NO_LAUNCH_EVIDENCE_REASON = (
+    'No launch evidence is available; this billing check holds capacity until its deadline plus grace.')
 BILLING_PROBE_REASONS = frozenset({'probe_invalid_request', 'probe_invalid_response', 'probe_not_authorized',
     'probe_unavailable', 'probe_conflict', 'probe_full', 'probe_busy', 'probe_not_ready',
     # Which step stopped a probe before it launched (0.3.2): preparing it, its worker, another step.
