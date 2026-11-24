@@ -315,6 +315,7 @@
  "root:test_check_identifiers": "unit",
  "root:test_ci_stages": "unit",
  "root:test_e2e_requirements": "scenario",
+ "root:test_e2e_run_control": "scenario",
  "root:test_e2e_strictness": "unit",
  "root:test_entrypoint_inventory": "scenario",
  "root:test_identifiers_parity": "scenario",

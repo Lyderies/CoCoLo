@@ -26,3 +26,17 @@ Status: see the bottom of this file.
   gated, so the inventory grows 23 -> 24 (docs/requirements/rsf-s1.md updated). The loop body is unchanged and now
   also covers the new op.
 - tests/test_reply_shape_live.py DRIVERS: one module added (no assertion removed).
+
+## 3. Merge of feat/t7-s1
+- Clean merge (ee1f4f1d). New root module tests/test_e2e_run_control.py registered as root:test_e2e_run_control,
+  stage integration, layer scenario (it starts a stand-in Python process). L6.1/L6.2 e2e checks are expected red
+  until fix/l6-findings merges.
+
+## Status
+- Commits: 6520e2fd (B4s merge), b2b5d68c (B4s x B4m x RS-F S1), ee1f4f1d (T7 S1 merge), then the registration/run commit.
+- Runs (named modules, clean env): settlement trio + lost_run_settlement + batch2 + rsd_runtime_close + reply_shape_compat
+  + rsf_s1 x2: 119 tests 116 s OK; journals/container/claim_denial/container_stop/holds_schema/result_lifetime/cap_guard/
+  admission_inputs/signature_inputs/signature_job_intake: 315 tests 150 s OK; open_withdrawal/b2_service_outcome/
+  holds_report: 127 tests 46 s OK; root test_test_stages/e2e_requirements/e2e_strictness/e2e_run_control: 68 tests 4 s OK.
+- test_project_driver alone: 93 tests 225 s OK. test_reply_shape_live alone (now replays test_account_settlement_driver
+  too): 5 tests 596 s OK (over the 5-min single-run guide; it is one module replaying 31 drivers).

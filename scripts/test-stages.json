@@ -315,6 +315,7 @@
  "root:test_check_identifiers": "unit",
  "root:test_ci_stages": "unit",
  "root:test_e2e_requirements": "e2e",
+ "root:test_e2e_run_control": "integration",
  "root:test_e2e_strictness": "unit",
  "root:test_entrypoint_inventory": "integration",
  "root:test_identifiers_parity": "integration",
