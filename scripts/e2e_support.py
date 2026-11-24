@@ -28,6 +28,7 @@ import pty
 import re
 import secrets
 import select
+import shlex
 import shutil
 import signal
 import sqlite3
@@ -446,8 +447,9 @@ class World:
                                   capture_output=True, text=True, env={**self.env, **(environment or {})},
                                   stdin=subprocess.DEVNULL, timeout=timeout, cwd=str(cwd or self.base))
         except subprocess.TimeoutExpired as expired:
-            # G1/G8: a step that waited too long is captured (partial output judged, a fixed reason) and answered
-            # as a failed step; the exception (it carries the arguments and paths) is never raised or printed.
+            # G1/G8 (S2 and S3): any caller's (a check's or the shared setup's) step that waited too long is captured
+            # (partial output judged, a fixed reason) and answered as a failed step (exit -1, never an expected
+            # refusal); the exception (it carries the arguments and paths) is never raised or printed.
             text = "".join(part.decode("utf-8", "replace") if isinstance(part, bytes) else (part or "")
                            for part in (expired.stdout, expired.stderr))
             self.outputs.append(text)
@@ -626,6 +628,114 @@ class World:
             return [json.loads(row[0]) for row in rows]
         finally:
             connection.close()
+
+    # T7 S3 helper block: the learning hook, a recorded Codex session and the protected copy ----------------
+
+    SESSION_ROLLOUT = "rollout-{day}T10-00-00-{thread}.jsonl"
+
+    def _run_captured(self, argv: list[str], label: str, *, refuses: bool = False, environment: dict | None = None,
+                      cwd: Path | None = None, timeout: float = 90, stdin: str | None = None) -> tuple[int, str, str]:
+        """One program of this World, judged like every step (G1, G8) even when it times out: (exit, stdout, text).
+
+        A timeout is captured with whatever the program had printed (`timed_out`), then answers exit -1."""
+        try:
+            feed = {"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}
+            done = subprocess.run(argv, capture_output=True, text=True, env={**self.env, **(environment or {})},
+                                  timeout=timeout, cwd=str(cwd or self.project), **feed)
+        except subprocess.TimeoutExpired as expired:
+            partial = [part.decode("utf-8", "replace") if isinstance(part, bytes) else (part or "")
+                       for part in (expired.stdout, expired.stderr)]
+            text = "".join(partial)
+            self.outputs.append(text)
+            self.steps.append({"step": label, "code": -1, "refuses": refuses, "timed_out": True})
+            self._capture(text, kind="output", code=-1, refuses=refuses, timed_out=True)
+            return -1, partial[0], text
+        text = done.stdout + done.stderr
+        self.outputs.append(text)
+        self.steps.append({"step": label, "code": done.returncode, "refuses": refuses, "timed_out": False})
+        self._capture(text, kind="output", code=done.returncode, refuses=refuses, timed_out=False)
+        return done.returncode, done.stdout, text
+
+    def hook_argv(self, checkout: Path | None = None) -> list[str]:
+        """The command the installed `.codex/hooks.json` runs for an event (as Codex splits it), optionally for
+        another checkout: only the `--checkout` value is replaced, so the program is still the installed hook."""
+        hooks = json.loads((self.project / ".codex" / "hooks.json").read_text())["hooks"]
+        commands = {item["command"] for group in hooks.values() for entry in group for item in entry["hooks"]}
+        if len(commands) != 1:
+            raise HarnessError("the installed hooks do not all run one command")
+        argv = shlex.split(commands.pop())
+        if checkout is not None:
+            at = argv.index("--checkout")
+            argv[at + 1] = str(checkout)
+        return argv
+
+    def run_hook(self, event: dict, *, checkout: Path | None = None, cwd: Path | None = None,
+                 timeout: float = 60) -> tuple[int, str, str]:
+        """Deliver one hook event to the installed `learning_hook.py` as Codex does (the event on its standard
+        input); (exit, stdout, text). The hook always exits 0."""
+        return self._run_captured(self.hook_argv(checkout), "hook-" + str(event.get("hook_event_name")),
+                                  stdin=json.dumps(event), cwd=cwd, timeout=timeout)
+
+    def codex_session(self, workspace: Path, *, thread: str, sandbox: str = "workspace-write",
+                      entries: list[dict] | None = None, roots: list[str] | None = None,
+                      disabled_profile: bool = False) -> Path:
+        """Write the record a Codex 0.164 session leaves under the account's ~/.codex/sessions (what the session
+        guard reads): the session's workspace, its sandbox policy and the folders it can write."""
+        def entry(path: Path, access: str = "write", **extra) -> dict:
+            return {"path": {"type": "path", "path": str(path)}, "access": access, **extra}
+
+        def special(kind: str, access: str = "write") -> dict:
+            return {"path": {"type": "special", "value": {"kind": kind}}, "access": access}
+
+        if disabled_profile:
+            entries = None  # Codex omits the filesystem entries when its sandbox is disabled, and writes the profile instead
+        elif entries is None:
+            entries = [special("root", "read"), entry(workspace), special("slash_tmp"), special("tmpdir"),
+                       *(entry(workspace / name, "read", missing_path_behavior="skip")
+                         for name in (".git", ".agents", ".codex"))]
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        folder = self.home / ".codex" / "sessions" / day.replace("-", "/")
+        folder.mkdir(parents=True, mode=0o700, exist_ok=True)
+        for part in (folder, folder.parent, folder.parent.parent):
+            part.chmod(0o700)
+        record = lambda kind, payload: json.dumps(  # noqa: E731
+            {"timestamp": "2026-11-25T10:00:00.000Z", "type": kind, "payload": payload}, separators=(",", ":")) + "\n"
+        path = folder / self.SESSION_ROLLOUT.format(day=day, thread=thread)
+        path.write_text(
+            record("session_meta", {"id": thread, "cwd": str(workspace),
+                                    "runtime_workspace_roots": roots if roots is not None else [str(workspace)]})
+            + record("turn_context", {"cwd": str(workspace), "sandbox_policy": {"type": sandbox},
+                                      **({"permission_profile": {"type": "disabled"}} if disabled_profile
+                                         else {"file_system_sandbox_policy": {"entries": entries}})}))
+        path.chmod(0o600)
+        return path
+
+    def protected_copies(self) -> dict[str, Path]:
+        """Each protected runtime copy's CLI by the project its owner-only binding names (read from the binding file)."""
+        found = {}
+        for binding in sorted((self.home / ".codex" / "agent-orchestration").glob("*/*/.codex/orchestration/runtime-binding.json")):
+            project = json.loads(binding.read_text()).get("project_root")
+            if isinstance(project, str):
+                found[os.path.realpath(project)] = binding.parent / "cli.py"
+        return found
+
+    def copy_cli(self, project: Path, *args: str, thread: str | None = None, refuses: bool = False,
+                 timeout: float = 90) -> tuple[int, dict | None, str]:
+        """A command as a Codex primary session runs it: through `project`'s protected runtime copy (the program
+        the owner's command rule allows), with `thread` as the session's CODEX_THREAD_ID (None: none set, as when
+        the command did not come from a Codex session). No other program is run; (exit, JSON reply, text)."""
+        program = self.protected_copies().get(os.path.realpath(project))
+        if program is None:
+            raise HarnessError("the project has no protected runtime copy")
+        environment = {"CODEX_THREAD_ID": thread} if thread is not None else {}
+        label = args[0] if args else "copy"
+        code, out, text = self._run_captured([str(self.shim), "-I", "-B", "-S", str(program), *args], "copy-" + label,
+                                             refuses=refuses, environment=environment, timeout=timeout)
+        try:
+            reply = json.loads(out)
+        except ValueError:
+            reply = None
+        return code, reply if isinstance(reply, dict) else None, text
 
     # Cleanup -------------------------------------------------------------------------------------
 

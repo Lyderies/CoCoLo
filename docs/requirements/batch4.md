@@ -47,3 +47,33 @@ Conflict and resolution:
 - cli.py / learning_store.py auto-merged with bkfix.
 - No new op; test_event_retention came registered. Assertion changes: only expfix's own
   (docs/requirements/expfix/assertions.md; decisions 200/204).
+
+## 4. Merge of feat/t7-s3 (T7 S3 checks; decisions 193/198/207/211)
+Conflicts and resolutions:
+- `scripts/e2e_lifecycle.py` `--fault` wiring: UNION of S1, S2 and S3, argument-only. S3's `set_fault` (S1 + S3
+  modules only) is dropped for batch 3's `select_fault`; `FAULT_MODULES = (e2e_checks_run_control,
+  e2e_checks_recovery, e2e_checks_learning_guard)`; `FAULTS` (the argparse choices) = every fault the three declare
+  (`slot_not_released`, `recovery_broken`, `learning_guard_broken`, plus S3's narrower ones); each fault is handed to
+  the one module that declares it, every other module gets None (single process and every `--jobs` worker; cleared
+  in `finally`). No environment variable selects a fault.
+- `scripts/e2e_core.py` `GROUP_SECONDS`: union (S1 run_ctl/run_silence/run_capacity, S2 rec_service/rec_collector,
+  S3 learn/guard/retain), values unchanged.
+- `scripts/e2e_support.py` `World.cli` timeout branch: both sides capture the partial output for G1/G8 and answer
+  exit -1. S2 records the step `refuses: False`; S3 passed the caller's `refuses`. Kept S2's (a step that timed out
+  is a failed step, never an expected refusal; G1 already breaks on `timed_out` either way); S3's comment folded in.
+  Both sides' tests (test_e2e_recovery timeout test, test_e2e_learning_guard G8 tests) pass.
+- `docs/requirements/t7/assertions.md`: both sections kept (S2 sections, then S3 sections); text unchanged.
+Helper deduplication (into scripts/e2e_checks_shared.py; no check function edited):
+- `e2e_checks_learning_guard` imported `Ctl, add_project, child_frames, project_view, set_up, write_patches` from
+  `e2e_checks_run_control` (S1's re-exports): now `Ctl, add_project, child_frames, project_view, write_patches`
+  from `e2e_checks_shared`. `shared.Ctl`'s timeouts are S1's (dispatch = harness default, finish 90 s), exactly what
+  S1's `Ctl` subclass set, so S3's runs are unchanged. `set_up` is a one-line S3 wrapper of `shared.set_up` with
+  label "learning-guard" (S1's wrapper said "run-control"; the label is only the harness-error text).
+- S3's private `state_root` (`HOME/.local/state/codex-agents`) is now `shared.state_dir` (same path), imported as
+  `state_root` so its checks and tests (`lg.state_root`) are unchanged; the `STATE` tuple is gone.
+- S3's own `step(world, *args)` (an installed-CLI command) differs from `shared.step` (a raw helper command) and stays.
+Registration: `root:test_e2e_learning_guard` was unregistered (test_test_stages red) -> stage integration, layer
+scenario (it starts real child processes: a sleeping shell and a Python script, for the G8 timeout tests).
+No new product op in batch 4 (B6, bkfix, expfix, S3 add none): `reply_shapes.REPLY_FIELDS`, the RS-F S1 mutating
+gate and the op-set pins are unchanged (test_reply_shape_compatibility, test_rsf_s1_ingress green).
+Assertion changes in this batch: only the one in section 1 (OrchestrationCountsCostTests, decisions 185/187/195).
