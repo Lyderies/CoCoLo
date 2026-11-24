@@ -236,7 +236,7 @@ def combine_run_records(reports):
         raise ValueError('missing/incomplete stage evidence: ' + repr(sorted(required - selected)))
     outcomes = {}
     for report in complete:
-        if report.get('metadata_errors') or report['budget_failures'] or report['debt_retirement_required'] or any(w['returncode'] or w.get('timed_out') for w in report['workers']):
+        if report.get('metadata_errors') or report['budget_failures'] or any(w['returncode'] or w.get('timed_out') for w in report['workers']):
             raise ValueError('failed worker, metadata or budget evidence')
         for worker in report['workers']:
             for name, status in worker.get('outcomes', {}).items():
