@@ -491,7 +491,7 @@
  "G8": {
   "checks": [],
   "source": "PLAN-0.4.0.md T7",
-  "statement": "No private value appears in any output: keys, fingerprints, paths under the temporary HOME."
+  "statement": "No private value (keys, fingerprints, paths under the temporary HOME) appears in any output that is saved, logged, reported or read by an AI helper (including the status command); a screen shown to the owner may show one only when the owner needs it to proceed or troubleshoot (owner decision 36)."
  },
  "G9": {
   "checks": [],
@@ -506,7 +506,7 @@
  "L1.2": {
   "checks": [],
   "source": "PLAN-0.4.0.md T7",
-  "statement": "Setup run again on an installed project changes nothing: same files, same digests, no new records except its own checks."
+  "statement": "Setup run again on an installed project changes nothing: same files, same digests, no new records except its own checks; an answers-file re-run skips signing a billing statement that is already signed and current unless the answers ask to sign again (owner decision 37)."
  },
  "L10.1": {
   "checks": [],
@@ -621,7 +621,7 @@
  "L4.2": {
   "checks": [],
   "source": "PLAN-0.4.0.md T7",
-  "statement": "A route edited after learning-route is refused."
+  "statement": "A route edited after learning-route never takes effect: an edited worker/verifier provider is replaced by the fresh installed route at open (RT-RX re-route at open, decision 133); any other edit is refused."
  },
  "L5.1": {
   "checks": [],
