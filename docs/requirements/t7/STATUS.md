@@ -14,6 +14,7 @@ status fingerprint, G8 owner screens, G9 CI job).
 Product findings for the primary: (1) L4.2 provider edit is admitted with the installed route, not refused
 (cli.py learning-open-host-run, designed); (2) setup's key screen shows ssh-keygen's fingerprint and home paths:
 owner decision needed whether screens may show them (G8 allows it on screens, forbids passphrase/key material).
-Next: run `python3 -I -B scripts/e2e_lifecycle.py --flows L1,L2,L3,L4,L5 --jobs 4 --report /tmp/r.json` (exit 0
-expected); then `python3 -B -m unittest tests.test_e2e_requirements tests.test_e2e_strictness tests.test_ci_stages`;
-check test_test_framework's lifecycle tests; first CI run of lifecycle-e2e decides if continue-on-error goes.
+Verified (2026-11-24): L1-L5 --jobs 4 full run green (report passed=true; G1-G4, G8, G9 and all L checks pass; 5m12 wall),
+tests.test_e2e_requirements/strictness/ci_stages (19) and test_test_framework ReviewLifecycleTests (4) green.
+Pending primary decisions: the 4 changes in assertions.md (L4.2, L2.2, G8, G9) are untouched.
+Next: first CI run of lifecycle-e2e decides if continue-on-error goes; G5-G7 checks belong to other slices.
