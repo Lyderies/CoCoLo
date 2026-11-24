@@ -72,3 +72,6 @@ tests/test_account_settlement_driver.py test_r1_H3_a_claim_admitted_before_its_f
 its wait read `self.ledger._connection` (the collector thread's connection) from the test thread, which raised
 sql_read_wrong_owner when the collector was mid-read (seen in a combined run, then cascading into 17 other
 failures). Now `account_claims()` reads the same COUNT(*) FROM launch_claims on a read-only connection of its own.
+APPROVED by the primary (decision 153): applied as one version-3 `intent` entry (state, version) + launch_token None;
+test renamed to test_without_the_switch_only_the_process_intent_is_written_and_the_claim_goes_as_today (the old name
+stated the forbidden behaviour). The claim-once and claim_sent assertions are unchanged.

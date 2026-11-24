@@ -346,12 +346,14 @@ class IntentBeforeClaimTests(unittest.TestCase):
             value._advance(run)
         self.assertEqual([], self.claim_calls(value))
 
-    def test_without_the_switch_no_intent_is_written_and_the_claim_goes_as_today(self):
+    def test_without_the_switch_only_the_process_intent_is_written_and_the_claim_goes_as_today(self):
         value, run = driver(self, containers=False), claiming_run()
         value._advance(run)
         self.assertEqual(1, len(self.claim_calls(value)))
         self.assertTrue(run.claim_sent)
-        self.assertEqual([], value._journal.entries())
+        # Decision 146: process mode writes one write-ahead intent before the claim; no container intent.
+        entries = value._journal.entries()
+        self.assertEqual([('intent', 3)], [(entry['state'], entry['version']) for entry in entries])
         self.assertIsNone(run.launch_token)
 
     def test_the_shipped_switch_keeps_todays_process_launch(self):
