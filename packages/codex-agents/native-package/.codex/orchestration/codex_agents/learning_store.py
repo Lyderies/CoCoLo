@@ -2865,7 +2865,10 @@ class LearningLedger:
         from . import project_backup
 
         _assert_no_symlink_components(path)
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError:  # The filesystem's text names the path (decisions 36, 192).
+            raise LedgerError("project backup is unavailable") from None
         try:
             before = os.fstat(descriptor)
             if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid() or before.st_mode & 0o077

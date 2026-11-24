@@ -80,13 +80,54 @@ class BackupReplyPrivateTests(unittest.TestCase):
         for error in (OSError(13, "denied", secret + "/x"), ValueError(secret),
                       KeyError(secret), RuntimeError("fixed text")):
             self.assertNotIn(secret, reason(error))
-        self.assertEqual("fixed text", reason(RuntimeError("fixed text")))
+        self.assertEqual("the backup could not be completed (RuntimeError)", reason(RuntimeError("fixed text")))
         # the folder check and a stuck cleanup name no path
         link = self.source.state.root / "a_link"
         os.symlink(self.source.state.root, link)
         with self.assertRaises(RuntimeError) as caught:
             TOOL["_private_folder"](link, owner_only=True)
         self.assertNotIn(secret, str(caught.exception))
+
+    def test_BK_7_only_allowlisted_reasons_pass_through(self):
+        secret = str(self.source.state.root)
+        reason = TOOL["_reason"]
+        self.assertNotIn(secret, reason(RuntimeError(f"cannot write {secret}/x")))
+        self.assertNotIn(secret, reason(TOOL["QuiesceLeftStopped"](secret)))
+        self.assertEqual("a backup with this file id already exists",
+                         reason(RuntimeError("a backup with this file id already exists")))
+
+    def test_BK_8_a_child_error_with_a_path_is_not_relayed(self):
+        secret = str(self.source.state.root)
+        real = __import__("subprocess").Popen
+
+        def child(argv, *args, **kwargs):
+            code = "import json,sys; print(json.dumps({'error': 'cannot open %s/t'})); sys.exit(2)" % secret
+            return real([sys.executable, "-I", "-c", code], *args, **kwargs)
+        schema = int(self.source._connection.execute("PRAGMA user_version").fetchone()[0])
+        with mock.patch("subprocess.Popen", child), self.assertRaises(Exception) as caught:
+            TOOL["backup_partition"](self.source, self.project, "bk_child", schema_version=schema,
+                                     expires_at_ms=self.source._clock_ms() + 3_600_000)
+        self.assertNotIn(secret, str(caught.exception))
+
+    def test_BK_9_verify_of_a_missing_registered_file_gives_a_fixed_reason(self):
+        self.cli_reply("learning-backup-project", "bk_gone")
+        os.unlink(self.source.state.backups / self.project / "bk_gone.sqlite3")
+        with self.assertRaises(Exception) as caught:
+            self.source.verify_sanitized_backup(self.project, file_id="bk_gone")
+        self.assertNotIn(str(self.source.state.root), str(caught.exception))
+        self.assertNotIn("FileNotFoundError", type(caught.exception).__name__)
+
+    def test_BK_10_the_cli_prints_a_fixed_reason_code_for_a_caught_exception(self):
+        secret = str(self.source.state.root)
+        argv = ["cli.py", "learning-verify-backup", "--state-root", secret, "--project-root", "/x",
+                "--file-id", "bk_x"]
+        out = io.StringIO()
+        with mock.patch.object(cli, "_learning_ledger", side_effect=cli.LedgerError(f"broken {secret}/db")), \
+                mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(out):
+            code = cli.main()
+        self.assertEqual(2, code)
+        self.assertNotIn(secret, out.getvalue())
+        self.assertFalse(json.loads(out.getvalue())["ready"])
 
 
 if __name__ == "__main__":

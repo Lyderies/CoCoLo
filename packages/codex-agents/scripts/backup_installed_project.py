@@ -37,10 +37,55 @@ CHILD_SECONDS = 4 * 3600
 _FILE_ID = re.compile(r"[A-Za-z0-9_]{1,160}")
 
 
+_FIXED_REASONS = frozenset({
+    "collector runtime authorization is invalid",
+    "the earlier authorization could not be put back",
+    "the earlier authorization could not be put back; a temporary copy remains",
+    "installed ledger schema does not support this backup",
+    "a folder on the way to the backup is a link",
+    "a folder on the way to the backup is not a private folder of this account",
+    "the backup copy's check did not report everything it must",
+    "backup file id must be 1 to 160 letters, digits or underscores",
+    "the backup folder is not inside the records folder",
+    "a backup with this file id already exists",
+    "the backup copy's columns differ from the installed schema's columns",
+    "the backup copy is not the file that was checked",
+    "the backup copy changed after it was checked",
+    "a backup with this file id appeared while it was written",
+    "the backup was stopped by a signal; nothing was kept",
+    "stopped by a signal",
+    "the backup copy is not the file the script created",
+    "the backup copy is not the private file the script created",
+    "the project's backup is over the ledger's backup limit",
+    "the backup copy changed while it was checked",
+    "backup expiry must be at least 60 seconds",
+    "installed orchestration runtime is unavailable",
+    "project backup cannot represent projects exactly",
+    "project binding is not active",
+})
+_FIXED_PATTERNS = tuple(re.compile(pattern) for pattern in (
+    r"the backup copy was stopped at its time limit \(\d+ s\)",
+    r"the backup copy could not be written or checked \(exit -?\d+\)",
+    r"the backup could not be completed \(\w+\)",
+    r"the project's backup is planned at \d+ bytes, over the limit of \d+",
+    r"the project's backup is planned at \d+ bytes and needs \d+ bytes free; not enough disk space",
+    r"project backup cannot represent [a-z_]+ exactly",
+))
+_CLEANUP = re.compile(r"(.*); \d+ partial file\(s\) in the backup folder could not be removed", re.S)
+
+
+def _fixed(text: str) -> bool:
+    if text in _FIXED_REASONS or any(pattern.fullmatch(text) for pattern in _FIXED_PATTERNS):
+        return True
+    cleanup = _CLEANUP.fullmatch(text)
+    return cleanup is not None and _fixed(cleanup.group(1))
+
+
 def _reason(error: BaseException) -> str:
-    """A fixed reason for a reply (decisions 36, 192): our own RuntimeError texts name no path; anything else
-    (filesystem, ledger, child or parser text) can, so it is reduced to one fixed sentence."""
-    if isinstance(error, RuntimeError):  # incl. QuiesceLeftStopped: raised only with fixed texts
+    """A fixed reason for a reply (decisions 36, 192): only an allowlist of this script's own fixed reason
+    strings passes through; any other text (filesystem, ledger, child, parser, an unlisted RuntimeError) can
+    hold a path or a private value, so it becomes one fixed generic sentence."""
+    if isinstance(error, RuntimeError) and _fixed(str(error)):
         return str(error)
     return f"the backup could not be completed ({type(error).__name__})"
 
@@ -399,7 +444,9 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
             report = None
         if child.returncode != 0:
             if isinstance(report, dict) and report.get("error"):
-                raise RuntimeError(_reason(RuntimeError(str(report["error"]))))  # the child's own fixed reason
+                error_text = report["error"]
+                raise RuntimeError(error_text if isinstance(error_text, str) and _fixed(error_text)
+                                   else "the backup could not be completed (ChildError)")  # allowlist only
             raise RuntimeError(f"the backup copy could not be written or checked (exit {child.returncode})")
         report = _checked_report(report)
         # The copy has exactly the columns this script checked against the installed schema (F3-6).

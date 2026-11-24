@@ -383,6 +383,13 @@ class _RestartingLedger:
                 raise CollectorRestartError(_COMPLETED_LEDGER_RESTART_ERROR) from exc
 
 
+_FIXED_EXCEPTION_CODES = {
+    "CatalogError": "catalog_refused", "CollectorError": "collector_refused", "HostCommandError": "host_command_refused",
+    "LedgerError": "ledger_refused", "PolicyError": "policy_refused", "StateError": "state_refused",
+    "JSONDecodeError": "input_not_json",
+}
+
+
 def _close_ledger(ledger: LearningLedger | _RestartingLedger) -> None:
     if isinstance(ledger, _RestartingLedger):
         ledger.close(operation_completed=sys.exc_info()[0] is None)
@@ -4185,7 +4192,10 @@ def main() -> int:
         StateError,
         json.JSONDecodeError,
     ) as exc:
-        _print(_with_codex_hint(args.command, {"ready": False, "error": str(exc)}))
+        # Never the exception's text: it can hold a path or a private value (decisions 36, 192).
+        report = {"ready": False, "error": "the command was refused", "reason_code": _FIXED_EXCEPTION_CODES.get(
+            type(exc).__name__, "command_refused")}
+        _print(_with_codex_hint(args.command, report))
         return 2
     _print_command_report(args, report)
     successful = report.get("ready", True)

@@ -300,7 +300,7 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         self.assertEqual(3, code)
         self.assertTrue(final["ready"])
         self.assertFalse(final["collector_quiesced"])
-        self.assertEqual("authorization unreadable", final["quiesce_error"])
+        self.assertEqual("the backup could not be completed (RuntimeError)", final["quiesce_error"])
         self.assertIsNotNone(self.registered("kept"))
         final, code = TOOL["finish_backup"](report, leave_quiesced=True, quiesce=lambda: None)
         self.assertEqual((0, True), (code, final["collector_quiesced"]))
@@ -392,7 +392,7 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         final, code = TOOL["finish_backup"](report, leave_quiesced=True, quiesce=quiesce)
         self.assertEqual(3, code)
         self.assertTrue(final["collector_quiesced"])
-        self.assertIn("restore failed", final["quiesce_error"])
+        self.assertEqual("the backup could not be completed (QuiesceLeftStopped)", final["quiesce_error"])
 
     def test_F3_13_a_collector_that_does_not_restart_is_in_the_one_report(self):
         report = self.owner_backup("not_restarted")
@@ -402,7 +402,8 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         final, code = TOOL["settle_maintenance"]({**report, "collector_quiesced": False}, 0, resume=resume)
         self.assertEqual(3, code)
         self.assertTrue(final["ready"])
-        self.assertIn("collector would not start", final["restart_error"])
+        self.assertIn("the installed collector did not restart", final["restart_error"])
+        self.assertNotIn("collector would not start", final["restart_error"])
         final, code = TOOL["settle_maintenance"]({**report, "collector_quiesced": True}, 0, resume=resume)
         self.assertEqual((0, None), (code, final.get("restart_error")))  # left stopped as asked: no restart
 
@@ -452,14 +453,15 @@ class OwnerBackupStreamedTests(unittest.TestCase):
                                close=fail("ledger would not close"), resume=lambda: resumed.append(True))
         self.assertEqual(3, code)
         self.assertTrue(final["ready"])
-        self.assertIn("ledger would not close", final["close_error"])
+        self.assertEqual("the backup could not be completed (RuntimeError)", final["close_error"])
         self.assertEqual([True], resumed)  # restarted although closing failed
         final, code = conclude(report=None, code=0, error=RuntimeError("preflight refused"),
                                close=lambda: None, resume=fail("collector would not start"))
         self.assertEqual(2, code)
         self.assertFalse(final["ready"])
-        self.assertEqual("preflight refused", final["error"])
-        self.assertIn("collector would not start", final["restart_error"])
+        self.assertEqual("the backup could not be completed (RuntimeError)", final["error"])
+        self.assertIn("the installed collector did not restart", final["restart_error"])
+        self.assertNotIn("collector would not start", final["restart_error"])
         final, code = conclude(report={**report, "collector_quiesced": True}, code=0, error=None,
                                close=lambda: None, resume=fail("must not be called"))
         self.assertEqual((0, None), (code, final.get("restart_error")))  # left stopped as asked

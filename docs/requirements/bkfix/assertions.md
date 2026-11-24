@@ -24,3 +24,19 @@ file with st_nlink > 1.
 | F3-9 child error output | `assertRaisesRegex "boom in the child"` (child stderr) | regex `could not be written or checked \(exit 3\)` | child stderr no longer relayed |
 
 New: BK-4 (cli file_id + verify round trip), BK-5 (hard link refused), BK-6 (fixed reasons, folder-check text).
+
+## Round 3 (decision 199: allowlist, missing file, CLI exception text)
+Requirement: only an allowlist of fixed reason strings passes through the owner script; a child's `error` text or an
+unlisted RuntimeError becomes "the backup could not be completed (<Type>)"; verify of a missing registered file says
+"project backup is unavailable"; the CLI's caught exception prints `reason_code` (e.g. ledger_refused), never its text.
+
+| Test (test_owner_backup_streamed) | Old | New | Why |
+|---|---|---|---|
+| quiesce failed (F3-3e) | `quiesce_error == "authorization unreadable"` | `== "the backup could not be completed (RuntimeError)"` | mock text not allowlisted |
+| F3-12 quiesce undone | `"restore failed" in quiesce_error` | `== "...completed (QuiesceLeftStopped)"` | unlisted text |
+| F3-13 / F3-16 restart | `"collector would not start" in restart_error` | contains "the installed collector did not restart", raw text absent | unlisted text |
+| F3-16 close | `"ledger would not close" in close_error` | `== "...completed (RuntimeError)"` | unlisted text |
+| test_backup_reply_private BK-6 (mine, round 2) | `reason(RuntimeError("fixed text")) == "fixed text"` | generic reason | allowlist, not RuntimeError type |
+New: BK-7..BK-10. Existing CLI tests that pinned printed exception text are listed below if any changed.
+| test_owner_backup_streamed F3-16 (conclude) | `final["error"] == "preflight refused"` | `== "the backup could not be completed (RuntimeError)"` | unlisted text |
+| test_project_driver while-a-child-runs (both classes) | `'a child run is active; nothing was changed' in refused['error']` | `refused['reason_code'] == 'ledger_refused'` and that text absent | CLI prints a fixed code, never exception text (decision 199) |
