@@ -2801,6 +2801,15 @@ class ProjectHistory:
         return self._connection.execute("SELECT * FROM project_account_settlements WHERE project_id=? AND run_handle=? "
                                         "AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
 
+    @staticmethod
+    def _crash_proof(evidence: str) -> bool:
+        """Batch 4: whether retained hold evidence is B5a's minimal process proof (its four public fields only)."""
+        try:
+            value = json.loads(evidence)
+        except (TypeError, ValueError):
+            return False
+        return type(value) is dict and set(value) == {"state", "child", "watchdog", "run_marker_digest"}
+
     def _settlement_replay_expired(self, hold) -> bool:
         """The permanent identity outlives its finite reply evidence; reads never extend the window."""
         from .lost_run_closure import RELEASE_KINDS
@@ -2851,7 +2860,13 @@ class ProjectHistory:
                     "AND state='released'", (self.project_id, payload.get("bridge_run_id"))).fetchone()
                 if self._settlement_replay_expired(tombstone):
                     raise HistoryError("history_result_not_reserved")
-                if tombstone is not None and tombstone["evidence"] is not None:
+                if (tombstone is not None and tombstone["evidence"] is not None
+                        and tombstone["release_kind"] == RELEASE_KINDS["crashed"]
+                        and self._crash_proof(tombstone["evidence"])):
+                    # Batch 4: a crashed hold retains B5a's process proof, not the closure; the identical request
+                    # is matched below by the request id and the digest of the complete original request.
+                    kind, hold = "reservation", tombstone
+                elif tombstone is not None and tombstone["evidence"] is not None:
                     from .lost_run_closure import verify_lost_run_closure
                     try:
                         closure = verify_lost_run_closure(self._result_key, tombstone["evidence"].encode('ascii'),
@@ -2896,6 +2911,14 @@ class ProjectHistory:
             self._connection.execute(
                 "UPDATE project_holds SET state='releasing',request_id=?,request_digest=? WHERE project_id=? AND kind=? "
                 "AND identity=? AND state<>'released'", (request_id, digest, self.project_id, kind, hold["identity"]))
+            if kind == "lease" and lease_row is not None and lease_row["state"] == "claim_pending":
+                from .launch_journal import process_settlement_evidence
+                proof = process_settlement_evidence(self._directory / "launches", self._lease(lease_row).binding,
+                                                    payload["bridge_run_id"], allow_unbound=True)
+                if proof is not None and proof["child"] is None:
+                    self._connection.execute(
+                        "UPDATE project_holds SET lease_case='admitted_unbound' WHERE project_id=? AND kind='lease' "
+                        "AND identity=?", (self.project_id, hold["identity"]))
         return {"state": "releasing", "request_id": request_id, "request_digest": digest}
 
     @_operation
@@ -2961,6 +2984,21 @@ class ProjectHistory:
                     or closure["released_at_ms"] < lease.created_at_ms
                     or hold["state"] != "releasing" or hold["request_digest"] != closure["request_digest"]):
                 raise HistoryError("history_conflict")
+            # Batch 4 (RSF-S7-1 with RS-B-B5a-3): the released hold keeps ONE bounded evidence value, written once
+            # by release_hold below: S7's authenticated closure, or for `crashed` B5a's minimal process proof (the
+            # closure itself stays in the settlement row; a crashed tombstone answers by its request digest).
+            retained = raw.decode('ascii')
+            if kind == "crashed":
+                from .launch_journal import process_settlement_evidence
+                proof = process_settlement_evidence(self._directory / "launches", lease_binding,
+                                                    closure["bridge_run_id"], allow_unbound=(
+                                                        reservation is None and hold["lease_case"] == "admitted_unbound"))
+                if proof is None:
+                    raise HistoryError("history_conflict")  # needs_process_evidence; age/closure alone proves nothing
+                evidence = {name: proof[name] for name in ("state", "child", "watchdog")}
+                evidence["run_marker_digest"] = (None if proof["run_tag"] is None
+                                                  else content_digest(proof["run_tag"]))
+                retained = canonical_json(evidence).decode()
             now = self._hold_now()
             if reservation is not None:
                 value = self._reservation(reservation)
@@ -2987,7 +3025,7 @@ class ProjectHistory:
                 "INSERT INTO project_account_settlements(project_id,run_handle,attempt,claim_id,release_kind,closure,"
                 "settled_at_ms) VALUES(?,?,?,?,?,?,?)", (self.project_id, run_handle, attempt, claim_id, kind, raw, now))
             project_holds_schema.release_hold(self._connection, self.project_id, hold_kind, hold["identity"],
-                                              expected_kind, now_ms=now, receipt=receipt, evidence=raw.decode('ascii'))
+                                              expected_kind, now_ms=now, receipt=receipt, evidence=retained)
         if ending:
             project_result_contexts.finish_quietly(self, run_handle, attempt)
         return {**answer, "known": False}
@@ -3263,9 +3301,11 @@ class ProjectHistory:
         after = self._purge_cursors["settlement_evidence"]
         statement = (
             "SELECT rowid,released_at_ms FROM project_holds WHERE project_id=? AND state='released' "
-            "AND kind IN ('reservation','lease') AND release_kind IN (?,?,?) AND evidence IS NOT NULL"
+            "AND kind IN ('reservation','lease') AND release_kind IN ({}) AND evidence IS NOT NULL"
         )
-        arguments = (self.project_id, *RELEASE_KINDS.values(), self._SETTLED_LEASE_KIND)
+        kinds = (*RELEASE_KINDS.values(), self._SETTLED_LEASE_KIND)  # batch 4: B5a's `crashed` is one of them
+        statement = statement.format(",".join("?" * len(kinds)))
+        arguments = (self.project_id, *kinds)
 
         def candidates(position):
             return self._connection.execute(

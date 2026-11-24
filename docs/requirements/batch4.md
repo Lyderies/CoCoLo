@@ -1,4 +1,4 @@
-# Batch 4 integration (merge/batch-0859: 0.8.58 + RS-B B6 + bkfix + expfix + T7 S3)
+# Batch 4 integration (merge/batch-0859: 0.8.58 + RS-B B6 + bkfix + expfix + T7 S3 + RS-F S7 + RS-B B5a)
 
 Base 1c293c44 (version/0.4.0 = 0.8.58). Version bookkeeping is left to the primary.
 
@@ -78,6 +78,42 @@ No new product op in batch 4 (B6, bkfix, expfix, S3 add none): `reply_shapes.REP
 gate and the op-set pins are unchanged (test_reply_shape_compatibility, test_rsf_s1_ingress green).
 Assertion changes in this batch: only the one in section 1 (OrchestrationCountsCostTests, decisions 185/187/195).
 
+## 5. Merge of feat/rsf-s7-replay (RS-F S7, RSF-S7-1..6; decisions 214/215)
+- project_history.py, learning_store.py, lifetime_caps.json, test-stages/test-layers: auto-merged with B6/bkfix/expfix.
+  B6's step-21 schema, indexes and close rules are untouched (S7 adds no schema; its purge touches only released
+  `reservation`/`lease` holds, B6's orchestration holds are never selected; B6's `release_hold` still clears an
+  orchestration hold's evidence).
+- Fixture change (not an assertion): `tests/rsf_s7_support.py` `ProjectFixture.migrate` simulates a format-18 store;
+  with schema 21 it now also calls B6's `legacy_orchestration_state_layout` (the same fixture B6 used in
+  test_open_withdrawal/test_project_holds_schema). Without it the 18 -> 21 upgrade refused `history_incompatible`
+  (5 S7 errors) because step 21's indexes/column were already present.
+
+## 6. Merge of feat/rsb-b5a-crashed (RS-B B5a, RS-B-B5a-1..6; decisions 216/217)
+Conflicts and resolutions:
+- `scripts/test-layers.json`, `test-stages.json`, `test-requirements.json`: textual (sorted neighbours); union of both
+  sides, values unchanged (B5a's six modules + `RS-B-B5a`).
+- `project_history.py` (auto-merged, semantic clash, three fixes):
+  1. S7's `_purge_settlement_evidence` hard-coded `release_kind IN (?,?,?)` for the two B4s kinds + `lost_unbound`;
+     B5a adds `crashed` to `RELEASE_KINDS`, so every purge pass raised (ProgrammingError -> `history_unavailable`;
+     4 S7 tests + B5a's tombstone test red). Placeholders are now built from the kinds, so crashed evidence is
+     purged inside the same 8-day window.
+  2. One evidence value per released hold: B5a wrote its process proof, then S7's `release_hold(evidence=closure)`
+     replaced it (COALESCE; B5a's two proof tests red). Now `record_account_settlement` computes ONE `retained`
+     value (S7's closure, or for `crashed` B5a's minimal proof) and `release_hold` writes it once, same
+     transaction. S7's pruning backfill writes only NULL/adopted evidence, so it never replaces a proof; the
+     closure itself stays in the settlement row until pruning.
+  3. S7's open-path tombstone lookup verified the hold's evidence as a closure; a crashed proof would answer
+     `history_conflict`. A `crashed` tombstone whose evidence is B5a's four-field proof (`_crash_proof`) is
+     adopted and then matched, as every tombstone already is, by request id + the digest of the complete
+     original request; S7's replay-window refusal still comes first.
+- New test module `tests/test_batch4_crashed_replay.py` (unit/unit, both checks listed under RS-B-B5a):
+  proof survives pruning, the identical open replays `settled` within the window, another request conflicts, after
+  the window both paths refuse `history_result_not_reserved` and the purge clears the proof. Red shown with
+  `_crash_proof` patched to False (history_conflict), green on the resolution.
+- Primary note: a crashed attempt's retained hold evidence is B5a's process proof, not the closure (RSF-S7-1 says
+  "one authenticated closure per settled attempt"); still bounded, cleared at 8 days.
+Assertion changes in sections 5-6: none (one fixture helper line, one new module).
+
 ## Proof (merge/batch-0859 at the S3 merge)
 - Lifecycle: `python3 -I -B scripts/e2e_lifecycle.py --flows L6,L7,L8,L9,L10,L11,L13,L14,L15 --jobs 3 --report
   /tmp/claude-501/batch4/r.json` (282 s): every S1 (L6.1, L6.2, L7.1-L7.3, L9.1-L9.3), S2 (L8.1-L8.3, L14.1,
@@ -99,3 +135,19 @@ Assertion changes in this batch: only the one in section 1 (OrchestrationCountsC
   history 82 tests 7 s. test_project_driver alone: 99 tests 247 s OK. Root: test_rsd_budget 6 tests; test_e2e_*
   (learning_guard, recovery, requirements, run_control, strictness) + test_test_stages 220 tests 5 s.
 - Metadata (`parallel_tests.metadata()`): 0 errors.
+
+## Proof after S7 + B5a merges and 0.8.59 bookkeeping
+- Named modules (packaged venv, from packages/codex-agents): 23 modules (S7: rsf_s7_account/project/journal; B5a:
+  crashed_settlement/process_evidence/account/driver_unit/settlement_socket, b5a_validation_privacy,
+  account_settlement(+_wire), publication_replay; new test_batch4_crashed_replay; B6/schema: b6_unattended_close,
+  holds_report, project_holds_schema, open_withdrawal, history_service_upgrade; reply_shape_compatibility,
+  rsf_s1_ingress, event_retention, launch_journal, lifetime_cap_guard) 396 tests 67 s OK.
+  test_lost_run_settlement alone 26 tests 77 s OK; test_project_driver alone 99 tests 248 s OK.
+- Root: test_test_stages + test_e2e_* (5) + test_rsd_budget 226 tests 7 s OK. Metadata: 0 errors.
+- Lifecycle: `--flows L6,L7,L8,L9,L10,L11,L13,L14,L15 --jobs 3 --report /tmp/claude-501/batch4/r2.json` (280 s):
+  every S1/S2/S3 ID PASSES; runner exit 1 only from L11.2 `no_check` (unchanged).
+- Release 0.8.59: VERSION, runtime-releases.json 0.8.59 = 8a333f07...efa6 (0.8.55-0.8.58 untouched),
+  previous-releases.json 0.8.58 record (source 1c293c44, same bundle eb34209d), packaging.py comment, catalogue
+  count 18 -> 19, CHANGELOG. No new runtime file (S7/B5a add tests only); learning-producers.json unchanged
+  (test_providers green); no tracked .pyc. test_runtime_release + test_lifetime_cap_guard + test_providers 113 tests
+  22 s; claude-agents test_previous_release(_catalogue,_recorded) + test_packaging 36 tests 1 s OK.

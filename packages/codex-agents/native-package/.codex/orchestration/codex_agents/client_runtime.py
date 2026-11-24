@@ -1417,7 +1417,9 @@ def _lost_run(state_root, project_root, run_handle, host_client):
         return None
     return {'ready': False, 'reason_code': 'run_lost', 'terminal_state': 'abandoned', 'outcome': 'unknown',
             'capacity_state': LOST_CAPACITY[reply['reason_code']],
-            'error': 'the service that ran this run stopped; it ended with an unknown outcome'}
+            'error': ('the service that ran this run stopped; it ended with an unknown outcome; '
+                      + ('its capacity was released' if LOST_CAPACITY[reply['reason_code']] == 'released' else
+                         'its capacity stays held while process exit is confirmed and settlement finishes'))}
 
 
 def bridged_run_owner(state_root, project_root, run_handle, *, host_client):

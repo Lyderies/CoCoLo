@@ -4,6 +4,12 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.59: release batch.
+  - RS-B B6: an orchestration left idle closes unattended, on store schema 21.
+  - RS-F S7: settlement replies replay across the store migration and attempt pruning, with bounded evidence.
+  - RS-B B5a: a crashed run is settled once its process is proven gone.
+  - Product fixes: backup replies carry no file paths, and learning-expire keeps the event summaries.
+  - T7 S3: learning, backup and guard checks in the lifecycle e2e.
 - Package 0.8.58: release batch.
   - RS-F S4: M4 and R3 run-slot rules, with the owner confirm command shown for a held slot.
   - RS-F S5: a named probe state in account status.
