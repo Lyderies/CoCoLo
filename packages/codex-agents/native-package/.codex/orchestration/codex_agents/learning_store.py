@@ -6646,6 +6646,35 @@ class LearningLedger:
             if row[0] is not None
         }
 
+    def provider_state_snapshot(self, project_id: str, *, now_ms: int | None = None):
+        """Build advisory routing state from the service's trusted account evidence."""
+        from .admission_metadata import ProviderStateSnapshot, classify_provider_state, _latest, IDENTITY_MAX_AGE_MS
+        timestamp = self._clock_ms() if now_ms is None else now_ms
+        states = {}
+        with self._write_unit():
+            project = self._connection.execute("SELECT status FROM projects WHERE project_id=?", (project_id,)).fetchone()
+            if project is None or project["status"] != "active":
+                raise LedgerError("project binding is not active")
+            for provider in ("codex", "claude"):
+                identities = self._provider_records_locked(project_id, "provider_identity", provider)
+                identity = _latest([(r, d) for r, d in identities
+                                    if 0 <= timestamp-r["observed_at_ms"] <= IDENTITY_MAX_AGE_MS])
+                fingerprint = identity[0]["account_fingerprint"] if identity is not None else None
+                headroom, _ = self._account_records_locked(project_id, "provider_headroom", provider)
+                billing, _ = self._account_records_locked(project_id, "provider_billing", provider)
+                state = classify_provider_state(provider, fingerprint, headroom, billing, timestamp)
+                digests = state["evidence_digests"]
+                refs = []
+                if digests:
+                    rows = self._connection.execute(
+                        "SELECT DISTINCT project_id,content_digest FROM records WHERE source='provider' AND content_digest IN ("
+                        + ",".join("?" for _ in digests) + ") ORDER BY project_id,content_digest", digests).fetchall()
+                    refs = [{"project_id": str(row[0]), "digest": str(row[1])} for row in rows]
+                states[provider] = {**state, "account_fingerprint": fingerprint,
+                    "identity_evidence": identity[1] if identity is not None else None,
+                    "identity_available": identity is not None, "evidence_refs": refs}
+        return ProviderStateSnapshot(project_id, timestamp, states)
+
     def _evaluate_admission_locked(
         self,
         project_id: str,

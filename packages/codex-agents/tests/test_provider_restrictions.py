@@ -10,6 +10,7 @@ from copy import deepcopy
 
 from tests.support import ORCHESTRATION_ROOT
 
+from test_golden import legacy_merged_record
 from codex_agents import provider_restrictions as restrictions
 from codex_agents.contracts import ContractError
 from codex_agents.providers import headroom_record
@@ -66,8 +67,8 @@ class ProviderRestrictionTests(unittest.TestCase):
             record(windows=[current]), [record("allowed", [window(used=100, reset=3000)])]))
 
     def test_merge_preserves_resetless_horizon_across_rollback_and_validates(self):
-        horizon = restrictions.EVIDENCE_HORIZON_MS
-        self.assertEqual(86_400_000, horizon)
+        horizon = restrictions.FIVE_HOURS_MS
+        self.assertEqual(18_000_000, horizon)
         for status in ("rejected", "allowed_warning"):
             for aggregate in (True, False):
                 original = [record(status, [] if aggregate else [window()], 2000),
@@ -78,7 +79,7 @@ class ProviderRestrictionTests(unittest.TestCase):
                 if aggregate:
                     expected.append(window(scope=None, minutes=None, reset=2000 + horizon + 1))
                 expected.sort(key=lambda item: repr((item["scope"], item["window_minutes"])))
-                self.assertEqual(record(status, expected, 500), result)
+                self.assertEqual(record(status, expected, 500), legacy_merged_record(result))
                 self.assertEqual(before, original)
                 self.assertEqual(result, restrictions._merged_restriction([result], observed_at_ms=500))
         with self.assertRaises(ValueError):
@@ -102,7 +103,7 @@ class ProviderRestrictionTests(unittest.TestCase):
             " from codex_agents.provider_restrictions import merged_restriction\n"
             " item = dict(provider='claude', account_fingerprint='a' * 64, windows=[], status='rejected', run_id='run-1', phase='during', observed_at_ms=2000)\n"
             " result = merged_restriction([item], observed_at_ms=1000)\n"
-            " assert result['windows'][0]['resets_at'] == 2000 + 86400000 + 1\n"
+            " assert result['windows'][0]['resets_at'] == 2000 + 18000000 + 1\n"
         )
         completed = subprocess.run([sys.executable, "-I", "-c", source], capture_output=True, text=True, check=False)
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)

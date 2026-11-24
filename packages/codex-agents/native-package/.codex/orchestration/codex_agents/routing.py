@@ -14,6 +14,7 @@ from typing import Any
 
 import tomllib
 
+from .admission_metadata import ProviderStateSnapshot
 from .catalog import discover, load_discovery_policy
 from .contracts import (
     FAILURE_REASONS,
@@ -1464,6 +1465,7 @@ def _select_verifier(
     use_legacy_fallback: bool,
     risk: str,
     independent: bool = False,
+    availability: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Prefer the other vendor, then the worker's own; judgment cells mark that fallback not independent.
 
@@ -1473,6 +1475,9 @@ def _select_verifier(
     order = ("codex", "claude") if worker_provider == "claude" else ("claude", "codex")
     skipped: str | None = None
     for provider in order:
+        if availability is not None and availability["providers"][provider]["state"] == "exhausted":
+            availability["candidates"].append({"phase": "verifier", "provider": provider, "skip": "usage"})
+            continue
         dispatch = _dispatch(primary_provider, provider)
         if provider == "codex":
             verifier = _codex_verifier(
@@ -1503,10 +1508,12 @@ def _select_verifier(
             continue
         verifier["provider"] = provider
         verifier["dispatch"] = dispatch
-        if independent and provider == worker_provider:
+        if provider == worker_provider:
             # Same-provider fallback is kept (owner decision 17); the record says so.
             verifier["independent"] = False
         return verifier
+    if availability is not None and any(v["state"] == "exhausted" for v in availability["providers"].values()):
+        raise _AvailabilityRefusal("verifier", availability)
     message = "no verifier candidate is eligible for this route"
     raise ContractError(f"{message}: {skipped}" if skipped else message)
 
@@ -1587,6 +1594,8 @@ def _route_task(
     trusted_routing_evidence_refs: frozenset[str] = frozenset(),
     use_legacy_fallback: bool = False,
     primary_provider: str = "codex",
+    provider_snapshot: ProviderStateSnapshot | None = None,
+    project_id: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(use_legacy_fallback, bool):
         raise ContractError("legacy fallback selection must be boolean")
@@ -1596,6 +1605,16 @@ def _route_task(
     candidate, stage, routed_family = _candidate(
         task, policy, trusted_routing_evidence_refs
     )
+    if provider_snapshot is not None:
+        if type(provider_snapshot) is not ProviderStateSnapshot or provider_snapshot.project_id != project_id:
+            raise ContractError("provider snapshot context does not match route")
+        if set(provider_snapshot.providers) != set(PROVIDERS):
+            raise ContractError("provider snapshot must cover both providers")
+        availability = provider_snapshot.audit()
+    else:
+        availability = {"status": "not_checked", "providers": {
+            provider: {"state": "not_checked", "known": False} for provider in PROVIDERS}}
+    availability.update(candidates=[], reroute_count=0, usage_switch=False)
     _, provider_config_digest = _provider_settings(policy)
     codex_role = policy["roles"][routed_family]
     codex_agent = _codex_project_agent(policy, task, routed_family, codex_role)
@@ -1615,6 +1634,7 @@ def _route_task(
             primary_provider=primary_provider,
             use_legacy_fallback=use_legacy_fallback,
             risk=task["risk"],
+            availability=availability,
             independent=(
                 policy.get("escalation", {}).get("scope") == "risk_banded_judgment"
                 and task["risk"] in {"low", "medium"}
@@ -1655,11 +1675,18 @@ def _route_task(
         skipped: str | None = None
         for entry in entries:
             provider = entry["provider"]
+            considered = {"phase": "worker", "provider": provider, "model": entry.get("model")}
+            availability["candidates"].append(considered)
+            if availability["providers"][provider]["state"] == "exhausted":
+                considered["skip"] = "usage"
+                availability["usage_switch"] = True
+                continue
             source = candidate if entry == CODEX_POLICY_CANDIDATE else entry
             model_effort = {"model": source["model"], "effort": source["effort"]}
             if not _provider_admitted(
                 policy, primary_provider, provider, model_effort["model"]
             ):
+                considered["skip"] = "configuration"
                 continue
             agent: dict[str, Any] | None = None
             if provider == "codex":
@@ -1668,11 +1695,14 @@ def _route_task(
                     and codex_agent.get("sandbox_mode", "read-only") != "read-only"
                 ):
                     skipped = _bridged_writable(codex_agent)
+                    considered["skip"] = "containment"
                     continue
             else:
                 agent = _claude_agent(policy, routed_family)
                 if agent is None:
+                    considered["skip"] = "agent_unavailable"
                     continue
+            considered["selected"] = True
             return (provider, model_effort, agent), skipped
         return None, skipped
 
@@ -1681,6 +1711,8 @@ def _route_task(
     else:
         skipped = None
     if picked is None:
+        if any(v["state"] == "exhausted" for v in availability["providers"].values()):
+            raise _AvailabilityRefusal("worker", availability)
         message = "no provider candidate is eligible for this route"
         raise ContractError(f"{message}: {skipped}" if skipped else message)
     escalation: dict[str, Any] | None = None
@@ -1741,6 +1773,7 @@ def _route_task(
             primary_provider=primary_provider,
             use_legacy_fallback=use_legacy_fallback,
             risk=task["risk"],
+            availability=availability,
             independent=(
                 policy.get("escalation", {}).get("scope") == "risk_banded_judgment"
                 and task["risk"] in {"low", "medium"}
@@ -1770,7 +1803,11 @@ def _route_task(
         selection["fallback_from"] = deepcopy(primary)
         if selected not in selection["eligible"]:
             selection["eligible"].append(deepcopy(selected))
+    availability["worker"] = provider if verification_for_provider is None else verification_for_provider
+    availability["verifier"] = verifier["provider"] if verifier is not None else (
+        provider if verification_for_provider is not None else None)
     result = {
+        "availability": availability,
         "task_id": task["id"],
         "role": codex_role,
         "model": model,
@@ -1839,14 +1876,18 @@ def route_task(
     *,
     trusted_routing_evidence_refs: frozenset[str] = frozenset(),
     primary_provider: str = "codex",
+    provider_snapshot: ProviderStateSnapshot | None = None,
+    project_id: str | None = None,
 ) -> dict[str, Any]:
     """Select the primary policy route; fallback requires trusted lifecycle evidence."""
 
-    return _route_task(
+    return _route_with_availability(
         task_data,
         policy,
         trusted_routing_evidence_refs=trusted_routing_evidence_refs,
         primary_provider=primary_provider,
+        provider_snapshot=provider_snapshot,
+        project_id=project_id,
     )
 
 
@@ -1856,13 +1897,68 @@ def _route_task_legacy_fallback(
     *,
     trusted_routing_evidence_refs: frozenset[str] = frozenset(),
     primary_provider: str = "codex",
+    provider_snapshot: ProviderStateSnapshot | None = None,
+    project_id: str | None = None,
 ) -> dict[str, Any]:
     """Resolve the private fallback after the ledger authorizes host unavailability."""
 
-    return _route_task(
+    return _route_with_availability(
         task_data,
         policy,
         trusted_routing_evidence_refs=trusted_routing_evidence_refs,
         use_legacy_fallback=True,
         primary_provider=primary_provider,
+        provider_snapshot=provider_snapshot,
+        project_id=project_id,
     )
+
+
+class _AvailabilityRefusal(Exception):
+    def __init__(self, phase, availability):
+        self.phase, self.availability = phase, availability
+
+
+def _route_with_availability(task_data, policy, **kwargs):
+    try:
+        return _route_task(task_data, policy, **kwargs)
+    except _AvailabilityRefusal as refusal:
+        audit = refusal.availability
+        both = all(value["state"] == "exhausted" for value in audit["providers"].values())
+        return {"status": "unsatisfied", "ready": False,
+                "reason_code": "no_provider_allowance" if both else "no_eligible_provider",
+                "cause": "provider_exhausted", "task_id": task_data["id"], "phase": refusal.phase,
+                "evaluated_at_ms": audit.get("evaluated_at_ms"), "snapshot_ref": audit.get("snapshot_ref"),
+                "providers": {p: {**value, "cause": "usage" if value["state"] == "exhausted" else "configuration"}
+                              for p, value in audit["providers"].items()}, "availability": audit}
+
+
+def open_routed_task(task, policy, *, project_id, snapshot, open_route, primary_provider="codex",
+                     trusted_routing_evidence_refs=frozenset()):
+    """One logical open: fresh advisory routing and at most one exhaustion recovery.
+
+    The callback must perform normal authoritative admission. No other denial
+    grants a retry and no route grants permission to launch.
+    """
+    from .providers import AdmissionDenied
+    attempts = []
+    for retry in range(2):
+        route = route_task(task, policy, project_id=project_id, provider_snapshot=snapshot(),
+                           primary_provider=primary_provider,
+                           trusted_routing_evidence_refs=trusted_routing_evidence_refs)
+        route["availability"].update(reroute_count=retry, open_attempts=deepcopy(attempts))
+        if retry:
+            route["availability"]["reroute_trigger"] = "provider_exhausted"
+        if route.get("status") == "unsatisfied":
+            return {"ready": False, "reason_code": route["reason_code"], "route": route}
+        try:
+            opened = open_route(route)
+        except AdmissionDenied as error:
+            attempts.append({"provider": route["provider"], "reason_code": error.reason_code,
+                             "snapshot_ref": route["availability"].get("snapshot_ref")})
+            if error.reason_code == "provider_exhausted" and retry == 0:
+                continue
+            route["availability"]["open_attempts"] = attempts
+            return {"ready": False, "reason_code": error.reason_code, "route": route}
+        route["availability"]["open_attempts"] = [*attempts, {"provider": route["provider"],
+            "run_handle": opened.get("run_handle"), "reason_code": "admitted"}]
+        return {"ready": True, "route": route, "open": opened}

@@ -1,0 +1,266 @@
+{
+  "RT-RX-1": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_boundaries_unknown_and_billing_share_the_admission_classifier",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:47",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:403",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_service_builds_account_scoped_snapshot_from_foreign_project_evidence",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:49",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:403",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-2": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_boundaries_unknown_and_billing_share_the_admission_classifier",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:47",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:403",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-3": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_chronology_five_hours_explicit_resets_and_rollback",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:66",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:403",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_newer_reading_clears_at_real_open_but_api_key_and_explicit_reset_still_deny",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:111",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:403",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-4": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_chronology_five_hours_explicit_resets_and_rollback",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:66",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:57",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_merge_preserves_resetless_provenance_and_later_clearing",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:144",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:57",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_newer_reading_clears_at_real_open_but_api_key_and_explicit_reset_still_deny",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:111",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:57",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-5": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_chronology_five_hours_explicit_resets_and_rollback",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:66",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:403",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_merge_preserves_resetless_provenance_and_later_clearing",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:144",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:403",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_newer_reading_clears_at_real_open_but_api_key_and_explicit_reset_still_deny",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:111",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:403",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-6": [
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_service_builds_account_scoped_snapshot_from_foreign_project_evidence",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:49",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py:6649",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-7": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_unsatisfied_configuration_and_offline_audit_are_distinct",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:125",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:384",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_service_builds_account_scoped_snapshot_from_foreign_project_evidence",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:49",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:384",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-8": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_policy_order_survives_all_non_exhausted_states_and_retries",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:93",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1590",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-9": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_policy_order_survives_all_non_exhausted_states_and_retries",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:93",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1590",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-10": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_policy_order_survives_all_non_exhausted_states_and_retries",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:93",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1521",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-11": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_policy_order_survives_all_non_exhausted_states_and_retries",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:93",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1459",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_every_same_provider_pair_has_an_explicit_non_independent_marker",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:109",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1459",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-12": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_every_same_provider_pair_has_an_explicit_non_independent_marker",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:109",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1459",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-13": [
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_one_reroute_after_a_real_exhaustion_denial_and_verifier_repick",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:72",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1935",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-14": [
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_one_reroute_after_a_real_exhaustion_denial_and_verifier_repick",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:72",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1935",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_second_exhaustion_stops_and_other_denials_never_retry",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:96",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1935",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-15": [
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_one_reroute_after_a_real_exhaustion_denial_and_verifier_repick",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:72",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:464",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_second_exhaustion_stops_and_other_denials_never_retry",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:96",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:464",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_newer_reading_clears_at_real_open_but_api_key_and_explicit_reset_still_deny",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:111",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/admission_metadata.py:464",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-16": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_unsatisfied_configuration_and_offline_audit_are_distinct",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:125",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1921",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_second_exhaustion_stops_and_other_denials_never_retry",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:96",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1921",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-17": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_unsatisfied_configuration_and_offline_audit_are_distinct",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:125",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1921",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-18": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_unsatisfied_configuration_and_offline_audit_are_distinct",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:125",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1590",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_one_reroute_after_a_real_exhaustion_denial_and_verifier_repick",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:72",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1590",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-19": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_unsatisfied_configuration_and_offline_audit_are_distinct",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:125",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py:6649",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_service_builds_account_scoped_snapshot_from_foreign_project_evidence",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:49",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py:6649",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-20": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_merge_preserves_resetless_provenance_and_later_clearing",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:144",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/provider_restrictions.py:94",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_newer_reading_clears_at_real_open_but_api_key_and_explicit_reset_still_deny",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:111",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/provider_restrictions.py:94",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ],
+  "RT-RX-21": [
+    {
+      "test": "codex:tests.test_route_exhausted.RouteExhaustedTests.test_every_same_provider_pair_has_an_explicit_non_independent_marker",
+      "source": "packages/codex-agents/tests/test_route_exhausted.py:109",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1590",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    },
+    {
+      "test": "codex:tests.test_route_exhausted_open.RouteExhaustedOpenTests.test_newer_reading_clears_at_real_open_but_api_key_and_explicit_reset_still_deny",
+      "source": "packages/codex-agents/tests/test_route_exhausted_open.py:111",
+      "code": "packages/codex-agents/native-package/.codex/orchestration/codex_agents/routing.py:1590",
+      "code_status": "partial_implementation_new_tests_pass_regression_conflict_stop"
+    }
+  ]
+}

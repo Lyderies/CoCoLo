@@ -1722,7 +1722,7 @@ PROVIDER_HEADROOM_REQUIRED_FIELDS = {
     "schema_version", "record_type", "record_id", "provider", "account_fingerprint",
     "windows", "status", "run_id", "phase", "observed_at_ms",
 }
-PROVIDER_HEADROOM_FIELDS = PROVIDER_HEADROOM_REQUIRED_FIELDS | {"probe_id"}
+PROVIDER_HEADROOM_FIELDS = PROVIDER_HEADROOM_REQUIRED_FIELDS | {"probe_id", "restriction_provenance"}
 # When an observation was taken relative to the run it belongs to.
 OBSERVATION_PHASES = {"before", "during", "after"}
 HEADROOM_WINDOW_FIELDS = {"window_minutes", "scope", "used_percent", "resets_at"}
@@ -1875,6 +1875,14 @@ def validate_provider_headroom(data: Any) -> dict[str, Any]:
         )
         _integer(window["resets_at"], "resets_at", nullable=True)
     _enum(data["status"], CLAUDE_HEADROOM_STATUSES, "status", nullable=True)
+    provenance = data.get("restriction_provenance")
+    if provenance is not None:
+        if not isinstance(provenance, list) or not 1 <= len(provenance) <= 128:
+            raise ContractError("headroom provenance must be a bounded array")
+        for component in provenance:
+            _closed(component, {"windows", "status", "observed_at_ms"}, "headroom provenance")
+            validate_provider_headroom({**{k: v for k, v in data.items() if k != "restriction_provenance"},
+                                       **component})
     _run_phase(data)
     return data
 

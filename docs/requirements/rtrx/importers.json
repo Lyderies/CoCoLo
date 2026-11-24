@@ -1,0 +1,1782 @@
+{
+  "method": "AST routing/admission_metadata imports; open_host_run/open_codex_client/AccountOpenInput/preflight_open references; reverse test-fixture dependency closure. Socket flag includes imported fixture dependencies. Conservative inventory; no importer runs after required conflict stop.",
+  "modules": [
+    {
+      "module": "codex:tests.b2_extra_runs",
+      "path": "packages/codex-agents/tests/b2_extra_runs.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.project_supervisor_fixture",
+      "path": "packages/codex-agents/tests/project_supervisor_fixture.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_billing_admission",
+      "path": "packages/codex-agents/tests/test_account_billing_admission.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_providers"
+      ],
+      "socket_in_dependency_tree": false,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_billing_execution",
+      "path": "packages/codex-agents/tests/test_account_billing_execution.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_billing_probe_worker",
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_billing_jobs",
+      "path": "packages/codex-agents/tests/test_account_billing_jobs.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_claim_jobs",
+      "path": "packages/codex-agents/tests/test_account_claim_jobs.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_account_claim_operation"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_claim_operation",
+      "path": "packages/codex-agents/tests/test_account_claim_operation.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_account_launch_claims"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_claim_storage",
+      "path": "packages/codex-agents/tests/test_account_claim_storage.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_account_claim_operation"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_cleanup_release",
+      "path": "packages/codex-agents/tests/test_account_cleanup_release.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_terminal_delivery",
+        "codex:tests.test_project_execution_grant"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_cleanup_schema",
+      "path": "packages/codex-agents/tests/test_account_cleanup_schema.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_launch_claims",
+        "codex:tests.test_account_open_schema"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_ingress",
+      "path": "packages/codex-agents/tests/test_account_ingress.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_claim_jobs"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_lane_restart",
+      "path": "packages/codex-agents/tests/test_account_lane_restart.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_claim_jobs",
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_launch_claims",
+      "path": "packages/codex-agents/tests/test_account_launch_claims.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_observation_failure",
+      "path": "packages/codex-agents/tests/test_account_observation_failure.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_observation_runs"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_observation_runs",
+      "path": "packages/codex-agents/tests/test_account_observation_runs.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_launch_claims"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_observation_schema",
+      "path": "packages/codex-agents/tests/test_account_observation_schema.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_launch_claims"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_open_schema",
+      "path": "packages/codex-agents/tests/test_account_open_schema.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_account_launch_claims"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_original_open",
+      "path": "packages/codex-agents/tests/test_account_original_open.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_project_open_scope"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_slot_health",
+      "path": "packages/codex-agents/tests/test_account_slot_health.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_store_recovery",
+      "path": "packages/codex-agents/tests/test_account_store_recovery.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_account_terminal_delivery",
+      "path": "packages/codex-agents/tests/test_account_terminal_delivery.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_project_execution_grant",
+        "codex:tests.test_run_holds"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_active_run_capacity",
+      "path": "packages/codex-agents/tests/test_active_run_capacity.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_account_claim_operation",
+        "codex:tests.test_account_launch_claims"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_admission_history_growth",
+      "path": "packages/codex-agents/tests/test_admission_history_growth.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_account_original_open"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_admission_inputs",
+      "path": "packages/codex-agents/tests/test_admission_inputs.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [],
+      "socket_in_dependency_tree": false,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_admission_metadata",
+      "path": "packages/codex-agents/tests/test_admission_metadata.py",
+      "direct_import": true,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [],
+      "socket_in_dependency_tree": false,
+      "result": "failed_see_restart_results"
+    },
+    {
+      "module": "codex:tests.test_append_lookup",
+      "path": "packages/codex-agents/tests/test_append_lookup.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_collector_read_scope",
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_b2_service_outcome",
+      "path": "packages/codex-agents/tests/test_b2_service_outcome.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_deadlines_retention",
+        "codex:tests.test_record_context",
+        "codex:tests.test_result_leases"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_b2_service_outcome_hosts",
+      "path": "packages/codex-agents/tests/test_b2_service_outcome_hosts.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_b2_service_outcome",
+        "codex:tests.test_bridge",
+        "codex:tests.test_record_context"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_b2_service_outcome_paths",
+      "path": "packages/codex-agents/tests/test_b2_service_outcome_paths.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_b2_service_outcome",
+        "codex:tests.test_bridge",
+        "codex:tests.test_deadlines_retention",
+        "codex:tests.test_project_result_usage",
+        "codex:tests.test_record_context"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_b2_service_outcome_round2",
+      "path": "packages/codex-agents/tests/test_b2_service_outcome_round2.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.b2_extra_runs",
+        "codex:tests.test_b2_service_outcome",
+        "codex:tests.test_b2_service_outcome_hosts",
+        "codex:tests.test_b2_service_outcome_paths",
+        "codex:tests.test_b2_service_outcome_sweep",
+        "codex:tests.test_project_operational_qa",
+        "codex:tests.test_record_context"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_b2_service_outcome_sweep",
+      "path": "packages/codex-agents/tests/test_b2_service_outcome_sweep.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_b2_service_outcome",
+        "codex:tests.test_bridge",
+        "codex:tests.test_codex_worker",
+        "codex:tests.test_deadlines_retention",
+        "codex:tests.test_record_context"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_backup_installed_project",
+      "path": "packages/codex-agents/tests/test_backup_installed_project.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_claim_operation",
+        "codex:tests.test_account_launch_claims"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_billing_gate",
+      "path": "packages/codex-agents/tests/test_billing_gate.py",
+      "direct_import": true,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_billing_rejudge",
+        "codex:tests.test_providers"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_billing_probe_worker",
+      "path": "packages/codex-agents/tests/test_billing_probe_worker.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_claude_init_plugins"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_billing_rejudge",
+      "path": "packages/codex-agents/tests/test_billing_rejudge.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_billing_admission",
+        "codex:tests.test_account_billing_jobs"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_billing_writers",
+      "path": "packages/codex-agents/tests/test_billing_writers.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_billing_rejudge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_binding_lookup",
+      "path": "packages/codex-agents/tests/test_binding_lookup.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_append_lookup"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_bridge",
+      "path": "packages/codex-agents/tests/test_bridge.py",
+      "direct_import": true,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_claude_init_plugins"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_capacity_status_api",
+      "path": "packages/codex-agents/tests/test_capacity_status_api.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_owned_execution"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_claim_denial_recovery",
+      "path": "packages/codex-agents/tests/test_claim_denial_recovery.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_claim_storage"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_claude_activity",
+      "path": "packages/codex-agents/tests/test_claude_activity.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_codex_activity_execution"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_claude_init_plugins",
+      "path": "packages/codex-agents/tests/test_claude_init_plugins.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_claude_structured_output",
+      "path": "packages/codex-agents/tests/test_claude_structured_output.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_cleanup_contracts",
+      "path": "packages/codex-agents/tests/test_cleanup_contracts.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_terminal_delivery"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_cleanup_custody",
+      "path": "packages/codex-agents/tests/test_cleanup_custody.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_codex_worker"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_cleanup_receipt_lifetime",
+      "path": "packages/codex-agents/tests/test_cleanup_receipt_lifetime.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_cleanup_release",
+        "codex:tests.test_account_terminal_delivery",
+        "codex:tests.test_bridge",
+        "codex:tests.test_lost_run_settlement"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_cli_billing_runtime",
+      "path": "packages/codex-agents/tests/test_cli_billing_runtime.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_billing_jobs",
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_cli_open_client_runtime",
+      "path": "packages/codex-agents/tests/test_cli_open_client_runtime.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_dispatch_client_runtime"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_codex_activity_execution",
+      "path": "packages/codex-agents/tests/test_codex_activity_execution.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_codex_preparation",
+      "path": "packages/codex-agents/tests/test_codex_preparation.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_codex_verifier_preparation",
+      "path": "packages/codex-agents/tests/test_codex_verifier_preparation.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_project_open_scope"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_codex_worker",
+      "path": "packages/codex-agents/tests/test_codex_worker.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_collector_read_scope",
+      "path": "packages/codex-agents/tests/test_collector_read_scope.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_original_open",
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_collector_stale",
+      "path": "packages/codex-agents/tests/test_collector_stale.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_container_recovery",
+      "path": "packages/codex-agents/tests/test_container_recovery.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_lost_run_settlement"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_contracts",
+      "path": "packages/codex-agents/tests/test_contracts.py",
+      "direct_import": true,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [],
+      "socket_in_dependency_tree": false,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_deadlines_retention",
+      "path": "packages/codex-agents/tests/test_deadlines_retention.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_record_context",
+        "codex:tests.test_result_leases"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_diagnostic_delivery",
+      "path": "packages/codex-agents/tests/test_diagnostic_delivery.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_dispatch_client_runtime",
+      "path": "packages/codex-agents/tests/test_dispatch_client_runtime.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_project_execution_processes"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_dispatch_preflight",
+      "path": "packages/codex-agents/tests/test_dispatch_preflight.py",
+      "direct_import": true,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [],
+      "socket_in_dependency_tree": false,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_evaluation",
+      "path": "packages/codex-agents/tests/test_evaluation.py",
+      "direct_import": true,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [],
+      "socket_in_dependency_tree": false,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_event_retention",
+      "path": "packages/codex-agents/tests/test_event_retention.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_event_shapes",
+      "path": "packages/codex-agents/tests/test_event_shapes.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_health_containers",
+      "path": "packages/codex-agents/tests/test_health_containers.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_health_monitor",
+      "path": "packages/codex-agents/tests/test_health_monitor.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_hold_lifecycle",
+      "path": "packages/codex-agents/tests/test_hold_lifecycle.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_lost_run_settlement",
+        "codex:tests.test_result_lifetime"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_host_open_lane",
+      "path": "packages/codex-agents/tests/test_host_open_lane.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_result_lease_lane"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_host_open_provenance",
+      "path": "packages/codex-agents/tests/test_host_open_provenance.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_account_claim_storage",
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_host_slots",
+      "path": "packages/codex-agents/tests/test_host_slots.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_project_driver"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_large_project_backups",
+      "path": "packages/codex-agents/tests/test_large_project_backups.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_launch_claims",
+        "codex:tests.test_learning_source_image_legacy"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_launch_signature_preparation",
+      "path": "packages/codex-agents/tests/test_launch_signature_preparation.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_providers"
+      ],
+      "socket_in_dependency_tree": false,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_learning_chunk_membership",
+      "path": "packages/codex-agents/tests/test_learning_chunk_membership.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_project_learning_corpus"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_learning_cli",
+      "path": "packages/codex-agents/tests/test_learning_cli.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_account_launch_claims",
+        "codex:tests.test_large_project_backups"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_learning_cycle_core",
+      "path": "packages/codex-agents/tests/test_learning_cycle_core.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_learning_engine",
+      "path": "packages/codex-agents/tests/test_learning_engine.py",
+      "direct_import": true,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_learning_migration",
+      "path": "packages/codex-agents/tests/test_learning_migration.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_cli",
+        "codex:tests.test_learning_source_image_legacy",
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_learning_outcome_pages",
+      "path": "packages/codex-agents/tests/test_learning_outcome_pages.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_project_learning_identity"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_learning_qa_upgrade",
+      "path": "packages/codex-agents/tests/test_learning_qa_upgrade.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_project_learning_corpus"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_learning_retention",
+      "path": "packages/codex-agents/tests/test_learning_retention.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_learning_source_image",
+      "path": "packages/codex-agents/tests/test_learning_source_image.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_learning_source_image_legacy",
+      "path": "packages/codex-agents/tests/test_learning_source_image_legacy.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_learning_source_transfer",
+      "path": "packages/codex-agents/tests/test_learning_source_transfer.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_source_image_legacy"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_learning_store",
+      "path": "packages/codex-agents/tests/test_learning_store.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_account_launch_claims"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_ledger_busy_answers",
+      "path": "packages/codex-agents/tests/test_ledger_busy_answers.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_ledger_lock_limits",
+      "path": "packages/codex-agents/tests/test_ledger_lock_limits.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_collector_read_scope",
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_legacy_capacity_upgrade",
+      "path": "packages/codex-agents/tests/test_legacy_capacity_upgrade.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_launch_claims",
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_lost_run_settlement",
+      "path": "packages/codex-agents/tests/test_lost_run_settlement.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_project_driver"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_open_request_lifetime",
+      "path": "packages/codex-agents/tests/test_open_request_lifetime.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_original_open",
+        "codex:tests.test_append_lookup",
+        "codex:tests.test_bridge",
+        "codex:tests.test_project_driver"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_open_withdrawal",
+      "path": "packages/codex-agents/tests/test_open_withdrawal.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_project_driver",
+        "codex:tests.test_result_leases"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_open_withdrawal_successor",
+      "path": "packages/codex-agents/tests/test_open_withdrawal_successor.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_lost_run_settlement",
+        "codex:tests.test_open_withdrawal"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_owned_execution",
+      "path": "packages/codex-agents/tests/test_owned_execution.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_run_holds"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_owner_backup_streamed",
+      "path": "packages/codex-agents/tests/test_owner_backup_streamed.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_launch_claims",
+        "codex:tests.test_large_project_backups",
+        "codex:tests.test_learning_source_image_legacy"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_owner_terminal_flow",
+      "path": "packages/codex-agents/tests/test_owner_terminal_flow.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_prepared_dispatch",
+      "path": "packages/codex-agents/tests/test_prepared_dispatch.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_codex_worker"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_probe_failure_causes",
+      "path": "packages/codex-agents/tests/test_probe_failure_causes.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_billing_jobs"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_cleanup",
+      "path": "packages/codex-agents/tests/test_project_cleanup.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_result_leases"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_driver",
+      "path": "packages/codex-agents/tests/test_project_driver.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_execution_grant",
+      "path": "packages/codex-agents/tests/test_project_execution_grant.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_claim_storage"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_execution_processes",
+      "path": "packages/codex-agents/tests/test_project_execution_processes.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_account_claim_storage",
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_hold_register",
+      "path": "packages/codex-agents/tests/test_project_hold_register.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_claim_denial_recovery",
+        "codex:tests.test_lost_run_settlement",
+        "codex:tests.test_result_lease_lane",
+        "codex:tests.test_result_leases"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_holds_schema",
+      "path": "packages/codex-agents/tests/test_project_holds_schema.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_result_leases"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_host_open",
+      "path": "packages/codex-agents/tests/test_project_host_open.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_host_open_provenance",
+        "codex:tests.test_run_provenance"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_host_result",
+      "path": "packages/codex-agents/tests/test_project_host_result.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_run_provenance"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_ingress",
+      "path": "packages/codex-agents/tests/test_project_ingress.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_project_request_queue"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_learning_corpus",
+      "path": "packages/codex-agents/tests/test_project_learning_corpus.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_engine",
+        "codex:tests.test_learning_store"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_learning_identity",
+      "path": "packages/codex-agents/tests/test_project_learning_identity.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_claim_storage"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_learning_qa",
+      "path": "packages/codex-agents/tests/test_project_learning_qa.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_store",
+        "codex:tests.test_project_learning_corpus"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_open_scope",
+      "path": "packages/codex-agents/tests/test_project_open_scope.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_project_worker_result"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_operational_qa",
+      "path": "packages/codex-agents/tests/test_project_operational_qa.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_project_worker_result"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_qa_check_receipts",
+      "path": "packages/codex-agents/tests/test_project_qa_check_receipts.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_project_operational_qa"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_qa_commit",
+      "path": "packages/codex-agents/tests/test_project_qa_commit.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_project_operational_qa"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_release_ack",
+      "path": "packages/codex-agents/tests/test_project_release_ack.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_result_leases"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_request_queue",
+      "path": "packages/codex-agents/tests/test_project_request_queue.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_result_persistence"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_result_usage",
+      "path": "packages/codex-agents/tests/test_project_result_usage.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_run_provenance"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_project_worker_result",
+      "path": "packages/codex-agents/tests/test_project_worker_result.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_run_provenance"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_providers",
+      "path": "packages/codex-agents/tests/test_providers.py",
+      "direct_import": true,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [],
+      "socket_in_dependency_tree": false,
+      "result": "failed_see_restart_results"
+    },
+    {
+      "module": "codex:tests.test_publication_replay",
+      "path": "packages/codex-agents/tests/test_publication_replay.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_deadlines_retention",
+        "codex:tests.test_project_holds_schema",
+        "codex:tests.test_publication_replay_driver",
+        "codex:tests.test_record_context",
+        "codex:tests.test_result_leases"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_publication_replay_driver",
+      "path": "packages/codex-agents/tests/test_publication_replay_driver.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_lost_run_settlement",
+        "codex:tests.test_project_driver",
+        "codex:tests.test_publication_retry",
+        "codex:tests.test_trial_run_driver_bugs"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_publication_replay_proofs",
+      "path": "packages/codex-agents/tests/test_publication_replay_proofs.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_publication_replay",
+        "codex:tests.test_publication_replay_driver"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_publication_retry",
+      "path": "packages/codex-agents/tests/test_publication_retry.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_project_driver",
+        "codex:tests.test_trial_run_driver_bugs"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_record_context",
+      "path": "packages/codex-agents/tests/test_record_context.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_claim_storage",
+        "codex:tests.test_bridge",
+        "codex:tests.test_claim_denial_recovery",
+        "codex:tests.test_project_holds_schema",
+        "codex:tests.test_result_leases",
+        "codex:tests.test_run_provenance"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_refusal_steps",
+      "path": "packages/codex-agents/tests/test_refusal_steps.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_required_host_open",
+      "path": "packages/codex-agents/tests/test_required_host_open.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_claim_jobs",
+        "codex:tests.test_account_claim_storage",
+        "codex:tests.test_bridge",
+        "codex:tests.test_run_provenance"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_result_commit_busy",
+      "path": "packages/codex-agents/tests/test_result_commit_busy.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_synchronized_races"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_result_denial_lane",
+      "path": "packages/codex-agents/tests/test_result_denial_lane.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_claim_denial_recovery"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_result_lease_lane",
+      "path": "packages/codex-agents/tests/test_result_lease_lane.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_result_persistence"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_result_leases",
+      "path": "packages/codex-agents/tests/test_result_leases.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_claim_operation"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_result_lifetime",
+      "path": "packages/codex-agents/tests/test_result_lifetime.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_project_driver"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_result_persistence",
+      "path": "packages/codex-agents/tests/test_result_persistence.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_codex_worker"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_retirement_sweep",
+      "path": "packages/codex-agents/tests/test_retirement_sweep.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_deadlines_retention",
+        "codex:tests.test_record_context",
+        "codex:tests.test_result_leases"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_review_qa",
+      "path": "packages/codex-agents/tests/test_review_qa.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_learning_engine"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_review_runner",
+      "path": "packages/codex-agents/tests/test_review_runner.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_review_runner_provenance",
+      "path": "packages/codex-agents/tests/test_review_runner_provenance.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_review_runner"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_review_verdict_required",
+      "path": "packages/codex-agents/tests/test_review_verdict_required.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_contracts"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_routing",
+      "path": "packages/codex-agents/tests/test_routing.py",
+      "direct_import": true,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [],
+      "socket_in_dependency_tree": false,
+      "result": "passed"
+    },
+    {
+      "module": "codex:tests.test_routing_judgment",
+      "path": "packages/codex-agents/tests/test_routing_judgment.py",
+      "direct_import": true,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_routing_risk"
+      ],
+      "socket_in_dependency_tree": false,
+      "result": "passed"
+    },
+    {
+      "module": "codex:tests.test_routing_risk",
+      "path": "packages/codex-agents/tests/test_routing_risk.py",
+      "direct_import": true,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [],
+      "socket_in_dependency_tree": false,
+      "result": "passed"
+    },
+    {
+      "module": "codex:tests.test_rsa_step3",
+      "path": "packages/codex-agents/tests/test_rsa_step3.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_billing_jobs",
+        "codex:tests.test_account_cleanup_release",
+        "codex:tests.test_owned_execution",
+        "codex:tests.test_run_holds"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_run_holds",
+      "path": "packages/codex-agents/tests/test_run_holds.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_active_run_capacity"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_run_provenance",
+      "path": "packages/codex-agents/tests/test_run_provenance.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_project_execution_grant"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_signature_execution",
+      "path": "packages/codex-agents/tests/test_signature_execution.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_signature_inputs"
+      ],
+      "socket_in_dependency_tree": false,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_signature_input_wire",
+      "path": "packages/codex-agents/tests/test_signature_input_wire.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_signature_inputs"
+      ],
+      "socket_in_dependency_tree": false,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_signature_inputs",
+      "path": "packages/codex-agents/tests/test_signature_inputs.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [],
+      "socket_in_dependency_tree": false,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_signature_job_intake",
+      "path": "packages/codex-agents/tests/test_signature_job_intake.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_signature_inputs"
+      ],
+      "socket_in_dependency_tree": false,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_signature_payloads",
+      "path": "packages/codex-agents/tests/test_signature_payloads.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_signature_inputs"
+      ],
+      "socket_in_dependency_tree": false,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_signature_process",
+      "path": "packages/codex-agents/tests/test_signature_process.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_signature_inputs"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_signature_worker_pool",
+      "path": "packages/codex-agents/tests/test_signature_worker_pool.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_signature_inputs"
+      ],
+      "socket_in_dependency_tree": false,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_state_location",
+      "path": "packages/codex-agents/tests/test_state_location.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_account_launch_claims"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_status_write_frequency",
+      "path": "packages/codex-agents/tests/test_status_write_frequency.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_claude_activity",
+        "codex:tests.test_codex_activity_execution"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_synchronized_races",
+      "path": "packages/codex-agents/tests/test_synchronized_races.py",
+      "direct_import": false,
+      "open_boundary_reference": true,
+      "fixture_dependencies": [
+        "codex:tests.test_account_launch_claims",
+        "codex:tests.test_account_terminal_delivery",
+        "codex:tests.test_providers"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_trial_run_driver_bugs",
+      "path": "packages/codex-agents/tests/test_trial_run_driver_bugs.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_bridge",
+        "codex:tests.test_project_driver"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_type_lookups",
+      "path": "packages/codex-agents/tests/test_type_lookups.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_append_lookup"
+      ],
+      "socket_in_dependency_tree": true,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "codex:tests.test_validation_cli_client_boundary",
+      "path": "packages/codex-agents/tests/test_validation_cli_client_boundary.py",
+      "direct_import": false,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [
+        "codex:tests.test_contracts"
+      ],
+      "socket_in_dependency_tree": false,
+      "result": "not_run_additional_assertion_conflict_stop"
+    },
+    {
+      "module": "root:test_setup_wizard_steps",
+      "path": "tests/test_setup_wizard_steps.py",
+      "direct_import": true,
+      "open_boundary_reference": false,
+      "fixture_dependencies": [],
+      "socket_in_dependency_tree": false,
+      "result": "not_run_additional_assertion_conflict_stop"
+    }
+  ],
+  "restart_note": "2026-11-24: partial implementation; stop on additional supersession fixture conflict, not on resolved 124d provenance comparison. Static socket dependency flags are not observed failures."
+}

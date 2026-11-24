@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import os
+from test_framework import requirements
+from test_golden import compare_json, legacy_route_availability
 import json
 import tempfile
 import unittest
@@ -80,7 +83,7 @@ def outcome(task: dict, policy: dict, primary: str) -> object:
     """The route, or the refusal, exactly as a caller would see it."""
 
     try:
-        return route_task(task, policy, primary_provider=primary)
+        return legacy_route_availability(route_task(task, policy, primary_provider=primary), task, policy)
     except ContractError as error:
         return {"refused": str(error)}
 
@@ -296,12 +299,10 @@ class GoldenTests(unittest.TestCase):
                       self.shipped["providers"]["claude"]["verifier"]["by_risk"]):
             self.assertEqual({"low", "medium"}, set(bands))
 
+    @requirements("RT-RX-21", why_not_scenario="Pure policy cross product with the legacy availability projection.")
     def test_shipped_policy_routes_identically_over_the_cross_product(self) -> None:
-        expected = json.loads(GOLDEN_PATH.read_text())
-        actual = golden_buckets(self.shipped)
-        self.assertEqual(sorted(expected), sorted(actual))
-        changed = sorted(name for name in expected if expected[name] != actual[name])
-        self.assertEqual([], changed, "routes differ from the approved shipped policy")
+        compare_json(path=GOLDEN_PATH, actual=golden_buckets(self.shipped), requirement="RT-RX-21",
+                     declared={"RT-RX-21"}, known={"RT-RX-21"}, environ=os.environ)
 
 
 class RiskRoutingTests(unittest.TestCase):

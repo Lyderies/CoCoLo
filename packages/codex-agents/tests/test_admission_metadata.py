@@ -86,7 +86,7 @@ class AdmissionMetadataTests(unittest.TestCase):
 
     def test_empty_unified_windows_keep_rejection_or_warning_until_fallback_expiry(self):
         cases = {case['name']: case for case in json.loads(FIXTURE.read_text())['cases']}
-        horizon = admission_metadata.EVIDENCE_HORIZON_MS
+        horizon = admission_metadata.FIVE_HOURS_MS
         for status in ('rejected', 'allowed_warning'):
             for delta in (0, 1, -horizon, -horizon - 1):
                 for entrypoint, suffix in (('evaluate_admission', 'admitted'), ('evaluate_launch', 'launch')):
@@ -99,7 +99,7 @@ class AdmissionMetadataTests(unittest.TestCase):
                     }, account_fingerprint='a' * 64, observed_at_ms=now + delta)
                     validate_provider_headroom(headroom)
                     self.assertEqual([], headroom['windows'])
-                    arguments['headroom'].append([headroom, '9' * 64])
+                    arguments['headroom'] = [[headroom, '9' * 64]]
                     arguments['billing'].append([billing, '8' * 64])
                     active = delta >= -horizon
                     rating = ('exhausted' if status == 'rejected' else 'constrained') if active else 'ample'

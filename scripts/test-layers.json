@@ -256,6 +256,8 @@
  "codex:tests.test_review_runner": "unit",
  "codex:tests.test_review_runner_provenance": "unit",
  "codex:tests.test_review_verdict_required": "unit",
+ "codex:tests.test_route_exhausted": "unit",
+ "codex:tests.test_route_exhausted_open": "scenario",
  "codex:tests.test_routing": "scenario",
  "codex:tests.test_routing_judgment": "unit",
  "codex:tests.test_routing_risk": "unit",

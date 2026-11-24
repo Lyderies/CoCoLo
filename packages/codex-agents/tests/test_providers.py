@@ -2628,13 +2628,13 @@ os.kill(os.getpid(), signal.SIGKILL)
                       if record["phase"] == "during"][-1]
         self.assertEqual("rejected", merged["status"])
         # The reset-less rejection lasts its day, not the allowed readings' hour.
-        self.assertEqual(rejected_at + 24 * 3_600_000 + 1, merged["windows"][0]["resets_at"])
+        self.assertEqual(rejected_at + 5 * 3_600_000 + 1, merged["windows"][0]["resets_at"])
         after_reset = reset * 1000 + 1
         self.clean_claude_billing(after_reset)
         self.assert_denied("provider_exhausted", "claude", now_ms=after_reset + 1)
 
     def test_later_aggregate_and_resetless_restrictions_are_not_discarded(self) -> None:
-        horizon = providers.EVIDENCE_HORIZON_MS
+        horizon = providers.FIVE_HOURS_MS
         quiet = {"isUsingOverage": False, "overageStatus": "rejected",
                  "overageDisabledReason": "org_level_disabled"}
         for status in ("rejected", "allowed_warning"):
@@ -2668,7 +2668,7 @@ os.kill(os.getpid(), signal.SIGKILL)
                     self.clock = last_observed + horizon + 1
 
     def test_billing_probe_merge_preserves_aggregate_and_resetless_expiry(self) -> None:
-        horizon = providers.EVIDENCE_HORIZON_MS
+        horizon = providers.FIVE_HOURS_MS
         quiet = {"isUsingOverage": False, "overageStatus": "rejected",
                  "overageDisabledReason": "org_level_disabled"}
         for status in ("rejected", "allowed_warning"):
@@ -2723,9 +2723,9 @@ os.kill(os.getpid(), signal.SIGKILL)
                            utilization=step / 1000, resetsAt=reset, **quiet)
         with self.ledger.repository(self.project_id) as repository:
             merged = [item for item in repository.records("provider_headroom") if item["phase"] == "during"][-1]
-        for at in (reset * 1000 + 1, rejected_at + providers.EVIDENCE_HORIZON_MS):
+        for at in (reset * 1000 + 1, rejected_at + providers.FIVE_HOURS_MS):
             self.assertEqual("exhausted", providers._headroom_state("claude", merged, at))
-        self.assertIsNone(providers._headroom_state("claude", merged, rejected_at + providers.EVIDENCE_HORIZON_MS + 1))
+        self.assertIsNone(providers._headroom_state("claude", merged, rejected_at + providers.FIVE_HOURS_MS + 1))
 
     def test_run_cap_keeps_another_projects_future_reset_after_clock_rollback(self) -> None:
         self.limit("codex", max_admissions_per_window=1)

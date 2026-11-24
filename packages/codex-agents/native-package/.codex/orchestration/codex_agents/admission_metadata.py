@@ -10,6 +10,8 @@ must come from closed bounded data decoding; no normal API is enabled here.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
+from copy import deepcopy
 from typing import Any
 
 from .learning_contracts import CLAUDE_SUBSCRIPTION_TYPES, CODEX_SUBSCRIPTION_PLAN_TYPES, parse_semver
@@ -53,16 +55,22 @@ def _latest(records: list[tuple[dict[str, Any], str]]) -> tuple[dict[str, Any], 
 
 
 def _window_live(window: dict[str, Any], observed_at_ms: int, now_ms: int) -> bool:
-    # A window counts until it resets; one with no reset time counts for a day.
+    # A window counts until it resets; one with no reset time counts for five hours.
     if window["resets_at"] is not None:
         return window["resets_at"] > now_ms
     # Future observations still restrict after a clock rollback, just like
     # future paid-usage evidence; a favourable older reading cannot clear them.
-    return now_ms - observed_at_ms <= EVIDENCE_HORIZON_MS
+    return now_ms - observed_at_ms <= FIVE_HOURS_MS
 
 
-def _headroom_state(provider: str, record: dict[str, Any], now_ms: int) -> str | None:
-    """Rate one headroom record: exhausted, constrained or ample; None once reset."""
+def _headroom_state(
+    provider: str, record: dict[str, Any], now_ms: int, *, unknown_when_unmeasured: bool = False,
+) -> str | None:
+    """Rate one record; keep legacy ample for unmeasured live windows by default.
+
+    The usage classifier requests unknown for those windows, so they neither
+    establish availability nor clear a resetless restriction.
+    """
 
     windows = [
         window for window in record["windows"]
@@ -73,11 +81,13 @@ def _headroom_state(provider: str, record: dict[str, Any], now_ms: int) -> str |
         # empty unifiedWindows map. With no reset information, use the same
         # fallback age bound. Explicitly expired windows never use this path.
         if (provider == "claude" and not record["windows"]
-                and now_ms - record["observed_at_ms"] <= EVIDENCE_HORIZON_MS):
+                and now_ms - record["observed_at_ms"] <= FIVE_HOURS_MS):
             if record["status"] == "rejected":
                 return "exhausted"
             if record["status"] == "allowed_warning":
                 return "constrained"
+            if record["status"] == "allowed":
+                return "ample"
         return None
     used = [window["used_percent"] for window in windows if window["used_percent"] is not None]
     if provider == "codex":
@@ -85,7 +95,7 @@ def _headroom_state(provider: str, record: dict[str, Any], now_ms: int) -> str |
             return "exhausted"
         if any(value >= CODEX_CONSTRAINED_PERCENT for value in used):
             return "constrained"
-        return "ample"
+        return "ample" if used or not unknown_when_unmeasured else None
     # Under a Claude primary, Claude children spend the primary's own allowance,
     # so Claude windows use the same thresholds as Codex.
     if record["status"] == "rejected" or any(
@@ -96,7 +106,7 @@ def _headroom_state(provider: str, record: dict[str, Any], now_ms: int) -> str |
         value >= CODEX_CONSTRAINED_PERCENT for value in used
     ):
         return "constrained"
-    return "ample"
+    return "ample" if used or not unknown_when_unmeasured else None
 
 
 def _admission_limits(settings: Any) -> tuple[tuple[int, int, int], tuple[int, int, int], int | None] | None:
@@ -376,46 +386,113 @@ def paid_usage_digest(
     return None
 
 
-def headroom_state(
-    provider: str,
-    fingerprint: str,
-    headroom: list[tuple[dict[str, Any], str]],
-    billing: list[tuple[dict[str, Any], str]],
-    now_ms: int,
-) -> tuple[str, str | None]:
-    """The most restrictive unreset headroom, and the latest record at that level.
+@dataclass(frozen=True)
+class ProviderStateSnapshot:
+    """Service-built advisory state. Never deserialized from task/assignment data."""
 
-    Only the latest record at the deciding level is named: a decision's digest
-    list is bounded, and runs keep adding headroom records. For Codex, the
-    latest billing reading disallowing ordinary usage also exhausts it, and so
-    does any such reading stamped after now, so a clock step back never hides it.
+    project_id: str
+    evaluated_at_ms: int
+    providers: dict[str, Any]
+
+    def audit(self) -> dict[str, Any]:
+        from .learning_contracts import content_digest
+        body = {"format_version": 1, "classifier": "RT-RX-1", "project_id": self.project_id,
+                "evaluated_at_ms": self.evaluated_at_ms, "providers": deepcopy(self.providers)}
+        return {**body, "snapshot_ref": content_digest(body), "status": "checked"}
+
+
+def _headroom_components(record):
+    # Merges retain original chronology and reset provenance outside legacy windows.
+    return record.get("restriction_provenance", [record])
+
+
+def classify_provider_state(provider, fingerprint, headroom, billing, now_ms):
+    """One pure usage classifier for routing, admission and the launch recheck.
+
+    A clearing reading replaces only older resetless components. Measured resets,
+    billing restrictions and future observations remain independently applicable.
     """
-
-    rank = {"ample": 0, "constrained": 1, "exhausted": 2}
-    state = "ample"
-    state_digest: str | None = None
+    rank = {"unknown": -1, "ample": 0, "constrained": 1, "exhausted": 2}
+    own = []
     for record, digest in headroom:
-        # A record stamped after now still restricts, so a clock step back
-        # never hides an exhausted window.
         if record["provider"] != provider or record["account_fingerprint"] != fingerprint:
             continue
-        rated = _headroom_state(provider, record, now_ms)
-        if rated is None:
+        if "restriction_provenance" not in record:
+            own.append((record, digest))
             continue
-        if rank[rated] >= rank[state]:
-            state, state_digest = rated, digest
+        components = _headroom_components(record)
+        # Preserve the conservative overflow merge for measured resets: each
+        # window's restriction lasts through the latest measured reset for it.
+        # Synthesized resetless expiries never extend a measured restriction.
+        resets = {}
+        for component in components:
+            for window in component["windows"]:
+                if window["resets_at"] is not None:
+                    key = (window["scope"], window["window_minutes"])
+                    resets[key] = max(resets.get(key, window["resets_at"]), window["resets_at"])
+        for component in components:
+            windows = [
+                {**window, "resets_at": resets[(window["scope"], window["window_minutes"])]}
+                if window["resets_at"] is not None else window
+                for window in component["windows"]
+            ]
+            own.append(({**component, "windows": windows}, digest))
+    clearing = [(record, digest) for record, digest in own
+                if record["observed_at_ms"] <= now_ms
+                and _headroom_state(provider, record, now_ms, unknown_when_unmeasured=True) in {"ample", "constrained"}]
+    newest_clear = _latest(clearing)
+    rated = []
+    cleared = []
+    for record, digest in own:
+        explicit = [w for w in record["windows"] if w["resets_at"] is not None]
+        resetless = [w for w in record["windows"] if w["resets_at"] is None]
+        components = []
+        if explicit:
+            components.append(({**record, "windows": explicit}, False))
+        if resetless or not record["windows"]:
+            components.append(({**record, "windows": resetless}, True))
+        for component, fallback in components:
+            state = _headroom_state(provider, component, now_ms, unknown_when_unmeasured=True)
+            if state is None:
+                continue
+            if (fallback and state in {"exhausted", "constrained"} and newest_clear is not None
+                    and newest_clear[0]["observed_at_ms"] > record["observed_at_ms"]):
+                cleared.append(digest)
+                continue
+            resets = [w["resets_at"] for w in component["windows"]
+                      if w["resets_at"] is not None and w["resets_at"] > now_ms
+                      and _headroom_state(provider, {**component, "windows": [w]}, now_ms,
+                                          unknown_when_unmeasured=True) == state]
+            rated.append((state, digest, resets,
+                          record["observed_at_ms"] + FIVE_HOURS_MS + 1 if fallback else None,
+                          "headroom"))
     if provider == "codex":
-        own = [
-            item for item in billing
-            if item[0]["provider"] == provider and item[0]["account_fingerprint"] == fingerprint
-        ]
-        latest = _latest([item for item in own if item[0]["observed_at_ms"] <= now_ms])
-        if (latest is not None and latest[0]["ordinary_usage_allowed"] is False) or any(
-            record["observed_at_ms"] > now_ms and record["ordinary_usage_allowed"] is False
-            for record, _ in own
-        ):
-            state = "exhausted"
-    return state, state_digest
+        own_billing = [(r, d) for r, d in billing
+                       if r["provider"] == provider and r["account_fingerprint"] == fingerprint]
+        latest = _latest([(r, d) for r, d in own_billing if r["observed_at_ms"] <= now_ms])
+        for record, digest in own_billing:
+            if record.get("ordinary_usage_allowed") is False and (
+                    record["observed_at_ms"] > now_ms or (latest is not None and (record, digest) == latest)):
+                rated.append(("exhausted", digest, [], None, "ordinary_usage_denied"))
+    state = max((item[0] for item in rated), key=rank.__getitem__, default="unknown")
+    deciding = [item for item in rated if item[0] == state]
+    # Admission cites only one deciding record. The route additionally explains clearing.
+    digests = list(dict.fromkeys(item[1] for item in deciding))[-1:]
+    if cleared and newest_clear is not None:
+        digests = list(dict.fromkeys([*digests, cleared[-1], newest_clear[1]]))
+    resets = sorted({reset for item in deciding for reset in item[2]})
+    expiries = [item[3] for item in deciding if item[3] is not None]
+    return {"state": state, "known": state != "unknown", "evidence_digests": digests,
+            "reasons": list(dict.fromkeys(item[4] for item in deciding)),
+            "next_reset_ms": min(resets, default=None), "blocking_resets_ms": resets,
+            "fallback_expiry_ms": max(expiries, default=None),
+            "decision_digest": deciding[-1][1] if deciding else None}
+
+
+def headroom_state(provider, fingerprint, headroom, billing, now_ms):
+    """Admission retains its validated three-rating vocabulary; unknown passes usage."""
+    result = classify_provider_state(provider, fingerprint, headroom, billing, now_ms)
+    return (result["state"] if result["known"] else "ample", result["decision_digest"])
 
 
 def evaluate_launch(

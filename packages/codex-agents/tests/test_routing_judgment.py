@@ -3,6 +3,9 @@ from __future__ import annotations
 
 # ruff: noqa: I001 -- support bootstraps the native package.
 import json
+import os
+from test_framework import requirements
+from test_golden import compare_json
 import unittest
 from copy import deepcopy
 
@@ -66,15 +69,15 @@ class JudgmentRoutingTests(unittest.TestCase):
                     self.assertEqual(short(medium), short(extreme))
                     self.assertEqual(risk, medium["routing_basis"]["risk_band"])
 
+    @requirements("RT-RX-21", why_not_scenario="Pure legacy route golden comparison.")
     def test_high_critical_routes_are_unchanged(self):
-        old = json.loads(LEGACY_GOLDEN.read_text())
         actual = golden_buckets(self.shipped)
-        high = {key: value for key, value in old.items()
+        high = {key: value for key, value in actual.items()
                 if "/high/" in key or "/critical/" in key}
         self.assertEqual(108, len(high))
-        self.assertEqual(high, {key: actual[key] for key in high})
-        shipped_golden = json.loads(GOLDEN_PATH.read_text())
-        self.assertEqual(high, {key: shipped_golden[key] for key in high})
+        for path in (LEGACY_GOLDEN, GOLDEN_PATH):
+            compare_json(path=path, actual=high, keys=high, requirement="RT-RX-21",
+                         declared={"RT-RX-21"}, known={"RT-RX-21"}, environ=os.environ)
 
     def test_missing_cell_falls_back_and_records_it(self):
         policy = deepcopy(self.policy)
@@ -169,11 +172,13 @@ class JudgmentRoutingTests(unittest.TestCase):
             self.assertEqual(first, retry)
             self.assertNotIn("escalation", retry.get("routing_basis", {}))
 
+    @requirements("RT-RX-21", why_not_scenario="Pure legacy route golden comparison.")
     def test_policy_v6_loads_and_old_policy_still_routes(self):
         self.assertEqual(6, self.shipped["version"])
         legacy = load_policy(LEGACY_PATH)
         self.assertEqual(5, legacy["version"])
-        self.assertEqual(json.loads(LEGACY_GOLDEN.read_text()), golden_buckets(legacy))
+        compare_json(path=LEGACY_GOLDEN, actual=golden_buckets(legacy), requirement="RT-RX-21",
+                     declared={"RT-RX-21"}, known={"RT-RX-21"}, environ=os.environ)
         # Already shipped bounded coding remains byte-for-byte identical, including retries.
         legacy = enable_providers(legacy)
         for risk in ("low", "medium"):
