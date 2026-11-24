@@ -2027,6 +2027,9 @@ DISPATCH_RESULT_FIELDS = {
 }
 DISPATCH_RESULT_SCHEMA_VERSION = 3
 DISPATCH_RESULT_V2_FIELDS = DISPATCH_RESULT_FIELDS | {"result_validation_reason_code"}
+# L6.1: the Claude client's own tool names; any other denied name is reported as "other".
+CLIENT_TOOL_NAMES = frozenset({"Read", "Glob", "Grep", "Bash", "Write", "Edit", "MultiEdit", "NotebookEdit",
+    "WebFetch", "WebSearch", "Task", "TodoWrite", "StructuredOutput", "other"})
 DISPATCH_RESULT_V3_FIELDS = DISPATCH_RESULT_V2_FIELDS | {"client_diagnostics"}
 
 

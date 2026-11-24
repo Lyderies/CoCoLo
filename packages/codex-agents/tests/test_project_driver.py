@@ -1545,6 +1545,63 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
             recorders[0].record_claude_rate_limit_event(
                 self.project_id, run_handle=run_handle, rate_limit_info=RATE_LIMIT['rate_limit_info'])
 
+    def test_l6_1_a_tool_the_client_denied_is_reported_in_the_dispatch_reply(self):
+        # L6.1: the denial the client reports reaches the reply as fixed fields (count and tool names), no inputs.
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        frame = result_frame()
+        frame['permission_denials'] = [{'tool_name': 'Write', 'tool_input': {'file_path': '/PRIVATE-CANARY'}}]
+        self.frames('claude', [init_frame(), frame])
+        dispatched = self.dispatch_claude(context, route_path, run_handle)
+        report = dispatched['bridge_report']
+        self.assertEqual(('claude_tool_not_allowed', 'failed'), (report['outcome'], report['terminal_state']))
+        self.assertIn('claude_tool_not_allowed', dispatched['result']['summary'])
+        self.assertEqual({'count': 1, 'tools': ['Write']}, report['permission_denials'])
+        self.assertNotIn('PRIVATE-CANARY', json.dumps(dispatched))
+
+    def test_l6_2_open_refuses_an_uncommitted_read_path_before_any_admission(self):
+        # L6.2: dispatch-preflight refuses an uncommitted read path; open refuses it the same way, admitting nothing.
+        task = self.write('l6-task.json', self.task())
+        route = self.cli_for(self.project, 'learning-route', '--task', task)
+        (self.project / 'draft-l6.txt').write_text('uncommitted\n')
+        assigned = self.assignment_for(route, context=['draft-l6.txt'])
+        common = ('--task', task, '--assignment', self.write('l6-assignment.json', assigned),
+                  '--parent-grant', self.write('l6-grant.json', PARENT_GRANT))
+        route_path = self.write('l6-route.json', route)
+        orchestration = self.cli_for(self.project, 'learning-open-orchestration')['orchestration_handle']
+        started = []
+        preflight = self.cli_for(self.project, 'dispatch-preflight', *common, expected=2)
+        with mock.patch.object(cli, '_start_project_host', side_effect=lambda *a, **k: started.append(a)), \
+                mock.patch.object(cli, 'check_backend', side_effect=lambda *a, **k: started.append(a)):
+            opened = self.cli_for(self.project, 'learning-open-host-run', *common, '--route', route_path,
+                                  '--orchestration-handle', orchestration, expected=2)
+        self.assertEqual([], started)   # no host start and no backend call before the refusal
+        self.assertEqual(preflight['reason'], opened['reason'])
+        connection = self.collector_ledger._connection
+        for table in ('host_run_bindings', 'active_run_capacity'):
+            self.assertEqual(0, connection.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0], table)
+
+    def test_l6_2_a_supplied_non_bridge_route_that_resolves_to_bridge_is_refused_before_admission(self):
+        task = self.write('l6b-task.json', self.task())
+        route = self.cli_for(self.project, 'learning-route', '--task', task)
+        (self.project / 'draft-l6b.txt').write_text('uncommitted\n')
+        assigned = self.assignment_for(route, context=['draft-l6b.txt'])
+        common = ('--task', task, '--assignment', self.write('l6b-assignment.json', assigned),
+                  '--parent-grant', self.write('l6b-grant.json', PARENT_GRANT))
+        route_path = self.write('l6b-route.json', {**route, 'dispatch': 'native'})
+        orchestration = self.cli_for(self.project, 'learning-open-orchestration')['orchestration_handle']
+        started = []
+        # The supplied route is accepted as supplied (shape checks and the changed-route comparison are stubbed);
+        # the installed route it is refreshed to is the bridge route.
+        with mock.patch.object(cli, '_start_project_host', side_effect=lambda *a, **k: started.append(a)), \
+                mock.patch.object(cli, 'validate_assignment'), mock.patch.object(cli, '_same_route', return_value=True):
+            opened = self.cli_for(self.project, 'learning-open-host-run', *common, '--route', route_path,
+                                  '--orchestration-handle', orchestration, expected=2)
+        self.assertEqual([], started)
+        self.assertEqual('dispatch refused', opened.get('error'), opened)
+        connection = self.collector_ledger._connection
+        for table in ('host_run_bindings', 'active_run_capacity'):
+            self.assertEqual(0, connection.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0], table)
+
     def test_a_running_claude_child_reports_live_status_and_stops_on_cancellation(self):
         context, route_path, orchestration, run_handle = self.open_claude_run()
         # The child starts and does some work, then goes quiet well inside every bound.

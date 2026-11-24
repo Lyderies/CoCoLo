@@ -121,7 +121,7 @@ def result_frame(text: str | None = None) -> dict:
         "usage": {"input_tokens": 120, "output_tokens": 30,
                   "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
         "total_cost_usd": 0.42,
-        "permission_denials": [{"tool_name": "Read", "tool_input": {"file_path": "/x"}}],
+        "permission_denials": [],
     }
 
 
@@ -384,8 +384,38 @@ class ClaudeBridgeTests(BridgeTestCase):
         report = output["bridge_report"]
         self.assertEqual(("result", None), (report["outcome"], report["terminal_state"]))
         self.assertEqual(0.42, report["usage"]["api_equivalent_cost_usd_estimate"])
-        self.assertEqual({"count": 1, "tools": ["Read"]}, report["permission_denials"])
-        self.assertNotIn("/x", json.dumps(output))
+        self.assertEqual({"count": 0, "tools": []}, report["permission_denials"])
+
+    def test_l6_1_a_tool_the_client_denied_stops_the_run_with_a_fixed_reason(self) -> None:
+        route, assigned, handle = self.claude_run()
+        frame = result_frame()
+        frame["permission_denials"] = [{"tool_name": "Write", "tool_input": {"file_path": "/PRIVATE-CANARY"}}]
+        self.frames("claude", [init_frame(), RATE_LIMIT, frame])
+        output = self.dispatch(route, assigned, handle)
+        report = output["bridge_report"]
+        self.assertEqual(("claude_tool_not_allowed", "failed"), (report["outcome"], report["terminal_state"]))
+        self.assertEqual({"count": 1, "tools": ["Write"]}, report["permission_denials"])
+        self.assertIn("claude_tool_not_allowed", output["result"]["summary"])
+        self.assertNotIn("PRIVATE-CANARY", json.dumps(output))
+
+    def test_l6_1_a_denial_once_seen_is_not_erased_by_a_later_clean_result(self) -> None:
+        route, assigned, handle = self.claude_run()
+        denied = result_frame()
+        denied["permission_denials"] = [{"tool_name": "Write", "tool_input": {}}]
+        self.frames("claude", [init_frame(), RATE_LIMIT, denied, result_frame()])
+        report = self.dispatch(route, assigned, handle)["bridge_report"]
+        self.assertEqual(("claude_tool_not_allowed", "failed"), (report["outcome"], report["terminal_state"]))
+        self.assertEqual({"count": 1, "tools": ["Write"]}, report["permission_denials"])
+
+    def test_l6_1_a_tool_name_that_is_not_a_known_client_tool_is_reported_as_other(self) -> None:
+        route, assigned, handle = self.claude_run()
+        frame = result_frame()
+        frame["permission_denials"] = [{"tool_name": "PRIVATE_CANARY_TOKEN", "tool_input": {}},
+                                       {"tool_name": "Bash", "tool_input": {}}]
+        self.frames("claude", [init_frame(), RATE_LIMIT, frame])
+        output = self.dispatch(route, assigned, handle)
+        self.assertEqual({"count": 2, "tools": ["Bash", "other"]}, output["bridge_report"]["permission_denials"])
+        self.assertNotIn("PRIVATE_CANARY_TOKEN", json.dumps(output))
 
     def test_run_is_contained_and_a_late_rejection_stops_it_and_blocks_until_reset(
         self,

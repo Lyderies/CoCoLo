@@ -14,6 +14,7 @@ from .control_api import ControlScope, scope_data
 from .contracts import RESULT_DIAGNOSTIC_REASON_CODES
 from .history_contracts import AttemptBinding, TerminalDelivery, _DIGEST, _RUN, matches, valid_integer
 from .learning_contracts import (
+    CLIENT_TOOL_NAMES,
     SUPPORTED_EFFORTS, SUPPORTED_MODELS, canonical_json, parse_bounded_json, validate_client_diagnostics,
 )
 from .result_contracts import MAX_RESULT_BODY_BYTES
@@ -162,7 +163,12 @@ def decode_dispatch_response(raw, request):
                     raise ValueError()
                 if claude and report.get('client_diagnostics') is not None:
                     validate_client_diagnostics(report['client_diagnostics'])
-                if (set(report) - (_RATE_LIMIT_FIELDS | {'client_diagnostics'} if claude else set()) - {'provider', 'requested_model', 'observed_model', 'effort', 'wall_seconds',
+                denials = report.get('permission_denials')
+                if denials is not None and (not claude or type(denials) is not dict or set(denials) != {'count', 'tools'}
+                        or not valid_integer(denials['count']) or type(denials['tools']) is not list
+                        or len(denials['tools']) > 16 or any(t not in CLIENT_TOOL_NAMES for t in denials['tools'])):
+                    raise ValueError()
+                if (set(report) - (_RATE_LIMIT_FIELDS | {'client_diagnostics', 'permission_denials'} if claude else set()) - {'provider', 'requested_model', 'observed_model', 'effort', 'wall_seconds',
                         'read_containment', 'rerouted', 'outcome', 'usage', 'result_validation_reason_code',
                         'bridge_run_id', 'reviewed', 'terminal_state', 'capacity_state', 'export_file_count',
                         'export_commit', 'export_manifest_digest'}

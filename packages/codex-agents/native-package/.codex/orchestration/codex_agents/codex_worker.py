@@ -13,6 +13,7 @@ automatic retry or production client migration is enabled here.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import re
 import hashlib
 import math
 import os
@@ -25,6 +26,7 @@ import weakref
 from . import bridge
 from .contracts import RESULT_DIAGNOSTIC_REASON_CODES, ContractError, validate_assignment
 from .learning_contracts import (
+    CLIENT_TOOL_NAMES,
     SUPPORTED_EFFORTS, SUPPORTED_MODELS, canonical_json, parse_bounded_json, validate_client_diagnostics,
 )
 from .owned_execution import ExecutionCustodyError, ExecutionTicket, OwnedExecutionRegistry
@@ -180,6 +182,16 @@ def _safe_report(report, provider):
         # The client's own exit code, result subtype and error label: fixed safe values only.
         if report.get("client_diagnostics") is not None:
             result["client_diagnostics"] = validate_client_diagnostics(report["client_diagnostics"])
+        denials = report.get("permission_denials")
+        if denials is not None:
+            # L6.1: the client's own refusals, as a count and fixed tool names only (never the inputs).
+            if (type(denials) is not dict or set(denials) != {"count", "tools"} or type(denials["count"]) is not int
+                    or not 0 <= denials["count"] <= 1_000_000 or type(denials["tools"]) is not list
+                    or any(type(t) is not str for t in denials["tools"])):
+                raise CodexWorkerError()
+            # A name that is not a known client tool is reported as "other", never passed on.
+            names = sorted({t if t in CLIENT_TOOL_NAMES else "other" for t in denials["tools"]})
+            result["permission_denials"] = {"count": denials["count"], "tools": names}
     if "raw_answer" in report:
         result["raw_answer"] = _safe_raw_answer(report["raw_answer"])
     body = canonical_json(result)
