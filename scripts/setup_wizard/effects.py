@@ -246,6 +246,28 @@ def runtime_problem(project) -> str:
 
 
 
+def active_runtime_digest(state_root) -> str | None:
+    """E1-9 (review 040-rse-s6 r1): the digest of the runtime the collector itself would start from this state,
+    or None. The collector's own active-identity check (require_authorized_collector_runtime: owner-only plain file
+    never read through a link, exact schema, a version, a digest, not quiesced for an upgrade) run from this
+    setup's own package, whose runtime the project's installed copy was attested to equal (runtime_problem)."""
+    if state_root is None:
+        return None
+    try:
+        module = attest()
+        paths = module.clone_module("collector_paths")
+        contracts = module.clone_module("collector_contracts")
+        runtime = module.clone_module("collector_runtime")
+    except Exception:  # noqa: BLE001 - this setup's own package cannot be loaded: nothing is checked, nothing passes
+        return None
+    try:
+        identity = runtime.require_authorized_collector_runtime(paths.CollectorPaths(Path(state_root)))
+    except (contracts.CollectorError, paths.StateError, OSError, ValueError):
+        return None
+    digest = identity.get("runtime_digest") if isinstance(identity, dict) else None
+    return digest if isinstance(digest, str) else None
+
+
 def unsafe_name(rel) -> bool:
     """A managed file name must be a plain, printable, relative UTF-8 path (setup.sh's helper)."""
     import unicodedata

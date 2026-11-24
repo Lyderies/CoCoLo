@@ -1257,8 +1257,9 @@ class Wizard:
 
     def login_start_step(self) -> None:
         """E1 (RS-11, decision 90.11 A): the question about starting the collector at login, once, with
-        the answer kept beside the project list. An update never asks (unless its answers file does);
-        Configure step by step offers to turn it off or on again. Nothing here ends the step badly."""
+        the answer kept beside the project list. An update never asks and never creates an entry, whatever its
+        answers file says (E1-4, E1-9): it only keeps an entry the owner said yes to current. Configure step by
+        step offers to turn it off or on again. Nothing here ends the step badly."""
         t = self.t
         projects = self.projects_file()
         state = projects.parent.parent if projects is not None else None
@@ -1267,26 +1268,24 @@ class Wizard:
         argv = []
         if state is not None and cli.is_file():
             argv = self.python_argv(str(cli.resolve()), "learning-serve", "--state-root", str(state))
-        digest = login_start.runtime_digest(state)
-        ask = None
-        if not self.update:
-            ask = lambda items: t.menu(0, items)  # noqa: E731 - consent is never an implied answer
-        elif self.answers is not None and "login_start" in self.answers:
-            ask = lambda items: 0 if self.answers["login_start"] else 1  # noqa: E731
         answer_file = projects.parent / "login-start" if projects is not None else None
         log_dir = login_start.log_folder(state) if state is not None else ""
-        outcome = login_start.offer(
-            home=self.home, kind=kind, answer_file=answer_file, argv=argv, log_dir=log_dir,
-            runner=login_start.terminal_runner(t), uid=os.getuid(), ask=ask, show=t.body,
-            configure=not self.update and not self.straight, digest=digest)
-        # E1-8/E1-9: consent kept and the runtime or its path changed: the entry is written again, never asked about;
-        # an entry that cannot be brought up to date is reported stale with the reason.
+        if self.update:
+            outcome = "answered" if login_start.read_answer(answer_file) is not None else "not_asked"
+        else:
+            outcome = login_start.offer(
+                home=self.home, kind=kind, answer_file=answer_file, argv=argv, log_dir=log_dir,
+                runner=login_start.terminal_runner(t), uid=os.getuid(), ask=lambda items: t.menu(0, items),
+                show=t.body, configure=not self.straight, digest=effects.active_runtime_digest(state))
+        # E1-8/E1-9: consent kept and the runtime or its path changed: the entry is written again, never asked about,
+        # and only for the runtime the collector's own check accepts; one that cannot be brought up to date is
+        # reported stale with a fixed reason.
         if outcome in ("unsupported", "no_place", "failed"):
             status, rewrote = login_start.Status("off"), False
         else:
             status, rewrote = login_start.refresh(
                 home=self.home, kind=kind, answer_file=answer_file, argv=argv, log_dir=log_dir,
-                runner=login_start.terminal_runner(t), uid=os.getuid(), digest=digest)
+                runner=login_start.terminal_runner(t), uid=os.getuid(), state_root=state)
         lines = {"installed": ("ok", "Login start: on. The collector starts when you log in and restarts after a crash."),
                  "declined": ("skip", "Login start: not now. Choose Configure -> Configure step by step to turn it on."),
                  "kept": ("ok", "Login start: kept on."),

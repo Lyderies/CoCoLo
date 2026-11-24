@@ -297,14 +297,14 @@ class InstallTests(TempHome):
         path = login_start.entry_path(self.home, "launchd")
         before, calls = tree(self.home), len(self.runner.calls)
         changed = ARGV[:-1] + ["/srv/example/.local/state/other"]
-        real = Path.read_bytes
+        real = os.open
 
-        def unreadable(this):
-            if this == path:
+        def unreadable(name, flags, *args, **kwargs):  # the entry is opened by name below its checked folder
+            if name == path.name and kwargs.get("dir_fd") is not None:
                 raise PermissionError(13, "Permission denied")
-            return real(this)
+            return real(name, flags, *args, **kwargs)
 
-        with mock.patch.object(Path, "read_bytes", unreadable):
+        with mock.patch.object(login_start.os, "open", unreadable):
             result = login_start.install(self.home, "launchd", changed, self.logs, self.runner, uid=501)
         self.assertFalse(result.ok)
         self.assertIn("could not be read", result.reason)
@@ -550,7 +550,8 @@ class WiringTests(TempHome):
         wizard = self.wizard([], update=True, answers={"login_start": True})
         wizard.login_start_step()
         self.assertEqual([], self.screen.menus)
-        self.assertTrue(login_start.entry_path(self.home, "launchd").exists())
+        self.assertEqual([], self.runner.calls)  # E1-9: with no recorded yes an update writes nothing
+        self.assertFalse(login_start.entry_path(self.home, "launchd").exists())
 
     @requirements('E1-7', why_not_scenario='Runs the wizard step against a stand-in terminal and an injected runner.')
     def test_E1_7_configure_walk_through_offers_keep_or_remove_and_the_first_time_asks_yes_or_not_now(self):
@@ -641,6 +642,7 @@ class WiringTests(TempHome):
 
 
 DIGEST_A, DIGEST_B = "a" * 64, "b" * 64
+from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST as ATTESTED, PACKAGE_VERSION  # noqa: E402
 
 
 class RuntimeHome(TempHome):
@@ -650,10 +652,11 @@ class RuntimeHome(TempHome):
         super().setUp()
         self.state = self.home / ".local" / "state" / "codex-agents"
         (self.state / "projects").mkdir(parents=True)
+        os.chmod(self.state, 0o700)  # an owner-only state folder, as the collector's own check requires
         self.answer = self.state / "projects" / "login-start"
         self.logs = login_start.log_folder(self.state)
 
-    def authorize(self, digest, version="0.8.55"):
+    def authorize(self, digest, version=PACKAGE_VERSION):
         path = self.state / "collector-authorization.json"
         path.unlink(missing_ok=True)
         path.write_text(json.dumps({"schema_version": 1, "runtime_version": version, "runtime_digest": digest}))
@@ -754,9 +757,9 @@ class UpgradeTests(RuntimeHome):
 
     @requirements('E1-9', why_not_scenario='Runs the wizard step against a stand-in terminal and an injected runner.')
     def test_E1_9_an_update_that_moves_the_collector_rewrites_the_entry_without_asking(self):
-        self.authorize(DIGEST_A)
+        self.authorize(ATTESTED)
         self.wizard(project="old")  # the cli file the old entry points at
-        self.write_entry(self.argv("old"), DIGEST_A)
+        self.write_entry(self.argv("old"), ATTESTED)
         self.runner.calls.clear()
         wizard = self.wizard(project="project")  # the update's project: another path, same runtime
         wizard.login_start_step()
@@ -765,19 +768,19 @@ class UpgradeTests(RuntimeHome):
         self.assertTrue(any("bootstrap" in call for call in self.runner.calls))
         self.assertEqual("yes", login_start.read_answer(self.answer))
         self.assertEqual("on", login_start.entry_status(self.home, "launchd", self.argv("project"), self.logs,
-                                                        self.answer, DIGEST_A).state)
+                                                        self.answer, ATTESTED).state)
         self.assertIn("Login start: refreshed", " ".join(self.screen.lines))
 
     @requirements('E1-9', why_not_scenario='Runs the wizard step against a stand-in terminal and an injected runner.')
     def test_E1_9_an_update_that_changes_the_runtime_digest_rewrites_the_entry(self):
         self.wizard()
         self.write_entry(self.argv(), DIGEST_A)
-        self.authorize(DIGEST_B)  # the update authorized a new runtime at the same path
+        self.authorize(ATTESTED)  # the update authorized a new runtime (this setup's attested one) at the same path
         self.runner.calls.clear()
         self.wizard().login_start_step()
         self.assertEqual([], self.screen.menus)
         self.assertTrue(any("bootstrap" in call for call in self.runner.calls))
-        self.assertEqual(DIGEST_B, login_start.read_record(self.answer))
+        self.assertEqual(ATTESTED, login_start.read_record(self.answer))
         self.assertIn("Login start: refreshed", " ".join(self.screen.lines))
         self.runner.calls.clear()
         self.wizard().login_start_step()  # nothing changed since: nothing rewritten
@@ -789,7 +792,7 @@ class UpgradeTests(RuntimeHome):
         self.wizard()
         self.write_entry(self.argv(), DIGEST_A)
         before = login_start.entry_path(self.home, "launchd").read_bytes()
-        self.authorize(DIGEST_B)
+        self.authorize(ATTESTED)
         self.runner.fail = ("bootstrap",)  # the system's login tool refuses the new entry
         self.wizard().login_start_step()
         self.assertEqual([], self.screen.menus)
@@ -799,14 +802,14 @@ class UpgradeTests(RuntimeHome):
         self.assertEqual(before, login_start.entry_path(self.home, "launchd").read_bytes())  # the earlier one kept
         self.assertEqual(DIGEST_A, login_start.read_record(self.answer))
         self.assertNotIn(DIGEST_A, screen)
-        self.assertNotIn(DIGEST_B, screen)
+        self.assertNotIn(ATTESTED, screen)
 
     @requirements('E1-9', why_not_scenario='Runs the wizard step against a stand-in terminal and an injected runner.')
     def test_E1_9_a_current_entry_a_missing_entry_and_no_consent_write_nothing(self):
         self.authorize(DIGEST_A)
         self.wizard()
         self.write_entry(self.argv(), DIGEST_A)
-        self.authorize(DIGEST_B)
+        self.authorize(ATTESTED)
         login_start.write_answer(self.answer, "no")  # the owner said no: an entry that is there is left alone
         self.runner.calls.clear()
         before = login_start.entry_path(self.home, "launchd").read_bytes()
@@ -824,6 +827,181 @@ class UpgradeTests(RuntimeHome):
         self.wizard().login_start_step()
         self.assertEqual([], self.runner.calls)
         self.assertEqual([], self.screen.menus)
+
+
+class ReviewFixTests(RuntimeHome):
+    """Review 040-rse-s6 r1: the active identity, safe reads, update consent and fixed public reasons."""
+
+    wizard, argv = UpgradeTests.wizard, UpgradeTests.argv
+
+    def authorize_raw(self, value):
+        path = self.state / "collector-authorization.json"
+        path.unlink(missing_ok=True)
+        path.write_text(json.dumps(value))
+        os.chmod(path, 0o600)
+
+    def stale_entry(self):
+        """An entry an earlier setup wrote for another runtime: consent yes, record DIGEST_A."""
+        self.wizard()
+        self.write_entry(self.argv(), DIGEST_A)
+        self.runner.calls.clear()
+        return login_start.entry_path(self.home, "launchd").read_bytes()
+
+    @requirements('E1-9', why_not_scenario='Runs the wizard step against a stand-in terminal and an injected runner.')
+    def test_E1_9_a_rewrite_needs_the_collectors_active_identity_for_the_attested_runtime(self):
+        identity = {"schema_version": 1, "runtime_version": PACKAGE_VERSION, "runtime_digest": ATTESTED}
+        for label, value in (("another runtime's digest", {**identity, "runtime_digest": DIGEST_B}),
+                             ("another version", {**identity, "runtime_version": "0.0.1"}),
+                             ("quiesced for an upgrade", {**identity, "quiesced_for_upgrade": True}),
+                             ("another schema", {**identity, "schema_version": 2}),
+                             ("an extra field", {**identity, "extra": 1})):
+            with self.subTest(label):
+                before = self.stale_entry()
+                self.authorize_raw(value)
+                self.wizard().login_start_step()
+                screen = " ".join(self.screen.lines)
+                self.assertEqual([], self.runner.calls, label)  # nothing the genuine CLI would refuse is written
+                self.assertEqual(before, login_start.entry_path(self.home, "launchd").read_bytes(), label)
+                self.assertEqual(DIGEST_A, login_start.read_record(self.answer), label)
+                self.assertIn("Login start: stale", screen, label)
+                self.assertNotIn("refreshed", screen, label)
+        self.authorize_raw(identity)  # the active identity of this setup's attested runtime: rewritten
+        self.wizard().login_start_step()
+        self.assertEqual(ATTESTED, login_start.read_record(self.answer))
+        self.assertIn("Login start: refreshed", " ".join(self.screen.lines))
+
+    @requirements('E1-8', why_not_scenario='Reads temporary files only; no process is started.')
+    def test_E1_8_status_never_follows_a_link_or_blocks_on_a_special_file_or_reads_another_users_entry(self):
+        import threading
+        path = login_start.entry_path(self.home, "launchd")
+
+        def status():
+            found = []
+            reader = threading.Thread(target=lambda: found.append(self.status()), daemon=True)
+            reader.start()
+            reader.join(5)
+            self.assertFalse(reader.is_alive(), "status blocked")
+            return found[0]
+
+        self.write_entry(self.argv(), DIGEST_A)
+        self.assertEqual("on", status().state)
+        copy = self.home / "copy.plist"
+        copy.write_bytes(path.read_bytes())
+        path.unlink()
+        path.symlink_to(copy)  # a link to an entry with the right bytes
+        self.assertEqual("stale", status().state)
+        path.unlink()
+        os.mkfifo(path)  # a FIFO is never opened for a blocking read
+        self.assertEqual("stale", status().state)
+        path.unlink()
+        folder = path.parent
+        folder.rename(self.home / "agents")
+        (self.home / "agents" / path.name).write_bytes(copy.read_bytes())
+        folder.symlink_to(self.home / "agents")  # a linked folder above the entry
+        self.assertEqual("stale", status().state)
+        folder.unlink()
+        (self.home / "agents").rename(folder)
+        self.assertEqual("on", status().state)
+        os.chmod(path, 0o666)  # others can change it
+        self.assertEqual("stale", status().state)
+        os.chmod(path, 0o644)
+        with mock.patch.object(login_start.os, "getuid", return_value=os.getuid() + 1):  # another user's file
+            found = status()
+        self.assertEqual("stale", found.state)
+        self.assertNotIn(str(self.home), found.reason)
+
+    @requirements('E1-6', why_not_scenario='Refusals of pure inputs; nothing runs.')
+    def test_E1_6_an_entry_another_user_owns_or_others_can_change_is_not_replaced(self):
+        self.assertTrue(login_start.install(self.home, "launchd", ARGV, self.logs, self.runner, uid=501).ok)
+        path = login_start.entry_path(self.home, "launchd")
+        changed = ARGV[:-1] + ["/srv/example/.local/state/other"]
+        os.chmod(path, 0o666)
+        before, calls = tree(self.home), len(self.runner.calls)
+        self.assertFalse(login_start.install(self.home, "launchd", changed, self.logs, self.runner, uid=501).ok)
+        self.assertEqual(before, tree(self.home))
+        self.assertEqual(calls, len(self.runner.calls))
+        os.chmod(path, 0o644)
+        before = tree(self.home)
+        with mock.patch.object(login_start.os, "getuid", return_value=os.getuid() + 1):
+            self.assertFalse(login_start.install(self.home, "launchd", changed, self.logs, self.runner, uid=501).ok)
+        self.assertEqual(before, tree(self.home))
+        self.assertEqual(calls, len(self.runner.calls))
+
+    @requirements('E1-9', why_not_scenario='Pure file reads in a temporary folder; no process is started.')
+    def test_E1_9_the_runtime_record_and_the_answer_are_read_only_from_private_plain_files_of_this_user(self):
+        import threading
+        self.assertTrue(login_start.write_answer(self.answer, "yes"))
+        self.assertTrue(login_start.write_record(self.answer, DIGEST_A))
+        record = login_start.record_path(self.answer)
+        for path, read, value in ((record, login_start.read_record, DIGEST_A),
+                                  (self.answer, login_start.read_answer, "yes")):
+            with self.subTest(path.name):
+                self.assertEqual(value, read(self.answer))
+                os.chmod(path, 0o644)
+                self.assertIsNone(read(self.answer))  # not owner-only
+                os.chmod(path, 0o600)
+                with mock.patch.object(login_start.os, "getuid", return_value=os.getuid() + 1):
+                    self.assertIsNone(read(self.answer))  # another user's file
+                saved = path.read_text()
+                path.unlink()
+                os.mkfifo(path)
+                found = []
+                reader = threading.Thread(target=lambda: found.append(read(self.answer)), daemon=True)
+                reader.start()
+                reader.join(5)
+                self.assertFalse(reader.is_alive(), "the read blocked on a FIFO")
+                self.assertIsNone(found[0])
+                path.unlink()
+                path.write_text(saved)
+                os.chmod(path, 0o600)
+                self.assertEqual(value, read(self.answer))
+
+    @requirements('E1-9', why_not_scenario='Runs the wizard step against a stand-in terminal and an injected runner.')
+    def test_E1_9_an_update_never_creates_an_entry_from_an_answers_file(self):
+        self.authorize(ATTESTED)
+        for answers in ({"login_start": True}, {"login_start": False}):
+            with self.subTest(answers=answers):
+                self.wizard(answers=answers).login_start_step()
+                self.assertEqual([], self.runner.calls)
+                self.assertEqual([], self.screen.menus)
+                self.assertFalse(os.path.lexists(login_start.entry_path(self.home, "launchd")))
+                self.assertIsNone(login_start.read_answer(self.answer))  # no consent is recorded by an update
+        login_start.write_answer(self.answer, "no")
+        self.wizard(answers={"login_start": True}).login_start_step()
+        self.assertEqual([], self.runner.calls)
+        self.assertEqual("no", login_start.read_answer(self.answer))
+
+    @requirements('E1-9', why_not_scenario='Runs the wizard step against a stand-in terminal and an injected runner.')
+    def test_E1_9_a_failed_rewrite_shows_a_fixed_reason_with_no_path(self):
+        self.stale_entry()
+        self.authorize(ATTESTED)
+        real_logs = self.home / "elsewhere-logs"
+        real_logs.mkdir()
+        if self.logs.is_dir():
+            self.logs.rmdir()
+        self.logs.symlink_to(real_logs)  # install refuses with a reason that names the folder
+        self.wizard().login_start_step()
+        screen = " ".join(self.screen.lines)
+        self.assertIn("Login start: stale", screen)
+        self.assertNotIn(str(self.home), screen)
+        self.assertNotIn("elsewhere", screen)
+        self.assertEqual(DIGEST_A, login_start.read_record(self.answer))
+
+    @requirements('E1-9', why_not_scenario='Runs the wizard step against a stand-in terminal and an injected runner.')
+    def test_E1_9_a_failed_record_write_keeps_the_earlier_entry_and_is_not_shown_as_refreshed(self):
+        self.authorize(ATTESTED)
+        self.wizard(project="old")
+        self.write_entry(self.argv("old"), DIGEST_A)
+        before = login_start.entry_path(self.home, "launchd").read_bytes()
+        self.runner.calls.clear()
+        with mock.patch.object(login_start, "write_record", return_value=False):  # the record cannot be kept
+            self.wizard(project="project").login_start_step()
+        screen = " ".join(self.screen.lines)
+        self.assertNotIn("refreshed", screen)
+        self.assertIn("Login start: stale", screen)
+        self.assertEqual(before, login_start.entry_path(self.home, "launchd").read_bytes())  # the earlier one is back
+        self.assertEqual(DIGEST_A, login_start.read_record(self.answer))
+        self.assertNotIn(str(self.home), screen)
 
 
 class CommandAuthorizationTests(TempHome):
@@ -875,6 +1053,47 @@ class CommandAuthorizationTests(TempHome):
                 self.assertEqual([], started)
                 self.assertNotEqual(0, status)
                 self.assertIn(refusal, out.getvalue())
+
+
+    @requirements('E1-10', why_not_scenario='Runs the rendered entry command as a real process against a temporary '
+                                            'installed copy; only the refusals run, so no collector is started.')
+    def test_E1_10_the_installed_command_run_as_given_is_refused_with_runtime_unauthorized(self):
+        import shutil
+        import subprocess
+        from codex_agents.collector_contracts import CollectorAuthorizationError
+        from codex_agents.collector_paths import CollectorPaths
+        from codex_agents.collector_runtime import require_authorized_collector_runtime
+        from codex_agents.learning_store import LearningState
+        project = self.home / "project"
+        shutil.copytree(ORCHESTRATION, project / ".codex" / "orchestration",
+                        ignore=shutil.ignore_patterns("__pycache__", ".DS_Store"))
+        shutil.copy(ORCHESTRATION.parents[1] / "VERSION", project / "VERSION")  # as the installer lays it out
+        state = self.home / "collector-state"
+        state.mkdir(mode=0o700)
+        LearningState(state)  # a real, empty, owner-only collector state
+        python = os.path.realpath(sys.executable)
+        argv = [python, "-I", "-B", "-S", "-X", "pycache_prefix=/dev/null",
+                str(project / ".codex" / "orchestration" / "cli.py"), "learning-serve", "--state-root", str(state)]
+        self.assertTrue(login_start.install(self.home, "launchd", argv, self.logs, self.runner, uid=501).ok)
+        entry = plistlib.loads(login_start.entry_path(self.home, "launchd").read_bytes())
+        command = entry["ProgramArguments"]
+        authorization = state / "collector-authorization.json"
+        for value, code in (({"schema_version": 1, "runtime_version": PACKAGE_VERSION, "runtime_digest": DIGEST_B},
+                             "runtime_unauthorized"),
+                            (None, "runtime_authorization_missing")):
+            authorization.unlink(missing_ok=True)
+            if value is not None:
+                authorization.write_text(json.dumps(value))
+                os.chmod(authorization, 0o600)
+            run = subprocess.run(command, cwd=entry["WorkingDirectory"], env=entry["EnvironmentVariables"],
+                                 capture_output=True, text=True, timeout=120)
+            self.assertNotEqual(0, run.returncode, run.stdout + run.stderr)
+            # The CLI prints the refusal's message, not its code: the message printed is the one the collector's own
+            # check raises with this code for this state.
+            with self.assertRaises(CollectorAuthorizationError) as raised:
+                require_authorized_collector_runtime(CollectorPaths(state))
+            self.assertEqual(code, raised.exception.code)
+            self.assertEqual({"ready": False, "error": str(raised.exception)}, json.loads(run.stdout))
 
 
 if __name__ == "__main__":

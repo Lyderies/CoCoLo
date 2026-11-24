@@ -10,10 +10,12 @@ S6 (E1-8, E1-9): the entry's status is on, off or stale (its command or the auth
 no longer matches the installed one); an update with consent already kept rewrites a stale entry, never asking.
 """
 
+import contextlib
 import json
 import os
 import plistlib
 import re
+import secrets
 import stat
 import tempfile
 from pathlib import Path
@@ -37,6 +39,87 @@ DEFAULT_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"  # As the collector's own start: 
 class Result(NamedTuple):
     ok: bool
     reason: str = ""
+    upset: bool = False  # a failed change that also left the earlier entry not as it was (not put back or not started)
+
+
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+ENTRY_LIMIT = 1024 * 1024  # an entry setup wrote is a few hundred bytes
+
+
+class _Unsafe(Exception):
+    """A folder or file on the way is not a plain one of this user's that others cannot change."""
+
+
+def _own(info, others: int) -> bool:
+    """This user's, and none of the `others` mode bits set."""
+    return info.st_uid == os.getuid() and not info.st_mode & others
+
+
+def _open_folder(home, folder: Path, *, create: bool = False) -> int:
+    """A descriptor for `folder`, opened one name at a time from the home without following a link below it
+    (the home itself may be a link); every folder on the way is this user's and not writable by others."""
+    home = Path(home)
+    descriptor = os.open(home, os.O_RDONLY | _DIRECTORY)
+    try:
+        for part in folder.relative_to(home).parts:
+            if create:
+                with contextlib.suppress(FileExistsError):
+                    os.mkdir(part, 0o755, dir_fd=descriptor)
+            child = os.open(part, os.O_RDONLY | _DIRECTORY | _NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+            if not _own(os.fstat(descriptor), 0o022):
+                raise _Unsafe(part)
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _read_all(descriptor: int, limit: int) -> bytes | None:
+    chunks, size = [], 0
+    while chunk := os.read(descriptor, 65536):
+        size += len(chunk)
+        if size > limit:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _read_entry(home, path: Path) -> tuple[str, bytes | None]:
+    """("none" | "ok" | "unreadable" | "unsafe", bytes): the entry read through checked folder descriptors, never
+    through a link, never blocking on a FIFO or device, and only when it is this user's and others cannot change it."""
+    try:
+        folder = _open_folder(home, path.parent)
+    except FileNotFoundError:
+        return "none", None
+    except (OSError, _Unsafe):
+        return "unsafe", None
+    try:
+        try:
+            info = os.stat(path.name, dir_fd=folder, follow_symlinks=False)
+        except FileNotFoundError:
+            return "none", None
+        if not stat.S_ISREG(info.st_mode):
+            return "unsafe", None
+        try:
+            handle = os.open(path.name, os.O_RDONLY | _NOFOLLOW | _NONBLOCK, dir_fd=folder)
+        except OSError:
+            return "unreadable", None
+        try:
+            info = os.fstat(handle)
+            if not stat.S_ISREG(info.st_mode) or not _own(info, 0o022):
+                return "unsafe", None
+            data = _read_all(handle, ENTRY_LIMIT)
+        finally:
+            os.close(handle)
+    except OSError:
+        return "unreadable", None
+    finally:
+        os.close(folder)
+    return ("ok", data) if data is not None else ("unsafe", None)
 
 
 def kind_for(system: str) -> str | None:
@@ -132,23 +215,45 @@ def render_unit(argv, log_dir) -> str:
     )
 
 
-def _write_entry(path: Path, data: bytes) -> str:
-    """Write the entry in one step; a reason (and no change) when the place is not safe."""
+NOT_YOURS = "the entry already there is not a plain file of yours that only you can change, so it was left alone"
+
+
+def _write_entry(home, path: Path, data: bytes) -> str:
+    """Write the entry in one step through checked folder descriptors: a new file renamed over the old one, and
+    only over a plain file of this user's that others cannot change. A reason (and no change) when not safe."""
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if os.path.lexists(path) and not stat.S_ISREG(os.lstat(path).st_mode):
-            return f"{path} already exists and is not a plain file, so it was left alone"
-        descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+        folder = _open_folder(home, path.parent, create=True)
+    except _Unsafe:
+        return "a folder on the way to the entry is not a plain folder of yours, so nothing was written"
     except OSError as exc:
         return f"the entry could not be written ({exc.strerror or 'refused'})"
+    temporary = f".{path.name}.{secrets.token_hex(6)}"
+    made = False
     try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(data)
-        os.chmod(temporary, 0o644 if path.suffix == ".plist" else 0o600)
-        os.replace(temporary, path)
+        try:
+            info = os.stat(path.name, dir_fd=folder, follow_symlinks=False)
+        except FileNotFoundError:
+            info = None
+        if info is not None and (not stat.S_ISREG(info.st_mode) or not _own(info, 0o022)):
+            return NOT_YOURS
+        handle = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o600, dir_fd=folder)
+        made = True
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(handle, view):]
+            os.fchmod(handle, 0o644 if path.suffix == ".plist" else 0o600)
+        finally:
+            os.close(handle)
+        os.replace(temporary, path.name, src_dir_fd=folder, dst_dir_fd=folder)
+        made = False
     except OSError as exc:
-        Path(temporary).unlink(missing_ok=True)
         return f"the entry could not be written ({exc.strerror or 'refused'})"
+    finally:
+        if made:
+            with contextlib.suppress(OSError):
+                os.unlink(temporary, dir_fd=folder)
+        os.close(folder)
     return ""
 
 
@@ -166,39 +271,36 @@ def _link_problem(home, path: Path, log_dir) -> str:
     return ""
 
 
-def _read_old(path: Path) -> tuple[bool, bytes | None]:
-    """(readable, bytes): (True, None) when there is no old entry; (False, None) when it cannot be read."""
-    if not os.path.lexists(path):
-        return True, None
-    try:
-        return True, path.read_bytes()
-    except OSError:
-        return False, None
-
-
 def install(home, kind: str | None, argv, log_dir, runner, *, uid: int) -> Result:
     """Write the entry and load it. Nothing is changed when a check fails; when the load fails, a new entry
     is removed again and an older working one is put back, and started again only if it was running."""
+    return _install(home, kind, argv, log_dir, runner, uid=uid)[0]
+
+
+def _install(home, kind, argv, log_dir, runner, *, uid: int) -> tuple[Result, bytes | None, bool]:
+    """install, and also the earlier entry's bytes and whether it was on, so a caller can put it back."""
     if kind not in ("launchd", "systemd"):
-        return Result(False, "this system has no login-start support (macOS and Linux only)")
+        return Result(False, "this system has no login-start support (macOS and Linux only)"), None, False
     problem = _command_problem(argv) or ("the log folder has a line break or other control character"
                                           if _has_control(log_dir) else "")
     if problem:
-        return Result(False, problem)
+        return Result(False, problem), None, False
     path = entry_path(home, kind)
     problem = _link_problem(home, path, log_dir)
     if problem:
-        return Result(False, problem)
+        return Result(False, problem), None, False
     if os.path.lexists(path) and not stat.S_ISREG(os.lstat(path).st_mode):
-        return Result(False, f"{path} already exists and is not a plain file, so it was left alone")
-    readable, old = _read_old(path)
-    if not readable:
-        return Result(False, f"{path} could not be read, so it was left alone")
+        return Result(False, f"{path} already exists and is not a plain file, so it was left alone"), None, False
+    found, old = _read_entry(home, path)
+    if found == "unreadable":
+        return Result(False, f"{path} could not be read, so it was left alone"), None, False
+    if found == "unsafe":
+        return Result(False, NOT_YOURS), None, False
     try:
         Path(log_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(log_dir, 0o700)
     except OSError as exc:
-        return Result(False, f"the log folder could not be made ({exc.strerror or 'refused'})")
+        return Result(False, f"the log folder could not be made ({exc.strerror or 'refused'})"), None, False
     data = render_plist(argv, log_dir) if kind == "launchd" else render_unit(argv, log_dir).encode("utf-8")
     was_on = False  # Whether the older entry was loaded (launchd) or running (systemd) before this change.
     if old is not None:
@@ -206,9 +308,9 @@ def install(home, kind: str | None, argv, log_dir, runner, *, uid: int) -> Resul
             was_on = runner([LAUNCHCTL, "print", f"gui/{uid}/{LABEL}"]) == 0
         else:
             was_on = runner([SYSTEMCTL, "--user", "is-active", UNIT]) == 0
-    reason = _write_entry(path, data)  # A new file renamed over the old one: the old stays until the swap.
+    reason = _write_entry(home, path, data)  # A new file renamed over the old one: the old stays until the swap.
     if reason:
-        return Result(False, reason)
+        return Result(False, reason), None, False
     if kind == "launchd":
         runner([LAUNCHCTL, "bootout", f"gui/{uid}/{LABEL}"])  # Replaces an older load; fine when none.
         loaded = runner([LAUNCHCTL, "bootstrap", f"gui/{uid}", str(path)]) == 0
@@ -218,15 +320,21 @@ def install(home, kind: str | None, argv, log_dir, runner, *, uid: int) -> Resul
                   # enable --now leaves a running unit as it was; a changed command needs a restart.
                   and (old is None or old == data or runner([SYSTEMCTL, "--user", "try-restart", UNIT]) == 0))
     if loaded:
-        return Result(True)
+        return Result(True), old, was_on
     if old is None:
         path.unlink(missing_ok=True)
         if kind == "systemd":
             runner([SYSTEMCTL, "--user", "daemon-reload"])
-        return Result(False, "the system's login tool did not accept the entry, so it was removed again")
-    if _write_entry(path, old):
-        return Result(False, "the system's login tool did not accept the new entry, and the earlier one could not "
-                             f"be put back; check {path}")
+        return Result(False, "the system's login tool did not accept the entry, so it was removed again"), None, False
+    return _put_back(home, kind, old, was_on, runner, uid=uid, why="the system's login tool did not accept the "
+                     "new entry"), old, was_on
+
+
+def _put_back(home, kind, old: bytes, was_on: bool, runner, *, uid: int, why: str) -> Result:
+    """Write the earlier entry back and load it again only if it was on; a failed result either way."""
+    path = entry_path(home, kind)
+    if _write_entry(home, path, old):
+        return Result(False, f"{why}, and the earlier one could not be put back; check {path}", upset=True)
     if kind == "launchd":
         runner([LAUNCHCTL, "bootout", f"gui/{uid}/{LABEL}"])
         back = not was_on or runner([LAUNCHCTL, "bootstrap", f"gui/{uid}", str(path)]) == 0
@@ -235,9 +343,9 @@ def install(home, kind: str | None, argv, log_dir, runner, *, uid: int) -> Resul
         back = runner([SYSTEMCTL, "--user", "daemon-reload"]) == 0 and (
             not was_on or runner([SYSTEMCTL, "--user", "restart", UNIT]) == 0)
     if not back:
-        return Result(False, "the system's login tool did not accept the new entry; the earlier one was put back "
-                             f"but could not be started again, so check {path} and the collector")
-    return Result(False, "the system's login tool did not accept the new entry, so the earlier one was kept")
+        return Result(False, f"{why}; the earlier one was put back but could not be started again, so check {path} "
+                             "and the collector", upset=True)
+    return Result(False, f"{why}, so the earlier one was kept")
 
 
 def remove(home, kind: str | None, runner, *, uid: int) -> Result:
@@ -258,17 +366,54 @@ def remove(home, kind: str | None, runner, *, uid: int) -> Result:
     return Result(True)
 
 
-def read_answer(path) -> str | None:
-    """The owner's kept answer, "yes" or "no"; None when none, or the file is not a plain file."""
-    if path is None:
-        return None
-    path = Path(path)
+def _read_private(path) -> str | None:
+    """A small owner-only plain file of this user's, never through a link and never blocking on a FIFO or device;
+    None otherwise."""
     try:
-        if path.is_symlink() or not path.is_file():
-            return None
-        value = path.read_text(encoding="utf-8", errors="replace").strip()
+        descriptor = os.open(path, os.O_RDONLY | _NOFOLLOW | _NONBLOCK)
     except OSError:
         return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or not _own(info, 0o077):
+            return None
+        raw = os.read(descriptor, 1025)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+    return raw.decode("utf-8", errors="replace").strip() if len(raw) <= 1024 else None
+
+
+def _write_private(path: Path, text: str) -> bool:
+    """Keep `text` in one step: a new owner-only file renamed into place, only over a plain file of this user's."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        info = None
+    except OSError:
+        return False
+    if info is not None and (not stat.S_ISREG(info.st_mode) or not _own(info, 0o077)):
+        return False
+    try:
+        descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    except OSError:
+        return False
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            handle.write(text + "\n")
+        os.replace(temporary, path)
+    except OSError:
+        Path(temporary).unlink(missing_ok=True)
+        return False
+    return True
+
+
+def read_answer(path) -> str | None:
+    """The owner's kept answer, "yes" or "no"; None when none, or the file is not a private plain file of yours."""
+    if path is None:
+        return None
+    value = _read_private(Path(path))
     return value if value in ("yes", "no") else None
 
 
@@ -276,19 +421,7 @@ def write_answer(path, value: str) -> bool:
     """Keep the answer in one step: a new owner-only file renamed into place."""
     if value not in ("yes", "no"):
         return False
-    path = Path(path)
-    try:
-        descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
-    except OSError:
-        return False
-    try:
-        with os.fdopen(descriptor, "w") as handle:
-            handle.write(value + "\n")
-        os.replace(temporary, path)
-    except OSError:
-        Path(temporary).unlink(missing_ok=True)
-        return False
-    return True
+    return _write_private(Path(path), value)
 
 
 def terminal_runner(term):
@@ -317,33 +450,15 @@ def read_record(answer_file) -> str | None:
     """The runtime digest the entry was last written for; None when none or not a plain private file."""
     if answer_file is None:
         return None
-    try:
-        path = record_path(answer_file)
-        if path.is_symlink() or not path.is_file():
-            return None
-        value = path.read_text(encoding="utf-8", errors="replace").strip()
-    except OSError:
-        return None
-    return value if _DIGEST.fullmatch(value) else None
+    value = _read_private(record_path(answer_file))
+    return value if value is not None and _DIGEST.fullmatch(value) else None
 
 
 def write_record(answer_file, digest) -> bool:
     """Keep the digest in one step: a new owner-only file renamed into place."""
     if answer_file is None or not isinstance(digest, str) or not _DIGEST.fullmatch(digest):
         return False
-    path = record_path(answer_file)
-    try:
-        descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
-    except OSError:
-        return False
-    try:
-        with os.fdopen(descriptor, "w") as handle:
-            handle.write(digest + "\n")
-        os.replace(temporary, path)
-    except OSError:
-        Path(temporary).unlink(missing_ok=True)
-        return False
-    return True
+    return _write_private(record_path(answer_file), digest)
 
 
 def runtime_digest(state_root) -> str | None:
@@ -373,41 +488,67 @@ def runtime_digest(state_root) -> str | None:
     return digest if isinstance(digest, str) and _DIGEST.fullmatch(digest) else None
 
 
+# E1-8, E1-9: the fixed public reasons a status line may give. None names a digest, a key or a folder.
+STALE_NO_COMMAND = "the installed collector's command is not available here to compare it with"
+STALE_NOT_YOURS = "the entry is not a plain file of yours that only you can change, so it was not read"
+STALE_COMMAND = "its command no longer matches the installed collector"
+STALE_UNCHECKED = "the installed runtime could not be checked against the one you authorized"
+STALE_RUNTIME = "the installed runtime changed since the entry was written"
+STALE_KEPT = "the entry could not be rewritten for the installed collector, so the earlier one was kept"
+STALE_UPSET = ("the entry could not be rewritten for the installed collector, and the earlier one could not be put "
+               "back as it was, so the collector may not start at login")
+STALE_NO_RECORD = ("setup could not keep a record of the runtime the entry is for, so the earlier entry was kept")
+STALE_NO_RECORD_UPSET = ("setup could not keep a record of the runtime the entry is for, and the earlier entry could "
+                         "not be put back as it was, so the collector may not start at login")
+
+
 def entry_status(home, kind: str | None, argv, log_dir, answer_file, digest) -> Status:
     """E1-8: is the entry on, off, or stale? Stale: its command is not the installed collector's, or it was
-    written for another authorized runtime than the one now installed (or this cannot be told). The reason
-    is plain words, never a digest, a key or a folder."""
+    written for another authorized runtime than the one now installed (or this cannot be told). The entry is
+    read only through checked folders, never through a link, never blocking, and only when it is yours. The
+    reason is one of the fixed STALE_* texts, never a digest, a key or a folder."""
     if not is_installed(home, kind):
         return Status("off")
     if _command_problem(argv) or _has_control(log_dir):
-        return Status("stale", "the installed collector's command is not available here to compare it with")
-    path = entry_path(home, kind)
-    readable, old = _read_old(path)
+        return Status("stale", STALE_NO_COMMAND)
+    found, old = _read_entry(home, entry_path(home, kind))
+    if found == "none":
+        return Status("off")
+    if found != "ok":
+        return Status("stale", STALE_NOT_YOURS)
     wanted = render_plist(argv, log_dir) if kind == "launchd" else render_unit(argv, log_dir).encode("utf-8")
-    if not readable or old != wanted:
-        return Status("stale", "its command no longer matches the installed collector")
+    if old != wanted:
+        return Status("stale", STALE_COMMAND)
     if digest is None:
-        return Status("stale", "the installed runtime could not be read to compare it with")
+        return Status("stale", STALE_UNCHECKED)
     if read_record(answer_file) != digest:
-        return Status("stale", "the installed runtime changed since the entry was written")
+        return Status("stale", STALE_RUNTIME)
     return Status("on")
 
 
-def refresh(*, home, kind, answer_file, argv, log_dir, runner, uid: int, digest) -> tuple[Status, bool]:
+def active_digest(state_root) -> str | None:
+    """The digest of the runtime the collector itself would start from this state, or None: the collector's own
+    active-identity check (require_authorized_collector_runtime) against this setup's attested runtime."""
+    from . import effects
+    return effects.active_runtime_digest(state_root)
+
+
+def refresh(*, home, kind, answer_file, argv, log_dir, runner, uid: int, state_root) -> tuple[Status, bool]:
     """E1-9: with consent already kept and the entry there but stale, write it again for the installed
-    collector (never asking, E1-4). Returns the status afterwards and whether it was rewritten; when it
-    cannot be rewritten the status is stale with the plain reason and the earlier entry is kept."""
+    collector (never asking, E1-4), and only for a runtime the collector's own check accepts as active. Returns
+    the status afterwards and whether it was rewritten and recorded; when it cannot be, the status is stale with
+    a fixed reason and the earlier entry is kept (put back when the record of what it is for cannot be kept)."""
+    digest = active_digest(state_root)
     status = entry_status(home, kind, argv, log_dir, answer_file, digest)
-    if status.state != "stale" or read_answer(answer_file) != "yes":
+    if status.state != "stale" or read_answer(answer_file) != "yes" or digest is None:
         return status, False
-    if digest is None:
-        return status, False
-    result = install(home, kind, argv, log_dir, runner, uid=uid)
+    result, old, was_on = _install(home, kind, argv, log_dir, runner, uid=uid)
     if not result.ok:
-        return Status("stale", "the entry could not be rewritten for the installed collector: " + result.reason), False
+        return Status("stale", STALE_UPSET if result.upset else STALE_KEPT), False
     if not write_record(answer_file, digest):
-        return Status("stale", "the entry was rewritten, but setup could not keep a record of the runtime it is "
-                               "for, so it may be rewritten again next time"), True
+        back = _put_back(home, kind, old, was_on, runner, uid=uid, why="the runtime record could not be kept") \
+            if old is not None else Result(False, upset=True)
+        return Status("stale", STALE_NO_RECORD_UPSET if back.upset else STALE_NO_RECORD), False
     return Status("on"), True
 
 
