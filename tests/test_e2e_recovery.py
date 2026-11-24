@@ -148,7 +148,9 @@ class RequirementTests(unittest.TestCase):
         # The collector scene's dispatches are judged by G1 (the product must not fail them).
         collector = SOURCE[SOURCE.index("def collector_scene"):]
         self.assertNotIn("dispatch_in_background(run, refuses=True)", collector)
-        self.assertNotIn("dispatch_in_background(other, refuses=True)", collector)
+        # Decision 180: the second dispatch's refusal is expected only with a replaced service (judged again once known).
+        self.assertIn("dispatch_in_background(other, refuses=True)", collector)
+        self.assertIn("dispatch_g1_breaks(", collector)
 
     def test_the_stand_in_python_boot_only_applies_listed_rewrites(self):
         self.assertIn("patches.json", e2e_support.BOOT)
@@ -207,6 +209,7 @@ class FixRoundTests(unittest.TestCase):
                              getattr(call.func, "attr", "?"))
                 found.add((function.name, label))
         self.assertEqual({("service_scene", "dispatch_in_background"),
+                          ("collector_scene", "dispatch_in_background"),
                           ("wait_running", "status"),
                           ("lost_and_released", "learning-run-status"),
                           ("service_scene", "learning-run-status")}, found)  # the nested poll, seen from its scene
@@ -218,7 +221,7 @@ class FixRoundTests(unittest.TestCase):
 
     def test_l8_2_terminal_is_exactly_run_lost_or_completed_with_capacity_released(self):
         self.assertEqual("run_lost", rec.persisted_terminal(("abandoned", "service_lost", 1)))
-        self.assertEqual("completed", rec.persisted_terminal(("terminal", None, 1)))
+        self.assertEqual("completed", rec.persisted_terminal(("terminal", None, 1), "completed"))
         for row in (None, ("pending", None, 0), ("pending", None, 1), ("abandoned", "service_lost", 0),
                     ("abandoned", "other_reason", 1), ("terminal", None, 0), ("terminal", None, None),
                     ("released", None, 1), ("abandoned", None, 1)):
@@ -318,6 +321,68 @@ class FixRoundTests(unittest.TestCase):
         for needed in ("is_tombstone", "observation_problems", "deleted_service_final", "kept_identity"):
             self.assertIn(needed, text)
         self.assertNotIn("KEPT_BY_DESIGN", text)
+
+
+class FinalFixTests(unittest.TestCase):
+    """Decision 180: the one final targeted fix (L8.3 against G1, L8.2/L8.1 outcome, L14.1 phase guard)."""
+
+    def test_l8_3_second_dispatch_g1_depends_on_the_observed_service(self):
+        replaced = rec.dispatch_g1_breaks(True, 1)
+        self.assertNotIn("g1_unexpected_exit", replaced)  # an EXPECTED refusal is not a G1 failure
+        self.assertNotIn("g1_unexpected_exit", rec.dispatch_g1_breaks(True, 0))
+        self.assertNotIn("g1_unexpected_exit", rec.dispatch_g1_breaks(False, 0))
+        self.assertIn("g1_unexpected_exit", rec.dispatch_g1_breaks(False, 1))  # untouched stays expected-success
+        self.assertIn("g1_unexpected_exit", rec.dispatch_g1_breaks(False, 2))
+
+    def test_l8_3_scene_passes_the_dispatch_through_that_judge(self):
+        collector = SOURCE[SOURCE.index("def collector_scene"):]
+        self.assertIn("dispatch_in_background(other, refuses=True)", collector)
+        self.assertIn("dispatch_g1_breaks(", collector)
+        self.assertIn("CAPTURE_BREAKS", collector)
+
+    def test_a_completed_terminal_needs_the_persisted_outcome_read_explicitly(self):
+        done = ("terminal", None, 1)
+        self.assertEqual("completed", rec.persisted_terminal(done, "completed"))
+        for outcome in (None, "", "running", "unknown", "failed", "COMPLETED"):
+            self.assertIsNone(rec.persisted_terminal(done, outcome), outcome)
+        self.assertIsNone(rec.persisted_terminal(done))  # never inferred from the released status
+        self.assertEqual("run_lost", rec.persisted_terminal(("abandoned", "service_lost", 1)))
+
+    def test_the_run_status_must_agree_with_an_explicit_terminal(self):
+        lost = {"reason_code": "run_lost"}
+        ended = {"ready": True, "terminal_observed": True}
+        self.assertTrue(rec.status_agrees("run_lost", lost))
+        self.assertTrue(rec.status_agrees("completed", ended))
+        for terminal, status in (("completed", {}), ("completed", None), ("completed", {"terminal_observed": False}),
+                                 ("completed", {"ready": True}), ("completed", lost), ("run_lost", {}),
+                                 ("run_lost", ended), (None, ended), (None, lost)):
+            self.assertFalse(rec.status_agrees(terminal, status), (terminal, status))
+
+    def test_l8_1_and_l8_2_read_the_outcome_from_persisted_history(self):
+        for name in ("l8_1_killed_service_next_service_settles_run_lost_slot_freed_nothing_twice",
+                     "l8_2_killed_collector_run_settles_once_back_slot_freed_nothing_twice"):
+            text = _function_source(name)
+            self.assertIn("status_agrees", text) if "l8_2" in name else None
+            self.assertTrue("outcome" in text, name)
+        self.assertIn("persisted_outcome", SOURCE[SOURCE.index("def service_scene"):])
+        self.assertIn("persisted_outcome", SOURCE[SOURCE.index("def collector_scene"):])
+
+    def test_l14_1_fails_when_any_one_migration_phase_is_left_out(self):
+        collected = {name: {"migration": {}} for name in rec.MIGRATION_PHASES}
+        collected["idle"] = {"lifecycle": {}}
+        self.assertTrue(rec.migration_phases_judged(collected, rec.MIGRATION_PHASES))
+        for left_out in rec.MIGRATION_PHASES:
+            judged = tuple(n for n in rec.MIGRATION_PHASES if n != left_out)
+            self.assertFalse(rec.migration_phases_judged(collected, judged), left_out)
+        self.assertFalse(rec.migration_phases_judged(collected, rec.MIGRATION_PHASES + ("idle",)))
+        self.assertIn("migration_phases_judged", _function_source(
+            "l14_1_status_commands_give_the_right_values_at_each_phase_and_none_is_private"))
+        self.assertNotIn("every phase", (ROOT / "docs" / "requirements" / "t7" / "assertions.md").read_text())
+
+    def test_the_assertions_file_states_decision_178_as_decided(self):
+        text = (ROOT / "docs" / "requirements" / "t7" / "assertions.md").read_text()
+        self.assertIn("decision 178", text)
+        self.assertNotIn("PRIMARY DECISION NEEDED", text)
 
 
 if __name__ == "__main__":

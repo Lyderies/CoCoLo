@@ -80,3 +80,17 @@ refuses, product finding 1; collector scene green), L14.1 red (findings 2), L15.
 stays), G1 red (the close and orchestration reads that now must succeed; same in the fault run). Fault: L8.1, L8.2 newly red, L8.3
 collector scene newly red, `fault_isolated` true (changed: L8.1, L8.2 only; the others were already red). Tests: tests.test_e2e_recovery
 (31), tests.test_e2e_requirements, tests.test_e2e_strictness green.
+
+## Final fix (primary decision 180), 2026-11-25: harness/checks only
+Done (each test red first, `tests.test_e2e_recovery.FinalFixTests`): (1) L8.3 collector scene: second dispatch captured
+`refuses=True`, judged again once the service is known (`dispatch_g1_breaks`: untouched + nonzero = G1 failure; replaced may
+refuse, and the check requires it); (2) `persisted_terminal(binding, outcome)`: completed needs the project history's outcome
+record `execution_state == completed` (`persisted_outcome`), `status_agrees` makes the L8.2 status comparison explicit (empty or
+running fails), L8.1 reads the next child's outcome again; (3) L14.1 `MIGRATION_PHASES` + `migration_phases_judged` guard, docs
+say idle collects the lifecycle status only; (4) assertions.md rows corrected, decision 178 DECIDED. Existing tests edited (listed
+old -> new in assertions.md, "S2 final fix").
+Evidence: `--flows L8,L14,L15 --jobs 2` (/tmp/claude-501/t7s2/r2.json, 206 s): L8.1, L8.2 green (outcome read works live), L8.3
+second check green (service_untouched), L8.3 first, L14.1, L15.1 red (product findings 1-3 unchanged); G1 red because the
+product's refused close in the L14.1/L8.3 service scene is an expected-success step (finding 1), G2-G4, G8, G9 green. Fault run
+(fault2.json, 313 s): L8.1, L8.2 newly red, all S2 IDs red, others unchanged. Tests: test_e2e_recovery (65 incl. strictness and
+requirements modules), green, 0.3 s.

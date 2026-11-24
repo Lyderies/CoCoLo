@@ -337,18 +337,62 @@ def wait_released(view, run, *, seconds: float = 40) -> dict:
 # ---------------------------------------------------------------------------------------------
 # Pure judges (guarded without a World by tests/test_e2e_recovery.py)
 
-def persisted_terminal(binding: tuple | None) -> str | None:
-    """What the account ledger's persisted fields say a run ended as: (binding state, abandoned reason, released).
-    Exactly `run_lost` (abandoned for a lost service, slot released) or `completed` (terminal, slot released);
-    anything else, a missing row included, is None (limbo)."""
+def persisted_terminal(binding: tuple | None, outcome: str | None = None) -> str | None:
+    """What the persisted records say a run ended as: the ledger's (binding state, abandoned reason, released) and,
+    for `completed`, the run's persisted terminal OUTCOME read explicitly (`outcome == "completed"`, never inferred
+    from a released slot or from the absence of run_lost). Exactly `run_lost` (abandoned for a lost service, slot
+    released) or `completed` (terminal, slot released, outcome completed); anything else is None (limbo)."""
     if not binding or len(binding) != 3 or binding[2] != 1:
         return None
     state, reason, _released = binding
     if state == "abandoned" and reason == "service_lost":
         return "run_lost"
-    if state == "terminal" and reason is None:
+    if state == "terminal" and reason is None and outcome == "completed":
         return "completed"
     return None
+
+
+def status_agrees(terminal: str | None, status: dict | None) -> bool:
+    """The run's own status says the same as the persisted terminal, explicitly: run_lost reads reason_code
+    run_lost; completed reads ready and terminal_observed both true and no run_lost. A missing, empty or
+    still-running status agrees with nothing."""
+    status = status or {}
+    if terminal == "run_lost":
+        return status.get("reason_code") == "run_lost"
+    if terminal == "completed":
+        return (status.get("ready") is True and status.get("terminal_observed") is True
+                and status.get("reason_code") != "run_lost")
+    return False
+
+
+def dispatch_g1_breaks(service_replaced_: bool, code: int) -> list[str]:
+    """G1 for a dispatch whose refusal is expected only when the project's service was observed replaced: the
+    capture marks it `refuses` at the time (the service is not known yet), this judges it again once the service
+    is known. An untouched service's dispatch stays expected-success."""
+    return e2e_support.capture_breaks("", kind="output", private={}, code=code, refuses=bool(service_replaced_),
+                                      timed_out=False)
+
+
+MIGRATION_PHASES = ("orchestration", "opened", "running", "lost", "next", "closed")
+
+
+def migration_phases_judged(collected: dict, judged) -> bool:
+    """Every collected phase that has a migration status is judged, exactly (dropping one fails). The idle phase
+    collects the lifecycle status only (no migration status)."""
+    return set(judged) == {name for name, view in collected.items() if "migration" in view} and len(tuple(judged)) == len(set(judged))
+
+
+def persisted_outcome(world, run, project_id: str | None) -> str | None:
+    """The run's persisted terminal outcome, read from the project's own history: the `execution_state` of the
+    outcome record written for this run (matched on the run id or the bridge id); None when there is none or
+    its state is not a string."""
+    ids = {(run.opened or {}).get("run_id"), getattr(run, "bridge", None)} - {None}
+    try:
+        records = project_records(world, project_id, "outcome") if project_id else []
+    except (sqlite3.Error, OSError):
+        return None
+    states = {record.get("execution_state") for record in records if record.get("run_id") in ids}
+    return states.pop() if len(states) == 1 and isinstance(next(iter(states)), str) else None
 
 
 def service_replaced(before: list, after: list, *, alive_fn=None) -> bool:
@@ -430,9 +474,10 @@ def run_binding(world, run) -> tuple | None:
     return ("terminal" if state == "pending" and completed else state, reason, released)
 
 
-def settled_binding(world, run, seconds: float = 20):
-    """The run's persisted binding, polled (bounded) until it reads as a terminal; the last reading either way."""
-    poll(lambda: persisted_terminal(run_binding(world, run)), seconds, every=1.0)
+def settled_binding(world, run, seconds: float = 20, outcome: str | None = None):
+    """The run's persisted binding, polled (bounded) until it reads as a terminal with the given persisted outcome;
+    the last reading either way."""
+    poll(lambda: persisted_terminal(run_binding(world, run), outcome), seconds, every=1.0)
     return run_binding(world, run)
 
 
@@ -717,7 +762,8 @@ def service_scene():
     record(ctl, nxt)
     row = ledger_run(world, nxt)
     nxt.bridge = (row or {}).get("bridge_run_id")
-    scene.next_binding = settled_binding(world, nxt)
+    scene.next_outcome = persisted_outcome(world, nxt, ctl.project_id)
+    scene.next_binding = settled_binding(world, nxt, outcome=scene.next_outcome)
     scene.next_read = wait_released(world, nxt, seconds=40)
     scene.phases["next"] = phase_view(ctl, nxt)
     # Can the orchestration close? (L8.3). If the close is refused, try the step the run's own status names.
@@ -772,7 +818,8 @@ def collector_scene():
     scene.slot_after = ledger_run(world, run)
     scene.status_after = ctl.status(run)  # before the result is recorded (a recorded run is forgotten)
     record(ctl, run)
-    scene.binding = settled_binding(world, run)
+    scene.outcome = persisted_outcome(world, run, ctl.project_id)
+    scene.binding = settled_binding(world, run, outcome=scene.outcome)
     scene.service_survived = (bool(scene.service_old) and scene.service_during == scene.service_old
                               and all(alive(pid) for pid in scene.service_old))
     scene.counts_first = run_counts(world, ctl.project_id)
@@ -785,7 +832,7 @@ def collector_scene():
     other = scene.second_run = ctl.child(open_run=False)
     arm(ctl, other, 14)
     ctl.open(other)
-    ctl.dispatch_in_background(other)
+    ctl.dispatch_in_background(other, refuses=True)  # refusal expected ONLY if the service is observed replaced: judged again below
     scene.other_running = ctl.wait_running(other)  # judged: the run really runs when the setup starts
     row = ledger_run(world, other)
     other.bridge = (row or {}).get("bridge_run_id")
@@ -801,6 +848,11 @@ def collector_scene():
     scene.dispatch_service_after = processes(world, "project_host.py", world.project)
     ctl.finish(other)
     scene.other_code, scene.other_reply, scene.other_text = other.code, other.reply, other.text
+    # The capture let this dispatch refuse; an untouched service must not have refused it (G1), a replaced one may.
+    # The step was captured as expected-to-refuse, so the unexpected exit is added here, once the service is known.
+    e2e_support.CAPTURE_BREAKS.extend(b for b in dispatch_g1_breaks(
+        service_replaced(scene.dispatch_service_before, scene.dispatch_service_after), other.code)
+        if b == "g1_unexpected_exit")
     scene.other_read = wait_released(world, other, seconds=60)
     scene.other_slot = ledger_run(world, other)
     scene.other_status = ctl.status(other)
@@ -913,8 +965,10 @@ def l8_1_killed_service_next_service_settles_run_lost_slot_freed_nothing_twice(p
                  and (scene.status_second or {}).get("capacity_state") == "released",
                  "after the second replacement the run still reads lost and released")
     nxt = scene.next
-    phase.expect(nxt.code == 0 and persisted_terminal(scene.next_binding) == "completed",
-                 "the next child claims the freed slot and completes (read from the persisted ledger, not the reply)")
+    phase.expect(nxt.code == 0 and scene.next_outcome == "completed"
+                 and persisted_terminal(scene.next_binding, scene.next_outcome) == "completed",
+                 "the next child claims the freed slot and completes (persisted outcome record read explicitly: "
+                 "outcome completed, ledger terminal and released; not the reply)")
     phase.expect(scene.next_read.get("state") == "released", "the next run's slot is released by the account's own read")
 
 
@@ -993,7 +1047,9 @@ def l14_1_status_commands_give_the_right_values_at_each_phase_and_none_is_privat
     phase.expect(counts(view, "host_runs_opened", "host_runs_pending", "host_runs_terminal", "host_runs_abandoned")
                  == {"host_runs_opened": 2, "host_runs_pending": 0, "host_runs_terminal": 1, "host_runs_abandoned": 1},
                  "after the next run: learning-status counts two runs, one ended, one abandoned, none pending")
-    for name in ("orchestration", "opened", "running", "lost", "next", "closed"):
+    phase.expect(migration_phases_judged(phases, MIGRATION_PHASES),
+                 "the migration status is judged at every phase that collects one (idle collects the lifecycle status only)")
+    for name in MIGRATION_PHASES:
         migration = phases[name]["migration"]
         phase.expect(migration["code"] == 0 and ((migration["reply"] or {}).get("earlier_version_runs") or {})
                      .get("holding") == 0, f"{name}: the migration status reports no earlier-version run holding a slot")
@@ -1035,12 +1091,13 @@ def l8_2_killed_collector_run_settles_once_back_slot_freed_nothing_twice(phase: 
                  "once it is back the account's own per-run read (polled, bounded) says released")
     phase.expect(scene.slot_after is not None and isinstance(scene.slot_after["released_at_ms"], int),
                  "the ledger's capacity table holds the slot released")
-    terminal = persisted_terminal(scene.binding)
+    terminal = persisted_terminal(scene.binding, scene.outcome)
     phase.expect(terminal in ("run_lost", "completed"),
-                 "the persisted ledger fields settle the run as exactly run_lost or completed, released (never limbo)")
-    phase.reason(terminal)
-    phase.expect((scene.status_after.get("reason_code") == "run_lost") == (terminal == "run_lost"),
-                 "the run's own status agrees with the persisted terminal")
+                 "the persisted ledger fields and, for completed, the persisted outcome (outcome == completed, read "
+                 "explicitly) settle the run as exactly run_lost or completed, released (never limbo)")
+    phase.reason(terminal or "limbo")
+    phase.expect(status_agrees(terminal, scene.status_after),
+                 "the run's own status agrees explicitly with the persisted terminal (an empty or running status does not)")
     phase.expect(scene.service_during == scene.service_old and scene.service_survived is True,
                  "the project service survived the collector's death (the same process, alive)")
     first, second = scene.counts_first, scene.counts_second
