@@ -578,7 +578,8 @@
  },
  "E2c-1": {
   "checks": [
-   "codex:tests.test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client"
+   "codex:tests.test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client",
+   "codex:tests.test_project_start.ProductionIntervalTests.test_E2c_3_1000_due_projects_with_launch_records_drain_within_60_seconds"
   ],
   "source": "tests/requirements/e2c.json#E2c-1",
   "statement": "### E2c-1 - A stopped project with due holds starts by itself (E2-1, T1)\nA registered project with a launch record, no live host and a due wake row (`project_wake.due_at_ms <= now`:\npublished by its last service, or marked due by E2a-9's reconcile because its state is unknown) is started by the\ncollector within one sweep interval (`STARTER_CHECK_SECONDS` apart), with no owner or client action. A project that\nis not due is not started. **Acceptance (real collector and project host processes):** a project that never ran\n(unknown: due at collector start) and one whose service published `clean_stop` with a past next due are both\nserving within the interval, without any client command."
@@ -588,7 +589,10 @@
    "codex:tests.test_project_start.StrandedTests.test_E2c_10_claims_left_by_a_dead_collector_are_reconciled",
    "codex:tests.test_project_start.StrandedTests.test_E2c_10_a_host_that_does_not_serve_in_time_is_killed_at_twice_the_timeout",
    "codex:tests.test_project_start.StrandedTests.test_E2c_10_a_killed_service_starts_and_a_restart_keeps_the_backoff",
-   "codex:tests.test_project_start.BudgetTests.test_E2c_10_the_stranded_pass_reaches_every_claim_past_one_page"
+   "codex:tests.test_project_start.BudgetTests.test_E2c_10_the_stranded_pass_reaches_every_claim_past_one_page",
+   "codex:tests.test_project_start.OwnershipTests.test_E2c_10_a_child_whose_pid_record_is_refused_is_still_timed_killed_and_reaped",
+   "codex:tests.test_project_start.ProbationTests.test_E2c_4_a_probation_is_kept_across_a_collector_restart",
+   "codex:tests.test_project_start.SlotTests.test_E2c_2_surviving_stranded_children_hold_their_slots"
   ],
   "source": "tests/requirements/e2c.json#E2c-10",
   "statement": "### E2c-10 - Stranded claims, timeouts and restarts (T11, T14; decision 150)\nA claim carries its attempt id, claim time and, once spawned, the child's pid. At collector start (on the\nstarter's thread, before its first claim) and once per sweep interval, every outstanding claim that is not one of\nthis starter's own is reconciled: no child, or a child gone, releases it (a child gone without serving counts\nfailed); a surviving child keeps it until it serves or ends, and past twice the start timeout it is released as\nfailed without being signalled (its identity cannot be proved after a restart). A claim never stays outstanding\nafter a collector crash. The starter's own child still alive at twice `START_TIMEOUT_SECONDS` gets SIGKILL to its\nprocess group and counts failed. A service killed between its pending acknowledgement and its commit, or between\nits commit and `exact`, is started within one interval; a collector restart keeps a project's failures and\nbackoff and reconciles unknown projects as due. **Acceptance:** a claim left by a dead collector with a dead child\nis released and the project started; one with a live child is kept until that child ends; a host that never serves\nis killed at twice the timeout; E2a's killed service is started; the backoff survives a collector restart."
@@ -604,7 +608,11 @@
   "checks": [
    "codex:tests.test_project_start.StartTests.test_E2c_2_limits_and_round_robin_with_two_projects_ending_at_once",
    "codex:tests.test_project_start.StartTests.test_E2c_2_a_start_blocked_in_its_spawn_holds_no_ledger_lock",
-   "codex:tests.test_project_start.LedgerStartTests.test_E2c_2_a_claim_is_one_per_project_until_it_ends"
+   "codex:tests.test_project_start.LedgerStartTests.test_E2c_2_a_claim_is_one_per_project_until_it_ends",
+   "codex:tests.test_project_start.FairnessTests.test_E2c_2_a_retry_never_goes_ahead_of_a_project_not_yet_tried",
+   "codex:tests.test_project_start.FairnessTests.test_E2c_2_past_the_queue_and_slot_limits_every_due_project_is_still_started",
+   "codex:tests.test_project_start.OwnershipTests.test_E2c_2_refused_ledger_steps_are_retried_and_no_worker_ends",
+   "codex:tests.test_project_start.SlotTests.test_E2c_2_surviving_stranded_children_hold_their_slots"
   ],
   "source": "tests/requirements/e2c.json#E2c-2",
   "statement": "### E2c-2 - Limits and lock discipline (E2-2, T2, T3)\nOnly the collector's starter thread starts projects. Its locked step only claims: one indexed read of due rows\n(not parked, not backing off, no start outstanding; at most `START_CLAIM_BATCH`), each claimed row marked\noutstanding with an attempt id and its claim time in the same transaction (`project_starts`), queued in memory\n(at most `START_QUEUE_LIMIT`, a project at most once). Probing, verifying, hashing, spawning, waiting and reaping\nrun on the starter's own workers, off the ledger lock and never on the collector's request thread. At most one\nstart is outstanding per project and `START_SLOTS` overall; slots are refilled from the queue in claim order (due\norder), so every due project is tried before any project is tried again (round robin). **Acceptance:** three due\nprojects, two of them ending at once: never more than 2 starts at once, never 2 for one project, the first three\nstarts name three different projects and retries alternate; while a start is blocked in its spawn, a collector\nrequest that takes the ledger lock and a direct ledger read both complete, and the start then finishes."
@@ -612,7 +620,8 @@
  "E2c-3": {
   "checks": [
    "codex:tests.test_project_start.BudgetTests.test_E2c_3_claim_batches_are_short_indexed_and_flat_at_100000_settled_rows",
-   "codex:tests.test_project_start.BudgetTests.test_E2c_3_a_collector_drains_1000_due_projects_within_60_seconds_and_starts_no_later"
+   "codex:tests.test_project_start.BudgetTests.test_E2c_3_a_collector_drains_1000_due_projects_within_60_seconds_and_starts_no_later",
+   "codex:tests.test_project_start.ProductionIntervalTests.test_E2c_3_1000_due_projects_with_launch_records_drain_within_60_seconds"
   ],
   "source": "tests/requirements/e2c.json#E2c-3",
   "statement": "### E2c-3 - Budgets (E2-2, T10; decision 150)\nWith 1,000 due projects the starter drains them (every one claimed and its attempt ended with an outcome) within\n60 s; no claim step holds the ledger lock 750 ms or more and a 64-row claim batch takes under 50 ms; 1,000 due rows\nadd under 200 ms to collector start-up (nothing of the starter runs before ready); and the claim step's work does\nnot grow with 100,000 settled wake rows (rows with no due time). **Acceptance:** measured on a real ledger and a\nreal collector."
@@ -622,7 +631,11 @@
    "codex:tests.test_project_start.BackoffTests.test_E2c_4_a_crash_loop_parks_and_only_the_owner_unparks",
    "codex:tests.test_project_start.BackoffTests.test_E2c_4_an_early_exit_counts_failed_and_a_lasting_start_ends_the_streak",
    "codex:tests.test_project_start.LedgerStartTests.test_E2c_4_backoff_doubles_to_its_cap_and_parks_once_the_streak_is_an_hour_old",
-   "codex:tests.test_project_start.LedgerStartTests.test_E2c_4_the_owner_unpark_and_a_lasting_start_end_the_streak"
+   "codex:tests.test_project_start.LedgerStartTests.test_E2c_4_the_owner_unpark_and_a_lasting_start_end_the_streak",
+   "codex:tests.test_project_start.BudgetTests.test_E2c_4_the_probation_pass_reaches_every_probation_past_one_page",
+   "codex:tests.test_project_start.OwnerCommandTests.test_E2c_4_the_owner_start_command_unparks_with_the_collector_down",
+   "codex:tests.test_project_start.ProbationTests.test_E2c_4_a_probation_is_kept_across_a_collector_restart",
+   "codex:tests.test_project_start.ProbationTests.test_E2c_4_a_serving_recheck_never_replaces_an_active_probation"
   ],
   "source": "tests/requirements/e2c.json#E2c-4",
   "statement": "### E2c-4 - Backoff and the crash-loop park (E2-2, owner decision 143, T2)\nA failed start (the host ended without serving, did not serve by twice `START_TIMEOUT_SECONDS`, or served but\nended within `START_PROBATION_SECONDS`) counts one failure of the project's streak; the first failure starts the\nstreak. The next attempt waits `START_BACKOFF_FIRST_SECONDS * 2^(failures-1)`, at most\n`START_BACKOFF_MAX_SECONDS`. Failures and the streak are kept in the ledger (`project_starts`), so a collector\nrestart keeps them, and a publish never resets them. Once a start fails while the streak's first failure is\n`START_PARK_AFTER_SECONDS` old, the project parks: `recovery failed: <reason_code>` and no further attempt. Only a\nuser action unparks: a new launch digest (setup ran again: a new install or update) or the owner's\n`learning-start-project-service --project-root <root>` (owner-signed collector operation `start_unpark`, which also\nends the streak). A project reporting again (a publish) does not unpark it. A start that serves for\n`START_PROBATION_SECONDS` ends the streak. **Acceptance:** a broken project backs off with growing waits; once\nits streak is old enough it parks after its next failure; a republish leaves it parked; the owner command unparks;\na project that is fixed and serves ends its streak; a host killed within probation counts as failed."
@@ -636,14 +649,16 @@
  },
  "E2c-6": {
   "checks": [
-   "codex:tests.test_project_start.StartTests.test_E2c_6_a_changed_or_missing_install_starts_nothing"
+   "codex:tests.test_project_start.StartTests.test_E2c_6_a_changed_or_missing_install_starts_nothing",
+   "codex:tests.test_project_start.TrustBoundaryTests.test_E2c_6_location_refusals_hold_in_the_product_path"
   ],
   "source": "tests/requirements/e2c.json#E2c-6",
   "statement": "### E2c-6 - Install changed (E2-4, T4)\nBefore each start, off the lock, the copy's name must equal `launch_digest` and `launch_target_problem(copy, root,\n{})` (the account's own home) must be None; otherwise nothing starts and the status is\n`recovery pending: install changed`, checked again every `START_RECHECK_SECONDS` (no failure counted).\nA project with no launch record is not started and keeps E2a-11's line. **Acceptance:** a changed copy file, a\nchanged project runtime file and a missing copy each give `recovery pending: install changed` and no spawn."
  },
  "E2c-7": {
   "checks": [
-   "codex:tests.test_project_start.StartTests.test_E2c_7_another_version_s_live_host_is_not_replaced"
+   "codex:tests.test_project_start.StartTests.test_E2c_7_another_version_s_live_host_is_not_replaced",
+   "codex:tests.test_project_start.OtherVersionTests.test_E2c_7_a_real_host_of_an_earlier_runtime_is_not_replaced"
   ],
   "source": "tests/requirements/e2c.json#E2c-7",
   "statement": "### E2c-7 - Another version's live service (E2-5, T5)\nWhen a live host of another runtime serves the project, nothing starts, no maintenance is taken and the collector\ndoes not stop; the status is `recovery: needs update handover: run learning-start-project-service --project-root\n<root>`, checked again every `START_RECHECK_SECONDS`. **Acceptance:** with another runtime's live host, the line\nand command shown, no spawn, the same collector process still serving and no maintenance marker."

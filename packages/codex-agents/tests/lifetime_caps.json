@@ -1950,7 +1950,7 @@
   },
   "learning_store.py::<module>": {
    "checks": 1,
-   "ends": "RS-E E2c-2: START_CLAIM_SQL reads at most one claim batch (64) of due rows per locked step; the starter claims again every STARTER_CHECK_SECONDS while due rows remain, and a claimed row leaves the set until its attempt ends",
+   "ends": "RS-E E2c-2: START_CLAIM_SQL / START_CLAIM_AFTER_SQL read at most one claim batch (64) of due rows per locked step; a full batch is followed by the next one at once (review round 1, HIGH 1), from the starter's cursor, and a claimed row leaves the set until its attempt ends",
    "test": "test_E2c_3_a_collector_drains_1000_due_projects_within_60_seconds_and_starts_no_later"
   },
   "learning_store.py::outstanding_starts": {
@@ -1962,6 +1962,31 @@
    "checks": 1,
    "ends": "RS-E E2c-10: a page shorter than START_CLAIM_BATCH ends the pass; a full page continues after its last claim, so every outstanding claim is reached",
    "test": "test_E2c_10_the_stranded_pass_reaches_every_claim_past_one_page"
+  },
+  "learning_store.py::probation_starts": {
+   "checks": 1,
+   "ends": "RS-E E2c-4 (review round 1, HIGH 4): one page of at most 64 kept probations per read; the starter's pass reads page after page from its cursor, and a probation leaves the set once its host served it out or ended",
+   "test": "test_E2c_4_the_probation_pass_reaches_every_probation_past_one_page"
+  },
+  "project_start.py::_reconcile_probations": {
+   "checks": 1,
+   "ends": "RS-E E2c-4 (review round 1, HIGH 4): a page shorter than START_CLAIM_BATCH ends the pass; a full page continues after its last row, so every kept probation is reached",
+   "test": "test_E2c_4_the_probation_pass_reaches_every_probation_past_one_page"
+  },
+  "project_start.py::_claim": {
+   "checks": 1,
+   "ends": "RS-E E2c-2 (review round 1, LOW): START_QUEUE_LIMIT (1,024) claims wait in memory at once; a worker taking one frees its place, a full queue is looked at again every tick, and a stopping collector releases what is left",
+   "test": "test_E2c_2_past_the_queue_and_slot_limits_every_due_project_is_still_started"
+  },
+  "project_start.py::_worker": {
+   "checks": 1,
+   "ends": "RS-E E2c-2 (review round 1, LOW, HIGH 3): START_SLOTS (2) starts at once, a dead collector's surviving child holding one; a slot is free again when its start ends (its outcome kept, or retried by the starter thread) or the surviving child serves, ends or reaches twice the start timeout",
+   "test": "test_E2c_2_past_the_queue_and_slot_limits_every_due_project_is_still_started"
+  },
+  "project_start.py::_record_child": {
+   "checks": 1,
+   "ends": "RS-E E2c-10 (review round 1, HIGH 2): SETTLE_TRIES tries to keep a child's pid on its claim, per start; past them the child is still timed, killed at twice the timeout and reaped by its worker",
+   "test": "test_E2c_10_a_child_whose_pid_record_is_refused_is_still_timed_killed_and_reaped"
   }
  }
 }

@@ -61,7 +61,8 @@ sys.path.insert(0, orchestration)
 from pathlib import Path
 from codex_agents import host_commands, learning_store, project_start
 host_commands.account_home = lambda: Path(home)
-host_commands.temp_roots = lambda: set()
+if options.get('trust_temp', True):
+    host_commands.temp_roots = lambda: set()
 for name, value in options['constants'].items():
     assert hasattr(project_start, name), name
     setattr(project_start, name, value)
@@ -73,6 +74,27 @@ log = options['log']
 def note(**fields):
     with open(log, 'a') as handle:
         handle.write(json.dumps({**fields, 't': time.monotonic()}) + '\n')
+
+# Fault injection (review round 1, HIGH 2): the first `count` calls of a ledger step are refused, as a busy or
+# failing ledger refuses them.
+refusals = dict(options.get('fail') or {})
+for method_name in list(refusals):
+    real_method = getattr(learning_store.LearningLedger, method_name)
+    def refused(self, *args, _real=real_method, _name=method_name, **kwargs):
+        if refusals[_name] > 0:
+            refusals[_name] -= 1
+            note(event='refused', step=_name)
+            raise learning_store.LedgerError('refused by the test')
+        return _real(self, *args, **kwargs)
+    setattr(learning_store.LearningLedger, method_name, refused)
+claim_due = learning_store.LearningLedger.claim_due_starts
+def timed_claim(self, **kwargs):
+    began = time.perf_counter()
+    try:
+        return claim_due(self, **kwargs)
+    finally:
+        note(event='claim', seconds=time.perf_counter() - began)
+learning_store.LearningLedger.claim_due_starts = timed_claim
 
 attempt = project_start.ProjectStarter._attempt
 def logged_attempt(self, item):
@@ -173,23 +195,35 @@ class StarterBase(unittest.TestCase):
     def mend_store(self, name):
         (self.state.root / 'projects' / self.projects[name][1] / 'history.sqlite3').unlink()
 
-    def launch(self, constants=None, store=None, env=None, block=None):
+    def launch(self, constants=None, store=None, env=None, block=None, fail=None, trust_temp=True,
+               orchestration=ORCHESTRATION_ROOT):
         options = {'constants': {**self.CONSTANTS, **(constants or {})}, 'store': {**self.STORE, **(store or {})},
-                   'log': str(self.log), 'block': block}
+                   'log': str(self.log), 'block': block, 'fail': fail, 'trust_temp': trust_temp}
+        self.options = options
         errors = open(self.base / 'collector.err', 'ab')
         self.addCleanup(errors.close)
         self.collector = subprocess.Popen(
-            [sys.executable, '-I', '-B', '-c', LAUNCHER, str(ORCHESTRATION_ROOT), str(self.home), str(self.state.root),
+            [sys.executable, '-I', '-B', '-c', LAUNCHER, str(orchestration), str(self.home), str(self.state.root),
              json.dumps(options)], env={'PATH': os.defpath, 'TMPDIR': SHORT_TMP, **(env or {})},
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errors, start_new_session=True)
         end = time.monotonic() + 30
         while True:
             try:
+                if orchestration != ORCHESTRATION_ROOT:  # another runtime's collector: this client may refuse it
+                    reply = json.loads(exchange_frame(self.state.socket, canonical_json({'protocol': 1, 'op': 'health'}),
+                                                      timeout=2.0, request_limit=4096, response_limit=16_384))
+                    if reply.get('ok') is True:
+                        return reply
+                    raise RuntimeError('not ready')
                 return CollectorClient(self.state.socket, timeout=2).health()
             except Exception:
                 if self.collector.poll() is not None or time.monotonic() > end:
                     self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])
                 time.sleep(0.05)
+
+    def constant(self, name):
+        """A starter constant as the running collector has it."""
+        return self.options['constants'].get(name, getattr(project_start, name))
 
     def stop_collector(self):
         if self.collector is not None and self.collector.poll() is None:
@@ -197,10 +231,12 @@ class StarterBase(unittest.TestCase):
             self.collector.wait(30)
         self.collector = None
 
-    def host_pids(self):
-        """This test's project hosts (its own state root is in their arguments)."""
-        listed = subprocess.run(['pgrep', '-f', 'project_host.py --state-root ' + str(self.state.root) + ' '],
-                                stdout=subprocess.PIPE, text=True, check=False)
+    def host_pids(self, name=None):
+        """This test's project hosts (its own state root is in their arguments), or one project's."""
+        pattern = 'project_host.py --state-root ' + str(self.state.root) + ' '
+        if name is not None:
+            pattern += '--project-root ' + str(self.root(name)) + '$'
+        listed = subprocess.run(['pgrep', '-f', pattern], stdout=subprocess.PIPE, text=True, check=False)
         return sorted(int(value) for value in listed.stdout.split())
 
     def stop_hosts(self):
@@ -313,6 +349,34 @@ class StarterBase(unittest.TestCase):
         return f'run learning-start-project-service --project-root {self.root(name)}'
 
 
+def bulk_projects(ledger, template_id, count, *, due_ms, prefix, copy_for=None):
+    """`count` active projects (as registration writes them) with wake rows due at `due_ms` (None: settled), with
+    the launch record `copy_for(root)` returns ((copy, digest), or None for no record)."""
+    connection = ledger._connection
+    template = dict(connection.execute('SELECT * FROM projects WHERE project_id=?', (template_id,)).fetchone())
+    columns = list(template)
+    rows, wakes = [], []
+    for index in range(count):
+        project_id = 'prj_' + f'{prefix}{index:0{32 - len(prefix)}d}'
+        root = f'/var/empty/{prefix}/{index}'
+        record = None if copy_for is None else copy_for(root)
+        row = {**template, 'project_id': project_id, 'canonical_root': root,
+               'launch_copy': None if record is None else record[0],
+               'launch_digest': None if record is None else record[1]}
+        for column in columns:
+            if column.endswith('_digest') and column != 'launch_digest' and type(row[column]) is str:
+                row[column] = row[column][:-12] + f'{index:012x}'
+        rows.append(tuple(row[column] for column in columns))
+        wakes.append((project_id, due_ms, 1))
+    with ledger._lock:
+        connection.execute('BEGIN IMMEDIATE')
+        connection.executemany(f'INSERT INTO projects({",".join(columns)}) VALUES({",".join("?" * len(columns))})',
+                               rows)
+        connection.executemany('INSERT INTO project_wake(project_id,allocated_epoch,refused,due_at_ms,'
+                               'updated_at_ms) VALUES(?,0,0,?,?)', wakes)
+        connection.commit()
+
+
 def overlaps(events):
     """The most starts in flight at once, overall and for any one project, from begin/end lines."""
     running, most, per_project = {}, 0, 0
@@ -339,7 +403,17 @@ class StartTests(StarterBase):
                 ledger.publish_wake(project_id, epoch=None, seq=1, state='pending', next_due_at_ms=None)
                 ledger.publish_wake(project_id, epoch=1, seq=2, state='clean_stop', next_due_at_ms=due)
         self.launch()
-        wait_for(self, lambda: self.serving('never') and self.serving('stopped'), 30, 'the due projects never served')
+        ready = time.monotonic()
+        # Review round 1 (MED 2): within one interval. Each due project's start begins within STARTER_CHECK_SECONDS
+        # of the collector being ready (one tick of slack) and serves within its start's own deadline.
+        check = self.constant('STARTER_CHECK_SECONDS')
+        deadline = ready + check + min(self.constant('STARTER_TICK_SECONDS'), check) + 1.0
+        for name in ('never', 'stopped'):
+            begun = wait_for(self, lambda: self.events('begin', name), max(0.0, deadline - time.monotonic()),
+                             f'{name}: no start began within one interval')
+            self.assertLessEqual(begun[0]['t'], deadline)
+        wait_for(self, lambda: self.serving('never') and self.serving('stopped'),
+                 2 * project_start.project_host_client.START_TIMEOUT_SECONDS, 'the due projects never served')
         time.sleep(1.0)
         self.assertFalse(self.serving('idle'))
         self.assertEqual([], self.events('begin', 'idle'))
@@ -599,7 +673,9 @@ class StrandedTests(StarterBase):
         self.add('killed', record=False)
         self.add('broken')
         self.break_store('broken')
-        constants = {'START_BACKOFF_FIRST_SECONDS': 300.0}
+        # A short probation, served out before the kill below: a host killed within its probation counts failed
+        # (E2c-4, kept across the restart since review round 1), and this test is about an unknown project.
+        constants = {'START_BACKOFF_FIRST_SECONDS': 300.0, 'START_PROBATION_SECONDS': 1.0}
         self.launch(constants=constants)
         root, project_id, copy = self.projects['killed']
         done = subprocess.run([sys.executable, '-I', '-B', '-c', KILLER, str(ORCHESTRATION_ROOT), str(self.state.root),
@@ -618,11 +694,16 @@ class StrandedTests(StarterBase):
                  lambda: f'the killed service was never started: {self.starts("killed")} {self.wake("killed")}')
         before = wait_for(self, lambda: (self.starts('broken') or {}).get('failures') == 1 and self.starts('broken'),
                           20, 'no failure counted')
+        wait_for(self, lambda: self.starts('killed')['started_at_ms'] is not None
+                 and self.starts('killed')['attempt'] is None and self.starts('killed')['probation_attempt'] is None,
+                 20, lambda: f'the probation never ended: {self.starts("killed")}')
         self.stop_collector()  # first, so no probation watcher sees the kill below
         for pid in self.host_pids():
             os.kill(pid, signal.SIGKILL)  # its state is now unknown (exact, not serving)
         self.launch(constants=constants)
-        wait_for(self, lambda: self.serving('killed'), 30, 'the unknown project was not reconciled and started')
+        wait_for(self, lambda: self.serving('killed'), 30,
+                 lambda: f'the unknown project was not reconciled and started: {self.starts("killed")} '
+                 f'{self.wake("killed")}')
         after = self.starts('broken')
         self.assertEqual((1, before['next_start_at_ms'], before['streak_first_ms']),
                          (after['failures'], after['next_start_at_ms'], after['streak_first_ms']))
@@ -735,27 +816,7 @@ class BudgetTests(unittest.TestCase):
 
     def bulk_projects(self, count, *, due_ms, prefix):
         """`count` active projects (as registration writes them) with wake rows due at `due_ms` (None: settled)."""
-        connection = self.ledger._connection
-        template = dict(connection.execute('SELECT * FROM projects WHERE project_id=?',
-                                           (self.fixture.project_a_id,)).fetchone())
-        columns = list(template)
-        rows, wakes = [], []
-        for index in range(count):
-            project_id = 'prj_' + f'{prefix}{index:0{32 - len(prefix)}d}'
-            row = {**template, 'project_id': project_id, 'canonical_root': f'/var/empty/{prefix}/{index}',
-                   'launch_copy': None, 'launch_digest': None}
-            for column in columns:
-                if column.endswith('_digest') and column != 'launch_digest' and type(row[column]) is str:
-                    row[column] = row[column][:-12] + f'{index:012x}'
-            rows.append(tuple(row[column] for column in columns))
-            wakes.append((project_id, due_ms, 1))
-        with self.ledger._lock:
-            connection.execute('BEGIN IMMEDIATE')
-            connection.executemany(f'INSERT INTO projects({",".join(columns)}) VALUES({",".join("?" * len(columns))})',
-                                   rows)
-            connection.executemany('INSERT INTO project_wake(project_id,allocated_epoch,refused,due_at_ms,'
-                                   'updated_at_ms) VALUES(?,0,0,?,?)', wakes)
-            connection.commit()
+        bulk_projects(self.ledger, self.fixture.project_a_id, count, due_ms=due_ms, prefix=prefix)
 
     def timed_claims(self, now_ms):
         durations, claimed = [], 0
@@ -777,6 +838,21 @@ class BudgetTests(unittest.TestCase):
         server = types.SimpleNamespace(ledger=self.ledger, state=self.fixture.state, _sweeps_stop=threading.Event())
         project_start.ProjectStarter(server)._reconcile_stranded()
         self.assertEqual([], self.ledger.outstanding_starts(limit=64))
+
+    @requirements('E2c-4', why_not_scenario='The kept-probation pass on a real ledger; no process boundary.')
+    def test_E2c_4_the_probation_pass_reaches_every_probation_past_one_page(self):
+        import types
+        self.bulk_projects(70, due_ms=1, prefix='p')
+        claimed = self.ledger.claim_due_starts(now_ms=10, limit=64) + self.ledger.claim_due_starts(now_ms=10, limit=64)
+        self.assertEqual(70, len(claimed))
+        for claim in claimed:  # a dead collector's started hosts, each within its probation
+            self.ledger.finish_start(claim.project_id, claim.attempt, outcome='started', reason=None, now_ms=10,
+                                     child_pid=2, **project_start.start_policy())
+        server = types.SimpleNamespace(ledger=self.ledger, state=self.fixture.state, _sweeps_stop=threading.Event())
+        starter = project_start.ProjectStarter(server)
+        starter._reconcile_probations()
+        self.assertEqual({claim.project_id for claim in claimed}, set(starter._foreign))
+        self.assertEqual([], self.ledger.claim_due_starts(now_ms=20, limit=64))  # none claimed within probation
 
     @requirements('E2c-3', why_not_scenario='Lock and batch budgets measured on a real ledger.')
     def test_E2c_3_claim_batches_are_short_indexed_and_flat_at_100000_settled_rows(self):
@@ -817,8 +893,8 @@ class BudgetTests(unittest.TestCase):
                     self.ledger._connection.execute("UPDATE project_wake SET due_at_ms=NULL,state='clean_stop',"
                                                     "epoch=1,seq=1,allocated_epoch=1")
             server = learning_store.CollectorServer(self.ledger, client_capabilities=self.fixture.clients)
-            with mock.patch.object(project_start, 'STARTER_CHECK_SECONDS', 0.05), \
-                    mock.patch.object(self.ledger, 'claim_due_starts', side_effect=claim):
+            # Review round 1 (HIGH 1, MED 2): the product's own intervals, unchanged.
+            with mock.patch.object(self.ledger, 'claim_due_starts', side_effect=claim):
                 began = time.perf_counter()
                 server.start()
                 timings[label] = time.perf_counter() - began
@@ -840,6 +916,365 @@ class BudgetTests(unittest.TestCase):
         self.assertLess(timings['due'], timings['settled'] + 0.200, timings)
         self.assertTrue(holds)
         self.assertLess(max(holds), 0.750)
+
+
+def update_ledger(test, sql, parameters):
+    """A direct write to the account ledger beside the running collector (test setup only)."""
+    connection = sqlite3.connect(str(test.state.database), timeout=10)
+    try:
+        with connection:
+            connection.execute(sql, parameters)
+    finally:
+        connection.close()
+
+
+class OtherVersionTests(StarterBase):
+    def older_runtime(self, version='0.8.1'):
+        """This package installed as an earlier release would be: a lower manifest version and one runtime file
+        different, so its runtime version and digest are another runtime's."""
+        import hashlib
+        old = install_package(self.base / 'older').resolve()
+        orchestration = old / '.codex' / 'orchestration'
+        target = orchestration / 'codex_agents' / '__init__.py'
+        target.write_bytes(target.read_bytes() + b'\n# an earlier build\n')
+        manifest_path = orchestration / 'install-manifest.json'
+        manifest = json.loads(manifest_path.read_text())
+        manifest['version'] = version
+        manifest['files']['.codex/orchestration/codex_agents/__init__.py'] = hashlib.sha256(
+            target.read_bytes()).hexdigest()
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        return orchestration
+
+    @requirements('E2c-7', why_not_scenario=SCENARIO)
+    def test_E2c_7_a_real_host_of_an_earlier_runtime_is_not_replaced(self):
+        """Review round 1, MED 2: the competing host is a real project host process of another runtime."""
+        from codex_agents.project_host_client import other_version_host
+        root, _project_id, copy = self.add('alpha', record=False)
+        older = self.older_runtime()
+        # The earlier runtime was the authorized one when its service started (as before an update).
+        self.state.collector_authorization.unlink()
+        done = subprocess.run(  # authorized by that runtime's own code, as its registration did
+            [sys.executable, '-I', '-B', '-c', 'import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; '
+             'from codex_agents.learning_store import LearningState, authorize_collector_runtime; '
+             'authorize_collector_runtime(LearningState(Path(sys.argv[2]), create=False), Path(sys.argv[1]) / "cli.py")',
+             str(older), str(self.state.root)], env={'PATH': os.defpath, 'TMPDIR': SHORT_TMP},
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(0, done.returncode, done.stderr[-2000:])
+        self.launch(orchestration=older)
+        host = subprocess.Popen(
+            [sys.executable, '-I', '-B', str(older / 'project_host.py'), '--state-root', str(self.state.root),
+             '--project-root', str(root)], env={'PATH': os.defpath, 'TMPDIR': SHORT_TMP},
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        self.held.append(host)
+        wait_for(self, lambda: other_version_host(self.state.root, root) is not None, 30,
+                 lambda: f'the earlier runtime\'s host never served (exit {host.poll()})')
+        self.stop_collector()
+        # The update: this runtime is authorized and its collector runs; setup records the launch.
+        authorize_collector_runtime(self.state, ORCHESTRATION_ROOT / 'cli.py')
+        started = self.launch()['started_at_ms']
+        CollectorClient(self.state.socket, timeout=30).record_launch(root, str(copy), copy.name)
+        expected = 'recovery: needs update handover: ' + self.command('alpha')
+        wait_for(self, lambda: self.status('alpha') == expected, 20, lambda: f'status: {self.status("alpha")}')
+        time.sleep(1.5)  # rechecked, still not replaced
+        self.assertIsNone(host.poll())  # the earlier runtime's host still serves
+        self.assertIsNotNone(other_version_host(self.state.root, root))
+        self.assertEqual([], self.events('spawned'))
+        self.assertIsNone(self.collector.poll())
+        self.assertEqual(started, CollectorClient(self.state.socket, timeout=2).health()['started_at_ms'])  # no stop
+
+
+class OwnershipTests(StarterBase):
+    """Review round 1, HIGH 2: a spawned child stays its start's until it ends; ledger refusals end no worker."""
+
+    @requirements('E2c-10', why_not_scenario=SCENARIO)
+    def test_E2c_10_a_child_whose_pid_record_is_refused_is_still_timed_killed_and_reaped(self):
+        self.add('slow')
+        self.launch(constants={'START_TIMEOUT_SECONDS': 0.02, 'START_BACKOFF_FIRST_SECONDS': 60.0},
+                    fail={'set_start_child': 1000})
+        row = wait_for(self, lambda: (self.starts('slow') or {}).get('outcome') == 'failed' and self.starts('slow'),
+                       20, lambda: f'never failed: {self.starts("slow")} {self.events()[-6:]}')
+        self.assertEqual('start_timeout', row['reason'])
+        self.assertTrue(self.events('refused'))
+        spawned = self.events('spawned')
+        self.assertEqual(1, len(spawned), spawned)  # its slot was held: no second start beside it
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(spawned[0]['pid'], 0)  # killed and reaped (a zombie would still answer)
+        self.assertEqual([], self.host_pids())
+        ended = self.events('end', 'slow')
+        self.assertEqual(1, len(ended))
+
+    @requirements('E2c-2', why_not_scenario=SCENARIO)
+    def test_E2c_2_refused_ledger_steps_are_retried_and_no_worker_ends(self):
+        names = ('alpha', 'bravo', 'charlie', 'delta')
+        for name in names:
+            self.add(name, record=False)
+        self.launch(fail={'finish_start': 4, 'release_start': 4})
+        for name in names:
+            wait_for(self, lambda: (self.starts(name) or {}).get('outcome') == 'no_record'
+                     and self.starts(name)['attempt'] is None, 20, lambda: f'{name}: {self.starts(name)}')
+        self.assertGreaterEqual(len(self.events('refused')), 4)
+        # Both workers still run: every project is looked at again after its recheck time.
+        for name in names:
+            wait_for(self, lambda: len(self.events('begin', name)) >= 2, 20,
+                     lambda: f'{name} was never looked at again: {self.events()[-8:]}')
+
+
+class SlotTests(StarterBase):
+    @requirements('E2c-2', 'E2c-10', why_not_scenario=SCENARIO)
+    def test_E2c_2_surviving_stranded_children_hold_their_slots(self):
+        """Review round 1, HIGH 3: never more than START_SLOTS starts across a collector restart."""
+        for name in ('one', 'two', 'fresh'):
+            self.add(name)
+        survivors = {}
+        for name in ('one', 'two'):
+            survivors[name] = subprocess.Popen(['/bin/sleep', '60'], start_new_session=True)
+            self.held.append(survivors[name])
+        now = self.now_ms()
+        with self.offline() as ledger:
+            ledger.mark_wakes_due([(self.projects[name][1], str(self.root(name)), None, None)
+                                   for name in ('one', 'two')], now_ms=now)
+            claims = {item.project_id: item for item in ledger.claim_due_starts(now_ms=now, limit=64)}
+            self.assertEqual({self.projects['one'][1], self.projects['two'][1]}, set(claims))
+            for name in ('one', 'two'):
+                ledger.set_start_child(self.projects[name][1], claims[self.projects[name][1]].attempt,
+                                       survivors[name].pid)
+        self.launch(constants={'START_TIMEOUT_SECONDS': 30.0, 'START_BACKOFF_FIRST_SECONDS': 60.0},
+                    store={'WORKER_RESULT_SWEEP_SECONDS': 1.0})
+        time.sleep(3.0)
+        self.assertEqual([], self.events('begin'))  # both slots are held by the surviving children
+        self.assertEqual('recovery: starting', self.status('one'))
+        survivors['one'].kill()
+        survivors['one'].wait(5)
+        wait_for(self, lambda: self.events('begin', 'fresh'), 10, 'no start once a slot was free')
+        wait_for(self, lambda: self.serving('fresh'), 30, 'fresh never served')
+        self.assertEqual(('failed', 'service_ended'), (self.starts('one')['outcome'], self.starts('one')['reason']))
+        self.assertEqual('recovery: starting', self.status('two'))
+        self.assertEqual(['fresh'], [self.name_of(row['project']) for row in self.events('begin')])
+
+
+class ProbationTests(StarterBase):
+    """Review round 1, HIGH 4: a started host's probation is kept with its attempt and child."""
+
+    @requirements('E2c-4', why_not_scenario=SCENARIO)
+    def test_E2c_4_a_serving_recheck_never_replaces_an_active_probation(self):
+        self.add('alpha')
+        self.launch(constants={'START_PROBATION_SECONDS': 30.0, 'START_BACKOFF_FIRST_SECONDS': 60.0})
+        wait_for(self, lambda: (self.starts('alpha') or {}).get('outcome') == 'started'
+                 and self.starts('alpha')['attempt'] is None, 30, lambda: f'never started: {self.starts("alpha")}')
+        # The project falls due again while its host serves (a hold of its falls due): a serving recheck.
+        update_ledger(self, 'UPDATE project_wake SET due_at_ms=? WHERE project_id=?',
+                      (self.now_ms() - 1_000, self.projects['alpha'][1]))
+        time.sleep(1.5)
+        self.assertEqual('started', self.starts('alpha')['outcome'])
+        self.assertTrue(self.status('alpha').startswith('recovery: started '), self.status('alpha'))
+        for pid in self.host_pids('alpha'):
+            os.kill(pid, signal.SIGKILL)  # it ends within its probation
+        row = wait_for(self, lambda: self.starts('alpha')['failures'] == 1 and self.starts('alpha'), 20,
+                       lambda: f'the early end was not counted: {self.starts("alpha")}')
+        self.assertEqual('service_ended_early', row['reason'])
+
+    @requirements('E2c-4', 'E2c-10', why_not_scenario=SCENARIO)
+    def test_E2c_4_a_probation_is_kept_across_a_collector_restart(self):
+        self.add('lasts')
+        root, _project_id, copy = self.add('dies', record=False)
+        constants = {'START_PROBATION_SECONDS': 10.0, 'START_BACKOFF_FIRST_SECONDS': 60.0}
+        self.launch(constants=constants)
+
+        def started(name):
+            row = self.starts(name) or {}
+            return row.get('outcome') == 'started' and row.get('attempt') is None and row
+
+        lasts = wait_for(self, lambda: started('lasts'), 30, lambda: f'never started: {self.starts("lasts")}')
+        self.assertIsNotNone(lasts['probation_pid'])
+        time.sleep(max(0.0, (lasts['started_at_ms'] + 6_000 - self.now_ms()) / 1000))
+        CollectorClient(self.state.socket, timeout=30).record_launch(root, str(copy), copy.name)
+        dies = wait_for(self, lambda: started('dies'), 30, lambda: f'never started: {self.starts("dies")}')
+        self.stop_collector()  # both hosts are within their probation and keep serving
+        for pid in self.host_pids('dies'):
+            os.kill(pid, signal.SIGKILL)  # ended while no collector watched it
+        # 'lasts' had a failure streak before this start; its probation ends while no collector runs.
+        update_ledger(self, 'UPDATE project_starts SET failures=2,streak_first_ms=? WHERE project_id=?',
+                      (self.now_ms() - 60_000, self.projects['lasts'][1]))
+        time.sleep(max(0.0, (lasts['probation_until_ms'] + 500 - self.now_ms()) / 1000))
+        self.assertLess(self.now_ms(), dies['probation_until_ms'] - 2_000)
+        self.launch(constants=constants)
+        row = wait_for(self, lambda: self.starts('dies')['failures'] == 1 and self.starts('dies'), 20,
+                       lambda: f'the early end was not counted after the restart: {self.starts("dies")}')
+        self.assertEqual('service_ended_early', row['reason'])
+        row = wait_for(self, lambda: self.starts('lasts')['failures'] == 0 and self.starts('lasts'), 20,
+                       lambda: f'the served-out probation did not end the streak: {self.starts("lasts")}')
+        self.assertEqual((None, None), (row['streak_first_ms'], row['probation_attempt']))
+        self.assertTrue(self.serving('lasts'))
+
+
+class OwnerCommandTests(StarterBase):
+    @requirements('E2c-4', why_not_scenario=SCENARIO)
+    def test_E2c_4_the_owner_start_command_unparks_with_the_collector_down(self):
+        """Review round 1, MED 1: the compatible collector first, then the owner-signed unpark, then the start."""
+        self.add('broken')
+        self.break_store('broken')
+        project_id = self.projects['broken'][1]
+        with self.offline() as ledger:  # parked by the ledger's own rule while no collector runs
+            now = self.now_ms() - 2 * 3_600_000
+            ledger.mark_wakes_due([(project_id, str(self.root('broken')), None, None)], now_ms=now)
+            while True:
+                claims = ledger.claim_due_starts(now_ms=now, limit=64)
+                self.assertEqual([project_id], [item.project_id for item in claims])
+                row = ledger.finish_start(project_id, claims[0].attempt, outcome='failed', reason='history_unavailable',
+                                          now_ms=now, **project_start.start_policy())
+                if row['parked_reason'] is not None:
+                    break
+                now = row['next_start_at_ms']
+        parked_failures = row['failures']
+        self.addCleanup(self.stop_cli_collector)
+        with self.assertRaises(Exception):
+            CollectorClient(self.state.socket, timeout=2).health()  # the collector is down
+        self.cli('learning-start-project-service', 'broken')
+        row = self.starts('broken')
+        self.assertIsNone(row['parked_reason'], row)
+        self.assertLess(row['failures'], parked_failures, row)  # its streak ended; any failure since is a new one
+
+    def stop_cli_collector(self):
+        """The collector the CLI started (not this test's launcher): its own drained stop, then wait for it."""
+        for extra in ({'runtime_digest': COLLECTOR_RUNTIME_DIGEST}, {}):
+            try:
+                exchange_frame(self.state.socket, canonical_json({'protocol': 1, 'op': 'shutdown_if_drained', **extra}),
+                               timeout=3.0, request_limit=4096, response_limit=16_384)
+            except Exception:
+                pass
+        end = time.monotonic() + 15
+        while self.state.socket.exists() and time.monotonic() < end:
+            time.sleep(0.1)
+
+
+class TrustBoundaryTests(StarterBase):
+    @requirements('E2c-6', why_not_scenario=SCENARIO)
+    def test_E2c_6_location_refusals_hold_in_the_product_path(self):
+        """Review round 1, MED 2: the fixture trusts its temporary home; without that, the product refuses it."""
+        root, _project_id, copy = self.add('alpha')
+        self.launch(trust_temp=False)  # only the account home is set: temporary directories stay untrusted
+        wait_for(self, lambda: self.status('alpha') == 'recovery pending: install changed', 20,
+                 lambda: f'status: {self.status("alpha")}')
+        self.assertEqual([], self.events('spawned'))
+        self.assertEqual([], self.host_pids())
+        with mock.patch.object(host_commands, 'account_home', lambda: self.home):
+            self.assertIsNotNone(host_commands.launch_target_problem(copy, root, {}))
+            inside = root / '.codex-copy' / copy.name  # a copy inside the project itself
+            self.assertIsNotNone(host_commands.launch_target_problem(inside, root, {}))
+
+
+class ProductionIntervalTests(StarterBase):
+    """E2c-1/E2c-3 with the product's own intervals (review round 1, HIGH 1 and MED 2)."""
+    CONSTANTS = {}
+
+    @requirements('E2c-3', 'E2c-1', why_not_scenario=SCENARIO)
+    def test_E2c_3_1000_due_projects_with_launch_records_drain_within_60_seconds(self):
+        served = [f'real{index}' for index in range(4)]
+        for name in served:
+            self.add(name)
+        changed = [f'changed{index}' for index in range(16)]
+        for name in changed:  # full verification, refused at its last step: the project's runtime changed
+            root, _id, _copy = self.add(name)
+            installed = root / '.codex' / 'orchestration' / 'codex_agents' / '__init__.py'
+            installed.write_bytes(installed.read_bytes() + b'\n# changed\n')
+
+        def missing_copy(root):  # a launch record whose copy is gone (removed since setup)
+            digest = format(abs(hash(root)), 'x').rjust(64, '0')[:64]
+            return (str(self.home / '.codex' / host_commands.RUNTIME_CONTAINER
+                        / host_commands.project_digest(Path(root)) / digest), digest)
+        with self.offline() as ledger:
+            bulk_projects(ledger, self.projects['real0'][1], 1_000 - len(served) - len(changed), due_ms=1,
+                          prefix='d', copy_for=missing_copy)
+        self.launch()
+        ready = time.monotonic()
+        end = ready + 60.0
+        query = ('SELECT COUNT(*) FROM projects p LEFT JOIN project_starts s ON s.project_id=p.project_id '
+                 'WHERE s.project_id IS NULL OR s.attempt IS NOT NULL OR s.outcome IS NULL')
+        while True:
+            connection = sqlite3.connect(self.state.database.as_uri() + '?mode=ro', uri=True, timeout=5)
+            try:
+                left = connection.execute(query).fetchone()[0]
+            finally:
+                connection.close()
+            if left == 0 or time.monotonic() > end:
+                break
+            time.sleep(0.25)
+        drained = time.monotonic() - ready
+        self.assertEqual(0, left, f'{left} of 1000 projects not drained in {drained:.1f} s')
+        self.assertLess(drained, 60.0)
+        for name in served:
+            self.assertEqual('started', self.starts(name)['outcome'], name)
+            self.assertTrue(self.serving(name), name)
+        for name in changed:
+            self.assertEqual('install_changed', self.starts(name)['outcome'], name)
+        self.assertEqual(4, len(self.events('spawned')))
+        holds = [row['seconds'] for row in self.events('claim')]
+        self.assertTrue(holds)
+        self.assertLess(max(holds), 0.750, holds)
+        first = min(row['t'] for row in self.events('begin'))
+        self.assertLessEqual(first - ready, project_start.STARTER_CHECK_SECONDS)  # E2c-1 at production intervals
+        print(f'\nE2c-3 production drain: {drained:.1f} s, {len(holds)} claims, longest {max(holds) * 1000:.1f} ms',
+              file=sys.stderr)
+
+
+class FairnessTests(unittest.TestCase):
+    """E2c-2 round robin on a real ledger with the real starter's claim step (review round 1, HIGH 1)."""
+
+    def setUp(self):
+        self.fixture = store_tests.LearningStoreTests(methodName='runTest')
+        with mock.patch.object(store_tests, 'TEMP_ROOT', SHORT_TMP):
+            self.fixture.setUp()
+        self.addCleanup(self.fixture.tearDown)
+        self.ledger = self.fixture.ledger
+        import types
+        self.server = types.SimpleNamespace(ledger=self.ledger, state=self.fixture.state,
+                                            _sweeps_stop=threading.Event(), sweep_error=None)
+
+    @requirements('E2c-2', why_not_scenario='The claim order on a real ledger; no process boundary.')
+    def test_E2c_2_a_retry_never_goes_ahead_of_a_project_not_yet_tried(self):
+        bulk_projects(self.ledger, self.fixture.project_a_id, 200, due_ms=1, prefix='f')
+        starter = project_start.ProjectStarter(self.server)
+        policy = {**project_start.start_policy(), 'backoff_first_ms': 1, 'backoff_max_ms': 1}
+        order = []
+        for _ in range(12):
+            starter._claim()
+            while starter._queue:
+                claim = starter._queue.popleft()
+                starter._queued.discard(claim.project_id)
+                order.append(claim.project_id)
+                self.ledger.finish_start(claim.project_id, claim.attempt, outcome='failed', reason='service_ended',
+                                         now_ms=time.time_ns() // 1_000_000, **policy)  # due again at once
+            time.sleep(0.002)
+        due = {row[0] for row in self.ledger._connection.execute(
+            'SELECT project_id FROM project_wake WHERE due_at_ms IS NOT NULL')}
+        self.assertGreaterEqual(len(order), len(due))
+        self.assertEqual(due, set(order[:len(due)]))  # every due project once before any is tried again
+
+    @requirements('E2c-2', why_not_scenario='The starter past its queue and slot limits on a real ledger.')
+    def test_E2c_2_past_the_queue_and_slot_limits_every_due_project_is_still_started(self):
+        bulk_projects(self.ledger, self.fixture.project_a_id, 200, due_ms=1, prefix='q')
+        server = learning_store.CollectorServer(self.ledger, client_capabilities=self.fixture.clients)
+        with mock.patch.object(project_start, 'START_QUEUE_LIMIT', 16):
+            server.start()
+            try:
+                end = time.monotonic() + 30
+                while time.monotonic() < end:
+                    with self.ledger._lock:
+                        left = self.ledger._connection.execute(
+                            "SELECT COUNT(*) FROM project_wake w LEFT JOIN project_starts s "
+                            "ON s.project_id=w.project_id WHERE w.due_at_ms IS NOT NULL "
+                            "AND (s.project_id IS NULL OR s.attempt IS NOT NULL OR s.outcome IS NULL)").fetchone()[0]
+                    if left == 0:
+                        break
+                    time.sleep(0.05)
+                starter = server._starter
+            finally:
+                server.stop()
+        self.assertEqual(0, left)  # 200 projects through a queue of 16 and 2 slots
+        self.assertLessEqual(starter.most_queued, 16)
+        self.assertLessEqual(starter.most_busy, project_start.START_SLOTS)
+        self.assertEqual(200, self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM project_starts WHERE outcome='no_record' AND project_id LIKE 'prj_q%'").fetchone()[0])
 
 
 if __name__ == '__main__':

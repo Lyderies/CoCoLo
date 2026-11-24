@@ -2775,6 +2775,9 @@ def main() -> int:
             # As every command that needs it: an idle earlier version's service is replaced and a
             # project with history is moved first when nothing runs (S1-U8).
             # RS-E E2c-4 (owner decision 143): the owner's start command ends a crash-loop park and its streak.
+            # Review round 1 (MED 1): the compatible collector is ensured first, so a collector that was down
+            # still takes the owner-signed unpark before the start.
+            _start_collector_quietly(args)
             _unpark_start(args)
             serving = _start_project_host(args) is True
             report = _start_reply(serving, getattr(args, "learning_migration_failure", None))

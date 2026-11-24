@@ -217,26 +217,37 @@ _WAKE_SCHEMA = (
     "instance TEXT NOT NULL,epoch INTEGER NOT NULL CHECK(epoch>=1),PRIMARY KEY(project_id,instance))",
 )
 # RS-E E2c: the starter's own row per project (machine-local, never in a backup): the outstanding claim (attempt id,
-# claim time, child pid), the failure streak and backoff (E2c-4), the park (owner decision 143) and the last outcome
-# the status line reads (E2c-9). Additive; no schema version change.
+# claim time, child pid), the failure streak and backoff (E2c-4), the park (owner decision 143), the last outcome
+# the status line reads (E2c-9) and a started host's probation (review round 1, HIGH 4: the attempt, its child and
+# when probation ends, so a collector restart reconciles it). Additive; no schema version change.
 _START_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS project_starts("
     "project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,"
     "attempt TEXT,claimed_at_ms INTEGER,child_pid INTEGER CHECK(child_pid IS NULL OR child_pid>1),"
     "failures INTEGER NOT NULL DEFAULT 0 CHECK(failures>=0),streak_first_ms INTEGER,next_start_at_ms INTEGER,"
     "parked_reason TEXT,parked_digest TEXT,outcome TEXT,reason TEXT,outcome_at_ms INTEGER,started_at_ms INTEGER,"
-    "updated_at_ms INTEGER NOT NULL)",
+    "probation_attempt TEXT,probation_pid INTEGER CHECK(probation_pid IS NULL OR probation_pid>1),"
+    "probation_until_ms INTEGER,updated_at_ms INTEGER NOT NULL)",
     "CREATE INDEX IF NOT EXISTS project_starts_outstanding ON project_starts(attempt) WHERE attempt IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS project_starts_probation ON project_starts(probation_attempt) "
+    "WHERE probation_attempt IS NOT NULL",
 )
 # E2c-2: the starter's one locked read: due rows by the due index, not parked (unless setup recorded a new launch
-# digest since), not backing off and with no start outstanding. Parameters: now, now, limit.
-START_CLAIM_SQL = (
-    "SELECT w.project_id,p.canonical_root,p.launch_copy,p.launch_digest,s.parked_reason FROM project_wake w "
-    "JOIN projects p ON p.project_id=w.project_id LEFT JOIN project_starts s ON s.project_id=w.project_id "
-    "WHERE w.due_at_ms IS NOT NULL AND w.due_at_ms<=? AND p.status='active' AND (s.project_id IS NULL OR "
-    "(s.attempt IS NULL AND (s.next_start_at_ms IS NULL OR s.next_start_at_ms<=?) AND (s.parked_reason IS NULL "
-    "OR s.parked_digest IS NOT p.launch_digest))) ORDER BY w.due_at_ms,w.project_id LIMIT ?"
-)
+# digest since), not backing off, not in a started host's probation and with no start outstanding. Parameters: now,
+# now, limit. START_CLAIM_AFTER_SQL (review round 1, HIGH 1) reads the same rows after the starter's cursor (due
+# time, project): one pass walks every due row once before any is read again, so a retry never goes ahead of a
+# project not yet tried. Parameters: now, cursor due, cursor due, cursor project, now, limit.
+_START_CLAIM_SELECT = (
+    "SELECT w.project_id,w.due_at_ms,p.canonical_root,p.launch_copy,p.launch_digest,s.parked_reason "
+    "FROM project_wake w JOIN projects p ON p.project_id=w.project_id "
+    "LEFT JOIN project_starts s ON s.project_id=w.project_id WHERE w.due_at_ms IS NOT NULL AND w.due_at_ms<=? ")
+_START_CLAIM_ELIGIBLE = (
+    "AND p.status='active' AND (s.project_id IS NULL OR (s.attempt IS NULL AND s.probation_attempt IS NULL AND "
+    "(s.next_start_at_ms IS NULL OR s.next_start_at_ms<=?) AND (s.parked_reason IS NULL "
+    "OR s.parked_digest IS NOT p.launch_digest))) ORDER BY w.due_at_ms,w.project_id LIMIT ?")
+START_CLAIM_SQL = _START_CLAIM_SELECT + _START_CLAIM_ELIGIBLE
+START_CLAIM_AFTER_SQL = (_START_CLAIM_SELECT + "AND w.due_at_ms>=? AND (w.due_at_ms>? OR w.project_id>?) "
+                         + _START_CLAIM_ELIGIBLE)
 
 
 @dataclass(frozen=True)
@@ -247,6 +258,7 @@ class StartClaim:
     copy: str | None
     digest: str | None
     attempt: str
+    due_at_ms: int | None = None  # the claimed wake row's due time: the starter's cursor (HIGH 1)
 
 
 START_OUTCOMES = frozenset({"failed", "started", "no_record", "install_changed", "handover", "migration", "serving",
@@ -4228,15 +4240,24 @@ class LearningLedger:
     # RS-E E2c: the starter's ledger steps. Each is one short hold of the ledger lock; nothing here probes, hashes,
     # spawns or waits (E2c-2).
 
-    def claim_due_starts(self, *, now_ms: int, limit: int) -> list[StartClaim]:
+    def claim_due_starts(self, *, now_ms: int, limit: int,
+                         after: tuple[int, str] | None = None) -> list[StartClaim]:
         """E2c-2: claim at most `limit` due projects (one indexed read), each marked outstanding with a fresh attempt
         id and its claim time in the same transaction. A parked project is claimed again only once setup recorded a
-        new launch digest, which also starts a fresh streak (owner decision 143)."""
+        new launch digest, which also starts a fresh streak (owner decision 143). `after`: the starter's cursor
+        (due time, project id) of the last row it claimed; only rows after it are read (HIGH 1)."""
         if type(limit) is not int or not 0 < limit <= 64:
             raise LedgerError("start claim limit is invalid")
+        if after is None:
+            query, parameters = START_CLAIM_SQL, (now_ms, now_ms, limit)
+        else:
+            if (type(after) is not tuple or len(after) != 2 or type(after[0]) is not int
+                    or type(after[1]) is not str):
+                raise LedgerError("start claim cursor is invalid")
+            query, parameters = START_CLAIM_AFTER_SQL, (now_ms, after[0], after[0], after[1], now_ms, limit)
         claims = []
         with self._account_transaction():
-            for row in self._connection.execute(START_CLAIM_SQL, (now_ms, now_ms, limit)).fetchall():
+            for row in self._connection.execute(query, parameters).fetchall():
                 attempt = secrets.token_hex(16)
                 self._connection.execute(
                     "INSERT OR IGNORE INTO project_starts(project_id,failures,updated_at_ms) VALUES(?,0,?)",
@@ -4250,7 +4271,8 @@ class LearningLedger:
                     (attempt, now_ms, now_ms, now_ms, row["project_id"]))
                 claims.append(StartClaim(str(row["project_id"]), str(row["canonical_root"]),
                                          None if row["launch_copy"] is None else str(row["launch_copy"]),
-                                         None if row["launch_digest"] is None else str(row["launch_digest"]), attempt))
+                                         None if row["launch_digest"] is None else str(row["launch_digest"]), attempt,
+                                         int(row["due_at_ms"])))
         return claims
 
     def set_start_child(self, project_id: str, attempt: str, pid: int) -> None:
@@ -4285,11 +4307,14 @@ class LearningLedger:
             (failures, first, now_ms + wait, reason, now_ms, now_ms, project_id))
 
     def finish_start(self, project_id: str, attempt: str, *, outcome: str, reason: str | None, now_ms: int,
-                     backoff_first_ms: int, backoff_max_ms: int, park_after_ms: int, recheck_ms: int) -> dict | None:
+                     backoff_first_ms: int, backoff_max_ms: int, park_after_ms: int, recheck_ms: int,
+                     probation_ms: int = 0, child_pid: int | None = None) -> dict | None:
         """E2c-2/4: end this attempt (no other attempt's claim is touched). `failed` counts one failure; `started`
-        keeps the streak until its probation ends (`start_probation`); every other outcome (no record, install
-        changed, handover, migration, serving) is looked at again after recheck_ms and counts nothing. Returns the
-        row, or None when the attempt is not outstanding."""
+        keeps the streak until its probation ends (`start_probation`): the probation is kept with this attempt, its
+        child and its end (now + probation_ms), so a restarted collector reconciles it (review round 1, HIGH 4);
+        every other outcome (no record, install changed, handover, migration, serving) is looked at again after
+        recheck_ms and counts nothing, and never replaces an active probation. Returns the row, or None when the
+        attempt is not outstanding."""
         if outcome not in START_OUTCOMES:
             raise LedgerError("start outcome is invalid")
         with self._account_transaction():
@@ -4304,9 +4329,17 @@ class LearningLedger:
                                           backoff_first_ms=backoff_first_ms, backoff_max_ms=backoff_max_ms,
                                           park_after_ms=park_after_ms)
             elif outcome == "started":
+                pid = None if child_pid is None or int(child_pid) <= 1 else int(child_pid)
                 self._connection.execute(
                     "UPDATE project_starts SET next_start_at_ms=NULL,outcome='started',reason=NULL,outcome_at_ms=?,"
-                    "started_at_ms=?,updated_at_ms=? WHERE project_id=?", (now_ms, now_ms, now_ms, project_id))
+                    "started_at_ms=?,probation_attempt=?,probation_pid=?,probation_until_ms=?,updated_at_ms=? "
+                    "WHERE project_id=?", (now_ms, now_ms, attempt, pid, now_ms + int(probation_ms), now_ms,
+                                          project_id))
+            elif row["probation_attempt"] is not None:
+                # HIGH 4: a recheck during a started host's probation keeps the probation and its `started` line.
+                self._connection.execute(
+                    "UPDATE project_starts SET next_start_at_ms=?,updated_at_ms=? WHERE project_id=?",
+                    (now_ms + recheck_ms, now_ms, project_id))
             else:
                 self._connection.execute(
                     "UPDATE project_starts SET next_start_at_ms=?,outcome=?,reason=?,outcome_at_ms=?,updated_at_ms=? "
@@ -4322,13 +4355,19 @@ class LearningLedger:
                 "updated_at_ms=? WHERE project_id=? AND attempt=?", (now_ms, project_id, attempt))
 
     def start_probation(self, project_id: str, *, survived: bool, now_ms: int, backoff_first_ms: int,
-                        backoff_max_ms: int, park_after_ms: int, recheck_ms: int = 0) -> dict | None:
+                        backoff_max_ms: int, park_after_ms: int, recheck_ms: int = 0, probation_ms: int = 0,
+                        attempt: str | None = None) -> dict | None:
         """E2c-4: a started host that served START_PROBATION_SECONDS ends the streak; one that ended sooner counts
-        one failure. Only for the last outcome `started` with no attempt outstanding."""
+        one failure. Only for a probation still kept (HIGH 4), and with `attempt` only for that attempt's; the
+        probation ends either way."""
         with self._account_transaction():
             row = self._start_row(project_id)
-            if row is None or row["attempt"] is not None or row["outcome"] != "started":
+            if (row is None or row["attempt"] is not None or row["probation_attempt"] is None
+                    or (attempt is not None and row["probation_attempt"] != attempt)):
                 return row
+            self._connection.execute(
+                "UPDATE project_starts SET probation_attempt=NULL,probation_pid=NULL,probation_until_ms=NULL "
+                "WHERE project_id=?", (project_id,))
             if survived:
                 self._connection.execute(
                     "UPDATE project_starts SET failures=0,streak_first_ms=NULL,updated_at_ms=? WHERE project_id=?",
@@ -4347,6 +4386,16 @@ class LearningLedger:
                 "SELECT s.project_id,s.attempt,s.claimed_at_ms,s.child_pid,p.canonical_root FROM project_starts s "
                 "JOIN projects p ON p.project_id=s.project_id WHERE s.attempt IS NOT NULL AND s.project_id>? "
                 "ORDER BY s.project_id LIMIT ?", (after, limit))]
+
+    def probation_starts(self, *, after: str = "", limit: int = 64) -> list[dict]:
+        """HIGH 4: one page of kept probations after `after` in project order (their partial index), for the
+        starter's reconcile after a restart, which reads page after page."""
+        with self._held():
+            return [dict(row) for row in self._connection.execute(
+                "SELECT s.project_id,s.probation_attempt,s.probation_pid,s.probation_until_ms,p.canonical_root "
+                "FROM project_starts s JOIN projects p ON p.project_id=s.project_id "
+                "WHERE s.probation_attempt IS NOT NULL AND s.project_id>? ORDER BY s.project_id LIMIT ?",
+                (after, limit))]
 
     def unpark_start(self, project_id: str, *, now_ms: int) -> None:
         """E2c-4 (owner decision 143): the owner's start command ends the park and the streak."""
