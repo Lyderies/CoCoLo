@@ -60,3 +60,11 @@ text they read was widened to include the shared module (framework plumbing foll
 
 ## Status
 See the batch commit message and the report to the primary for runs and timings.
+
+## 4. Integration fix: learning producer matrix (RS-F S4)
+- RS-F S4 added `run_slot_confirmation` to `learning_contracts.PRODUCER_AUTHORITY["owner"]` but not to
+  `config/learning-producers.json`, so `install.py verify` refused every install ("learning producer matrix does not
+  match enforced authority") and every lifecycle World's setup failed at step 4 (red: first batch3 e2e run, all IDs
+  red, `the scripted setup of a ... project did not finish`). Fix: the owner row of learning-producers.json gains
+  `run_slot_confirmation` (config follows the decided S4 requirement, decision 166). Green: install verify ready.
+  No test asserted the old matrix. The defect is on feat/rsf-s4-slots itself (not a merge artefact).
