@@ -41,6 +41,6 @@ Removed assertions: none. New tests: 17 (docs/requirements/e2a.md, "Review round
 
 ## Decision 179 (the one final fix)
 
-Existing assertions changed: none. Removed: none. CollectorRecordTests.test_E2a_3_record_launch_over_the_collector_wire_and_its_runtime_gate
-left untouched (owner question 176 pending; it still fails as before). New tests: 11 (FinalFixTests 3, FinalWireTests 1,
+Existing assertions changed: the E2a-3 row above, applied 2026-11-25 by the primary after owner decision 176 ("yes"): both
+success assertions -> refusal + no record; runtime-gate and bad-digest assertions unchanged; module 24/24 green. New tests: 11 (FinalFixTests 3, FinalWireTests 1,
 WakeFinalFixTests 7).

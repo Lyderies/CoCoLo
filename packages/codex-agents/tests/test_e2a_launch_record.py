@@ -28,7 +28,7 @@ from codex_agents.host_commands import (
 )
 from codex_agents.learning_contracts import canonical_json
 from codex_agents.learning_store import (
-    COLLECTOR_RUNTIME_DIGEST, CollectorClient, CollectorServer, LedgerError, ProjectNotRegisteredError,
+    COLLECTOR_RUNTIME_DIGEST, CollectorClient, CollectorError, CollectorServer, LedgerError, ProjectNotRegisteredError,
     _snapshot_project_partition, _verify_project_backup_body,
 )
 from codex_agents.service_transport import exchange_frame
@@ -137,15 +137,17 @@ class CollectorRecordTests(StoreBase):
         with self.ledger._lock:
             self.assertEqual(changes, self.ledger._connection.total_changes)
         client = CollectorClient(self.fixture.state.socket, timeout=2)
-        client.record_launch(root, copy, DIGEST)
+        # Decision 176: the fixture copy is not at the trusted copy root, so it is refused and nothing is recorded.
+        with self.assertRaises(CollectorError):
+            client.record_launch(root, copy, DIGEST)
         with self.ledger._lock:
-            self.assertEqual((copy, DIGEST), self.ledger.launch_record(self.fixture.project_a_id))
+            self.assertIsNone(self.ledger.launch_record(self.fixture.project_a_id))
         bad = json.loads(exchange_frame(self.fixture.state.socket, canonical_json(
             {**old, 'launch_digest': 'e' * 64, 'runtime_digest': COLLECTOR_RUNTIME_DIGEST}),
             timeout=2.0, request_limit=65_536, response_limit=16_384))
         self.assertFalse(bad['ok'])
         with self.ledger._lock:
-            self.assertEqual((copy, DIGEST), self.ledger.launch_record(self.fixture.project_a_id))
+            self.assertIsNone(self.ledger.launch_record(self.fixture.project_a_id))
 
 
 class CopyBase(unittest.TestCase):
