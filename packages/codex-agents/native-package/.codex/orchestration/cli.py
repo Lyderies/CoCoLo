@@ -390,6 +390,10 @@ _FIXED_EXCEPTION_CODES = {
 }
 
 
+# The commands whose caught-exception reply is path-free with a reason code (decisions 202, 205, 220).
+_BACKUP_COMMANDS = frozenset({"learning-backup-project", "learning-verify-backup"})
+
+
 def _path_free(text: str) -> bool:
     """True for a short message with no path-like segment: no slash, backslash, tilde, home folder or drive."""
     home = os.path.expanduser("~")
@@ -4289,14 +4293,18 @@ def main() -> int:
         StateError,
         json.JSONDecodeError,
     ) as exc:
-        # Never the exception's text: it can hold a path or a private value (decisions 36, 192).
-        # The product's own fixed refusal texts are shown (owner: plain reasons on screen); a text that could
-        # carry a path or the home folder is replaced by the generic refusal.
-        text = str(exc)
-        shown = text if _path_free(text) else "the command was refused"
-        report = {"ready": False, "error": shown, "reason_code": _FIXED_EXCEPTION_CODES.get(
-            type(exc).__name__, "command_refused")}
-        _print(_with_codex_hint(args.command, report))
+        if args.command in _BACKUP_COMMANDS:
+            # Backup replies never carry the exception's text: it can hold a backup path or a private value
+            # (decisions 36, 192). The product's own path-free refusal text is shown with its reason code
+            # (decisions 202, 205); a text that could carry a path or the home folder becomes the generic
+            # refusal. Scoped to the backup commands only (decision 220): every other command keeps its reply.
+            text = str(exc)
+            shown = text if _path_free(text) else "the command was refused"
+            report = {"ready": False, "error": shown, "reason_code": _FIXED_EXCEPTION_CODES.get(
+                type(exc).__name__, "command_refused")}
+            _print(_with_codex_hint(args.command, report))
+            return 2
+        _print(_with_codex_hint(args.command, {"ready": False, "error": str(exc)}))
         return 2
     _print_command_report(args, report)
     successful = report.get("ready", True)

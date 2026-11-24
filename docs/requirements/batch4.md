@@ -170,3 +170,18 @@ Assertion changes in sections 5-6: none (one fixture helper line, one new module
 - lifetime_caps.json `record_account_settlement`: checks 0 -> 1 (the new combined-size check), `ends` text names it.
 - Rerun: S7 + B5a + batch4 + account_settlement + publication_replay + reply shapes + cap guard 133 tests 14 s;
   test_lost_run_settlement alone 26 tests 77 s.
+
+## Decision 220 (primary): full-run fixes for the 0.8.59 candidate
+- CLI caught-exception filter (bkfix, decisions 202/205) scoped to `learning-backup-project` and
+  `learning-verify-backup` (`_BACKUP_COMMANDS`, cli.py; verify is the restore path). Every other command's
+  caught-exception reply is back to its 1c293c44 shape and text: `{"ready": false, "error": str(exc)}` + the Codex
+  hint, no `reason_code`/`next_step`. Restores test_host_commands (3 tests), test_login_start E1-10 and
+  test_state_location legacy-state messages, all unchanged; BK-1..BK-11 and test_owner_backup_streamed stay green.
+- learning_store `drain_event_retention` (expfix L10.3, 311d0b16): `sweep_event_retention()` result read as
+  `(... or 0)`, so a sweep that reports no count ends the pass instead of raising TypeError
+  (test_ledger_lock_limits E1a_T4 unchanged, error -> pass).
+- scripts/test-layers.json: `codex:tests.test_b6_unattended_close` component -> scenario (it starts processes).
+- No test assertion changed. 0.8.59 digest refreshed (not installed).
+- Rerun: test_host_commands, test_state_location, test_ledger_lock_limits, test_b6_unattended_close,
+  test_backup_reply_private, test_owner_backup_streamed 189 tests 116 s OK; root test_login_start + test_test_stages
+  57 tests 4 s OK; test_runtime_release + test_b4m_compatibility OK.

@@ -13103,8 +13103,9 @@ class CollectorServer:
             # O0b RS-A-4: due account holds are released here, with no client action, in batches of 64. Until
             # M4b E1b's owner thread exists this runs where the other account sweeps run, under the ledger lock.
             def drain_event_retention():
-                # Continue in this pass while a full batch went (more may be due), unless stopping.
-                while not self._sweeps_stop.is_set() and self.ledger.sweep_event_retention() >= EVENT_SWEEP_BATCH:
+                # Continue in this pass while a full batch went (more may be due), unless stopping. A sweep
+                # that reports no count (None) is treated as nothing removed: the pass ends (decision 220).
+                while not self._sweeps_stop.is_set() and (self.ledger.sweep_event_retention() or 0) >= EVENT_SWEEP_BATCH:
                     pass
             sweeps = [(self.ledger.sweep_worker_results, (LedgerError, OSError, sqlite3.Error)),
                       (drain_event_retention, loose),
