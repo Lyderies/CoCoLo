@@ -56,6 +56,7 @@
  "codex:tests.test_b2_service_outcome_sweep": "scenario",
  "codex:tests.test_b4m_compatibility": "scenario",
  "codex:tests.test_backup_installed_project": "scenario",
+ "codex:tests.test_batch2_b4s_integration": "scenario",
  "codex:tests.test_billing_gate": "scenario",
  "codex:tests.test_billing_probe_api": "unit",
  "codex:tests.test_billing_probe_worker": "scenario",

@@ -30,6 +30,11 @@ REPLY_FIELDS = {'account.billing_probe': {'optional': ['billing_waivers', 'clien
                                                'state']},
  'account.fence_claim': {'optional': [], 'required': ['closure', 'receipt']},
  'account.health': {'optional': [], 'required': ['database_checked', 'transport_alive']},
+ # B4s (RS-B-B4-1): a NEW operation (settle_lost_run's reply stays fixed); fields = lost_run_closure._FIELDS.
+ 'account.lost_run_closure': {'optional': [],
+                              'required': ['assignment_digest', 'binding', 'bridge_run_id', 'lease_digest',
+                                           'receipt_digest', 'release_kind', 'released_at_ms', 'request_digest',
+                                           'state']},
  'account.observe_provider': {'optional': ['billing_waivers'],
                               'required': ['known',
                                            'observed_at_ms',

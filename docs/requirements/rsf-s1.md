@@ -70,6 +70,8 @@ project, owner_key, owner_public_key, capacity_status, provider_state_snapshot.
 Internal sweeps and direct offline owner maintenance are not wire requests.
 
 Inventory: **23** mutating operations (8 collector + 15 account).
+Batch 0.8.57b: B4s adds `account.lost_run_closure`, so the inventory is **24** (8 collector + 16 account);
+the gate covers it by construction (`ACCOUNT_OPERATIONS - ACCOUNT_READ_OPERATIONS`). See docs/requirements/batch2.md.
 At base, **8** lacked a serving-runtime check; account's existing 15 checks lacked
 the specified refusal contract. In the implementation, **0 unchecked** mutating
 operations remain. Current collector clients attach identity at

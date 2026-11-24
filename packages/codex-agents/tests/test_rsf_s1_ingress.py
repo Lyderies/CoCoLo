@@ -159,7 +159,7 @@ class AccountIngressTests(StoreFixture):
 
     def test_RSF_S1_2_every_account_mutation_refuses_missing_or_wrong_runtime_before_authorizer(self):
         mutations = ACCOUNT_OPERATIONS - ACCOUNT_READ_OPERATIONS
-        self.assertEqual(15, len(mutations))
+        self.assertEqual(16, len(mutations))  # batch 0.8.57b: + account.lost_run_closure (B4s)
         for operation in sorted(mutations):
             for fields in ({}, {"runtime_digest": "0" * 64}, {"runtime_digest": []}):
                 with self.subTest(operation=operation, fields=fields):

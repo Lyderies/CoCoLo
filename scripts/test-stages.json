@@ -56,6 +56,7 @@
  "codex:tests.test_b2_service_outcome_sweep": "integration",
  "codex:tests.test_b4m_compatibility": "integration",
  "codex:tests.test_backup_installed_project": "integration",
+ "codex:tests.test_batch2_b4s_integration": "integration",
  "codex:tests.test_billing_gate": "integration",
  "codex:tests.test_billing_probe_api": "unit",
  "codex:tests.test_billing_probe_worker": "integration",
