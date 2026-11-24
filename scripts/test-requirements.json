@@ -1515,7 +1515,8 @@
    "codex:tests.test_b6_unattended_close.RegisterRowTests.test_B6_1_a_failed_release_write_rolls_the_close_back",
    "codex:tests.test_b6_unattended_close.RegisterRowTests.test_B6_1_end_earlier_releases_the_row_taken_at_open_closed_and_the_unattended_close_interrupted_unattended",
    "codex:tests.test_b6_unattended_close.RegisterRowTests.test_B6_1_open_takes_a_held_row_activity_moves_its_due_time_and_the_primary_close_releases_it_closed",
-   "codex:tests.test_b6_unattended_close.RegisterRowTests.test_B6_1_the_validator_refuses_an_open_orchestration_without_its_held_row_and_a_held_row_of_a_closed_one"
+   "codex:tests.test_b6_unattended_close.RegisterRowTests.test_B6_1_the_validator_refuses_an_open_orchestration_without_its_held_row_and_a_held_row_of_a_closed_one",
+   "codex:tests.test_b6_unattended_close.ReviewStateValidationTests.test_B6_8_a_closed_state_and_released_row_of_an_active_orchestration_is_refused_at_open"
   ],
   "source": "docs/requirements/b6.md#RS-B-B6-1",
   "statement": "**RS-B-B6-1 \u2014 Every orchestration has a register row.**\n> Every orchestration has a register row: taken when created, released `closed` by the primary's close or\n> `end_earlier`, `interrupted_unattended` by the unattended close, each in the close's own transaction. Existing open\n> orchestrations are adopted in a 20 -> 21 step only; the validator then refuses an open orchestration without a held row.\n\nAcceptance: `orchestration.open` writes, in its own transaction, a held `orchestration` row (identity = handle,\n`taken_at_ms` = open time, `due_at_ms` = open time + ORCHESTRATION_IDLE_MS). Every later non-close mutation\n(checkpoint, pause, resume) moves `due_at_ms` to its own time + ORCHESTRATION_IDLE_MS. The primary's close releases it\n`closed` (evidence `{\"by\":\"primary\"}`), `end_earlier` releases it `closed` (evidence `ended_by_update_unrecorded`, as\nRS-D N1), the unattended close releases it `interrupted_unattended` (evidence `{\"by\":\"unattended\"}`). A failure writing\nthe release rolls the close back (the orchestration stays open, its row held). The register validator (SH-7, run at\nopen, at restore and inside the step) refuses: an open orchestration without a held row; a held row whose orchestration\nis closed or missing. An ordinary open never adopts."
@@ -1528,7 +1529,10 @@
    "codex:tests.test_b6_unattended_close.EligibilityWithRunsTests.test_B6_2_a_recorded_result_whose_reservation_is_still_held_blocks_the_unattended_close_not_the_primarys",
    "codex:tests.test_b6_unattended_close.EligibilityWithRunsTests.test_B6_2_an_unfinished_attempt_keeps_it_open",
    "codex:tests.test_b6_unattended_close.LeaseTests.test_B6_2_a_live_lease_keeps_it_open",
-   "codex:tests.test_b6_unattended_close.LeaseTests.test_B6_2_taking_an_execution_hold_is_activity_releasing_one_is_not"
+   "codex:tests.test_b6_unattended_close.LeaseTests.test_B6_2_taking_an_execution_hold_is_activity_releasing_one_is_not",
+   "codex:tests.test_b6_unattended_close.ReviewAdoptionTests.test_B6_7_adoption_counts_the_latest_lease_and_reservation_take_and_dates_a_held_row_without_a_due_time",
+   "codex:tests.test_b6_unattended_close.ReviewClockTests.test_B6_2_the_service_pass_closes_at_the_floor_after_the_wall_clock_went_back",
+   "codex:tests.test_b6_unattended_close.ReviewRetainedHistoryTests.test_B6_2_a_complete_close_does_equal_work_at_0_and_100000_retained_rows_of_other_orchestrations"
   ],
   "source": "docs/requirements/b6.md#RS-B-B6-2",
   "statement": "**RS-B-B6-2 \u2014 Eligibility of the unattended close, inside its transaction.**\n> No held lease or reservation of that orchestration, `_unfinished` false, effective now (`max(wall, floor)`) >=\n> `due_at_ms` (24 h after last activity). Memory kinds are not checked: a live registered run with no lease is refused\n> new work by the existing `active_for` gates after the close.\n\nAcceptance: inside the close's transaction the unattended close refuses (`history_orchestration_pending`, nothing\nwritten) when any reservation of the orchestration has a held or releasing register row, when `_unfinished` is true\n(covers held leases: a held lease row is exactly a live lease, SH-7), or when effective now < `due_at_ms`. Effective now\nis `max(wall, persisted floor)` read without moving the floor: a wall clock moved back below the floor still closes at\nthe floor. Taking an execution hold (lease or reservation) of the orchestration is activity: `due_at_ms` moves to at\nleast its time + ORCHESTRATION_IDLE_MS, in the take's own transaction (releasing one is not activity, B6-4). After the\nclose, `active_for` refuses new work for that orchestration\n(`history_orchestration_state`)."
@@ -1546,7 +1550,8 @@
    "codex:tests.test_b6_unattended_close.LeaseTests.test_B6_4_a_blocked_row_never_stops_a_later_due_row",
    "codex:tests.test_b6_unattended_close.LeaseTests.test_B6_4_releasing_a_lease_of_the_orchestration_resets_its_next_check",
    "codex:tests.test_b6_unattended_close.ReplayAndFairnessTests.test_B6_4_a_blocked_row_backs_off_from_10_seconds_doubling_to_5_minutes",
-   "codex:tests.test_b6_unattended_close.ReplayAndFairnessTests.test_B6_4_at_most_four_close_per_pass_and_the_service_asks_for_four"
+   "codex:tests.test_b6_unattended_close.ReplayAndFairnessTests.test_B6_4_at_most_four_close_per_pass_and_the_service_asks_for_four",
+   "codex:tests.test_b6_unattended_close.ReviewBatchTests.test_B6_4_an_explicit_limit_above_four_is_clamped_to_four"
   ],
   "source": "docs/requirements/b6.md#RS-B-B6-4",
   "statement": "**RS-B-B6-4 \u2014 Fairness: next check, back-off, reset.**\nAcceptance: one pass selects held orchestration rows by `next_check_ms` (ascending, at most UNATTENDED_CLOSE_BATCH = 4\nper pass; the service passes 4), only rows with `next_check_ms <= now` and `due_at_ms <= now`, through a partial index\n(`project_holds_orchestration_check`). A row that is due but refused (B6-2) backs off: its first refusal sets\n`next_check_ms = now + 10 s`, each later one doubles the wait, capped at 5 min. Releasing any execution hold (lease or\nreservation) of that orchestration resets its `next_check_ms` to 0 (and the back-off) in the release's own transaction.\nA blocked row never stops a later due row from closing in the same pass."
@@ -1566,6 +1571,8 @@
  },
  "RS-B-B6-7": {
   "checks": [
+   "codex:tests.test_b6_unattended_close.ReviewAdoptionTests.test_B6_7_adoption_counts_the_latest_lease_and_reservation_take_and_dates_a_held_row_without_a_due_time",
+   "codex:tests.test_b6_unattended_close.ReviewLayoutTests.test_B6_7_an_index_predicate_whose_literal_differs_only_in_case_is_refused",
    "codex:tests.test_b6_unattended_close.SchemaStepTests.test_B6_7_a_failure_inside_the_step_leaves_20_and_removes_its_copy_then_a_later_attempt_upgrades",
    "codex:tests.test_b6_unattended_close.SchemaStepTests.test_B6_7_a_real_step_20_store_upgrades_its_records_unchanged_and_adopts_its_open_orchestrations",
    "codex:tests.test_b6_unattended_close.SchemaStepTests.test_B6_7_an_unknown_object_in_a_step_20_store_is_refused_before_any_write",
@@ -1577,7 +1584,8 @@
  },
  "RS-B-B6-8": {
   "checks": [
-   "codex:tests.test_b6_unattended_close.OrchestrationStateTests.test_B6_8_counting_open_orchestrations_reads_the_indexed_state_not_the_checkpoints"
+   "codex:tests.test_b6_unattended_close.OrchestrationStateTests.test_B6_8_counting_open_orchestrations_reads_the_indexed_state_not_the_checkpoints",
+   "codex:tests.test_b6_unattended_close.ReviewStateValidationTests.test_B6_8_a_closed_state_and_released_row_of_an_active_orchestration_is_refused_at_open"
   ],
   "source": "docs/requirements/b6.md#RS-B-B6-8",
   "statement": "**RS-B-B6-8 \u2014 Indexed orchestration state (decisions 185, 187).**\nAcceptance: every open/close writes `state` in the same statement as the checkpoint pointer. Counting open\norchestrations (`_open_count`, the open limit) reads only `project_orchestrations_state`, never a checkpoint blob\n(work equal at 0 and 1,000 closed orchestrations, measured as SQLite VM steps). Integration note: batch 3's\n`OrchestrationCountsCostTests` (not on this base) is to be un-skipped against this column when batches merge."

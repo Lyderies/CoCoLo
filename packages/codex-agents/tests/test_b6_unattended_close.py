@@ -33,6 +33,8 @@ requirements = __import__('test_framework').requirements
 KEY = b'j' * 32  # the format-20 fixture's key (tests/fixtures/history_step20/make_store.py)
 CLIENT = 'codex-host-v1'
 STEP20 = Path(__file__).resolve().parent / 'fixtures' / 'history_step20' / 'store.sql'
+# B6 review r1: the same step-20 runtime's store with lease and reservation histories (make_store.py --leases)
+STEP20_LEASES = STEP20.with_name('store_leases.sql')
 WHY = ('The register rows, the close transaction and the schema step are store contracts: real stores, the real '
        'orchestration owner and the real upgrade path, with a controlled clock; no service boundary is patched.')
 TERMINAL = {'completed', 'failed', 'cancelled', 'interrupted'}
@@ -455,7 +457,7 @@ class ReplayAndFairnessTests(OrchestrationStore):
         self.assertEqual(2, self.owner.end_idle(self.now))
         self.assertEqual({'interrupted'}, {self.status(handle) for handle in handles})
         source = (ORCHESTRATION_ROOT / 'codex_agents' / 'result_persistence.py').read_text()
-        self.assertIn('end_idle(history._result_now(), UNATTENDED_CLOSE_BATCH)', source)
+        self.assertIn('end_idle(None, UNATTENDED_CLOSE_BATCH)', source)  # review r1: the owner reads its own time
 
     @requirements('RS-B-B6-4', why_not_scenario=WHY)
     def test_B6_4_a_blocked_row_backs_off_from_10_seconds_doubling_to_5_minutes(self):
@@ -650,6 +652,13 @@ class SchemaStepTests(OrchestrationStore):
         self.assertEqual(20, self.version())
         self.assertEqual(before, self.rows())
         self.assertEqual(21, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
+        # B6 review r1 (MED crash copy): the dead attempt's own copy is removed by the retry; exactly one is left,
+        # the store as it was (format 20), and no attempt marker or temporary file stays behind.
+        (copy,) = self.copies()
+        with closing(sqlite3.connect(copy)) as kept:
+            self.assertEqual(20, kept.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual([], [path.name for path in self.directory.iterdir()
+                              if path.name.endswith(('.partial', '.attempt'))])
 
     @requirements('RS-B-B6-7', why_not_scenario=WHY)
     def test_B6_7_an_unknown_object_in_a_step_20_store_is_refused_before_any_write(self):
@@ -680,6 +689,243 @@ class SchemaStepTests(OrchestrationStore):
         self.assertIn("WHERE state<>'expired'", indexes['result_reservations_live'])
         self.assertIn("WHERE kind='orchestration' AND state='held'", indexes['project_holds_orchestration_check'])
         self.assertIn('project_orchestrations_state', indexes)
+
+
+
+# B6 review round 1 (Codex security review of 700d41f8): each HIGH and MED with a behavioural test, red on 700d41f8.
+
+def handles_by_start(database):
+    """{started_at_ms: handle} of a raw store's orchestrations, from their first checkpoints (plain JSON)."""
+    with closing(sqlite3.connect(database)) as db:
+        return {json.loads(content)['snapshot']['started_at_ms']: handle for handle, content in db.execute(
+            'SELECT orchestration_handle,content FROM project_orchestration_checkpoints WHERE sequence=1')}
+
+
+class Step20Store(OrchestrationStore):
+    """SchemaStepTests' store and helpers, without its tests."""
+    fixture = STEP20
+    rows, version, copies = SchemaStepTests.rows, SchemaStepTests.version, SchemaStepTests.copies
+    upgrade, assert_left_at_20 = SchemaStepTests.upgrade, SchemaStepTests.assert_left_at_20
+
+    def setUp(self):
+        super().setUp()
+        self.store.close()
+        self.database = self.directory / 'history.sqlite3'
+        for name in self.directory.iterdir():
+            name.unlink()
+        with closing(sqlite3.connect(self.database)) as db:
+            db.executescript(self.fixture.read_text())
+        self.database.chmod(0o600)
+        self.store = SimpleNamespace(close=lambda: None)
+
+
+class ReviewAdoptionTests(Step20Store):
+    """HIGH (adoption idle window): the backfill's last activity includes the latest attributable lease and
+    reservation take, and an existing held row with no due time gets one."""
+    fixture = STEP20_LEASES
+
+    def status_of(self, handle):
+        return self.store._orchestration_owner()._current(self.scope, handle)['snapshot']['status']
+
+    @requirements('RS-B-B6-7', 'RS-B-B6-2', why_not_scenario=WHY)
+    def test_B6_7_adoption_counts_the_latest_lease_and_reservation_take_and_dates_a_held_row_without_a_due_time(
+            self):
+        starts = handles_by_start(self.database)
+        withdrawn, bound, quiet = starts[3500], starts[3800], starts[4100]
+        with closing(sqlite3.connect(self.database)) as db:
+            # A held orchestration row with no due time (no step-20 writer leaves one; a damaged or hand-made row).
+            db.execute("INSERT INTO project_holds(project_id,kind,identity,state,taken_at_ms) "
+                       "VALUES(?,'orchestration',?,'held',4100)", (PROJECT_A, quiet))
+            db.commit()
+        self.now = 5000
+        store = self.upgrade()
+        # withdrawn: checkpoint 3500, lease taken 3600 (withdrawn unsent at 3700: a release is not activity).
+        self.assertEqual(3600 + ORCHESTRATION_IDLE_MS, hold(store, withdrawn)[3])
+        # bound: checkpoint 3800, lease (and the reservation's created_at_ms) 3900, reservation's hold taken 4000.
+        self.assertEqual(4000 + ORCHESTRATION_IDLE_MS, hold(store, bound)[3])
+        # quiet: its existing held row keeps its take and evidence and gets the due time of its last activity.
+        self.assertEqual(('held', None, 4100, 4100 + ORCHESTRATION_IDLE_MS, 0, None), hold(store, quiet))
+        consistent(self, store)
+        owner = store._orchestration_owner()
+        self.now = 3600 + ORCHESTRATION_IDLE_MS - 1
+        owner.end_idle(self.now)  # the step-20 active and paused ones are due; this one is not
+        self.assertEqual('active', self.status_of(withdrawn))
+        self.now = 3600 + ORCHESTRATION_IDLE_MS
+        owner.end_idle(self.now)
+        self.assertEqual('interrupted', self.status_of(withdrawn))
+        self.now = 4100 + ORCHESTRATION_IDLE_MS
+        owner.end_idle(self.now)
+        self.assertEqual('interrupted', self.status_of(quiet))  # selected: its row now has a due time
+        self.assertEqual('active', self.status_of(bound))  # its reservation is still held
+
+
+OTHER = 'orc_' + 'e' * 48
+
+
+def retain(store, count):
+    """`count` finished attempts of another orchestration kept in the store: leases (expired), reservations
+    (expired), consumptions and their released register rows. None of them is the target's. Both stores also get the
+    same two neighbours (orchestrations sorting before and after any target), so an index seek ends on a neighbour
+    in both and the only difference measured is the retained history."""
+    db = store._connection
+    owners = ['orc_' + '0' * 48, 'orc_' + 'f' * 48] + [OTHER] * count
+    with store._transaction():
+        db.executemany(
+            'INSERT INTO result_reservations(project_id,claim_id,run_handle,attempt,claim_digest,orchestration_handle,'
+            "binding,assignment_digest,created_at_ms,hard_deadline_at_ms,reserved_until_ms,expires_at_ms,state) "
+            "VALUES(?,?,?,1,?,?,x'7b7d','a',0,1,1,1,'expired')",
+            ((PROJECT_A, f'clm-r-{n}', f'hrn-r-{n}', f'{n:064x}', owner) for n, owner in enumerate(owners)))
+        db.executemany(
+            'INSERT INTO result_leases(project_id,run_handle,attempt,claim_request_id,binding,assignment_digest,'
+            "created_at_ms,reserved_until_ms,state,lease_digest,state_digest) VALUES(?,?,1,?,?,'a',0,1,'expired','d','s')",
+            ((PROJECT_A, f'hrn-l-{n}', f'req-{n}', json.dumps({'orchestration_handle': owner}).encode())
+             for n, owner in enumerate(owners)))
+        db.executemany('INSERT INTO project_execution_consumptions VALUES(?,?,?,x\'00\',0)',
+                       ((PROJECT_A, f'clm-r-{n}', f'reg-{n}') for n, owner in enumerate(owners)))
+        db.executemany("INSERT INTO project_holds(project_id,kind,identity,state,taken_at_ms,released_at_ms,"
+                       "release_kind) VALUES(?,'reservation',?,'released',0,0,'completed')",
+                       ((PROJECT_A, f'clm-r-{n}') for n, owner in enumerate(owners)))
+        db.executemany("INSERT INTO project_holds(project_id,kind,identity,state,lease_case,taken_at_ms,"
+                       "released_at_ms,release_kind) VALUES(?,'lease',?,'released','unarmed',0,0,'withdrawn_unsent')",
+                       ((PROJECT_A, f'hrn-l-{n}:1') for n, owner in enumerate(owners)))
+
+
+def vm_steps(db, call):
+    steps = 0
+
+    def progress():
+        nonlocal steps
+        steps += 1
+        return 0
+
+    db.set_progress_handler(progress, 1)
+    try:
+        result = call()
+    finally:
+        db.set_progress_handler(None, 0)
+    return steps, result
+
+
+class ReviewRetainedHistoryTests(OrchestrationStore):
+    """HIGH (retained history): a close checks only the target orchestration's own obligations, through indexes:
+    other orchestrations' finished rows neither refuse it (the 4,096-row bound) nor change its work."""
+    lease = LeaseTests.lease
+
+    @requirements('RS-B-B6-2', why_not_scenario=WHY)
+    def test_B6_2_a_complete_close_does_equal_work_at_0_and_100000_retained_rows_of_other_orchestrations(self):
+        measurements = []
+        for count in (0, 100_000):
+            with self.subTest(retained=count):
+                if count:
+                    self.store.close()
+                    for path in self.directory.iterdir():
+                        path.unlink()
+                    self.now = 1000
+                    self.store = self.open_history()
+                primary = self.open('open-primary')
+                unattended = self.open('open-unattended')['orchestration_handle']
+                self.lease(primary['orchestration_handle'])  # the target's own finished attempt (withdrawn)
+                self.store.release_unsent_result_lease(self.lease_binding)
+                primary = self.owner._current(self.scope, primary['orchestration_handle'])['snapshot']
+                retain(self.store, count)
+                db = self.store._connection
+                self.now = 1000 + ORCHESTRATION_IDLE_MS
+                primary_steps, _ = vm_steps(db, lambda: self.close(primary))
+                unattended_steps, ended = vm_steps(db, lambda: self.owner.end_idle(self.now))
+                self.assertEqual(('completed', 1, 'interrupted'),
+                                 (self.status(primary['orchestration_handle']), ended, self.status(unattended)))
+                measurements.append((primary_steps, unattended_steps))
+        self.assertEqual(measurements[0], measurements[1], ('VM steps at 0 and 100000 retained rows', measurements))
+
+
+class ReviewClockTests(OrchestrationStore):
+    """MED (clock rollback): the service's pass closes an idle orchestration at the floor when the wall clock went
+    back below it, and the decision time is read inside the close's transaction."""
+
+    def service_pass(self):
+        import threading
+        from codex_agents import result_persistence
+        lane = SimpleNamespace(
+            _history=lambda: self.store, _service_scope=self.scope, _service_instance='instance-1',
+            _lock=threading.Lock(), _jobs={}, _unanswered={}, _earlier_held=1, _reporting=0,
+            _adopt_committed=lambda *arguments, **options: None, _record_authority=lambda: None,
+            recording_notes=None)
+        request = result_persistence._EarlierLeases('expire')
+        result_persistence.ResultPersistenceLane._earlier(lane, request)
+        return request
+
+    @requirements('RS-B-B6-2', why_not_scenario=WHY)
+    def test_B6_2_the_service_pass_closes_at_the_floor_after_the_wall_clock_went_back(self):
+        handle = self.open()['orchestration_handle']
+        floor = 1000 + ORCHESTRATION_IDLE_MS + 5
+        self.now = floor
+        self.store._result_now()  # the floor moves to here
+        self.now = 10  # the wall clock went back below the floor
+        reads = []
+        original = self.store._hold_now
+
+        def hold_now():
+            reads.append(self.store._connection.in_transaction)
+            return original()
+        self.store._hold_now = hold_now
+        self.service_pass()
+        self.assertEqual(('released', 'interrupted_unattended'), hold(self.store, handle)[:2])
+        ended = self.owner._current(self.scope, handle)['snapshot']
+        self.assertEqual(('interrupted', floor), (ended['status'], ended['ended_at_ms']))
+        self.assertIn(True, reads)  # the close's decision time is read inside its transaction
+        self.assertEqual(floor, self.store._connection.execute(
+            'SELECT last_observed_at_ms FROM result_identity').fetchone()[0])  # never moved back
+
+
+class ReviewLayoutTests(Step20Store):
+    """MED (layout): the schema comparison keeps quoted literals as they are (no case folding inside them)."""
+
+    @requirements('RS-B-B6-7', why_not_scenario=WHY)
+    def test_B6_7_an_index_predicate_whose_literal_differs_only_in_case_is_refused(self):
+        with closing(sqlite3.connect(self.database)) as db:
+            db.executescript("DROP INDEX project_holds_due; CREATE INDEX project_holds_due ON "
+                             "project_holds(state,next_check_ms) WHERE state<>'RELEASED';")
+        before = self.rows()
+        digest = hashlib.sha256(self.database.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(HistoryError, 'history_incompatible'):
+            self.upgrade()
+        self.assert_left_at_20(before, digest)
+        with closing(sqlite3.connect(self.database)) as db:
+            db.executescript("DROP INDEX project_holds_due; CREATE INDEX project_holds_due ON "
+                             "project_holds(state,next_check_ms) WHERE state<>'released';")
+        self.upgrade().close()
+        with closing(sqlite3.connect(self.database)) as db:  # the same at an ordinary open of format 21
+            db.executescript("DROP INDEX result_reservations_live; CREATE INDEX result_reservations_live ON "
+                             "result_reservations(project_id) WHERE state<>'EXPIRED';")
+        with self.assertRaisesRegex(HistoryError, 'history_incompatible'):
+            self.open_history()
+
+
+class ReviewStateValidationTests(OrchestrationStore):
+    """MED (state validation): at open the state column is checked against each orchestration's latest sealed
+    checkpoint, so a matching but wrong state and register row cannot undercount open orchestrations."""
+
+    @requirements('RS-B-B6-8', 'RS-B-B6-1', why_not_scenario=WHY)
+    def test_B6_8_a_closed_state_and_released_row_of_an_active_orchestration_is_refused_at_open(self):
+        handle = self.open()['orchestration_handle']
+        self.store.close()
+        with closing(sqlite3.connect(self.directory / 'history.sqlite3')) as raw:
+            raw.execute("UPDATE project_orchestrations SET state='closed' WHERE orchestration_handle=?", (handle,))
+            raw.execute("UPDATE project_holds SET state='released',release_kind='closed',released_at_ms=1 "
+                        "WHERE kind='orchestration' AND identity=?", (handle,))
+            raw.commit()
+        with self.assertRaisesRegex(HistoryError, 'history_incompatible'):
+            self.open_history()
+        self.store = SimpleNamespace(close=lambda: None)
+
+
+class ReviewBatchTests(OrchestrationStore):
+    @requirements('RS-B-B6-4', why_not_scenario=WHY)
+    def test_B6_4_an_explicit_limit_above_four_is_clamped_to_four(self):
+        handles = [self.open(f'open-{n}')['orchestration_handle'] for n in range(6)]
+        self.now = 1000 + ORCHESTRATION_IDLE_MS
+        self.assertEqual(4, self.owner.end_idle(self.now, 10))
+        self.assertEqual(2, sum(self.status(handle) == 'active' for handle in handles))
 
 
 if __name__ == '__main__':

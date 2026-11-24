@@ -231,7 +231,8 @@ class SchemaStepTests(unittest.TestCase):
             for name in ('project_holds_open_run', 'project_holds_open_held', 'project_registered_runs_run'):
                 db.execute('DROP INDEX ' + name)
             db.execute('DROP TABLE project_result_recorders')  # schema20 (B2, decision 114.1 A): format 18 never had it
-            for name in ('project_orchestrations_state', 'result_reservations_live', 'project_holds_orchestration_check'):
+            for name in ('project_orchestrations_state', 'result_reservations_live', 'project_holds_orchestration_check',
+                         'result_reservations_orchestration', 'result_leases_orchestration'):
                 db.execute('DROP INDEX ' + name)  # schema21 (B6, decision 131): format 18 never had them
             db.execute('ALTER TABLE project_orchestrations DROP COLUMN state')  # schema21 (B6, decision 131)
             db.execute('PRAGMA user_version=18')

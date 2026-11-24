@@ -210,8 +210,16 @@ _SCHEMA_V20 = _SCHEMA_V19 + service_record.RECORDER_SCHEMA
 RESULT_LIVE_INDEX_SCHEMA = """
 CREATE INDEX result_reservations_live ON result_reservations(project_id) WHERE state<>'expired';
 """
+# B6 review r1 (HIGH retained history): a close checks only its own orchestration's leases and reservations, each
+# found by its orchestration through an index (a lease names it only inside its sealed binding), so other
+# orchestrations' finished rows are never read and never count against the close's bound.
+LEASE_ORCHESTRATION = project_holds_schema.LEASE_ORCHESTRATION
+TARGET_INDEX_SCHEMA = f"""
+CREATE INDEX result_reservations_orchestration ON result_reservations(project_id,orchestration_handle);
+CREATE INDEX result_leases_orchestration ON result_leases(project_id,{LEASE_ORCHESTRATION});
+"""
 STEP_21_SCHEMA = (ORCHESTRATION_STATE_INDEX_SCHEMA + RESULT_LIVE_INDEX_SCHEMA
-                  + project_holds_schema.ORCHESTRATION_CHECK_INDEX_SCHEMA)
+                  + project_holds_schema.ORCHESTRATION_CHECK_INDEX_SCHEMA + TARGET_INDEX_SCHEMA)
 _SCHEMA = with_orchestration_state(_SCHEMA_V20) + STEP_21_SCHEMA
 _COLUMNS = {
     **PROJECT_HOLDS_COLUMNS,
@@ -274,6 +282,31 @@ def _operation(function):
             # Do not chain SQL, paths or rejected values into public diagnostics.
             raise HistoryError(failure)
     return guarded
+
+
+# B6 review r1 (HIGH adoption idle window): an orchestration's latest attempt activity before step 21, from what
+# can be attributed to it: its reservations' creation and register takes (a bound reservation's take is its bind,
+# later than the lease creation it inherits) and its leases' creation and register takes (a lease withdrawn unsent
+# has no reservation). Releases are not activity (RS-B-B6-2).
+_LAST_ATTEMPT_ACTIVITY = (
+    "SELECT MAX(t) FROM ("
+    "SELECT MAX(created_at_ms) AS t FROM result_reservations WHERE project_id=:project AND orchestration_handle=:handle "
+    "UNION ALL SELECT MAX(h.taken_at_ms) FROM result_reservations s JOIN project_holds h ON h.project_id=s.project_id "
+    "AND h.kind='reservation' AND h.identity=s.claim_id WHERE s.project_id=:project AND s.orchestration_handle=:handle "
+    f"UNION ALL SELECT MAX(created_at_ms) FROM result_leases WHERE project_id=:project AND {LEASE_ORCHESTRATION}=:handle "
+    "UNION ALL SELECT MAX(h.taken_at_ms) FROM result_leases JOIN project_holds h "
+    "ON h.project_id=result_leases.project_id AND h.kind='lease' "
+    "AND h.identity=result_leases.run_handle||':'||result_leases.attempt "
+    f"WHERE result_leases.project_id=:project AND {LEASE_ORCHESTRATION}=:handle)")
+_SQL_LITERAL = re.compile(r"('(?:[^']|'')*')")
+
+
+def _normalized_sql(statement: str) -> str:
+    """A schema statement for comparison: whitespace runs as one space and case folded, OUTSIDE quoted literals
+    only. B6 review r1 (MED layout): a literal's contents are compared exactly ('released' is not 'RELEASED')."""
+    parts = _SQL_LITERAL.split(statement)
+    return "".join(part if index % 2 else re.sub(r"\s+", " ", part).casefold()
+                   for index, part in enumerate(parts)).strip()
 
 
 class ProjectHistory:
@@ -464,9 +497,9 @@ class ProjectHistory:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         application = connection.execute("PRAGMA application_id").fetchone()[0]
         objects = connection.execute("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL").fetchall()
-        actual_schema = {" ".join(row[2].split()).casefold() for row in objects}
+        actual_schema = {_normalized_sql(row[2]) for row in objects}
         def schema_set(schema):
-            return {" ".join(statement.split()).casefold() for statement in schema.split(";") if statement.strip()}
+            return {_normalized_sql(statement) for statement in schema.split(";") if statement.strip()}
         if not objects and version == 0 and application == 0:
             # executescript is used only for this fixed, empty schema, never requests.
             connection.executescript("BEGIN IMMEDIATE;" + _SCHEMA)
@@ -502,14 +535,20 @@ class ProjectHistory:
             # O10 HS-5/HS-6: every check passes before anything is written, and the store is kept as it
             # was, under this writer lock, on every path that upgrades.
             self._check_result_identity_before_upgrade(version)
+            self._recover_interrupted_upgrade(remove_copy=True)  # B6 review r1: a dead attempt's own copy goes
             copy = self._keep_copy_before_upgrade(version)
+            marker = self._upgrade_marker
             try:
                 self._upgrade(connection, version)
             except BaseException:
                 # O10 HS-18: the store is unchanged, so the copy made for this attempt goes too.
                 with contextlib.suppress(OSError):
                     copy.unlink()
+                with contextlib.suppress(OSError):
+                    marker.unlink()
                 raise
+            with contextlib.suppress(OSError):
+                marker.unlink()  # committed: the copy is the kept one; a marker left by a death here is cleared below
         elif (
             version != _SCHEMA_VERSION or application != _APPLICATION_ID
             or actual_schema != schema_set(_SCHEMA)
@@ -517,6 +556,7 @@ class ProjectHistory:
             raise HistoryError("history_incompatible")
         self._check_schema_identity(_COLUMNS)
         self._check_project_holds()  # SH-7: at every open, so also of a restored copy
+        self._recover_interrupted_upgrade(remove_copy=False)  # upgraded: its copy is the kept one
 
     def _check_project_holds(self) -> None:
         """SH-7: RS-B's register validator and RS-D's custody validator (project_holds_schema)."""
@@ -524,6 +564,7 @@ class ProjectHistory:
                 and project_holds_schema.custody_consistent(self._connection, self._result_key)
                 and service_record.recorders_consistent(self._connection)):  # B2: step 20's validator
             raise HistoryError("history_incompatible")
+        self._check_orchestration_states()  # B6 review r1
 
     def _upgrade(self, connection, version) -> None:
         with self._transaction():
@@ -570,6 +611,23 @@ class ProjectHistory:
             self._check_project_holds()
             connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
 
+    def _check_orchestration_states(self) -> None:
+        """B6 review r1 (MED state): at integrity validation (every open, so every restore, and inside the step)
+        each orchestration's state column agrees with its latest sealed checkpoint, so a state and register row
+        changed together cannot undercount open ones. One whose checkpoint does not verify is left to the readers
+        (it counts as open, as before). Routine counts stay on the index. Without the result key nothing can be
+        verified or done with an orchestration; nothing is checked."""
+        if self._result_key is None:
+            return
+        from .orchestration_api import ORCHESTRATION_TERMINAL_STATES
+        owner = self._orchestration_owner()
+        for row in self._connection.execute("SELECT orchestration_handle,sequence,checkpoint_digest,state FROM "
+                                            "project_orchestrations WHERE project_id=?", (self.project_id,)):
+            snapshot = owner._latest_snapshot(row)
+            if snapshot is not None and row["state"] != (
+                    "closed" if snapshot["status"] in ORCHESTRATION_TERMINAL_STATES else "open"):
+                raise HistoryError("history_incompatible")
+
     def _orchestrations_to_adopt(self) -> list:
         """B6 (step 20 -> 21): (handle, open, started_at_ms, last activity) of every orchestration, from its latest
         checkpoint verified by its own keyed seal. One that does not verify is taken as open (it never frees a place,
@@ -585,9 +643,8 @@ class ProjectHistory:
             if snapshot is None:
                 adopted.append((row["orchestration_handle"], True, now, now))
                 continue
-            latest = self._connection.execute(
-                "SELECT MAX(created_at_ms) FROM result_reservations WHERE project_id=? AND orchestration_handle=?",
-                (self.project_id, row["orchestration_handle"])).fetchone()[0]
+            latest = self._connection.execute(_LAST_ATTEMPT_ACTIVITY, {
+                "project": self.project_id, "handle": row["orchestration_handle"]}).fetchone()[0]
             activity = max(snapshot["observed_at_ms"], latest if valid_integer(latest) else 0)
             adopted.append((row["orchestration_handle"], snapshot["status"] not in ORCHESTRATION_TERMINAL_STATES,
                             snapshot["started_at_ms"], activity))
@@ -617,6 +674,38 @@ class ProjectHistory:
         if self._result_identity_refused(self._connection.execute("SELECT * FROM result_identity LIMIT 2").fetchall()):
             raise HistoryError("history_incompatible")
 
+    def _upgrade_markers(self):
+        """B6 review r1 (MED crash copy): each upgrade attempt's marker, an empty file named for the device and
+        inode of the copy it makes (the copy is a hard link of its temporary file), made before the copy is
+        published and removed when the attempt ends. A marker left behind is a dead attempt's."""
+        found = []
+        for path in self._directory.glob(f".history.sqlite3.upgrade-{_SCHEMA_VERSION}.*.attempt"):
+            match = re.fullmatch(rf"\.history\.sqlite3\.upgrade-{_SCHEMA_VERSION}\.([0-9]+)-([0-9]+)\.attempt",
+                                 path.name)
+            if match is not None:
+                found.append((path, int(match.group(1)), int(match.group(2))))
+        return found
+
+    def _recover_interrupted_upgrade(self, *, remove_copy: bool) -> None:
+        """B6 review r1 (MED crash copy): a dead upgrade attempt (process death after its copy was published) left
+        its marker. Before another attempt of an unchanged store, that attempt's own copy and temporary file (same
+        device and inode as its marker names) are removed; no other copy is touched (HS-10/HS-16: an existing copy
+        is never reused, replaced or trusted). A store already at this format keeps its copy; only the marker goes."""
+        for marker, device, inode in self._upgrade_markers():
+            if remove_copy:
+                for path in self._directory.glob("history.sqlite3.before-*"):
+                    with contextlib.suppress(OSError):
+                        status = os.lstat(path)
+                        if stat.S_ISREG(status.st_mode) and (status.st_dev, status.st_ino) == (device, inode):
+                            path.unlink()
+                for path in self._directory.glob(".history.sqlite3.before-*.partial"):
+                    with contextlib.suppress(OSError):
+                        status = os.lstat(path)
+                        if stat.S_ISREG(status.st_mode) and (status.st_dev, status.st_ino) == (device, inode):
+                            path.unlink()
+            with contextlib.suppress(OSError):
+                marker.unlink()
+
     def _keep_copy_before_upgrade(self, version) -> None:
         """O10 HS-10: every upgrade attempt keeps its own copy of the store as it was,
         history.sqlite3.before-<format>.<time>, made under this writer lock, owner-only, synced with its
@@ -624,13 +713,18 @@ class ProjectHistory:
         copy in progress is removed and the upgrade does not happen."""
         name = f"history.sqlite3.before-{_SCHEMA_VERSION}.{time.time_ns()}"
         temporary = self._directory / f".{name}.{secrets.token_hex(8)}.partial"
-        final, published = None, False
+        final, published, marker = None, False, None
         try:
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
             try:
                 os.fchmod(descriptor, 0o600)
+                identity = os.fstat(descriptor)
             finally:
                 os.close(descriptor)
+            # B6 review r1: this attempt's marker, before anything is published (synced with the folder below).
+            marker = self._directory / (f".history.sqlite3.upgrade-{_SCHEMA_VERSION}."
+                                        f"{identity.st_dev}-{identity.st_ino}.attempt")
+            os.close(os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600))
             target = sqlite3.connect(temporary)
             try:
                 self._connection.backup(target)
@@ -655,12 +749,13 @@ class ProjectHistory:
             os.unlink(temporary)
             os.fsync(self._directory_fd)  # HS-15: the folder's sync is part of success
             published = True
+            self._upgrade_marker = marker  # B6 review r1: removed when the attempt ends
             return final
         except (OSError, sqlite3.Error):
             raise HistoryError("history_unavailable") from None
         finally:
             if not published:  # HS-15: every file this attempt made goes, its final name too
-                for path in (temporary, final):
+                for path in (temporary, final, marker):
                     if path is not None:
                         with contextlib.suppress(OSError):
                             path.unlink()

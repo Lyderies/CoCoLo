@@ -14,7 +14,7 @@ from .orchestration_api import (
     checked_orchestration_view, decode_orchestration_request, encode_orchestration_request,
     orchestration_request_digest, HOST_CLIENT_VERSIONS, ORCHESTRATION_TERMINAL_STATES, SCOPE_FIELDS,
 )
-from .project_history import MAX_LEASE_ROWS, ProjectHistory, _operation
+from .project_history import LEASE_ORCHESTRATION, MAX_LEASE_ROWS, ProjectHistory, _operation
 from . import project_holds_schema
 
 MAX_JOURNAL_EVENTS = 65_536
@@ -27,6 +27,15 @@ ORCHESTRATION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 ORCHESTRATION_IDLE_MS = project_holds_schema.ORCHESTRATION_IDLE_MS
 # B6 (RS-B-B6-4): at most this many unattended closes are tried per pass (the service asks for this many).
 UNATTENDED_CLOSE_BATCH = 4
+
+# B6 review r1 (HIGH retained history): one orchestration's own leases and reservations, through step 21's indexes.
+_TARGET_ROWS = {
+    'result_leases': ('SELECT rowid FROM result_leases INDEXED BY result_leases_orchestration '
+                      f'WHERE project_id=? AND {LEASE_ORCHESTRATION}=?'),
+    'result_reservations': ('SELECT rowid FROM result_reservations INDEXED BY result_reservations_orchestration '
+                            'WHERE project_id=? AND orchestration_handle=?'),
+}
+
 
 class OrchestrationOwner:
     def __init__(self, history):
@@ -211,15 +220,20 @@ class OrchestrationOwner:
                              (now + wait, project_holds_schema.evidence_json(backoff_ms=wait),
                               self._history.project_id, handle))
 
-    def end_idle(self, now, limit=UNATTENDED_CLOSE_BATCH):
+    def end_idle(self, now=None, limit=UNATTENDED_CLOSE_BATCH):
         """The unattended close (RS-B-B6, O0c P5): end, as interrupted, the open or paused orchestrations with no
         activity for ORCHESTRATION_IDLE_MS. Selected fairly from their register rows by next check (at most `limit`,
-        UNATTENDED_CLOSE_BATCH for the service); each is closed by the ordinary close, under its own sealed scope, with
+        never more than UNATTENDED_CLOSE_BATCH); each is closed by the ordinary close, under its own sealed scope, with
         its eligibility checked inside the close's transaction (no held reservation, nothing unfinished, due). A
-        refused one backs off. Effective now is max(wall, persisted floor). Returns how many ended."""
+        refused one backs off. Returns how many ended.
+        B6 review r1 (MED clock): the time is the owner's own effective now, max(wall, persisted floor), read
+        without moving the floor (and read again inside each close's transaction); `now` is not used, so a caller's
+        clock that went back below the floor can neither refuse nor delay the pass."""
         project = self._history.project_id
-        floor = self._history._hold_now()
-        now = max(now, floor) if valid_integer(now) else floor
+        if not valid_integer(limit, minimum=1):
+            raise HistoryError('history_invalid_input')
+        limit = min(limit, UNATTENDED_CLOSE_BATCH)
+        now = self._history._hold_now()
         ended = 0
         for row in self._db.execute(self._UNATTENDED_SELECT, (project, now, now, limit)).fetchall():
             handle = row['identity']
@@ -304,16 +318,16 @@ class OrchestrationOwner:
         scope = OrchestrationScope(**{name: getattr(binding, name) for name in SCOPE_FIELDS})
         return self._current(scope, binding.orchestration_handle)
 
-    def _positions(self, table):
+    def _positions(self, table, handle):
         # Only fixed owner-selected tables, bounded scalar rows before any blob.
-        if table not in {'result_leases', 'result_reservations', 'project_execution_consumptions'}:
+        if table not in _TARGET_ROWS:
             raise HistoryError('history_invalid_input')
         if self._history._result_capacity is None:
             raise HistoryError('history_orchestration_unavailable')
-        # This bounds the verification work, not results (0.3.4 R1e): with the 64-entry limit here, a
-        # store holding more than 64 rows, finished ones included, could close no orchestration.
-        positions = self._db.execute('SELECT rowid FROM ' + table + ' WHERE project_id=? LIMIT ?',
-                                     (self._history.project_id, MAX_LEASE_ROWS + 1)).fetchall()
+        # This bounds the verification work, not results (0.3.4 R1e). B6 review r1: only this orchestration's own
+        # rows, found by index, so other orchestrations' kept rows neither count against it nor add work.
+        positions = self._db.execute(_TARGET_ROWS[table] + ' LIMIT ?',
+                                     (self._history.project_id, handle, MAX_LEASE_ROWS + 1)).fetchall()
         if len(positions) > MAX_LEASE_ROWS:
             raise HistoryError('history_orchestration_unavailable')
         return positions
@@ -350,7 +364,9 @@ class OrchestrationOwner:
 
     def _unfinished(self, scope, handle, *, unrecorded=None):
         # A timeout, absent process or accepted terminal does not prove cleanup.
-        for position in self._positions('result_leases'):
+        # B6 review r1 (HIGH retained history): only this orchestration's own leases and reservations (each still
+        # verified by its seal), so no project-wide scan; its reservations' consumptions are verified below.
+        for position in self._positions('result_leases', handle):
             row = self._db.execute('SELECT * FROM result_leases WHERE rowid=?', (position[0],)).fetchone()
             lease = self._history._lease(row)
             if lease.binding.orchestration_handle == handle:
@@ -358,12 +374,7 @@ class OrchestrationOwner:
                     raise HistoryError('history_conflict')
                 if lease.state in {'reserved', 'claim_pending'}:
                     return True
-        for position in self._positions('project_execution_consumptions'):
-            row = self._db.execute('SELECT claim_id FROM project_execution_consumptions WHERE rowid=?', (position[0],)).fetchone()
-            if self._db.execute('SELECT 1 FROM result_reservations WHERE project_id=? AND claim_id=?',
-                                (scope.project_id, row['claim_id'])).fetchone() is None:
-                raise HistoryError('history_incompatible')
-        for position in self._positions('result_reservations'):
+        for position in self._positions('result_reservations', handle):
             row = self._db.execute('SELECT * FROM result_reservations WHERE rowid=?', (position[0],)).fetchone()
             reservation = self._history._reservation(row)
             binding = reservation.binding
@@ -419,10 +430,11 @@ class OrchestrationOwner:
                                "AND identity=? AND state='held'", (project, handle)).fetchone()
         if row is None or not valid_integer(row[0]) or now < row[0]:
             return False
+        # B6 review r1: this orchestration's own reservations by index, each with its register row by key.
         return self._db.execute(
-            "SELECT 1 FROM project_holds r INDEXED BY project_holds_kind_due JOIN result_reservations s "
-            "ON s.project_id=r.project_id AND s.claim_id=r.identity WHERE r.kind='reservation' "
-            "AND r.state<>'released' AND r.project_id=? AND s.orchestration_handle=? LIMIT 1",
+            "SELECT 1 FROM result_reservations s INDEXED BY result_reservations_orchestration JOIN project_holds r "
+            "ON r.project_id=s.project_id AND r.kind='reservation' AND r.identity=s.claim_id "
+            "WHERE s.project_id=? AND s.orchestration_handle=? AND r.state<>'released' LIMIT 1",
             (project, handle)).fetchone() is None
 
     @_operation
@@ -460,9 +472,12 @@ class OrchestrationOwner:
             raise HistoryError('history_orchestration_unavailable')
         if _unattended and operation != 'orchestration.close':
             raise HistoryError('history_invalid_input')
-        # B6 (RS-B-B6-2): the unattended close judges at max(wall, persisted floor), read without moving the floor.
-        now = self._history._hold_now() if _unattended else self._history._result_now()
+        # B6 (RS-B-B6-2): the unattended close judges at max(wall, persisted floor), read without moving the floor,
+        # inside the close's own transaction (review r1).
+        now = None if _unattended else self._history._result_now()
         with self._history._transaction():
+            if _unattended:
+                now = self._history._hold_now()
             if operation == 'orchestration.open':
                 # Only open or paused ones count (0.3.4 R6); in 0.8.29 every one ever opened did.
                 if self._open_count() >= limits.max_orchestrations:

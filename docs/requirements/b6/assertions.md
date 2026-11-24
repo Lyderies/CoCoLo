@@ -74,3 +74,21 @@ about behaviour was weakened; each line is a format pin, a copy-name pin, or a f
 
 ## C. Brought in unchanged
 `tests/test_rsd_budget.py` (RS-D S3, 9a3c6860): no line changed; its two red retirement tests are green on step 21.
+
+## E. Review round 1 (Codex security review of 700d41f8; primary: read these against the original)
+- `test_b6_unattended_close.py` `test_B6_4_at_most_four_close_per_pass_and_the_service_asks_for_four` (B6's own test,
+  new in 700d41f8, not yet released): `self.assertIn('end_idle(history._result_now(), UNATTENDED_CLOSE_BATCH)', source)`
+  -> `self.assertIn('end_idle(None, UNATTENDED_CLOSE_BATCH)', source)`. Reason: review MED clock (RS-B-B6-2 round 1):
+  the old text pinned the defect itself (`_result_now()` raises below the floor before the close starts, and moves
+  the floor); the owner now reads its own effective time. The service-path behaviour is proven by the new
+  ReviewClockTests. NOT covered by decision 195: listed for the primary.
+- `test_b6_unattended_close.py` process-death test: assertions ADDED only (exactly one copy, format 20; no marker or
+  partial file left); no existing line changed.
+- Fixture lines: `project_schema_fixtures.legacy_orchestration_state_layout` and `test_project_holds_schema.py` D111
+  also drop the two new step-21 indexes (`result_reservations_orchestration`, `result_leases_orchestration`).
+  Reason: they build older layouts from a format 21 store (section B).
+- `tests/fixtures/history_step20/make_store.py`: `--leases` variant added (the default output path and operations are
+  unchanged; `store.sql` was NOT regenerated); new `store_leases.sql` generated once with the 6a1ea9da runtime.
+- `tests/lifetime_caps.json`: two sites registered (`orchestration_store.py::<module>`, `::_open_count`); the
+  end_earlier and runtime_close_status `ends` texts corrected (hold tombstones are never purged; decision 131's
+  indexes purge nothing).

@@ -1262,10 +1262,12 @@ class ResultPersistenceLane:
                 with contextlib.suppress(HistoryError, sqlite3.Error):
                     history._orchestration_owner().end_earlier(self._service_scope, 10)
                 # O0c P5 / B6 (RS-B-B6-4): an orchestration idle for 24 hours with no run left is ended interrupted
-                # unattended, at most UNATTENDED_CLOSE_BATCH a pass, fairly by each one's next check.
+                # unattended, at most UNATTENDED_CLOSE_BATCH a pass, fairly by each one's next check. The owner reads
+                # its own effective time (max(wall, floor), never moving the floor): a wall clock that went back below
+                # the floor never stops the pass (review r1).
                 from .orchestration_store import UNATTENDED_CLOSE_BATCH
                 with contextlib.suppress(HistoryError, sqlite3.Error):
-                    history._orchestration_owner().end_idle(history._result_now(), UNATTENDED_CLOSE_BATCH)
+                    history._orchestration_owner().end_idle(None, UNATTENDED_CLOSE_BATCH)
                 with contextlib.suppress(HistoryError, sqlite3.Error):  # S1-R6-8, reporting only
                     history.settle_earlier_registrations(self._service_instance, now_ms=history._result_now())
                 # RS-B L1 (the start pass, and every pass after it): an unarmed lease no live job of this

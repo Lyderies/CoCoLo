@@ -200,6 +200,11 @@ CREATE INDEX project_holds_orchestration_check ON project_holds(project_id,next_
 """
 
 
+# The orchestration a lease belongs to, from its sealed binding (the expression of step 21's
+# result_leases_orchestration index; a lease row has no orchestration column).
+LEASE_ORCHESTRATION = "json_extract(CAST(binding AS TEXT),'$.orchestration_handle')"
+
+
 def _orchestration_of(connection, project_id: str, kind: str, identity: str):
     """The orchestration handle an execution hold (lease or reservation) belongs to, from its source row; None for
     another kind. Scheduling only: the sealed binding is what any close decision verifies."""
@@ -208,7 +213,7 @@ def _orchestration_of(connection, project_id: str, kind: str, identity: str):
                                  "AND claim_id=?", (project_id, identity)).fetchone()
     elif kind == "lease":
         run_handle, _, attempt = identity.rpartition(":")
-        row = connection.execute("SELECT json_extract(CAST(binding AS TEXT),'$.orchestration_handle') "
+        row = connection.execute("SELECT " + LEASE_ORCHESTRATION + " "
                                  "FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
                                  (project_id, run_handle, attempt)).fetchone()
     else:
@@ -261,7 +266,8 @@ def adopt_orchestrations(connection, project_id: str, orchestrations) -> None:
     """B6 (RS-B-B6-1, B6-7), inside the 20 -> 21 step before both validators: each orchestration's state column from
     its latest checkpoint, and each open one without a register row its held row (evidence `{"adopted":21}`, taken at
     its start, due 24 h after its last activity). A closed one and an existing row are left as they are (a pre-B6
-    close wrote none; RS-D N1's update closes wrote their tombstones). `orchestrations` holds (handle, open,
+    close wrote none; RS-D N1's update closes wrote their tombstones), except that an open one's held row with no due
+    time gets that due time (review r1). `orchestrations` holds (handle, open,
     started_at_ms, last_activity_ms) for every row."""
     if not connection.in_transaction:
         raise HistoryError("history_unavailable")
@@ -274,6 +280,12 @@ def adopt_orchestrations(connection, project_id: str, orchestrations) -> None:
                 "INSERT INTO project_holds(project_id,kind,identity,state,taken_at_ms,due_at_ms,evidence) "
                 "VALUES(?,'orchestration',?,'held',?,?,?)",
                 (project_id, handle, started_at_ms, activity_ms + ORCHESTRATION_IDLE_MS, ADOPTED_21))
+        elif is_open:
+            # B6 review r1 (HIGH): an existing held row with no due time would never be selected; it is dated from
+            # the same last activity. Its take and evidence stay as they are.
+            connection.execute("UPDATE project_holds SET due_at_ms=? WHERE project_id=? AND kind='orchestration' "
+                               "AND identity=? AND state='held' AND due_at_ms IS NULL",
+                               (activity_ms + ORCHESTRATION_IDLE_MS, project_id, handle))
 
 
 # B1 adoption (SH-1, RS-9), inside the 17 -> 18 step before both validators. Each class follows from the source row's

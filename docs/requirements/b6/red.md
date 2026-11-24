@@ -16,3 +16,19 @@ the tests and scripts of this branch beside it); green = the same tests on this 
 | RS-D-9-S2/S3 | tests/test_rsd_budget.py (root) x6 | 2/6 fail: retirement VM steps [296, 275] vs [700296, 500275]; plan `result_expiry` + temp sort | 6/6 pass |
 
 Base run of the B6 module: 25 tests, failures=8, errors=19 (24 tests red, K2 green).
+
+## Review round 1 (fix of the Codex security review of 700d41f8)
+
+Red = the round's final test text run against 700d41f8 (exported with `git archive`, the new tests and
+`store_leases.sql` beside it): 31 tests, failures=6, errors=4. Green = the same on the fix commit.
+
+| Finding | Test (tests/test_b6_unattended_close.py) | Red on 700d41f8 | Green |
+|---|---|---|---|
+| HIGH adoption window (B6-7, B6-2) | ReviewAdoptionTests.test_B6_7_adoption_counts_the_latest_lease_and_reservation_take_and_dates_a_held_row_without_a_due_time | `86403600 != 86403500` (due from the checkpoint, not the lease take) | pass |
+| HIGH retained history (B6-2) | ReviewRetainedHistoryTests.test_B6_2_a_complete_close_does_equal_work_at_0_and_100000_retained_rows_of_other_orchestrations | 100,000: `history_orchestration_unavailable` (the 4,096 bound over other orchestrations' rows); 0: the other orchestrations' two neighbour leases are parsed by the project-wide scan (`history_incompatible`) | pass, VM steps equal (primary and unattended close) |
+| MED clock (B6-2) | ReviewClockTests.test_B6_2_the_service_pass_closes_at_the_floor_after_the_wall_clock_went_back | `('held', None)`: the service pass skipped the close | pass |
+| MED crash copy (B6-7) | SchemaStepTests.test_B6_7_process_death_inside_the_step_leaves_20_and_a_later_attempt_upgrades (assertions added) | 2 copies after the retry | pass, 1 copy (format 20), no marker/partial |
+| MED layout (B6-7) | ReviewLayoutTests.test_B6_7_an_index_predicate_whose_literal_differs_only_in_case_is_refused | accepted (failed later, `history_unavailable`), not refused before any write | pass |
+| MED state (B6-8) | ReviewStateValidationTests.test_B6_8_a_closed_state_and_released_row_of_an_active_orchestration_is_refused_at_open | opened (`HistoryError not raised`) | pass |
+| LOW clamp (B6-4) | ReviewBatchTests.test_B6_4_an_explicit_limit_above_four_is_clamped_to_four | 6 closed | pass |
+| LOW cap registry | tests.test_lifetime_cap_guard (existing) | `<module>` and `_open_count` unlisted | pass |

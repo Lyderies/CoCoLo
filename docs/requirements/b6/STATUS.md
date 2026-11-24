@@ -3,7 +3,33 @@
 Worktree ~/Code/temp/cocolo-b6, branch feat/rsb-b6-close, base 6a1ea9da (0.8.57). Requirements: docs/requirements/b6.md.
 Evidence: docs/requirements/b6/red.md. Assertion ledger: docs/requirements/b6/assertions.md.
 
-## State: COMPLETE, committed on feat/rsb-b6-close
+## State: review round 1 fix COMPLETE, committed on feat/rsb-b6-close (on 700d41f8)
+
+### Review round 1 (one fix round; red evidence in red.md, ledger section E in assertions.md, acceptance in b6.md)
+- HIGH adoption window: `_LAST_ATTEMPT_ACTIVITY` (project_history) = max of the orchestration's reservations'
+  created/taken and leases' created/taken; `adopt_orchestrations` dates an existing held row with a null due time.
+  Fixture `tests/fixtures/history_step20/store_leases.sql` (`make_store.py --leases`, 6a1ea9da runtime; store.sql
+  untouched).
+- HIGH retained history: step 21 also adds `result_reservations_orchestration` and `result_leases_orchestration`
+  (expression index on the lease binding's orchestration handle); `_positions(table, handle)` / `_unfinished` /
+  `_unattended_eligible` read only the target's rows; the project-wide consumption scan is gone (the target's
+  consumptions are verified per reservation, as before).
+- MED clock: `end_idle(now=None, limit)` ignores `now`, reads `_hold_now()`; apply(_unattended) reads it inside the
+  transaction; service passes `end_idle(None, UNATTENDED_CLOSE_BATCH)`.
+- MED crash copy: marker `.history.sqlite3.upgrade-21.<dev>-<ino>.attempt` (no extra fsync); `_recover_interrupted_upgrade`.
+- MED layout: `_normalized_sql` keeps quoted literals exact. MED state: `_check_orchestration_states` in
+  `_check_project_holds`.
+- LOW: end_idle clamps limit to 4; lifetime_caps.json `<module>` + `_open_count`; tombstone-purge claim corrected.
+
+### Round 1 test runs (named modules, all green)
+- Batch A, 27 store modules: 643 tests, 180 s (2 errors fixed: `_keep_copy_before_upgrade` keeps returning a path;
+  rerun of the 3 modules 6 s).
+- Batch B1, 12 service modules: 376 tests, 286 s. Batch B2, 15 modules (settlement, lifetime, backups, learning,
+  cap guard): 324 tests, 279 s. tests.test_project_driver alone: 99 tests, 299 s. Root tests.test_rsd_budget 4 s.
+- Not run: full suite / --affected (primary's). Digests not refreshed.
+- For the primary: assertions.md section E (one B6-own assertion text changed, outside decision 195).
+
+## Earlier state: COMPLETE, committed on feat/rsb-b6-close (700d41f8)
 
 ## Done
 1. Requirements RS-B-B6-1..8 written (B6-6 = RS-D N1/N2, already built by S2; B6-7 = schema step; B6-8 = state column).
