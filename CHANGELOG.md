@@ -4,6 +4,12 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.58: release batch.
+  - RS-F S4: M4 and R3 run-slot rules, with the owner confirm command shown for a held slot.
+  - RS-F S5: a named probe state in account status.
+  - T7 S2: recovery, status and deletion checks in the lifecycle e2e.
+  - Product fixes: an orchestration closes after a lost run, status counts agree, and delete stops the
+    service and removes history, leaving a pending-cleanup marker.
 - Package 0.8.57: release batch.
   - B4s lost-run settlement: a run whose process is gone is settled from its recorded launch, with a
     write-ahead intent written before the settlement so a crash between the two steps is finished on restart.
