@@ -72,7 +72,7 @@ if os.path.lexists(RUNTIME_BINDING) and not _copy_holds_only_its_runtime():
 sys.path.append(str(ORCHESTRATION_ROOT))
 
 from codex_agents.bridge import BridgeRefused  # noqa: E402
-from codex_agents.bridge import dispatch_preflight  # noqa: E402
+from codex_agents.bridge import assignment_read_paths, committed_export_manifest, dispatch_preflight  # noqa: E402
 from codex_agents.catalog import CatalogError, discover, load_discovery_policy  # noqa: E402
 from codex_agents.contracts import (  # noqa: E402
     ContractError,
@@ -2676,6 +2676,10 @@ def main() -> int:
                 for name in ("model", "effort", "role", "verification_required"):
                     rebound[name] = route[name]
                 validate_assignment(rebound, task=task, route=route, parent_grant=parent_grant)
+                if route.get("dispatch") == "bridge" and route.get("provider") in {"codex", "claude"}:
+                    # L6.2: the same refusal as dispatch-preflight, before any admission or hold is made.
+                    committed_export_manifest(args.project_root, assignment_read_paths(
+                        rebound, worker_outcome_digest=task.get("verification_for_outcome")))
                 if _host_driven(route):
                     _start_project_host(args)
                     host = _host_client()

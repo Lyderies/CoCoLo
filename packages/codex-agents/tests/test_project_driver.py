@@ -1545,6 +1545,32 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
             recorders[0].record_claude_rate_limit_event(
                 self.project_id, run_handle=run_handle, rate_limit_info=RATE_LIMIT['rate_limit_info'])
 
+    def test_l6_1_a_tool_the_client_denied_is_reported_in_the_dispatch_reply(self):
+        # L6.1: the denial the client reports reaches the reply as fixed fields (count and tool names), no inputs.
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        frame = result_frame()
+        frame['permission_denials'] = [{'tool_name': 'Write', 'tool_input': {'file_path': '/PRIVATE-CANARY'}}]
+        self.frames('claude', [init_frame(), frame])
+        dispatched = self.dispatch_claude(context, route_path, run_handle)
+        report = dispatched['bridge_report']
+        self.assertEqual({'count': 1, 'tools': ['Write']}, report['permission_denials'])
+        self.assertNotIn('PRIVATE-CANARY', json.dumps(dispatched))
+
+    def test_l6_2_open_refuses_an_uncommitted_read_path_before_any_admission(self):
+        # L6.2: dispatch-preflight refuses an uncommitted read path; open refuses it the same way, admitting nothing.
+        task = self.write('l6-task.json', self.task())
+        route = self.cli_for(self.project, 'learning-route', '--task', task)
+        (self.project / 'draft-l6.txt').write_text('uncommitted\n')
+        assigned = self.assignment_for(route, context=['draft-l6.txt'])
+        common = ('--task', task, '--assignment', self.write('l6-assignment.json', assigned),
+                  '--parent-grant', self.write('l6-grant.json', PARENT_GRANT))
+        route_path = self.write('l6-route.json', route)
+        orchestration = self.cli_for(self.project, 'learning-open-orchestration')['orchestration_handle']
+        preflight = self.cli_for(self.project, 'dispatch-preflight', *common, expected=2)
+        opened = self.cli_for(self.project, 'learning-open-host-run', *common, '--route', route_path,
+                              '--orchestration-handle', orchestration, expected=2)
+        self.assertEqual(preflight['reason'], opened['reason'])
+
     def test_a_running_claude_child_reports_live_status_and_stops_on_cancellation(self):
         context, route_path, orchestration, run_handle = self.open_claude_run()
         # The child starts and does some work, then goes quiet well inside every bound.

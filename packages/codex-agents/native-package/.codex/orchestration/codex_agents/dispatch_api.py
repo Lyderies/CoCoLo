@@ -39,6 +39,7 @@ _CLAUDE_OUTCOMES = frozenset({'claude_activity_invalid', 'claude_tool_not_allowe
     'init_plugin_not_disabled'})  # O10 VF-6
 _USAGE = {'codex': {'input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens'},
           'claude': {'input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'}}
+_TOOL_NAME = re.compile(r'[A-Za-z0-9_]{1,40}')
 _RATE_LIMIT_FIELDS = {'rate_limit_events', 'rate_limit_records_kept', 'rate_limit_record_failed'}
 
 
@@ -162,7 +163,12 @@ def decode_dispatch_response(raw, request):
                     raise ValueError()
                 if claude and report.get('client_diagnostics') is not None:
                     validate_client_diagnostics(report['client_diagnostics'])
-                if (set(report) - (_RATE_LIMIT_FIELDS | {'client_diagnostics'} if claude else set()) - {'provider', 'requested_model', 'observed_model', 'effort', 'wall_seconds',
+                denials = report.get('permission_denials')
+                if denials is not None and (not claude or type(denials) is not dict or set(denials) != {'count', 'tools'}
+                        or not valid_integer(denials['count']) or type(denials['tools']) is not list
+                        or len(denials['tools']) > 16 or any(type(t) is not str or _TOOL_NAME.fullmatch(t) is None for t in denials['tools'])):
+                    raise ValueError()
+                if (set(report) - (_RATE_LIMIT_FIELDS | {'client_diagnostics', 'permission_denials'} if claude else set()) - {'provider', 'requested_model', 'observed_model', 'effort', 'wall_seconds',
                         'read_containment', 'rerouted', 'outcome', 'usage', 'result_validation_reason_code',
                         'bridge_run_id', 'reviewed', 'terminal_state', 'capacity_state', 'export_file_count',
                         'export_commit', 'export_manifest_digest'}
