@@ -11,6 +11,8 @@ EXACT = {
     'account_busy': "The account's records were busy: try again in a moment.",  # M4b E1a-2
     'open_account_busy': "The account's records were busy: try again in a moment.",  # M4b E1a-2
     'status_ledger_busy': "The collector's records were busy: run learning-status again in a moment.",  # S1-H1a-6c
+    'runtime_upgrade_required': "The client and the collector must use the same runtime: update this project with its "
+                                "setup update command, then try again.",  # RSF-S1
     'result_capacity_full': "Close finished orchestrations (learning-close-orchestration), or wait for their "
                             "results to pass their retention.",
     'result_capacity_busy': "Children still running in this project hold the space for results: wait for them "

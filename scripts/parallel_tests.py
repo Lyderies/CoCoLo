@@ -208,7 +208,9 @@ def lifecycle_link_errors(declared=None, rows=None):
     """Reciprocal links between the lifecycle checks and tests/e2e/requirements.json, the lifecycle authority."""
     declared = lifecycle_checks() if declared is None else declared
     if rows is None:
-        rows = framework.decode_json((ROOT / 'tests/e2e/requirements.json').read_text())['requirements']
+        # A tree without the lifecycle authority (a fixture, like one without scripts/e2e_lifecycle.py) has no lifecycle rows.
+        authority = ROOT / 'tests/e2e/requirements.json'
+        rows = framework.decode_json(authority.read_text())['requirements'] if authority.exists() else []
     by_id = {row['id']: row for row in rows}
     errors = []
     for name, ids in sorted(declared.items()):
