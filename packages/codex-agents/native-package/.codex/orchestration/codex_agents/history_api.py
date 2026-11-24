@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .reply_shapes import reply_fields_match
 from .contracts import ContractError, TASK_FAMILIES
 from .history_contracts import (
     HISTORY_REASON_CODES, MAX_SEQUENCE, AttemptBinding, HistoryError, TerminalDelivery,
@@ -309,6 +310,8 @@ def _validate_host_reference(result, binding, digest, *, verification):
 
 def _validate_result(request: HistoryRequest, result: object) -> None:
     operation = request.operation
+    if not reply_fields_match(operation, result):
+        raise HistoryError("history_invalid_response")
     if operation == 'history.learning_cycle':
         from .project_learning_live import LEARNING_REASONS
         if (not _closed(result, {'state', 'reason_code', 'summary', 'report_bytes'})

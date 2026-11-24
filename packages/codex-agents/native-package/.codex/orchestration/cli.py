@@ -213,6 +213,7 @@ from codex_agents.routing import (  # noqa: E402
     route_task,
     verifier_setting,
 )
+from codex_agents.compatibility_message import compatibility_message, project_service_version  # noqa: E402
 from codex_agents.runtime_files import RELEASES_FILE  # noqa: E402
 from codex_agents.session_guard import (  # noqa: E402
     SessionRefused,
@@ -561,7 +562,7 @@ def _start_project_host(args):
     leaves the project as it was: its service starts either way.
     """
     if other_version_host(args.state_root, args.project_root) is not None and not _replace_other_version_host(args):
-        raise ProjectServiceOtherVersion()
+        raise ProjectServiceOtherVersion(project_service_version(args.state_root, args.project_root))
     try:
         if not project_host_serving(args.state_root, args.project_root):
             _start_collector_quietly(args)
@@ -830,7 +831,7 @@ def _register_project(args, moved_aside, upgrade_required, progress):
         finally:
             _close_ledger(ledger)
         authorize_collector_runtime(
-            state, ORCHESTRATION_ROOT / "cli.py"
+            state, ORCHESTRATION_ROOT / "cli.py", project_root=args.project_root
         )
         progress["registered"] = True
     except BaseException:
@@ -4041,11 +4042,13 @@ def main() -> int:
             args.command, {"ready": False, "error": "filesystem operation failed"}
         ))
         return 2
-    except ProjectServiceOtherVersion:
+    except ProjectServiceOtherVersion as error:
         _print({
             "ready": False,
-            "error": "this project's service was started by another version and a child run is still active "
-                     "or unsettled; try again when none is running",
+            "error": compatibility_message(
+                error.args[0] if error.args else None, project_root=args.project_root,
+                orchestration_root=ORCHESTRATION_ROOT, state_name="project state",
+            ) + " A child run is still active or unsettled; try again when none is running.",
             "reason_code": "project_service_other_version",
         })
         return 2

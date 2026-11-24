@@ -14,6 +14,7 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
+from .reply_shapes import reply_fields_match
 from .contracts import ContractError
 from .learning_contracts import canonical_json, parse_bounded_json
 from .owner_key_contracts import checked_public_key
@@ -232,7 +233,7 @@ def account_request_digest(request: AccountRequest) -> str:
 
 
 def _checked_result(result: object, request: AccountRequest) -> dict:
-    if type(result) is not dict:
+    if not reply_fields_match(request.operation, result):
         raise AccountError("account_invalid_response")
     if request.operation == 'account.billing_probe':
         try:

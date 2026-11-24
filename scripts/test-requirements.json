@@ -1355,6 +1355,33 @@
   "source": "REQUIREMENTS-open-withdrawal.md#RS-B-5",
   "statement": "**RS-B-5 \u2014 Authenticated withdrawal of an unclaimed open.**\nThe project service and the opening host class may withdraw an unclaimed open with matching enrolled project,\ncaller scope, run id, inputs digest, attempt custody and current binding generation. Authentication precedes\nimmutable receipt replay; an exact replay remains available after the binding is pruned. Different callers receive\nno receipt. New transitions refuse claimed, fenced, withdrawn or stale bindings; missing generations are refused.\nWithdrawal evidence is retained for the tombstone's life. The project records its withdrawal duty before registration,\nmarks the complete request releasing before dropping memory, retries identical requests after lost replies, and\nwithdraws never-claimed cancellations, pre-preparation failures, idle registrations (one hour, owner decision 90.7)\nand stopped-service registrations. A registration refusal preserves the duty; a faulted writer gets one memory\nwithdrawal, otherwise account expiry. Armed leases belong to the fence path.\nSource: DESIGN-0.4.0-RS-B.md draft 3 \u00a74, \u00a77 and rows W1-W5 (W4a-e), M7; PLAN-0.4.0-supervisor-slices.md B3."
  },
+ "RS-B-B4m-1": {
+  "checks": [
+   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_missing_local_record_does_not_guess_a_clone",
+   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_old_client_newer_collector_names_command",
+   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_project_service_version_comes_from_local_hint_and_release_record",
+   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_registration_from_clone_keeps_the_project_in_the_command",
+   "codex:tests.test_b4m_compatibility.CompatibilityMessageTests.test_three_sites_share_the_command"
+  ],
+  "source": "docs/requirements/b4m.md#RS-B-B4m-1",
+  "statement": "**RS-B-B4m-1 \u2014 One local update command.** One function builds the exact terminal command\nfrom the local install record: change into the installing clone, then run `./setup.sh <project>`\nand choose Configure. All three compatibility refusal sites use it, name the version holding\nthe state, and use plain words. Collector replies never supply command paths or executable text."
+ },
+ "RS-B-B4m-2": {
+  "checks": [
+   "codex:tests.test_reply_shape_compatibility.ReplyShapeCompatibilityTests.test_added_and_removed_fields_are_refused_for_every_operation",
+   "codex:tests.test_reply_shape_compatibility.ReplyShapeCompatibilityTests.test_both_apis_apply_the_shape_guard_before_value_checks",
+   "codex:tests.test_reply_shape_compatibility.ReplyShapeCompatibilityTests.test_every_existing_reply_matches_previous_release_catalogue"
+  ],
+  "source": "docs/requirements/b4m.md#RS-B-B4m-2",
+  "statement": "**RS-B-B4m-2 \u2014 Preserve existing reply fields.** A newer collector/account never adds or removes\nfields of an existing account/history operation's reply. New data requires a new operation.\nThe guard compares every existing operation with the previous-release field catalogue, retaining\nthe optional field variants already allowed by that release."
+ },
+ "RS-B-B4m-3": {
+  "checks": [
+   "codex:tests.test_b4m_compatibility.CompatibilityDocsTests.test_old_installs_have_the_codes_and_terminal_command_in_docs"
+  ],
+  "source": "docs/requirements/b4m.md#RS-B-B4m-3",
+  "statement": "**RS-B-B4m-3 \u2014 Help already-installed clients.** Troubleshooting and release notes name\n`status_collector_unavailable` and `runtime_newer`, show the clone/project terminal command,\nand direct already-installed 0.3.x users to Configure."
+ },
  "RS-D-D2": {
   "checks": [
    "codex:tests.test_deadlines_retention.ClockFloorTests.test_D4_a_committed_row_is_selected_by_the_expire_pass_at_the_floor_when_the_wall_is_below_its_deadline",

@@ -1,0 +1,40 @@
+{
+  "base": "8d4a7ce3 (supplied worktree base; no production files changed)",
+  "command": "python3 -B -m unittest tests.test_b4m_compatibility tests.test_reply_shape_compatibility",
+  "tests": 8,
+  "seconds": 0.033,
+  "failures": 6,
+  "errors": 51,
+  "failure_examples": [
+    {
+      "test": "test_old_client_newer_collector_names_command (tests.test_b4m_compatibility.CompatibilityMessageTests.test_old_client_newer_collector_names_command)",
+      "reason": "AssertionError: '0.8.55' not found in 'a newer collector owns the shared learning state; update this project'"
+    },
+    {
+      "test": "test_three_sites_share_the_command (tests.test_b4m_compatibility.CompatibilityMessageTests.test_three_sites_share_the_command) (message='a newer collector owns the shared learning state; update this project')",
+      "reason": "AssertionError: 'cd \\'/private/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/tmp6h_cbg7i/clone \\'\"\\'\"\\'with spaces; $(false)\\' && ./setup.sh \\'/private/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/tmp6h_cbg7i/project \\'\"\\'\"\\'with spaces; $(false)\\'' not found in 'a newer collector owns the shared learning state; update this project'"
+    },
+    {
+      "test": "test_three_sites_share_the_command (tests.test_b4m_compatibility.CompatibilityMessageTests.test_three_sites_share_the_command) (message='a newer collector runtime is already authorized')",
+      "reason": "AssertionError: 'cd \\'/private/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/tmp6h_cbg7i/clone \\'\"\\'\"\\'with spaces; $(false)\\' && ./setup.sh \\'/private/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/tmp6h_cbg7i/project \\'\"\\'\"\\'with spaces; $(false)\\'' not found in 'a newer collector runtime is already authorized'"
+    },
+    {
+      "test": "test_three_sites_share_the_command (tests.test_b4m_compatibility.CompatibilityMessageTests.test_three_sites_share_the_command) (message=\"this project's service was started by another version and a child run is still active or unsettled; try again when none is running\")",
+      "reason": "AssertionError: 'cd \\'/private/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/tmp6h_cbg7i/clone \\'\"\\'\"\\'with spaces; $(false)\\' && ./setup.sh \\'/private/var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/tmp6h_cbg7i/project \\'\"\\'\"\\'with spaces; $(false)\\'' not found in \"this project's service was started by another version and a child run is still active or unsettled; try again when none is running\""
+    }
+  ],
+  "error_causes": [
+    "AttributeError: <module 'codex_agents.account_api'",
+    "AttributeError: <module 'codex_agents.history_api'",
+    "ModuleNotFoundError: No module named 'codex_agents.compatibility_message'",
+    "ModuleNotFoundError: No module named 'codex_agents.reply_shapes'"
+  ],
+  "additional_test_first": {
+    "test": "tests.test_b4m_compatibility.CompatibilityMessageTests.test_registration_from_clone_keeps_the_project_in_the_command",
+    "tests": 1,
+    "seconds": 0.003,
+    "errors": 1,
+    "reason": "TypeError: authorize_collector_runtime() got an unexpected keyword argument 'project_root'",
+    "phase": "after first green, before project-root plumbing implementation"
+  }
+}
