@@ -701,9 +701,12 @@ class LearningCliTests(unittest.TestCase):
             )["runtime_version"],
         )
         status = self._run("learning-status")
-        self.assertEqual(
-            1, status["ingestion"]["managed_lifecycle"]["orchestrations_active"]
-        )
+        # s2fix round 2 (L14.1): the orchestrations are the project service's; with none running the count is
+        # unknown, never this ledger's older table (assertions.md).
+        managed = status["ingestion"]["managed_lifecycle"]
+        self.assertEqual((None, None, None), tuple(managed["orchestrations_" + name]
+                                                   for name in ("active", "paused", "closed")))
+        self.assertIn("service", managed["orchestrations_unknown_reason"])
         self.assertEqual("active", orchestration["status"])
 
     def test_status_reports_unregistered_project_without_identifiers(self) -> None:

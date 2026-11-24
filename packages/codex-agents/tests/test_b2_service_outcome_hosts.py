@@ -283,3 +283,36 @@ class RecordCommandTests(HostFixture):
         before = self.counts()
         self.refused('recheck_result_mismatch', body={**json.loads(self.body), 'summary': 'another answer'})
         self.assertEqual(before, self.counts())
+
+
+class OrchestrationCountsAccessTests(HostFixture):
+    """s2fix round 3 (L14.1, decision 185): the counts are subject-scoped: the enrolled primary of this project, or the
+    owner, reads them; any other credential is refused with the uniform denial."""
+
+    def counts_call(self, **options):
+        service, token = self.serve(**options)
+        return self.ask(service, token, 'history.orchestration_counts', 'orchestrations', {})
+
+    def test_the_enrolled_primary_of_this_project_and_the_owner_read_the_counts(self):
+        for client in (CODEX, CLAUDE, OWNER_CLIENT):
+            with self.subTest(client=client):
+                reply = self.counts_call(host_client=client)
+                self.assertEqual({'active', 'paused', 'closed'}, set(reply))
+
+    def test_another_projects_credential_and_an_unenrolled_caller_are_refused_uniformly(self):
+        reasons = {}
+        for name, options in {'unenrolled (another project holds no credential here)': dict(enrolled=False)}.items():
+            reasons[name] = self.refusal(lambda: self.counts_call(**options))
+        service, token = self.serve()
+        reasons['request naming another project'] = self.refusal(lambda: decode_history_response(
+            service.handle(encode_history_request(HistoryRequest(
+                1, 'history.orchestration_counts', 'orchestrations', 'prj_' + '9' * 32, self.binding.runtime_digest, {})),
+                token), HistoryRequest(1, 'history.orchestration_counts', 'orchestrations', 'prj_' + '9' * 32,
+                                       self.binding.runtime_digest, {})))
+        self.assertEqual({'history_not_authorized'}, set(reasons.values()), reasons)
+
+    def test_learning_status_asks_with_its_real_credential_not_the_owner_label(self):
+        import re
+        source = (Path(__file__).resolve().parents[1] / 'native-package/.codex/orchestration/cli.py').read_text()
+        call = re.search(r'orchestration_counts_client\(args\.state_root, args\.project_root, host_client=([^)]*)\)', source)
+        self.assertEqual('label', call.group(1).strip())

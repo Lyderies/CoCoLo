@@ -144,6 +144,15 @@ class RefusalStepTests(unittest.TestCase):
         self.assertIn('learning-run-status', run)
         self.assertLess(run.index('learning-run-status'), run.index('abandoned'))  # check before classifying
 
+    @__import__('test_framework').requirements('L8.3', why_not_scenario='One fixed text; the lifecycle check L8.3 drives the close itself.')
+    def test_L8_3_an_unfinished_orchestration_close_names_the_runs_status_not_a_service_restart(self):
+        """T7 S2 finding 1: a close refused while a run is unfinished says to check the runs and wait (a lost run is
+        settled by the next service), never to restart the service, which changes nothing."""
+        step = refusal_steps.next_step('history_orchestration_pending')
+        self.assertIn('learning-run-status', step)
+        self.assertIn('learning-close-orchestration', step)
+        self.assertNotIn('restart', step)
+
     def test_an_unknown_code_gets_the_default(self):
         self.assertEqual(refusal_steps.DEFAULT, refusal_steps.next_step('something_new'))
         self.assertEqual(refusal_steps.DEFAULT, refusal_steps.next_step(None))

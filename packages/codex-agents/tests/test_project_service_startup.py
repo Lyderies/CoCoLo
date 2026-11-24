@@ -15,7 +15,7 @@ import threading
 import time
 import unittest
 
-from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
+from tests.support import ORCHESTRATION_ROOT, REPOSITORY_ROOT, TEMP_ROOT
 from tests.learning_support import generate_test_owner_key
 
 from codex_agents.client_runtime import read_runtime_hint, runtime_hint_path
@@ -24,6 +24,8 @@ from codex_agents.learning_store import CollectorServer, LearningLedger, Learnin
 from codex_agents.project_host_client import _host_alive, project_host_serving
 from codex_agents.project_service import history_directory, serve_project, supervisor_scope
 from codex_agents.service_enrollment import capability_path
+
+sys.path.insert(0, str(REPOSITORY_ROOT.parents[1] / 'scripts'))  # test_framework (requirement tags)
 
 
 class ProjectServiceStartupTests(unittest.TestCase):
@@ -285,6 +287,148 @@ class ProjectServiceStartupTests(unittest.TestCase):
         self.assertFalse(again.is_alive(), 'the next service did not start and idle out')
         self.assertEqual({'ready': True, 'stopped': True}, reports[-1])
         self.assertIn(False, settled, "the next service swept the stopped instance's runs")
+
+    @__import__('test_framework').requirements('L15.1', why_not_scenario='Real host processes and the unmodified CLI; '
+                                               'the lifecycle check L15.1 also counts the ledger rows table by table.')
+    def test_L15_1_deleting_a_project_stops_its_service_and_leaves_the_other_running(self):
+        """T7 S2 finding 3: learning-delete-project removes the project's records AND its service (bounded wait);
+        another project's service keeps running."""
+        other = self.base / 'other'
+        (other / '.git').mkdir(parents=True)
+        other_id = self.ledger.register_project(other)
+        self.assertTrue(self.cli('learning-start-project-service')['serving'])
+        (kept,) = self.hosts()
+        self.assertTrue(self.cli('learning-start-project-service', project=other)['serving'])
+        (doomed,) = set(self.hosts()) - {kept}
+        # In this process, as the project-driver tests do. The collector here is this test's own in-process one: it
+        # is stopped (as the deletion's maintenance stops a real one) and the pause itself is a stand-in.
+        self.collector.stop()
+        self.ledger.close()
+        import contextlib
+        import io
+        from unittest import mock
+        from tests.test_bridge import cli as cli_module
+        out = io.StringIO()
+        argv = ['cli.py', 'learning-delete-project', '--state-root', str(self.state.root), '--project-root', str(other),
+                '--confirm-project-id', other_id]
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(cli_module.CollectorMaintenance, 'acquire',
+                                                                     return_value=mock.Mock()), \
+                contextlib.redirect_stdout(out):
+            code = cli_module.main()
+        deleted = json.loads(out.getvalue())
+        self.assertEqual(0, code, deleted)
+        self.assertEqual((True, other_id, 'stopped'), (deleted['ready'], deleted['project_id'], deleted['project_service']))
+        end = time.monotonic() + 15
+        while doomed in self.hosts():
+            self.assertLess(time.monotonic(), end, "the deleted project's service kept running")
+            time.sleep(.05)
+        self.assertEqual([kept], self.hosts())
+        self.assertFalse(project_host_serving(self.paths.root, other))
+        self.assertTrue(project_host_serving(self.paths.root, self.project))
+
+
+    def second_project(self):
+        other = self.base / 'other'
+        (other / '.git').mkdir(parents=True)
+        other_id = self.ledger.register_project(other)
+        self.assertTrue(self.cli('learning-start-project-service', project=other)['serving'])
+        return other, other_id
+
+    def delete_in_process(self, project, project_id):
+        """learning-delete-project in this process (as the L15.1 test above): the collector here is this test's own."""
+        self.collector.stop()
+        self.ledger.close()
+        import contextlib
+        import io
+        from unittest import mock
+        from tests.test_bridge import cli as cli_module
+        out = io.StringIO()
+        argv = ['cli.py', 'learning-delete-project', '--state-root', str(self.state.root), '--project-root', str(project),
+                '--confirm-project-id', project_id]
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(cli_module.CollectorMaintenance, 'acquire',
+                                                                     return_value=mock.Mock()), \
+                contextlib.redirect_stdout(out):
+            code = cli_module.main()
+        return code, json.loads(out.getvalue())
+
+    @__import__('test_framework').requirements('L15.1', why_not_scenario='Real host processes; the lifecycle check '
+                                               'L15.1 drives the unmodified CLI.')
+    def test_L15_1_a_new_registration_at_the_same_root_keeps_its_service(self):
+        """s2fix round 2: the withdrawal compares the hint's project id with the deleted project's id."""
+        from codex_agents.project_host_client import stop_project_host
+        other, _ = self.second_project()
+        (host,) = self.hosts()
+        hint = runtime_hint_path(self.paths, other)
+        self.assertEqual('not_running', stop_project_host(self.state.root, other, project_id='prj_' + 'f' * 32))
+        self.assertTrue(hint.exists())
+        self.assertEqual([host], self.hosts())
+        self.assertTrue(project_host_serving(self.paths.root, other))
+
+    @__import__('test_framework').requirements('L15.1', why_not_scenario='Real host processes; the lifecycle check '
+                                               'L15.1 drives the unmodified CLI.')
+    def test_L15_1_hint_lock_contention_is_unknown_never_not_running(self):
+        import fcntl
+        from unittest import mock
+        from codex_agents import project_host_client
+        from codex_agents.project_host_client import stop_project_host
+        other, other_id = self.second_project()
+        scope, _, endpoint = read_runtime_hint(self.paths, other)
+        with open(endpoint.parent / project_host_client.HINT_LOCK, 'a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            with mock.patch.object(project_host_client, 'HINT_READ_WAIT_SECONDS', 0.05):
+                self.assertEqual('unknown', stop_project_host(self.state.root, other, project_id=other_id))
+        self.assertEqual(1, len(self.hosts()))
+
+    @__import__('test_framework').requirements('L15.1', why_not_scenario='Real host processes; the lifecycle check '
+                                               'L15.1 drives the unmodified CLI.')
+    def test_L15_1_a_wedged_host_makes_the_deletion_not_ready_with_a_plain_reason(self):
+        from unittest import mock
+        from codex_agents import project_host_client
+        other, other_id = self.second_project()
+        (host,) = self.hosts()
+        os.kill(host, signal.SIGSTOP)  # wedged: it cannot notice its withdrawn hint
+        self.addCleanup(lambda: os.kill(host, signal.SIGCONT))
+        with mock.patch.object(project_host_client, 'STOP_TIMEOUT_SECONDS', 0.5):
+            code, deleted = self.delete_in_process(other, other_id)
+        self.assertEqual('still_running', deleted['project_service'])
+        self.assertIs(False, deleted['ready'])
+        self.assertIn('service', deleted['reason'])
+        self.assertNotIn('prj_', deleted['reason'])
+
+    @__import__('test_framework').requirements('L15.1', why_not_scenario='Real host processes; the lifecycle check '
+                                               'L15.1 drives the unmodified CLI.')
+    def test_L15_1_deletion_removes_the_projects_history_store(self):
+        other, other_id = self.second_project()
+        store = history_directory(self.paths, other_id)
+        self.assertTrue((store / 'history.sqlite3').exists())
+        code, deleted = self.delete_in_process(other, other_id)
+        self.assertEqual((0, True, 'stopped'), (code, deleted['ready'], deleted['project_service']))
+        self.assertFalse((store / 'history.sqlite3').exists())
+        self.assertEqual([], [path.name for path in store.glob('history.sqlite3*')] if store.exists() else [])
+
+    @__import__('test_framework').requirements('L15.1', why_not_scenario='Real host processes; the lifecycle check '
+                                               'L15.1 drives the unmodified CLI.')
+    def test_L15_1_a_busy_history_writer_leaves_a_pending_cleanup_that_a_later_deletion_finishes(self):
+        """s2fix round 3 (decision 185.4): the root binding is cleared by the first deletion, yet the retry works."""
+        import fcntl
+        store = history_directory(self.paths, self.project_id)
+        store.mkdir(parents=True, mode=0o700)
+        (store / 'history.sqlite3').write_bytes(b'x')
+        busy = os.open(store / 'history.lock', os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(busy, fcntl.LOCK_EX)
+        try:
+            code, first = self.delete_in_process(self.project, self.project_id)
+            self.assertIs(False, first['ready'])
+            self.assertTrue((store / 'history.sqlite3').exists())
+            self.assertIn('pending', first['reason'])
+        finally:
+            fcntl.flock(busy, fcntl.LOCK_UN)
+            os.close(busy)
+        code, second = self.delete_in_process(self.project, self.project_id)
+        self.assertEqual((0, True), (code, second['ready']), second)
+        self.assertFalse((store / 'history.sqlite3').exists())
+        from codex_agents.project_service import pending_cleanups
+        self.assertEqual([], pending_cleanups(self.paths))
 
 
 if __name__ == '__main__':

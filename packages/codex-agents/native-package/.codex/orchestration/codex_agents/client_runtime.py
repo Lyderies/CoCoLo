@@ -1061,6 +1061,19 @@ def capacity_report_client(state_root, project_root, *, host_client):
         return None  # A diagnostic: it never stops learning-status (review 034-security).
 
 
+def orchestration_counts_client(state_root, project_root, *, host_client):
+    """This project's orchestrations by state from its service's store (T7 S2, L14.1), or None when its service is
+    not running or does not answer; a diagnostic for learning-status, never a refusal of it."""
+    try:
+        state = CollectorPaths(state_root)
+        scope, _, endpoint = read_runtime_hint(state, project_root)
+        history = HistoryClient(endpoint, scope.project_id, scope.runtime_digest, timeout=2)
+        enroll_clients(state, project_root, scope, (endpoint,), host_client=host_client)
+        return history.orchestration_counts()
+    except Exception:
+        return None
+
+
 def orchestration_report_client(state_root, project_root, orchestration_id, *, host_client):
     """The statistics of an orchestration this project's service ran, or None if it holds none by that name."""
     try:

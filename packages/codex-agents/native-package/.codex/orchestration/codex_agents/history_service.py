@@ -406,6 +406,10 @@ class HistoryService:
                 from .project_holds_report import holds_report
                 self._history()
                 result = holds_report(self._store, runtime_digest=self._runtime)
+            elif request.operation == 'history.orchestration_counts':
+                from .project_orchestration_report import orchestration_counts
+                self._history()
+                result = orchestration_counts(self._store)
             elif request.operation == 'history.capacity_report':
                 from .project_capacity_report import capacity_report
                 self._history()

@@ -42,6 +42,8 @@ HISTORY_OPERATIONS = frozenset({
     "history.learning_cycle", "history.learning_report", "history.routing_evidence",
     "history.learning_feedback", "history.learning_review_case", "history.orchestration_report",
     "history.capacity_report", "history.holds_report",
+    # T7 S2 (L14.1): this project's orchestrations by state, for learning-status (the store holds them, not the ledger).
+    "history.orchestration_counts",
     # D1: a published attempt's terminal reference, found in the store from its run handle, attempt and inputs.
     "history.result_reference",
 })
@@ -129,6 +131,9 @@ def _validate_request(request: HistoryRequest) -> None:
             raise HistoryError('history_invalid_request')
     elif operation == 'history.capacity_report':
         if not _closed(payload, set()) or request.request_id != 'capacity':
+            raise HistoryError('history_invalid_request')
+    elif operation == 'history.orchestration_counts':
+        if not _closed(payload, set()) or request.request_id != 'orchestrations':
             raise HistoryError('history_invalid_request')
     elif operation == 'history.orchestration_report':
         if (not _closed(payload, {'orchestration_id'}) or type(payload['orchestration_id']) is not str
@@ -336,6 +341,10 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
     elif operation == 'history.holds_report':
         from .holds_report_contracts import checked_holds_report
         checked_holds_report(result)
+    elif operation == 'history.orchestration_counts':
+        if not _closed(result, {'active', 'paused', 'closed'}) or any(
+                not valid_integer(result[name], maximum=1 << 32) for name in ('active', 'paused', 'closed')):
+            raise HistoryError('history_invalid_response')
     elif operation == 'history.capacity_report':
         from .project_capacity_report import CAPACITY_NAMES
         # O0c M1, M3: a host's service also names the run slots it can no longer free.
@@ -626,6 +635,10 @@ class HistoryClient:
     def capacity_report(self) -> dict:
         """Each limit of this project's store with its live count (0.3.4 R9)."""
         return self._call('history.capacity_report', 'capacity', {})
+
+    def orchestration_counts(self) -> dict:
+        """This project's orchestrations by state: active, paused and closed (T7 S2, L14.1)."""
+        return self._call('history.orchestration_counts', 'orchestrations', {})
 
     def orchestration_report(self, orchestration_id: str) -> dict:
         """Content-free statistics for one orchestration this project's service ran."""
