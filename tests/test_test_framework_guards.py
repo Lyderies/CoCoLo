@@ -272,6 +272,21 @@ class ReaperTests(unittest.TestCase):
         pid = 424243
         def poll(self):
             return None
+        def wait(self, timeout=None):
+            raise subprocess.TimeoutExpired('worker', timeout)
+
+    class Exiting:
+        """Still exiting when EPERM arrives (poll() is None), finished a moment later (0.8.59 full run 4, C13)."""
+        pid = 424244
+        def poll(self):
+            return None
+        def wait(self, timeout=None):
+            return 0
+
+    def test_reap_waits_for_a_worker_still_exiting_when_eperm_arrives(self):
+        from unittest import mock
+        with mock.patch.object(parallel_tests.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')):
+            parallel_tests.reap_worker_group(self.Exiting())  # must not raise
 
     def test_reap_treats_eperm_on_an_exited_group_as_gone(self):
         from unittest import mock

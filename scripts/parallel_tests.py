@@ -314,15 +314,19 @@ def _group_gone(process, sig):
     """Signal the worker's group; True when no member is left to signal.
 
     macOS answers EPERM (not ESRCH) for a group whose members have all exited but are not
-    yet reaped. Every member is ours, so EPERM after the leader exited means the group is gone;
-    EPERM for a live leader is a real error and is raised (decision 224)."""
+    yet reaped, or are still exiting. Every member is ours, so EPERM means the group is going:
+    wait briefly for the leader; one still alive after that is a real error and is raised
+    (decision 224; full run 4 caught a leader still exiting)."""
     try:
         os.killpg(process.pid, sig)
     except ProcessLookupError:
         return True
     except PermissionError:
         if process.poll() is None:
-            raise
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                raise PermissionError(1, 'killpg refused for a live worker group') from None
         return True
     return False
 
