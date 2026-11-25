@@ -30,6 +30,13 @@ host_slots 10, lost_run_settlement 27). The pairs below are the only changed ass
   new host`; new: wait until five sweeps are collected (`through_sweeps(5)`), then the same assertions. Five seconds were
   five sweeps at the product cadence.
 - `crash_while_running` / that test: `count_sweeps()` is installed before the next host starts (new helper, no assertion).
+- `test_host_slots.HostReplacementTests` (`test_M3_...`, `test_M1_...`, `test_D1_...`): old: `thread.join(IDLE_SECONDS + 30)`
+  after the steps, i.e. sit through the host's real 4 s idle window (plus the loop's one-second check); new:
+  `until_idle(stuck, thread)` moves that host's clock `IDLE_SECONDS + 1` s ahead (`host._clock_ns`, the technique
+  `PreparationCleanupLifecycleTests` already uses) and then does the same `thread.join(IDLE_SECONDS + 30)`. Every assertion
+  stays: the host is still serving before the move (`assertTrue(thread.is_alive())` in M1), is gone after it
+  (`assertFalse(thread.is_alive(), ...)`), its slot is settled, and a fresh host is started by the production path. The
+  product's stop rule (`idle_ns() >= idle_stop_ns`, checked by the production loop) is what ends the host.
 
 ## Changed fixture behaviour (old -> new)
 
