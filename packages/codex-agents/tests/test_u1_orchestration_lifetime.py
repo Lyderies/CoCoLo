@@ -117,7 +117,7 @@ class OrchestrationLifetimeTests(unittest.TestCase):
             result = self.advance(current, identity='roll-' + str(number), cause='capacity', next_session='session-1')
             self.assertTrue(result['rolled_over'])
             old = result['previous']['snapshot']
-            self.assertEqual(('completed', 3), (old['status'], old['sequence']))
+            self.assertEqual(('rolled_over', 3), (old['status'], old['sequence']))
             self.assertEqual(3, report.orchestration_report(self.store, old['orchestration_id'])['checkpoint_count'])
             self.assertTrue(self.advance(current, identity='roll-' + str(number), cause='capacity',
                                          next_session='session-1')['known'])
@@ -135,6 +135,7 @@ class OrchestrationLifetimeTests(unittest.TestCase):
         self.assertEqual(state, self.packet(first)['resume_state'])
         result = self.advance(first)
         second = result['current']['snapshot']
+        self.assertEqual('paused', second['status'])
         handoff = result['handoff']
         self.assertEqual((first['orchestration_handle'], second['orchestration_handle']),
                          (handoff['previous_handle'], handoff['next_handle']))
@@ -145,7 +146,7 @@ class OrchestrationLifetimeTests(unittest.TestCase):
         packet = self.packet(second)
         self.assertEqual(state, packet['resume_state'])
         self.assertEqual(handoff, packet['handoff'])
-        self.assertEqual('completed', report.orchestration_report(self.store, first['orchestration_id'])['status'])
+        self.assertEqual('rolled_over', report.orchestration_report(self.store, first['orchestration_id'])['status'])
         with mock.patch.object(self.store, '_result_now', side_effect=AssertionError('replay read clock')):
             replay = self.advance(first)
         self.assertTrue(replay['known'])
@@ -371,3 +372,135 @@ original(OrchestrationOwner(store),req,client_version='codex-host-v1',before_com
                 snapshot['ended_at_ms'] = snapshot['observed_at_ms']
             with self.subTest(mutation=mutation), self.assertRaisesRegex(HistoryError, 'history_invalid_response'):
                 decode_orchestration_response(json.dumps(altered).encode(), request)
+
+    @requirements('O0C-U1-2', 'O0C-U1-4', 'O0C-U1-5')
+    def test_paused_session_and_capacity_handoff_wait_for_owner_resume(self):
+        from dataclasses import replace
+        from types import SimpleNamespace
+        for cause in ('session', 'capacity'):
+            with self.subTest(cause=cause):
+                # Open + checkpoint + pause consumes all ordinary event slots.
+                self.store._orchestration_limits = OrchestrationLimits(1, 4)
+                first = self.call('open', identity='open-' + cause)['current']['snapshot']
+                state = {'pause_reason': 'owner reviewing results', 'inflight': []}
+                first = self.call('checkpoint', self.target(first, goal_tokens_used=50,
+                    goal_time_used_seconds=2, resume_state=state), 'state-' + cause)['current']['snapshot']
+                first = self.call('pause', self.target(first), 'pause-' + cause)['current']['snapshot']
+                result = self.advance(first, identity='handoff-' + cause, cause=cause,
+                                      next_session='session-2' if cause == 'session' else 'session-1')
+                second = result['current']['snapshot']
+                self.assertEqual('paused', second['status'])
+                self.assertEqual(first['scope'], second['scope'])
+                # Reopen simulates a new provider session, without any file or instruction.
+                self.service.close()
+                self.store = self.open_history()
+                self.service = self.make_service()
+                self.assertEqual(state, self.packet(second)['resume_state'])
+                binding = SimpleNamespace(**second['scope'], orchestration_handle=second['orchestration_handle'])
+                with self.assertRaisesRegex(HistoryError, 'history_orchestration_state'):
+                    self.store._orchestration_owner().active_for(binding)
+                with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
+                    self.call('resume', self.target(second), 'foreign-' + cause,
+                              scope=replace(self.scope, primary_session_id='foreign'))
+                self.assertEqual('paused', self.packet(second)['current']['snapshot']['status'])
+                resumed = self.call('resume', self.target(second), 'resume-' + cause)['current']['snapshot']
+                self.assertEqual('active', resumed['status'])
+                self.store._orchestration_owner().active_for(binding)
+                replay = self.advance(first, identity='handoff-' + cause, cause=cause,
+                                      next_session='session-2' if cause == 'session' else 'session-1')
+                self.assertTrue(replay['known'])
+                self.assertEqual('paused', replay['receipt']['snapshot']['status'])
+                self.assertEqual('active', replay['current']['snapshot']['status'])
+                self.call('close', self.target(resumed, status='completed', goal_tokens_used=None,
+                                              goal_time_used_seconds=None), 'end-' + cause)
+
+    @requirements('O0C-U1-2', 'O0C-U1-4', 'O0C-U1-5')
+    def test_goal_usage_totals_continue_across_repeated_rollover_and_restart(self):
+        current = self.opened()
+        unknown = self.advance(current, identity='unknown')
+        current = unknown['current']['snapshot']
+        self.assertIsNone(current['goal_tokens_used'])
+        self.assertIsNone(current['goal_time_used_seconds'])
+        for number in range(1, 4):
+            tokens, seconds = number * 200000, number * 20
+            current = self.call('checkpoint', self.target(current, goal_tokens_used=tokens,
+                goal_time_used_seconds=seconds), 'usage-' + str(number))['current']['snapshot']
+            result = self.advance(current, identity='accounting-' + str(number))
+            current = result['current']['snapshot']
+            self.assertEqual((tokens, seconds), (current['goal_tokens_used'], current['goal_time_used_seconds']))
+            for snapshot in (result['previous']['snapshot'], current):
+                usage = report.orchestration_report(self.store, snapshot['orchestration_id'])['usage']
+                self.assertEqual((tokens, seconds), (usage['goal_total_tokens'], usage['goal_time_used_seconds']))
+            with self.assertRaisesRegex(HistoryError, 'history_orchestration_state'):
+                self.call('checkpoint', self.target(current, goal_tokens_used=tokens - 1,
+                          goal_time_used_seconds=seconds), 'reset-' + str(number))
+        self.service.close()
+        self.store = self.open_history()
+        self.service = self.make_service()
+        self.assertEqual(current, self.packet(current)['current']['snapshot'])
+
+    @requirements('O0C-U1-2', 'O0C-U1-5')
+    def test_rollover_report_distinguishes_continuation_and_keeps_all_rows(self):
+        first = self.opened()
+        self.register(first, 1)
+        self.register(first, 2)
+        self.store.record_run_failed_before_open('hrn_' + f'{2:048x}', 1, 'run_failed', now_ms=self.now)
+        self.open_row(first, 1)
+        first = self.call('checkpoint', self.target(first, goal_tokens_used=123,
+                          goal_time_used_seconds=7), 'usage')['current']['snapshot']
+        result = self.advance(first)
+        previous = report.orchestration_report(self.store, first['orchestration_id'])
+        self.assertEqual('rolled_over', result['previous']['snapshot']['status'])
+        self.assertEqual('rolled_over', previous['status'])
+        self.assertEqual(3, previous['checkpoint_count'])
+        self.assertEqual(3, len(previous['checkpoints']))
+        self.assertEqual((2, 1, 1), (previous['runs']['admitted'], previous['runs']['opened'],
+                                  previous['runs']['failed_before_open']))
+        self.assertEqual(123, previous['usage']['goal_total_tokens'])
+
+    @requirements('O0C-U1-3', 'O0C-U1-5')
+    def test_capacity_sql_work_is_flat_as_unrelated_host_opens_grow(self):
+        from codex_agents.orchestration_lifetime import _capacity_due
+        current = self.opened()
+        self.register(current, 1)
+        self.open_row(current, 1)  # overlap and one other open exercise both queries
+        self.open_row(current, 2)
+        unrelated = {**current, 'orchestration_handle': 'orc_' + 'f' * 48}
+        db = self.store._connection
+        def work():
+            steps = 0
+            def tick():
+                nonlocal steps
+                steps += 1
+                return 0
+            db.set_progress_handler(tick, 1)
+            try:
+                self.assertFalse(_capacity_due(self.store._orchestration_owner(), current))
+            finally:
+                db.set_progress_handler(None, 0)
+            return steps
+        before = work()
+        for number in range(10, 1010):
+            self.open_row(unrelated, number)
+        after = work()
+        self.assertLessEqual(after, before + 20, (before, after))
+
+    @requirements('O0C-U1-3', 'O0C-U1-5')
+    def test_host_open_index_is_additive_recreated_on_reopen_without_version_change(self):
+        db = self.store._connection
+        version = db.execute('PRAGMA user_version').fetchone()[0]
+        def index_names():
+            return {row[1] for row in self.store._connection.execute('PRAGMA index_list(project_host_opens)')}
+        self.assertIn('project_host_opens_orchestration', index_names())
+        db.execute('DROP INDEX project_host_opens_orchestration')
+        self.service.close()
+        self.store.close()  # No service call yet: the lazy service does not own this fixture store.
+        self.store = self.open_history()
+        self.service = self.make_service()
+        self.assertIn('project_host_opens_orchestration', index_names())
+        self.assertEqual(version, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.service.close()
+        self.store.close()
+        self.store = self.open_history()  # already indexed layout is also accepted
+        self.service = self.make_service()
+        self.assertEqual(version, self.store._connection.execute('PRAGMA user_version').fetchone()[0])

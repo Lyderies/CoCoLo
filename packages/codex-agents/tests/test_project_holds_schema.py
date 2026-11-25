@@ -237,6 +237,7 @@ class SchemaStepTests(unittest.TestCase):
                          'result_reservations_orchestration', 'result_leases_orchestration',
                          'project_execution_consumptions_orchestration'):
                 db.execute('DROP INDEX ' + name)  # schema21 (B6, decision 131): format 18 never had them
+            db.execute('DROP INDEX IF EXISTS project_host_opens_orchestration')  # U1 additive index
             db.execute('DROP TABLE runtime_takeover')  # RSF-S2: genuine pre-22 fixture
             db.execute('ALTER TABLE project_orchestrations DROP COLUMN state')  # schema21 (B6, decision 131)
             db.execute('PRAGMA user_version=18')

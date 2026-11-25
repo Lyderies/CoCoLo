@@ -104,6 +104,10 @@ class OrchestrationOwner:
         except HistoryError:
             raise HistoryError('history_incompatible') from None
         snapshot = view['snapshot']
+        if sequence == 1 and data.get('handoff', {}).get('next_handle') != handle:
+            if (snapshot['status'] != 'active' or snapshot['goal_tokens_used'] is not None
+                    or snapshot['goal_time_used_seconds'] is not None):
+                raise HistoryError('history_incompatible')
         if (snapshot['orchestration_handle'] != handle or snapshot['scope']['project_id'] != self._history.project_id
                 or snapshot['sequence'] != sequence
                 or snapshot['orchestration_id'] != external_id(self._key(), 'orc', handle)
@@ -553,7 +557,7 @@ class OrchestrationOwner:
 
     @_operation
     def apply(self, request, *, client_version, before_commit, _runtime_update=False, _unattended=False,
-              _in_transaction=False, _continuation=None, _handle=None):
+              _in_transaction=False, _continuation=None, _handle=None, _successor=None):
         if type(request) is not OrchestrationRequest or client_version not in HOST_CLIENT_VERSIONS or not callable(before_commit):
             raise HistoryError('history_invalid_input')
         request = decode_orchestration_request(encode_orchestration_request(request))
@@ -567,6 +571,10 @@ class OrchestrationOwner:
         scope_digest = self._scope_digest(scope)
         request_key = keyed_digest(self._key(), canonical_json({'scope_digest': scope_digest, 'request_id': request.request_id}))
         payload, operation = request.payload, request.operation
+        if _successor is not None and (operation != 'orchestration.open' or not _in_transaction
+                or _handle is None or _continuation is None
+                or _continuation.get('handoff', {}).get('next_handle') != _handle):
+            raise HistoryError('history_invalid_input')
         if operation == 'orchestration.status':
             current = self._current(scope, payload['orchestration_handle'])
             if current['snapshot']['client_version'] != client_version:
@@ -607,6 +615,11 @@ class OrchestrationOwner:
                             'orchestration_id': external_id(self._key(), 'orc', handle), 'client_version': client_version,
                             'status': 'active', 'sequence': 1, 'started_at_ms': now, 'observed_at_ms': now,
                             'ended_at_ms': None, 'goal_tokens_used': None, 'goal_time_used_seconds': None}
+                if _successor is not None:
+                    # Inherit before sealing the first checkpoint: a paused successor is never
+                    # published active, and goal accounting remains cumulative across the chain.
+                    for name in ('status', 'goal_tokens_used', 'goal_time_used_seconds'):
+                        snapshot[name] = _successor[name]
                 previous_digest = None
                 continuation = {}
             else:

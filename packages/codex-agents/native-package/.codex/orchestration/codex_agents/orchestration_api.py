@@ -20,7 +20,7 @@ MAX_ORCHESTRATION_CHECKPOINT_BYTES = 8192
 MAX_RESUME_STATE_BYTES = 2048
 ORCHESTRATION_OPERATIONS = frozenset('orchestration.' + name for name in (
     'open', 'pause', 'resume', 'checkpoint', 'close', 'status', 'rollover', 'packet'))
-ORCHESTRATION_TERMINAL_STATES = frozenset({'completed', 'failed', 'interrupted', 'cancelled'})
+ORCHESTRATION_TERMINAL_STATES = frozenset({'completed', 'failed', 'interrupted', 'cancelled', 'rolled_over'})
 ORCHESTRATION_STATES = ORCHESTRATION_TERMINAL_STATES | {'active', 'paused'}
 HOST_CLIENT_VERSIONS = frozenset({'codex-host-v1', 'claude-host-v1'})
 SCOPE_FIELDS = ('project_id', 'primary_session_id', 'runtime_digest', 'supervisor_instance_id', 'supervisor_generation')
@@ -190,9 +190,10 @@ def checked_orchestration_view(value):
             or (s['status'] in ORCHESTRATION_TERMINAL_STATES
                 and (not valid_integer(s['ended_at_ms']) or s['ended_at_ms'] != s['observed_at_ms']))
             or any(s[n] is not None and not valid_integer(s[n]) for n in ('goal_tokens_used', 'goal_time_used_seconds'))
-            # Only open commits sequence 1: active, unmeasured and observed at start.
-            or (s['sequence'] == 1 and (s['status'] != 'active' or s['observed_at_ms'] != s['started_at_ms']
-                                        or s['goal_tokens_used'] is not None or s['goal_time_used_seconds'] is not None))):
+            # A successor's first checkpoint may inherit pause and cumulative usage.
+            # Ordinary open receipts still require active, unmeasured state below.
+            or (s['sequence'] == 1 and (s['status'] not in {'active', 'paused'}
+                                        or s['observed_at_ms'] != s['started_at_ms']))):
         raise HistoryError('history_invalid_response')
     return value
 
@@ -206,11 +207,16 @@ _RECEIPT_STATUS = {'orchestration.open': {'active'}, 'orchestration.pause': {'pa
                    'orchestration.resume': {'active'}, 'orchestration.checkpoint': {'active', 'paused'}}
 
 
-def _check_receipt(request, receipt, current, known):
+def _check_receipt(request, receipt, current, known, *, successor=False):
     # The receipt is the original committed result; current is separately read
     # state. A known receipt is metadata only and never a new execution grant.
     committed, now, payload = receipt['snapshot'], current['snapshot'], request.payload
     expected = {payload['status']} if request.operation == 'orchestration.close' else _RECEIPT_STATUS[request.operation]
+    if request.operation == 'orchestration.open':
+        if successor:
+            expected = {'active', 'paused'}
+        elif any(committed[n] is not None for n in ('goal_tokens_used', 'goal_time_used_seconds')):
+            raise ValueError()
     sequence = 1 if request.operation == 'orchestration.open' else payload['expected_sequence'] + 1
     if committed['status'] not in expected or committed['sequence'] != sequence:
         raise ValueError()
@@ -313,10 +319,13 @@ def _check_lifetime_result(request, result):
         raise ValueError()
     closing = OrchestrationRequest(1, 'orchestration.close', request.request_id, request.scope, {
         'orchestration_handle': payload['orchestration_handle'], 'expected_sequence': payload['expected_sequence'],
-        'status': 'completed', 'goal_tokens_used': None, 'goal_time_used_seconds': None})
+        'status': 'rolled_over', 'goal_tokens_used': None, 'goal_time_used_seconds': None})
     _check_receipt(closing, previous, previous, False)
     opening = OrchestrationRequest(1, 'orchestration.open', request.request_id, request.scope, {})
-    _check_receipt(opening, receipt, current, result['known'])
+    _check_receipt(opening, receipt, current, result['known'], successor=True)
+    if any(receipt['snapshot'][n] != previous['snapshot'][n]
+           for n in ('goal_tokens_used', 'goal_time_used_seconds')):
+        raise ValueError()
 
 
 class OrchestrationClient:

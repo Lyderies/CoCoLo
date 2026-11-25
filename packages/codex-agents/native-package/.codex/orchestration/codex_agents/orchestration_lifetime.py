@@ -23,14 +23,14 @@ def _capacity_due(owner, snapshot):
     if registered >= min(project_history.MAX_REGISTERED_RUNS, report.MAX_RUNS):
         return True
     opens = owner._db.execute(
-        "SELECT COUNT(*) FROM project_host_opens WHERE project_id=? "
+        "SELECT COUNT(*) FROM project_host_opens INDEXED BY project_host_opens_orchestration WHERE project_id=? "
         "AND json_extract(CAST(binding AS TEXT),'$.orchestration_handle')=?", (project, handle)).fetchone()[0]
     if opens >= report.MAX_RUNS:
         return True
     mixed = owner._db.execute(
         "SELECT COUNT(*) FROM (SELECT run_id FROM project_registered_runs WHERE project_id=? "
         "AND orchestration_handle=? UNION SELECT json_extract(CAST(binding AS TEXT),'$.run_id') "
-        "FROM project_host_opens WHERE project_id=? "
+        "FROM project_host_opens INDEXED BY project_host_opens_orchestration WHERE project_id=? "
         "AND json_extract(CAST(binding AS TEXT),'$.orchestration_handle')=?)",
         (project, handle, project, handle)).fetchone()[0]
     return mixed >= report.MAX_RUNS
@@ -57,7 +57,7 @@ def lifetime_call(owner, request, *, client_version, before_commit):
         'scope': scope.as_data(), 'request_id': request.request_id}))
     close_request = OrchestrationRequest(1, 'orchestration.close', 'rollover-close:' + identity, scope, {
         'orchestration_handle': handle, 'expected_sequence': payload['expected_sequence'],
-        'status': 'completed', 'goal_tokens_used': None, 'goal_time_used_seconds': None})
+        'status': 'rolled_over', 'goal_tokens_used': None, 'goal_time_used_seconds': None})
     open_request = OrchestrationRequest(1, 'orchestration.open', 'rollover-open:' + identity, scope, {})
     close_key = keyed_digest(owner._key(), canonical_json({
         'scope_digest': owner._scope_digest(scope), 'request_id': close_request.request_id}))
@@ -103,6 +103,6 @@ def lifetime_call(owner, request, *, client_version, before_commit):
         from .project_orchestration_report import orchestration_report
         orchestration_report(owner._history, snapshot['orchestration_id'])
         opened = owner.apply(open_request, client_version=client_version, before_commit=lambda: None,
-                             _in_transaction=True, _continuation=extras, _handle=next_handle)
+                             _in_transaction=True, _continuation=extras, _handle=next_handle, _successor=snapshot)
         before_commit()
         return {'previous': previous, **opened, 'handoff': link, 'rolled_over': True, 'note': None}

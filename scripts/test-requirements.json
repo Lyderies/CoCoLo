@@ -3745,10 +3745,13 @@
   "checks": [
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_events_replay_and_reserved_close_roll_repeatedly_past_limit",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_exact_enrolled_runner_call_uses_one_exchange_and_reconciles_lost_reply",
+   "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_goal_usage_totals_continue_across_repeated_rollover_and_restart",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_handoff_links_packet_and_state_survive_restart_without_file",
+   "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_paused_session_and_capacity_handoff_wait_for_owner_resume",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_process_exit_between_close_and_open_rolls_back_then_replays",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_revocation_and_new_identity_cannot_fork_a_closed_predecessor",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_rollbacks_and_lost_reply_never_leave_zero_or_two_open",
+   "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_rollover_report_distinguishes_continuation_and_keeps_all_rows",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_runner_requires_durable_explicit_identity_before_enrollment",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_wire_rejects_changed_link_wrong_scope_and_false_rollover_receipt"
   ],
@@ -3757,8 +3760,10 @@
  },
  "O0C-U1-3": {
   "checks": [
+   "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_capacity_sql_work_is_flat_as_unrelated_host_opens_grow",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_events_replay_and_reserved_close_roll_repeatedly_past_limit",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_exact_enrolled_runner_call_uses_one_exchange_and_reconciles_lost_reply",
+   "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_host_open_index_is_additive_recreated_on_reopen_without_version_change",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_independent_registration_report_open_and_mixed_boundaries",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_overlap_does_not_double_charge_and_attempt_rows_do_count",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_pending_work_returns_only_internal_wait_and_retries_after_drain",
@@ -3771,7 +3776,9 @@
  },
  "O0C-U1-4": {
   "checks": [
+   "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_goal_usage_totals_continue_across_repeated_rollover_and_restart",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_handoff_links_packet_and_state_survive_restart_without_file",
+   "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_paused_session_and_capacity_handoff_wait_for_owner_resume",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_restart_without_handoff_generates_packet_and_rejects_corrupt_state",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_resume_state_exact_byte_limit_and_one_past_preserves_packet",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_wire_rejects_changed_link_wrong_scope_and_false_rollover_receipt"
@@ -3781,11 +3788,15 @@
  },
  "O0C-U1-5": {
   "checks": [
+   "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_capacity_sql_work_is_flat_as_unrelated_host_opens_grow",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_events_replay_and_reserved_close_roll_repeatedly_past_limit",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_exact_enrolled_runner_call_uses_one_exchange_and_reconciles_lost_reply",
+   "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_goal_usage_totals_continue_across_repeated_rollover_and_restart",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_handoff_links_packet_and_state_survive_restart_without_file",
+   "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_host_open_index_is_additive_recreated_on_reopen_without_version_change",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_independent_registration_report_open_and_mixed_boundaries",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_overlap_does_not_double_charge_and_attempt_rows_do_count",
+   "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_paused_session_and_capacity_handoff_wait_for_owner_resume",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_pending_work_returns_only_internal_wait_and_retries_after_drain",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_process_exit_between_close_and_open_rolls_back_then_replays",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_registration_boundary_rolls_at_real_512_and_continues_past_it",
@@ -3794,6 +3805,7 @@
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_resume_state_exact_byte_limit_and_one_past_preserves_packet",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_revocation_and_new_identity_cannot_fork_a_closed_predecessor",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_rollbacks_and_lost_reply_never_leave_zero_or_two_open",
+   "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_rollover_report_distinguishes_continuation_and_keeps_all_rows",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_runner_requires_durable_explicit_identity_before_enrollment",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_unchanged_capacity_reply_cannot_substitute_a_new_sequence_or_closed_state",
    "codex:tests.test_u1_orchestration_lifetime.OrchestrationLifetimeTests.test_wire_rejects_changed_link_wrong_scope_and_false_rollover_receipt"
