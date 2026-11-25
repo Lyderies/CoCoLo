@@ -129,6 +129,7 @@
  "codex:tests.test_dispatch_delivery_cli": "unit",
  "codex:tests.test_dispatch_preflight": "integration",
  "codex:tests.test_dispatch_wait": "unit",
+ "codex:tests.test_e1a_evidence": "integration",
  "codex:tests.test_e2a_launch_record": "integration",
  "codex:tests.test_e2a_wake_wire": "integration",
  "codex:tests.test_evaluation": "unit",

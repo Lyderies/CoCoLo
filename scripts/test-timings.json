@@ -901,6 +901,7 @@
  "codex:tests.test_dispatch_preflight.DispatchPreflightTests.test_reserved_worker_input_is_indicated_without_a_repository_path_or_body": 0.07,
  "codex:tests.test_dispatch_preflight.DispatchPreflightTests.test_unsupported_or_writable_preview_refuses_before_git": 0.04,
  "codex:tests.test_dispatch_wait": 0.11,
+ "codex:tests.test_e1a_evidence": 20.0,
  "codex:tests.test_evaluation": 0.05,
  "codex:tests.test_event_retention": 0.8,
  "codex:tests.test_event_shapes": 0.22,
