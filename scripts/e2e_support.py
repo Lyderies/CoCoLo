@@ -20,6 +20,7 @@ home, and the whole folder is removed at the end, after every process started in
 from __future__ import annotations
 
 import ast
+import atexit
 import contextlib
 import hashlib
 import json
@@ -36,6 +37,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
+import e2e_processes
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -52,6 +55,15 @@ BARE_UNAVAILABLE = ("run_unavailable", "account_unavailable", "probe_unavailable
 BOOT = '''\
 import os, sys, pwd, runpy, shutil
 HOME = %HOME%
+# Raw BOOT is also used by standalone fault-rewrite tests; a World's generated boot enables tracking.
+TRACK_WORLD = False
+# A removed helper must fail closed, rather than let a late host execute unregistered product code.
+if TRACK_WORLD:
+    import importlib.util as _util
+    _spec = _util.spec_from_file_location("_e2e_owned", HOME + "/.e2e-bin/e2e_processes.py")
+    _owned = _util.module_from_spec(_spec)
+    _spec.loader.exec_module(_owned)
+    _owned.install_tracking(__import__("pathlib").Path(HOME).parent)
 _account = pwd.getpwuid
 def getpwuid(uid):
     r = _account(uid)
@@ -121,6 +133,75 @@ CLIENT = '#!/bin/sh\nexec "%PYTHON%" "${0%/*}/fake_child.py" "${0%/*}" "${0##*/}
 
 # Every private value any World of this process has held, so the report can be scanned for them (G8).
 PRIVATE_VALUES: set[str] = set()
+_LIVE_WORLDS: dict[int, "World"] = {}
+_PREVIOUS_SIGNALS = {}
+_WORLD_POPEN = None
+
+
+def close_worlds():
+    failure = None
+    for world in list(_LIVE_WORLDS.values()):
+        try:
+            world.__exit__(None, None, None)
+        except Exception as error:
+            failure = failure or error
+    if failure is not None:
+        raise failure
+
+
+def _terminate_worlds(signum, frame):
+    # Unwind first: cleanup here could deadlock on a spawn lock held by the interrupted frame.
+    # Context/finally/atexit perform cleanup, with pipe EOF as the hard-death fallback.
+    previous = _PREVIOUS_SIGNALS.get(signum)
+    if callable(previous):
+        previous(signum, frame)
+    raise SystemExit(128 + signum)
+
+
+def _watch_world(world):
+    global _WORLD_POPEN
+    _LIVE_WORLDS[id(world)] = world
+    if _WORLD_POPEN is None:
+        original = subprocess.Popen
+        class WorldPopen(original):
+            def __init__(self, *args, **kwargs):
+                env = kwargs.get("env") or {}
+                owner = next((item for item in list(_LIVE_WORLDS.values())
+                              if getattr(item, "home", None) is not None
+                              and env.get("HOME") == str(item.home)), None)
+                if owner is None:
+                    super().__init__(*args, **kwargs)
+                else:
+                    with e2e_processes.locked(owner.base, shared=True):
+                        if (owner.base / ".e2e-closing").exists():
+                            raise RuntimeError("e2e World is closing")
+                        super().__init__(*args, **kwargs)
+                        try:
+                            self._e2e_record = e2e_processes._register(owner.base, self.pid)
+                            self._e2e_base = owner.base
+                        except BaseException:
+                            self.kill()
+                            self.wait()
+                            raise
+            def wait(self, *args, **kwargs):
+                result = super().wait(*args, **kwargs)
+                e2e_processes.forget(getattr(self, '_e2e_base', None), getattr(self, '_e2e_record', None))
+                return result
+
+            def poll(self):
+                result = super().poll()
+                if result is not None:
+                    e2e_processes.forget(getattr(self, '_e2e_base', None), getattr(self, '_e2e_record', None))
+                return result
+        _WORLD_POPEN = original
+        subprocess.Popen = WorldPopen
+    if threading.current_thread() is threading.main_thread() and not _PREVIOUS_SIGNALS:
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            _PREVIOUS_SIGNALS[signum] = signal.getsignal(signum)
+            signal.signal(signum, _terminate_worlds)
+
+
+atexit.register(close_worlds)
 
 
 # G1 and G8, judged as each output is captured, in every World of the process (a World is one scene's machine;
@@ -154,7 +235,7 @@ def capture_breaks(text: str, *, kind: str, private: dict, code: int, refuses: b
 def child_environment(environ) -> dict:
     """The environment a World's processes start from: never a harness variable (E2E_*), so no switch of the test
     runner (a fault selection, for one) reaches the product or a child it starts (T7 S1 fault isolation)."""
-    return {key: value for key, value in environ.items() if not key.startswith("E2E_")}
+    return {key: value for key, value in environ.items() if not key.startswith("E2E_") and key != "COCOLO_E2E_REGISTRY"}
 
 
 class HarnessError(Exception):
@@ -221,17 +302,36 @@ class World:
     known_passphrases: set = field(default_factory=set)  # every other passphrase a step typed (G8)
 
     def __enter__(self) -> "World":
+        _watch_world(self)
         try:
             self._build()
         except BaseException:
-            self.__exit__(None, None, None)
+            self.__exit__(*sys.exc_info())
             raise
         return self
 
     def __exit__(self, *exc) -> None:
-        self.stop_processes()
-        if getattr(self, "base", None) is not None:
-            shutil.rmtree(self.base, ignore_errors=True)
+        try:
+            self.stop_processes()
+            if getattr(self, "base", None) is not None:
+                with contextlib.suppress(FileNotFoundError):
+                    e2e_processes.remove_world(self.base)
+        finally:
+            active_error = sys.exc_info()[0] is not None or bool(exc and exc[0])
+            try:
+                guardian = getattr(self, "_guardian", None)
+                if guardian is not None:
+                    guardian.stdin.close()
+                    guardian.wait(timeout=8)
+            except Exception:
+                if not active_error:
+                    raise
+            finally:
+                _LIVE_WORLDS.pop(id(self), None)
+                if not _LIVE_WORLDS and threading.current_thread() is threading.main_thread():
+                    for signum, handler in _PREVIOUS_SIGNALS.items():
+                        signal.signal(signum, handler)
+                    _PREVIOUS_SIGNALS.clear()
 
     # Building ------------------------------------------------------------------------------------
 
@@ -241,6 +341,7 @@ class World:
         cache.mkdir(mode=0o700, exist_ok=True)
         self.base = Path(os.path.realpath(tempfile.mkdtemp(prefix="e2e-", dir=cache)))
         self.base.chmod(0o700)
+        self._start_cleanup()
         self.home = self.base / "h"  # short: a socket path may not pass 100 bytes (service_host.MAX_SOCKET_PATH_BYTES)
         self.home.mkdir()
         for folder in (".ssh", ".codex", ".local", ".local/bin", ".local/state", ".e2e-bin"):
@@ -257,10 +358,24 @@ class World:
         self.env = self._environment()
         self._fake_project()
 
+    def _start_cleanup(self) -> None:
+        if getattr(self, "_guardian", None) is not None:
+            return
+        e2e_processes.initialize(self.base)
+        helper = self.base / ".e2e-processes.py"
+        shutil.copyfile(Path(e2e_processes.__file__), helper)
+        self._guardian = (_WORLD_POPEN or subprocess.Popen)(
+            [sys.executable, "-I", "-B", "-S", str(helper), str(self.base)],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=child_environment(os.environ), start_new_session=True)
+
     def _stand_in_python(self) -> None:
+        self._start_cleanup()
         folder = self.home / ".e2e-bin"
+        shutil.copyfile(Path(e2e_processes.__file__), folder / "e2e_processes.py")
         shim = folder / "python3"
-        (folder / "boot.py").write_text(BOOT.replace("%HOME%", repr(str(self.home))).replace("%SHIM%", repr(str(shim))))
+        (folder / "boot.py").write_text(BOOT.replace("%HOME%", repr(str(self.home))).replace("%SHIM%", repr(str(shim)))
+                                       .replace("TRACK_WORLD = False", "TRACK_WORLD = True"))
         shim.write_text(SHIM.replace("%PYTHON%", self.python).replace("%BOOT%", str(folder / "boot.py")))
         shim.chmod(0o755)
         self.shim = shim
@@ -370,11 +485,13 @@ class World:
                 os.chdir(cwd or ROOT)
                 os.execve(argv[0], argv, self.env)
             os._exit(127)
+        e2e_processes.register(self.base, pid)
         raw, mark, timed_out, status = b"", 0, False, None
         typed = self.passphrase if passphrase is None else passphrase
         self.known_passphrases.add(typed)
         rules = (*((re.compile(pattern), reply) for pattern, reply in answers),
                  (re.compile(r"\[y/N\]\s*$"), "y"), (re.compile(r"[Pp]assphrase[^\n]*:\s*$"), typed))
+        completed = False
         try:
             while True:
                 ready, _, _ = select.select([descriptor], [], [], 0.25)
@@ -396,8 +513,9 @@ class World:
                 if time.monotonic() - started > timeout:
                     timed_out = True
                     break
+            completed = True
         finally:
-            if timed_out:
+            if timed_out or not completed:
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(pid, signal.SIGKILL)
             with contextlib.suppress(OSError):
@@ -740,24 +858,10 @@ class World:
     # Cleanup -------------------------------------------------------------------------------------
 
     def stop_processes(self) -> None:
-        """Stop every process started inside this scratch folder (the collector, project services)."""
+        """Drained collector stop, then bounded escalation of recorded World processes."""
         base = getattr(self, "base", None)
-        if base is None:
-            return
-        for _ in range(3):
-            listing = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True,
-                                     env=child_environment(os.environ)).stdout
-            pids = [int(line.split(None, 1)[0]) for line in listing.splitlines()
-                    if str(base) in line and int(line.split(None, 1)[0]) != os.getpid()]
-            if not pids:
-                return
-            for pid in pids:
-                with contextlib.suppress(OSError):
-                    os.kill(pid, signal.SIGTERM)
-            time.sleep(0.6)
-        for pid in pids:
-            with contextlib.suppress(OSError):
-                os.kill(pid, signal.SIGKILL)
+        if base is not None:
+            e2e_processes.cleanup(base, remove=False)
 
     # Private values (G8) -------------------------------------------------------------------------
 

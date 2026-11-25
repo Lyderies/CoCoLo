@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -89,7 +90,10 @@ def run_checks(flows: set[str], *, home_root: Path | None = None, keep_scenes: b
         finally:
             select_fault(None)
             if not keep_scenes:
-                close_scenes()
+                try:
+                    close_scenes()
+                finally:
+                    e2e_support.close_worlds()
     decided = {}
     for entry in results:
         for requirement in entry["requirements"] or [i["id"] for i in selected if entry["check"] in i["checks"]]:
@@ -147,21 +151,48 @@ def _execute_in_processes(wanted, jobs: int, *, fault: str | None = None) -> lis
         groups.setdefault(CHECK_GROUPS.get(name, name), []).append(name)
     queue = sorted(groups.items(), key=lambda item: -GROUP_SECONDS.get(item[0], GROUP_SECONDS["default"]))
     with tempfile.TemporaryDirectory(prefix="cocolo-e2e-jobs-") as folder:
+        owner = Path(folder) / "owner"
+        owner.mkdir()
+        e2e_support.e2e_processes.initialize(owner)
+        guardian = subprocess.Popen(
+            [sys.executable, "-I", "-B", "-S", str(Path(e2e_support.e2e_processes.__file__)), str(owner)],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=e2e_support.child_environment(os.environ), start_new_session=True)
+
+        def terminate(signum, frame):
+            # Pipe EOF wakes the guardian before ThreadPoolExecutor waits for its workers.
+            # Avoid acquiring cleanup locks in the interrupted frame.
+            guardian.stdin.close()
+            raise SystemExit(128 + signum)
+
+        previous = {sig: signal.signal(sig, terminate) for sig in (signal.SIGTERM, signal.SIGINT)}
         def run_group(item):
             _group, names = item
             out = Path(folder) / (re.sub(r"[^a-z0-9_]", "_", _group) + ".json")
-            # The fault, if any, is the worker's explicit argument (never an environment variable it inherits).
+            # The fault is explicit; the registry is harness metadata, stripped from product envs.
             done = subprocess.run([sys.executable, "-I", "-B", str(Path(__file__).resolve()),
                                    "--execute", ",".join(names), "--results", str(out),
+                                   "--owner-world", str(owner),
                                    *(["--fault", fault] if fault else [])],
-                                  stdin=subprocess.DEVNULL, env=e2e_support.child_environment(os.environ))
+                                  stdin=subprocess.DEVNULL,
+                                  env={**e2e_support.child_environment(os.environ),
+                                       "COCOLO_E2E_REGISTRY": str(owner / "worlds")})
             try:
                 entries = json.loads(out.read_text())
             except (OSError, ValueError):
                 entries = []
             return accept_worker(entries, names, done.returncode)
-        with ThreadPoolExecutor(max_workers=jobs) as pool:
-            gathered = [entry for entries in pool.map(run_group, queue) for entry in entries]
+        try:
+            with ThreadPoolExecutor(max_workers=jobs) as pool:
+                gathered = [entry for entries in pool.map(run_group, queue) for entry in entries]
+        finally:
+            try:
+                e2e_support.e2e_processes.cleanup(owner, remove=False)
+                guardian.stdin.close()
+                guardian.wait(timeout=8)
+            finally:
+                for sig, handler in previous.items():
+                    signal.signal(sig, handler)
     return sorted(gathered, key=lambda entry: entry["check"])
 
 
@@ -300,8 +331,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jobs", type=int, default=1, help="processes to run the scene groups in (default 1)")
     parser.add_argument("--fault", choices=FAULTS,
                         help="inject this test-only product fault into its slice's scenes (T7 S1 run control, S2 recovery, S3 learning and guard, S5 update safety)")
+    parser.add_argument("--owner-world", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.execute is not None:
+        if args.owner_world is not None:
+            e2e_support.e2e_processes.register(args.owner_world, os.getpid())
         return _worker(args.execute.split(","), args.results, fault=args.fault)
     known = set(requirements()["flows"])
     flows = known if args.all else {flow.strip() for flow in args.flows.split(",")}
@@ -326,7 +360,10 @@ def _worker(names: list[str], results: Path | None, *, fault: str | None = None)
         entries = _execute(names, None)
     finally:
         select_fault(None)
-        close_scenes()
+        try:
+            close_scenes()
+        finally:
+            e2e_support.close_worlds()
     text = json.dumps(entries)
     home_roots = [tempfile.gettempdir(), str(Path.home()), os.path.realpath(Path.home())]
     if private_values_in(text, home_roots, e2e_support.PRIVATE_VALUES):

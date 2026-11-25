@@ -349,6 +349,7 @@
  "root:test_e2e_core_api": "integration",
  "root:test_e2e_learning_guard": "integration",
  "root:test_e2e_update_history": "integration",
+ "root:test_e2e_process_cleanup": "integration",
  "root:test_e2e_recovery": "unit",
  "root:test_e2e_requirements": "e2e",
  "root:test_e2e_run_control": "integration",

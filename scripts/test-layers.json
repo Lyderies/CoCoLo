@@ -349,6 +349,7 @@
  "root:test_e2e_core_api": "scenario",
  "root:test_e2e_learning_guard": "scenario",
  "root:test_e2e_update_history": "scenario",
+ "root:test_e2e_process_cleanup": "scenario",
  "root:test_e2e_recovery": "unit",
  "root:test_e2e_requirements": "scenario",
  "root:test_e2e_run_control": "scenario",

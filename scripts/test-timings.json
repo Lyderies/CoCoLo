@@ -2823,6 +2823,7 @@
  "root:test_check_identifiers": 0.05,
  "root:test_ci_stages": 0.05,
  "root:test_e2e_core_api": 0.6,
+ "root:test_e2e_process_cleanup": 26.0,
  "root:test_e2e_requirements": 0.05,
  "root:test_e2e_strictness": 0.12,
  "root:test_install": 61.78,
