@@ -3,8 +3,8 @@
 
 Started detached by the checked CLI entry (`learning-serve` hands over to this
 file) with a fixed environment. The thread that opens the ledger owns the
-account services and runs their loop; the collector thread serves hooks. Both
-keep the ledger's existing lock discipline. Stops on SIGTERM, SIGINT or the
+account services and runs their loop; the collector thread serves hooks. Other
+threads hand whole ledger operations to its bounded owner queue. Stops on SIGTERM, SIGINT or the
 collector's own shutdown request.
 """
 
@@ -27,7 +27,12 @@ from codex_agents.collector_exit import read_exit, write_exit  # noqa: E402
 from codex_agents.collector_paths import CollectorPaths  # noqa: E402
 from codex_agents.collector_runtime import require_authorized_collector_runtime  # noqa: E402
 from codex_agents.history_contracts import HistoryError  # noqa: E402
-from codex_agents.learning_store import CollectorServer, LearningLedger, LearningState  # noqa: E402
+from codex_agents.ledger_owner import LedgerOwner  # noqa: E402
+from codex_agents.ledger_owner_queue import DEFAULT_LEDGER_QUEUE_LIMITS  # noqa: E402
+
+# At most the queue's whole retained capacity per loop pass, so the account step still runs every pass.
+OWNER_REQUESTS_PER_PASS = DEFAULT_LEDGER_QUEUE_LIMITS.requests
+from codex_agents.learning_store import CollectorServer, LearningLedger, LearningState, sole_owner_open  # noqa: E402
 from codex_agents.shutdown_watchdog import ShutdownWatchdog  # noqa: E402
 
 
@@ -63,14 +68,18 @@ def main(argv: list[str] | None = None) -> int:
     # S1-U9a: how long each start-up phase takes, reported by learning-status (milliseconds only).
     phase_start = time.monotonic()
     try:
-        ledger = LearningLedger(state)
+        # E1b-1 (review 040-e1bw-r1 MED-1): check_same_thread, so SQLite itself refuses every other thread's
+        # cursor, statement, close or backup on this connection, not only the Python-level guard.
+        with sole_owner_open():
+            ledger = LearningLedger(state)
+        owner = LedgerOwner(state, ledger=ledger)
     except BaseException:
         watchdog.done()  # Nothing to shut down; nothing may fire later (SD3-3).
         raise
     phases = {"ledger_open": int((time.monotonic() - phase_start) * 1000)}
     phase_start = time.monotonic()
     try:
-        server = CollectorServer(ledger)
+        server = CollectorServer(owner.client)
     except BaseException as error:
         # Owning the ledger already: say why it stops even here, close it, and raise as before (C10d).
         try:
@@ -79,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         except BaseException:
             pass
         finally:
-            ledger.close()
+            owner.close()
             watchdog.done()
         raise
     account = None
@@ -102,9 +111,15 @@ def main(argv: list[str] | None = None) -> int:
         phases["account"] = int((time.monotonic() - phase_start) * 1000)
         server.startup_phases = phases
         checked = restart_checked = time.monotonic()
-        while not server.wait(0.002 if account is not None else 0.5):
+        while True:
+            # MED-3 (review 040-e1bw-r1): wake as soon as a request is offered, then handle every ready
+            # request (bounded by the queue's own capacity) before the account step, not one per 2 ms tick.
+            owner.queue.wait_for_work(0.002)
+            if server.wait(0):
+                break
             if stopping["signal"]:
                 break  # O10 SD3-2: a stop signal whose exception was swallowed somewhere.
+            owner.pump_ready(OWNER_REQUESTS_PER_PASS)
             if account is not None:
                 account.serve_once()
             if time.monotonic() - checked >= 1:
@@ -122,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
                 last = account_restart.last_restart(state.root)
                 server.account_restart_last = last if type(last) is dict else None  # D5
                 # O0c M8-M10: and only once every child the account's lanes started is proven gone.
-                decision = account_restart.check(account.health_notes, ledger.machine_idle, last,
+                decision = account_restart.check(account.health_notes, owner.client.machine_idle, last,
                                                  now_ms=now_ms, mono_ns=mono_ns,
                                                  read_children=account.unended_children)
                 if decision["action"] == "restart" and not account_restart.record_restart(
@@ -170,6 +185,9 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
         stop_ms["server_stop"] = int((time.monotonic() - step_start) * 1000)
+        owner.queue.close()
+        if not owner.queue.drain(0):
+            raise RuntimeError("ledger requests remain during exit recording")
         watchdog.step("exit_record")
         try:
             # Best effort, and never in the way of closing the ledger or the exit code. Decided
@@ -190,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
             pass
         finally:
             watchdog.step("ledger_close")
-            ledger.close()
+            owner.close()
             watchdog.done()
     print(json.dumps({"ready": True, "stopped": True, "account_services": account is not None}, sort_keys=True))
     return 0

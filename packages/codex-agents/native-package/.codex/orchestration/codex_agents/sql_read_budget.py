@@ -165,6 +165,7 @@ class SQLReadConnection(FencedConnection):
         self._sql_foreign_progress = False
         self._sql_scope: _ReadScope | None = None
         self._sql_unusable = False
+        self._sql_sole_owner = False
         # The lock that keeps other threads off this connection (set by its owner).
         # A scope refuses every other thread's statement, so every scope holds it:
         # another thread's locked statement then waits instead of being refused.
@@ -180,9 +181,25 @@ class SQLReadConnection(FencedConnection):
         self._sql_owner_lock = lock
         self._sql_lock_waits = waits
 
+    def require_owner(self) -> None:
+        """Opt the collector's existing connection into sole-thread ownership."""
+        self._read_owner()
+        self._sql_sole_owner = True
+
     def _usable(self) -> None:
+        if self._sql_sole_owner and (self._sql_origin[0] != os.getpid()
+                                    or self._sql_origin[1] is not threading.current_thread()):
+            raise SQLReadError("sql_read_wrong_owner")
         if self._sql_unusable:
             raise SQLReadError("sql_read_unavailable")
+
+    def interrupt(self) -> None:
+        """SQLite lets any thread interrupt; a sole-owner connection refuses it from another thread too, as
+        check_same_thread refuses every other native use (review 040-e1bw-r1 MED-1)."""
+        if self._sql_sole_owner and (self._sql_origin[0] != os.getpid()
+                                    or self._sql_origin[1] is not threading.current_thread()):
+            raise SQLReadError("sql_read_wrong_owner")
+        super().interrupt()
 
     def _read_owner(self) -> None:
         if self._sql_origin[0] != os.getpid() or self._sql_origin[1] is not threading.current_thread():

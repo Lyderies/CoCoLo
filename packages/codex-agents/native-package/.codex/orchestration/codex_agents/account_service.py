@@ -882,6 +882,9 @@ class AccountService:
         return self._handle(raw, transport_context, deferred=True, ingress=_ingress)
 
     def drive_claims(self):
+        owner = getattr(self._views._ledger, "_owner", None)
+        if owner is not None and owner.owns_thread() and not owner._running:
+            return owner.call(self.drive_claims, caller="account_drive")
         if self._claim_jobs is None and self._observation_jobs is None:
             raise ClaimError("claim_unavailable")
         if self._claim_jobs is not None:
@@ -938,6 +941,9 @@ class AccountService:
     def take_claim_reply(self, ticket, *, _ingress=None):
         """Deferred publication has its own request deadline (M4b E1a revision 3)."""
         with ledger_waits.request():
+            owner = getattr(self._views._ledger, "_owner", None)
+            if owner is not None and owner.owns_thread() and not owner._running:
+                return owner.call(lambda: self._take_claim_reply(ticket, _ingress=_ingress), caller="account_publish")
             return self._take_claim_reply(ticket, _ingress=_ingress)
 
     def _take_claim_reply(self, ticket, *, _ingress=None):
@@ -1045,7 +1051,26 @@ class AccountService:
         """M4b E1a (revision 3): every ledger wait in one request shares one deadline, set here, where
         both handle() and begin() arrive, and restored on return."""
         with ledger_waits.request():
-            return self._handle_request(raw, transport_context, deferred=deferred, ingress=ingress)
+            owner = getattr(self._views._ledger, "_owner", None)
+            if owner is None or not owner.owns_thread():
+                return self._handle_request(raw, transport_context, deferred=deferred, ingress=ingress)
+            upgrade = self.runtime_upgrade_reply(raw)
+            if upgrade is not None:
+                return upgrade
+            try:
+                request = decode_account_request(raw)
+            except AccountError:
+                return self._handle_request(raw, transport_context, deferred=deferred, ingress=ingress)
+            try:
+                return owner.call(lambda: self._handle_request(
+                    raw, transport_context, deferred=deferred, ingress=ingress),
+                    project_id=request.project_id, caller="account")
+            except SQLReadError as error:
+                if error.reason_code != "sql_read_busy":
+                    raise
+                labels = {"request_id": request.request_id, "project_id": request.project_id,
+                          "runtime_digest": request.runtime_digest, "request_digest": account_request_digest(request)}
+                return self._reply(labels, reason=busy_reason(request.operation))
 
     def runtime_upgrade_reply(self, raw: bytes) -> bytes | None:
         """RSF-S1: bounded, side-effect-free gate, also safe on the socket front thread."""

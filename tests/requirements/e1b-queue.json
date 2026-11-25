@@ -3,7 +3,7 @@
  "requirements": [
   {
    "id": "E1b-3",
-   "statement": "The standalone ledger owner queue bounds queued and running custody through completion, including abandonment and expiry, schedules projects fairly, and immediately returns named, counted existing busy refusals on overflow. Queue size and project share are configurable provisional limits pending E0b-v2.",
+   "statement": "The standalone ledger owner queue bounds queued and running custody through completion, including abandonment and expiry, schedules projects fairly, and immediately returns named, counted existing busy refusals on overflow. Queue limits are configurable; decision 304 fixes measured defaults at 12 retained requests, 8 projects, 6 per project and an 800 ms wait.",
    "source": "tests/requirements/e1b-queue.json#E1b-3"
   },
   {

@@ -525,10 +525,13 @@
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_close_wakes_waiting_owner_and_timeout_is_bounded",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_refusal_caller_buckets_are_bounded_and_preserve_totals",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_documented_owner_binding_and_deadline_precedence",
-   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_overflow_refusal_counters_are_bounded_without_close"
+   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_overflow_refusal_counters_are_bounded_without_close",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_full_queue_returns_existing_account_busy_and_retry_succeeds",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_measured_queue_defaults",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerHostProcessTests.test_review_host_loop_drains_ready_requests_each_pass"
   ],
   "source": "tests/requirements/e1b-queue.json#E1b-3",
-  "statement": "The standalone ledger owner queue bounds queued and running custody through completion, including abandonment and expiry, schedules projects fairly, and immediately returns named, counted existing busy refusals on overflow. Queue size and project share are configurable provisional limits pending E0b-v2."
+  "statement": "The standalone ledger owner queue bounds queued and running custody through completion, including abandonment and expiry, schedules projects fairly, and immediately returns named, counted existing busy refusals on overflow. Queue limits are configurable; decision 304 fixes measured defaults at 12 retained requests, 8 projects, 6 per project and an 800 ms wait."
  },
  "E1b-4": {
   "checks": [
@@ -537,7 +540,16 @@
    "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_reply_collected_after_deadline_answers_busy",
    "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_running_timeout_keeps_custody_until_whole_completion",
    "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_wait_uses_remaining_deadline_and_counts_once",
-   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_documented_owner_binding_and_deadline_precedence"
+   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_documented_owner_binding_and_deadline_precedence",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerHostProcessTests.test_review_host_loop_drains_ready_requests_each_pass",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_a_display_read_failure_never_fails_a_committed_write",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_a_write_is_acknowledged_without_rereading_published_health",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_late_deferred_begin_keeps_its_ticket",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_late_deferred_claim_publication_is_delivered_not_lost",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_owner_key_report_fails_closed_when_the_owner_is_busy",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_owner_thread_request_that_runs_late_keeps_its_answer",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_full_queue_returns_existing_account_busy_and_retry_succeeds",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_measured_queue_defaults"
   ],
   "source": "tests/requirements/e1b-queue.json#E1b-4",
   "statement": "A caller waits only until the earlier of its absolute deadline and the configured maximum of 800 ms. Expired queued work is skipped; running work completes whole, retains custody until handled, and answers busy after its deadline."
@@ -547,7 +559,21 @@
   "source": "tests/requirements/e1b-queue.json#E1b-5",
   "checks": [
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_operation_error_is_plain_result_and_owner_serves_next_request",
-   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_base_exceptions_stay_on_owner_and_are_acknowledged"
+   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_base_exceptions_stay_on_owner_and_are_acknowledged",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_handler_refusal_preserves_answer_and_next_request_runs",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_sweep_failure_keeps_existing_containment_and_owner_serves_next",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_fatal_sql_error_reaches_owner",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_real_account_handler_keeps_failure_answer_and_processes_next_request",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_full_queue_returns_existing_account_busy_and_retry_succeeds",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_unregistered_project_keeps_its_unregistered_answer",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_project_not_yet_published_answers_in_full",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_idle_project_keeps_its_answer_shape",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_owner_thread_request_that_runs_late_keeps_its_answer",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_late_deferred_claim_publication_is_delivered_not_lost",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_late_deferred_begin_keeps_its_ticket",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_a_display_read_failure_never_fails_a_committed_write",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_owner_key_report_fails_closed_when_the_owner_is_busy",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_handed_back_errors_keep_their_attributes"
   ]
  },
  "E1b-6": {
@@ -557,7 +583,20 @@
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_close_idle_refuses_and_acknowledges_queued_work_idempotently",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_close_is_bounded_while_running_and_drains_after_whole_completion",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_close_wakes_waiting_owner_and_timeout_is_bounded",
-   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_drain_waiter_wakes_after_final_acknowledgement"
+   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_drain_waiter_wakes_after_final_acknowledgement",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_sql_trace_without_transport_covers_wakes_sweeps_restart_and_close",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_paused_owner_leaves_project_health_responsive",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_exit_is_recorded_after_final_handled_request",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_published_health_evicts_past_project_limit",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_unregistered_project_keeps_its_unregistered_answer",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_project_not_yet_published_answers_in_full",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_idle_project_keeps_its_answer_shape",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_published_health_ages_an_idle_project_at_read_time",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_published_health_counts_a_run_slot_that_passed_its_deadline_since_publication",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_a_write_is_acknowledged_without_rereading_published_health",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_a_display_read_failure_never_fails_a_committed_write",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_cold_project_answers_while_another_refresh_is_outstanding",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_outstanding_health_refreshes_are_bounded_and_end_when_handled"
   ]
  },
  "E1b-7": {
@@ -571,7 +610,12 @@
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_close_is_bounded_while_running_and_drains_after_whole_completion",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_operation_error_is_plain_result_and_owner_serves_next_request",
    "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_base_exceptions_stay_on_owner_and_are_acknowledged",
-   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_drain_waiter_wakes_after_final_acknowledgement"
+   "codex:tests.test_ledger_owner_queue_lifecycle.LedgerQueueLifecycleTests.test_drain_waiter_wakes_after_final_acknowledgement",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_all_sql_from_open_through_close_has_one_owner",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_sql_trace_without_transport_covers_wakes_sweeps_restart_and_close",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_transaction_rechecks_are_one_request_and_revocation_rolls_back",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_paused_owner_leaves_project_health_responsive",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_exit_is_recorded_after_final_handled_request"
   ],
   "source": "tests/requirements/e1b-queue.json#E1b-7",
   "statement": "Accepted requests provide a handled acknowledgement after owner execution or skipping, outcome publication and custody release. Unit tests coordinate on events and controlled clocks without sleeps or timed polling."
@@ -3733,5 +3777,37 @@
   ],
   "source": "tests/requirements/usage-recheck.json#UX-HCU-1",
   "statement": "### UX-HCU-1 - host_client_unknown says what to do (LOW)\n\nThe refusal `host_client_unknown` gets its own next step: run the command from the Claude Code or Codex session\nthat is the project's host (or name a host that is running there). It does not say to run learning-status.\n**Acceptance:** `refusal_steps.next_step('host_client_unknown')` names the host session and not learning-status."
+ },
+ "E1b-1": {
+  "statement": "One opening thread constructs the ledger and account views and executes every SQL statement through shutdown.",
+  "source": "tests/requirements/e1b-wiring.json#E1b-1",
+  "checks": [
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerHostProcessTests.test_review_production_connection_refuses_every_use_from_another_thread",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_all_sql_from_open_through_close_has_one_owner",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_sql_trace_without_transport_covers_wakes_sweeps_restart_and_close"
+  ]
+ },
+ "E1b-2": {
+  "statement": "Whole ledger operations including account transactions and their authority rechecks execute as one owner request.",
+  "source": "tests/requirements/e1b-wiring.json#E1b-2",
+  "checks": [
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_transaction_rechecks_are_one_request_and_revocation_rolls_back",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_preparation_does_not_occupy_owner_and_commit_rechecks_authority",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_signature_preparation_yields_owner_and_changed_generation_refuses_commit",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_real_account_handler_keeps_failure_answer_and_processes_next_request",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_real_original_open_rechecks_and_rolls_back_within_one_request",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_unregistered_project_keeps_its_unregistered_answer",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_project_not_yet_published_answers_in_full",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_idle_project_keeps_its_answer_shape"
+  ]
+ },
+ "E1b-8": {
+  "statement": "Preparation runs before owner requests where existing checks permit, and current authority is rechecked before commit.",
+  "source": "tests/requirements/e1b-wiring.json#E1b-8",
+  "checks": [
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_preparation_does_not_occupy_owner_and_commit_rechecks_authority",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_signature_preparation_yields_owner_and_changed_generation_refuses_commit",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_real_original_open_rechecks_and_rolls_back_within_one_request"
+  ]
  }
 }

@@ -147,8 +147,8 @@ class LedgerOwnerQueueTests(unittest.TestCase):
 
     @requirements("E1b-3")
     def test_limits_and_handle_owner_validation(self):
-        self.assertEqual(DEFAULT_LEDGER_QUEUE_LIMITS, LedgerQueueLimits(16, 8, 2, 800 * MS))
-        self.assertEqual(LedgerOwnerQueue().snapshot()["maximum"], 16)
+        self.assertEqual(DEFAULT_LEDGER_QUEUE_LIMITS, LedgerQueueLimits(12, 8, 6, 800 * MS))
+        self.assertEqual(LedgerOwnerQueue().snapshot()["maximum"], 12)
         for values in ((0, 1, 1, 1), (1, 0, 1, 1), (1, 1, 0, 1), (1, 1, 1, 0),
                        (True, 1, 1, 1), (1, 1, 1, True), (4097, 1, 1, 1),
                        (1, 257, 1, 1), (1, 1, 4097, 1), (1, 1, 1, 800 * MS + 1)):
