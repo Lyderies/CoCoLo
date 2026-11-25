@@ -218,7 +218,12 @@ def _capture(ledger, project_id, runtime_digest, caller_scope, request_id, reque
             original_key = keyed_digest(key, 'account-exhaustion-recovery\0'+original_key+'\0'+reference['receipt_digest'])
         except (KeyError, TypeError, ValueError):
             raise OpenError('open_conflict') from None
-    parameters = keyed_digest(key, b'account-original-open-parameters-v1\0'+canonical_json(original))
+    # Match open_inputs_digest and the project's proof: availability is a
+    # refreshed advisory audit, outside route identity. A project registration
+    # refusal leaves this account open retryable, with its original window.
+    # Keep full worker custody and every execution input bound to the request.
+    parameters = keyed_digest(key, b'account-original-open-parameters-v1\0'+canonical_json(
+        {**original, 'route': route_identity(original['route'])}))
     # The original opaque handle is recoverable without persisting a bearer token.
     handle = 'hrn_'+keyed_digest(key, b'account-original-open-handle-v1\0'+request_key.encode())[:48]
     execution = OpenExecution(*(assignment[n] for n in ('assignment_id', 'model', 'effort', 'role')),

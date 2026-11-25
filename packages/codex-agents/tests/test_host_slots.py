@@ -7,17 +7,24 @@ entries and monitor attempts. Each scenario reaches its failure exit through one
 only the product's own steps run. A service that stops is started again only by the production path
 (the next command's `ensure_project_host`), here in-process so the trusted fake clients still apply.
 """
+import contextlib
 import functools
 import json
+import sqlite3
 import subprocess
 import time
+import unittest
+from pathlib import Path
 from unittest import mock
 
+from test_framework import requirements
+
 from tests import service_harness
-from tests.test_bridge import cli, null_filled, result
+from tests.test_bridge import PARENT_GRANT, cli, null_filled, result
 from tests.test_project_driver import DriverHarness
 
-from codex_agents import codex_preparation, owned_execution, process_tree, project_service, result_persistence
+from codex_agents import (client_runtime, codex_preparation, owned_execution, process_tree, project_driver,
+                          project_service, result_persistence)
 from codex_agents.history_contracts import HistoryError
 from codex_agents.project_host_client import project_host_serving
 
@@ -183,6 +190,136 @@ class HostWarmUpStatusTests(HostSlotHarness):
         service = self.cli('learning-status')['project_service']
         self.assertEqual({'state', 'since_ms', 'failed_phase', 'last_failure_code'}, set(service['warm_up']))
         self.assertEqual((None, None), (service['warm_up']['failed_phase'], service['warm_up']['last_failure_code']))
+
+
+class DispatchSlotAdmissionTests(HostSlotHarness):
+    def setUp(self):
+        # Installed policy is fixed before the runtime binds its dispatch service.
+        patcher = mock.patch.object(project_driver, 'DISPATCH_SLOTS', 2)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+
+    def open_arguments(self, name):
+        task = self.write(name + '-task.json', self.task())
+        route = self.cli('learning-route', '--task', task)
+        context = ('--task', task, '--assignment', self.write(name + '-assignment.json', self.assignment_for(route)),
+                   '--parent-grant', self.write(name + '-grant.json', PARENT_GRANT))
+        route_path = self.write(name + '-route.json', route)
+        orchestration = self.cli('learning-open-orchestration')['orchestration_handle']
+        return context, route_path, orchestration
+
+    def open_with(self, arguments):
+        context, route, orchestration = arguments
+        return self.cli('learning-open-host-run', *context, '--route', route,
+                        '--orchestration-handle', orchestration)
+
+    @requirements('M11-1', 'M11-2', 'M11-3', why_not_scenario='Real CLI and service-loop lifecycle scenario.')
+    def test_M11_busy_exhaustion_refuses_then_drains_replaces_and_dispatches_the_retried_run(self):
+        self.succeed()
+        host = self.hosts[-1]
+        thread = [t for t in self.threads if t.name.startswith('test-project-host-')][-1]
+        driver = host._driver
+        self.assertEqual(2, driver._dispatch._maximum)
+        arguments = self.open_arguments('first')
+        opened = self.open_with(arguments)
+        self.assertTrue(opened['project_host_registered'])
+        first = (*arguments, opened['run_handle'])
+        code, first_result = self.dispatch(first)
+        self.assertEqual((0, 'result'), (code, first_result.get('bridge_report', {}).get('outcome')), first_result)
+
+        # The second slot holds a real running child when the third open arrives.
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'm11-busy-child'}, {'sleep': 30},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        arguments = self.open_arguments('second')
+        opened = self.open_with(arguments)
+        self.assertTrue(opened['project_host_registered'])
+        second = (*arguments, opened['run_handle'])
+        process = self.separate_dispatch(second[0], second[1], second[3])
+        self.wait_for_launches(2, [process], seconds=30)
+        target = ('--orchestration-handle', second[2], '--run-handle', second[3])
+        self.assertEqual('running', self.cli('learning-run-status', *target)['cancellation_state'])
+        self.assertEqual(2, len(driver._dispatch._jobs))
+        self.assertTrue(driver.busy())
+        self.assertFalse(driver.exhausted())
+        self.assertTrue(thread.is_alive())
+
+        arguments = self.open_arguments('third')
+        original = client_runtime._run_driver
+        registration_replies = []
+
+        def observe(*args, **options):
+            reply = original(*args, **options)
+            if args[2] == 'run.register':
+                registration_replies.append(reply)
+            return reply
+
+        def claims():
+            return self.collector_ledger._connection.execute('SELECT COUNT(*) FROM launch_claims').fetchone()[0]
+        self.assertEqual(2, claims())
+        with mock.patch.object(client_runtime, '_run_driver', observe):
+            refused = self.open_with(arguments)
+        self.assertEqual([{'protocol': 1, 'state': 'refused', 'reason_code': 'history_service_unavailable'}],
+                         registration_replies)
+        self.assertFalse(refused['project_host_registered'])
+        self.assertNotIn((refused['run_handle'], 1), driver._runs)
+        history_path = self.state.root / 'projects' / self.project_id / 'history.sqlite3'
+        with contextlib.closing(sqlite3.connect('file:' + str(history_path) + '?mode=ro', uri=True)) as connection:
+            self.assertEqual(0, connection.execute('SELECT COUNT(*) FROM project_registered_runs WHERE run_handle=?',
+                                                  (refused['run_handle'],)).fetchone()[0])
+            self.assertEqual(0, connection.execute('SELECT COUNT(*) FROM result_leases WHERE run_handle=?',
+                                                  (refused['run_handle'],)).fetchone()[0])
+        self.assertEqual(2, claims())
+        self.assertEqual(2, len(self.executions()))
+        self.assertEqual([], self.replacements)
+        self.cli('learning-status')
+        self.assertTrue(thread.is_alive())
+
+        # Record one result while the other child remains live and controllable.
+        self.record(first[0], first[1], first[3], first_result)
+        self.wait_released(1)
+        self.assertTrue(driver.busy())
+        self.assertTrue(thread.is_alive())
+        self.assertIsNone(process.poll())
+        self.assertEqual('running', self.cli('learning-run-status', *target)['cancellation_state'])
+        cancelled = self.cli('learning-cancel-run', *target)
+        self.assertEqual(('cancel_requested', True), (cancelled['stop_reason'], cancelled['stop_requested']))
+        self.assertIn(cancelled['cancellation_state'], {'stop_requested', 'cleanup_confirmed'})
+        output, errors = process.communicate(timeout=30)
+        self.assertEqual(0, process.returncode, errors.decode(errors='replace'))
+        dispatched = json.loads(output)
+        self.assertEqual('cancelled', dispatched['bridge_report']['terminal_state'])
+        self.record(second[0], second[1], second[3], dispatched)
+        self.wait_released(2)
+        # The ordinary idle timeout is 15 minutes; exhaustion ends it promptly.
+        thread.join(10)
+        self.assertFalse(thread.is_alive(), 'exhausted service did not stop after drain')
+        self.assertEqual([], self.replacements)
+        self.assertEqual(0, self.account_slots())
+
+        self.succeed()
+        retried = self.open_with(arguments)
+        self.assertEqual(refused['run_handle'], retried['run_handle'])
+        self.assertTrue(retried['project_host_registered'])
+        self.assertEqual(1, len(self.replacements))
+        self.assertIsNot(host, self.hosts[-1])
+        code, dispatched = self.dispatch((*arguments, retried['run_handle']))
+        self.assertEqual((0, 'result'), (code, dispatched.get('bridge_report', {}).get('outcome')), dispatched)
+        self.assertEqual(3, claims())
+        self.assertEqual(3, len(self.executions()))
+        self.record(arguments[0], arguments[1], retried['run_handle'], dispatched)
+        self.wait_released(3)
+
+
+class DispatchSlotRegistryTests(unittest.TestCase):
+    @requirements('M11-4', why_not_scenario='Checks the evidence binding consumed by the lifetime-cap guard.')
+    def test_M11_registration_limit_is_bound_to_the_busy_drain_replacement_scenario(self):
+        entry = json.loads(Path(__file__).with_name('lifetime_caps.json').read_text())['sites'][
+            'project_driver.py::_register']
+        self.assertEqual('test_M11_busy_exhaustion_refuses_then_drains_replaces_and_dispatches_the_retried_run',
+                         entry.get('test'))
+        for word in ('refus', 'busy', 'drain', 'replac'):
+            self.assertIn(word, entry['ends'].lower())
 
 
 class HostReplacementTests(HostSlotHarness):

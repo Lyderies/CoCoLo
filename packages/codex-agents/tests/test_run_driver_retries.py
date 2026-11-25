@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from test_framework import requirements
+
 from codex_agents import project_driver
 from codex_agents.project_driver import RunDriver, _Run
 from codex_agents.project_monitor import ProjectMonitorError
@@ -344,3 +346,44 @@ class DispatchSlotRegisterTests(unittest.TestCase):
             fresh = self.host(0)
             self.register(fresh)
             self.assertIn(self.KEY, fresh._runs)
+
+    @requirements('M11-1')
+    def test_M11_busy_dispatch_exhaustion_refuses_a_new_registration_without_a_claim(self):
+        with mock.patch.object(project_driver, 'DISPATCH_SLOTS', 2):
+            value = self.host(2)
+            existing = fencing_run(state='running', key=('hrn_' + 'b' * 48, 1))
+            value._runs[existing.key] = existing
+            self.assertTrue(value.busy())
+            with self.assertRaises(project_driver.HistoryError) as refused:
+                self.register(value)
+            self.assertEqual('history_service_unavailable', refused.exception.reason_code)
+            self.assertEqual({existing.key: existing}, value._runs)
+            value._submit_registration.assert_not_called()
+            value._account_call.assert_not_called()
+            self.assertTrue(value.busy())
+            self.assertFalse(value.exhausted())
+
+    @requirements('M11-1')
+    def test_M11_a_known_registration_replays_at_dispatch_exhaustion_without_resubmission(self):
+        with mock.patch.object(project_driver, 'DISPATCH_SLOTS', 2):
+            value = self.host(0)
+            self.register(value)
+            known = value._runs[self.KEY]
+            value._dispatch._jobs = {0: object(), 1: object()}
+            value._submit_registration.reset_mock()
+            self.register(value)
+            self.assertIs(known, value._runs[self.KEY])
+            self.assertEqual(1, len(value._runs))
+            value._submit_registration.assert_not_called()
+
+    @requirements('M11-2')
+    def test_M11_busy_dispatch_exhaustion_waits_for_drain_without_forcing_busy_false(self):
+        with mock.patch.object(project_driver, 'DISPATCH_SLOTS', 2):
+            value = self.host(2)
+            run = fencing_run(state='running')
+            value._runs[run.key] = run
+            self.assertTrue(value.busy())
+            self.assertFalse(value.exhausted())
+            run.state = 'released'
+            self.assertFalse(value.busy())
+            self.assertTrue(value.exhausted())

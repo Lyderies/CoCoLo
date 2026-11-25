@@ -1,0 +1,25 @@
+{
+ "authority": "docs/requirements/m11.md",
+ "requirements": [
+  {
+   "id": "M11-1",
+   "source": "tests/requirements/m11.json#M11-1",
+   "statement": "With two dispatch slots configured before startup, busy exhaustion refuses a third host registration with history_service_unavailable before registration or claim; known registration replay remains idempotent."
+  },
+  {
+   "id": "M11-2",
+   "source": "tests/requirements/m11.json#M11-2",
+   "statement": "At dispatch exhaustion the host continues serving existing work including a live child; status, result recording and cancellation remain available, and replacement waits for both runs to drain."
+  },
+  {
+   "id": "M11-3",
+   "source": "tests/requirements/m11.json#M11-3",
+   "statement": "After drain the production loop stops the exhausted service promptly; retrying the same third CLI open, including a refreshed advisory availability audit, replays its original account open and successfully dispatches the same account run on a fresh service without another claim or reservation at refusal."
+  },
+  {
+   "id": "M11-4",
+   "source": "tests/requirements/m11.json#M11-4",
+   "statement": "The project_driver.py::_register lifetime-cap entry binds busy refusal, drain and replacement to the two-slot CLI scenario, preserving the original synthetic test."
+  }
+ ]
+}

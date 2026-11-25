@@ -1448,6 +1448,7 @@
  "codex:tests.test_lost_run_settlement.WorkspaceRemovalTests.test_a_container_replaced_by_a_symlink_is_refused": 2.1,
  "codex:tests.test_lost_run_settlement.WorkspaceRemovalTests.test_a_workspace_is_removed_only_inside_the_real_scratch_container": 1.3,
  "codex:tests.test_open_request_lifetime": 19.66,
+ "codex:tests.test_open_retry_identity": 0.1,
  "codex:tests.test_owned_execution": 27.27,
  "codex:tests.test_owned_execution.CapacityCompletionTests.test_RS_A_2_a_late_normal_release_after_a_crashed_one_keeps_the_written_decision": 0.42,
  "codex:tests.test_owned_execution.CapacityCompletionTests.test_RS_A_F5_a_completed_slot_s_register_receipt_is_its_release_digest": 0.32,

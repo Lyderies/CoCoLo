@@ -1287,7 +1287,8 @@
   },
   "project_driver.py::_register": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "O0c M11: lifetime dispatch slots refuse new registration before any claim at exhaustion; busy existing runs remain served until drain, then the production service loop replaces the exhausted host and the retried run dispatches on its replacement",
+   "test": "test_M11_busy_exhaustion_refuses_then_drains_replaces_and_dispatches_the_retried_run"
   },
   "project_driver.py::_release_failed": {
    "checks": 1,
