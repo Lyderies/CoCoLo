@@ -1038,7 +1038,7 @@
   },
   "learning_store.py::drain_event_retention": {
    "checks": 1,
-   "ends": "one existing EVENT_SWEEP_BATCH (500) per collector cycle/lock hold; a full batch requests another cycle after a cancellable gap, until a short batch or stop. Committed rows disappear, so a later collector resumes from durable rows; BOUNDED",
+   "ends": "one existing EVENT_SWEEP_BATCH (500) per collector cycle/lock hold; a full batch requests another cycle after a cancellable gap, until a short batch, failed batch or stop. A failed batch ends the retention pass until the next full interval. Committed rows disappear, so a later collector resumes from durable rows; BOUNDED",
    "test": "test_LOCKHOLD_1_backlog_drains_across_bounded_holds_with_identical_final_state"
   },
   "learning_store.py::earlier_version_runs": {

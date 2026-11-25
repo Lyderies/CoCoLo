@@ -22,3 +22,18 @@ Use existing indexes where sufficient. Any additional index must be additive,
 recreated on normal open without a schema version change, and removed by genuine
 old-layout fixtures. Register count limits and prove work beyond each limit can
 finish. Suite fixtures stay small; large measurements belong in `scripts/`.
+
+## Fix round (review 040-lockhold-r1)
+
+- MED-1 / LOCKHOLD-1: a suppressed event-batch failure ends that retention pass.
+  The collector clears its pending-event flag, releases the lock, and retries only
+  at the next normal full interval. Persistent failure must not schedule 10 ms
+  retries. Rollback keeps earlier committed batches and the next full cycle can
+  resume from durable rows.
+- LOW-1 / LOCKHOLD-2: the pinned provider lookup translates only SQLite
+  OperationalError messages containing `no such index` or `no query solution`
+  into a plain LedgerError asking for a reopen. Other SQLite errors propagate
+  unchanged, as for the existing pinned evidence lookups.
+- LOW-2 / LOCKHOLD-1: appending fresh events between two committed retention
+  batches preserves those events and produces exactly the same final records
+  as an unbounded drain with the same events and batch/append ordering.

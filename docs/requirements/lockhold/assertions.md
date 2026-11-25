@@ -11,4 +11,16 @@ is replaced by `test_collector_sweep_cycles_drain_expired_events_in_bounded_batc
   bounds and transactional completion are added. Automatic continuation is proved
   separately in `test_lockhold`.
 
-No other existing assertion is changed or removed.
+## Fix round: MED-1 / LOCKHOLD-1
+
+`test_LOCKHOLD_1_failed_batch_rolls_back_and_restarts`:
+
+- Old: the failed second `_sweep_cycle(holds_only=True)` returns `"more"`.
+- New: it returns `None`, clears `_event_retention_more`, and an idle holds-only
+  cycle does not retry it. After the fault is removed, the same collector's next
+  full cycle resumes the backlog; a new collector can still finish the drain.
+- Reason: a suppressed failure must end the retention pass until the normal full
+  interval, avoiding indefinite 10 ms retries under the ledger lock. The unchanged
+  rollback, transaction and total-summary checks remain in place.
+
+No other existing assertion is changed or removed in the fix round.

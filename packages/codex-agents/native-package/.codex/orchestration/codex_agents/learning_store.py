@@ -7149,15 +7149,21 @@ class LearningLedger:
     def _provider_records_locked(
         self, project_id: str, record_type: str, provider: str
     ) -> list[tuple[dict[str, Any], str]]:
-        rows = self._connection.execute(
-            # LOCKHOLD-2/3: an ORDER BY must not make SQLite walk every event in
-            # the project's sequence index. Sort only this type's evidence rows.
-            "SELECT content,content_digest,source FROM records INDEXED BY records_type_project "
-            "WHERE project_id=? AND record_type=? "
-            "AND json_extract(CAST(content AS TEXT),'$.provider')=? "
-            "ORDER BY source_sequence",
-            (project_id, record_type, provider),
-        ).fetchall()
+        try:
+            rows = self._connection.execute(
+                # LOCKHOLD-2/3: an ORDER BY must not make SQLite walk every event in
+                # the project's sequence index. Sort only this type's evidence rows.
+                "SELECT content,content_digest,source FROM records INDEXED BY records_type_project "
+                "WHERE project_id=? AND record_type=? "
+                "AND json_extract(CAST(content AS TEXT),'$.provider')=? "
+                "ORDER BY source_sequence",
+                (project_id, record_type, provider),
+            ).fetchall()
+        except sqlite3.OperationalError as error:
+            # Match the pinned evidence lookups: other SQLite errors keep their answers.
+            if "no such index" not in str(error) and "no query solution" not in str(error):
+                raise
+            raise LedgerError("provider evidence lookup is unavailable; reopen the ledger") from None
         result = []
         for row in rows:
             record = json.loads(bytes(row["content"]))
@@ -13830,6 +13836,8 @@ class CollectorServer:
                 # LOCKHOLD-1: one whole transaction per cycle. The loop schedules
                 # the next batch after releasing the outer lock and waiting its
                 # cancellable gap. None still means nothing removed (decision 220).
+                # A suppressed failure ends this pass until the next full interval.
+                self._event_retention_more = False
                 self._event_retention_more = (self.ledger.sweep_event_retention() or 0) >= EVENT_SWEEP_BATCH
             sweeps = [(self.ledger.sweep_worker_results, (LedgerError, OSError, sqlite3.Error)),
                       (drain_event_retention, loose),

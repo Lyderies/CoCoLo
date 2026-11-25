@@ -15,6 +15,7 @@ from tests.learning_support import (
     fake_provider_tools, routing_fields,
 )
 from codex_agents import learning_store
+from codex_agents.contracts import LedgerError
 from codex_agents.learning_contracts import content_digest
 from test_framework import requirements
 
@@ -150,11 +151,18 @@ class LockHoldRetentionTests(unittest.TestCase):
         self.db.execute("CREATE TEMP TRIGGER stop_batch BEFORE DELETE ON records "
                         "WHEN OLD.record_id='m750' BEGIN SELECT RAISE(ABORT,'stopped'); END")
         try:
-            self.assertEqual('more', server._sweep_cycle(holds_only=True))
+            self.assertIsNone(server._sweep_cycle(holds_only=True))
+            self.assertFalse(server._event_retention_more)
             self.assertEqual(before, self.rows())
             self.assertFalse(self.db.in_transaction)
+            with mock.patch.object(self.ledger, 'sweep_event_retention') as sweep:
+                self.assertIsNone(server._sweep_cycle(holds_only=True))
+                sweep.assert_not_called()
         finally:
             self.db.execute('DROP TRIGGER stop_batch')
+        # A later full interval retries on the same collector, without a restart.
+        self.assertEqual('more', server._sweep_cycle())
+        self.assertEqual(1501, len(self.base._raw_ids()))
         # Pending work is in the durable raw rows, so a new collector also resumes it.
         restarted = learning_store.CollectorServer(self.ledger)
         with self.counted_holds() as counter:
@@ -163,6 +171,85 @@ class LockHoldRetentionTests(unittest.TestCase):
         self.assertEqual(set(), self.base._raw_ids())
         self.assertEqual(2501, sum(s['event_count'] for s in self.base._summaries()))
         self.assertTrue(all(n <= 500 for n in counter.holds), counter.holds)
+
+    def test_LOCKHOLD_1_persistent_batch_failure_waits_for_full_interval(self):
+        server = learning_store.CollectorServer(self.ledger)
+        clock, attempts, waits, failed_rows = [0.0], [], [], []
+        sweep, delete = self.ledger.sweep_event_retention, self.db.executemany
+
+        def attempt():
+            attempts.append(clock[0])
+            try:
+                return sweep()
+            finally:
+                self.assertFalse(self.db.in_transaction)
+
+        def fail_delete(sql, parameters):
+            if sql.startswith('DELETE FROM records') and len(attempts) > 1:
+                failed_rows.append(len(parameters))
+                error = sqlite3.OperationalError('database or disk is full')
+                error.sqlite_errorcode = sqlite3.SQLITE_FULL
+                raise error
+            return delete(sql, parameters)
+
+        def wait(seconds):
+            self.assertEqual(0, counter.depth, 'failure backoff must release the ledger')
+            waits.append(seconds)
+            clock[0] += seconds
+            # Also bound a broken implementation that keeps scheduling 10 ms retries.
+            return clock[0] >= 4.0 or len(waits) > 20
+
+        with self.counted_holds() as counter, \
+                mock.patch.object(learning_store.time, 'monotonic', side_effect=lambda: clock[0]), \
+                mock.patch.object(learning_store, 'WORKER_RESULT_SWEEP_SECONDS', 1.0), \
+                mock.patch.object(learning_store, 'SWEEP_IDLE_CHECK_SECONDS', 1.0), \
+                mock.patch.object(learning_store, 'SWEEP_BATCH_GAP_SECONDS', 0.01), \
+                mock.patch.object(server._sweeps_stop, 'wait', side_effect=wait), \
+                mock.patch.object(server, '_run_health_pass'), \
+                mock.patch.object(self.ledger, 'sweep_event_retention', side_effect=attempt), \
+                mock.patch.object(self.db, 'executemany', side_effect=fail_delete):
+            server._sweep_loop()
+        self.assertEqual(4, len(attempts), attempts)
+        for expected, actual in zip((1.0, 1.01, 2.0, 3.0), attempts):
+            self.assertAlmostEqual(expected, actual)
+        self.assertEqual([500, 500, 500], failed_rows)
+        self.assertEqual([500], [n for n in counter.holds if n])
+        self.assertFalse(server._event_retention_more)
+        self.assertEqual(2001, len(self.base._raw_ids()))
+        self.assertEqual(500, sum(s['event_count'] for s in self.base._summaries()))
+
+    def test_LOCKHOLD_1_appends_between_batches_match_unbounded_drain(self):
+        initial = self.rows()
+        appended_at = self.now + 8 * retention.DAY
+
+        def append_events():
+            for identifier in ('between-hook', 'between-app-server'):
+                self.base.append(retention.event(identifier, 'tool_started', observed_at_ms=appended_at),
+                                 producer='hook' if identifier == 'between-hook' else 'app_server',
+                                 now_ms=appended_at)
+
+        # Former drain with the same append after its first committed batch.
+        self.assertEqual(500, self.ledger.sweep_event_retention())
+        append_events()
+        while self.ledger.sweep_event_retention() >= learning_store.EVENT_SWEEP_BATCH:
+            pass
+        expected = self.rows()
+        with self.db:
+            self.db.execute('DELETE FROM records')
+            self.db.executemany('INSERT INTO records VALUES(' + ','.join('?' for _ in initial[0]) + ')', initial)
+        server = learning_store.CollectorServer(self.ledger)
+        self.assertEqual('more', server._sweep_cycle())
+        append_events()
+        with self.counted_holds() as counter:
+            for remaining in (1503, 1003, 503, 3, 2):
+                outcome = server._sweep_cycle(holds_only=True)
+                self.assertEqual(remaining, len(self.base._raw_ids()))
+                self.assertEqual('more' if remaining > 2 else None, outcome)
+                self.assertFalse(self.db.in_transaction)
+        self.assertEqual([500, 500, 500, 500, 1], [n for n in counter.holds if n])
+        self.assertEqual({'between-hook', 'between-app-server'}, self.base._raw_ids())
+        self.assertEqual(2501, sum(s['event_count'] for s in self.base._summaries()))
+        self.assertEqual(expected, self.rows())
 
     def test_LOCKHOLD_1_loop_resumes_batches_and_stop_cancels_the_gap(self):
         server = learning_store.CollectorServer(self.ledger)
@@ -286,6 +373,41 @@ class LockHoldReadTests(unittest.TestCase):
         self.db.execute("DELETE FROM records WHERE project_id=? AND record_type='provider_identity' "
                         "AND json_extract(CAST(content AS TEXT),'$.provider')='claude'", (self.project,))
         check('present', 'identity_missing')
+
+    def test_LOCKHOLD_2_pinned_lookup_classifies_only_index_errors(self):
+        def lookup():
+            with self.ledger._held():
+                return self.ledger._provider_records_locked(self.project, 'provider_identity', 'codex')
+
+        # Exercise a real missing index on an already-open ledger connection.
+        index_sql = self.db.execute(
+            "SELECT sql FROM sqlite_master WHERE name='records_type_project'").fetchone()[0]
+        with self.subTest(error='missing index on open connection'):
+            self.db.execute('DROP INDEX records_type_project')
+            try:
+                with self.assertRaisesRegex(LedgerError, 'reopen the ledger') as raised:
+                    lookup()
+                self.assertIs(type(raised.exception), LedgerError)
+            finally:
+                self.db.execute(index_sql)
+
+        for message in ('no such index: records_type_project', 'no query solution'):
+            with self.subTest(error=message), \
+                    mock.patch.object(self.db, 'execute', side_effect=sqlite3.OperationalError(message)):
+                with self.assertRaisesRegex(LedgerError, 'reopen the ledger') as raised:
+                    lookup()
+                self.assertIs(type(raised.exception), LedgerError)
+
+        for error in (sqlite3.OperationalError('database is locked'),
+                      sqlite3.OperationalError('disk I/O error'),
+                      sqlite3.OperationalError('interrupted'),
+                      sqlite3.DatabaseError('no query solution'),
+                      sqlite3.IntegrityError('no such index')):
+            with self.subTest(error=str(error), kind=type(error)), \
+                    mock.patch.object(self.db, 'execute', side_effect=error):
+                with self.assertRaises(type(error)) as raised:
+                    lookup()
+                self.assertIs(error, raised.exception)
 
     @requirements('LOCKHOLD-3', why_not_scenario='Actual host opens and their preflight/write-time admission under growing history.')
     def test_LOCKHOLD_3_open_admission_has_flat_vm_work_and_same_decision(self):
