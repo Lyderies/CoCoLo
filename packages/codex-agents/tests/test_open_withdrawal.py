@@ -496,7 +496,7 @@ class OpenBindingStoreTests(unittest.TestCase):
 
     def test_D108_a_format_18_project_store_upgrades_to_19_and_keeps_its_rows_and_its_refusals(self):
         from codex_agents import project_history
-        self.assertEqual(21, project_history._SCHEMA_VERSION)  # B6: schema 21 (decision 131)
+        self.assertEqual(22, project_history._SCHEMA_VERSION)  # B6: schema 21 (decision 131)
         self.fill(5, 0)
         self.register(1)
         db = self.store._connection
@@ -515,7 +515,7 @@ class OpenBindingStoreTests(unittest.TestCase):
             self.base.fixture.open()
         self.base.fixture.store = self.base.fixture.open(allow_schema_upgrade=True)
         db = self.store._connection
-        self.assertEqual(21, db.execute('PRAGMA user_version').fetchone()[0])  # B6: schema 21 (decision 131)
+        self.assertEqual(22, db.execute('PRAGMA user_version').fetchone()[0])  # B6: schema 21 (decision 131)
         self.assertEqual(added, {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='index'")} & added)
         self.assertEqual(before, sorted(tuple(row) for row in db.execute('SELECT * FROM project_holds')))
         with self.assertRaisesRegex(HistoryError, 'history_conflict'):

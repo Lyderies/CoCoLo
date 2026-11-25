@@ -13,6 +13,11 @@ def legacy_orchestration_state_layout(store):
     B6 review r1, one by the final fix) and the orchestration state column. B6's held orchestration rows are kept: the 20 -> 21 step adopts only the open
     orchestrations without one, so a fixture's rows come back unchanged (a real format 20 store, with none, is
     tests/fixtures/history_step20, test_b6_unattended_close)."""
+    # RSF-S2: a pre-22 fixture has no owner epoch. Retire the new connection
+    # gate explicitly before producing the genuine historical layout.
+    store._connection._write_fence = None
+    store._fence.epoch = None
+    store._connection.execute("DROP TABLE IF EXISTS runtime_takeover")
     for name in ('project_orchestrations_state', 'result_reservations_live', 'project_holds_orchestration_check',
                  'result_reservations_orchestration', 'result_leases_orchestration',
                  'project_execution_consumptions_orchestration'):  # the sixth: B6 final fix (decision 210)

@@ -118,7 +118,7 @@ def _repairs(history):
 
 
 def holds_report(history, *, runtime_digest=None):
-    history._require_owner()
+    history._require_owner(read_only=True)
     from .recovery_report import recovery_pending
     return {'project_holds': _holds(history), 'result_custody': _custody(history, runtime_digest),
             'result_retirement_repairs': _repairs(history), 'recovery_pending': recovery_pending(history)}

@@ -32,7 +32,7 @@ class LearningSourceTransferTests(unittest.TestCase):
 
     def target_rows(self):
         return {name: [tuple(row) for row in self.target._connection.execute('SELECT * FROM ' + name)]
-                for name in history._COLUMNS}
+                for name in history._COLUMNS if name != "runtime_takeover"}
 
     def reopen(self):
         self.target.close()

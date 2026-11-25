@@ -1,0 +1,27 @@
+FAILED codex:tests.test_rsf_s2_fence (exit 1) -> /private/tmp/ptcpgjebpg/1.log
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 2 != 5
+
+======================================================================
+FAIL: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x1094b8f60>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 116, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    self.assertEqual(before, connection.total_changes)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 2 != 5
+
+======================================================================
+FAIL: test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance) (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x1094b9010>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 116, in test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance
+    self.assertEqual(before, connection.total_changes)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 2 != 5
+
+----------------------------------------------------------------------
+Ran 12 tests in 2.050s
+
+FAILED (failures=9)
+

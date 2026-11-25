@@ -1,6 +1,7 @@
 """RSF-S4 store regressions: retained evidence, deadlines and signed owner confirmation."""
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 from tests import test_learning_store as legacy
 from tests.test_account_launch_claims import downgrade_ledger_to_six
@@ -231,13 +232,16 @@ class LegacySlotEvidenceTests(unittest.TestCase):
         import os
         self.seed(journal='claimed', live=True)
         original = launch_journal.os.open
+        refused = []
         def unreadable(path, *args, **kwargs):
-            if str(path).endswith('.lock'):
+            if str(path).endswith('.lock') and Path(path) != self.ledger.state.lock:
+                refused.append(path)
                 raise PermissionError('unreadable')
             return original(path, *args, **kwargs)
         with mock.patch.object(os, 'open', side_effect=unreadable):
             self.ledger.release_due_account_holds()
             self.assertEqual(1, self.count())
+        self.assertTrue(refused, 'the journal instance lock fault must actually be exercised')
 
 
 class LegacySlotCorrectionTests(LegacySlotEvidenceTests):

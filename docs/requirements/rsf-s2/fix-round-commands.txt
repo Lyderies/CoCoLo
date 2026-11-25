@@ -1,0 +1,28 @@
+# Run from ~/Code/temp/cocolo-rsf-s2; only named modules.
+PY=<tmp>
+
+# Red proof (before production edits), metadata_errors [].
+"$PY" -B scripts/parallel_tests.py --jobs 2 --module codex:tests.test_rsf_s2_regressions
+
+# Final regression batch: 110 tests in 11 modules green; native cleanup-custody fixture 7 pass / 1 fail.
+"$PY" -B scripts/parallel_tests.py --jobs 4 --module codex:tests.test_rsf_s2_regressions --module codex:tests.test_launch_receipts_layout --module codex:tests.test_holds_report --module codex:tests.test_lifetime_cap_guard --module codex:tests.test_release_batch_queries --module codex:tests.test_learning_cycle_core --module codex:tests.test_project_cleanup --module codex:tests.test_cleanup_contracts --module codex:tests.test_cleanup_custody --module codex:tests.test_project_release_ack --module codex:tests.test_sql_read_budget --module codex:tests.test_ledger_startup
+
+# Copier/backup/restore/move/schema/code-enumeration batch: 236 pass, metadata_errors [].
+"$PY" -B scripts/parallel_tests.py --jobs 4 --module codex:tests.test_backup_installed_project --module codex:tests.test_owner_backup_streamed --module codex:tests.test_large_project_backups --module codex:tests.test_backup_reply_private --module codex:tests.test_learning_source_image --module codex:tests.test_learning_source_image_legacy --module codex:tests.test_learning_source_transfer --module codex:tests.test_account_observation_backup --module codex:tests.test_account_open_schema --module codex:tests.test_account_cleanup_schema --module codex:tests.test_account_observation_schema --module codex:tests.test_learning_chunk_upgrade --module codex:tests.test_learning_qa_upgrade --module codex:tests.test_history_service_upgrade --module codex:tests.test_project_holds_schema --module codex:tests.test_legacy_history_compatibility --module codex:tests.test_reply_shape_compatibility --module codex:tests.test_refusal_steps
+
+# Final six-unit regression rerun after explicit fixture connection cleanup.
+"$PY" -B scripts/parallel_tests.py --jobs 1 --module codex:tests.test_rsf_s2_regressions
+
+# REQUIRED PRIMARY RERUN: owner shell, unsandboxed; real collector sockets and native supervision.
+mkdir -p /tmp/claude-501/rsf-s2-primary
+TMPDIR=/tmp/claude-501/rsf-s2-primary COCOLO_WORKER_TIMEOUT=180 "$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_upgrade_handover --module codex:tests.test_project_start --module codex:tests.test_project_execution_processes --module codex:tests.test_cleanup_custody --module codex:tests.test_rsf_s2_fence
+
+# Existing mixed store/migration modules need the same owner facilities (see prior owner-retry-commands.txt).
+TMPDIR=/tmp/claude-501/rsf-s2-primary COCOLO_WORKER_TIMEOUT=180 "$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_learning_store --module codex:tests.test_learning_migration
+
+# Runtime digest bookkeeping remains the primary's merge task. No VERSION/catalogue changes here.
+
+# Nine existing S2 in-process tests, excluding the process/archive cases.
+cd packages/codex-agents
+PYTHONPATH=native-package/.codex/orchestration:../../scripts "$PY" -B -m unittest tests.test_rsf_s2_fence.FenceTests.test_epoch_advances_and_signed_records_are_unchanged tests.test_rsf_s2_fence.FenceTests.test_lost_or_replaced_lifetime_lock_refuses_admissions tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance tests.test_rsf_s2_fence.FenceTests.test_commit_rechecks_epoch_and_rolls_back tests.test_rsf_s2_fence.FenceTests.test_paused_ledger_writer_cannot_resume_after_successor tests.test_rsf_s2_fence.FenceTests.test_unsafe_hard_link_lock_is_refused_before_writing_an_owner_stamp tests.test_rsf_s2_fence.FenceTests.test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership tests.test_rsf_s2_fence.FenceTests.test_epoch_is_inside_the_schema_step_before_each_legacy_adoption_and_rolls_back_with_it tests.test_rsf_s2_fence.FenceTests.test_current_format_missing_epoch_refuses_without_recreating_it
+cd ../..

@@ -59,7 +59,7 @@ class LedgerSchemaTests(StoreBase):
     @requirements('E2a-1', why_not_scenario='Ledger schema and write rules on a real ledger; no process boundary.')
     def test_E2a_1_additive_columns_and_wake_table_keep_the_schema_version(self):
         connection = self.ledger._connection
-        self.assertEqual(16, connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(17, connection.execute('PRAGMA user_version').fetchone()[0])
         columns = {row[1] for row in connection.execute('PRAGMA table_info(projects)')}
         self.assertLessEqual({'launch_copy', 'launch_digest'}, columns)
         wake = {row[1] for row in connection.execute('PRAGMA table_info(project_wake)')}
@@ -71,7 +71,7 @@ class LedgerSchemaTests(StoreBase):
         self.ledger.close()
         reopened = store_tests.LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
         self.fixture.ledger = reopened
-        self.assertEqual(16, reopened._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(17, reopened._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assertEqual(columns, {row[1] for row in reopened._connection.execute('PRAGMA table_info(projects)')})
 
     @requirements('E2a-1', why_not_scenario='Ledger schema and write rules on a real ledger; no process boundary.')

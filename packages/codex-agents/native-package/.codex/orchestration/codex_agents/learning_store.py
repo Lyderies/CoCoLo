@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .store_fence import StoreFence, EPOCH_SCHEMA, FENCE_MESSAGE
+
 import contextlib
 import base64
 import hashlib
@@ -230,10 +232,10 @@ _ADDITIVE_MIGRATIONS_SCHEMA = (
 def _other_table_columns() -> dict[str, tuple[str, ...]]:
     reference = sqlite3.connect(":memory:")
     try:
-        for statement in (_OWNER_KEY_HISTORY_SCHEMA, _ADDITIVE_MIGRATIONS_SCHEMA, ADMISSION_EVIDENCE_SCHEMA):
+        for statement in (_OWNER_KEY_HISTORY_SCHEMA, _ADDITIVE_MIGRATIONS_SCHEMA, ADMISSION_EVIDENCE_SCHEMA, EPOCH_SCHEMA):
             reference.execute(statement)
         return {table: tuple(row[1] for row in reference.execute(f"PRAGMA table_xinfo({table})"))
-                for table in ("additive_migrations", "owner_key_history", "admission_evidence")}
+                for table in ("additive_migrations", "owner_key_history", "admission_evidence", "runtime_takeover")}
     finally:
         reference.close()
 
@@ -1035,7 +1037,7 @@ def _verify_project_backup_body(
     }:
         raise LedgerError("project backup body is invalid")
     schema_version = body["ledger_schema_version"]
-    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}:
+    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
         raise LedgerError("project backup body is invalid")
     if (
         expected_ledger_schema_version is not None
@@ -1563,7 +1565,7 @@ def _free_backup_bytes(path: Path) -> int:
 
 
 def _schema_behind(database: Path) -> int | None:
-    """The schema of a ledger file an earlier version wrote, else None (current, newer, new or absent).
+    """The schema requiring a project-record upgrade, else None (additive, current, newer, new or absent).
 
     A ledger that is there but cannot be read is an error, never taken for a current one.
     """
@@ -1580,11 +1582,13 @@ def _schema_behind(database: Path) -> int | None:
             connection.close()
     except (OSError, sqlite3.Error, TypeError, ValueError) as error:
         raise LedgerError("the ledger cannot be read to check which version wrote it") from error
-    return version if 5 <= version < LEDGER_SCHEMA_VERSION else None
+    # Step 16->17 adds only the machine-local owner epoch, like the additive
+    # launch/wake steps: no project records change or need upgrade consent.
+    return version if 5 <= version < LEDGER_SCHEMA_VERSION and version != 16 else None
 
 
 def ledger_schema_behind(state: "LearningState") -> int | None:
-    """The schema of this state root's ledger when an earlier version wrote it, else None."""
+    """This ledger's schema when a project-record upgrade needs consent, else None."""
 
     return _schema_behind(state.database)
 
@@ -2286,6 +2290,8 @@ class LearningLedger:
         )
         self._collector_active = False
         self._writer_descriptor: int | None = None
+        if fcntl is None:
+            raise LedgerError(FENCE_MESSAGE)
         if fcntl is not None:
             descriptor: int | None = None
             try:
@@ -2294,6 +2300,9 @@ class LearningLedger:
                     os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
                     0o600,
                 )
+                info = os.fstat(descriptor)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
+                    raise OSError("unsafe writer lock")
                 os.fchmod(descriptor, 0o600)
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 self._writer_descriptor = descriptor
@@ -2302,11 +2311,16 @@ class LearningLedger:
                     with contextlib.suppress(OSError):
                         os.close(descriptor)
                 if isinstance(exc, OSError):
-                    raise LedgerError("another learning writer owns this state root") from exc
+                    raise LedgerError("another learning writer owns this state root. Run: ./setup.sh --update") from exc
                 raise
         try:
+            self._fence = StoreFence(self.state.lock, self._writer_descriptor, COLLECTOR_RUNTIME_DIGEST,
+                                     lambda: LedgerError(FENCE_MESSAGE))
             self._connection = self._connect()
             self._connection.share_with_lock(self._lock, waits=self._lock_waits)
+            self._fence.legacy = self._connection.execute("PRAGMA user_version").fetchone()[0] < LEDGER_SCHEMA_VERSION
+            self._fence.connection = self._connection
+            self._connection._write_fence = self._fence
             self._migrate()
             # O10 AP: after every migration path (each returns early), one additive index lets an
             # append find the project's latest observed time from an index end, not by reading every
@@ -2396,7 +2410,8 @@ class LearningLedger:
             version = connection.execute('PRAGMA user_version').fetchone()[0]
             if version > LEDGER_SCHEMA_VERSION:
                 raise LedgerError('ledger schema is newer than this package')
-            if 5 <= version < LEDGER_SCHEMA_VERSION and not self._allow_schema_upgrade:
+            if (5 <= version < LEDGER_SCHEMA_VERSION and version != 16
+                    and not self._allow_schema_upgrade):
                 raise LedgerError('ledger schema upgrade requires explicit drained-owner authorization and verified backups')
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA journal_mode = WAL")
@@ -2458,6 +2473,7 @@ class LearningLedger:
         yet, a signer file that holds anything can be replaced; an empty one is first setup.
         """
 
+        self._fence.check(self._connection)
         content = self.state._owner_signer_content(public_key)
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
         path = self.state.allowed_signers_path
@@ -2970,6 +2986,7 @@ class LearningLedger:
         """Copy one partition into a new owner-only backup file, check it, then register it."""
         from . import project_backup
 
+        self._fence.check(self._connection)
         if not file_id or len(file_id) > 160 or not file_id.replace("_", "").isalnum():
             raise LedgerError("stored file identifier is invalid")
         project_backup.check_inventory(self._connection)  # 0.8.60 final fix (decision 249): before anything is created
@@ -3200,6 +3217,7 @@ class LearningLedger:
     def _migrate_six_or_seven_to_current(self, version: int) -> None:
         self._connection.execute("BEGIN IMMEDIATE")
         try:
+            self._fence.claim(self._connection)
             self._initialize_launch_claims_locked(backfill=version == 6)
             if version == 7:
                 # Preserve existing consumption and fence every older ambiguous
@@ -3232,6 +3250,7 @@ class LearningLedger:
 
         self._connection.execute("BEGIN IMMEDIATE")
         try:
+            self._fence.claim(self._connection)
             columns = {
                 str(row[1])
                 for row in self._connection.execute(
@@ -3472,6 +3491,12 @@ class LearningLedger:
                     self._initialize_probe_ids_locked()
                     self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
                 return
+        if current == 16:
+            # Epoch-only, additive step. The lifetime lock already proves the
+            # prior writer retired; no per-project data is rewritten or backed up.
+            with self._account_transaction():
+                self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+            return
         with self._account_transaction():
             self._migrate_layout_locked(current)
 
@@ -5886,6 +5911,7 @@ class LearningLedger:
                 raise LedgerError("account write transaction is already active")
             self._connection.execute("BEGIN IMMEDIATE")
             try:
+                self._fence.claim(self._connection)
                 yield
                 # Check the fixed database/WAL paths before making the unit
                 # durable, so a mode/path refusal cannot lose a committed handle.
@@ -11504,6 +11530,7 @@ class LearningLedger:
     def _write_owner_file(
         self, kind: str, project_id: str, file_id: str, payload: bytes
     ) -> Path:
+        self._fence.check(self._connection)
         if not file_id or len(file_id) > 160 or not file_id.replace("_", "").isalnum():
             raise LedgerError("stored file identifier is invalid")
         root = {
@@ -13277,6 +13304,7 @@ class LearningLedger:
             self.state.harden_database_files()
 
     def _remove_registered_path(self, project_id: str, relative: str) -> None:
+        self._fence.check(self._connection)
         path = Path(relative)
         if (
             path.is_absolute()

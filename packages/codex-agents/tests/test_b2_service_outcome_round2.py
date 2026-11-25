@@ -37,7 +37,7 @@ def durable(store):
     """Every durable row of the store and its stored body and context files: what a failed write must not change."""
     db = store._connection
     names = [row[0] for row in db.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'runtime_takeover' ORDER BY name")]
     tables = {name: sorted((tuple(row) for row in db.execute(f'SELECT * FROM "{name}"')), key=repr) for name in names}
     files = sorted(path.name for path in store._directory.iterdir() if path.name.startswith(('.result-', '.context-')))
     try:

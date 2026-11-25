@@ -1,0 +1,25 @@
+FAILED codex:tests.test_rsf_s2_fence (exit 1) -> /private/tmp/ptq12euphq/1.log
+FF.........
+======================================================================
+FAIL: test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership (tests.test_rsf_s2_fence.FenceTests.test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership) (owner='LearningLedger')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 173, in test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership
+    with self.subTest(owner=type(owner).__name__), self.assertRaises((LedgerError, HistoryError)):
+                                                   ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership (tests.test_rsf_s2_fence.FenceTests.test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership) (owner='ProjectHistory')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 173, in test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership
+    with self.subTest(owner=type(owner).__name__), self.assertRaises((LedgerError, HistoryError)):
+                                                   ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+----------------------------------------------------------------------
+Ran 10 tests in 1.515s
+
+FAILED (failures=2)
+

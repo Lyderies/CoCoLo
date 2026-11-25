@@ -210,10 +210,10 @@ class LearningSourceImageTests(unittest.TestCase):
         self.refuse('history_conflict')
 
     def test_schema_version_columns_and_primary_key_are_exact(self):
-        # PC-4: schema 16 is supported; 17 is newer and refused.
-        self.connection.execute('PRAGMA user_version=17').close()
+# RSF-S2: schema 17 is supported; 18 is newer and refused.
+        self.connection.execute('PRAGMA user_version=18').close()
         self.refuse('history_incompatible')
-        self.connection.execute('PRAGMA user_version=16').close()
+        self.connection.execute('PRAGMA user_version=17').close()
         self.connection.execute('ALTER TABLE sessions ADD COLUMN unexpected TEXT').close()
         self.refuse('history_incompatible')
 

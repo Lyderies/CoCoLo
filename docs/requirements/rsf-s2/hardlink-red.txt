@@ -1,0 +1,16 @@
+FAILED codex:tests.test_rsf_s2_fence (exit 1) -> /private/tmp/pt435rm47t/1.log
+.........F..
+======================================================================
+FAIL: test_unsafe_hard_link_lock_is_refused_before_writing_an_owner_stamp (tests.test_rsf_s2_fence.FenceTests.test_unsafe_hard_link_lock_is_refused_before_writing_an_owner_stamp)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 168, in test_unsafe_hard_link_lock_is_refused_before_writing_an_owner_stamp
+    self.assertEqual(b'original bytes must survive', retained.read_bytes())
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: b'original bytes must survive' != b'953ac523a585baf473ef11791dd5bc14e7d0fc381bec37160b7e713491568900'
+
+----------------------------------------------------------------------
+Ran 12 tests in 1.826s
+
+FAILED (failures=1)
+
