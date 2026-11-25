@@ -1798,6 +1798,7 @@
  "codex:tests.test_project_host_result.ProjectHostResultTests.test_reentrant_borrowed_service_close_rolls_back_host_result_admission": 0.69,
  "codex:tests.test_project_host_result.ProjectHostResultTests.test_response_links_and_terminal_diagnostics_cannot_be_changed": 0.69,
  "codex:tests.test_project_host_result.ProjectHostResultTests.test_revocation_and_input_mutation_after_body_io_prevent_commit": 0.74,
+ "codex:tests.test_project_host_start_cost": 4.0,
  "codex:tests.test_project_ingress": 2.8,
  "codex:tests.test_project_ingress.ProjectIngressTests.test_actual_history_client_and_original_writer_use_separate_threads": 0.13,
  "codex:tests.test_project_ingress.ProjectIngressTests.test_authorization_rechecked_after_buffering_and_before_first_send": 0.13,
