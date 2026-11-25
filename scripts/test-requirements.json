@@ -1852,7 +1852,9 @@
    "codex:tests.test_project_driver.RefusedRegistrationViewTests.test_R6_16_a_a_prepare_after_the_failed_run_left_memory_still_answers_run_failed",
    "codex:tests.test_project_driver.StartupRecoverOpenTests.test_R6_16_a_during_the_start_up_recovery_dispatch_still_answers_run_failed",
    "codex:tests.test_project_driver.StartupRecoverOpenTests.test_a_failed_start_up_recovery_refuses_the_waiting_register_as_an_unavailable_service",
-   "codex:tests.test_project_driver.StartupRecoverOpenTests.test_an_open_during_the_start_up_recovery_is_registered_and_dispatches"
+   "codex:tests.test_project_driver.StartupRecoverOpenTests.test_an_open_during_the_start_up_recovery_is_registered_and_dispatches",
+   "codex:tests.test_run_driver_retries.MemoryHoldLimitTests.test_RS_B_4_failed_views_past_the_bound_drop_the_oldest_and_the_newest_still_answers_a_late_prepare",
+   "codex:tests.test_run_driver_retries.MemoryHoldLimitTests.test_RS_B_4_registers_past_the_intake_bound_during_start_up_get_the_plain_refusal_and_the_held_ones_register"
   ],
   "source": "tests/requirements/rsb-memory-holds.json#RS-B-4",
   "statement": "Instance-bound driver and preparation rows commit before their effects, retire only after memory retirement, and recover only from positive stopped-instance evidence; preserve withdrawal and handoff custody (M1-M8, I1, L4, L6, L7)."

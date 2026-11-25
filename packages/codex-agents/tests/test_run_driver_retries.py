@@ -5,6 +5,8 @@ finish and a retired run's monitor slot the monitor refused are each asked for
 again with a growing pause. None of them frees account capacity without the
 account's own answer, and a live attempt is never forgotten.
 """
+import hashlib
+import json
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -387,3 +389,74 @@ class DispatchSlotRegisterTests(unittest.TestCase):
             run.state = 'released'
             self.assertFalse(value.busy())
             self.assertTrue(value.exhausted())
+
+
+LIMIT_WHY = ('Driver-level limit past its bound (RS-B-4 final fix): the counted things are driver state, so the '
+             'driver is exercised directly; no timing or service is involved.')
+
+
+class Peer:
+    """A driver connection as the driver sees it: what it was sent, and whether it was closed."""
+
+    def __init__(self):
+        self.sent, self.closed = b'', False
+
+    def setblocking(self, flag):
+        pass
+
+    def send(self, data):
+        self.sent += data
+
+    def close(self):
+        self.closed = True
+
+
+class MemoryHoldLimitTests(unittest.TestCase):
+    """RS-B-4 final fix: the two count-based limits it added (lifetime_caps.json lists both) still work past
+    their bound. Nothing here sleeps; each step is a direct call on a driver with only the parts it touches."""
+
+    @requirements('RS-B-4', why_not_scenario=LIMIT_WHY)
+    def test_RS_B_4_failed_views_past_the_bound_drop_the_oldest_and_the_newest_still_answers_a_late_prepare(self):
+        with mock.patch.object(project_driver, 'MAX_RETIRED_RUNS', 3):
+            value = driver()
+            value._runs, value._failed_views, value._give_back = {}, {}, mock.Mock()
+            runs = [fencing_run(key=('hrn_' + chr(97 + number) * 48, 1), closed=True, reason='run_failed')
+                    for number in range(5)]
+            for run in runs:
+                value._release_failed(run)
+                self.assertEqual('released', run.state)
+            self.assertEqual([run.key for run in runs[2:]], list(value._failed_views))  # the oldest two went
+            self.assertIsNone(value._late_failure(runs[0].key, 'd' * 64, 'codex-host-v1'))
+            self.assertEqual({'state': 'failed', 'reason_code': 'run_failed'},
+                             value._late_failure(runs[4].key, 'd' * 64, 'codex-host-v1'))
+
+    def held(self, number, wait):
+        """A driver in its start-up memory recovery that has been sent `number` run.register lines."""
+        value = driver()
+        value._memory, value._memory_start = object(), SimpleNamespace(state='queued')
+        value._register_waiting, value._intake = [], []
+        value._answer = mock.Mock()
+        peers = []
+        for index in range(number):
+            line = json.dumps({'protocol': 1, 'operation': 'run.register', 'run_handle': 'hrn_' + 'a' * 48,
+                               'attempt': index + 1, 'inputs_digest': 'd' * 64}).encode()
+            peer = Peer()
+            enrolled = SimpleNamespace(request_digest=hashlib.sha256(line).hexdigest(), context=b'{}',
+                                       host_client='codex-host-v1')
+            value._request(peer, enrolled, line + b'\n')
+            peers.append(peer)
+        return value, peers
+
+    @requirements('RS-B-4', why_not_scenario=LIMIT_WHY)
+    def test_RS_B_4_registers_past_the_intake_bound_during_start_up_get_the_plain_refusal_and_the_held_ones_register(self):
+        with mock.patch.object(project_driver, 'MAX_INTAKE', 3):
+            value, peers = self.held(4, 5.0)
+            self.assertEqual(3, len(value._register_waiting))
+            value._answer.assert_not_called()  # the held ones wait for the recovery
+            self.assertEqual([False, False, False, True], [peer.closed for peer in peers])
+            reply = json.loads(peers[3].sent)
+            self.assertEqual(('refused', 'history_service_unavailable'), (reply['state'], reply['reason_code']))
+            value._memory_start.state = 'done'
+            value._release_registers()
+            self.assertEqual([], value._register_waiting)
+            self.assertEqual([1, 2, 3], [call.args[2]['attempt'] for call in value._answer.call_args_list])

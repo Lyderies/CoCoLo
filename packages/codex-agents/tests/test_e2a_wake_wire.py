@@ -890,7 +890,8 @@ class WakeFinalFixTests(StoreBase):
         from codex_agents.project_driver import RunDriver
 
         def driver(lost):
-            stub = mock.Mock(_containers=None, _preamble=None, _owner_name='test-e2a')
+            # A driver without memory custody (RS-B memory holds: the class default is None, a bare Mock is not).
+            stub = mock.Mock(_containers=None, _preamble=None, _owner_name='test-e2a', _memory=None)
             stub._settle_lost.return_value = lost
             return stub
         held = {'hrn_a': ('codex', 'held'), 'hrn_b': ('codex', 'released')}
