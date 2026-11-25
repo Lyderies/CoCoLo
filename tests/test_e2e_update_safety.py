@@ -28,6 +28,8 @@ REGISTRY = json.loads((ROOT / "tests" / "e2e" / "requirements.json").read_text()
 
 
 def source_of(module: str) -> str:
+    if module.startswith("setup_wizard"):
+        return (ROOT / "scripts" / (module.replace(".", "/") + ".py")).read_text()
     base = CLAUDE_SOURCE if module.startswith("claude_agents") else ORCHESTRATION
     return (base / (module.replace(".", "/") + ".py")).read_text()
 
@@ -44,9 +46,36 @@ class FaultTests(unittest.TestCase):
                 self.assertEqual(1, source_of(item["module"]).count(item["old"]), (name, item["module"]))
 
     def test_the_fault_names_the_runner_can_pick_are_the_modules_own(self):
-        self.assertEqual({"update_handover_broken"}, set(us.FAULTS))
-        self.assertIn("update_handover_broken", lifecycle.FAULTS)
+        self.assertEqual({"update_handover_broken", "failed_update_leaves_files", "update_ignores_uncommitted_files",
+                          "update_stops_other_projects"}, set(us.FAULTS))
+        for name in us.FAULTS:
+            self.assertIn(name, lifecycle.FAULTS)
         self.assertIn(us, lifecycle.FAULT_MODULES)
+
+    def test_each_fault_has_its_own_target_and_the_targets_are_distinct(self):
+        """Decision 259 / review: L11.2, L12.4 and L12.5 each have a red proof on their OWN assertion, not through G6's
+        handover fault; L12.3 has none (it is red by a product bug, so no green-to-red transition can be shown)."""
+        self.assertEqual(set(us.FAULTS), set(us.FAULT_TARGETS))
+        self.assertEqual({"G6"}, set(us.FAULT_TARGETS["update_handover_broken"]))
+        self.assertEqual(("L11.2",), us.FAULT_TARGETS["failed_update_leaves_files"])
+        self.assertEqual(("L12.4",), us.FAULT_TARGETS["update_ignores_uncommitted_files"])
+        self.assertEqual(("L12.5",), us.FAULT_TARGETS["update_stops_other_projects"])
+        every = [i for targets in us.FAULT_TARGETS.values() for i in targets]
+        self.assertEqual(len(every), len(set(every)))
+        self.assertNotIn("L12.3", every)
+        for name in ("failed_update_leaves_files", "update_ignores_uncommitted_files", "update_stops_other_projects"):
+            self.assertEqual((), us.FAULT_ALSO_RED[name], name)  # the narrow faults turn nothing else red
+
+    def test_the_failed_update_fault_replaces_the_plain_forced_failure_only_for_the_forced_update(self):
+        us.FAULT = "failed_update_leaves_files"
+        try:
+            self.assertEqual([], us.fault_patches())
+            forced = us.fault_patches(forced=True)
+            self.assertEqual(us.FAULTS["failed_update_leaves_files"], forced)
+            self.assertIn("e2e_forced_failure", forced[0]["new"])  # it still fails the update
+            self.assertIn("e2e-left-by-the-failed-update.txt", forced[0]["new"])
+        finally:
+            us.FAULT = None
 
     def test_the_forced_failure_is_not_a_fault_and_is_only_added_for_one_update(self):
         self.assertNotIn("forced_failure", us.FAULTS)
@@ -64,20 +93,84 @@ class FaultTests(unittest.TestCase):
         self.assertIn('"--fault"', text)
         self.assertNotRegex(text, r"environ[^\n]*FAULT")
 
-    def test_a_fault_run_must_turn_exactly_the_s5_ids_red(self):
-        ids = us.S5_IDS
-        normal = {"flows": ["L11", "L12"], "requirements": {**{i: {"passed": i != "L12.3"} for i in ids},
-                                                          "G3": {"passed": True}}}
-        fault = {"flows": ["L11", "L12"], "requirements": {**{i: {"passed": False} for i in ids},
-                                                          "G3": {"passed": True}}}
-        self.assertTrue(us.fault_isolated(normal, fault, expected_ids=set(normal["requirements"]))["isolated"])
-        outside = {"flows": ["L11", "L12"], "requirements": {**fault["requirements"], "G3": {"passed": False}}}
-        self.assertFalse(us.fault_isolated(normal, outside, expected_ids=set(normal["requirements"]))["isolated"])
-        one_green = {"flows": ["L11", "L12"], "requirements": {**fault["requirements"], "L12.4": {"passed": True}}}
-        self.assertFalse(us.fault_isolated(normal, one_green, expected_ids=set(normal["requirements"]))["isolated"])
-        missing = {"flows": ["L11", "L12"], "requirements": {i: v for i, v in fault["requirements"].items() if i != "G6"}}
-        self.assertFalse(us.fault_isolated(normal, missing, expected_ids=set(normal["requirements"]))["isolated"])
-        self.assertEqual({"G1"}, set(us.FAULT_ALSO_RED["update_handover_broken"]))
+    def reports(self, normal_red=(), fault_red=(), extra_ids=("G3",)):
+        ids = [*us.CHECKED_IDS, *extra_ids]
+        make = lambda red: {"flows": ["L11", "L12"], "requirements": {i: {"passed": i not in red} for i in ids}}
+        return make(normal_red), make(fault_red), set(ids)
+
+    def test_a_fault_run_needs_a_real_green_to_red_transition_per_targeted_id(self):
+        for name, targets in us.FAULT_TARGETS.items():
+            normal, fault, ids = self.reports(normal_red=("L12.3",), fault_red=("L12.3", *targets))
+            self.assertTrue(us.fault_isolated(normal, fault, name, expected_ids=ids)["isolated"], name)
+            # a targeted ID that is red in BOTH runs is no proof
+            both_red = self.reports(normal_red=("L12.3", *targets), fault_red=("L12.3", *targets))
+            result = us.fault_isolated(both_red[0], both_red[1], name, expected_ids=both_red[2])
+            self.assertFalse(result["isolated"], name)
+            self.assertEqual(sorted(targets), result["targets_not_transitioned"])
+            # a targeted ID still green under the fault is no proof either
+            none = self.reports(normal_red=("L12.3",), fault_red=("L12.3",))
+            self.assertFalse(us.fault_isolated(none[0], none[1], name, expected_ids=none[2])["isolated"], name)
+
+    def test_a_fault_may_not_change_another_id_or_lose_one(self):
+        normal, fault, ids = self.reports(normal_red=("L12.3",), fault_red=("L12.3", "L12.5", "G3"))
+        self.assertFalse(us.fault_isolated(normal, fault, "update_stops_other_projects", expected_ids=ids)["isolated"])
+        normal, fault, ids = self.reports(normal_red=("L12.3",), fault_red=("L12.3", "L12.4", "L12.5"))
+        self.assertFalse(us.fault_isolated(normal, fault, "update_stops_other_projects", expected_ids=ids)["isolated"])
+        normal, fault, ids = self.reports(normal_red=("L12.3",), fault_red=("L12.3", "G6"))
+        del fault["requirements"]["L12.3"]  # an ID the fault run lost (L12.3 is no named collateral)
+        self.assertFalse(us.fault_isolated(normal, fault, "update_handover_broken", expected_ids=ids)["isolated"])
+        # the handover fault may also turn its named collateral IDs red
+        normal, fault, ids = self.reports(normal_red=("L12.3",), fault_red=("L12.3", "G6", "L11.2", "L12.4", "L12.5"))
+        self.assertTrue(us.fault_isolated(normal, fault, "update_handover_broken", expected_ids=ids)["isolated"])
+        self.assertEqual({"G1", "G8", "L11.2", "L12.4", "L12.5"}, set(us.FAULT_ALSO_RED["update_handover_broken"]))
+
+    def test_requirement_map_reads_the_workers_entries(self):
+        entries = [{"requirements": ["L12.3"], "passed": True, "reasons": ["a"]},
+                   {"requirements": ["L12.3"], "passed": False, "reasons": ["b"]},
+                   {"requirements": ["G6", "G1"], "passed": True}]
+        verdict = us.requirement_map(entries)["requirements"]
+        self.assertEqual({"L12.3": {"passed": False, "reasons": ["a", "b"]}, "G6": {"passed": True, "reasons": []},
+                          "G1": {"passed": True, "reasons": []}}, verdict)
+
+    def test_g6_red_by_the_product_bug_proves_the_fault_only_by_an_update_that_turned_from_ok_to_failed(self):
+        """G6 is red in a normal run until UPDFIX lands (the retry after the refusal). Its fault proof is then a per-update
+        reason code: an update `_ok` in the normal run and `_failed` in the fault run. Red in both with no such change is no proof."""
+        ids = {*us.CHECKED_IDS, "G3"}
+
+        def doc(g6_reasons, g6=False):
+            reqs = {i: {"passed": True, "reasons": []} for i in ids}
+            reqs["L12.3"]["passed"] = False
+            reqs["G6"] = {"passed": g6, "reasons": g6_reasons}
+            return {"flows": [], "requirements": reqs}
+        normal = doc(["g6_first_update_ok", "g6_retry_after_refusal_failed"])
+        fault = doc(["g6_first_update_failed", "g6_retry_after_refusal_failed"])
+        fault["requirements"].update({k: {"passed": False, "reasons": []} for k in ("L11.2", "L12.4", "L12.5")})
+        self.assertTrue(us.fault_isolated(normal, fault, "update_handover_broken", expected_ids=ids)["isolated"])
+        same = doc(["g6_first_update_ok", "g6_retry_after_refusal_failed"])
+        same["requirements"].update({k: {"passed": False, "reasons": []} for k in ("L11.2", "L12.4", "L12.5")})
+        result = us.fault_isolated(normal, same, "update_handover_broken", expected_ids=ids)
+        self.assertFalse(result["isolated"])
+        self.assertEqual(["G6"], result["targets_not_transitioned"])
+        # only G6 has this latitude: another targeted ID red in both runs is rejected
+        both = doc([])
+        both["requirements"]["L12.4"]["passed"] = False
+        fault_l124 = doc([])
+        fault_l124["requirements"]["L12.4"]["passed"] = False
+        self.assertEqual(["L12.4"], us.fault_isolated(both, fault_l124, "update_ignores_uncommitted_files",
+                                                      expected_ids=ids)["targets_not_transitioned"])
+
+    def test_a_named_collateral_id_may_appear_in_only_one_run(self):
+        ids = {*us.CHECKED_IDS}
+        normal = {"flows": [], "requirements": {i: {"passed": i != "L12.3", "reasons": []} for i in ids}}
+        fault = {"flows": [], "requirements": {i: {"passed": False, "reasons": []} for i in ids}}
+        fault["requirements"]["G8"] = {"passed": False, "reasons": []}
+        fault["requirements"]["G1"] = {"passed": False, "reasons": []}
+        fault["requirements"]["G6"] = {"passed": False, "reasons": []}
+        result = us.fault_isolated(normal, fault, "update_handover_broken", expected_ids=ids)
+        self.assertEqual([], result["ids_differ"])
+        self.assertEqual([], result["changed_outside_targets"])
+        stray = {"flows": [], "requirements": {**fault["requirements"], "G5": {"passed": False, "reasons": []}}}
+        self.assertEqual(["G5"], us.fault_isolated(normal, stray, "update_handover_broken", expected_ids=ids)["ids_differ"])
 
     def test_every_subprocess_names_its_environment(self):
         tree = ast.parse(SOURCE)
@@ -138,6 +231,22 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(["records"], us.changed_anything(before, self.snapshot(records={"status": "y"})))
         self.assertEqual(["tables"], us.changed_anything(before, self.snapshot(ledger={"records": 4})))
 
+    def test_history_is_kept_only_when_records_exist_and_are_unchanged(self):
+        before = {"rows": {"outcome:1": "a", "dispatch_result:2": "b"}, "integrity": "ok"}
+        same = {"rows": dict(before["rows"]), "integrity": "ok"}
+        self.assertTrue(us.history_kept(before, same, exact=True))
+        self.assertTrue(us.history_kept(before, same, exact=False))
+        grown = {"rows": {**before["rows"], "outcome:3": "c"}, "integrity": "ok"}
+        self.assertFalse(us.history_kept(before, grown, exact=True))  # right after a failed update nothing may be added
+        self.assertTrue(us.history_kept(before, grown, exact=False))  # after a successful update later records may follow
+        edited = {"rows": {**before["rows"], "outcome:1": "x"}, "integrity": "ok"}
+        self.assertFalse(us.history_kept(before, edited, exact=False))  # a changed record
+        lost = {"rows": {"outcome:1": "a"}, "integrity": "ok"}
+        self.assertFalse(us.history_kept(before, lost, exact=False))  # a lost record
+        self.assertFalse(us.history_kept(before, {**same, "integrity": "database disk image is malformed"}, exact=False))
+        self.assertFalse(us.history_kept({"rows": {}, "integrity": "ok"}, {"rows": {}, "integrity": "ok"}, exact=True))  # no history seeded
+        self.assertFalse(us.history_kept(before, {"rows": {}, "integrity": "unreadable"}, exact=False))
+
     def test_a_collector_replaced_by_the_update_needs_the_old_gone_and_one_new(self):
         alive = {1: False, 2: True}
         self.assertTrue(us.replaced([1], [2], lambda pid: alive[pid]))
@@ -164,14 +273,55 @@ class JudgeTests(unittest.TestCase):
 
 
 class RegistryTests(unittest.TestCase):
-    def test_each_s5_id_has_its_own_check_in_the_module(self):
+    def test_each_checked_s5_id_has_its_own_check_in_the_module(self):
         declared = {name: ids for name, (ids, _f) in lifecycle.CHECKS.items() if name in us.CHECK_NAMES}
-        for requirement in us.S5_IDS:
+        row = {item["id"]: item for item in REGISTRY}
+        for requirement in us.CHECKED_IDS:
             self.assertTrue([n for n, ids in declared.items() if requirement in ids], requirement)
-        row = {item["id"]: item["checks"] for item in REGISTRY}
-        for requirement in us.S5_IDS:
-            self.assertTrue(row[requirement], requirement)
-            self.assertTrue(set(row[requirement]) <= set(declared), requirement)
+            self.assertTrue(row[requirement]["checks"], requirement)
+            self.assertTrue(set(row[requirement]["checks"]) <= set(declared), requirement)
+
+    def test_l12_2_is_unchecked_on_purpose_with_its_reason(self):
+        """Decision 259: no 0.2.x leftovers are planted, so no check may claim the ID."""
+        self.assertEqual(("L12.2",), tuple(us.UNCHECKED))
+        item = next(i for i in REGISTRY if i["id"] == "L12.2")
+        self.assertEqual([], item["checks"])
+        self.assertIs(True, item["deferred"])
+        self.assertTrue(item["reason"].startswith("0.2.x leftovers need a historical ledger: slice S4 / L12.6"))
+        for name, (ids, _f) in lifecycle.CHECKS.items():
+            self.assertNotIn("L12.2", ids, name)
+        self.assertNotIn("L12.2", us.CHECKED_IDS)
+
+    def test_l11_2_names_the_installers_automatic_rollback_not_learning_rollback(self):
+        """Decision 260: the statement says the installer's automatic rollback of a failed update (same intent)."""
+        item = next(i for i in REGISTRY if i["id"] == "L11.2")
+        self.assertNotIn("learning-rollback", item["statement"])
+        self.assertIn("the installer's automatic rollback of a failed update works", item["statement"])
+        self.assertTrue(item["statement"].startswith("A failed upgrade forced part-way leaves the records unchanged"))
+        self.assertTrue(item["statement"].endswith("and the next attempt succeeds."))
+
+    def test_every_check_of_the_slice_shares_one_group_so_g6_sees_every_update_once(self):
+        self.assertEqual({us.GROUP}, {lifecycle.CHECK_GROUPS[name] for name in us.CHECK_NAMES})
+
+    def test_g6_judges_every_update_of_the_slice_including_the_retry_after_the_refusal(self):
+        function = next(n for n in ast.parse(SOURCE).body if isinstance(n, ast.FunctionDef)
+                        and n.name.startswith("g6_update_never_needs"))
+        text = ast.get_source_segment(SOURCE, function)
+        for needle in ("main.u1", "main.u2", "child.final", "dirty.final", "fail.nxt", "child_scene()", "dirty_scene()",
+                       "fail_scene()", "main_scene()"):
+            self.assertIn(needle, text, needle)
+
+    def test_l11_2_seeds_real_child_history_and_compares_the_stores_contents(self):
+        function = next(n for n in ast.parse(SOURCE).body if isinstance(n, ast.FunctionDef) and n.name == "fail_scene")
+        text = ast.get_source_segment(SOURCE, function)
+        self.assertLess(text.index("run_a_child("), text.index("do_update(world, refuses=True)"))
+        self.assertLess(text.index("history_before"), text.index("do_update(world, refuses=True)"))
+        for needle in ("history_failed", "history_next", "persisted_outcome", "capacity_read"):
+            self.assertIn(needle, text)
+        check = next(n for n in ast.parse(SOURCE).body if isinstance(n, ast.FunctionDef) and n.name.startswith("l11_2_"))
+        body = ast.get_source_segment(SOURCE, check)
+        self.assertIn("history_kept(scene.history_before, scene.history_failed, exact=True)", body)
+        self.assertIn("history_kept(scene.history_before, scene.history_next, exact=False)", body)
 
     def test_the_module_declares_only_s5_ids(self):
         for name in us.CHECK_NAMES:

@@ -37,7 +37,14 @@ class E2ERequirementsTests(unittest.TestCase):
         self.assertEqual(len(self.doc["requirements"]), len(self.requirements))
         for item in self.doc["requirements"]:
             with self.subTest(item["id"]):
-                self.assertEqual({"id", "flow", "source", "statement", "checks"}, set(item))
+                base = {"id", "flow", "source", "statement", "checks"}
+                if "deferred" in item:  # unchecked ON PURPOSE, with its reason (never silently): no check, a reason
+                    self.assertEqual(base | {"deferred", "reason"}, set(item))
+                    self.assertIs(True, item["deferred"])
+                    self.assertEqual([], item["checks"], "a deferred requirement has no check (it would be green on a stand-in)")
+                    self.assertTrue(isinstance(item["reason"], str) and len(item["reason"]) > 20)
+                else:
+                    self.assertEqual(base, set(item))
                 self.assertIn(item["flow"], {*self.doc["flows"], "all"})
                 self.assertTrue(item["source"] and item["statement"])
 

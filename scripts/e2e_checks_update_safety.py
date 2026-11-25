@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -35,8 +36,12 @@ from e2e_checks_setup import summary_states  # noqa: E402
 from e2e_checks_shared import add_project, child_frames, project_records, project_view, write_patches  # noqa: E402
 
 S5_IDS = ("L11.2", "L12.2", "L12.3", "L12.4", "L12.5", "G6")
+# L12.2 is unchecked ON PURPOSE (decision 259: a check is green only through the real product path): the requirement's 0.2.x
+# leftovers need a historical ledger that no supported product path plants (writing one into the product's ledger is refused).
+UNCHECKED = {"L12.2": "0.2.x leftovers need a historical ledger: slice S4 / L12.6"}
+CHECKED_IDS = tuple(i for i in S5_IDS if i not in UNCHECKED)
+GROUP = "upd_all"  # G6 judges every update of the slice, so every check of the slice reads its scenes in one process
 CHECK_NAMES = (
-    "l12_2_one_update_with_an_admitted_never_launched_run_needs_no_manual_stop",
     "l12_3_update_with_a_running_child_is_refused_plainly_and_the_child_goes_on",
     "l12_3_refused_update_with_a_running_child_changes_nothing",
     "l12_3_the_update_after_the_refused_one_goes_through_when_the_child_has_ended",
@@ -46,22 +51,51 @@ CHECK_NAMES = (
     "g6_update_never_needs_the_collector_stopped_by_hand_and_ends_healthy_on_the_new_build",
 )
 
-# The fault of this slice, chosen ONLY by the runner's explicit `--fault NAME` argument (e2e_lifecycle.py sets FAULT in the
+# The faults of this slice, chosen ONLY by the runner's explicit `--fault NAME` argument (e2e_lifecycle.py sets FAULT in the
 # process that runs the scenes); no environment variable selects it and World environments carry no E2E_ variable.
 FAULT: str | None = None
 FAULTS = {
     # The earlier collector refuses every handover, as if a child were always running: the update can only finish if the
-    # owner stops the collector by hand.
+    # owner stops the collector by hand. (G6's own red proof.)
     "update_handover_broken": [
         {"module": "codex_agents.learning_store",
          "old": "                # earlier version left never ran under a collector, so they do not count.\n"
                 "                if not self.ledger.drained(children_only=True):\n",
          "new": "                # earlier version left never ran under a collector, so they do not count.\n"
-                "                if True:\n"}]}
-# Every S5 ID the fault must turn red; nothing else may change except G1 (every update that is not an expected refusal
-# must exit 0, and the broken handover makes those exit 2).
-FAULT_TARGETS = {"update_handover_broken": S5_IDS}
-FAULT_ALSO_RED = {"update_handover_broken": ("G1",)}
+                "                if True:\n"}],
+    # The forced failure also leaves a file the part-applied update did not report, so the installer's rollback cannot
+    # put the project back as it was. (L11.2's own red proof.)
+    "failed_update_leaves_files": [
+        {"module": "claude_agents.packaging",
+         "old": "        report = _operate(source_root, target, operation, apply, previous_source_root)\n",
+         "new": "        if apply and operation == \"update\":\n"
+                "            (target / \"e2e-left-by-the-failed-update.txt\").write_text(\"left\\n\")\n"
+                "            _fail(\"e2e_forced_failure\")\n"
+                "        report = _operate(source_root, target, operation, apply, previous_source_root)\n"}],
+    # The update does not stop at uncommitted managed files. (L12.4's own red proof.)
+    "update_ignores_uncommitted_files": [
+        {"module": "setup_wizard.flow",
+         "old": "        if dirty:\n            return \"Uncommitted changes exist in managed paths",
+         "new": "        if False:\n            return \"Uncommitted changes exist in managed paths"}],
+    # The hint removal for an earlier service of ANOTHER project than the last one (the second project's update) takes every
+    # project's service hint with it, so the first project's service stops. (L12.5's own red proof.)
+    "update_stops_other_projects": [
+        {"module": "codex_agents.project_host_client",
+         "old": "        runtime_hint_path(CollectorPaths(state_root), Path(project_root)).unlink(missing_ok=True)\n",
+         "new": "        runtime_hint_path(CollectorPaths(state_root), Path(project_root)).unlink(missing_ok=True)\n"
+                "        _mark = runtime_hint_path(CollectorPaths(state_root), Path(project_root)).parent / 'e2e-withdrew-for'\n"
+                "        if _mark.exists() and _mark.read_text() != str(project_root):\n"
+                "            for _other in runtime_hint_path(CollectorPaths(state_root), Path(project_root)).parent.glob('*.json'):\n"
+                "                _other.unlink(missing_ok=True)\n"
+                "        _mark.write_text(str(project_root))\n"}]}
+# What each fault must turn from green (normal run) to red (fault run), judged per ID on its own assertion, and the only
+# other IDs it may turn red with it (named, never a prefix). An ID red in BOTH runs proves nothing and is not accepted.
+# L12.3 has no fault: it is red in a normal run by a product bug (S5-STATUS.md finding 1), so a transition cannot be shown.
+FAULT_TARGETS = {"update_handover_broken": ("G6",), "failed_update_leaves_files": ("L11.2",),
+                 "update_ignores_uncommitted_files": ("L12.4",), "update_stops_other_projects": ("L12.5",)}
+FAULT_ALSO_RED = {"update_handover_broken": ("G1", "G8", "L11.2", "L12.4", "L12.5"),  # their next updates need the handover too
+                  "failed_update_leaves_files": (), "update_ignores_uncommitted_files": (),
+                  "update_stops_other_projects": ()}
 # A forced failure part-way through an update (L11.2): not a fault of the product but the stimulus of that requirement. The
 # Claude package's update step, which runs after the Codex package's has been applied, fails once.
 FORCED_FAILURE = [
@@ -72,7 +106,12 @@ FORCED_FAILURE = [
 
 
 def fault_patches(*, forced: bool = False) -> list:
-    return [*(FAULTS[FAULT] if FAULT else []), *(FORCED_FAILURE if forced else [])]
+    """The patches a scene writes: the chosen fault's and, for the one update that is forced to fail, the forced failure
+    (the failed-update fault REPLACES the plain forced failure: it is the same failure plus what it leaves behind)."""
+    chosen = FAULTS[FAULT] if FAULT else []
+    if FAULT == "failed_update_leaves_files":  # only the forced update's own failure carries it
+        return list(chosen) if forced else []
+    return [*chosen, *(FORCED_FAILURE if forced else [])]
 
 
 def registry_ids(flows=None) -> set:
@@ -81,18 +120,49 @@ def registry_ids(flows=None) -> set:
     return {item["id"] for item in items if flows is None or item["flow"] in flows or (item["flow"] == "all" and item["checks"])}
 
 
+# IDs that are red in a NORMAL run because of a product bug being fixed elsewhere (UPDFIX): a green-to-red transition cannot be
+# shown for them yet. G6 judges each update separately (reason codes `g6_<update>_ok` / `_failed`), so its proof is that an
+# update which is `_ok` in the normal run is `_failed` in the fault run. L12.3 is red by the same bug and has no fault.
+RED_BY_PRODUCT_BUG_IN_NORMAL = ("G6",)
+
+
 def fault_isolated(normal: dict, fault: dict, name: str = "update_handover_broken", expected_ids=None) -> dict:
-    """Compare a normal report with a fault report over EVERY requirement ID: the fault run must hold the same IDs, leave
-    every S5 ID red and change no other ID (G1 may change: the broken handover makes the updates that must succeed exit 2)."""
+    """Compare a normal report with a fault report over EVERY requirement ID. Every targeted ID must be a real transition
+    (green in the normal run, red in the fault run; red in both is no proof, except an ID red by a product bug, whose proof
+    is an update `_ok` in the normal run and `_failed` in the fault run), no other ID may change except the named collateral
+    ones, and both reports must hold the same IDs (a named collateral ID, such as G8, may show up in only one)."""
     before, after = normal.get("requirements") or {}, fault.get("requirements") or {}
     changed = sorted(i for i in set(before) & set(after) if bool(before[i].get("passed")) != bool(after[i].get("passed")))
-    allowed = set(FAULT_TARGETS[name]) | set(FAULT_ALSO_RED.get(name, ()))
+    collateral = set(FAULT_ALSO_RED.get(name, ()))
+    allowed = set(FAULT_TARGETS[name]) | collateral
+
+    def transitioned(i):
+        was, now = before.get(i) or {}, after.get(i) or {}
+        if was.get("passed") is True and now.get("passed") is False:
+            return True
+        if i in RED_BY_PRODUCT_BUG_IN_NORMAL and was.get("passed") is False and now.get("passed") is False:
+            reasons_before, reasons_after = set(was.get("reasons") or ()), set(now.get("reasons") or ())
+            return any(code.endswith("_ok") and code[:-3] + "_failed" in reasons_after for code in reasons_before)
+        return False
     outside = [i for i in changed if i not in allowed]
-    not_red = sorted(i for i in FAULT_TARGETS[name] if (after.get(i) or {}).get("passed") is not False)
+    not_transitioned = sorted(i for i in FAULT_TARGETS[name] if not transitioned(i))
     wanted = set(registry_ids(normal.get("flows") or None) if expected_ids is None else expected_ids)
-    missing = sorted(set(before) ^ set(after)) + sorted(i for i in wanted if i not in before or i not in after)
-    return {"isolated": not outside and not not_red and not missing, "changed": changed,
-            "changed_outside_targets": outside, "targets_not_red": not_red, "ids_differ": missing}
+    missing = sorted(i for i in set(before) ^ set(after) if i not in collateral)
+    missing += sorted(i for i in wanted if (i not in before or i not in after) and i not in collateral)
+    return {"isolated": not outside and not not_transitioned and not missing, "changed": changed,
+            "changed_outside_targets": outside, "targets_not_transitioned": not_transitioned, "ids_differ": missing}
+
+
+def requirement_map(entries: list) -> dict:
+    """The per-ID verdicts of a `--execute` worker's entries (an ID is green when every check naming it passed; its reason
+    codes are kept), in the shape `fault_isolated` compares."""
+    verdicts: dict = {}
+    reasons: dict = {}
+    for entry in entries:
+        for requirement in entry.get("requirements") or []:
+            verdicts[requirement] = verdicts.get(requirement, True) and bool(entry.get("passed"))
+            reasons.setdefault(requirement, []).extend(entry.get("reasons") or [])
+    return {"requirements": {i: {"passed": v, "reasons": reasons.get(i, [])} for i, v in verdicts.items()}}
 
 
 # Every `refuses=True` of this module is one expected refusal with the reason its check asserts (G1: any other step that
@@ -315,6 +385,51 @@ def settled(world, timeout: float = 30) -> list:
         time.sleep(0.3)
 
 
+def history_dump(world, project_id) -> dict:
+    """The project history's own store, read-only and by its own path (never through a command): every record as
+    `type:sequence` -> sha256 of its stored content, and SQLite's own integrity verdict. A store that cannot be read says so."""
+    path = shared.project_history(world, project_id)
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            rows = {f"{kind}:{sequence}": hashlib.sha256(content if isinstance(content, bytes) else str(content).encode()).hexdigest()
+                    for kind, sequence, content in connection.execute(
+                        "select record_type, source_sequence, content from records order by record_type, source_sequence")}
+            return {"rows": rows, "integrity": connection.execute("pragma integrity_check").fetchone()[0]}
+        finally:
+            connection.close()
+    except (sqlite3.Error, OSError):
+        return {"rows": {}, "integrity": "unreadable"}
+
+
+def history_kept(before: dict, after: dict, *, exact: bool) -> bool:
+    """The project history still holds what it held: some record before, SQLite says `ok` both times, and every earlier
+    record is there with the same content (`exact`: nothing else either, as right after a failed update)."""
+    rows_before, rows_after = before.get("rows") or {}, after.get("rows") or {}
+    if not rows_before or before.get("integrity") != "ok" or after.get("integrity") != "ok":
+        return False
+    if exact:
+        return rows_before == rows_after
+    return all(rows_after.get(key) == value for key, value in rows_before.items())
+
+
+def quiet(view, seconds: float = 90) -> dict:
+    """The project's snapshot once nothing is changing any more: a child that just ended is still being settled by the
+    services (its per-run working files, `.context-*` and `.result-*`, are removed some seconds after it ends; its
+    records are counted), and a snapshot taken before that would make an update look as if it changed them. Waits until
+    no such working file is left and two consecutive snapshots are equal; the last one either way after `seconds`."""
+    deadline = time.monotonic() + seconds
+    last = take(view)
+    while time.monotonic() < deadline:
+        time.sleep(3.0)
+        current = take(view)
+        working = [name for name in current["files"] if "/.context-" in name or "/.result-" in name]
+        if current == last and not working:
+            return current
+        last = current
+    return last
+
+
 def run_a_child(view, tag: str) -> SimpleNamespace:
     """A fresh orchestration on the project and one child run to the end (completed), recorded as the primary does."""
     ctl = Ctl(view, tag)
@@ -368,42 +483,7 @@ def main_scene():
     return scene
 
 
-@check("L12.2", group="upd_main")
-def l12_2_one_update_with_an_admitted_never_launched_run_needs_no_manual_stop(phase: Phase) -> None:
-    scene = main_scene()
-    update = scene.u1
-    run = scene.admitted
-    phase.expect(run.open_code == 0 and (run.opened or {}).get("admission") == "admitted",
-                 "before the update a run was opened and admitted")
-    phase.expect(run.thread is None and run.code is None, "that run was never dispatched, so it never launched")
-    phase.expect((scene.admitted_ledger.get("host_run_bindings") or 0) >= 1,
-                 "the account ledger holds the opened run's binding before the update")
-    start = scene.start["first"]
-    phase.expect(len(start.pids) == 1 and runs_from(start.collector, scene.clone) and runs_from(start.service, scene.clone),
-                 "before the update the collector and the project's service run from the earlier build")
-    phase.expect(start.version == previous_version(current_version()) and start.ready is True,
-                 "the collector reports the earlier version, ready")
-    phase.expect(update.steps == ["setup_update"], "the update was one command (the harness ran nothing else around it)")
-    phase.expect(not update.run.timed_out and update.run.code == 0, "the one update command exits 0")
-    states = states_of(update)
-    phase.expect(sorted(states) == list(range(1, 10)) and "FAIL" not in states.values(),
-                 "the update's summary names every step and none failed")
-    phase.expect(all(update.alive_before.values()) and update.alive_before,
-                 "the earlier collector was running right before the update")
-    phase.expect(replaced(update.before.pids, update.after.pids, recovery.alive),
-                 "the earlier collector is gone and exactly one new collector runs (replaced by the update itself)")
-    phase.expect(runs_from(update.after.collector, ROOT) and runs_from(update.after.service, ROOT),
-                 "the collector and the project's service now run from this build")
-    phase.expect(update.after.service_pids and not set(update.after.service_pids) & set(update.before.service_pids),
-                 "the project's service was replaced, not kept")
-    phase.expect(update.after.ready is True and update.after.version == current_version() and update.after.stale is False,
-                 "the collector reports this build, ready, its code not stale")
-    phase.expect((update.after.earlier or {}).get("holding") == 0,
-                 "the collector reports no earlier-version run holding a slot")
-    phase.reason("update_without_manual_stop")
-
-
-@check("L12.3", group="upd_child")
+@check("L12.3", group=GROUP)
 def l12_3_update_with_a_running_child_is_refused_plainly_and_the_child_goes_on(phase: Phase) -> None:
     scene = child_scene()
     update, run = scene.refused, scene.run
@@ -429,7 +509,7 @@ def l12_3_update_with_a_running_child_is_refused_plainly_and_the_child_goes_on(p
                  "the child's slot is released in the ledger once it ends")
 
 
-@check("L12.3", group="upd_child")
+@check("L12.3", group=GROUP)
 def l12_3_refused_update_with_a_running_child_changes_nothing(phase: Phase) -> None:
     """The requirement is `changes nothing`: no file, no commit, no record, and the project still works for the primary
     that started the child (it can record the child's result and close its orchestration)."""
@@ -448,7 +528,7 @@ def l12_3_refused_update_with_a_running_child_changes_nothing(phase: Phase) -> N
     phase.expect(scene.closed[0] == 0, "the primary can still close its orchestration after the refusal")
 
 
-@check("L12.3", group="upd_child")
+@check("L12.3", group=GROUP)
 def l12_3_the_update_after_the_refused_one_goes_through_when_the_child_has_ended(phase: Phase) -> None:
     """`Try again when none is running` (the refusal's own words) has to work without a hand stop."""
     scene = child_scene()
@@ -467,7 +547,7 @@ def l12_3_the_update_after_the_refused_one_goes_through_when_the_child_has_ended
                  "and replaces the earlier collector and the project's service, ready on this build")
 
 
-@check("L12.4", group="upd_dirty")
+@check("L12.4", group=GROUP)
 def l12_4_update_with_uncommitted_managed_files_is_refused_and_changes_nothing(phase: Phase) -> None:
     scene = dirty_scene()
     update = scene.refused
@@ -495,7 +575,7 @@ def l12_4_update_with_uncommitted_managed_files_is_refused_and_changes_nothing(p
                  "and replaces the earlier collector by itself, ready on this build")
 
 
-@check("L12.5", group="upd_main")
+@check("L12.5", group=GROUP)
 def l12_5_second_project_updated_after_the_first_works_and_the_first_still_works(phase: Phase) -> None:
     scene = main_scene()
     first, second = scene.u1, scene.u2
@@ -520,13 +600,21 @@ def l12_5_second_project_updated_after_the_first_works_and_the_first_still_works
     works(phase, scene.second, scene.work["second"], "the second project")
 
 
-@check("L11.2", group="upd_fail")
+@check("L11.2", group=GROUP)
 def l11_2_update_failed_part_way_is_rolled_back_records_unchanged_next_attempt_succeeds(phase: Phase) -> None:
-    """The requirement names `learning-rollback`; that command (cli.py) records a candidate's failback and has nothing to do
-    with an upgrade, so this check judges what the requirement describes: a failed upgrade, forced part-way, undone by the
-    installer's own rollback, the records unchanged, the next attempt succeeding (S5-STATUS.md, finding)."""
+    """Decision 260: the requirement names the installer's automatic rollback of a failed update. An update forced to fail
+    part-way, after the Codex package's step was applied, is undone by that rollback: files and Git as before, the collector's
+    records, the ledger and the project's own history store (recorded child history seeded through the real product before the
+    failure) unchanged, and the next attempt succeeds with that history still readable."""
     scene = fail_scene()
     failed = scene.failed
+    seed = scene.seed
+    phase.expect(seed.run.open_code == 0 and seed.run.code == 0 and seed.outcome == "completed"
+                 and scene.seed_closed[0] == 0,
+                 "before the forced failure a child really ran through the installed CLI, was recorded and its orchestration closed")
+    phase.expect(len(scene.history_before["rows"]) > 0 and scene.history_before["integrity"] == "ok"
+                 and any(key.startswith("outcome:") for key in scene.history_before["rows"]),
+                 "the project history store holds recorded child history (an outcome among its records), SQLite integrity ok")
     phase.expect(failed.steps == ["setup_update"], "the failing update was one command")
     phase.expect(not failed.run.timed_out and failed.run.code != 0, "the forced failure stops the update (it exits non-zero)")
     states = states_of(failed)
@@ -542,6 +630,8 @@ def l11_2_update_failed_part_way_is_rolled_back_records_unchanged_next_attempt_s
                  "the Codex step really rewrote its file before the failure (it was written, then put back)")
     phase.expect("records" not in changed and "tables" not in changed,
                  "the collector's records by kind and the ledger's table row counts are unchanged")
+    phase.expect(history_kept(scene.history_before, scene.history_failed, exact=True),
+                 "the project history store is exactly as before the failed update: every record, byte for byte, integrity ok")
     phase.expect(failed.before.pids == failed.after.pids and failed.before.service_pids == failed.after.service_pids
                  and runs_from(failed.after.collector, scene.clone),
                  "the collector and the project's service are the same live processes, still on the earlier build")
@@ -553,27 +643,63 @@ def l11_2_update_failed_part_way_is_rolled_back_records_unchanged_next_attempt_s
                  "and replaces the earlier collector by itself, ready on this build")
     phase.expect(nxt.snapshot_after["commits"] != nxt.snapshot_before["commits"] and nxt.snapshot_after["dirty"] == "",
                  "the next attempt installed and committed the update the failed one had undone")
+    phase.expect(history_kept(scene.history_before, scene.history_next, exact=False),
+                 "after the next successful update every earlier history record is still in the store, unchanged, integrity ok")
+    phase.expect(scene.outcome_next == "completed" and scene.read_next.get("state") == "released",
+                 "the seeded child's history is still readable after the next update (its outcome record and the account's per-run read)")
 
 
-@check("G6", group="upd_main")
+def update_problems(update, *, replaces_earlier: bool) -> list[str]:
+    """What is wrong with one update of the slice that must succeed (empty: nothing). Fixed names only: exit 0 by itself (the
+    harness stops nothing), the one command, no failing step, and the project ends with exactly one collector, from this
+    build, ready and not stale (the earlier one alive right before and gone after, where one ran)."""
+    found = []
+    if update.steps != ["setup_update"]:
+        found.append("not_the_only_command")
+    if update.run.timed_out or update.run.code != 0:
+        found.append("needed_a_hand_stop_or_failed")
+    if "FAIL" in states_of(update).values():
+        found.append("a_step_failed")
+    if not (update.after.ready is True and update.after.version == current_version() and update.after.stale is False):
+        found.append("collector_not_ready_on_this_build")
+    if not (len(update.after.pids) == 1 and runs_from(update.after.collector, ROOT)):
+        found.append("not_exactly_one_collector_of_this_build")
+    if replaces_earlier and not (all(update.alive_before.values()) and update.alive_before
+                                 and replaced(update.before.pids, update.after.pids, recovery.alive)):
+        found.append("earlier_collector_not_replaced_by_the_update")
+    return found
+
+
+@check("G6", group=GROUP)
 def g6_update_never_needs_the_collector_stopped_by_hand_and_ends_healthy_on_the_new_build(phase: Phase) -> None:
-    scene = main_scene()
-    first, second = scene.u1, scene.u2
-    for name, update in (("the first", first), ("the second", second)):
-        phase.expect(update.run.code == 0 and not update.run.timed_out, f"{name} update exits 0")
-        phase.expect(update.steps == ["setup_update"], f"{name} update was the only command run around it")
-        phase.expect(update.after.ready is True and update.after.version == current_version()
-                     and update.after.stale is False, f"{name} update ends with the collector ready on this build, not stale")
-        phase.expect(len(update.after.pids) == 1 and runs_from(update.after.collector, ROOT),
-                     f"{name} update ends with exactly one collector, running this build")
-    phase.expect(all(first.alive_before.values()) and first.alive_before
-                 and replaced(first.before.pids, first.after.pids, recovery.alive),
-                 "the earlier collector was alive right before the first update and gone after it, with no stop in between")
-    phase.expect(all(second.alive_before.values()) and second.alive_before,
-                 "the collector the first update started was alive right before the second update")
-    phase.expect(scene.after_u2.ready is True and scene.after_u2.pids == second.after.pids,
-                 "the collector is healthy and the same process after both updates")
-    phase.reason("collector_replaced_by_update")
+    """Every update of the slice that is expected to succeed, judged alike: the two updates of the main scene (the first
+    with an admitted, never launched run), the retry after the refused update with a running child, the update after the
+    uncommitted file was discarded and the attempt after the forced failure. The refusals themselves are L12.3, L12.4 and
+    L11.2's; what G6 says is that no update, and no retry after a refusal, ever needs the collector stopped by hand. Each
+    update's verdict is a reason code (`g6_<update>_ok` or `_failed`), so a report shows which of them it was."""
+    main, child, dirty, fail = main_scene(), child_scene(), dirty_scene(), fail_scene()
+    run = main.admitted
+    phase.expect(run.open_code == 0 and (run.opened or {}).get("admission") == "admitted" and run.thread is None and run.code is None
+                 and (main.admitted_ledger.get("host_run_bindings") or 0) >= 1,
+                 "before the first update a run was opened and admitted, never dispatched, its binding in the ledger")
+    start = main.start["first"]
+    phase.expect(len(start.pids) == 1 and runs_from(start.collector, main.clone) and runs_from(start.service, main.clone)
+                 and start.version == previous_version(current_version()) and start.ready is True,
+                 "before the first update the collector and the project's service run from the earlier build, ready")
+    second_before = main.u2.alive_before
+    second_extra = [] if (all(second_before.values()) and second_before and main.after_u2.ready is True
+                          and main.after_u2.pids == main.u2.after.pids) else ["collector_not_the_one_started_before"]
+    first_extra = [] if (sorted(states_of(main.u1)) == list(range(1, 10))
+                         and (main.u1.after.earlier or {}).get("holding") == 0) else ["summary_or_earlier_runs_not_clean"]
+    judged = (("first_update", update_problems(main.u1, replaces_earlier=True) + first_extra),
+              ("second_update", update_problems(main.u2, replaces_earlier=False) + second_extra),
+              ("retry_after_refusal", update_problems(child.final, replaces_earlier=True)),
+              ("after_discarding_the_file", update_problems(dirty.final, replaces_earlier=True)),
+              ("after_the_forced_failure", update_problems(fail.nxt, replaces_earlier=True)))
+    for tag, problems in judged:
+        phase.reason(f"g6_{tag}_{'failed' if problems else 'ok'}")
+    bad = [tag for tag, problems in judged if problems]
+    phase.expect(not bad, "every update of the slice goes through by itself and ends healthy on this build: failing " + ", ".join(bad))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -651,11 +777,24 @@ def fail_scene():
     write_patches(world, fault_patches())
     scene.clone = previous_clone(world)
     set_up_previous(world, scene.clone)
+    # Real recorded child history before the forced failure: one child run to its end through the installed CLI of the
+    # earlier build, recorded as the primary does, its orchestration closed; then the history store's own contents.
+    seed = Ctl(world, "f0")
+    seed.host("provider-observe", "--provider", "claude", "--billing-probe")
+    scene.seed = run_a_child(world, "f1")
+    scene.seed_closed = scene.seed.ctl.host("learning-close-orchestration", "--orchestration-handle", scene.seed.ctl.handle,
+                                           "--status", "completed")
+    quiet(world)  # the seeded child is settled before the part-way failure is measured against it
+    scene.history_before = history_dump(world, scene.seed.project_id)
     scene.touched = world.project / ".codex" / "orchestration" / "codex_agents" / "__init__.py"  # the file the Codex step updates
     scene.touched_before = scene.touched.stat().st_mtime_ns
     write_patches(world, fault_patches(forced=True))
     scene.failed = do_update(world, refuses=True)
     scene.touched_after = scene.touched.stat().st_mtime_ns
+    scene.history_failed = history_dump(world, scene.seed.project_id)
     write_patches(world, fault_patches())
     scene.nxt = do_update(world)
+    scene.history_next = history_dump(world, scene.seed.project_id)
+    scene.read_next = recovery.capacity_read(world, scene.seed.run)  # the product's own per-run read of the seeded run
+    scene.outcome_next = recovery.persisted_outcome(world, scene.seed.run, scene.seed.project_id)
     return scene
