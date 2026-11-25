@@ -291,7 +291,12 @@
    "flow": "L12",
    "source": "PLAN-0.4.0.md T7",
    "statement": "From each earlier release tag (v0.3.1 on), with history built on it, an update to HEAD succeeds and the full run passes again.",
-   "checks": []
+   "checks": [
+    "l12_1_update_from_v0_3_1_succeeds_and_the_full_run_passes_again",
+    "l12_1_update_from_v0_3_2_succeeds_and_the_full_run_passes_again",
+    "l12_1_update_from_v0_3_3_succeeds_and_the_full_run_passes_again",
+    "l12_1_update_from_v0_3_4_succeeds_and_the_full_run_passes_again"
+   ]
   },
   {
    "id": "L12.2",
@@ -326,14 +331,18 @@
    "flow": "L12",
    "source": "PLAN-0.4.0.md T7",
    "statement": "History built on an earlier release with more than 512 admission records, runs left by 0.2.x and a project over 128 MiB still opens, dispatches and upgrades (the four live-test bugs: unbounded admission history, a masked busy probe, 0.2.x leftovers blocking updates, a protected copy without role files).",
-   "checks": []
+   "checks": [
+    "l12_6_over_512_admission_records_and_128_mib_still_open_dispatch_and_upgrade"
+   ]
   },
   {
    "id": "L12.7",
    "flow": "L12",
    "source": "DESIGN-0.3.3-claim-capture.md",
    "statement": "A dispatch refused at its claim on a project with long history closes by itself, and after an update from the release before, the next service closes any such run an earlier version left (0.3.3 C2, C3, C3f).",
-   "checks": []
+   "checks": [],
+   "deferred": true,
+   "reason": "Needs a dispatch refused at its claim on v0.3.2 with a long history (the old service leaves the lease), which the fake clients cannot cause through the CLI, then the next service closing it; not built in S4 (see docs/requirements/t7/S4-STATUS.md)."
   },
   {
    "id": "L13.1",
@@ -433,7 +442,12 @@
    "flow": "all",
    "source": "PLAN-0.4.0.md T7",
    "statement": "Records keep their history across every update: counts by kind, never content.",
-   "checks": []
+   "checks": [
+    "g7_update_from_v0_3_1_keeps_counts_by_kind",
+    "g7_update_from_v0_3_2_keeps_counts_by_kind",
+    "g7_update_from_v0_3_3_keeps_counts_by_kind",
+    "g7_update_from_v0_3_4_keeps_counts_by_kind"
+   ]
   },
   {
    "id": "G8",

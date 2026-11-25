@@ -43,10 +43,11 @@ import e2e_checks_general  # noqa: E402,F401
 import e2e_checks_run_control  # noqa: E402,F401
 import e2e_checks_recovery  # noqa: E402,F401
 import e2e_checks_learning_guard  # noqa: E402,F401
+import e2e_checks_update_history  # noqa: E402,F401
 
 # Every slice's test-only product faults (T7 S1 run control, T7 S2 recovery, T7 S3 learning and guard). A fault is chosen ONLY by the runner's
 # explicit --fault argument; it is handed to the one module that owns it, every other module runs with none.
-FAULT_MODULES = (e2e_checks_run_control, e2e_checks_recovery, e2e_checks_learning_guard)
+FAULT_MODULES = (e2e_checks_run_control, e2e_checks_recovery, e2e_checks_learning_guard, e2e_checks_update_history)
 FAULTS = sorted(name for module in FAULT_MODULES for name in module.FAULTS)
 
 
