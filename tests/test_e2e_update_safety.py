@@ -9,9 +9,12 @@ import ast
 import importlib.util
 import json
 import re
+import sqlite3
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -46,8 +49,8 @@ class FaultTests(unittest.TestCase):
                 self.assertEqual(1, source_of(item["module"]).count(item["old"]), (name, item["module"]))
 
     def test_the_fault_names_the_runner_can_pick_are_the_modules_own(self):
-        self.assertEqual({"update_handover_broken", "failed_update_leaves_files", "update_ignores_uncommitted_files",
-                          "update_stops_other_projects"}, set(us.FAULTS))
+        self.assertEqual({"update_handover_broken", "failed_update_leaves_files", "failed_update_alters_history",
+                          "update_ignores_uncommitted_files", "update_stops_other_projects"}, set(us.FAULTS))
         for name in us.FAULTS:
             self.assertIn(name, lifecycle.FAULTS)
         self.assertIn(us, lifecycle.FAULT_MODULES)
@@ -58,12 +61,14 @@ class FaultTests(unittest.TestCase):
         self.assertEqual(set(us.FAULTS), set(us.FAULT_TARGETS))
         self.assertEqual({"G6"}, set(us.FAULT_TARGETS["update_handover_broken"]))
         self.assertEqual(("L11.2",), us.FAULT_TARGETS["failed_update_leaves_files"])
+        self.assertEqual(("L11.2",), us.FAULT_TARGETS["failed_update_alters_history"])  # L11.2's second, history-store proof
         self.assertEqual(("L12.4",), us.FAULT_TARGETS["update_ignores_uncommitted_files"])
         self.assertEqual(("L12.5",), us.FAULT_TARGETS["update_stops_other_projects"])
-        every = [i for targets in us.FAULT_TARGETS.values() for i in targets]
-        self.assertEqual(len(every), len(set(every)))
+        every = [i for name, targets in us.FAULT_TARGETS.items() for i in targets if name != "failed_update_alters_history"]
+        self.assertEqual(len(every), len(set(every)))  # one fault per ID, except L11.2's second (history) proof
         self.assertNotIn("L12.3", every)
-        for name in ("failed_update_leaves_files", "update_ignores_uncommitted_files", "update_stops_other_projects"):
+        for name in ("failed_update_leaves_files", "failed_update_alters_history", "update_ignores_uncommitted_files",
+                     "update_stops_other_projects"):
             self.assertEqual((), us.FAULT_ALSO_RED[name], name)  # the narrow faults turn nothing else red
 
     def test_the_failed_update_fault_replaces_the_plain_forced_failure_only_for_the_forced_update(self):
@@ -74,6 +79,20 @@ class FaultTests(unittest.TestCase):
             self.assertEqual(us.FAULTS["failed_update_leaves_files"], forced)
             self.assertIn("e2e_forced_failure", forced[0]["new"])  # it still fails the update
             self.assertIn("e2e-left-by-the-failed-update.txt", forced[0]["new"])
+        finally:
+            us.FAULT = None
+
+    def test_the_history_fault_changes_only_a_non_content_column_and_replaces_the_forced_failure(self):
+        us.FAULT = "failed_update_alters_history"
+        try:
+            self.assertEqual([], us.fault_patches())
+            forced = us.fault_patches(forced=True)
+            self.assertEqual(us.FAULTS["failed_update_alters_history"], forced)
+            new = forced[0]["new"]
+            self.assertIn("e2e_forced_failure", new)  # it still fails the update
+            self.assertIn("ingested_at_ms = ingested_at_ms + 1", new)
+            self.assertNotIn("content", new)  # the content column is left alone
+            self.assertNotIn("e2e-left-by-the-failed-update.txt", new)  # and no file is left
         finally:
             us.FAULT = None
 
@@ -158,6 +177,41 @@ class FaultTests(unittest.TestCase):
         fault_l124["requirements"]["L12.4"]["passed"] = False
         self.assertEqual(["L12.4"], us.fault_isolated(both, fault_l124, "update_ignores_uncommitted_files",
                                                       expected_ids=ids)["targets_not_transitioned"])
+
+    def test_g6_exception_is_restricted_to_g6_the_named_updates_and_the_known_baseline_bug(self):
+        """Review t7s5-r2c MED: an unrelated `_ok` -> `_failed` pair, another baseline failure or an unnamed failing update
+        in the fault run must not count as G6's transition."""
+        ids = {*us.CHECKED_IDS, "G3"}
+
+        def doc(g6_reasons):
+            reqs = {i: {"passed": True, "reasons": []} for i in ids}
+            reqs["L12.3"]["passed"] = False
+            reqs["G6"] = {"passed": False, "reasons": g6_reasons}
+            for k in ("L11.2", "L12.4", "L12.5"):
+                reqs[k]["passed"] = False
+            return {"flows": [], "requirements": reqs}
+        base = ["g6_retry_after_refusal_failed"]
+
+        def isolated(normal, fault):
+            return us.fault_isolated(doc(normal), doc(fault), "update_handover_broken", expected_ids=ids)["isolated"]
+        self.assertTrue(isolated(["g6_first_update_ok", *base], ["g6_first_update_failed", *base]))
+        for name in us.G6_UPDATES:
+            if name != "retry_after_refusal":
+                self.assertTrue(isolated([f"g6_{name}_ok", *base], [f"g6_{name}_failed", *base]), name)
+        # an unrelated pair is no proof
+        self.assertFalse(isolated(["unrelated_ok", *base], ["unrelated_failed", *base]))
+        self.assertFalse(isolated(["g6_first_update_ok", "unrelated_ok", *base], ["g6_first_update_ok", "unrelated_failed", *base]))
+        self.assertFalse(isolated(["g6_unrelated_ok", *base], ["g6_unrelated_failed", *base]))
+        # a failing update in the fault run that G6 does not judge is rejected even with a real named transition
+        self.assertFalse(isolated(["g6_first_update_ok", *base], ["g6_first_update_failed", "g6_unrelated_failed", *base]))
+        # the baseline's only failing G6 code must be the known product bug
+        self.assertFalse(isolated(["g6_first_update_ok"], ["g6_first_update_failed"]))  # no baseline failure at all
+        self.assertFalse(isolated(["g6_first_update_ok", "g6_second_update_failed"],
+                                  ["g6_first_update_failed", "g6_second_update_failed"]))  # another update fails in the baseline
+        self.assertFalse(isolated(["g6_first_update_ok", *base, "g6_second_update_failed"],
+                                  ["g6_first_update_failed", *base, "g6_second_update_failed"]))  # more than the known failure
+        # the known failure alone changes nothing
+        self.assertFalse(isolated(["g6_first_update_ok", *base], ["g6_first_update_ok", *base]))
 
     def test_a_named_collateral_id_may_appear_in_only_one_run(self):
         ids = {*us.CHECKED_IDS}
@@ -246,6 +300,70 @@ class JudgeTests(unittest.TestCase):
         self.assertFalse(us.history_kept(before, {**same, "integrity": "database disk image is malformed"}, exact=False))
         self.assertFalse(us.history_kept({"rows": {}, "integrity": "ok"}, {"rows": {}, "integrity": "ok"}, exact=True))  # no history seeded
         self.assertFalse(us.history_kept(before, {"rows": {}, "integrity": "unreadable"}, exact=False))
+
+    def test_the_history_dump_reads_every_column_of_every_row_of_every_table(self):
+        """Review t7s5-r2c HIGH: a rollback that changes a non-content column (`ingested_at_ms`, `late`, any other table's
+        column) must not look like an unchanged store."""
+        with tempfile.TemporaryDirectory() as tmp:
+            world = SimpleNamespace(home=Path(tmp))
+            path = us.shared.project_history(world, "p1")
+            path.parent.mkdir(parents=True)
+            db = sqlite3.connect(path)
+            db.executescript(
+                "create table records(project_id text, record_id text primary key, record_type text, source text,"
+                " source_sequence integer, observed_at_ms integer, ingested_at_ms integer, content blob, content_digest text,"
+                " late integer);"
+                "create table history_identity(project_id text primary key, next_source_sequence integer);"
+                "create table result_identity(project_id text primary key, key_check text, last_observed_at_ms integer);"
+                "create table no_rowid(a text primary key, b text) without rowid;"
+                "insert into records values('p1','r1','outcome','s',1,10,20,x'0102','d',0);"
+                "insert into records values('p1','r2','dispatch_result','s',2,11,21,x'03','e',0);"
+                "insert into history_identity values('p1',3);"
+                "insert into result_identity values('p1','kc',1000);"
+                "insert into no_rowid values('k','v');")
+            db.commit()
+            before = us.history_dump(world, "p1")
+            self.assertEqual("ok", before["integrity"])
+            self.assertEqual({"outcome:1", "dispatch_result:2", "history_identity:1", "result_identity:1", "no_rowid:0"}, set(before["rows"]))
+            self.assertTrue(us.history_kept(before, us.history_dump(world, "p1"), exact=True))
+            for name, statement in (("ingested_at_ms", "update records set ingested_at_ms = 21 where record_id='r1'"),
+                                    ("late", "update records set late = 1 where record_id='r2'"),
+                                    ("observed_at_ms", "update records set observed_at_ms = 99"),
+                                    ("record_id", "update records set record_id = 'z' where record_id='r1'"),
+                                    ("content", "update records set content = x'ff' where record_id='r1'"),
+                                    ("another table", "update history_identity set next_source_sequence = 4"),
+                                    ("a result_identity column other than the clock", "update result_identity set key_check = 'x'"),
+                                    ("the clock floor going back", "update result_identity set last_observed_at_ms = 999"),
+                                    ("a table without a rowid", "update no_rowid set b = 'w'")):
+                db.execute(statement)
+                db.commit()
+                changed = us.history_dump(world, "p1")
+                self.assertFalse(us.history_kept(before, changed, exact=True), name)
+                self.assertFalse(us.history_kept(before, changed, exact=False), name)  # an earlier row changed
+                db.rollback()
+                db.executescript("delete from records; delete from history_identity; delete from no_rowid; delete from result_identity;"
+                                 "insert into result_identity values('p1','kc',1000);"
+                                 "insert into records values('p1','r1','outcome','s',1,10,20,x'0102','d',0);"
+                                 "insert into records values('p1','r2','dispatch_result','s',2,11,21,x'03','e',0);"
+                                 "insert into history_identity values('p1',3); insert into no_rowid values('k','v');")
+                db.commit()
+                self.assertTrue(us.history_kept(before, us.history_dump(world, "p1"), exact=True), name)
+            db.execute("update result_identity set last_observed_at_ms = 1010")  # the live service's clock floor advances alone
+            db.commit()
+            moved = us.history_dump(world, "p1")
+            self.assertTrue(us.history_kept(before, moved, exact=True))
+            self.assertTrue(us.history_kept(before, moved, exact=False))
+            self.assertFalse(us.history_kept(moved, before, exact=True))  # but never back
+            self.assertEqual([], us.history_differences(before, moved))
+            db.execute("update records set ingested_at_ms = 22 where record_id='r1'")
+            db.commit()
+            self.assertEqual(["records:outcome"], us.history_differences(before, us.history_dump(world, "p1")))
+            db.execute("update records set ingested_at_ms = 20 where record_id='r1'")
+            db.execute("create table extra(a)")  # a changed schema is not "exactly as before"
+            db.commit()
+            self.assertFalse(us.history_kept(before, us.history_dump(world, "p1"), exact=True))
+            db.close()
+            self.assertEqual({"rows": {}, "integrity": "unreadable"}, us.history_dump(world, "missing"))
 
     def test_a_collector_replaced_by_the_update_needs_the_old_gone_and_one_new(self):
         alive = {1: False, 2: True}

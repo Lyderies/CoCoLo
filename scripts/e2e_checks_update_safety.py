@@ -72,6 +72,21 @@ FAULTS = {
                 "            (target / \"e2e-left-by-the-failed-update.txt\").write_text(\"left\\n\")\n"
                 "            _fail(\"e2e_forced_failure\")\n"
                 "        report = _operate(source_root, target, operation, apply, previous_source_root)\n"}],
+    # The forced failure also rewrites a NON-content column (`ingested_at_ms`) of every record in the project history stores,
+    # leaving every record's content and the files untouched: a rollback that does not keep the history exactly. (L11.2's own
+    # red proof for the history store, review t7s5-r2c.)
+    "failed_update_alters_history": [
+        {"module": "claude_agents.packaging",
+         "old": "        report = _operate(source_root, target, operation, apply, previous_source_root)\n",
+         "new": "        if apply and operation == \"update\":\n"
+                "            import sqlite3 as _sqlite3\n"
+                "            for _db in (Path.home() / \".local\" / \"state\" / \"codex-agents\" / \"projects\").glob(\"*/history.sqlite3\"):\n"
+                "                _c = _sqlite3.connect(str(_db))\n"
+                "                _c.execute(\"update records set ingested_at_ms = ingested_at_ms + 1\")\n"
+                "                _c.commit()\n"
+                "                _c.close()\n"
+                "            _fail(\"e2e_forced_failure\")\n"
+                "        report = _operate(source_root, target, operation, apply, previous_source_root)\n"}],
     # The update does not stop at uncommitted managed files. (L12.4's own red proof.)
     "update_ignores_uncommitted_files": [
         {"module": "setup_wizard.flow",
@@ -92,9 +107,10 @@ FAULTS = {
 # other IDs it may turn red with it (named, never a prefix). An ID red in BOTH runs proves nothing and is not accepted.
 # L12.3 has no fault: it is red in a normal run by a product bug (S5-STATUS.md finding 1), so a transition cannot be shown.
 FAULT_TARGETS = {"update_handover_broken": ("G6",), "failed_update_leaves_files": ("L11.2",),
+                 "failed_update_alters_history": ("L11.2",),
                  "update_ignores_uncommitted_files": ("L12.4",), "update_stops_other_projects": ("L12.5",)}
 FAULT_ALSO_RED = {"update_handover_broken": ("G1", "G8", "L11.2", "L12.4", "L12.5"),  # their next updates need the handover too
-                  "failed_update_leaves_files": (), "update_ignores_uncommitted_files": (),
+                  "failed_update_leaves_files": (), "failed_update_alters_history": (), "update_ignores_uncommitted_files": (),
                   "update_stops_other_projects": ()}
 # A forced failure part-way through an update (L11.2): not a fault of the product but the stimulus of that requirement. The
 # Claude package's update step, which runs after the Codex package's has been applied, fails once.
@@ -109,7 +125,7 @@ def fault_patches(*, forced: bool = False) -> list:
     """The patches a scene writes: the chosen fault's and, for the one update that is forced to fail, the forced failure
     (the failed-update fault REPLACES the plain forced failure: it is the same failure plus what it leaves behind)."""
     chosen = FAULTS[FAULT] if FAULT else []
-    if FAULT == "failed_update_leaves_files":  # only the forced update's own failure carries it
+    if FAULT in ("failed_update_leaves_files", "failed_update_alters_history"):  # only the forced update's own failure carries it
         return list(chosen) if forced else []
     return [*chosen, *(FORCED_FAILURE if forced else [])]
 
@@ -124,6 +140,23 @@ def registry_ids(flows=None) -> set:
 # shown for them yet. G6 judges each update separately (reason codes `g6_<update>_ok` / `_failed`), so its proof is that an
 # update which is `_ok` in the normal run is `_failed` in the fault run. L12.3 is red by the same bug and has no fault.
 RED_BY_PRODUCT_BUG_IN_NORMAL = ("G6",)
+# The exact updates G6 judges (its reason codes are `g6_<name>_ok` / `g6_<name>_failed`) and the one update that is red in a
+# normal run by the UPDFIX product bug (the retry after the refused update still needs a hand stop).
+G6_UPDATES = ("first_update", "second_update", "retry_after_refusal", "after_discarding_the_file", "after_the_forced_failure")
+G6_KNOWN_BASELINE_FAILURE = "g6_retry_after_refusal_failed"
+
+
+def g6_transitioned(was: dict, now: dict) -> bool:
+    """G6 red in both runs counts as proved only if the normal run's ONLY failing update is the known product bug, every
+    update the fault run fails is a named one, and at least one named update is `_ok` in the normal run and `_failed` in the
+    fault run. Any other `_ok` to `_failed` pair (an unrelated name) is no proof."""
+    before, after = set(was.get("reasons") or ()), set(now.get("reasons") or ())
+    named_failed = {f"g6_{name}_failed" for name in G6_UPDATES}
+    failed_before = {code for code in before if code.startswith("g6_") and code.endswith("_failed")}
+    failed_after = {code for code in after if code.startswith("g6_") and code.endswith("_failed")}
+    if failed_before != {G6_KNOWN_BASELINE_FAILURE} or not failed_after <= named_failed:
+        return False
+    return any(f"g6_{name}_ok" in before and f"g6_{name}_failed" in after for name in G6_UPDATES)
 
 
 def fault_isolated(normal: dict, fault: dict, name: str = "update_handover_broken", expected_ids=None) -> dict:
@@ -141,8 +174,7 @@ def fault_isolated(normal: dict, fault: dict, name: str = "update_handover_broke
         if was.get("passed") is True and now.get("passed") is False:
             return True
         if i in RED_BY_PRODUCT_BUG_IN_NORMAL and was.get("passed") is False and now.get("passed") is False:
-            reasons_before, reasons_after = set(was.get("reasons") or ()), set(now.get("reasons") or ())
-            return any(code.endswith("_ok") and code[:-3] + "_failed" in reasons_after for code in reasons_before)
+            return g6_transitioned(was, now)
         return False
     outside = [i for i in changed if i not in allowed]
     not_transitioned = sorted(i for i in FAULT_TARGETS[name] if not transitioned(i))
@@ -385,17 +417,49 @@ def settled(world, timeout: float = 30) -> list:
         time.sleep(0.3)
 
 
+# The one column of the history store that a LIVE service moves on its own, with no update or command involved: the project
+# service advances `result_identity.last_observed_at_ms` (the store's trusted wall-clock floor) about every ten seconds
+# (measured in a World: three reads, 0 s / 8 s / after the update, 10 s apart, no command in between). It is never compared
+# for equality; it must only never go back (a rollback that restored an older value would resurrect expired results).
+LIVE_CLOCK_COLUMNS = {"result_identity": ("last_observed_at_ms",)}
+
+
+def _cell(value) -> list:
+    """One stored value as fixed, comparable text (a blob as its hex), tagged by its type."""
+    return [type(value).__name__, value.hex() if isinstance(value, bytes) else str(value)]
+
+
 def history_dump(world, project_id) -> dict:
-    """The project history's own store, read-only and by its own path (never through a command): every record as
-    `type:sequence` -> sha256 of its stored content, and SQLite's own integrity verdict. A store that cannot be read says so."""
+    """The project history's own store, read-only and by its own path (never through a command): EVERY column of EVERY row of
+    EVERY table (sha256 of the row's whole contents; a record is keyed `type:sequence`, another table's row `table:rowid`),
+    the schema's own text, and SQLite's own integrity verdict. A store that cannot be read says so."""
     path = shared.project_history(world, project_id)
     try:
         connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
-            rows = {f"{kind}:{sequence}": hashlib.sha256(content if isinstance(content, bytes) else str(content).encode()).hexdigest()
-                    for kind, sequence, content in connection.execute(
-                        "select record_type, source_sequence, content from records order by record_type, source_sequence")}
-            return {"rows": rows, "integrity": connection.execute("pragma integrity_check").fetchone()[0]}
+            tables = [row[0] for row in connection.execute(
+                "select name from sqlite_master where type = 'table' and name not like 'sqlite_%' order by name")]
+            schema = [list(row) for row in connection.execute("select type, name, sql from sqlite_master order by type, name")]
+            rows: dict = {}
+            floors: dict = {}
+            for table in tables:
+                columns = [row[1] for row in connection.execute(f'pragma table_info("{table}")')]
+                try:
+                    cursor = connection.execute(f'select rowid, * from "{table}" order by rowid')
+                except sqlite3.Error:  # a table without a rowid: numbered by its sorted rows
+                    cursor = connection.execute(f'select null, * from "{table}" order by 2')
+                for number, row in enumerate(cursor):
+                    cells = list(row[1:])
+                    named = dict(zip(columns, cells))
+                    for column in LIVE_CLOCK_COLUMNS.get(table, ()):
+                        floors[f"{table}:{row[0] if row[0] is not None else number}:{column}"] = named.pop(column)
+                    cells = [value for column, value in zip(columns, cells) if column in named]
+                    key = (f"{named['record_type']}:{named['source_sequence']}" if table == "records"
+                           else f"{table}:{row[0] if row[0] is not None else number}")
+                    kept = [column for column in columns if column in named]
+                    rows[key] = hashlib.sha256(json.dumps([kept, [_cell(cell) for cell in cells]]).encode()).hexdigest()
+            return {"rows": rows, "floors": floors, "schema": hashlib.sha256(json.dumps(schema).encode()).hexdigest(),
+                    "integrity": connection.execute("pragma integrity_check").fetchone()[0]}
         finally:
             connection.close()
     except (sqlite3.Error, OSError):
@@ -403,14 +467,31 @@ def history_dump(world, project_id) -> dict:
 
 
 def history_kept(before: dict, after: dict, *, exact: bool) -> bool:
-    """The project history still holds what it held: some record before, SQLite says `ok` both times, and every earlier
-    record is there with the same content (`exact`: nothing else either, as right after a failed update)."""
+    """The project history still holds what it held: some row before, SQLite says `ok` both times, and every earlier
+    row is there with every column the same except the live clock floor, which may only have advanced (`exact`: nothing else
+    either, as right after a failed update)."""
     rows_before, rows_after = before.get("rows") or {}, after.get("rows") or {}
     if not rows_before or before.get("integrity") != "ok" or after.get("integrity") != "ok":
         return False
+    floors_before, floors_after = before.get("floors") or {}, after.get("floors") or {}
+    if not all(isinstance(floors_after.get(key), int) and floors_after[key] >= value for key, value in floors_before.items()):
+        return False  # the trusted clock floor went back or its row is gone
     if exact:
-        return rows_before == rows_after
+        return rows_before == rows_after and before.get("schema") == after.get("schema")
     return all(rows_after.get(key) == value for key, value in rows_before.items())
+
+
+def history_differences(before: dict, after: dict, *, earlier_only: bool = False) -> list[str]:
+    """Which parts of the history store differ, as fixed names (`records:<type>` for a record, the table's name for another
+    table's row, `schema`), for the report's reason codes."""
+    rows_before, rows_after = before.get("rows") or {}, after.get("rows") or {}
+    names = {key.split(":")[0] if key.split(":")[0] in ("history_identity", "terminal_outbox", "result_identity",
+                                                         "result_reservations", "project_holds", "project_orchestrations") else "records:" + key.split(":")[0]
+             for key in (set(rows_before) if earlier_only else set(rows_before) | set(rows_after))
+             if rows_before.get(key) != rows_after.get(key)}
+    if before.get("schema") != after.get("schema"):
+        names.add("schema")
+    return sorted(names)
 
 
 def quiet(view, seconds: float = 90) -> dict:
@@ -610,7 +691,7 @@ def l11_2_update_failed_part_way_is_rolled_back_records_unchanged_next_attempt_s
     failed = scene.failed
     seed = scene.seed
     phase.expect(seed.run.open_code == 0 and seed.run.code == 0 and seed.outcome == "completed"
-                 and scene.seed_closed[0] == 0,
+                 and scene.seed_closed[0] == 0 and scene.probe_closed[0] == 0,
                  "before the forced failure a child really ran through the installed CLI, was recorded and its orchestration closed")
     phase.expect(len(scene.history_before["rows"]) > 0 and scene.history_before["integrity"] == "ok"
                  and any(key.startswith("outcome:") for key in scene.history_before["rows"]),
@@ -630,6 +711,8 @@ def l11_2_update_failed_part_way_is_rolled_back_records_unchanged_next_attempt_s
                  "the Codex step really rewrote its file before the failure (it was written, then put back)")
     phase.expect("records" not in changed and "tables" not in changed,
                  "the collector's records by kind and the ledger's table row counts are unchanged")
+    for name in history_differences(scene.history_before, scene.history_failed):
+        phase.reason("history_changed_" + name.replace(":", "_"))
     phase.expect(history_kept(scene.history_before, scene.history_failed, exact=True),
                  "the project history store is exactly as before the failed update: every record, byte for byte, integrity ok")
     phase.expect(failed.before.pids == failed.after.pids and failed.before.service_pids == failed.after.service_pids
@@ -643,6 +726,8 @@ def l11_2_update_failed_part_way_is_rolled_back_records_unchanged_next_attempt_s
                  "and replaces the earlier collector by itself, ready on this build")
     phase.expect(nxt.snapshot_after["commits"] != nxt.snapshot_before["commits"] and nxt.snapshot_after["dirty"] == "",
                  "the next attempt installed and committed the update the failed one had undone")
+    for name in history_differences(scene.history_before, scene.history_next, earlier_only=True):
+        phase.reason("history_changed_after_next_" + name.replace(":", "_"))
     phase.expect(history_kept(scene.history_before, scene.history_next, exact=False),
                  "after the next successful update every earlier history record is still in the store, unchanged, integrity ok")
     phase.expect(scene.outcome_next == "completed" and scene.read_next.get("state") == "released",
@@ -781,6 +866,9 @@ def fail_scene():
     # earlier build, recorded as the primary does, its orchestration closed; then the history store's own contents.
     seed = Ctl(world, "f0")
     seed.host("provider-observe", "--provider", "claude", "--billing-probe")
+    # The probe's own orchestration is closed too: a hold the earlier build leaves open is legitimately released by the next
+    # update (the product's own work, not a rollback), so it would move rows of the store the next comparison reads.
+    scene.probe_closed = seed.host("learning-close-orchestration", "--orchestration-handle", seed.handle, "--status", "completed")
     scene.seed = run_a_child(world, "f1")
     scene.seed_closed = scene.seed.ctl.host("learning-close-orchestration", "--orchestration-handle", scene.seed.ctl.handle,
                                            "--status", "completed")
