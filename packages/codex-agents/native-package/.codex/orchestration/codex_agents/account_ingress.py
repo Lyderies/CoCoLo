@@ -437,6 +437,11 @@ class AccountIngress:
             self._pumping = False
             self._publish_health()  # S1-H1a C5
 
+    def engaged(self):
+        """S13d-1: whether any connection or in-flight request is held; read-only, any thread."""
+        with self._lock:
+            return bool(self._peers or self._groups)
+
     def request_close(self):
         self._owner()
         self._pumping = True

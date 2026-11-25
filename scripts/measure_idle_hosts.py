@@ -38,9 +38,12 @@ runpy.run_path(entry, run_name='__main__')
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--seconds', type=float, default=10)
-    parser.add_argument('--budget', type=float, help='Maximum user+system CPU seconds per idle wall second')
+    parser.add_argument('--budget', type=float, help='Maximum user+system CPU seconds per idle wall second (each host)')
+    parser.add_argument('--collector-budget', type=float, help='Overrides --budget for the collector host')
+    parser.add_argument('--project-budget', type=float, help='Overrides --budget for the project host')
     args = parser.parse_args()
-    if args.seconds < 10 or (args.budget is not None and args.budget <= 0):
+    budgets = {'collector': args.collector_budget or args.budget, 'project': args.project_budget or args.budget}
+    if args.seconds < 10 or any(value is not None and value <= 0 for value in budgets.values()):
         parser.error('seconds must be >= 10 and budget must be positive')
     repository = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repository / 'packages' / 'codex-agents'))
@@ -100,7 +103,8 @@ def main():
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait(5)
-                process.stdin.close()
+                with contextlib.suppress(OSError):  # a host that already died leaves a broken pipe
+                    process.stdin.close()
                 process.stdout.close()
             stack.callback(stop)
             return process
@@ -109,8 +113,9 @@ def main():
         ready(collector, lambda: CollectorClient(state.socket, timeout=1).health().get('ok'))
         host = start('project_host.py', '--project-root', str(project))
         ready(host, lambda: project_host_serving(state.root, project))
-        # Both hosts are ready and warmed before either measurement starts.
-        time.sleep(1)
+        # Both hosts are ready and settled before either measurement starts: a host keeps its short pass
+        # interval for a few hundred passes after start-up or a client (PassPacer), which is not idle cost.
+        time.sleep(4)
         before = {name: sample(process) for name, process in [('collector', collector), ('project', host)]}
         time.sleep(args.seconds)
         failed = False
@@ -122,7 +127,7 @@ def main():
             rate = (user + system) / elapsed
             print(json.dumps({'host': name, 'idle_seconds': elapsed, 'user_seconds': user,
                               'system_seconds': system, 'cpu_seconds_per_idle_second': rate}, sort_keys=True))
-            failed |= args.budget is not None and rate > args.budget
+            failed |= budgets[name] is not None and rate > budgets[name]
         return int(failed)
 
 

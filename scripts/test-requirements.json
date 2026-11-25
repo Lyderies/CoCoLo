@@ -3939,7 +3939,9 @@
   "statement": "Prove independent boundaries, exact replay, reserved close, repeated past-cap operation, rollback and abrupt process exit with fast tests."
  },
  "S13d-1": {
-  "checks": [],
+  "checks": [
+   "codex:tests.test_idle_cpu_budget.IdleCpuBudgetTests.test_S13d_1_idle_collector_and_project_host_stay_within_their_cpu_budgets"
+  ],
   "source": "tests/requirements/s13d.json#S13d-1",
   "statement": "Measure real idle host CPU before setting a regression budget or changing waits; preserve queue and latency contracts."
  },

@@ -49,6 +49,25 @@ from .service_enrollment import (
     account_endpoint_path, issue_capability, prepare_proof_directory, proof_directory, prune_proofs, revoke_capability,
 )
 
+FAST_PASS_SECONDS = 0.002
+QUIET_PASS_SECONDS = 0.05  # S13d-1: wait between serve passes once nothing has been held for QUIET_AFTER_PASSES passes
+QUIET_AFTER_PASSES = 400  # about 1 s of fast passes after the last client or work, so follow-up requests stay prompt
+
+
+class PassPacer:
+    """S13d-1: the wait between host passes. A pass every 2 ms was measured as a busy-poll when nothing is held;
+    the wait stays fast while engaged and for QUIET_AFTER_PASSES passes after, then grows to QUIET_PASS_SECONDS.
+    Counted in passes, not time, so load never shortens the fast stretch. A new client waits at most one quiet
+    interval to be accepted and a stop at most one to be seen."""
+
+    def __init__(self, fast=FAST_PASS_SECONDS, quiet=QUIET_PASS_SECONDS, after=QUIET_AFTER_PASSES):
+        self._fast, self._quiet, self._after, self._idle = fast, quiet, after, 0
+
+    def wait_seconds(self, engaged):
+        self._idle = 0 if engaged else min(self._idle + 1, self._after + 1)
+        return self._quiet if self._idle > self._after else self._fast
+
+
 MAX_SOCKET_PATH_BYTES = 100  # Below the smallest supported sun_path, including its terminator.
 _KINDS = ('control', 'project', 'driver')
 # What the owner's terminal label may ask of a project's service.
@@ -317,6 +336,11 @@ class EnrolledFrontend:
             else:
                 remaining.append(pending)
         self._pending = remaining
+
+    def engaged(self):
+        """S13d-1: whether any connection is being enrolled or is attached; no client means nothing to poll fast for."""
+        with self._lock:
+            return bool(self._pending or self._contexts)
 
     def close(self):
         with self._lock:
@@ -654,10 +678,17 @@ class ProjectServiceHost:
         if self._driver is not None:
             self._driver.step()
 
-    def serve(self, stopped, *, idle_seconds=0.002):
+    def serve(self, stopped, *, idle_seconds=FAST_PASS_SECONDS, pacer=None):
+        """Serve until stopped, pausing between passes as `PassPacer` decides (S13d-1)."""
+        pacer = PassPacer(idle_seconds) if pacer is None else pacer
         while not stopped():
             self.serve_once()
-            time.sleep(idle_seconds)
+            time.sleep(pacer.wait_seconds(self.engaged()))
+
+    def engaged(self):
+        """Whether a client is connecting or attached, or a run or folder removal is held here."""
+        self._owner()
+        return self._frontend.engaged() or self.holding()
 
     def endpoints(self):
         return {kind: str(path) for kind, path in self._endpoints.items()}
@@ -763,7 +794,10 @@ class ProjectServiceHost:
         if not self.threads_stopped():
             return False
         # RS-E E2a-8: True only once every thread stopped and final settlement ran to its end.
-        settled = self._driver is None or self._driver.settle_on_exit() is True
-        if settled:
+        try:
+            return self._driver is None or self._driver.settle_on_exit() is True
+        finally:
+            # S13d-3: the lock was held through the writer drain and this one final settlement attempt. Every
+            # thread has stopped, so nothing of this host's is left to disturb; a run it could not settle is the
+            # next host's to settle (as before this step), and that host must not find this one still holding it.
             self._release_host_lock()
-        return settled

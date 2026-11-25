@@ -33,6 +33,7 @@ from codex_agents.ledger_owner_queue import DEFAULT_LEDGER_QUEUE_LIMITS  # noqa:
 # At most the queue's whole retained capacity per loop pass, so the account step still runs every pass.
 OWNER_REQUESTS_PER_PASS = DEFAULT_LEDGER_QUEUE_LIMITS.requests
 from codex_agents.learning_store import CollectorServer, LearningLedger, LearningState, sole_owner_open  # noqa: E402
+from codex_agents.service_host import PassPacer  # noqa: E402
 from codex_agents.shutdown_watchdog import ShutdownWatchdog  # noqa: E402
 
 
@@ -111,17 +112,20 @@ def main(argv: list[str] | None = None) -> int:
         phases["account"] = int((time.monotonic() - phase_start) * 1000)
         server.startup_phases = phases
         checked = restart_checked = time.monotonic()
+        pacer, engaged = PassPacer(), False
         while True:
             # MED-3 (review 040-e1bw-r1): wake as soon as a request is offered, then handle every ready
             # request (bounded by the queue's own capacity) before the account step, not one per 2 ms tick.
-            owner.queue.wait_for_work(0.002)
+            # S13d-1: a pass every 2 ms measured as a busy-poll; once no account client or request has been
+            # held for a while the wait grows (PassPacer). Owner requests still wake at once (the work signal).
+            owner.queue.wait_for_work(pacer.wait_seconds(engaged))
             if server.wait(0):
                 break
             if stopping["signal"]:
                 break  # O10 SD3-2: a stop signal whose exception was swallowed somewhere.
             owner.pump_ready(OWNER_REQUESTS_PER_PASS)
-            if account is not None:
-                account.serve_once()
+            # Owner requests do not count as engagement: the work signal wakes the wait for them at once.
+            engaged = account is not None and account.serve_once() is True
             if time.monotonic() - checked >= 1:
                 checked = time.monotonic()
                 # A removed state root or endpoint means nobody can reach or own this collector.
