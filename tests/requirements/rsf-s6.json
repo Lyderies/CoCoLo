@@ -23,7 +23,7 @@
   },
   {
    "id": "RSF-S6-5",
-   "statement": "**RSF-S6-5 \u2014 Memory-only preparation.** Do not reconstruct driver or preparation\nmemory. Report those categories as not_tracked. Classify any surviving unarmed\nlease as held with a named legacy preparation reason and plain owner next step;\nno missing-memory inference releases an uncertain obligation. Pure memory with\nno durable source creates no invented hold or launch authority.",
+   "statement": "**RSF-S6-5 \u2014 Memory-only preparation.** Do not reconstruct driver or preparation\nmemory. Report those categories as tracked with zero invented historical holds (B2). Classify any surviving unarmed\nlease as held with a named legacy preparation reason and plain owner next step;\nno missing-memory inference releases an uncertain obligation. Pure memory with\nno durable source creates no invented hold or launch authority.",
    "source": "tests/requirements/rsf-s6.json#RSF-S6-5"
   },
   {

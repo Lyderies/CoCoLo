@@ -142,6 +142,17 @@ _REGISTER_INCONSISTENT = (
     # B6 (RS-B-B6-1): a held orchestration row's orchestration exists and is open.
     "OR (r.kind='orchestration' AND NOT EXISTS(SELECT 1 FROM project_orchestrations o "
     "WHERE o.project_id=r.project_id AND o.orchestration_handle=r.identity AND o.state='open'))) LIMIT 1",
+    # Memory rows have a retained registration of the same instance; preparations also have an entry.
+    "SELECT 1 FROM project_holds r INDEXED BY project_holds_due WHERE r.state<>'released' "
+    "AND r.kind IN ('driver_entry','preparation') AND (NOT EXISTS(SELECT 1 FROM project_registered_runs s WHERE "
+    f"{_attempt_of('s')} AND s.service_instance=r.instance "
+    "AND s.orchestration_handle=json_extract(r.evidence,'$.orchestration_handle')) OR "
+    "(r.kind='preparation' AND NOT EXISTS(SELECT 1 FROM project_holds e WHERE e.project_id=r.project_id "
+    "AND e.kind='driver_entry' AND e.identity=r.identity AND e.instance=r.instance AND e.state<>'released'))) LIMIT 1",
+    # Journal instance ids distinguish new tracked registrations from legacy reporting-only `svc-*` rows.
+    "SELECT 1 FROM project_registered_runs s LEFT JOIN project_holds r ON r.project_id=s.project_id "
+    "AND r.kind='driver_entry' AND r.identity=s.run_handle||':'||s.attempt WHERE length(s.service_instance)=32 "
+    "AND s.service_instance NOT GLOB '*[^0-9a-f]*' AND (r.kind IS NULL OR r.instance<>s.service_instance) LIMIT 1",
     # B6 (RS-B-B6-1): every open orchestration has its held row (one lookup per open orchestration, by its index).
     "SELECT 1 FROM project_orchestrations o INDEXED BY project_orchestrations_state LEFT JOIN project_holds r "
     "ON r.project_id=o.project_id AND r.kind='orchestration' AND r.identity=o.orchestration_handle "
@@ -213,6 +224,23 @@ CONSUMPTION_ORCHESTRATION = ("(CASE WHEN json_valid(CAST(\"grant\" AS TEXT)) THE
                              "json_extract(CAST(\"grant\" AS TEXT),'$.grant.binding.orchestration_handle') END)")
 
 
+# A correlated project_orchestrations row `o`: source-backed execution obligations,
+# including the memory holds that precede any lease. Used by status and recovery.
+ORCHESTRATION_EXECUTION_HELD = (
+    "(EXISTS(SELECT 1 FROM project_holds h INDEXED BY project_holds_due WHERE h.project_id=o.project_id "
+    "AND h.state<>'released' AND h.kind IN ('driver_entry','preparation') "
+    "AND json_extract(h.evidence,'$.orchestration_handle')=o.orchestration_handle) OR EXISTS("
+    "SELECT 1 FROM project_holds h INDEXED BY project_holds_due CROSS JOIN result_reservations s "
+    "ON s.project_id=h.project_id AND s.claim_id=h.identity WHERE h.project_id=o.project_id "
+    "AND h.kind='reservation' AND h.state<>'released' AND s.orchestration_handle=o.orchestration_handle) OR EXISTS("
+    "SELECT 1 FROM project_holds h INDEXED BY project_holds_due CROSS JOIN result_leases l "
+    "ON l.project_id=h.project_id AND l.run_handle=substr(h.identity,1,instr(h.identity,':')-1) "
+    "AND l.attempt=CAST(substr(h.identity,instr(h.identity,':')+1) AS INTEGER) WHERE h.project_id=o.project_id "
+    "AND h.kind='lease' AND h.state<>'released' AND " + LEASE_ORCHESTRATION + "=o.orchestration_handle "
+    "AND l.state IN ('reserved','claim_pending')))"
+)
+
+
 def _orchestration_of(connection, project_id: str, kind: str, identity: str):
     """The orchestration handle an execution hold (lease or reservation) belongs to, from its source row; None for
     another kind. Scheduling only: the sealed binding is what any close decision verifies."""
@@ -224,6 +252,9 @@ def _orchestration_of(connection, project_id: str, kind: str, identity: str):
         row = connection.execute("SELECT " + LEASE_ORCHESTRATION + " "
                                  "FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
                                  (project_id, run_handle, attempt)).fetchone()
+    elif kind in ('driver_entry', 'preparation'):
+        row = connection.execute("SELECT json_extract(evidence,'$.orchestration_handle') FROM project_holds "
+                                 "WHERE project_id=? AND kind=? AND identity=?", (project_id, kind, identity)).fetchone()
     else:
         return None
     return None if row is None or type(row[0]) is not str else row[0]
@@ -316,7 +347,7 @@ def next_hold_due(connection) -> int | None:
 
 
 def take_hold(connection, project_id: str, kind: str, identity: str, *, now_ms: int, lease_case: str | None = None,
-              due_at_ms: int | None = None, evidence: str | None = None) -> None:
+              due_at_ms: int | None = None, evidence: str | None = None, instance: str | None = None) -> None:
     """Take one hold. An identity is taken once: its tombstone (a released row, kept for good) or a row still held
     refuses the take (RS-B R2, S4), so a purged attempt can never be presented again. B6: an execution hold taken
     against an orchestration is its activity (its due time moves to at least now + ORCHESTRATION_IDLE_MS)."""
@@ -325,8 +356,8 @@ def take_hold(connection, project_id: str, kind: str, identity: str, *, now_ms: 
         raise HistoryError("history_conflict")
     wake_before(project_id, due_at_ms)  # E2a-7: before the row exists
     connection.execute(
-        "INSERT INTO project_holds(project_id,kind,identity,state,lease_case,taken_at_ms,due_at_ms,evidence) "
-        "VALUES(?,?,?,'held',?,?,?,?)", (project_id, kind, identity, lease_case, now_ms, due_at_ms, evidence))
+        "INSERT INTO project_holds(project_id,kind,identity,state,lease_case,taken_at_ms,due_at_ms,evidence,instance) "
+        "VALUES(?,?,?,'held',?,?,?,?,?)", (project_id, kind, identity, lease_case, now_ms, due_at_ms, evidence, instance))
     handle = _orchestration_of(connection, project_id, kind, identity)
     if handle is not None:
         connection.execute("UPDATE project_holds SET due_at_ms=MAX(COALESCE(due_at_ms,0),?) WHERE project_id=? "

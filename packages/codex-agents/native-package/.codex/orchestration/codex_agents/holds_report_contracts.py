@@ -3,7 +3,7 @@ from .history_contracts import HistoryError, valid_integer
 from .recovery_report import RECOVERY_REASONS
 
 HOLD_KINDS = ('driver_entry', 'preparation', 'lease', 'reservation', 'orchestration', 'open_binding', 'result_custody')
-UNTRACKED_KINDS = frozenset({'driver_entry', 'preparation', 'orchestration'})
+UNTRACKED_KINDS = frozenset()
 TIMER_KINDS = frozenset({'orchestration', 'result_custody'})
 MAX_REPAIR_ENTRIES = 20
 CONTEXT_BYTES_LIMIT = 256 * 1_048_576

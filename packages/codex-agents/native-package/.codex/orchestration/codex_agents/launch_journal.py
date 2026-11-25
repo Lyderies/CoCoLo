@@ -681,6 +681,10 @@ class LaunchJournal:
         """Remove a stopped instance's lock file once none of its runs is left unsettled."""
         if self._released or not self.instance_stopped(instance) or self._unsettled(instance):
             return
+        if getattr(self, 'keep_lock', False):
+            memory = getattr(self, 'memory_instances', None)
+            if memory is None or instance in memory:
+                return  # The writer has not yet proved these memory obligations retired.
         with contextlib.suppress(OSError):
             self._lock_path(instance).unlink()
 
@@ -760,7 +764,7 @@ class LaunchJournal:
         """This instance's threads have stopped: later instances may settle its runs."""
         if self._lock_fd is None:
             return
-        if not self._unsettled(self.instance):
+        if not getattr(self, 'keep_lock', False) and not self._unsettled(self.instance):
             with contextlib.suppress(OSError):
                 self._lock_path(self.instance).unlink()
         self._released = True  # Nothing is written here after the lock is gone.

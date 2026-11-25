@@ -1,7 +1,7 @@
 """B7a: project-local hold/custody counts and bounded, content-free D3 repairs.
 
 Read only, on the history writer thread. Deadlines never imply an evidence-only
-release. Memory holds remain explicitly untracked until their writer slice exists.
+release. Memory holds report the durable driver and preparation lifecycle.
 """
 from .holds_report_contracts import (HOLD_KINDS, UNTRACKED_KINDS, TIMER_KINDS, MAX_REPAIR_ENTRIES,
                                       DIRECTORY_REPAIR, OPERATOR_REPAIR, RETRY_REPAIR)
@@ -37,6 +37,13 @@ def _holds(history):
         "WHERE s.project_id=c.project_id AND s.run_handle=c.run_handle AND s.attempt=c.attempt "
         "AND s.state='committed')))", (now, project)).fetchone()
     result['result_custody'].update(past_due=past, next_eligible=due)
+    from .project_holds_schema import ORCHESTRATION_EXECUTION_HELD
+    due, past = db.execute(
+        "SELECT MIN(r.due_at_ms),COALESCE(SUM(r.due_at_ms<=?),0) FROM project_holds r "
+        "JOIN project_orchestrations o ON o.project_id=r.project_id AND o.orchestration_handle=r.identity "
+        "WHERE r.project_id=? AND r.kind='orchestration' AND r.state='held' "
+        "AND r.due_at_ms IS NOT NULL AND NOT " + ORCHESTRATION_EXECUTION_HELD, (now,project)).fetchone()
+    result['orchestration'].update(past_due=past,next_eligible=due)
     return result
 
 

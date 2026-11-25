@@ -2008,6 +2008,11 @@
    "checks": 2,
    "ends": "Temporary migration batching only; a batch of at most 64 source rows advances the durable cursor and ends at commit; progress is removed on validated publication.",
    "test": "test_account_killed_before_and_after_each_class_commit_reopens_twice_identically"
+  },
+  "memory_holds.py::drop": {
+   "checks": 1,
+   "ends": "Reuses MAX_RETIRED_RUNS: the oldest memory tombstone is removed on insertion past the bound; durable project hold tombstones retain replay protection independently.",
+   "test": "test_retired_tombstones_rotate_past_bound"
   }
  }
 }
