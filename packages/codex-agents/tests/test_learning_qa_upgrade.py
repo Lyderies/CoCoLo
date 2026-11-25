@@ -77,7 +77,7 @@ class LearningQACorpusUpgradeTests(unittest.TestCase):
             self.read_original(connection)
         store = ProjectHistory(self.base.directory, fixtures.PROJECT, allow_schema_upgrade=True)
         try:
-            self.assertEqual(21, store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) B6: schema 21 (decision 131)
+            self.assertEqual(22, store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) B6: schema 21 (decision 131)
             self.read_original(store._connection)
             self.assertEqual(self.summary, store.finish_learning_import(
                 'import-1', now_ms=999, before_commit=lambda: None))

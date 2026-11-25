@@ -1,0 +1,87 @@
+FFF.EFF
+======================================================================
+ERROR: test_savepoint_release_rechecks_epoch_and_refused_owners_can_rollback_to (tests.test_rsf_s2_regressions.FenceRegressionTests.test_savepoint_release_rechecks_epoch_and_refused_owners_can_rollback_to)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_regressions.py", line 134, in test_savepoint_release_rechecks_epoch_and_refused_owners_can_rollback_to
+    db.execute('ROLLBACK TO inner_unit')
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/sql_read_budget.py", line 231, in execute
+    cursor = self._track(super().execute(sql, parameters))
+                         ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/store_fence.py", line 216, in execute
+    return self._fenced(sql, lambda: sqlite3.Cursor.execute(cursor, sql, parameters))
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/store_fence.py", line 168, in _fenced
+    return operation()
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/store_fence.py", line 216, in <lambda>
+    return self._fenced(sql, lambda: sqlite3.Cursor.execute(cursor, sql, parameters))
+                                     ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.OperationalError: no such savepoint: inner_unit
+
+======================================================================
+FAIL: test_cleanup_checks_live_custody_before_historical_material (tests.test_rsf_s2_regressions.FenceRegressionTests.test_cleanup_checks_live_custody_before_historical_material)
+----------------------------------------------------------------------
+codex_agents.history_contracts.HistoryError: history_incompatible
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_regressions.py", line 147, in test_cleanup_checks_live_custody_before_historical_material
+    with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: "history_not_authorized" does not match "history_incompatible"
+
+======================================================================
+FAIL: test_nested_named_savepoints_preserve_rollback_to_and_outer_transaction (tests.test_rsf_s2_regressions.FenceRegressionTests.test_nested_named_savepoints_preserve_rollback_to_and_outer_transaction) (owner='LearningLedger', explicit=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_regressions.py", line 107, in test_nested_named_savepoints_preserve_rollback_to_and_outer_transaction
+    self.assertTrue(db.in_transaction)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_nested_named_savepoints_preserve_rollback_to_and_outer_transaction (tests.test_rsf_s2_regressions.FenceRegressionTests.test_nested_named_savepoints_preserve_rollback_to_and_outer_transaction) (owner='ProjectHistory', explicit=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_regressions.py", line 107, in test_nested_named_savepoints_preserve_rollback_to_and_outer_transaction
+    self.assertTrue(db.in_transaction)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_schema16_explicit_upgrade_does_not_request_project_backups (tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_explicit_upgrade_does_not_request_project_backups)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_regressions.py", line 73, in test_schema16_explicit_upgrade_does_not_request_project_backups
+    ledger = learning_store.LearningLedger(self.state, allow_schema_upgrade=True)
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py", line 2323, in __init__
+    self._migrate()
+    ~~~~~~~~~~~~~^^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py", line 3517, in _migrate
+    self._require_project_migration_backups(16, LEDGER_SCHEMA_VERSION)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1241, in _execute_mock_call
+    raise effect
+AssertionError: epoch-only step requested a project backup
+
+======================================================================
+FAIL: test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent (tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_regressions.py", line 44, in test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent
+    self.assertIsNone(learning_store.ledger_schema_behind(self.state))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 16 is not None
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.136s
+
+FAILED (failures=5, errors=1)

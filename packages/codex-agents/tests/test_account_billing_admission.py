@@ -780,7 +780,7 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         path = self.ledger.create_sanitized_backup(self.fixture.project_id, file_id='original_probe',
             expires_at_ms=time.time_ns()//1_000_000+60_000)
         body = backup_body(path, self.fixture.project_id)
-        self.assertEqual(16, body['ledger_schema_version'])  # O0b RS-A (requirement)
+        self.assertEqual(17, body['ledger_schema_version'])  # O0b RS-A (requirement)
         self.assertTrue(self.ledger.verify_sanitized_backup(self.fixture.project_id, file_id='original_probe')['verified'])
         broken = deepcopy(body)
         broken['tables']['account_billing_probe_requests'] = []

@@ -37,7 +37,7 @@ class SourceArchive:
 # index (not in a project's backup: derived from what is); 15 added the hold
 # register (O0b RS-A), which is in it, since a crashed release cannot be derived.
 # Schema 16 adds nullable probe provenance to the original records.
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 # The registered backup is a streamed (format 3) SQLite file, read one batch at a
 # time; this bounds its size, not memory. It matches the ledger's own limit.
 MAX_BACKUP_BYTES = 16 * 1024 ** 3

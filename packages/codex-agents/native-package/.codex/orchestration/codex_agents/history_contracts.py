@@ -43,11 +43,11 @@ HISTORY_REASON_CODES = frozenset({
 
 
 class HistoryError(RuntimeError):
-    def __init__(self, reason_code: str) -> None:
+    def __init__(self, reason_code: str, *, message: str | None = None) -> None:
         if type(reason_code) is not str or reason_code not in HISTORY_REASON_CODES:
             reason_code = "history_invalid_input"
         self.reason_code = reason_code
-        super().__init__(reason_code)
+        super().__init__(message if message is not None else reason_code)
 
 
 def matches(value: object, pattern: re.Pattern[str]) -> bool:

@@ -18,6 +18,13 @@ from tests.learning_support import backup_body
 
 def drop_admission_evidence_for_legacy_fixture(connection):
     """Leave a ledger as schema 13 wrote it: without the admission evidence index (derived data)."""
+    # RSF-S2: retire the current gate before constructing an exact pre-17 fixture.
+    fence = connection._write_fence
+    if fence is not None:
+        fence.epoch = None
+        fence.legacy = True
+    connection._write_fence = None
+    connection.execute("DROP TABLE IF EXISTS runtime_takeover")
     if "probe_id" in {row[1] for row in connection.execute("PRAGMA table_info(records)")}:
         if connection.execute("SELECT 1 FROM records WHERE probe_id IS NOT NULL").fetchone():
             raise AssertionError("cannot discard probe provenance in a legacy fixture")

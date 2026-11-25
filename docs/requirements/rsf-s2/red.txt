@@ -1,0 +1,27 @@
+FAILED codex:tests.test_rsf_s2_fence (exit 1) -> /private/tmp/ptk6kxi3k0/1.log
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_lost_or_replaced_lifetime_lock_refuses_admissions (tests.test_rsf_s2_fence.FenceTests.test_lost_or_replaced_lifetime_lock_refuses_admissions) (replace=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 79, in test_lost_or_replaced_lifetime_lock_refuses_admissions
+    with self.assertRaisesRegex((LedgerError, HistoryError), r'./setup.sh --update'):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'codex_agents.contracts.LedgerError'>, <class 'codex_agents.history_contracts.HistoryError'>) not raised
+
+======================================================================
+FAIL: test_paused_ledger_writer_cannot_resume_after_successor (tests.test_rsf_s2_fence.FenceTests.test_paused_ledger_writer_cannot_resume_after_successor)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_rsf_s2_fence.py", line 153, in test_paused_ledger_writer_cannot_resume_after_successor
+    self.assertEqual(1, len(errors), errors)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : []
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.976s
+
+FAILED (failures=3, errors=5)
+

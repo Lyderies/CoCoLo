@@ -26,6 +26,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
+from .store_fence import FencedConnection, StoreFence, EPOCH_SCHEMA, EPOCH_COLUMNS, FENCE_MESSAGE, BUSY_MESSAGE
+from .collector_client import COLLECTOR_RUNTIME_DIGEST
+
 from .contracts import ContractError, validate_task
 from .claim_storage import MAX_STORAGE_EVIDENCE_BYTES, encode_storage_evidence, lease_data, lease_receipt_digest, lease_state_seal
 from .project_cleanup import CLEANUP_COLUMNS, CLEANUP_SCHEMA, CLEANUP_SCHEMA_V9, check_cleanup_reservation, reserve_cleanup
@@ -64,7 +67,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 21
+_SCHEMA_VERSION = 22
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
@@ -226,8 +229,10 @@ CREATE INDEX project_execution_consumptions_orchestration ON project_execution_c
 """
 STEP_21_SCHEMA = (ORCHESTRATION_STATE_INDEX_SCHEMA + RESULT_LIVE_INDEX_SCHEMA
                   + project_holds_schema.ORCHESTRATION_CHECK_INDEX_SCHEMA + TARGET_INDEX_SCHEMA)
-_SCHEMA = with_orchestration_state(_SCHEMA_V20) + STEP_21_SCHEMA
+_SCHEMA_V21 = with_orchestration_state(_SCHEMA_V20) + STEP_21_SCHEMA
+_SCHEMA = _SCHEMA_V21 + EPOCH_SCHEMA
 _COLUMNS = {
+    "runtime_takeover": EPOCH_COLUMNS,
     **PROJECT_HOLDS_COLUMNS,
     **service_record.RECORDER_COLUMNS,
     **ACTIVATION_COLUMNS,
@@ -273,10 +278,13 @@ class _ExecutionProvenanceRejected(HistoryError):
         super().__init__('history_execution_not_ready')
 
 
-def _operation(function):
+def _operation(function, *, read_only=False):
     @functools.wraps(function)
     def guarded(self, *args, **kwargs):
-        self._require_owner()
+        if read_only:
+            self._require_owner(read_only=True)
+        else:
+            self._require_owner()
         failure = None
         try:
             return function(self, *args, **kwargs)
@@ -394,7 +402,9 @@ class ProjectHistory:
             try:
                 fcntl.flock(self._writer_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                raise HistoryError("history_writer_busy") from None
+                raise HistoryError("history_writer_busy", message=BUSY_MESSAGE + " (history_writer_busy)") from None
+            self._fence = StoreFence(directory / "history.lock", self._writer_fd, COLLECTOR_RUNTIME_DIGEST,
+                                     lambda: HistoryError("history_wrong_owner", message=FENCE_MESSAGE))
             database_fd = self._owned_file("history.sqlite3")
             os.close(database_fd)
             for name in ("history.sqlite3-wal", "history.sqlite3-shm", "history.sqlite3-journal"):
@@ -402,7 +412,8 @@ class ProjectHistory:
                     self._check_owned(os.stat(name, dir_fd=self._directory_fd, follow_symlinks=False))
                 except FileNotFoundError:
                     pass
-            self._connection = sqlite3.connect(directory / "history.sqlite3", timeout=0.25, isolation_level=None)
+            self._connection = sqlite3.connect(directory / "history.sqlite3", timeout=0.25, isolation_level=None,
+                                               factory=FencedConnection)
             # Bound corrupted TEXT/BLOB rows in SQLite before Python receives
             # them. A valid record plus its fixed metadata fits this ceiling.
             self._connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_HISTORY_ROW_BYTES)
@@ -411,6 +422,9 @@ class ProjectHistory:
             self._connection.execute("PRAGMA foreign_keys=ON")
             self._connection.execute("PRAGMA synchronous=FULL")
             self._connection.execute("PRAGMA busy_timeout=250")
+            self._fence.legacy = self._connection.execute("PRAGMA user_version").fetchone()[0] < _SCHEMA_VERSION
+            self._fence.connection = self._connection
+            self._connection._write_fence = self._fence
             self._initialize()
             if self._result_key is not None:
                 self._initialize_results()
@@ -419,9 +433,9 @@ class ProjectHistory:
             if self._connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] != "wal":
                 raise HistoryError("history_unavailable")
         except HistoryError as exc:
-            failure = exc.reason_code
+            failure = (exc.reason_code, str(exc))
         except (OSError, sqlite3.Error):
-            failure = "history_unavailable"
+            failure = ("history_unavailable", None)
         except BaseException:
             # Interrupted initialization must not strand the original writer
             # lock/connection. Preserve the original nonlocal interruption.
@@ -430,7 +444,7 @@ class ProjectHistory:
             raise
         if failure is not None:
             self.close()
-            raise HistoryError(failure)
+            raise HistoryError(failure[0], message=failure[1])
 
     @staticmethod
     def _open_directory(directory: Path) -> int:
@@ -478,9 +492,11 @@ class ProjectHistory:
             raise
         return descriptor
 
-    def _require_owner(self) -> None:
+    def _require_owner(self, *, read_only=False) -> None:
         if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
             raise HistoryError("history_wrong_owner")
+        if not read_only:
+            self._fence.check(self._connection)
 
     def _orchestration_owner(self):
         # Lazy import keeps the protocol/client free of persistence imports.
@@ -491,6 +507,7 @@ class ProjectHistory:
     def _transaction(self):
         self._connection.execute("BEGIN IMMEDIATE")
         try:
+            self._fence.claim(self._connection)
             yield
             self._connection.execute("COMMIT")
         except BaseException:
@@ -512,6 +529,7 @@ class ProjectHistory:
             # executescript is used only for this fixed, empty schema, never requests.
             connection.executescript("BEGIN IMMEDIATE;" + _SCHEMA)
             try:
+                self._fence.claim(connection)
                 connection.execute("INSERT INTO history_identity VALUES(?,1,1)", (self.project_id,))
                 connection.execute(f"PRAGMA application_id={_APPLICATION_ID}")
                 connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
@@ -519,21 +537,21 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
               and application == _APPLICATION_ID
               and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4,
                                                5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7, 8: _SCHEMA_V8,
                                                9: _SCHEMA_V9, 10: _SCHEMA_V10, 11: _SCHEMA_V11,
                                                12: _SCHEMA_V12, 13: _SCHEMA_V13, 14: _SCHEMA_V14,
                                                15: _SCHEMA_V15, 16: _SCHEMA_V16, 17: _SCHEMA_V17, 18: _SCHEMA_V18,
-                                               19: _SCHEMA_V19, 20: _SCHEMA_V20}[version])):
+                                               19: _SCHEMA_V19, 20: _SCHEMA_V20, 21: _SCHEMA_V21}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {*(service_record.RECORDER_COLUMNS if version < 20 else set()), *(PROJECT_HOLDS_COLUMNS if version < 18 else set()), *(REGISTERED_RUN_COLUMNS if version < 17 else set()), *(ACTIVATION_COLUMNS if version < 16 else set()), *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
+            omitted = {"runtime_takeover", *(service_record.RECORDER_COLUMNS if version < 20 else set()), *(PROJECT_HOLDS_COLUMNS if version < 18 else set()), *(REGISTERED_RUN_COLUMNS if version < 17 else set()), *(ACTIVATION_COLUMNS if version < 16 else set()), *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
             old_columns = {name: (columns[:-1] if ((name == 'result_leases' and version < 9)
                                                  or (name == 'project_cleanup_reservations' and version == 9)
@@ -562,8 +580,13 @@ class ProjectHistory:
             or actual_schema != schema_set(_SCHEMA)
         ):
             raise HistoryError("history_incompatible")
-        self._check_schema_identity(_COLUMNS)
-        self._check_project_holds()  # SH-7: at every open, so also of a restored copy
+        if self._fence.epoch is None:
+            with self._transaction():
+                self._check_schema_identity(_COLUMNS)
+                self._check_project_holds()
+        else:
+            self._check_schema_identity(_COLUMNS)
+            self._check_project_holds()  # SH-7: at every open, so also of a restored copy
         self._recover_interrupted_upgrade(remove_copy=False)  # upgraded: its copy is the kept one
 
     def _check_project_holds(self) -> None:
@@ -605,10 +628,11 @@ class ProjectHistory:
                 if statement.strip():
                     connection.execute(statement)
             # B6 (step 20 -> 21): the orchestration state column, then the three indexes; additive only.
-            connection.execute('ALTER TABLE project_orchestrations ADD COLUMN ' + ORCHESTRATION_STATE_COLUMN)
-            for statement in STEP_21_SCHEMA.split(';'):
-                if statement.strip():
-                    connection.execute(statement)
+            if version < 21:
+                connection.execute('ALTER TABLE project_orchestrations ADD COLUMN ' + ORCHESTRATION_STATE_COLUMN)
+                for statement in STEP_21_SCHEMA.split(';'):
+                    if statement.strip():
+                        connection.execute(statement)
             # B1: every lease and reservation gets its register row by class, idempotently, before the validators.
             if version < 18:
                 project_holds_schema.adopt_project_holds(connection, self._hold_now())
@@ -3182,7 +3206,7 @@ class ProjectHistory:
                                      (self.project_id, binding.claim_id))
             project_result_contexts.end_retirement(self, binding)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def result_retirement_repairs(self, limit: int = 20, cursor: str | None = None) -> list[dict]:
         """D3 (RS-D draft 3 §4): the retirements that wait, for status, operator-needed first. Each stays charged. The
         list has `truncated` and `cursor`; pass the cursor back to read the entries after a truncated page."""

@@ -148,12 +148,20 @@ def _original_material(store, binding):
     return lease, CleanupEvidence(binding, evidence.grant, evidence.delivery, expected)
 
 
-def _current_cleanup(registry, custody, value):
-    from .owned_execution import ExecutionCustodyError, OwnedExecutionKey, OwnedExecutionRegistry
+def _cleanup_snapshot(registry, custody):
+    from .owned_execution import ExecutionCustodyError, OwnedExecutionRegistry
     if type(registry) is not OwnedExecutionRegistry:
         raise HistoryError('history_not_authorized')
     try:
-        snapshot = registry.cleanup_snapshot(custody)
+        return registry.cleanup_snapshot(custody)
+    except ExecutionCustodyError:
+        raise HistoryError('history_not_authorized') from None
+
+
+def _current_cleanup(registry, custody, value):
+    from .owned_execution import ExecutionCustodyError, OwnedExecutionKey
+    snapshot = _cleanup_snapshot(registry, custody)
+    try:
         grant = value.grant
         if (snapshot['key'] != OwnedExecutionKey(value.binding.project_id, grant.handle_digest,
                 grant.binding.run_id, grant.binding.claim_id) or snapshot['deadline_ns'] != grant.deadline_ns):
@@ -189,6 +197,9 @@ def issue_cleanup(store, binding, *, registry, custody):
     This still supplies no native peer/profile or closed-descendant proof.
     """
     from .cleanup_contracts import encode_cleanup_evidence
+    # A retired supervisor has no current custody, even if historical cleanup
+    # material is absent or corrupt. Refuse before inspecting that material.
+    _cleanup_snapshot(registry, custody)
     with store._transaction():
         lease, value = _original_material(store, binding)
         _current_cleanup(registry, custody, value)

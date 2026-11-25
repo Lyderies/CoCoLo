@@ -1428,7 +1428,7 @@ class ReleasedLedgerUpgradeTests(upgrade_tests.Fixture, unittest.TestCase):
     """Review round 2 (decision 243, new HIGH): a ledger the released 0.8.59 runtime created (real processes: a git
     archive of its release commit registers a project and runs its own collector, as tests/test_upgrade_handover.py
     does) opens and works under this build: E2a's launch columns and wake tables and E2c's start table are added by
-    an additive, idempotent migration, with no ledger schema version change."""
+    an additive, idempotent migration. S2 then adds the machine-local epoch in step 16→17."""
 
     RELEASED_COMMIT = '227b0c5e'  # 0.8.59
     EXPECTED = {
@@ -1460,7 +1460,7 @@ class ReleasedLedgerUpgradeTests(upgrade_tests.Fixture, unittest.TestCase):
         self.stop_collector()
         with contextlib.closing(sqlite3.connect(self.state / 'learning.sqlite3')) as connection:
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION,
+            self.assertEqual(16,  # the released fixture's version, before S2's epoch-only upgrade
                              connection.execute('PRAGMA user_version').fetchone()[0])
         self.assertFalse({'project_wake', 'project_starts'} & tables)  # the released schema, before E2a and E2c
         state = LearningState(self.state, create=False)

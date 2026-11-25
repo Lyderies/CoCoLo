@@ -1,0 +1,240 @@
+METADATA: codex:tests.test_rsf_s2_regressions: incompatible stage/layer integration/unit
+METADATA: codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_cleanup_checks_live_custody_before_historical_material: RSF-S2-3 does not list its check
+METADATA: codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_nested_named_savepoints_preserve_rollback_to_and_outer_transaction: RSF-S2-3 does not list its check
+METADATA: codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_record_changing_schema15_still_requires_explicit_upgrade: RSF-S2-2 does not list its check
+METADATA: codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_record_changing_schema15_still_requires_explicit_upgrade: RSF-S2-6 does not list its check
+METADATA: codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_savepoint_release_rechecks_epoch_and_refused_owners_can_rollback_to: RSF-S2-3 does not list its check
+METADATA: codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_explicit_upgrade_does_not_request_project_backups: RSF-S2-2 does not list its check
+METADATA: codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_explicit_upgrade_does_not_request_project_backups: RSF-S2-6 does not list its check
+METADATA: codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent: RSF-S2-1 does not list its check
+METADATA: codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent: RSF-S2-2 does not list its check
+METADATA: codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent: RSF-S2-4 does not list its check
+METADATA: codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent: RSF-S2-6 does not list its check
+FAILED codex:tests.test_launch_receipts_layout (exit 1) -> /private/tmp/ptzjtt4o65/1.log
+F.
+======================================================================
+FAIL: test_receipts_ddl_changes_only_with_a_schema_bump (tests.test_launch_receipts_layout.LaunchReceiptsLayoutTests.test_receipts_ddl_changes_only_with_a_schema_bump)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_launch_receipts_layout.py", line 28, in test_receipts_ddl_changes_only_with_a_schema_bump
+    self.assertEqual(16, LEDGER_SCHEMA_VERSION,
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                     'the ledger schema changed: add the new layout hash and its upgrade, then update this test')
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 16 != 17 : the ledger schema changed: add the new layout hash and its upgrade, then update this test
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.001s
+
+FAILED (failures=1)
+
+FAILED codex:tests.test_holds_report (exit 1) -> /private/tmp/ptzjtt4o65/2.log
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/project_holds_report.py", line 120, in holds_report
+    history._require_owner()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/project_history.py", line 495, in _require_owner
+    self._fence.check(self._connection)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/store_fence.py", line 92, in check
+    self.lock()
+    ~~~~~~~~~^^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/store_fence.py", line 67, in lock
+    probe = os.open(self.path, os.O_RDWR | os.O_NOFOLLOW)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1241, in _execute_mock_call
+    raise effect
+AssertionError: private file opened
+
+----------------------------------------------------------------------
+Ran 26 tests in 0.400s
+
+FAILED (failures=1)
+
+FAILED codex:tests.test_lifetime_cap_guard (exit 1) -> /private/tmp/ptzjtt4o65/3.log
+...F
+======================================================================
+FAIL: test_every_count_based_limit_in_the_runtime_is_listed_with_its_end (tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_lifetime_cap_guard.py", line 74, in test_every_count_based_limit_in_the_runtime_is_listed_with_its_end
+    self.assertEqual([], problems(runtime_sites(), registry, test_names()))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [] != ["learning_store.py::__init__: a new count[118 chars]st)"]
+
+Second list contains 1 additional elements.
+First extra element 0:
+"learning_store.py::__init__: a new count-based limit; list it in lifetime_caps.json with 'ends' (how what it counts goes away) and 'test' (a past-the-limit test)"
+
+- []
++ ['learning_store.py::__init__: a new count-based limit; list it in '
++  "lifetime_caps.json with 'ends' (how what it counts goes away) and 'test' (a "
++  'past-the-limit test)']
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.654s
+
+FAILED (failures=1)
+
+BUDGET DEBT: codex:tests.test_bridge ceiling=299.500s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_container_stop ceiling=67.620s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_host_commands ceiling=119.560s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_learning_cli ceiling=95.440s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_lost_run_settlement ceiling=98.640s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_project_driver ceiling=390.320s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_trial_run_driver_bugs ceiling=70.220s not_measured seconds=None
+BUDGET DEBT: codex:tests.test_write_merge ceiling=241.240s not_measured seconds=None
+BUDGET DEBT: root:test_install ceiling=110.140s not_measured seconds=None
+BUDGET DEBT: root:test_install_claude_upgrade ceiling=120.330s not_measured seconds=None
+BUDGET DEBT: root:test_setup_sh ceiling=177.880s not_measured seconds=None
+BUDGET DEBT: root:test_setup_straight ceiling=264.440s not_measured seconds=None
+BUDGET DEBT: root:test_setup_update ceiling=167.880s not_measured seconds=None
+BUDGET DEBT: root:test_setup_wizard_direct ceiling=265.860s not_measured seconds=None
+RUN RECORD: /var/folders/1l/881ngmrd0wld824x45ztl8jw0000gn/T/cocolo-test-record-xdrdqdtr/run.json
+{
+ "elapsed_seconds": 0.8,
+ "jobs": 4,
+ "stages": [
+  "e2e",
+  "integration",
+  "unit"
+ ],
+ "job_seconds": 1.706,
+ "over_budget": [],
+ "budget_failures": [],
+ "budget_warnings": [
+  {
+   "module": "codex:tests.test_bridge",
+   "ceiling": 299.5,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_container_stop",
+   "ceiling": 67.62,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_host_commands",
+   "ceiling": 119.56,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_learning_cli",
+   "ceiling": 95.44,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_lost_run_settlement",
+   "ceiling": 98.64,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_project_driver",
+   "ceiling": 390.32,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_trial_run_driver_bugs",
+   "ceiling": 70.22,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "codex:tests.test_write_merge",
+   "ceiling": 241.24,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_install",
+   "ceiling": 110.14,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_install_claude_upgrade",
+   "ceiling": 120.33,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_sh",
+   "ceiling": 177.88,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_straight",
+   "ceiling": 264.44,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_update",
+   "ceiling": 167.88,
+   "seconds": null,
+   "status": "not_measured"
+  },
+  {
+   "module": "root:test_setup_wizard_direct",
+   "ceiling": 265.86,
+   "seconds": null,
+   "status": "not_measured"
+  }
+ ],
+ "debt_retirement_required": [],
+ "discovery_seconds": 2.295542584033683,
+ "preflight_seconds": 6.87619812390767,
+ "metadata_errors": [
+  "codex:tests.test_rsf_s2_regressions: incompatible stage/layer integration/unit",
+  "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_cleanup_checks_live_custody_before_historical_material: RSF-S2-3 does not list its check",
+  "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_nested_named_savepoints_preserve_rollback_to_and_outer_transaction: RSF-S2-3 does not list its check",
+  "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_record_changing_schema15_still_requires_explicit_upgrade: RSF-S2-2 does not list its check",
+  "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_record_changing_schema15_still_requires_explicit_upgrade: RSF-S2-6 does not list its check",
+  "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_savepoint_release_rechecks_epoch_and_refused_owners_can_rollback_to: RSF-S2-3 does not list its check",
+  "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_explicit_upgrade_does_not_request_project_backups: RSF-S2-2 does not list its check",
+  "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_explicit_upgrade_does_not_request_project_backups: RSF-S2-6 does not list its check",
+  "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent: RSF-S2-1 does not list its check",
+  "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent: RSF-S2-2 does not list its check",
+  "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent: RSF-S2-4 does not list its check",
+  "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent: RSF-S2-6 does not list its check"
+ ],
+ "partial": false,
+ "profile": "ci",
+ "requirement_failures": [],
+ "units": 3,
+ "tests": {
+  "codex": 32
+ },
+ "failed_units": [
+  "codex:tests.test_launch_receipts_layout",
+  "codex:tests.test_holds_report",
+  "codex:tests.test_lifetime_cap_guard"
+ ],
+ "slowest_units": [
+  [
+   "codex:tests.test_lifetime_cap_guard",
+   0.8
+  ],
+  [
+   "codex:tests.test_holds_report",
+   0.7
+  ],
+  [
+   "codex:tests.test_launch_receipts_layout",
+   0.2
+  ]
+ ],
+ "logs": "/private/tmp/ptzjtt4o65"
+}
+Unchecked requirements (83): API-1, API-10, API-11, API-12, API-13, API-14, API-15, API-16, API-17, API-18, API-19, API-2, API-20, API-21, API-22, API-23, API-24, API-25, API-26, API-27, API-3, API-4, API-5, API-6, API-7, API-8, API-9, G1, G2, G3, G4, G5, G6, G7, G8, G9, L1.1, L1.2, L10.1, L10.2, L10.3, L11.1, L11.2, L12.1, L12.2, L12.3, L12.4, L12.5, L12.6, L12.7, L13.1, L13.2, L2.1, L2.2, L3.1, L3.2, L3.3, L4.1, L4.2, L5.1, L5.2, L5.3, L6.1, L6.2, L7.1, L7.2, L7.3, L8.1, L8.2, L9.1, L9.2, L9.3, P4-REPORT, RS-B-B6-6, TERM-13, TERM-17, TERM-5, TERM-6, TERM-7, TF-23, TF-25, TF-26, TF-27

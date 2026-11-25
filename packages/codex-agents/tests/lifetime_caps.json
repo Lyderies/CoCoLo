@@ -1987,6 +1987,11 @@
    "checks": 1,
    "ends": "RS-E E2c-10 (review round 1, HIGH 2): SETTLE_TRIES tries to keep a child's pid on its claim, per start; past them the child is still timed, killed at twice the timeout and reaped by its worker",
    "test": "test_E2c_10_a_child_whose_pid_record_is_refused_is_still_timed_killed_and_reaped"
+  },
+  "learning_store.py::__init__": {
+   "checks": 1,
+   "ends": "Schema-version comparison, not a lifetime count: the legacy flag lasts one owner connection. Step 16\u219217 replaces the singleton machine-local epoch, preserves project records, and creates no accumulating quota.",
+   "test": "test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent"
   }
  }
 }

@@ -291,7 +291,7 @@ class AccountCleanupReleaseTests(unittest.TestCase):
         path = self.ledger.create_sanitized_backup(self.binding.project_id, file_id='cleanup_release_backup',
             expires_at_ms=self.base.fixture.base.stamp+60_000)
         body = backup_body(path, self.binding.project_id)
-        self.assertEqual(16, body['ledger_schema_version'])  # O0b RS-A (requirement)
+        self.assertEqual(17, body['ledger_schema_version'])  # O0b RS-A (requirement)
         self.assertEqual(1, body['counts']['account_cleanup_receipts'])
         self.assertTrue(self.ledger.verify_sanitized_backup(self.binding.project_id, file_id='cleanup_release_backup')['verified'])
         self.assertEqual(original, tuple(self.ledger._connection.execute('SELECT * FROM account_cleanup_receipts').fetchone()))

@@ -1,0 +1,35 @@
+{
+ "authority": "docs/requirements/rsf-s2.md",
+ "requirements": [
+  {
+   "id": "RSF-S2-1",
+   "statement": "**RSF-S2-1 \u2014 Exclusive lifetime ownership.** Both store owners acquire their\nexisting, protected writer flock before opening/migrating a database. A live\npredecessor, including a stopped/paused executable, prevents adoption and new\nadmissions. Do not infer exit from a failed health check. Keep the same lock\ninode/descriptor until the connection closes; refuse lost, replaced, unlinked,\ninherited or released ownership, without reacquiring it. Never unlink locks.\nA released lifetime lock proves the predecessor has retired its connection;\nreal executable tests additionally wait for process exit before migration.",
+   "source": "tests/requirements/rsf-s2.json#RSF-S2-1"
+  },
+  {
+   "id": "RSF-S2-2",
+   "statement": "**RSF-S2-2 \u2014 Atomic epoch before adoption.** Each successful owner acquisition\nadvances one durable singleton `runtime_takeover` epoch, retaining the preceding\nand current loaded runtime digest. Install it in the schema transaction before\nany historical hold adoption; roll it back with a failed migration. A successor\nopening the same build also advances the epoch. Publish no owner/admission\ninterface until initialization and validation succeed. Supported historical\nrecords still upgrade through the existing authorization and backup gates.",
+   "source": "tests/requirements/rsf-s2.json#RSF-S2-2"
+  },
+  {
+   "id": "RSF-S2-3",
+   "statement": "**RSF-S2-3 \u2014 Every current write.** A central connection boundary checks the\ncaptured epoch and lifetime ownership inside every write transaction and again\nbefore commit. Cover account/project admissions, direct writes, autocommit,\ncursor/batch/script writes, explicit transactions, sweeps, backup registration,\ndeletion and VACUUM/journal maintenance. A paused stale writer must refuse with\nzero committed changes after takeover, even if it retains a connection.\nRollback and connection close must remain possible after revocation.",
+   "source": "tests/requirements/rsf-s2.json#RSF-S2-3"
+  },
+  {
+   "id": "RSF-S2-4",
+   "statement": "**RSF-S2-4 \u2014 Exclude old executable reopen.** Advance ledger schema 16\u219217\nand project schema 21\u219222 so genuine older executables cannot reopen either\nmigrated store, including an offline CLI. Test an unmodified git archive of\n0.8.55 (`8d4a7ce3`) holding each store, racing migration, and retrying after\nmigration. Old stores are positive upgrade fixtures; old runtimes are negative\nwriter fixtures. Do not change VERSION or the runtime digest catalogue.",
+   "source": "tests/requirements/rsf-s2.json#RSF-S2-4"
+  },
+  {
+   "id": "RSF-S2-5",
+   "statement": "**RSF-S2-5 \u2014 Plain refusals.** Current fencing refusals identify ownership or\nruntime replacement in plain language and include the exact trusted command\n`./setup.sh --update`. Keep existing busy/incompatible reason codes so wire\nreason inventories do not grow. Already installed old binaries cannot acquire\nnew message text; their existing schema refusal is the negative fence proof.",
+   "source": "tests/requirements/rsf-s2.json#RSF-S2-5"
+  },
+  {
+   "id": "RSF-S2-6",
+   "statement": "**RSF-S2-6 \u2014 Preservation and validation.** Preserve signed/historical records,\nexisting backup formats and project partitions. The machine-local epoch never\ntravels in a per-project learning backup or source image. Register new tests,\nrun them red before code then green, and prove `metadata_errors: []`. Run only\nnamed modules, including every copier/backup/restore/move/enumeration module\naffected by the schema step. Record evidence and unrun checks in\n[STATUS.md](rsf-s2/STATUS.md). Existing assertions may change only with an\nold\u2192new entry in [assertions.md](rsf-s2/assertions.md).",
+   "source": "tests/requirements/rsf-s2.json#RSF-S2-6"
+  }
+ ]
+}

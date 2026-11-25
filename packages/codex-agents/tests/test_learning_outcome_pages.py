@@ -67,7 +67,9 @@ class LearningOutcomePageTests(unittest.TestCase):
         self.assertEqual(expected, tuple(seen))
         self.assertEqual(entries[-1].source_sequence, revision)
         self.assertFalse(any(s.startswith(('BEGIN', 'COMMIT')) for s in statements))
-        self.assertTrue(all('INDEXED BY records_learning_outcomes' in s for s in statements))
+        fence_sql = 'SELECT epoch,new_digest FROM runtime_takeover WHERE singleton=1'
+        self.assertIn(fence_sql, statements)
+        self.assertTrue(all('INDEXED BY records_learning_outcomes' in s or s == fence_sql for s in statements))
 
     def test_unrelated_activity_and_exact_replay_preserve_revision_but_new_outcome_conflicts(self):
         self.assertEqual(0, self.store.learning_outcome_revision())
@@ -164,7 +166,7 @@ class LearningOutcomePageUpgradeTests(unittest.TestCase):
             connection.close()
             store = ProjectHistory(directory, PROJECT, allow_schema_upgrade=True)
             try:
-                self.assertEqual(21, store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) B6: schema 21 (decision 131)
+                self.assertEqual(22, store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) B6: schema 21 (decision 131)
                 self.assertEqual(original, tuple(store._connection.execute('SELECT * FROM records').fetchone()))
                 self.assertEqual(1, store.learning_outcome_revision())
                 self.assertEqual(raw, store.learning_outcome_page(1)[0][3])

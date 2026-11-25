@@ -6,7 +6,7 @@ from typing import Any
 
 from .learning_contracts import MAX_RECORD_BYTES
 
-LEDGER_SCHEMA_VERSION = 16  # PC-4: nullable probe provenance
+LEDGER_SCHEMA_VERSION = 17  # RSF-S2: lifetime owner epoch and legacy writer exclusion
 COLLECTOR_PROTOCOL_VERSION = 1
 MAX_REQUEST_BYTES = MAX_RECORD_BYTES + 16_384
 

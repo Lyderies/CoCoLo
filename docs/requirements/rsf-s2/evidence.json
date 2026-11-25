@@ -1,0 +1,5208 @@
+{
+  "branch": "feat/rsf-s2-fence",
+  "base": "cbc757d5",
+  "new_test_outcomes": {
+    "codex:tests.test_rsf_s2_fence.FenceTests.test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership": "passed",
+    "codex:tests.test_rsf_s2_fence.FenceTests.test_commit_rechecks_epoch_and_rolls_back": "passed",
+    "codex:tests.test_rsf_s2_fence.FenceTests.test_current_format_missing_epoch_refuses_without_recreating_it": "passed",
+    "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_advances_and_signed_records_are_unchanged": "passed",
+    "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance": "passed",
+    "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_is_inside_the_schema_step_before_each_legacy_adoption_and_rolls_back_with_it": "passed",
+    "codex:tests.test_rsf_s2_fence.FenceTests.test_lost_or_replaced_lifetime_lock_refuses_admissions": "passed",
+    "codex:tests.test_rsf_s2_fence.FenceTests.test_paused_ledger_writer_cannot_resume_after_successor": "passed",
+    "codex:tests.test_rsf_s2_fence.FenceTests.test_paused_project_process_cannot_resume_after_takeover": "passed",
+    "codex:tests.test_rsf_s2_fence.FenceTests.test_unsafe_hard_link_lock_is_refused_before_writing_an_owner_stamp": "passed",
+    "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_old_offline_cli_cannot_reopen_migrated_ledger": "passed",
+    "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_real_0855_owners_block_migration_then_cannot_reopen": "passed"
+  },
+  "epoch_mutation": "EXPECTED MUTATION FAILURES: ['tests.test_rsf_s2_fence.FenceTests.test_commit_rechecks_epoch_and_rolls_back', \"tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770cd50>)\", \"tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770d900>)\", \"tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770db10>)\", \"tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770d9b0>)\", \"tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770de80>)\", \"tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770da60>)\", \"tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770dbc0>)\", \"tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770e140>)\", \"tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770dd20>)\", \"tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770dfe0>)\", \"tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770e1f0>)\", \"tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770e350>)\", \"tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='LearningLedger', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770dc70>)\", \"tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance (owner='ProjectHistory', mutation=<function FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance.<locals>.<lambda> at 0x10770e2a0>)\"]",
+  "runs": [
+    {
+      "label": "red",
+      "elapsed_seconds": 1.324,
+      "job_seconds": 1.316,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "failed",
+        "RSF-S2-2": "failed",
+        "RSF-S2-3": "failed",
+        "RSF-S2-4": "failed",
+        "RSF-S2-5": "failed",
+        "RSF-S2-6": "failed"
+      },
+      "modules": {
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 7,
+          "seconds": 1.316,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 6,
+          "failed_examples": [
+            "codex:tests.test_rsf_s2_fence.FenceTests.test_commit_rechecks_epoch_and_rolls_back",
+            "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_advances_and_signed_records_are_unchanged",
+            "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance"
+          ]
+        }
+      }
+    },
+    {
+      "label": "green",
+      "elapsed_seconds": 1.757,
+      "job_seconds": 1.753,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 7,
+          "seconds": 1.753,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "core",
+      "elapsed_seconds": 18.871,
+      "job_seconds": 65.754,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "not_run",
+        "RSF-S2-2": "not_run",
+        "RSF-S2-3": "not_run",
+        "RSF-S2-4": "not_run",
+        "RSF-S2-5": "not_run",
+        "RSF-S2-6": "not_run"
+      },
+      "modules": {
+        "codex:tests.test_sql_read_budget": {
+          "tests": 34,
+          "seconds": 0.215,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_runtime_release": {
+          "tests": 3,
+          "seconds": 0.373,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 2,
+          "failed_examples": [
+            "codex:tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version",
+            "codex:tests.test_runtime_release.RuntimeReleaseTests.test_the_runtime_file_set_is_exactly_the_package_orchestration_files"
+          ]
+        },
+        "codex:tests.test_project_history": {
+          "tests": 35,
+          "seconds": 1.77,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 11,
+          "failed_examples": [
+            "codex:tests.test_project_history.ProjectHistoryTests.test_corrupted_binding_or_record_returns_fixed_failure_without_chained_input",
+            "codex:tests.test_project_history.ProjectHistoryTests.test_corrupted_observation_aggregate_cannot_escape_or_append",
+            "codex:tests.test_project_history.ProjectHistoryTests.test_forked_process_cannot_use_or_close_the_inherited_writer"
+          ]
+        },
+        "codex:tests.test_ledger_startup": {
+          "tests": 5,
+          "seconds": 2.2,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 2,
+          "failed_examples": [
+            "codex:tests.test_ledger_startup.LedgerStartupTests.test_lock_setup_failures_close_actual_descriptor",
+            "codex:tests.test_ledger_startup.LedgerStartupTests.test_successful_owner_still_excludes_another_writer"
+          ]
+        },
+        "codex:tests.test_project_holds_schema": {
+          "tests": 40,
+          "seconds": 2.254,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 33,
+          "failed_examples": [
+            "codex:tests.test_project_holds_schema.OrchestrationHoldTests.test_R3_a_held_orchestration_row_with_no_orchestration_is_refused",
+            "codex:tests.test_project_holds_schema.SchemaStepTests.test_D111_a_failing_validator_in_the_18_to_19_step_leaves_18_and_removes_its_copy",
+            "codex:tests.test_project_holds_schema.SchemaStepTests.test_M2_a_failed_backup_refuses_the_step"
+          ]
+        },
+        "codex:tests.test_learning_source_image_legacy": {
+          "tests": 7,
+          "seconds": 3.534,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 7,
+          "failed_examples": [
+            "codex:tests.test_learning_source_image_legacy.LearningSourceImageLegacyTests.test_central_original_custody_change_refuses_despite_valid_backup_and_same_staged_subsets",
+            "codex:tests.test_learning_source_image_legacy.LearningSourceImageLegacyTests.test_complete_original_image_matches_existing_owner_and_stays_read_only",
+            "codex:tests.test_learning_source_image_legacy.LearningSourceImageLegacyTests.test_existing_unicode_backup_identifiers_keep_their_original_file_and_body"
+          ]
+        },
+        "codex:tests.test_learning_source_image": {
+          "tests": 33,
+          "seconds": 3.635,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 32,
+          "failed_examples": [
+            "codex:tests.test_learning_source_image.LearningSourceImageTests.test_added_deleted_and_changed_central_rows_refuse",
+            "codex:tests.test_learning_source_image.LearningSourceImageTests.test_an_extra_column_on_an_allowed_extra_table_refuses",
+            "codex:tests.test_learning_source_image.LearningSourceImageTests.test_arbitrary_registered_path_is_not_followed"
+          ]
+        },
+        "codex:tests.test_learning_store": {
+          "tests": 100,
+          "seconds": 15.055,
+          "returncodes": [
+            1,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 19,
+          "failed_examples": [
+            "codex:tests.test_learning_store.LearningStoreTests.test_PC4_schema_15_upgrade_preserves_legacy_bytes_and_null_probe_id",
+            "codex:tests.test_learning_store.LearningStoreTests.test_app_server_cli_normalizes_and_ingests_through_collector",
+            "codex:tests.test_learning_store.LearningStoreTests.test_backup_roundtrips_complete_project_authority_and_lifecycle_rows"
+          ]
+        },
+        "codex:tests.test_run_holds": {
+          "tests": 71,
+          "seconds": 36.719,
+          "returncodes": [
+            1,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 19,
+          "failed_examples": [
+            "codex:tests.test_run_holds.RunHoldTests.test_RS_A_F2_a_backup_with_a_register_row_without_its_hold_is_refused",
+            "codex:tests.test_run_holds.RunHoldTests.test_RS_A_G10_a_pruned_lost_tombstone_without_its_evidence_is_refused",
+            "codex:tests.test_run_holds.RunHoldTests.test_RS_A_G10_a_real_lost_decision_still_opens"
+          ]
+        }
+      }
+    },
+    {
+      "label": "core2",
+      "elapsed_seconds": 3.1,
+      "job_seconds": 13.827,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_project_history": {
+          "tests": 35,
+          "seconds": 1.639,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_holds_schema": {
+          "tests": 40,
+          "seconds": 1.912,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 28,
+          "failed_examples": [
+            "codex:tests.test_project_holds_schema.OrchestrationHoldTests.test_R3_a_held_orchestration_row_with_no_orchestration_is_refused",
+            "codex:tests.test_project_holds_schema.SchemaStepTests.test_D111_a_failing_validator_in_the_18_to_19_step_leaves_18_and_removes_its_copy",
+            "codex:tests.test_project_holds_schema.SchemaStepTests.test_M2_a_repeated_step_is_a_no_op"
+          ]
+        },
+        "codex:tests.test_ledger_startup": {
+          "tests": 5,
+          "seconds": 1.909,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 7,
+          "seconds": 2.242,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_source_image_legacy": {
+          "tests": 7,
+          "seconds": 3.037,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 7,
+          "failed_examples": [
+            "codex:tests.test_learning_source_image_legacy.LearningSourceImageLegacyTests.test_central_original_custody_change_refuses_despite_valid_backup_and_same_staged_subsets",
+            "codex:tests.test_learning_source_image_legacy.LearningSourceImageLegacyTests.test_complete_original_image_matches_existing_owner_and_stays_read_only",
+            "codex:tests.test_learning_source_image_legacy.LearningSourceImageLegacyTests.test_existing_unicode_backup_identifiers_keep_their_original_file_and_body"
+          ]
+        },
+        "codex:tests.test_learning_source_image": {
+          "tests": 33,
+          "seconds": 3.087,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 21,
+          "failed_examples": [
+            "codex:tests.test_learning_source_image.LearningSourceImageTests.test_added_deleted_and_changed_central_rows_refuse",
+            "codex:tests.test_learning_source_image.LearningSourceImageTests.test_arbitrary_registered_path_is_not_followed",
+            "codex:tests.test_learning_source_image.LearningSourceImageTests.test_boolean_counts_and_duplicate_original_keys_refuse"
+          ]
+        }
+      }
+    },
+    {
+      "label": "core3",
+      "elapsed_seconds": 3.204,
+      "job_seconds": 11.889,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_sql_read_budget": {
+          "tests": 34,
+          "seconds": 0.213,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_history": {
+          "tests": 35,
+          "seconds": 1.494,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 10,
+          "failed_examples": [
+            "codex:tests.test_project_history.ProjectHistoryTests.test_forked_process_cannot_use_or_close_the_inherited_writer",
+            "codex:tests.test_project_history.ProjectHistoryTests.test_incompatible_version_application_and_columns_are_not_opened_as_history",
+            "codex:tests.test_project_history.ProjectHistoryTests.test_one_attempt_and_claim_digest_cannot_acquire_a_second_terminal_binding"
+          ]
+        },
+        "codex:tests.test_project_holds_schema": {
+          "tests": 40,
+          "seconds": 1.763,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 29,
+          "failed_examples": [
+            "codex:tests.test_project_holds_schema.OrchestrationHoldTests.test_R3_a_held_orchestration_row_with_no_orchestration_is_refused",
+            "codex:tests.test_project_holds_schema.SchemaStepTests.test_D111_a_failing_validator_in_the_18_to_19_step_leaves_18_and_removes_its_copy",
+            "codex:tests.test_project_holds_schema.SchemaStepTests.test_M2_a_failed_backup_refuses_the_step"
+          ]
+        },
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 7,
+          "seconds": 2.121,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_source_image": {
+          "tests": 33,
+          "seconds": 3.12,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_source_image_legacy": {
+          "tests": 7,
+          "seconds": 3.179,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "core4",
+      "elapsed_seconds": 1.948,
+      "job_seconds": 5.057,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_project_history": {
+          "tests": 35,
+          "seconds": 1.394,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 3,
+          "failed_examples": [
+            "codex:tests.test_project_history.ProjectHistoryTests.test_forked_process_cannot_use_or_close_the_inherited_writer",
+            "codex:tests.test_project_history.ProjectHistoryTests.test_owner_affinity_and_lifetime_writer_lock",
+            "codex:tests.test_project_history.ProjectHistoryTests.test_recycled_numeric_thread_identity_cannot_read_or_close_a_writer"
+          ]
+        },
+        "codex:tests.test_project_holds_schema": {
+          "tests": 40,
+          "seconds": 1.722,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 23,
+          "failed_examples": [
+            "codex:tests.test_project_holds_schema.SchemaStepTests.test_D111_a_failing_validator_in_the_18_to_19_step_leaves_18_and_removes_its_copy",
+            "codex:tests.test_project_holds_schema.SchemaStepTests.test_M2_a_repeated_step_is_a_no_op",
+            "codex:tests.test_project_holds_schema.SchemaStepTests.test_M2_an_old_writer_still_running_excludes_the_step"
+          ]
+        },
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 7,
+          "seconds": 1.941,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "core5",
+      "elapsed_seconds": 2.045,
+      "job_seconds": 5.299,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_project_history": {
+          "tests": 35,
+          "seconds": 1.385,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_holds_schema": {
+          "tests": 40,
+          "seconds": 1.876,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 2,
+          "failed_examples": [
+            "codex:tests.test_project_holds_schema.SchemaStepTests.test_SB_a_copy_of_an_18_store_carries_the_new_tables_and_a_restore_opens_validated",
+            "codex:tests.test_project_holds_schema.SchemaStepTests.test_X5_M3_one_step_creates_the_four_tables_adopts_nothing_and_both_validators_pass"
+          ]
+        },
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 7,
+          "seconds": 2.038,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "copiers1",
+      "elapsed_seconds": 23.393,
+      "job_seconds": 102.67,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "not_run",
+        "RSF-S2-2": "not_run",
+        "RSF-S2-3": "not_run",
+        "RSF-S2-4": "not_run",
+        "RSF-S2-5": "not_run",
+        "RSF-S2-6": "not_run"
+      },
+      "modules": {
+        "codex:tests.test_reply_shape_compatibility": {
+          "tests": 3,
+          "seconds": 0.409,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_cleanup_schema": {
+          "tests": 3,
+          "seconds": 1.194,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_account_cleanup_schema.AccountCleanupSchemaTests.test_verified_upgrade_preserves_old_manifest_and_invents_no_cleanup"
+          ]
+        },
+        "codex:tests.test_learning_qa_upgrade": {
+          "tests": 3,
+          "seconds": 0.811,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_learning_qa_upgrade.LearningQACorpusUpgradeTests.test_explicit_upgrade_rolls_back_failure_then_preserves_every_original_row"
+          ]
+        },
+        "codex:tests.test_account_observation_backup": {
+          "tests": 2,
+          "seconds": 1.341,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_account_observation_backup.AccountObservationBackupTests.test_both_verifiers_preserve_committed_and_unknown_original_requests"
+          ]
+        },
+        "codex:tests.test_account_open_schema": {
+          "tests": 10,
+          "seconds": 1.491,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 4,
+          "failed_examples": [
+            "codex:tests.test_account_open_schema.AccountOpenSchemaTests.test_all_additive_ddl_and_version_roll_back_after_injected_interruption",
+            "codex:tests.test_account_open_schema.AccountOpenSchemaTests.test_explicit_old_upgrade_preserves_original_partition_and_never_invents_opens",
+            "codex:tests.test_account_open_schema.AccountOpenSchemaTests.test_fresh_layout_has_explicit_origin_and_independent_original_journals"
+          ]
+        },
+        "codex:tests.test_learning_chunk_upgrade": {
+          "tests": 5,
+          "seconds": 0.588,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_learning_chunk_upgrade.LearningChunkUpgradeTests.test_interrupted_upgrade_rolls_back_then_exact_replay_backfills_only_membership"
+          ]
+        },
+        "codex:tests.test_backup_installed_project": {
+          "tests": 2,
+          "seconds": 1.913,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_refusal_steps": {
+          "tests": 14,
+          "seconds": 0.804,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_owner_backup_streamed": {
+          "tests": 20,
+          "seconds": 13.018,
+          "returncodes": [
+            -15,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 13,
+          "failed_examples": [
+            "codex:tests.test_owner_backup_streamed.OwnerBackupStreamedTests.test_F3_14_a_file_cleanup_cannot_remove_is_named",
+            "codex:tests.test_owner_backup_streamed.OwnerBackupStreamedTests.test_F3_18_an_extra_column_on_an_allowed_extra_table_is_refused_by_both_validators",
+            "codex:tests.test_owner_backup_streamed.OwnerBackupStreamedTests.test_F3_1_an_earlier_schema_project_is_streamed_without_holding_it_in_memory"
+          ]
+        },
+        "codex:tests.test_account_observation_schema": {
+          "tests": 7,
+          "seconds": 3.303,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 6,
+          "failed_examples": [
+            "codex:tests.test_account_observation_schema.AccountObservationSchemaTests.test_default_refuses_without_writes_and_explicit_upgrade_keeps_all_original_cells",
+            "codex:tests.test_account_observation_schema.AccountObservationSchemaTests.test_interrupted_upgrade_rolls_back_both_tables_and_releases_original_writer",
+            "codex:tests.test_account_observation_schema.AccountObservationSchemaTests.test_or3_upgrade_backup_verify_keep_a_legacy_inconsistent_axes_outcome_byte_identical"
+          ]
+        },
+        "codex:tests.test_account_store_recovery": {
+          "tests": 19,
+          "seconds": 3.975,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_backup_reply_private": {
+          "tests": 11,
+          "seconds": 6.125,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_backup_reply_private.BackupReplyPrivateTests.test_BK_3_the_owner_script_reply_names_the_backup_without_a_path"
+          ]
+        },
+        "codex:tests.test_state_location": {
+          "tests": 22,
+          "seconds": 6.661,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 3,
+          "failed_examples": [
+            "codex:tests.test_state_location.LegacyStateMoveTests.test_old_records_of_an_earlier_version_move_only_once_the_upgrade_is_approved_too",
+            "codex:tests.test_state_location.LegacyStateMoveTests.test_only_the_new_folder_is_normal",
+            "codex:tests.test_state_location.LegacyStateMoveTests.test_registration_stops_the_collector_copies_and_sets_the_old_folder_aside"
+          ]
+        },
+        "codex:tests.test_learning_migration": {
+          "tests": 17,
+          "seconds": 21.244,
+          "returncodes": [
+            1,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 3,
+          "failed_examples": [
+            "codex:tests.test_learning_migration.MigrationCliTests.test_first_start_of_the_project_service_moves_the_history_by_itself",
+            "codex:tests.test_learning_migration.ActivationSchemaTests.test_schema15_store_gains_the_cutover_table_only_by_explicit_upgrade",
+            "codex:tests.test_learning_migration.MigrationCliTests.test_command_moves_reports_refuses_and_rolls_back"
+          ]
+        },
+        "codex:tests.test_learning_source_transfer": {
+          "tests": 13,
+          "seconds": 7.193,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 3,
+          "failed_examples": [
+            "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_complete_original_rows_signatures_and_qa_survive_restart_and_exact_replay",
+            "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_exact_schema14_upgrade_preserves_rows_and_does_not_infer_missing_image",
+            "codex:tests.test_learning_source_transfer.LearningSourceTransferTests.test_unknown_schema14_trigger_refuses_without_changing_original_rows"
+          ]
+        },
+        "codex:tests.test_large_project_backups": {
+          "tests": 8,
+          "seconds": 32.6,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "missing-epoch-red",
+      "elapsed_seconds": 2.178,
+      "job_seconds": 2.169,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "failed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "failed"
+      },
+      "modules": {
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 9,
+          "seconds": 2.169,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_rsf_s2_fence.FenceTests.test_current_format_missing_epoch_refuses_without_recreating_it"
+          ]
+        }
+      }
+    },
+    {
+      "label": "fix1",
+      "elapsed_seconds": 18.579,
+      "job_seconds": 44.777,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_account_cleanup_schema": {
+          "tests": 3,
+          "seconds": 0.797,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_open_schema": {
+          "tests": 10,
+          "seconds": 1.067,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_holds_schema": {
+          "tests": 40,
+          "seconds": 1.981,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 9,
+          "seconds": 2.631,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_observation_schema": {
+          "tests": 7,
+          "seconds": 2.679,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_backup_reply_private": {
+          "tests": 11,
+          "seconds": 5.233,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_owner_backup_streamed": {
+          "tests": 40,
+          "seconds": 30.389,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "copiers2",
+      "elapsed_seconds": 24.93,
+      "job_seconds": 202.673,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "not_run",
+        "RSF-S2-2": "not_run",
+        "RSF-S2-3": "not_run",
+        "RSF-S2-4": "not_run",
+        "RSF-S2-5": "not_run",
+        "RSF-S2-6": "not_run"
+      },
+      "modules": {
+        "codex:tests.test_rsf_s7_account": {
+          "tests": 4,
+          "seconds": 1.552,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_legacy_capacity_upgrade": {
+          "tests": 12,
+          "seconds": 2.995,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_results": {
+          "tests": 46,
+          "seconds": 2.555,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 2,
+          "failed_examples": [
+            "codex:tests.test_project_results.ResultSchemaMigrationTests.test_actual_process_death_during_schema_upgrade_rolls_back_and_can_restart",
+            "codex:tests.test_project_results.ResultSchemaMigrationTests.test_exact_schema1_migration_preserves_every_existing_byte_and_sequence"
+          ]
+        },
+        "codex:tests.test_history_service_upgrade": {
+          "tests": 30,
+          "seconds": 1.128,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 6,
+          "failed_examples": [
+            "codex:tests.test_history_service_upgrade.HistoryServiceUpgradeTests.test_HS_10_an_existing_copy_is_never_reused",
+            "codex:tests.test_history_service_upgrade.HistoryServiceUpgradeTests.test_HS_16_a_copy_never_replaces_an_existing_one",
+            "codex:tests.test_history_service_upgrade.HistoryServiceUpgradeTests.test_HS_18_a_copy_made_for_an_upgrade_that_fails_is_removed"
+          ]
+        },
+        "codex:tests.test_learning_source_image_legacy": {
+          "tests": 7,
+          "seconds": 4.808,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_legacy_history_compatibility": {
+          "tests": 5,
+          "seconds": 0.699,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_release_ack": {
+          "tests": 2,
+          "seconds": 0.638,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_project_release_ack.ProjectReleaseAckSchemaTests.test_old_schema_refuses_without_writes_and_explicit_upgrade_keeps_original_rows"
+          ]
+        },
+        "codex:tests.test_learning_source_image": {
+          "tests": 33,
+          "seconds": 5.649,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_hold_register": {
+          "tests": 30,
+          "seconds": 8.57,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 6,
+          "failed_examples": [
+            "codex:tests.test_project_hold_register.RegisterAdoptionTests.test_the_step_adopts_every_lease_and_reservation_by_class",
+            "codex:tests.test_project_hold_register.SuccessorRegisterTests.test_L3_a_closure_the_account_stored_but_the_project_did_not_is_released_denied_by_the_successor",
+            "codex:tests.test_project_hold_register.SuccessorRegisterTests.test_L3_a_denied_reply_then_a_crash_before_the_closure_releases_nothing_until_the_successor_closes_it"
+          ]
+        },
+        "codex:tests.test_learning_source_transfer": {
+          "tests": 13,
+          "seconds": 8.827,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_store": {
+          "tests": 100,
+          "seconds": 21.043,
+          "returncodes": [
+            1,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 6,
+          "failed_examples": [
+            "codex:tests.test_learning_store.LearningStoreTests.test_app_server_cli_normalizes_and_ingests_through_collector",
+            "codex:tests.test_learning_store.LearningStoreTests.test_collector_serializes_concurrent_clients",
+            "codex:tests.test_learning_store.LearningStoreTests.test_spoofed_project_manifest_cannot_replace_active_collector"
+          ]
+        },
+        "codex:tests.test_account_launch_claims": {
+          "tests": 16,
+          "seconds": 10.572,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_e2a_launch_record": {
+          "tests": 24,
+          "seconds": 11.877,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 8,
+          "failed_examples": [
+            "codex:tests.test_e2a_launch_record.CollectorRecordTests.test_E2a_3_record_launch_over_the_collector_wire_and_its_runtime_gate",
+            "codex:tests.test_e2a_launch_record.FinalFixTests.test_E2a_4_a_lost_record_reply_keeps_the_new_copy_pinned",
+            "codex:tests.test_e2a_launch_record.FinalWireTests.test_E2a_3_record_launch_and_launch_status_refuse_a_wrong_key_and_a_replayed_proof"
+          ]
+        },
+        "codex:tests.test_learning_cli": {
+          "tests": 30,
+          "seconds": 51.489,
+          "returncodes": [
+            1,
+            1,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 13,
+          "failed_examples": [
+            "codex:tests.test_learning_cli.LearningCliTests.test_concurrent_direct_commands_serialize_and_leave_collector_active",
+            "codex:tests.test_learning_cli.LearningCliTests.test_only_learning_register_creates_missing_runtime_authorization",
+            "codex:tests.test_learning_cli.LearningCliTests.test_an_upgrade_that_cannot_fit_refuses_before_writing_any_backup"
+          ]
+        },
+        "codex:tests.test_run_holds": {
+          "tests": 71,
+          "seconds": 45.377,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_e2a_wake_wire": {
+          "tests": 31,
+          "seconds": 24.895,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 12,
+          "failed_examples": [
+            "codex:tests.test_e2a_wake_wire.WakePublisherTests.test_E2a_8_clean_stop_is_bounded_and_a_writer_fault_publishes_nothing",
+            "codex:tests.test_e2a_wake_wire.WakeReconcileTests.test_E2a_9_unknown_projects_are_marked_due_at_collector_start_and_clean_stops_are_not",
+            "codex:tests.test_e2a_wake_wire.WakeRoundOneTests.test_E2a_5_the_verifier_probes_no_caller_named_path_and_binds_the_project_id"
+          ]
+        }
+      }
+    },
+    {
+      "label": "lock-owner-red",
+      "elapsed_seconds": 1.712,
+      "job_seconds": 1.708,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "failed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "failed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 10,
+          "seconds": 1.708,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_rsf_s2_fence.FenceTests.test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership"
+          ]
+        }
+      }
+    },
+    {
+      "label": "fix2",
+      "elapsed_seconds": 2.355,
+      "job_seconds": 9.854,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_project_release_ack": {
+          "tests": 2,
+          "seconds": 0.54,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_history_service_upgrade": {
+          "tests": 30,
+          "seconds": 0.864,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_history": {
+          "tests": 35,
+          "seconds": 1.125,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_results": {
+          "tests": 46,
+          "seconds": 1.66,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_holds_schema": {
+          "tests": 40,
+          "seconds": 1.658,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_ledger_startup": {
+          "tests": 5,
+          "seconds": 1.656,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 10,
+          "seconds": 2.351,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "enumeration3",
+      "elapsed_seconds": 19.958,
+      "job_seconds": 240.506,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "not_run",
+        "RSF-S2-2": "not_run",
+        "RSF-S2-3": "not_run",
+        "RSF-S2-4": "not_run",
+        "RSF-S2-5": "not_run",
+        "RSF-S2-6": "not_run"
+      },
+      "modules": {
+        "codex:tests.test_rsf_s7_account": {
+          "tests": 4,
+          "seconds": 1.768,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_start": {
+          "tests": 38,
+          "seconds": 57.714,
+          "returncodes": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 32,
+          "failed_examples": [
+            "codex:tests.test_project_start.BackoffTests.test_E2c_4_an_early_exit_counts_failed_and_a_lasting_start_ends_the_streak",
+            "codex:tests.test_project_start.FairnessTests.test_E2c_2_past_the_queue_and_slot_limits_every_due_project_is_still_started",
+            "codex:tests.test_project_start.OwnershipTests.test_E2c_10_a_child_whose_pid_record_is_refused_is_still_timed_killed_and_reaped"
+          ]
+        },
+        "codex:tests.test_rsa_step3": {
+          "tests": 5,
+          "seconds": 5.011,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_reply_shape_compatibility": {
+          "tests": 3,
+          "seconds": 0.282,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_rsf_s4_slots": {
+          "tests": 33,
+          "seconds": 8.119,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 3,
+          "failed_examples": [
+            "codex:tests.test_rsf_s4_slots.LegacySlotCorrectionTests.test_collector_timer_releases_a_slot_whose_process_proof_appears",
+            "codex:tests.test_rsf_s4_slots.LegacySlotCorrectionTests.test_unreadable_instance_lock_cannot_establish_positive_unsent",
+            "codex:tests.test_rsf_s4_slots.LegacySlotEvidenceTests.test_unreadable_instance_lock_cannot_establish_positive_unsent"
+          ]
+        },
+        "codex:tests.test_usage_recheck": {
+          "tests": 17,
+          "seconds": 1.38,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_publication_replay": {
+          "tests": 40,
+          "seconds": 2.733,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_orchestration": {
+          "tests": 38,
+          "seconds": 1.548,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_project_orchestration.ProjectOrchestrationTests.test_R6_a_populated_schema_16_store_gains_the_table_only_by_explicit_upgrade"
+          ]
+        },
+        "codex:tests.test_result_leases": {
+          "tests": 23,
+          "seconds": 2.736,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 2,
+          "failed_examples": [
+            "codex:tests.test_result_leases.ResultLeaseTests.test_schema2_normal_open_refuses_without_writes_and_explicit_upgrade_preserves_existing_bytes",
+            "codex:tests.test_result_leases.ResultLeaseTests.test_schema4_upgrade_preserves_all_rows_body_windows_and_does_not_invent_orchestrations"
+          ]
+        },
+        "codex:tests.test_phase_report": {
+          "tests": 14,
+          "seconds": 0.223,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_review_runner_provenance": {
+          "tests": 18,
+          "seconds": 0.616,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_refusal_steps": {
+          "tests": 14,
+          "seconds": 0.507,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_run_driver_retries": {
+          "tests": 21,
+          "seconds": 0.389,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_rate_limit_contracts": {
+          "tests": 7,
+          "seconds": 0.217,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_owned_execution": {
+          "tests": 74,
+          "seconds": 23.568,
+          "returncodes": [
+            1,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 25,
+          "failed_examples": [
+            "codex:tests.test_owned_execution.CapacityCompletionTests.test_RS_A_G1_a_completed_slot_s_register_receipt_must_be_its_release_digest",
+            "codex:tests.test_owned_execution.CapacityCompletionTests.test_RS_A_G1_a_slot_s_register_kind_must_be_a_slot_s_release_kind",
+            "codex:tests.test_owned_execution.CapacityCompletionTests.test_lost_registry_acknowledgement_retrieves_the_committed_receipt"
+          ]
+        },
+        "codex:tests.test_run_provenance": {
+          "tests": 19,
+          "seconds": 16.92,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_run_provenance.RunProvenanceTests.test_snapshot_work_and_duration_exhaustion_restore_connection_policy"
+          ]
+        },
+        "codex:tests.test_signature_inputs": {
+          "tests": 36,
+          "seconds": 10.213,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 3,
+          "failed_examples": [
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_capture_busy_refusal_is_bounded_and_restores_the_previous_timeout",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_invalid_owner_history_refuses_before_fetching_signer_bytes",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_malformed_sequence_never_returns_variable_data_from_preliminary_cursor"
+          ]
+        },
+        "codex:tests.test_project_host_open": {
+          "tests": 21,
+          "seconds": 18.267,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 2,
+          "failed_examples": [
+            "codex:tests.test_project_host_open.ProjectHostOpenTests.test_explicit_schema5_upgrade_preserves_old_rows_and_creates_no_open_facts",
+            "codex:tests.test_project_host_open.ProjectHostOpenTests.test_two_process_client_service_sqlite_path_keeps_sqlite_out_of_client"
+          ]
+        },
+        "codex:tests.test_providers": {
+          "tests": 106,
+          "seconds": 38.385,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_qa_commit": {
+          "tests": 30,
+          "seconds": 37.725,
+          "returncodes": [
+            1,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 2,
+          "failed_examples": [
+            "codex:tests.test_project_qa_commit.ProjectQACommitTests.test_explicit_schema7_upgrade_preserves_original_checks_and_invents_no_qa",
+            "codex:tests.test_project_qa_commit.ProjectQASocketCommitTests.test_actual_separate_writer_and_sqlite_free_client_commit_and_read_qa"
+          ]
+        },
+        "codex:tests.test_open_withdrawal": {
+          "tests": 49,
+          "seconds": 12.184,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 26,
+          "failed_examples": [
+            "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_L2_a_failed_deferral_submission_keeps_the_batch_and_the_failed_rows_duty",
+            "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M1_a_withdrawal_the_account_keeps_refusing_does_not_block_a_later_one",
+            "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M7_a_registration_refused_after_the_binding_exists_withdraws_the_open"
+          ]
+        }
+      }
+    },
+    {
+      "label": "enumeration1",
+      "elapsed_seconds": 137.169,
+      "job_seconds": 775.318,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [
+        {
+          "budget": 60.0,
+          "fragments": 1,
+          "layer": "scenario",
+          "module": "codex:tests.test_account_billing_admission",
+          "seconds": 123.58476587501355,
+          "stage": "integration"
+        },
+        {
+          "budget": 60.0,
+          "fragments": 2,
+          "layer": "scenario",
+          "module": "codex:tests.test_account_claim_jobs",
+          "seconds": 253.84281220810954,
+          "stage": "integration"
+        },
+        {
+          "budget": 60.0,
+          "fragments": 1,
+          "layer": "scenario",
+          "module": "codex:tests.test_b2_service_outcome_paths",
+          "seconds": 62.03288908302784,
+          "stage": "integration"
+        },
+        {
+          "budget": 60.0,
+          "fragments": 1,
+          "layer": "scenario",
+          "module": "codex:tests.test_billing_gate",
+          "seconds": 137.13870037498418,
+          "stage": "integration"
+        }
+      ],
+      "requirements": {
+        "RSF-S2-1": "not_run",
+        "RSF-S2-2": "not_run",
+        "RSF-S2-3": "not_run",
+        "RSF-S2-4": "not_run",
+        "RSF-S2-5": "not_run",
+        "RSF-S2-6": "not_run"
+      },
+      "modules": {
+        "codex:tests.test_batch2_b4s_integration": {
+          "tests": 4,
+          "seconds": 0.798,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_settlement_wire": {
+          "tests": 6,
+          "seconds": 0.596,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_admission_inputs": {
+          "tests": 26,
+          "seconds": 4.092,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 4,
+          "failed_examples": [
+            "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_ambiguous_begin_failure_cannot_leave_a_reusable_open_transaction",
+            "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_closed_owner_refuses_before_filesystem_work",
+            "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_restoration_fault_discards_capture_and_poison_prevents_reuse"
+          ]
+        },
+        "codex:tests.test_claim_denial_recovery": {
+          "tests": 18,
+          "seconds": 23.862,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_store_recovery": {
+          "tests": 19,
+          "seconds": 3.275,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_contracts": {
+          "tests": 51,
+          "seconds": 1.757,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_launch_claims": {
+          "tests": 16,
+          "seconds": 9.628,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_control_loop": {
+          "tests": 27,
+          "seconds": 0.262,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_backup_installed_project": {
+          "tests": 2,
+          "seconds": 1.062,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_backup_installed_project.InstalledBackupManifestTests.test_exact_version_manifests_match_owner_reader_and_keep_old_tables_absent"
+          ]
+        },
+        "codex:tests.test_cleanup_receipt_lifetime": {
+          "tests": 14,
+          "seconds": 11.455,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_cleanup_receipt_lifetime.CleanupReceiptLimitTests.test_P1_5_more_lost_and_crashed_runs_than_the_limit_never_stop_a_normal_run"
+          ]
+        },
+        "codex:tests.test_b6_unattended_close": {
+          "tests": 41,
+          "seconds": 12.17,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 7,
+          "failed_examples": [
+            "codex:tests.test_b6_unattended_close.FinalCrashCopyTests.test_B6_7_a_dead_attempts_copy_with_another_hard_link_is_left_alone",
+            "codex:tests.test_b6_unattended_close.FinalCrashCopyTests.test_B6_7_a_stale_marker_after_inode_reuse_leaves_a_copy_it_did_not_make_alone",
+            "codex:tests.test_b6_unattended_close.FinalStalePartialTests.test_B6_7_a_crash_before_the_marker_leaves_no_partial_after_the_next_attempt"
+          ]
+        },
+        "codex:tests.test_account_cleanup_release": {
+          "tests": 15,
+          "seconds": 12.772,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_account_cleanup_release.AccountCleanupReleaseTests.test_registered_backup_preserves_original_release_journal_and_standalone_restore"
+          ]
+        },
+        "codex:tests.test_active_run_capacity": {
+          "tests": 16,
+          "seconds": 13.093,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_active_run_capacity.ActiveRunCapacityTests.test_schema_eight_backfills_unknown_capacity_and_preserves_signed_bytes"
+          ]
+        },
+        "codex:tests.test_account_claim_operation": {
+          "tests": 25,
+          "seconds": 15.247,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_b2_service_outcome_round2": {
+          "tests": 45,
+          "seconds": 43.389,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 6,
+          "failed_examples": [
+            "codex:tests.test_b2_service_outcome_round2.FailedAdmissionLeavesNothingTests.test_a_non_history_error_inside_the_transaction_leaves_no_open_transaction_and_no_partial_write",
+            "codex:tests.test_b2_service_outcome_round2.FailedAdmissionLeavesNothingTests.test_a_storage_error_is_a_named_unavailability_and_the_reopened_store_matches_the_snapshot",
+            "codex:tests.test_b2_service_outcome_round2.OwnershipTransferTests.test_a_successor_opens_the_writer_at_the_barrier_and_the_first_one_writes_nothing"
+          ]
+        },
+        "codex:tests.test_collector_read_scope": {
+          "tests": 17,
+          "seconds": 45.262,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 6,
+          "failed_examples": [
+            "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_a_defect_or_broken_connection_still_stops_the_collector_and_is_recorded",
+            "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_a_passing_refusal_during_a_bind_is_answered_and_the_collector_keeps_serving",
+            "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_an_unusable_connection_stops_the_collector"
+          ]
+        },
+        "codex:tests.test_b2_service_outcome_paths": {
+          "tests": 41,
+          "seconds": 62.033,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_billing_admission": {
+          "tests": 50,
+          "seconds": 123.585,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 49,
+          "failed_examples": [
+            "codex:tests.test_account_billing_admission.AccountBillingAdmissionTests.test_B0_5_finished_probes_do_not_count_against_the_probe_cap_and_still_replay",
+            "codex:tests.test_account_billing_admission.AccountBillingAdmissionTests.test_B2_a_probe_that_saw_paid_usage_is_refused_on_that_probe_and_on_every_reuse",
+            "codex:tests.test_account_billing_admission.AccountBillingAdmissionTests.test_B3_a_missing_attestation_at_reuse_time_is_refused_even_with_a_fresh_probe_record"
+          ]
+        },
+        "codex:tests.test_account_claim_jobs": {
+          "tests": 38,
+          "seconds": 253.843,
+          "returncodes": [
+            1,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 33,
+          "failed_examples": [
+            "codex:tests.test_account_claim_jobs.AccountClaimJobTests.test_FR1_a_failed_capture_on_retry_keeps_its_own_reason",
+            "codex:tests.test_account_claim_jobs.AccountClaimJobTests.test_FR2_a_cancel_during_a_retry_ends_it_as_cancelled",
+            "codex:tests.test_account_claim_jobs.AccountClaimJobTests.test_FR4_a_statement_that_appears_with_a_bad_signature_is_verified_and_refuses"
+          ]
+        },
+        "codex:tests.test_billing_gate": {
+          "tests": 191,
+          "seconds": 137.139,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 176,
+          "failed_examples": [
+            "codex:tests.test_billing_gate.BR16JudgmentRelativeComparison.test_BR16_paid_usage_added_by_the_first_callback_of_the_publication_check_is_refused",
+            "codex:tests.test_billing_gate.BR16JudgmentRelativeComparison.test_BR16_paid_usage_stored_before_the_publication_check_began_is_refused_not_taken_as_its_baseline",
+            "codex:tests.test_billing_gate.BR16JudgmentRelativeComparison.test_BR16_paid_usage_stored_with_an_earlier_stamp_by_the_first_callback_is_refused"
+          ]
+        }
+      }
+    },
+    {
+      "label": "enumeration2",
+      "elapsed_seconds": 167.279,
+      "job_seconds": 229.872,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [
+        {
+          "budget": 60.0,
+          "fragments": 1,
+          "layer": "scenario",
+          "module": "codex:tests.test_open_request_lifetime",
+          "seconds": 92.20778845902532,
+          "stage": "integration"
+        }
+      ],
+      "requirements": {
+        "RSF-S2-1": "not_run",
+        "RSF-S2-2": "not_run",
+        "RSF-S2-3": "not_run",
+        "RSF-S2-4": "not_run",
+        "RSF-S2-5": "not_run",
+        "RSF-S2-6": "not_run"
+      },
+      "modules": {
+        "codex:tests.test_health_contention": {
+          "tests": 19,
+          "seconds": 1.447,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 17,
+          "failed_examples": [
+            "codex:tests.test_health_contention.HealthContentionTests.test_G1_a_stop_cancels_the_sweeps_even_while_a_request_is_being_handled",
+            "codex:tests.test_health_contention.HealthContentionTests.test_G1_a_stop_right_after_start_is_kept",
+            "codex:tests.test_health_contention.HealthContentionTests.test_G2_G4_a_sweep_outliving_the_join_is_reported_and_a_restart_is_refused"
+          ]
+        },
+        "codex:tests.test_host_open_provenance": {
+          "tests": 14,
+          "seconds": 9.91,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_ledger_lock_limits": {
+          "tests": 27,
+          "seconds": 26.523,
+          "returncodes": [
+            0,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_3_refusals_are_published_with_collector_health"
+          ]
+        },
+        "codex:tests.test_installer": {
+          "tests": 30,
+          "seconds": 14.222,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 4,
+          "failed_examples": [
+            "codex:tests.test_installer.InstallerTests.test_clean_project_installs_with_explicit_empty_mapping",
+            "codex:tests.test_installer.InstallerTests.test_clean_project_mapping_can_select_packaged_agent",
+            "codex:tests.test_installer.InstallerTests.test_install_verify_and_remove"
+          ]
+        },
+        "codex:tests.test_open_request_lifetime": {
+          "tests": 23,
+          "seconds": 92.208,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 10,
+          "failed_examples": [
+            "codex:tests.test_open_request_lifetime.OpenLifetimeJobTests.test_OP_1_finished_opens_never_block_a_new_open",
+            "codex:tests.test_open_request_lifetime.OpenLifetimeJobTests.test_OP_2_a_finished_open_is_purged_with_its_binding_and_receipt_past_retention",
+            "codex:tests.test_open_request_lifetime.OpenLifetimeJobTests.test_OP_2_a_replay_of_a_purged_open_answers_open_expired_and_never_reopens"
+          ]
+        },
+        "codex:tests.test_merge_library_states": {
+          "tests": 25,
+          "seconds": 0.484,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_merge_library_recovery": {
+          "tests": 9,
+          "seconds": 1.125,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_merge_library_contract": {
+          "tests": 127,
+          "seconds": 24.541,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_merge_library_adversarial": {
+          "tests": 49,
+          "seconds": 46.146,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_ledger_waits": {
+          "tests": 5,
+          "seconds": 0.164,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_gate_policy": {
+          "tests": 66,
+          "seconds": 0.222,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_dispatch_delivery_cli": {
+          "tests": 5,
+          "seconds": 0.436,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_outcome_pages": {
+          "tests": 6,
+          "seconds": 0.66,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 2,
+          "failed_examples": [
+            "codex:tests.test_learning_outcome_pages.LearningOutcomePageTests.test_exact_bytes_and_sequence_pagination_without_owner_json_or_hash_work",
+            "codex:tests.test_learning_outcome_pages.LearningOutcomePageUpgradeTests.test_exact_v11_upgrade_requires_drained_owner_and_rolls_back_failed_index_creation"
+          ]
+        },
+        "codex:tests.test_learning_chunk_membership": {
+          "tests": 13,
+          "seconds": 0.712,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_learning_chunk_membership.LearningChunkMembershipTests.test_raw_byte_envelope_and_pk_queries_close_every_cursor"
+          ]
+        },
+        "codex:tests.test_diagnostic_delivery": {
+          "tests": 1,
+          "seconds": 1.099,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_diagnostic_delivery.DiagnosticDeliveryTests.test_bridge_reason_survives_history_retry_restart_and_report_formats"
+          ]
+        },
+        "codex:tests.test_learning_retention": {
+          "tests": 15,
+          "seconds": 1.094,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_legacy_capacity_upgrade": {
+          "tests": 12,
+          "seconds": 1.682,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_ledger_busy_answers": {
+          "tests": 9,
+          "seconds": 1.956,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_event_retention": {
+          "tests": 22,
+          "seconds": 2.481,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_event_retention.CollectorSweepTests.test_the_collector_applies_retention_by_itself"
+          ]
+        },
+        "codex:tests.test_crashed_account": {
+          "tests": 5,
+          "seconds": 2.76,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "final1",
+      "elapsed_seconds": 45.03,
+      "job_seconds": 203.039,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_backup_installed_project": {
+          "tests": 2,
+          "seconds": 1.393,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_orchestration": {
+          "tests": 38,
+          "seconds": 1.498,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_result_leases": {
+          "tests": 23,
+          "seconds": 2.655,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 10,
+          "seconds": 3.388,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_admission_inputs": {
+          "tests": 26,
+          "seconds": 4.08,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_signature_inputs": {
+          "tests": 36,
+          "seconds": 5.677,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_b6_unattended_close": {
+          "tests": 41,
+          "seconds": 11.079,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_b6_unattended_close.SchemaStepTests.test_B6_7_a_real_step_20_store_upgrades_its_records_unchanged_and_adopts_its_open_orchestrations"
+          ]
+        },
+        "codex:tests.test_account_cleanup_release": {
+          "tests": 15,
+          "seconds": 12.235,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_active_run_capacity": {
+          "tests": 16,
+          "seconds": 12.619,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_host_open": {
+          "tests": 21,
+          "seconds": 15.206,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_project_host_open.ProjectHostOpenTests.test_two_process_client_service_sqlite_path_keeps_sqlite_out_of_client"
+          ]
+        },
+        "codex:tests.test_project_qa_commit": {
+          "tests": 30,
+          "seconds": 31.882,
+          "returncodes": [
+            0,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_project_qa_commit.ProjectQASocketCommitTests.test_actual_separate_writer_and_sqlite_free_client_commit_and_read_qa"
+          ]
+        },
+        "codex:tests.test_installer": {
+          "tests": 30,
+          "seconds": 16.846,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 4,
+          "failed_examples": [
+            "codex:tests.test_installer.InstallerTests.test_clean_project_installs_with_explicit_empty_mapping",
+            "codex:tests.test_installer.InstallerTests.test_clean_project_mapping_can_select_packaged_agent",
+            "codex:tests.test_installer.InstallerTests.test_install_verify_and_remove"
+          ]
+        },
+        "codex:tests.test_b2_service_outcome_round2": {
+          "tests": 45,
+          "seconds": 39.469,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_collector_read_scope": {
+          "tests": 17,
+          "seconds": 45.014,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 6,
+          "failed_examples": [
+            "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_a_defect_or_broken_connection_still_stops_the_collector_and_is_recorded",
+            "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_a_passing_refusal_during_a_bind_is_answered_and_the_collector_keeps_serving",
+            "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_an_unusable_connection_stops_the_collector"
+          ]
+        }
+      }
+    },
+    {
+      "label": "final2",
+      "elapsed_seconds": 82.656,
+      "job_seconds": 168.6,
+      "partial": false,
+      "metadata_errors": [
+        "runner interrupted: KeyboardInterrupt"
+      ],
+      "budget_failures": [],
+      "requirements": {},
+      "modules": {
+        "codex:tests.test_ledger_startup": {
+          "tests": 5,
+          "seconds": 2.702,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_sql_read_budget": {
+          "tests": 34,
+          "seconds": 0.224,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_ledger_waits": {
+          "tests": 5,
+          "seconds": 0.213,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 11,
+          "seconds": 4.02,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_source_image_legacy": {
+          "tests": 7,
+          "seconds": 4.739,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_event_retention": {
+          "tests": 22,
+          "seconds": 4.784,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_event_retention.CollectorSweepTests.test_the_collector_applies_retention_by_itself"
+          ]
+        },
+        "codex:tests.test_learning_source_image": {
+          "tests": 33,
+          "seconds": 5.288,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_source_transfer": {
+          "tests": 13,
+          "seconds": 8.089,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_store": {
+          "tests": 100,
+          "seconds": 18.87,
+          "returncodes": [
+            1,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 5,
+          "failed_examples": [
+            "codex:tests.test_learning_store.LearningStoreTests.test_app_server_cli_normalizes_and_ingests_through_collector",
+            "codex:tests.test_learning_store.LearningStoreTests.test_collector_serializes_concurrent_clients",
+            "codex:tests.test_learning_store.LearningStoreTests.test_spoofed_project_manifest_cannot_replace_active_collector"
+          ]
+        },
+        "codex:tests.test_owner_backup_streamed": {
+          "tests": 40,
+          "seconds": 39.829,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_providers": {
+          "tests": 106,
+          "seconds": 35.77,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_run_holds": {
+          "tests": 71,
+          "seconds": 44.072,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "final-green",
+      "elapsed_seconds": 23.692,
+      "job_seconds": 85.632,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_account_observation_backup": {
+          "tests": 2,
+          "seconds": 1.341,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_account_observation_backup.AccountObservationBackupTests.test_both_verifiers_preserve_committed_and_unknown_original_requests"
+          ]
+        },
+        "codex:tests.test_history_service_upgrade": {
+          "tests": 30,
+          "seconds": 1.328,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_backup_installed_project": {
+          "tests": 2,
+          "seconds": 1.561,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_orchestration": {
+          "tests": 38,
+          "seconds": 1.673,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_history": {
+          "tests": 35,
+          "seconds": 1.871,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_release_ack": {
+          "tests": 2,
+          "seconds": 0.675,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_cleanup_schema": {
+          "tests": 3,
+          "seconds": 0.774,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_qa_upgrade": {
+          "tests": 3,
+          "seconds": 0.549,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_learning_qa_upgrade.LearningQACorpusUpgradeTests.test_explicit_upgrade_rolls_back_failure_then_preserves_every_original_row"
+          ]
+        },
+        "codex:tests.test_learning_chunk_upgrade": {
+          "tests": 5,
+          "seconds": 0.485,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_learning_chunk_upgrade.LearningChunkUpgradeTests.test_interrupted_upgrade_rolls_back_then_exact_replay_backfills_only_membership"
+          ]
+        },
+        "codex:tests.test_account_open_schema": {
+          "tests": 10,
+          "seconds": 1.107,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_results": {
+          "tests": 46,
+          "seconds": 2.712,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_holds_schema": {
+          "tests": 40,
+          "seconds": 2.755,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_result_leases": {
+          "tests": 23,
+          "seconds": 2.937,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_observation_schema": {
+          "tests": 7,
+          "seconds": 3.374,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 11,
+          "seconds": 3.705,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_admission_inputs": {
+          "tests": 26,
+          "seconds": 4.372,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_signature_inputs": {
+          "tests": 36,
+          "seconds": 5.51,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_backup_reply_private": {
+          "tests": 11,
+          "seconds": 6.267,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_large_project_backups": {
+          "tests": 8,
+          "seconds": 32.898,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_b6_unattended_close": {
+          "tests": 41,
+          "seconds": 9.739,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "boundaries",
+      "elapsed_seconds": 9.6,
+      "job_seconds": 9.912,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "not_run",
+        "RSF-S2-2": "not_run",
+        "RSF-S2-3": "not_run",
+        "RSF-S2-4": "not_run",
+        "RSF-S2-5": "not_run",
+        "RSF-S2-6": "not_run"
+      },
+      "modules": {
+        "codex:tests.test_runtime_release": {
+          "tests": 3,
+          "seconds": 0.317,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version"
+          ]
+        },
+        "codex:tests.test_upgrade_handover": {
+          "tests": 12,
+          "seconds": 9.595,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 12,
+          "failed_examples": [
+            "codex:tests.test_upgrade_handover.Earlier0855Tests.test_registering_stops_a_running_earlier_collector_and_completes",
+            "codex:tests.test_upgrade_handover.Earlier0858Tests.test_registering_stops_a_running_earlier_collector_and_completes",
+            "codex:tests.test_upgrade_handover.HandoverRefusalTests.test_a_caller_that_is_not_the_owner_registration_never_retries"
+          ]
+        }
+      }
+    },
+    {
+      "label": "additional-red",
+      "elapsed_seconds": 23.346,
+      "job_seconds": 70.295,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "not_run",
+        "RSF-S2-2": "not_run",
+        "RSF-S2-3": "not_run",
+        "RSF-S2-4": "not_run",
+        "RSF-S2-5": "not_run",
+        "RSF-S2-6": "not_run"
+      },
+      "modules": {
+        "codex:tests.test_learning_outcome_pages": {
+          "tests": 6,
+          "seconds": 0.743,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 2,
+          "failed_examples": [
+            "codex:tests.test_learning_outcome_pages.LearningOutcomePageTests.test_exact_bytes_and_sequence_pagination_without_owner_json_or_hash_work",
+            "codex:tests.test_learning_outcome_pages.LearningOutcomePageUpgradeTests.test_exact_v11_upgrade_requires_drained_owner_and_rolls_back_failed_index_creation"
+          ]
+        },
+        "codex:tests.test_project_learning_corpus": {
+          "tests": 17,
+          "seconds": 1.277,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_project_learning_corpus.LearningCorpusUpgradeTests.test_v10_upgrade_is_explicit_preserves_existing_bytes_and_rolls_back_interruption"
+          ]
+        },
+        "codex:tests.test_learning_migration": {
+          "tests": 17,
+          "seconds": 19.514,
+          "returncodes": [
+            1,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 3,
+          "failed_examples": [
+            "codex:tests.test_learning_migration.MigrationCliTests.test_first_start_of_the_project_service_moves_the_history_by_itself",
+            "codex:tests.test_learning_migration.ActivationSchemaTests.test_schema15_store_gains_the_cutover_table_only_by_explicit_upgrade",
+            "codex:tests.test_learning_migration.MigrationCliTests.test_command_moves_reports_refuses_and_rolls_back"
+          ]
+        },
+        "codex:tests.test_project_execution_grant": {
+          "tests": 12,
+          "seconds": 7.962,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_project_execution_grant.ProjectExecutionGrantTests.test_ordinary_schema3_open_refuses_and_explicit_upgrade_preserves_original_bindings"
+          ]
+        },
+        "codex:tests.test_project_qa_check_receipts": {
+          "tests": 23,
+          "seconds": 17.466,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_project_qa_check_receipts.ProjectCheckReceiptTests.test_explicit_schema6_upgrade_keeps_all_original_rows_and_invents_no_receipts"
+          ]
+        },
+        "codex:tests.test_b2_service_outcome": {
+          "tests": 55,
+          "seconds": 23.332,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 3,
+          "failed_examples": [
+            "codex:tests.test_b2_service_outcome.SchemaStepTests.test_a_failed_validator_rolls_the_step_back_and_removes_its_copy",
+            "codex:tests.test_b2_service_outcome.SchemaStepTests.test_a_format_19_project_store_upgrades_to_20_and_keeps_its_rows",
+            "codex:tests.test_b2_service_outcome.SchemaStepTests.test_schema_is_20_and_the_table_is_exactly_as_designed"
+          ]
+        }
+      }
+    },
+    {
+      "label": "hardlink-red",
+      "elapsed_seconds": 2.003,
+      "job_seconds": 1.996,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "failed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "failed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 12,
+          "seconds": 1.996,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_rsf_s2_fence.FenceTests.test_unsafe_hard_link_lock_is_refused_before_writing_an_owner_stamp"
+          ]
+        }
+      }
+    },
+    {
+      "label": "final3",
+      "elapsed_seconds": 24.115,
+      "job_seconds": 57.935,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_learning_chunk_upgrade": {
+          "tests": 5,
+          "seconds": 0.382,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_qa_upgrade": {
+          "tests": 3,
+          "seconds": 0.491,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_outcome_pages": {
+          "tests": 6,
+          "seconds": 0.708,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_observation_backup": {
+          "tests": 2,
+          "seconds": 0.878,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_history": {
+          "tests": 35,
+          "seconds": 1.189,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_learning_corpus": {
+          "tests": 17,
+          "seconds": 1.249,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_ledger_startup": {
+          "tests": 5,
+          "seconds": 1.836,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 12,
+          "seconds": 2.65,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_execution_grant": {
+          "tests": 12,
+          "seconds": 7.033,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_qa_check_receipts": {
+          "tests": 23,
+          "seconds": 17.415,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_b2_service_outcome": {
+          "tests": 55,
+          "seconds": 24.105,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "acceptance",
+      "elapsed_seconds": 33.565,
+      "job_seconds": 127.945,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_account_observation_backup": {
+          "tests": 2,
+          "seconds": 1.317,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_history_service_upgrade": {
+          "tests": 30,
+          "seconds": 1.41,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_backup_installed_project": {
+          "tests": 2,
+          "seconds": 1.487,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_history": {
+          "tests": 35,
+          "seconds": 1.798,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_orchestration": {
+          "tests": 38,
+          "seconds": 2.03,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_release_ack": {
+          "tests": 2,
+          "seconds": 1.499,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_chunk_upgrade": {
+          "tests": 5,
+          "seconds": 0.959,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_qa_upgrade": {
+          "tests": 3,
+          "seconds": 1.313,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_cleanup_schema": {
+          "tests": 3,
+          "seconds": 1.764,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_open_schema": {
+          "tests": 10,
+          "seconds": 2.26,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_results": {
+          "tests": 46,
+          "seconds": 3.951,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_result_leases": {
+          "tests": 23,
+          "seconds": 4.012,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_observation_schema": {
+          "tests": 7,
+          "seconds": 4.549,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_holds_schema": {
+          "tests": 40,
+          "seconds": 4.532,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 12,
+          "seconds": 5.686,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_admission_inputs": {
+          "tests": 26,
+          "seconds": 7.123,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_signature_inputs": {
+          "tests": 36,
+          "seconds": 9.513,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_backup_reply_private": {
+          "tests": 11,
+          "seconds": 9.737,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_large_project_backups": {
+          "tests": 8,
+          "seconds": 47.677,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_b6_unattended_close": {
+          "tests": 41,
+          "seconds": 15.329,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "regressions",
+      "elapsed_seconds": 47.853,
+      "job_seconds": 294.735,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [
+        {
+          "budget": 5.0,
+          "fragments": 1,
+          "layer": "unit",
+          "module": "codex:tests.test_ledger_startup",
+          "seconds": 5.211565665900707,
+          "stage": "unit"
+        }
+      ],
+      "requirements": {
+        "RSF-S2-1": "not_run",
+        "RSF-S2-2": "not_run",
+        "RSF-S2-3": "not_run",
+        "RSF-S2-4": "not_run",
+        "RSF-S2-5": "not_run",
+        "RSF-S2-6": "not_run"
+      },
+      "modules": {
+        "codex:tests.test_reply_shape_compatibility": {
+          "tests": 3,
+          "seconds": 0.493,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_outcome_pages": {
+          "tests": 6,
+          "seconds": 1.892,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_learning_corpus": {
+          "tests": 17,
+          "seconds": 2.77,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_legacy_history_compatibility": {
+          "tests": 5,
+          "seconds": 1.227,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_refusal_steps": {
+          "tests": 14,
+          "seconds": 1.072,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_sql_read_budget": {
+          "tests": 34,
+          "seconds": 0.425,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_ledger_startup": {
+          "tests": 5,
+          "seconds": 5.212,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_source_image_legacy": {
+          "tests": 7,
+          "seconds": 6.536,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_source_image": {
+          "tests": 33,
+          "seconds": 8.116,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_source_transfer": {
+          "tests": 13,
+          "seconds": 10.561,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_execution_grant": {
+          "tests": 12,
+          "seconds": 12.76,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_cleanup_release": {
+          "tests": 15,
+          "seconds": 16.128,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_active_run_capacity": {
+          "tests": 16,
+          "seconds": 16.465,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_owner_backup_streamed": {
+          "tests": 40,
+          "seconds": 48.463,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_run_holds": {
+          "tests": 71,
+          "seconds": 54.291,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_qa_check_receipts": {
+          "tests": 23,
+          "seconds": 26.771,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_b2_service_outcome": {
+          "tests": 55,
+          "seconds": 33.945,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_b2_service_outcome_round2": {
+          "tests": 45,
+          "seconds": 47.608,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "final-boundaries",
+      "elapsed_seconds": 1.36,
+      "job_seconds": 1.575,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "not_run",
+        "RSF-S2-2": "not_run",
+        "RSF-S2-3": "not_run",
+        "RSF-S2-4": "not_run",
+        "RSF-S2-5": "not_run",
+        "RSF-S2-6": "not_run"
+      },
+      "modules": {
+        "codex:tests.test_runtime_release": {
+          "tests": 3,
+          "seconds": 0.22,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version"
+          ]
+        },
+        "codex:tests.test_ledger_startup": {
+          "tests": 5,
+          "seconds": 1.356,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "mixed-final",
+      "elapsed_seconds": 45.114,
+      "job_seconds": 160.396,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [
+        {
+          "budget": 60.0,
+          "fragments": 2,
+          "layer": "scenario",
+          "module": "codex:tests.test_account_claim_jobs",
+          "seconds": 90.1746278750943,
+          "stage": "integration"
+        }
+      ],
+      "requirements": {
+        "RSF-S2-1": "not_run",
+        "RSF-S2-2": "not_run",
+        "RSF-S2-3": "not_run",
+        "RSF-S2-4": "not_run",
+        "RSF-S2-5": "not_run",
+        "RSF-S2-6": "not_run"
+      },
+      "modules": {
+        "codex:tests.test_learning_chunk_membership": {
+          "tests": 13,
+          "seconds": 0.919,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_diagnostic_delivery": {
+          "tests": 1,
+          "seconds": 1.451,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_diagnostic_delivery.DiagnosticDeliveryTests.test_bridge_reason_survives_history_retry_restart_and_report_formats"
+          ]
+        },
+        "codex:tests.test_rsf_s4_slots": {
+          "tests": 33,
+          "seconds": 5.682,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 3,
+          "failed_examples": [
+            "codex:tests.test_rsf_s4_slots.LegacySlotCorrectionTests.test_collector_timer_releases_a_slot_whose_process_proof_appears",
+            "codex:tests.test_rsf_s4_slots.LegacySlotCorrectionTests.test_unreadable_instance_lock_cannot_establish_positive_unsent",
+            "codex:tests.test_rsf_s4_slots.LegacySlotEvidenceTests.test_unreadable_instance_lock_cannot_establish_positive_unsent"
+          ]
+        },
+        "codex:tests.test_learning_migration": {
+          "tests": 17,
+          "seconds": 20.917,
+          "returncodes": [
+            1,
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 2,
+          "failed_examples": [
+            "codex:tests.test_learning_migration.MigrationCliTests.test_first_start_of_the_project_service_moves_the_history_by_itself",
+            "codex:tests.test_learning_migration.MigrationCliTests.test_command_moves_reports_refuses_and_rolls_back"
+          ]
+        },
+        "codex:tests.test_project_hold_register": {
+          "tests": 30,
+          "seconds": 6.862,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 5,
+          "failed_examples": [
+            "codex:tests.test_project_hold_register.SuccessorRegisterTests.test_L3_a_closure_the_account_stored_but_the_project_did_not_is_released_denied_by_the_successor",
+            "codex:tests.test_project_hold_register.SuccessorRegisterTests.test_L3_a_denied_reply_then_a_crash_before_the_closure_releases_nothing_until_the_successor_closes_it",
+            "codex:tests.test_project_hold_register.SuccessorRegisterTests.test_L5_a_crash_after_the_host_open_before_the_claim_is_fenced_by_the_successor"
+          ]
+        },
+        "codex:tests.test_e2a_launch_record": {
+          "tests": 24,
+          "seconds": 9.603,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 7,
+          "failed_examples": [
+            "codex:tests.test_e2a_launch_record.CollectorRecordTests.test_E2a_3_record_launch_over_the_collector_wire_and_its_runtime_gate",
+            "codex:tests.test_e2a_launch_record.FinalFixTests.test_E2a_4_a_lost_record_reply_keeps_the_new_copy_pinned",
+            "codex:tests.test_e2a_launch_record.FinalWireTests.test_E2a_3_record_launch_and_launch_status_refuse_a_wrong_key_and_a_replayed_proof"
+          ]
+        },
+        "codex:tests.test_open_withdrawal": {
+          "tests": 49,
+          "seconds": 11.576,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 23,
+          "failed_examples": [
+            "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_L2_a_failed_deferral_submission_keeps_the_batch_and_the_failed_rows_duty",
+            "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M1_a_withdrawal_the_account_keeps_refusing_does_not_block_a_later_one",
+            "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M7_a_registration_refused_after_the_binding_exists_withdraws_the_open"
+          ]
+        },
+        "codex:tests.test_run_provenance": {
+          "tests": 19,
+          "seconds": 13.211,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_claim_jobs": {
+          "tests": 0,
+          "seconds": 90.175,
+          "returncodes": [
+            1,
+            1
+          ],
+          "timed_out": true,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "returned-cursor-red",
+      "elapsed_seconds": 2.289,
+      "job_seconds": 2.285,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "failed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "failed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 12,
+          "seconds": 2.285,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance"
+          ]
+        }
+      }
+    },
+    {
+      "label": "cursor-final",
+      "elapsed_seconds": 3.851,
+      "job_seconds": 15.245,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_sql_read_budget": {
+          "tests": 34,
+          "seconds": 0.214,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_history": {
+          "tests": 35,
+          "seconds": 1.061,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_ledger_startup": {
+          "tests": 5,
+          "seconds": 1.661,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 12,
+          "seconds": 2.527,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_source_image_legacy": {
+          "tests": 7,
+          "seconds": 2.891,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_source_image": {
+          "tests": 33,
+          "seconds": 3.044,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_rsf_s4_slots": {
+          "tests": 33,
+          "seconds": 3.847,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 3,
+          "failed_examples": [
+            "codex:tests.test_rsf_s4_slots.LegacySlotCorrectionTests.test_collector_timer_releases_a_slot_whose_process_proof_appears",
+            "codex:tests.test_rsf_s4_slots.LegacySlotCorrectionTests.test_unreadable_instance_lock_cannot_establish_positive_unsent",
+            "codex:tests.test_rsf_s4_slots.LegacySlotEvidenceTests.test_unreadable_instance_lock_cannot_establish_positive_unsent"
+          ]
+        }
+      }
+    },
+    {
+      "label": "delivery-boundaries",
+      "elapsed_seconds": 6.165,
+      "job_seconds": 6.428,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "not_run",
+        "RSF-S2-2": "not_run",
+        "RSF-S2-3": "not_run",
+        "RSF-S2-4": "not_run",
+        "RSF-S2-5": "not_run",
+        "RSF-S2-6": "not_run"
+      },
+      "modules": {
+        "codex:tests.test_runtime_release": {
+          "tests": 3,
+          "seconds": 0.268,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version"
+          ]
+        },
+        "codex:tests.test_rsf_s4_slots": {
+          "tests": 33,
+          "seconds": 6.161,
+          "returncodes": [
+            1
+          ],
+          "timed_out": false,
+          "failed_count": 1,
+          "failed_examples": [
+            "codex:tests.test_rsf_s4_slots.LegacySlotCorrectionTests.test_collector_timer_releases_a_slot_whose_process_proof_appears"
+          ]
+        }
+      }
+    },
+    {
+      "label": "delivery-acceptance",
+      "elapsed_seconds": 28.143,
+      "job_seconds": 85.653,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_account_observation_schema": {
+          "tests": 7,
+          "seconds": 2.554,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 12,
+          "seconds": 3.045,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_backup_reply_private": {
+          "tests": 11,
+          "seconds": 5.802,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_admission_inputs": {
+          "tests": 26,
+          "seconds": 3.88,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_observation_backup": {
+          "tests": 2,
+          "seconds": 0.898,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_result_leases": {
+          "tests": 23,
+          "seconds": 2.402,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_signature_inputs": {
+          "tests": 36,
+          "seconds": 5.759,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_backup_installed_project": {
+          "tests": 2,
+          "seconds": 1.13,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_large_project_backups": {
+          "tests": 8,
+          "seconds": 38.071,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_results": {
+          "tests": 46,
+          "seconds": 2.09,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_history": {
+          "tests": 35,
+          "seconds": 1.338,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_holds_schema": {
+          "tests": 40,
+          "seconds": 2.144,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_history_service_upgrade": {
+          "tests": 30,
+          "seconds": 0.919,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_release_ack": {
+          "tests": 2,
+          "seconds": 0.539,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_open_schema": {
+          "tests": 10,
+          "seconds": 0.923,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_cleanup_schema": {
+          "tests": 3,
+          "seconds": 0.598,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_qa_upgrade": {
+          "tests": 3,
+          "seconds": 0.431,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_b6_unattended_close": {
+          "tests": 41,
+          "seconds": 11.503,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_orchestration": {
+          "tests": 38,
+          "seconds": 1.251,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_chunk_upgrade": {
+          "tests": 5,
+          "seconds": 0.376,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "delivery-regressions",
+      "elapsed_seconds": 56.593,
+      "job_seconds": 209.007,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "not_run",
+        "RSF-S2-2": "not_run",
+        "RSF-S2-3": "not_run",
+        "RSF-S2-4": "not_run",
+        "RSF-S2-5": "not_run",
+        "RSF-S2-6": "not_run"
+      },
+      "modules": {
+        "codex:tests.test_active_run_capacity": {
+          "tests": 16,
+          "seconds": 12.79,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_owner_backup_streamed": {
+          "tests": 40,
+          "seconds": 37.064,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_run_holds": {
+          "tests": 71,
+          "seconds": 44.616,
+          "returncodes": [
+            0,
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_qa_check_receipts": {
+          "tests": 23,
+          "seconds": 22.14,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_reply_shape_compatibility": {
+          "tests": 3,
+          "seconds": 0.214,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_execution_grant": {
+          "tests": 12,
+          "seconds": 8.075,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_account_cleanup_release": {
+          "tests": 15,
+          "seconds": 10.684,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_project_learning_corpus": {
+          "tests": 17,
+          "seconds": 1.014,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_source_image_legacy": {
+          "tests": 7,
+          "seconds": 3.106,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_source_image": {
+          "tests": 33,
+          "seconds": 3.539,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_ledger_startup": {
+          "tests": 5,
+          "seconds": 1.826,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_outcome_pages": {
+          "tests": 6,
+          "seconds": 0.592,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_sql_read_budget": {
+          "tests": 34,
+          "seconds": 0.217,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_refusal_steps": {
+          "tests": 14,
+          "seconds": 0.378,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_legacy_history_compatibility": {
+          "tests": 5,
+          "seconds": 0.49,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_learning_source_transfer": {
+          "tests": 13,
+          "seconds": 5.855,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_b2_service_outcome": {
+          "tests": 55,
+          "seconds": 22.185,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        },
+        "codex:tests.test_b2_service_outcome_round2": {
+          "tests": 45,
+          "seconds": 34.222,
+          "returncodes": [
+            0
+          ],
+          "timed_out": false,
+          "failed_count": 0,
+          "failed_examples": []
+        }
+      }
+    },
+    {
+      "label": "delivery-fence",
+      "elapsed_seconds": 2.313,
+      "job_seconds": 3.751,
+      "partial": false,
+      "metadata_errors": [],
+      "budget_failures": [],
+      "requirements": {
+        "RSF-S2-1": "passed",
+        "RSF-S2-2": "passed",
+        "RSF-S2-3": "passed",
+        "RSF-S2-4": "passed",
+        "RSF-S2-5": "passed",
+        "RSF-S2-6": "passed"
+      },
+      "modules": {
+        "codex:tests.test_ledger_startup": {
+          "tests": 5,
+          "seconds": 1.442,
+          "failed_count": 0,
+          "failed_examples": [],
+          "returncodes": [
+            0
+          ],
+          "timed_out": false
+        },
+        "codex:tests.test_rsf_s2_fence": {
+          "tests": 12,
+          "seconds": 2.309,
+          "failed_count": 0,
+          "failed_examples": [],
+          "returncodes": [
+            0
+          ],
+          "timed_out": false
+        }
+      }
+    }
+  ],
+  "latest_named_module_results": {
+    "codex:tests.test_account_billing_admission": {
+      "run": "enumeration1",
+      "tests": 50,
+      "seconds": 123.585,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 49,
+      "failed_examples": [
+        "codex:tests.test_account_billing_admission.AccountBillingAdmissionTests.test_B0_5_finished_probes_do_not_count_against_the_probe_cap_and_still_replay",
+        "codex:tests.test_account_billing_admission.AccountBillingAdmissionTests.test_B2_a_probe_that_saw_paid_usage_is_refused_on_that_probe_and_on_every_reuse",
+        "codex:tests.test_account_billing_admission.AccountBillingAdmissionTests.test_B3_a_missing_attestation_at_reuse_time_is_refused_even_with_a_fresh_probe_record"
+      ]
+    },
+    "codex:tests.test_account_claim_jobs": {
+      "run": "mixed-final",
+      "tests": 0,
+      "seconds": 90.175,
+      "returncodes": [
+        1,
+        1
+      ],
+      "timed_out": true,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_account_claim_operation": {
+      "run": "enumeration1",
+      "tests": 25,
+      "seconds": 15.247,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_account_cleanup_release": {
+      "run": "delivery-regressions",
+      "tests": 15,
+      "seconds": 10.684,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_account_cleanup_schema": {
+      "run": "delivery-acceptance",
+      "tests": 3,
+      "seconds": 0.598,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_account_launch_claims": {
+      "run": "enumeration1",
+      "tests": 16,
+      "seconds": 9.628,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_account_observation_backup": {
+      "run": "delivery-acceptance",
+      "tests": 2,
+      "seconds": 0.898,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_account_observation_schema": {
+      "run": "delivery-acceptance",
+      "tests": 7,
+      "seconds": 2.554,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_account_open_schema": {
+      "run": "delivery-acceptance",
+      "tests": 10,
+      "seconds": 0.923,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_account_settlement_wire": {
+      "run": "enumeration1",
+      "tests": 6,
+      "seconds": 0.596,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_account_store_recovery": {
+      "run": "enumeration1",
+      "tests": 19,
+      "seconds": 3.275,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_active_run_capacity": {
+      "run": "delivery-regressions",
+      "tests": 16,
+      "seconds": 12.79,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_admission_inputs": {
+      "run": "delivery-acceptance",
+      "tests": 26,
+      "seconds": 3.88,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_b2_service_outcome": {
+      "run": "delivery-regressions",
+      "tests": 55,
+      "seconds": 22.185,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_b2_service_outcome_paths": {
+      "run": "enumeration1",
+      "tests": 41,
+      "seconds": 62.033,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_b2_service_outcome_round2": {
+      "run": "delivery-regressions",
+      "tests": 45,
+      "seconds": 34.222,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_b6_unattended_close": {
+      "run": "delivery-acceptance",
+      "tests": 41,
+      "seconds": 11.503,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_backup_installed_project": {
+      "run": "delivery-acceptance",
+      "tests": 2,
+      "seconds": 1.13,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_backup_reply_private": {
+      "run": "delivery-acceptance",
+      "tests": 11,
+      "seconds": 5.802,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_batch2_b4s_integration": {
+      "run": "enumeration1",
+      "tests": 4,
+      "seconds": 0.798,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_billing_gate": {
+      "run": "enumeration1",
+      "tests": 191,
+      "seconds": 137.139,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 176,
+      "failed_examples": [
+        "codex:tests.test_billing_gate.BR16JudgmentRelativeComparison.test_BR16_paid_usage_added_by_the_first_callback_of_the_publication_check_is_refused",
+        "codex:tests.test_billing_gate.BR16JudgmentRelativeComparison.test_BR16_paid_usage_stored_before_the_publication_check_began_is_refused_not_taken_as_its_baseline",
+        "codex:tests.test_billing_gate.BR16JudgmentRelativeComparison.test_BR16_paid_usage_stored_with_an_earlier_stamp_by_the_first_callback_is_refused"
+      ]
+    },
+    "codex:tests.test_claim_denial_recovery": {
+      "run": "enumeration1",
+      "tests": 18,
+      "seconds": 23.862,
+      "returncodes": [
+        0,
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_cleanup_receipt_lifetime": {
+      "run": "enumeration1",
+      "tests": 14,
+      "seconds": 11.455,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 1,
+      "failed_examples": [
+        "codex:tests.test_cleanup_receipt_lifetime.CleanupReceiptLimitTests.test_P1_5_more_lost_and_crashed_runs_than_the_limit_never_stop_a_normal_run"
+      ]
+    },
+    "codex:tests.test_collector_read_scope": {
+      "run": "final1",
+      "tests": 17,
+      "seconds": 45.014,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 6,
+      "failed_examples": [
+        "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_a_defect_or_broken_connection_still_stops_the_collector_and_is_recorded",
+        "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_a_passing_refusal_during_a_bind_is_answered_and_the_collector_keeps_serving",
+        "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_an_unusable_connection_stops_the_collector"
+      ]
+    },
+    "codex:tests.test_contracts": {
+      "run": "enumeration1",
+      "tests": 51,
+      "seconds": 1.757,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_control_loop": {
+      "run": "enumeration1",
+      "tests": 27,
+      "seconds": 0.262,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_crashed_account": {
+      "run": "enumeration2",
+      "tests": 5,
+      "seconds": 2.76,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_diagnostic_delivery": {
+      "run": "mixed-final",
+      "tests": 1,
+      "seconds": 1.451,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 1,
+      "failed_examples": [
+        "codex:tests.test_diagnostic_delivery.DiagnosticDeliveryTests.test_bridge_reason_survives_history_retry_restart_and_report_formats"
+      ]
+    },
+    "codex:tests.test_dispatch_delivery_cli": {
+      "run": "enumeration2",
+      "tests": 5,
+      "seconds": 0.436,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_e2a_launch_record": {
+      "run": "mixed-final",
+      "tests": 24,
+      "seconds": 9.603,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 7,
+      "failed_examples": [
+        "codex:tests.test_e2a_launch_record.CollectorRecordTests.test_E2a_3_record_launch_over_the_collector_wire_and_its_runtime_gate",
+        "codex:tests.test_e2a_launch_record.FinalFixTests.test_E2a_4_a_lost_record_reply_keeps_the_new_copy_pinned",
+        "codex:tests.test_e2a_launch_record.FinalWireTests.test_E2a_3_record_launch_and_launch_status_refuse_a_wrong_key_and_a_replayed_proof"
+      ]
+    },
+    "codex:tests.test_e2a_wake_wire": {
+      "run": "copiers2",
+      "tests": 31,
+      "seconds": 24.895,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 12,
+      "failed_examples": [
+        "codex:tests.test_e2a_wake_wire.WakePublisherTests.test_E2a_8_clean_stop_is_bounded_and_a_writer_fault_publishes_nothing",
+        "codex:tests.test_e2a_wake_wire.WakeReconcileTests.test_E2a_9_unknown_projects_are_marked_due_at_collector_start_and_clean_stops_are_not",
+        "codex:tests.test_e2a_wake_wire.WakeRoundOneTests.test_E2a_5_the_verifier_probes_no_caller_named_path_and_binds_the_project_id"
+      ]
+    },
+    "codex:tests.test_event_retention": {
+      "run": "final2",
+      "tests": 22,
+      "seconds": 4.784,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 1,
+      "failed_examples": [
+        "codex:tests.test_event_retention.CollectorSweepTests.test_the_collector_applies_retention_by_itself"
+      ]
+    },
+    "codex:tests.test_gate_policy": {
+      "run": "enumeration2",
+      "tests": 66,
+      "seconds": 0.222,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_health_contention": {
+      "run": "enumeration2",
+      "tests": 19,
+      "seconds": 1.447,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 17,
+      "failed_examples": [
+        "codex:tests.test_health_contention.HealthContentionTests.test_G1_a_stop_cancels_the_sweeps_even_while_a_request_is_being_handled",
+        "codex:tests.test_health_contention.HealthContentionTests.test_G1_a_stop_right_after_start_is_kept",
+        "codex:tests.test_health_contention.HealthContentionTests.test_G2_G4_a_sweep_outliving_the_join_is_reported_and_a_restart_is_refused"
+      ]
+    },
+    "codex:tests.test_history_service_upgrade": {
+      "run": "delivery-acceptance",
+      "tests": 30,
+      "seconds": 0.919,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_host_open_provenance": {
+      "run": "enumeration2",
+      "tests": 14,
+      "seconds": 9.91,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_installer": {
+      "run": "final1",
+      "tests": 30,
+      "seconds": 16.846,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 4,
+      "failed_examples": [
+        "codex:tests.test_installer.InstallerTests.test_clean_project_installs_with_explicit_empty_mapping",
+        "codex:tests.test_installer.InstallerTests.test_clean_project_mapping_can_select_packaged_agent",
+        "codex:tests.test_installer.InstallerTests.test_install_verify_and_remove"
+      ]
+    },
+    "codex:tests.test_large_project_backups": {
+      "run": "delivery-acceptance",
+      "tests": 8,
+      "seconds": 38.071,
+      "returncodes": [
+        0,
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_learning_chunk_membership": {
+      "run": "mixed-final",
+      "tests": 13,
+      "seconds": 0.919,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_learning_chunk_upgrade": {
+      "run": "delivery-acceptance",
+      "tests": 5,
+      "seconds": 0.376,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_learning_cli": {
+      "run": "copiers2",
+      "tests": 30,
+      "seconds": 51.489,
+      "returncodes": [
+        1,
+        1,
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 13,
+      "failed_examples": [
+        "codex:tests.test_learning_cli.LearningCliTests.test_concurrent_direct_commands_serialize_and_leave_collector_active",
+        "codex:tests.test_learning_cli.LearningCliTests.test_only_learning_register_creates_missing_runtime_authorization",
+        "codex:tests.test_learning_cli.LearningCliTests.test_an_upgrade_that_cannot_fit_refuses_before_writing_any_backup"
+      ]
+    },
+    "codex:tests.test_learning_migration": {
+      "run": "mixed-final",
+      "tests": 17,
+      "seconds": 20.917,
+      "returncodes": [
+        1,
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 2,
+      "failed_examples": [
+        "codex:tests.test_learning_migration.MigrationCliTests.test_first_start_of_the_project_service_moves_the_history_by_itself",
+        "codex:tests.test_learning_migration.MigrationCliTests.test_command_moves_reports_refuses_and_rolls_back"
+      ]
+    },
+    "codex:tests.test_learning_outcome_pages": {
+      "run": "delivery-regressions",
+      "tests": 6,
+      "seconds": 0.592,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_learning_qa_upgrade": {
+      "run": "delivery-acceptance",
+      "tests": 3,
+      "seconds": 0.431,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_learning_retention": {
+      "run": "enumeration2",
+      "tests": 15,
+      "seconds": 1.094,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_learning_source_image": {
+      "run": "delivery-regressions",
+      "tests": 33,
+      "seconds": 3.539,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_learning_source_image_legacy": {
+      "run": "delivery-regressions",
+      "tests": 7,
+      "seconds": 3.106,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_learning_source_transfer": {
+      "run": "delivery-regressions",
+      "tests": 13,
+      "seconds": 5.855,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_learning_store": {
+      "run": "final2",
+      "tests": 100,
+      "seconds": 18.87,
+      "returncodes": [
+        1,
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 5,
+      "failed_examples": [
+        "codex:tests.test_learning_store.LearningStoreTests.test_app_server_cli_normalizes_and_ingests_through_collector",
+        "codex:tests.test_learning_store.LearningStoreTests.test_collector_serializes_concurrent_clients",
+        "codex:tests.test_learning_store.LearningStoreTests.test_spoofed_project_manifest_cannot_replace_active_collector"
+      ]
+    },
+    "codex:tests.test_ledger_busy_answers": {
+      "run": "enumeration2",
+      "tests": 9,
+      "seconds": 1.956,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_ledger_lock_limits": {
+      "run": "enumeration2",
+      "tests": 27,
+      "seconds": 26.523,
+      "returncodes": [
+        0,
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 1,
+      "failed_examples": [
+        "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_3_refusals_are_published_with_collector_health"
+      ]
+    },
+    "codex:tests.test_ledger_startup": {
+      "run": "delivery-fence",
+      "tests": 5,
+      "seconds": 1.442,
+      "failed_count": 0,
+      "failed_examples": [],
+      "returncodes": [
+        0
+      ],
+      "timed_out": false
+    },
+    "codex:tests.test_ledger_waits": {
+      "run": "final2",
+      "tests": 5,
+      "seconds": 0.213,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_legacy_capacity_upgrade": {
+      "run": "enumeration2",
+      "tests": 12,
+      "seconds": 1.682,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_legacy_history_compatibility": {
+      "run": "delivery-regressions",
+      "tests": 5,
+      "seconds": 0.49,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_merge_library_adversarial": {
+      "run": "enumeration2",
+      "tests": 49,
+      "seconds": 46.146,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_merge_library_contract": {
+      "run": "enumeration2",
+      "tests": 127,
+      "seconds": 24.541,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_merge_library_recovery": {
+      "run": "enumeration2",
+      "tests": 9,
+      "seconds": 1.125,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_merge_library_states": {
+      "run": "enumeration2",
+      "tests": 25,
+      "seconds": 0.484,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_open_request_lifetime": {
+      "run": "enumeration2",
+      "tests": 23,
+      "seconds": 92.208,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 10,
+      "failed_examples": [
+        "codex:tests.test_open_request_lifetime.OpenLifetimeJobTests.test_OP_1_finished_opens_never_block_a_new_open",
+        "codex:tests.test_open_request_lifetime.OpenLifetimeJobTests.test_OP_2_a_finished_open_is_purged_with_its_binding_and_receipt_past_retention",
+        "codex:tests.test_open_request_lifetime.OpenLifetimeJobTests.test_OP_2_a_replay_of_a_purged_open_answers_open_expired_and_never_reopens"
+      ]
+    },
+    "codex:tests.test_open_withdrawal": {
+      "run": "mixed-final",
+      "tests": 49,
+      "seconds": 11.576,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 23,
+      "failed_examples": [
+        "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_L2_a_failed_deferral_submission_keeps_the_batch_and_the_failed_rows_duty",
+        "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M1_a_withdrawal_the_account_keeps_refusing_does_not_block_a_later_one",
+        "codex:tests.test_open_withdrawal.DriverWithdrawalTests.test_M7_a_registration_refused_after_the_binding_exists_withdraws_the_open"
+      ]
+    },
+    "codex:tests.test_owned_execution": {
+      "run": "enumeration3",
+      "tests": 74,
+      "seconds": 23.568,
+      "returncodes": [
+        1,
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 25,
+      "failed_examples": [
+        "codex:tests.test_owned_execution.CapacityCompletionTests.test_RS_A_G1_a_completed_slot_s_register_receipt_must_be_its_release_digest",
+        "codex:tests.test_owned_execution.CapacityCompletionTests.test_RS_A_G1_a_slot_s_register_kind_must_be_a_slot_s_release_kind",
+        "codex:tests.test_owned_execution.CapacityCompletionTests.test_lost_registry_acknowledgement_retrieves_the_committed_receipt"
+      ]
+    },
+    "codex:tests.test_owner_backup_streamed": {
+      "run": "delivery-regressions",
+      "tests": 40,
+      "seconds": 37.064,
+      "returncodes": [
+        0,
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_phase_report": {
+      "run": "enumeration3",
+      "tests": 14,
+      "seconds": 0.223,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_project_execution_grant": {
+      "run": "delivery-regressions",
+      "tests": 12,
+      "seconds": 8.075,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_project_history": {
+      "run": "delivery-acceptance",
+      "tests": 35,
+      "seconds": 1.338,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_project_hold_register": {
+      "run": "mixed-final",
+      "tests": 30,
+      "seconds": 6.862,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 5,
+      "failed_examples": [
+        "codex:tests.test_project_hold_register.SuccessorRegisterTests.test_L3_a_closure_the_account_stored_but_the_project_did_not_is_released_denied_by_the_successor",
+        "codex:tests.test_project_hold_register.SuccessorRegisterTests.test_L3_a_denied_reply_then_a_crash_before_the_closure_releases_nothing_until_the_successor_closes_it",
+        "codex:tests.test_project_hold_register.SuccessorRegisterTests.test_L5_a_crash_after_the_host_open_before_the_claim_is_fenced_by_the_successor"
+      ]
+    },
+    "codex:tests.test_project_holds_schema": {
+      "run": "delivery-acceptance",
+      "tests": 40,
+      "seconds": 2.144,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_project_host_open": {
+      "run": "final1",
+      "tests": 21,
+      "seconds": 15.206,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 1,
+      "failed_examples": [
+        "codex:tests.test_project_host_open.ProjectHostOpenTests.test_two_process_client_service_sqlite_path_keeps_sqlite_out_of_client"
+      ]
+    },
+    "codex:tests.test_project_learning_corpus": {
+      "run": "delivery-regressions",
+      "tests": 17,
+      "seconds": 1.014,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_project_orchestration": {
+      "run": "delivery-acceptance",
+      "tests": 38,
+      "seconds": 1.251,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_project_qa_check_receipts": {
+      "run": "delivery-regressions",
+      "tests": 23,
+      "seconds": 22.14,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_project_qa_commit": {
+      "run": "final1",
+      "tests": 30,
+      "seconds": 31.882,
+      "returncodes": [
+        0,
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 1,
+      "failed_examples": [
+        "codex:tests.test_project_qa_commit.ProjectQASocketCommitTests.test_actual_separate_writer_and_sqlite_free_client_commit_and_read_qa"
+      ]
+    },
+    "codex:tests.test_project_release_ack": {
+      "run": "delivery-acceptance",
+      "tests": 2,
+      "seconds": 0.539,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_project_results": {
+      "run": "delivery-acceptance",
+      "tests": 46,
+      "seconds": 2.09,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_project_start": {
+      "run": "enumeration3",
+      "tests": 38,
+      "seconds": 57.714,
+      "returncodes": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 32,
+      "failed_examples": [
+        "codex:tests.test_project_start.BackoffTests.test_E2c_4_an_early_exit_counts_failed_and_a_lasting_start_ends_the_streak",
+        "codex:tests.test_project_start.FairnessTests.test_E2c_2_past_the_queue_and_slot_limits_every_due_project_is_still_started",
+        "codex:tests.test_project_start.OwnershipTests.test_E2c_10_a_child_whose_pid_record_is_refused_is_still_timed_killed_and_reaped"
+      ]
+    },
+    "codex:tests.test_providers": {
+      "run": "final2",
+      "tests": 106,
+      "seconds": 35.77,
+      "returncodes": [
+        0,
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_publication_replay": {
+      "run": "enumeration3",
+      "tests": 40,
+      "seconds": 2.733,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_rate_limit_contracts": {
+      "run": "enumeration3",
+      "tests": 7,
+      "seconds": 0.217,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_refusal_steps": {
+      "run": "delivery-regressions",
+      "tests": 14,
+      "seconds": 0.378,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_reply_shape_compatibility": {
+      "run": "delivery-regressions",
+      "tests": 3,
+      "seconds": 0.214,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_result_leases": {
+      "run": "delivery-acceptance",
+      "tests": 23,
+      "seconds": 2.402,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_review_runner_provenance": {
+      "run": "enumeration3",
+      "tests": 18,
+      "seconds": 0.616,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_rsa_step3": {
+      "run": "enumeration3",
+      "tests": 5,
+      "seconds": 5.011,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_rsf_s2_fence": {
+      "run": "delivery-fence",
+      "tests": 12,
+      "seconds": 2.309,
+      "failed_count": 0,
+      "failed_examples": [],
+      "returncodes": [
+        0
+      ],
+      "timed_out": false
+    },
+    "codex:tests.test_rsf_s4_slots": {
+      "run": "delivery-boundaries",
+      "tests": 33,
+      "seconds": 6.161,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 1,
+      "failed_examples": [
+        "codex:tests.test_rsf_s4_slots.LegacySlotCorrectionTests.test_collector_timer_releases_a_slot_whose_process_proof_appears"
+      ]
+    },
+    "codex:tests.test_rsf_s7_account": {
+      "run": "enumeration3",
+      "tests": 4,
+      "seconds": 1.768,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_run_driver_retries": {
+      "run": "enumeration3",
+      "tests": 21,
+      "seconds": 0.389,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_run_holds": {
+      "run": "delivery-regressions",
+      "tests": 71,
+      "seconds": 44.616,
+      "returncodes": [
+        0,
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_run_provenance": {
+      "run": "mixed-final",
+      "tests": 19,
+      "seconds": 13.211,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_runtime_release": {
+      "run": "delivery-boundaries",
+      "tests": 3,
+      "seconds": 0.268,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 1,
+      "failed_examples": [
+        "codex:tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version"
+      ]
+    },
+    "codex:tests.test_signature_inputs": {
+      "run": "delivery-acceptance",
+      "tests": 36,
+      "seconds": 5.759,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_sql_read_budget": {
+      "run": "delivery-regressions",
+      "tests": 34,
+      "seconds": 0.217,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    },
+    "codex:tests.test_state_location": {
+      "run": "copiers1",
+      "tests": 22,
+      "seconds": 6.661,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 3,
+      "failed_examples": [
+        "codex:tests.test_state_location.LegacyStateMoveTests.test_old_records_of_an_earlier_version_move_only_once_the_upgrade_is_approved_too",
+        "codex:tests.test_state_location.LegacyStateMoveTests.test_only_the_new_folder_is_normal",
+        "codex:tests.test_state_location.LegacyStateMoveTests.test_registration_stops_the_collector_copies_and_sets_the_old_folder_aside"
+      ]
+    },
+    "codex:tests.test_upgrade_handover": {
+      "run": "boundaries",
+      "tests": 12,
+      "seconds": 9.595,
+      "returncodes": [
+        1
+      ],
+      "timed_out": false,
+      "failed_count": 12,
+      "failed_examples": [
+        "codex:tests.test_upgrade_handover.Earlier0855Tests.test_registering_stops_a_running_earlier_collector_and_completes",
+        "codex:tests.test_upgrade_handover.Earlier0858Tests.test_registering_stops_a_running_earlier_collector_and_completes",
+        "codex:tests.test_upgrade_handover.HandoverRefusalTests.test_a_caller_that_is_not_the_owner_registration_never_retries"
+      ]
+    },
+    "codex:tests.test_usage_recheck": {
+      "run": "enumeration3",
+      "tests": 17,
+      "seconds": 1.38,
+      "returncodes": [
+        0
+      ],
+      "timed_out": false,
+      "failed_count": 0,
+      "failed_examples": []
+    }
+  },
+  "diagnostic_environment": {
+    "outcome": "process_tracking_unavailable",
+    "terminal_state": "failed",
+    "result_frame_seen": false
+  }
+}

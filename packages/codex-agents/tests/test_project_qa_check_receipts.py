@@ -240,7 +240,7 @@ class ProjectCheckReceiptTests(unittest.TestCase):
             result_clock_ms=lambda:self.base.fixture.base.stamp,
             orchestration_limits=OrchestrationLimits(1,8),allow_schema_upgrade=True)
         self.store=self.base.fixture.store
-        self.assertEqual(21, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) B6: schema 21 (decision 131)
+        self.assertEqual(22, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) B6: schema 21 (decision 131)
         for name,rows in before.items():
             assert_migrated_rows(self, self.store, name, rows)
         self.assertEqual(0,self.count())

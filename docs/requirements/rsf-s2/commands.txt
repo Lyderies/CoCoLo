@@ -1,0 +1,16 @@
+PY=<tmp>
+
+# delivery-acceptance: 28.1 seconds; 380 tests
+COCOLO_WORKER_TIMEOUT=120 "$PY" -B scripts/parallel_tests.py --jobs 6 --module codex:tests.test_account_cleanup_schema --module codex:tests.test_account_observation_backup --module codex:tests.test_account_observation_schema --module codex:tests.test_account_open_schema --module codex:tests.test_admission_inputs --module codex:tests.test_b6_unattended_close --module codex:tests.test_backup_installed_project --module codex:tests.test_backup_reply_private --module codex:tests.test_history_service_upgrade --module codex:tests.test_large_project_backups --module codex:tests.test_learning_chunk_upgrade --module codex:tests.test_learning_qa_upgrade --module codex:tests.test_project_history --module codex:tests.test_project_holds_schema --module codex:tests.test_project_orchestration --module codex:tests.test_project_release_ack --module codex:tests.test_project_results --module codex:tests.test_result_leases --module codex:tests.test_rsf_s2_fence --module codex:tests.test_signature_inputs
+
+# delivery-regressions: 56.6 seconds; 414 tests
+COCOLO_WORKER_TIMEOUT=120 "$PY" -B scripts/parallel_tests.py --jobs 6 --module codex:tests.test_account_cleanup_release --module codex:tests.test_active_run_capacity --module codex:tests.test_b2_service_outcome --module codex:tests.test_b2_service_outcome_round2 --module codex:tests.test_learning_outcome_pages --module codex:tests.test_learning_source_image --module codex:tests.test_learning_source_image_legacy --module codex:tests.test_learning_source_transfer --module codex:tests.test_ledger_startup --module codex:tests.test_legacy_history_compatibility --module codex:tests.test_owner_backup_streamed --module codex:tests.test_project_execution_grant --module codex:tests.test_project_learning_corpus --module codex:tests.test_project_qa_check_receipts --module codex:tests.test_refusal_steps --module codex:tests.test_reply_shape_compatibility --module codex:tests.test_run_holds --module codex:tests.test_sql_read_budget
+
+# final3: 24.1 seconds; 175 tests
+COCOLO_WORKER_TIMEOUT=120 "$PY" -B scripts/parallel_tests.py --jobs 6 --module codex:tests.test_account_observation_backup --module codex:tests.test_b2_service_outcome --module codex:tests.test_learning_chunk_upgrade --module codex:tests.test_learning_outcome_pages --module codex:tests.test_learning_qa_upgrade --module codex:tests.test_ledger_startup --module codex:tests.test_project_execution_grant --module codex:tests.test_project_history --module codex:tests.test_project_learning_corpus --module codex:tests.test_project_qa_check_receipts --module codex:tests.test_rsf_s2_fence
+
+# delivery-boundaries: 6.2 seconds; 36 tests
+COCOLO_WORKER_TIMEOUT=120 "$PY" -B scripts/parallel_tests.py --jobs 6 --module codex:tests.test_rsf_s4_slots --module codex:tests.test_runtime_release
+
+# final exact-command / import-safe test module and isolated startup
+COCOLO_WORKER_TIMEOUT=30 "$PY" -B scripts/parallel_tests.py --jobs 2 --module codex:tests.test_rsf_s2_fence --module codex:tests.test_ledger_startup

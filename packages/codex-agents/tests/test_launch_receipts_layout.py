@@ -14,6 +14,9 @@ from codex_agents.collector_contracts import LEDGER_SCHEMA_VERSION
 
 # sha256 of the whitespace-normalized sqlite_master sql, as tests/fixtures/learning/schema11-layout.json records it.
 FROZEN_FOR_SCHEMA_15 = 'e2d505aac99614b436bb135af66d7e62c9bedf10309cb4688e6cce552c27fa9f'
+# S2 step 16→17 (_migrate): only runtime_takeover is added. No receipt DDL or
+# historical receipt changes; retain the schema-15 pin alongside the new pin.
+FROZEN_FOR_SCHEMA_17 = 'e2d505aac99614b436bb135af66d7e62c9bedf10309cb4688e6cce552c27fa9f'
 
 
 def stored_layout():
@@ -25,9 +28,10 @@ def stored_layout():
 
 class LaunchReceiptsLayoutTests(unittest.TestCase):
     def test_receipts_ddl_changes_only_with_a_schema_bump(self):
-        self.assertEqual(16, LEDGER_SCHEMA_VERSION,
+        self.assertEqual(17, LEDGER_SCHEMA_VERSION,
                          'the ledger schema changed: add the new layout hash and its upgrade, then update this test')
         self.assertEqual(FROZEN_FOR_SCHEMA_15, stored_layout())
+        self.assertEqual(FROZEN_FOR_SCHEMA_17, stored_layout())
 
     def test_receipts_do_not_admit_a_later_admission_reason(self):
         db = sqlite3.connect(':memory:')

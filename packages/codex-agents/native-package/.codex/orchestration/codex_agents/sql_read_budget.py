@@ -15,6 +15,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+from .store_fence import FencedConnection
+
 SQL_READ_PROGRESS_INTERVAL = 256
 MAX_SQL_READ_CALLBACKS = 100_000
 MAX_SQL_READ_DURATION_MS = 1000
@@ -145,7 +147,7 @@ class _SQLReadView:
             self._cursor.close()
 
 
-class SQLReadConnection(sqlite3.Connection):
+class SQLReadConnection(FencedConnection):
     """Trusted fresh factory; ordinary legacy operations keep their contract.
 
     A read scope requires the actual construction process/thread, no transaction,
