@@ -258,6 +258,7 @@
  "codex:tests.test_qa_tree_scan": "unit",
  "codex:tests.test_rate_limit_contracts": "unit",
  "codex:tests.test_record_context": "scenario",
+ "codex:tests.test_recovery_line": "scenario",
  "codex:tests.test_refusal_steps": "unit",
  "codex:tests.test_release_batch_queries": "unit",
  "codex:tests.test_reply_shape_compatibility": "unit",

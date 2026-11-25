@@ -1257,45 +1257,65 @@ class ResultPersistenceLane:
                 operation, arguments, options = request.arguments
                 result = getattr(history, operation)(*arguments, **options)
             elif request.kind == 'expire':
+                maintenance_ok = True
                 # An update leaves the earlier runtime's open orchestrations to this service (0.3.4 R10).
                 # A failure here never stops the result cleanup below (review 034-r10).
-                with contextlib.suppress(HistoryError, sqlite3.Error):
+                try:
                     history._orchestration_owner().end_earlier(self._service_scope, 10)
+                except (HistoryError, sqlite3.Error):
+                    maintenance_ok = False
                 # O0c P5 / B6 (RS-B-B6-4): an orchestration idle for 24 hours with no run left is ended interrupted
                 # unattended, at most UNATTENDED_CLOSE_BATCH a pass, fairly by each one's next check. The owner reads
                 # its own effective time (max(wall, floor), never moving the floor): a wall clock that went back below
                 # the floor never stops the pass (review r1).
                 from .orchestration_store import UNATTENDED_CLOSE_BATCH
-                with contextlib.suppress(HistoryError, sqlite3.Error):
+                try:
                     history._orchestration_owner().end_idle(None, UNATTENDED_CLOSE_BATCH)
-                with contextlib.suppress(HistoryError, sqlite3.Error):  # S1-R6-8, reporting only
+                except (HistoryError, sqlite3.Error):
+                    maintenance_ok = False
+                try:  # S1-R6-8, reporting only
                     history.settle_earlier_registrations(self._service_instance, now_ms=history._result_now())
+                except (HistoryError, sqlite3.Error):
+                    maintenance_ok = False
                 # RS-B L1 (the start pass, and every pass after it): an unarmed lease no live job of this
                 # service holds is an earlier service's; it can never be armed and no claim of it was sent, so it is
                 # released `withdrawn_unsent` now, before its time. A live job's lease is untouched.
                 with self._lock:
                     live = {(pending.lease_binding.run_handle, pending.lease_binding.attempt)
                             for pending in self._jobs.values() if pending.lease_binding is not None}
-                with contextlib.suppress(HistoryError, sqlite3.Error):
+                try:
                     history.release_earlier_unarmed_leases(live, limit=10)
+                except (HistoryError, sqlite3.Error):
+                    maintenance_ok = False
                 # An earlier service's unarmed lease past its time can never be armed; release it here,
                 # with no client action (O10 D1). Armed leases are never expired by time.
-                with contextlib.suppress(HistoryError, sqlite3.Error):
+                try:
                     history.expire_result_leases(limit=10)
+                except (HistoryError, sqlite3.Error):
+                    maintenance_ok = False
                 # D4 (RS-D draft 3 §6): stored publications whose job is not publishing here are completed, at most
                 # 4 a pass, before the cleanup; a job of this service that failed takes the delivery committed.
                 with self._lock:
                     publishing = frozenset(pending.binding.claim_id for pending in self._jobs.values()
                                            if pending.state in {'queued', 'committing'}
                                            and type(pending.binding) is AttemptBinding)
-                with contextlib.suppress(HistoryError, sqlite3.Error):
+                try:
                     self._adopt_committed(history, set(history.replay_publications(publishing)))
+                except (HistoryError, sqlite3.Error):
+                    maintenance_ok = False
                 # B2 (decision 92.2 A): the backstop and the check after a restart: record what is committed and
                 # unrecorded. A refusal never stops the result cleanup below.
-                with contextlib.suppress(Exception):  # each candidate is isolated inside; this is the pass's own limit
+                try:  # each candidate is isolated inside; this is the pass's own limit
                     service_record.record_pass(history, self._record_authority(), clock=history._result_now,
                                                notes=self.recording_notes)
+                except Exception:
+                    maintenance_ok = False
                 result = history.expire_results(limit=10)
+                # RECOV-1/3: every maintenance step must succeed to renew progress. Suppressed failures still
+                # allow cleanup, but must not hide partly broken maintenance from E2c-9.
+                if maintenance_ok:
+                    from .project_holds_schema import wake_checked
+                    wake_checked(history.project_id, history._connection, now_ms=_TIME_NS() // 1_000_000)
             elif request.kind == 'arbitrate':
                 result = history.arbitrate_publication(*request.arguments)
                 if result == 'recovered':
@@ -1357,7 +1377,9 @@ class ResultPersistenceLane:
                 # Trusted runtime startup only, never selected by a request.
                 # Validate schema and acquire the existing exclusive writer lock
                 # before the native frontend publishes any endpoint.
-                self._history()
+                history = self._history()
+                from .project_holds_schema import wake_checked
+                wake_checked(history.project_id, history._connection, now_ms=_TIME_NS() // 1_000_000)
             if self._requests is not None:
                 history_auth, result_auth, orchestration_auth = self._service_authorizers
                 service = HistoryService(self._project, self._runtime, self._history,

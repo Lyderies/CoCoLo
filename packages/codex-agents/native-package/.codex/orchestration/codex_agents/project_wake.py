@@ -15,8 +15,9 @@ The collector must start a stopped project whose holds come due, without opening
   `clean_stop` with it, best effort within 2 s. A writer-fault stop sends nothing, so the collector keeps its state
   unknown.
 
-The next due is the earliest `due_at_ms` of a held or releasing hold, or the withdrawal retry (`next_check_ms`) of a
-releasing open binding (`project_holds_schema.next_hold_due`).
+The next due is the earliest outstanding check (`project_holds_schema.next_hold_due`), respecting B6 backoff and
+open-withdrawal retries. A completed periodic history-writer pass advances an overdue live check to its completion
+time (RECOV), without changing any hold deadline. A clean stop always publishes the store's actual next check.
 
 A process killed between a `pending` acknowledgement and the commit, or between the commit and `exact`, leaves
 `pending` in the ledger, which the collector's reconcile treats as unknown (due now).
@@ -104,6 +105,7 @@ class WakePublisher:
         self._version = 0  # counts pendings; an exact computed under an older version is never sent
         self._queued = None  # (next due, version) for the sender
         self._next_due = None
+        self._checked_at_ms = None  # RECOV: writer progress; ordinary hold writes never renew it
         self.unpublished = False
         self.dirty = False
         self._instance = secrets.token_hex(16)  # this service instance: a lost epoch reply is retried idempotently
@@ -228,10 +230,22 @@ class WakePublisher:
     def after_settle(self, next_due):
         """After the transaction ended: queue `exact` with the store's next due."""
         with self._wakeup:
-            self.dirty = False
-            self._next_due = next_due
-            self._queued = (next_due, self._version)
-            self._wakeup.notify()
+            self._queue_exact(next_due)
+
+    def after_check(self, next_due, *, now_ms):
+        """RECOV: initial validated open or a completed maintenance pass, on the history writer thread."""
+        with self._wakeup:
+            self._checked_at_ms = now_ms
+            self._queue_exact(next_due)
+
+    def _queue_exact(self, next_due):
+        """Under _wakeup: retain completed progress even if a subsequent transaction still sees old evidence."""
+        if next_due is not None and self._checked_at_ms is not None:
+            next_due = max(next_due, self._checked_at_ms)
+        self.dirty = False
+        self._next_due = next_due
+        self._queued = (next_due, self._version)
+        self._wakeup.notify()
 
     def _send_queued(self):
         """One attempt for the queued exact; whether nothing is left to send."""

@@ -266,12 +266,38 @@ def wake_settled(project_id: str, connection) -> None:
             pass
 
 
+def wake_checked(project_id: str, connection, *, now_ms: int) -> None:
+    """RECOV-1/3: initial validated history open or a completed writer pass checked obligations at `now_ms`.
+
+    Evidence waits can retain an old deadline indefinitely. Publish the next live check at least at this pass's
+    time, so E2c-9 measures stalled maintenance rather than the age of an obligation. Only the writer calls this
+    after initial validation or a completed pass: sender and status reads cannot manufacture progress. Deadlines stay
+    for conservative clean_stop publication and recovery after a stop.
+    """
+    guard = _WAKE_GUARDS.get(project_id)
+    if guard is not None:
+        try:
+            due = next_hold_due(connection)
+            guard.after_check(due, now_ms=now_ms)
+        except Exception:
+            pass  # As with wake_settled, a failed read leaves the last known deadline in force.
+
+
 def next_hold_due(connection) -> int | None:
-    """The earliest deadline of a held or releasing hold, by index seeks per kind (never the tombstones), or the
-    withdrawal retry (`next_check_ms`) of a releasing open binding, whichever is earlier."""
+    """The earliest outstanding check (never tombstones): hold deadlines, B6's effective orchestration check,
+    or a releasing open binding's withdrawal retry. Evidence obligations retain conservative deadlines here.
+    Ordinary minima use indexed deadlines; the orchestration expression scans the capped open orchestrations.
+    """
     found = None
     for kind in HOLD_KINDS:
         for state in ("held", "releasing"):
+            if kind == "orchestration" and state == "held":
+                value = connection.execute(
+                    "SELECT MIN(MAX(due_at_ms,next_check_ms)) FROM project_holds "
+                    "WHERE kind='orchestration' AND state='held' AND due_at_ms IS NOT NULL").fetchone()[0]
+                if value is not None and (found is None or value < found):
+                    found = int(value)
+                continue
             value = connection.execute(
                 "SELECT MIN(due_at_ms) FROM project_holds WHERE kind=? AND state=? AND due_at_ms IS NOT NULL",
                 (kind, state)).fetchone()[0]
@@ -323,9 +349,15 @@ def release_hold(connection, project_id: str, kind: str, identity: str, release_
     # B6 (RS-B-B6-4): releasing an execution hold of an orchestration has its unattended close checked again at once.
     handle = _orchestration_of(connection, project_id, kind, identity)
     if handle is not None:
+        row = connection.execute("SELECT due_at_ms FROM project_holds WHERE project_id=? "
+                                 "AND kind='orchestration' AND identity=? AND state='held'",
+                                 (project_id, handle)).fetchone()
+        if row is not None:
+            # E2a-7: resetting B6 backoff can move the effective check earlier; invalidate before the reset.
+            wake_before(project_id, row[0])
         connection.execute("UPDATE project_holds SET next_check_ms=0,evidence=NULL WHERE project_id=? "
                            "AND kind='orchestration' AND identity=? AND state='held'", (project_id, handle))
-    wake_touch(project_id)  # E2a-7: the next due may move later
+    wake_touch(project_id)  # Releasing the hold itself can move the next due later; the reset above may move it earlier.
 
 
 def adopt_orchestrations(connection, project_id: str, orchestrations) -> None:

@@ -249,6 +249,7 @@ class OrchestrationOwner:
         wait = (project_holds_schema.UNATTENDED_BACKOFF_MS if not valid_integer(previous, minimum=1)
                 else min(previous * 2, project_holds_schema.UNATTENDED_BACKOFF_MAX_MS))
         with self._history._transaction():
+            project_holds_schema.wake_before(self._history.project_id, now + wait)
             self._db.execute("UPDATE project_holds SET next_check_ms=?,evidence=? WHERE project_id=? "
                              "AND kind='orchestration' AND identity=? AND state='held'",
                              (now + wait, project_holds_schema.evidence_json(backoff_ms=wait),
