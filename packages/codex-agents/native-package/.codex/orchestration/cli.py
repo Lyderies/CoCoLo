@@ -139,6 +139,8 @@ from codex_agents.admission_metadata import api_keys_present  # noqa: E402
 from codex_agents.host_paths import PYTHON_ISOLATION_FLAGS  # noqa: E402
 from codex_agents.cli_reports import command_report, unavailable_cycle  # noqa: E402
 from codex_agents.collector_contracts import (  # noqa: E402
+    CollectorBuildConflictError,
+    CollectorUpgradeRequired,
     CollectorError,
     CollectorTransportError,
     CollectorRestartError,
@@ -579,6 +581,95 @@ def _replace_other_version_host(args):
     except CollectorError as error:
         raise CollectorRestartError(_COLLECTOR_RESTART_ERROR) from error
     return replaced
+
+
+UPDATE_CHECK_UNREADABLE = ("the update could not tell whether a child run is active; nothing was changed. Close any running "
+                           "child, check that the learning state folder and its database can be read by this account, then "
+                           "try again")
+
+
+def _update_check_report(state_root, project_root):
+    """UPDFIX-2 (L12.3): whether an update of this project would be refused for a running child, read only.
+
+    The collector's own rule for its drained stop (`CollectorMaintenance.acquire`, `_replace_other_version_host`): a child may
+    be running when the ledger holds an unreleased claim that is not long crashed (a run admitted but never claimed has no
+    child). The update would have to stop the collector when the one running is not this build, and withdraw the project's
+    service when another version started it. Setup asks this BEFORE it installs anything, so a refusal changes nothing.
+    Nothing is stopped, started or written here, and no ledger row is changed (SQLite may still create or touch its own
+    -wal/-shm files when it reads a ledger kept in write-ahead mode).
+
+    Decision 265 (fails closed): only a project with no ledger at all (no learning database in the state folder) goes ahead
+    unchecked. A ledger that exists but cannot be opened or evaluated is reported `unreadable` and `refused`.
+    """
+    children = False
+    replace = False
+    root = Path(state_root).expanduser() if state_root is not None else default_state_root()
+    try:
+        os.lstat(root / "learning.sqlite3")  # not lexists: that hides a permission error as "absent" (review 040-updfix-r2c)
+    except FileNotFoundError:
+        return _update_check_result(children, replace, unreadable=False)  # no ledger at all: nothing to protect
+    except OSError:
+        return _update_check_result(children, replace, unreadable=True)
+    try:
+        state = LearningState(state_root, create=False)
+        client = CollectorClient(state.socket)
+        try:
+            client.health()
+        except (CollectorUpgradeRequired, CollectorBuildConflictError):
+            replace = True
+        except CollectorError:
+            pass  # not running, or newer than this build: nothing here can replace it
+        if not replace and other_version_host(state_root, project_root) is not None:
+            replace = True
+        for attempt in (1, 2):
+            try:
+                children = _update_check_children(state.database)
+                break
+            except sqlite3.OperationalError as error:
+                # Busy or locked is a healthy moment (the collector's own maintenance): wait, then try once more.
+                busy = (getattr(error, "sqlite_errorcode", None) in (5, 6)  # SQLITE_BUSY, SQLITE_LOCKED
+                        or "locked" in str(error) or "busy" in str(error))
+                if attempt == 2 or not busy:
+                    raise
+    except (StateError, OSError, sqlite3.Error, ValueError):
+        return _update_check_result(children, replace, unreadable=True)
+    return _update_check_result(children, replace, unreadable=False)
+
+
+UPDATE_CHECK_BUSY_SECONDS = 3.0
+
+
+def _update_check_children(database):
+    """Whether a child may be running, on a read-only connection. A ledger of an older release has no capacity tables, so
+    it holds no child this check can see (decision 269); every other schema, permission and SQL failure raises."""
+    from codex_agents.learning_source_image import _drained
+    from codex_agents.legacy_slots import register_legacy_functions
+
+    connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=UPDATE_CHECK_BUSY_SECONDS)
+    try:
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE name='active_run_capacity'").fetchone() is None:
+            return False
+        # The same functions the collector's connection has: an unreleased earlier-version slot needs them.
+        register_legacy_functions(connection)
+        try:
+            _drained(connection, time.time_ns() // 1_000_000, children_only=True)
+        except HistoryError:
+            return True
+        return False
+    finally:
+        connection.close()
+
+
+def _update_check_result(children, replace, *, unreadable):
+    refused = unreadable or (children and replace)
+    report = {"ready": True, "children_running": children, "would_replace": replace, "unreadable": unreadable,
+              "refused": refused, "reason": None, "message": None}
+    if unreadable:
+        report["reason"], report["message"] = "ledger_unreadable", UPDATE_CHECK_UNREADABLE
+    elif refused:
+        report["reason"] = "child_run_active"
+        report["message"] = "a child run is active; nothing was changed, try again when none is running"
+    return report
 
 
 from codex_agents.learning_migration import START_REASONS, clear_start_failure, record_start_failure  # noqa: E402
@@ -1846,6 +1937,13 @@ def build_parser() -> argparse.ArgumentParser:
     learning_start_service.add_argument("--state-root", type=Path)
     learning_start_service.add_argument("--project-root", required=True, type=Path)
 
+    learning_update_check = subparsers.add_parser(
+        "learning-update-check",
+        help="read only: would an update of this project be refused for a running child (setup asks before it installs)",
+    )
+    learning_update_check.add_argument("--state-root", type=Path)
+    learning_update_check.add_argument("--project-root", required=True, type=Path)
+
     learning_status = subparsers.add_parser(
         "learning-status", help="report persistent collector and redacted client health"
     )
@@ -2787,6 +2885,8 @@ def main() -> int:
                               error="this project's service did not start; run learning-status for the collector")
                 _print(report)
                 return 2
+        elif args.command == "learning-update-check":
+            report = _update_check_report(args.state_root, args.project_root)
         elif args.command == "learning-status":
             _start_collector_quietly(args)
             report = status_client(args.state_root, args.project_root)

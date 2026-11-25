@@ -106,6 +106,22 @@ def issue_wake_capability(state, project_root, project_id=None):
     return key
 
 
+def keep_wake_capability(state, project_root, project_id):
+    """UPDFIX-5 (L1.2): the project's wake key as it is when it is a valid one (the file, owner-only, of the right size), so
+    registering a project again on a running collector changes nothing; the collector's verifier learns the same key. Only a
+    missing or invalid key is issued. A collector that starts issues a fresh key per active project (`issue_wake_capability`)."""
+    try:
+        key = _read_key(wake_capability_path(state, project_root))
+    except EnrollmentError:
+        return issue_wake_capability(state, project_root, project_id)
+    try:
+        subject = str(_canonical_project_root(Path(project_root)))
+    except (StateError, OSError, ValueError):
+        raise EnrollmentError('enrollment_unavailable') from None
+    wake_keys(state).remember(subject, project_id, key)
+    return key
+
+
 class WakeKeys:
     """RS-E E2a-5 (review round 1): the wake keys this process issued, in memory, each bound to the immutable id of
     the project it was issued for. A lookup never touches the filesystem: a subject with no key gets a dummy key, so

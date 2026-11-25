@@ -22,3 +22,15 @@ Schema ends at ledger 17 / project 22 (RS-F S2); P9's temporary tables are per-c
 | docs/requirements/t7/assertions.md | Both slices' sections kept (S6 then S5). |
 | tests/test_e2e_requirements.py | S5 and S6 carry the same `deferred`/`reason` acceptance; one copy kept (git merged it cleanly). |
 | other registries (test-layers, test-stages, test-timings, lifetime_caps, tests/requirements, tests/e2e/requirements.json) | Merged by git; all valid JSON; no duplicate e2e requirement ids. |
+
+## fix/update-refusal (UPDFIX), merged ninth
+
+UPDFIX carried a cherry-pick of S5's earlier commit (the update-safety harness), so these files conflicted add/add or content:
+`scripts/e2e_checks_update_safety.py`, `tests/test_e2e_update_safety.py`, `scripts/e2e_core.py`, `scripts/e2e_lifecycle.py`,
+`tests/e2e/requirements.json`, `docs/requirements/t7/assertions.md`, `docs/requirements/t7/S5-STATUS.md`.
+UPDFIX changed none of them except `scripts/e2e_checks_update_safety.py`, so S5's final version of all seven was kept and
+only UPDFIX's own hunk was re-applied (see `updfix-assertions.md`): in check
+`l12_3_update_with_a_running_child_is_refused_plainly_and_the_child_goes_on` the refusal is now before the install
+(no step 3 to 8 is OK, step 2 is not OK, the output contains "The update stopped (child_run_active)") instead of
+"step 5 FAIL". The product changes (cli.py, learning_store.py, legacy_slots.py, service_enrollment.py, setup_wizard/flow.py)
+merged without conflict; `learning_store.py` was also touched by P9b and RS-F S2 and merged by git without conflict.

@@ -2404,9 +2404,8 @@ class LearningLedger:
             connection.row_factory = sqlite3.Row
             # O0b RS-A (F5): the register's triggers record releases at the ledger's own clock.
             connection.create_function("ledger_now_ms", 0, lambda: self._clock_ms())
-            from .legacy_slots import dispatch_deadline, dispatch_run_id
-            connection.create_function("legacy_dispatch_deadline", 4, dispatch_deadline, deterministic=True)
-            connection.create_function("legacy_dispatch_run_id", 1, dispatch_run_id, deterministic=True)
+            from .legacy_slots import register_legacy_functions
+            register_legacy_functions(connection)
             version = connection.execute('PRAGMA user_version').fetchone()[0]
             if version > LEDGER_SCHEMA_VERSION:
                 raise LedgerError('ledger schema is newer than this package')
@@ -13895,9 +13894,10 @@ class CollectorServer:
                 project_id = self.ledger.register_project(Path(request["project_root"]))
                 # RS-E E2a-5: the project's wake credential, as the account host issues one at its start.
                 with contextlib.suppress(Exception):
-                    from .service_enrollment import issue_wake_capability
+                    from .service_enrollment import keep_wake_capability
                     from .collector_paths import CollectorPaths
-                    issue_wake_capability(CollectorPaths(self.state.root), Path(request["project_root"]), project_id)
+                    # UPDFIX-5 (L1.2): a valid key is kept, so registering again changes no file.
+                    keep_wake_capability(CollectorPaths(self.state.root), Path(request["project_root"]), project_id)
                 return {"ok": True, "project_id": project_id}
             if request.get("op") == "launch_status" and set(request) == {"protocol", "op", "project_root", "owner"}:
                 # RS-E E2a-11: whether setup's launch record exists for this registered root (read only). Review
