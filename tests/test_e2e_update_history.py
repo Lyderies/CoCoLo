@@ -152,6 +152,35 @@ class AdmissionPreservedTests(unittest.TestCase):
         self.assertNotIn("probe_after_wait", source)
 
 
+class FirstProbeInL121Tests(unittest.TestCase):
+    """L12.1 judges the first billing probe itself: the result must not depend on whether G7 (which takes the G1
+    failure of a refused probe) ran before it on the cached scene."""
+
+    def failure_of_l12_1(self, scene) -> str:
+        phase = e2e_core.Phase("l12_1", Path("/nonexistent"))
+        with self.assertRaises(e2e_core.CheckFailed) as caught:
+            uh.updated_and_full_run_passes(phase, scene)
+        return str(caught.exception)
+
+    def test_a_refused_first_probe_is_red_for_every_earlier_release_and_either_order(self):
+        for tag in ("v0.3.1", "v0.3.2", "v0.3.3", "v0.3.4"):
+            for g7_first in (False, True):
+                scene = SimpleNamespace(tag=tag, probe_code=2, probe=None)  # a later recovery is not the first probe
+                if g7_first:
+                    judged(uh.history_kept, honest_scene())  # G7 ran earlier on the cached scene
+                self.assertEqual(self.failure_of_l12_1(scene), uh.FIRST_PROBE_READY)
+
+    def test_an_exit_zero_probe_that_was_not_ready_is_red(self):
+        scene = SimpleNamespace(tag="v0.3.1", probe_code=0, probe={"ready": False, "probe": "launched"})
+        self.assertEqual(self.failure_of_l12_1(scene), uh.FIRST_PROBE_READY)
+
+    def test_every_l12_1_check_runs_the_judge_that_asserts_the_first_probe(self):
+        source = (ROOT / "scripts" / "e2e_checks_update_history.py").read_text()
+        body = source.split("def updated_and_full_run_passes", 1)[1].split("\n\n\n", 1)[0]
+        self.assertIn("first_probe_succeeded(phase, scene", body)
+        self.assertEqual(source.count("updated_and_full_run_passes(phase, scene_for("), 4)
+
+
 class RequirementTests(unittest.TestCase):
     def test_l12_6_is_split_and_the_second_part_is_deferred_with_its_three_cases(self):
         rows = {row["id"]: row for row in json.loads((ROOT / "tests" / "e2e" / "requirements.json").read_text())["requirements"]}

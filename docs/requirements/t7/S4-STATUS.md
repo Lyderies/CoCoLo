@@ -11,7 +11,7 @@ The update is HEAD's `./setup.sh --answers` with `upgrade_records: true`: `--upd
 owner chooses the records upgrade. This proves the DATA upgrade from the release, not its old wizard (R6, an owner check).
 
 ## Per ID
-- L12.1 -> `l12_1_update_from_v0_3_{1,2,3,4}_succeeds_and_the_full_run_passes_again` (4 scenes, ~76 s each, parallel). Reads: the tag's VERSION from git
+- L12.1 -> `l12_1_update_from_v0_3_{1,2,3,4}_succeeds_and_the_full_run_passes_again` (4 scenes, ~76 s each, parallel). Reads: the tag's VERSION from git L12.1 itself asserts the first post-update billing probe succeeded (probe_code 0, ready), so it is red on a refused first probe in any check order.
   objects vs the old collector's runtime version, ledger counts, the CLI status after, the process table, then the L5.1-L5.3 judges on the updated project.
 - G7 -> `g7_update_from_v0_3_{1..4}_keeps_counts_by_kind`: the ledger's rows by table and by record type, read-only sqlite before and after, now by
   IDENTITY (each row's primary key, each record's id), not by count against an allowance. Every row the earlier ledger held must still be there

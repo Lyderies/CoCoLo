@@ -350,9 +350,24 @@ def summary(text: str) -> dict:
     return summary_states(text)
 
 
+FIRST_PROBE_RAN = "the billing probe right after the update, on its first attempt, ran on the long history"
+FIRST_PROBE_READY = "the billing probe right after the update succeeded on its first attempt and the project was ready"
+
+
+def first_probe_succeeded(phase: Phase, scene, what: str) -> None:
+    """The first billing probe after the update (never a later or diagnostic one), judged here by itself so no check
+    depends on the order the runner takes the checks of one scene in."""
+    probe = getattr(scene, "probe", None)
+    probe = probe if isinstance(probe, dict) else {}
+    phase.expect(getattr(scene, "probe_code", None) == 0 and probe.get("ready") is True
+                 and probe.get("probe") in ("launched", "reused"), what)
+
+
 def updated_and_full_run_passes(phase: Phase, scene) -> None:
-    """L12.1: the project ran the earlier release with history, the update to this build succeeded, and the L5 run
-    (both judges of L5.1, L5.2 and L5.3) passes on the updated project."""
+    """L12.1: the project ran the earlier release with history, the update to this build succeeded, the first billing
+    probe after it succeeded (judged here, independent of check order), and the L5 run (both judges of L5.1, L5.2 and
+    L5.3) passes on the updated project."""
+    first_probe_succeeded(phase, scene, FIRST_PROBE_READY)
     world = scene.world
     wanted = tag_version(scene.tag)
     phase.expect(wanted != HEAD_VERSION, "the earlier release is not this build")
@@ -551,9 +566,7 @@ def admission_preserved(phase: Phase, scene) -> None:
         phase.expect(before["record_keys"].get(kind, frozenset()) <= scene.final["record_keys"].get(kind, frozenset()),
                      "every admission record is still there after the project opened and dispatched")
     phase.expect(scene.final_recent_admission > 512, "more than 512 admission records were in the admission window when the project opened and dispatched")
-    phase.expect(scene.probe_code == 0 and (scene.probe or {}).get("ready") is True
-                 and (scene.probe or {}).get("probe") in ("launched", "reused"),
-                 "the billing probe right after the update, on its first attempt, ran on the long history")
+    first_probe_succeeded(phase, scene, FIRST_PROBE_RAN)
 
 
 @check("L12.6a", group="upd_big")
