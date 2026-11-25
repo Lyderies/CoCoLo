@@ -146,6 +146,7 @@ class Wizard:
         self.mode = "full"
         self.install_exists = False
         self.accept_pending: str | None = None  # an accepted installed project not yet remembered (UPDFIX-3)
+        self.projects_undo: tuple | None = None  # the list as it was before an interactive open remembered a project
         self.install_applied = False  # UPDFIX-4: the installer has written during this run
         self.profile_wanted = self.profile_ready = self.codex_primary = False
         self.rule_file = self.rule_copy = self.rule_status = self.rule_reason = ""
@@ -512,8 +513,22 @@ class Wizard:
     def remember_accepted(self) -> None:
         """Remember the installed project that step 2 accepted, once nothing can refuse it any more (UPDFIX-3)."""
         folder, self.accept_pending = self.accept_pending, None
+        self.projects_undo = None  # accepted: the earlier remembering stands
         if folder:
             self.remember_project(folder)
+
+    def remember_chosen(self, folder: str) -> None:
+        """An installed project opened interactively is offered first next time as soon as it is chosen. Keep the list as
+        it was, so a refusal that comes later (step 2's check or the one before --apply) can put it back (UPDFIX-3)."""
+        path = self.projects_file()
+        self.projects_undo = (path, effects.projects_snapshot(path)) if path is not None else None
+        self.remember_project(folder)
+
+    def forget_refused(self) -> None:
+        """UPDFIX-3: a refused update changes no setup-projects entry: put back what remember_chosen replaced."""
+        undo, self.projects_undo = self.projects_undo, None
+        if undo is not None:
+            effects.restore_projects(*undo)
 
     def pick_project(self, default: str) -> str | None:
         path = self.projects_file()
@@ -672,8 +687,11 @@ class Wizard:
                 continue
             self.mode = "full"
             self.install_exists = False
+            self.projects_undo = None
             if os.path.isfile(os.path.join(folder, ".codex", "orchestration", "install-manifest.json")):
                 self.install_exists = True
+                if not self.update:  # Offered first next time once chosen, put back if refused; an update waits to be accepted.
+                    self.remember_chosen(folder)
                 t.list_add("ok", f"Project: {folder}")
                 self.owner_key_notice()
                 if not self.update:
@@ -723,6 +741,7 @@ class Wizard:
                 # UPDFIX-1, UPDFIX-3 (L12.3): decided before the installer writes or commits anything, and before the
                 # project is remembered (review 040-updfix-r1: a refused update changes no setup-projects entry).
                 code, sentence = refusal
+                self.forget_refused()
                 t.list_add("fail", folder)
                 t.list_sub(sentence)
                 if self.update:
@@ -951,6 +970,7 @@ class Wizard:
         refusal = self.update_refusal(project) if self.install_exists else None  # UPDFIX-3: again, right before the first write
         if refusal is not None:
             code, sentence = refusal
+            self.forget_refused()
             t.list_add("fail", project)
             t.list_sub(sentence)
             if self.update:

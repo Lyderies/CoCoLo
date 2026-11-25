@@ -671,6 +671,7 @@ class WiringTests(TempHome):
         for patch in (mock.patch.object(again, "pick_project", return_value=str(project)),
                       mock.patch.object(again, "basic_problem", return_value=""),
                       mock.patch.object(again, "managed_problem", return_value=""),
+                      mock.patch.object(again, "update_refusal", return_value=None),  # UPDFIX-3: no collector here
                       mock.patch.object(again, "prepare_project_inputs"),
                       mock.patch.object(again, "run_installer", return_value=0),
                       mock.patch.object(again, "remember_project"),

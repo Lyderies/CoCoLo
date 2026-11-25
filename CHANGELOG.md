@@ -4,6 +4,16 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.61: release batch.
+  - RECOV: the status line shows recovery state correctly.
+  - RS-B B7b: recovery reasons and measured budgets.
+  - P9, P9b: attestation capture.
+  - M11: dispatch admission.
+  - RS-F S2: the store-owner fence, on store schemas 17 and 22.
+  - UPDFIX: a refused update changes nothing, and a second setup is stable.
+  - T7 S4, S5, S6: lifecycle end-to-end checks.
+  - Test budgets raised per owner decision 238.
+
 - Package 0.8.60: release batch.
   - RS-E E2a: a setup-bound launch record, copy pinning, and authenticated wake publishing and reconcile.
   - RS-E E2c: the collector starts a stopped project service that has due holds, with budgets and backoff,

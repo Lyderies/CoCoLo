@@ -66,6 +66,7 @@ class RefusedPreviewTests(unittest.TestCase):
             with mock.patch.object(wizard, "managed_problem", return_value=""), \
                     mock.patch.object(wizard, "basic_problem", return_value=""), \
                     mock.patch.object(wizard, "remember_project"), \
+                    mock.patch.object(wizard, "update_refusal", return_value=None), \
                     mock.patch.object(wizard, "owner_key_notice"), \
                     mock.patch.object(wizard, "prepare_project_inputs"), \
                     mock.patch.object(wizard, "run_installer", side_effect=refused), \

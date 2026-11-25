@@ -26,3 +26,17 @@ persistent-lock tests in packages/codex-agents/tests/test_updfix.py, and
 `test_UPDFIX_3_a_refusal_at_the_check_before_the_install_leaves_the_remembered_projects_alone` in tests/test_setup_update.py.
 The requirement text of UPDFIX-2 and UPDFIX-3 in updfix.md is reconciled (older ledger proceeds, lstat, remember after the
 pre-apply check, busy retry).
+
+## Batch 0.8.61 integration fix A (full run failures after the merge)
+
+No assertion was changed or removed. Test set-up only (a test double, not an assertion):
+
+| Where | Old | New | Why |
+|-------|-----|-----|-----|
+| tests/test_login_start.py `test_E1_7_the_real_set_up_choice_makes_the_first_run_ask_once_and_a_re_run_not_ask` (the re-run wizard) | patches managed_problem, run_installer, remember_project ... | also patches `update_refusal` to None | The stand-in terminal's `call` returns None, so the fail-closed step 2 check (decision 265) cannot read a reply; the test is about login start, not the collector check. |
+| tests/test_setup_wizard_refusals.py `test_an_update_whose_preview_is_refused_stops_with_the_installers_reason` | same set of patches | also patches `update_refusal` to None | Same reason; the test is about the installer's preview refusal. |
+
+Product: tests/test_setup_sh.py `test_projects_set_up_before_are_offered_in_a_list` (the project chosen is moved first once chosen) failed because
+UPDFIX removed the remembering at the interactive open. The wizard now remembers an interactively opened installed project when it
+is chosen, as before, and puts the list back byte for byte when step 2's check or the one right before `--apply` refuses
+(`remember_chosen`, `forget_refused`, effects `projects_snapshot`/`restore_projects`); an update still remembers only once accepted.

@@ -457,6 +457,36 @@ def write_projects(path, lines: list[str]) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
+def projects_snapshot(path) -> bytes | None:
+    """The remembered list's exact bytes, None when there is no regular file (so restore_projects can remove a new one)."""
+    path = Path(path)
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def restore_projects(path, snapshot: bytes | None) -> None:
+    """Put the remembered list back exactly as projects_snapshot saw it (an owner-only file renamed into place)."""
+    path = Path(path)
+    try:
+        if snapshot is None:
+            if path.is_file() and not path.is_symlink():
+                path.unlink()
+            return
+        descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    except OSError:
+        return
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(snapshot)
+        os.replace(temporary, path)
+    except OSError:
+        Path(temporary).unlink(missing_ok=True)
+
+
 def copy_input(source, destination) -> bool:
     """A private snapshot of an owner-chosen input (attest.copy_input): a regular file of at most
     1 MiB, opened so a FIFO never hangs; False, writing nothing, otherwise."""
