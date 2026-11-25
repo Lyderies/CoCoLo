@@ -1,4 +1,26 @@
-# U4 build status — incomplete, dependency and execution blockers
+# U4 build status — U4-1/2/4 pass unsandboxed; U4-3 deferred (C5)
+
+## Fix round (primary, unsandboxed)
+
+- Scope: O0C-U4-3 is **deferred, unchecked**: C5 probe journal/reaper parked with the
+  container phase (decision 110). Recorded in `u4.md`, `tests/requirements/u4.json` and
+  `scripts/test-requirements.json` as `deferred: true` with that reason, no checks.
+  The older "Missing 3.3 dependency" and "Resume" sections below are historical;
+  step 1 there is now this deferral.
+- Cause of the unsandboxed failure of `test_completed_history_past_the_cap_still_replays`
+  (`'reserved' != 'committed'` in the borrowed fixture's `prepare`): a TEST defect, not a
+  product defect. The shared `row()` helper runs `SELECT * ... fetchone()` with no filter,
+  so from the second lifecycle it returned the first, committed row. The new test now sets
+  a local `case.row` that returns the not-yet-committed (else newest) row. Nothing in the
+  fixture module or in any assertion was edited or weakened; no runtime change, no digest
+  re-record needed.
+- The earlier signature/socket failures were sandbox-only: unsandboxed the live and
+  product modules pass too.
+- Run (`--jobs 6`, short TMPDIR, unsandboxed): the four U4 modules plus
+  test_account_billing_admission, test_account_billing_execution, test_rsf_s5_probe,
+  test_hold_lifecycle: 8 units, failed_units [], metadata_errors [], budget_failures [],
+  requirement_failures []. Module seconds: hold_lifecycle 31.9, billing_admission 26.7,
+  billing_execution 16.4, u4 product 9.3, u4 execution 6.4, u4 live 3.4.
 
 Base verified: `8b959668`, branch `feat/u4-probe-capacity`; clean before work.
 VERSION, runtime digest catalogue and all runtime files remain unchanged.

@@ -47,6 +47,10 @@ class CompletedProbeCapacityTests(unittest.TestCase):
         case.reserve = lambda: case.owner.reserve(case.fixture.project_id, 'a' * 64, 'b' * 64,
             identity[0], case.context, before_commit=lambda: case.allowed)
         rows = []
+        # The shared fixture's row() reads the first row of the table, which is right for its single-lifecycle
+        # tests. With history kept, the lifecycle under test is the one not yet committed (else the newest).
+        case.row = lambda: dict(case.ledger._connection.execute(
+            "SELECT * FROM account_billing_probe_requests ORDER BY state='committed', created_at_ms DESC, request_key DESC LIMIT 1").fetchone())
         for number in range(3):
             identity[0] = 'completed-' + str(number)
             handle, _, supervisor = case.launch()

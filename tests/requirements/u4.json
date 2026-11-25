@@ -14,7 +14,10 @@
   {
    "id": "O0C-U4-3",
    "source": "tests/requirements/u4.json#O0C-U4-3",
-   "statement": "Repeated restarted admitted probe lifecycles release exactly once on the accepted 3.3 journal and reaper evidence, preserve replay and keep live executions charged."
+   "statement": "Repeated restarted admitted probe lifecycles release exactly once on the accepted 3.3 journal and reaper evidence, preserve replay and keep live executions charged.",
+   "checks": [],
+   "deferred": true,
+   "reason": "C5 probe journal/reaper parked with the container phase (decision 110)"
   },
   {
    "id": "O0C-U4-4",
