@@ -455,6 +455,34 @@
   "source": "docs/requirements/e1.md#E1-WS",
   "statement": "**E1-WS \u2014 Wizard source safety.** The Python setup wizard keeps the source-level safety properties setup.sh's source tests checked (audited launch builders, literal non-porcelain git with the trusted binary and helpers off, isolated Python, provider clients never run by name, product naming and screen wording). Source: tests/test_setup_wizard_source.py module docstring (S5) and owner decision 112b A (2026-11-24)."
  },
+ "E1a-T2": {
+  "checks": [
+   "codex:tests.test_e1a_evidence.ClaimContentionTests.test_claim_completion_busy_then_retry",
+   "codex:tests.test_e1a_evidence.ClaimContentionTests.test_real_stale_recapture_busy_then_retry",
+   "codex:tests.test_e1a_evidence.OpenContentionTests.test_initial_open_real_host_authorization_busy_then_retry",
+   "codex:tests.test_e1a_evidence.OpenContentionTests.test_open_completion_busy_then_retry",
+   "codex:tests.test_e1a_evidence.ProvenanceContentionTests.test_open_provenance_real_contention_then_retry",
+   "codex:tests.test_e1a_evidence.ProvenanceContentionTests.test_run_provenance_real_contention_then_retry"
+  ],
+  "source": "tests/requirements/e1a-evidence.json#E1a-T2",
+  "statement": "After earlier phases succeed, a different thread must actually hold the ledger\nlock during claim/open completion, stale-input recapture, initial open\nauthorization and both provenance adapters. The decoded reply must give exactly\n`account_busy` (or `open_account_busy` for open), with the exact plain next step\n\u201cThe account's records were busy: try again in a moment.\u201d Contention must leave\nthe lane unfaulted with no failure note. Releasing the holder must allow a\nsuccessful retry. Enrollment can be synthetic, but the initial-open authorizer\nand the contended ledger operations must be real."
+ },
+ "E1a-T3": {
+  "checks": [
+   "codex:tests.test_e1a_evidence.OpenContentionTests.test_exhausted_deferred_publication_restores_next_request_and_owner_pump",
+   "codex:tests.test_e1a_evidence.RequestDeadlineEvidenceTests.test_real_handle_and_begin_share_successive_waits_and_refresh",
+   "codex:tests.test_e1a_evidence.RequestDeadlineEvidenceTests.test_slow_collector_receipt_and_next_frame_get_fresh_budgets"
+  ],
+  "source": "tests/requirements/e1a-evidence.json#E1a-T3",
+  "statement": "Real `AccountService.handle` and `begin` entries give successive waits one\nrequest budget. A deferred open publication exhausts its own budget; the next\nrequest and owner pump must observe a fresh budget. A collector frame received\nslowly starts its ledger budget only after receipt, and the next frame gets a\nfresh budget. Check restoration on the same thread. A controlled clock may\nadvance time without sleeping; actual ledger operations remain wired in."
+ },
+ "E1a-T4": {
+  "checks": [
+   "codex:tests.test_e1a_evidence.ConcurrentRefusalEvidenceTests.test_event_coordinated_exact_counts_for_all_acquisition_paths_during_health"
+  ],
+  "source": "tests/requirements/e1a-evidence.json#E1a-T4",
+  "statement": "Use events/barriers, rather than a timed load loop, to coordinate simultaneous\nrefusals through the held, write-unit, account-transaction, read-call, reader\nentry, slot-health, sweep and project-health acquisition paths. Assert the exact\nwhole per-label count dictionary while ledger-free health reads run concurrently.\nAll workers must acknowledge completion, and release must permit ordinary work."
+ },
  "E2a-1": {
   "checks": [
    "codex:tests.test_e2a_launch_record.LedgerSchemaTests.test_E2a_1_additive_columns_and_wake_table_keep_the_schema_version",
