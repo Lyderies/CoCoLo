@@ -179,7 +179,7 @@ class ServiceRecordAuthority:
         try:
             evidence = json.loads(custody['evidence'])
             _, reservation = history._result_row(binding)
-            return (evidence.get('adopted') == 22 and evidence.get('reason') == 'legacy_finished_result'
+            return (evidence.get('classified') == 22 and evidence.get('reason') == 'legacy_finished_result'
                 and evidence.get('binding_digest') == keyed_digest(history._result_key, canonical_json(binding.as_data()))
                 and evidence.get('context_digest') == row['context_digest']
                 and evidence.get('result_digest') == reservation.result_digest)

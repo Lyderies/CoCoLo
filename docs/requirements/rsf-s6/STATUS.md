@@ -187,3 +187,11 @@ green belongs to `4a00f22d`, not to this fix diff.
 
 Final `git diff --check` and identifier scan pass. No test process or full run
 remains in flight. No commit was attempted under the sandbox restriction.
+
+## Primary correction after the fix round
+The fix round's broader run reported `test_project_hold_register` (`{18}` adopted evidence) as a baseline failure; it is green on
+the 0.8.62 base, so it was an S6 regression: classification overwrote the original `adopted` step of rows adopted at step 18.
+Classification now adds `classified=22` and keeps `adopted`; the finished-result check in service_record.py reads `classified`.
+No test changed. Unsandboxed rerun: project_hold_register, rsf_s6_classify, rsf_s3_resumable, rsf_s2_fence, project_holds_schema,
+b2_service_outcome, publication_replay, project_results all green; learning_migration, learning_store, state_location,
+open_withdrawal green.

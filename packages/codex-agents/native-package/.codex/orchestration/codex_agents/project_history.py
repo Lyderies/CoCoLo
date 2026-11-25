@@ -723,7 +723,7 @@ class ProjectHistory:
             return  # Unknown historical evidence is not ours to replace.
         if type(evidence) is not dict or 'reason' in evidence:
             return
-        evidence.update(adopted=22, reason=reason, next_step=next_step, **facts)
+        evidence.update(classified=22, reason=reason, next_step=next_step, **facts)  # keep the original 'adopted' step
         self._connection.execute("UPDATE project_holds SET evidence=? WHERE project_id=? AND kind=? AND identity=?",
             (project_holds_schema.evidence_json(**evidence), self.project_id, kind, identity))
 
