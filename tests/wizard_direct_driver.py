@@ -106,6 +106,34 @@ class _DirectTerminal(terminal.Terminal):
 class DirectDriverMixin:
     """Mixed in before test_setup_sh.WizardTerminalTests: its tests, driven in-process."""
 
+    # TESTSPEED-2: a class that sets this runs every isolated interpreter it starts (the wizard's own, the
+    # installer's, the fakes') with one bytecode cache shared by the class, instead of `-B` and
+    # `pycache_prefix=/dev/null`, which recompile the whole runtime tree in every start. Only the start that
+    # is really made is changed: the argument list the wizard builds and the logs record are untouched.
+    shared_pycache = False
+    _pycache: str | None = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        if cls.shared_pycache:
+            import tempfile
+            cls._pycache = tempfile.mkdtemp(prefix="pyc-")
+            cls.addClassCleanup(shutil.rmtree, cls._pycache, ignore_errors=True)
+
+    @staticmethod
+    def with_shared_pycache(command, prefix: str):
+        """`command` with its `-X pycache_prefix=/dev/null` pointing at `prefix` and its interpreter `-B` dropped
+        (`-B` would stop the cache being written); anything else is returned as it came."""
+        if not isinstance(command, (list, tuple)) or "pycache_prefix=/dev/null" not in command:
+            return command
+        command = list(command)
+        position = command.index("pycache_prefix=/dev/null")
+        command[position] = f"pycache_prefix={prefix}"
+        if "-B" in command[:position]:
+            del command[command.index("-B")]
+        return command
+
     def setUp(self) -> None:
         if getattr(self, "_undo", None):  # setUp called again inside a test: end the earlier start first
             self._reap()
@@ -307,13 +335,21 @@ class DirectDriverMixin:
         # again) begins from the test's own environment and folder.
         environment = mock.patch.dict(os.environ, env, clear=True)
         environment.start()
+        shared = []
+        if self._pycache:
+            run = subprocess.run
+            prefix = self._pycache
+            patched = mock.patch.object(
+                subprocess, "run", lambda command, *a, **k: run(self.with_shared_pycache(command, prefix), *a, **k))
+            patched.start()
+            shared.append(patched.stop)
         here = os.getcwd()
         os.chdir(cwd)
         # In-process, the installer's own trusted-interpreter check answers with the interpreter the
         # wrapper runs it under.
         trusted = mock.patch.object(effects.installer().attest, "trusted_python", lambda: TRUSTED_PY)
         trusted.start()
-        self._undo = [trusted.stop, lambda: os.chdir(here), environment.stop]
+        self._undo = [trusted.stop, lambda: os.chdir(here), *shared, environment.stop]
         self.thread = None
         self.addCleanup(self._reap)  # Registered at once: a start that fails later is still undone.
         # Simulated, not evidence of isolation: the two lines setup.sh's launcher would log before the

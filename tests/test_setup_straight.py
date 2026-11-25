@@ -14,6 +14,8 @@ from test_setup_update import REGISTERED, SetupUpdateTests  # noqa: E402
 
 
 class SetupStraightTests(SetupUpdateTests):
+    shared_pycache = True  # TESTSPEED-2: one bytecode cache for the interpreters the wizard and installer start
+
     def to_fresh_choice(self, **env):
         project, checks = self.make_project()
         self.attest_count = self.base / "attest.count"
