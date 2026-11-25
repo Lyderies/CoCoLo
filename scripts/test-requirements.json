@@ -1,4 +1,32 @@
 {
+ "AP3": {
+  "checks": [
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_digest_index_is_additive_on_first_open",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_indexed_copy_opens_reads_and_appends_with_real_previous_release",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_reopen_recreates_digest_index_and_preserves_lookup_answers",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_missing_previous_source_has_actionable_failure",
+   "codex:tests.test_candidate_index_build.CandidateIndexBuildTests.test_AP3_first_open_builds_index_used_by_candidate_lookups"
+  ],
+  "source": "tests/requirements/ap5-lookup.json#AP3",
+  "statement": "No schema version change and no owner step: an older same-schema release still opens, reads and appends to an indexed account-ledger copy."
+ },
+ "AP5-2": {
+  "checks": [
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP5_2_fixed_links_have_flat_vm_work_as_unrelated_records_grow"
+  ],
+  "source": "tests/requirements/ap5-lookup.json#AP5-2",
+  "statement": "The candidate evidence-link check looks up linked records by identity using an additive index, with flat SQLite VM work for fixed links as unrelated records grow."
+ },
+ "AP5-3": {
+  "checks": [
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP5_3_mixed_evidence_answers_and_link_order_match_former_scan",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP5_3_public_admission_duplicates_and_history_order_match",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_reopen_recreates_digest_index_and_preserves_lookup_answers",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP5_3_missing_digest_index_gives_plain_ledger_error"
+  ],
+  "source": "tests/requirements/ap5-lookup.json#AP5-3",
+  "statement": "Preserve candidate evidence results, linked-evidence and history order, and admission checks exactly as before the indexed replacement."
+ },
  "API-1": {
   "checks": [],
   "source": "PLAN-0.4.0-terminal.md section 9",
