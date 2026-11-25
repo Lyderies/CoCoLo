@@ -28,6 +28,40 @@ class _Failure:
     message: str
     code: int | None = None
     name: str | None = None
+    args: tuple = ()
+    attributes: tuple = ()
+
+
+_PLAIN = (str, int, float, bool, bytes, type(None))
+
+
+def _plain(value):
+    return type(value) in _PLAIN or (type(value) is tuple and all(type(item) in _PLAIN for item in value))
+
+
+def _failure(error, *, sqlite=False):
+    """Plain values only: no traceback, frame or owner object crosses the handoff (LOW-3: but every plain
+    attribute does, so CollectorError.code, OSError.errno and reason codes keep their meaning)."""
+    args = error.args if all(_plain(item) for item in error.args) else (str(error),)
+    attributes = tuple((key, value) for key, value in vars(error).items()
+                       if type(key) is str and not key.startswith('__') and _plain(value))
+    code = getattr(error, 'sqlite_errorcode', None) if sqlite else None
+    name = getattr(error, 'sqlite_errorname', None) if sqlite else None
+    return _Failure(type(error), str(error), code, name, args, attributes)
+
+
+def _rebuild(failure):
+    try:
+        # __new__ without __init__: constructors with their own arguments (ResultContractError) are not re-run.
+        error = failure.kind.__new__(failure.kind, *failure.args)
+        error.args = failure.args
+        for key, value in failure.attributes:
+            setattr(error, key, value)
+    except Exception:
+        error = failure.kind(failure.message)
+    if failure.code is not None:
+        error.sqlite_errorcode, error.sqlite_errorname = failure.code, failure.name
+    return error
 
 
 @dataclass(frozen=True)
@@ -144,16 +178,23 @@ class LedgerOwner:
         if self._pid != os.getpid() or self._thread is not threading.current_thread():
             raise RuntimeError('ledger wrong owner')
 
-    def offer(self, operation, *, project_id=SYSTEM_PROJECT, caller='ledger', deadline_ns=None, contain_errors=False):
+    def offer(self, operation, *, project_id=SYSTEM_PROJECT, caller='ledger', deadline_ns=None, contain_errors=False,
+              _outcome=None):
         if deadline_ns is None:
             deadline_ns = ledger_waits.deadline_ns()
         def execute():
+            outcome = run()
+            if _outcome is not None:
+                _outcome.append(outcome)  # The owner-thread caller's own answer, kept even if it ran late.
+            return outcome
+        def run():
             self._running = True
+            connection = getattr(self.ledger, "_connection", None)
+            before = getattr(connection, "total_changes", None)
             try:
                 with ledger_waits.request_until(deadline_ns):
                     value = operation()
                 # A native cursor/transaction must never leave this thread.
-                connection = getattr(self.ledger, "_connection", None)
                 if connection is not None and connection.in_transaction:
                     connection.rollback()
                     raise RuntimeError('ledger operation left a transaction open')
@@ -162,16 +203,16 @@ class LedgerOwner:
                     raise RuntimeError('ledger operation returned a cursor')
                 if self.after_request is not None:
                     try:
-                        self.after_request()
-                    except (LedgerError, StateError, SQLReadError, ValueError):
+                        # No SQL: published health is only marked stale (review 040-e1bw-r1 MED-2).
+                        self.after_request(project_id, before)
+                    except Exception:
                         pass  # Display publication cannot replace a committed operation's answer.
                 return value
             except (LedgerError, StateError, TypeError, ValueError) as error:
-                return _Failure(type(error), str(error))
+                return _failure(error)
             except BaseException as error:
                 if isinstance(error, Exception) and (contain_errors or _passing_refusal(error)):
-                    return _Failure(type(error), str(error), getattr(error, 'sqlite_errorcode', None),
-                                    getattr(error, 'sqlite_errorname', None))
+                    return _failure(error, sqlite=True)
                 self._fatal = error  # Kept only on the owner, raised immediately by pump.
                 return _Failure(RuntimeError, 'ledger owner failed')
             finally:
@@ -187,21 +228,32 @@ class LedgerOwner:
             result = self.queue.wait(handle)
         except LedgerQueueBusy:
             raise SQLReadError('sql_read_busy') from None
+        return self._answer(result)
+
+    @staticmethod
+    def _answer(result):
         if type(result) is _Failure:
-            error = result.kind(result.message)
-            if result.code is not None:
-                error.sqlite_errorcode, error.sqlite_errorname = result.code, result.name
-            raise error
+            raise _rebuild(result)
         return result
 
     def call(self, operation, *, project_id=SYSTEM_PROJECT, caller='ledger', contain_errors=False):
         if self.owns_thread() and self._running:
             return operation()  # Nested work belongs to the same whole transaction.
-        handle = self.offer(operation, project_id=project_id, caller=caller, contain_errors=contain_errors)
-        if self.owns_thread():
-            while not handle.handled.is_set():
-                self.pump()
-        return self.result(handle)
+        if not self.owns_thread():
+            # E1b-4: another thread waits at most its deadline; a late request still ends whole.
+            return self.result(self.offer(operation, project_id=project_id, caller=caller,
+                                          contain_errors=contain_errors))
+        # The owner thread runs its own request (review 040-e1bw-r1 HIGH-1). Its deadline refuses it only before
+        # it starts; once it has run, its answer is this caller's, as a direct call's was before the wiring. A
+        # deferred completion it consumed or a ticket it registered is therefore never answered busy and lost.
+        outcome = []
+        handle = self.offer(operation, project_id=project_id, caller=caller, contain_errors=contain_errors,
+                            _outcome=outcome)
+        while not handle.handled.is_set():
+            self.pump()
+        if outcome:
+            return self._answer(outcome[0])
+        return self.result(handle)  # Refused before it ran: the existing busy answer, nothing consumed.
 
     def pump(self):
         self.guard()
@@ -209,6 +261,13 @@ class LedgerOwner:
         if self._fatal is not None:
             error, self._fatal = self._fatal, None
             raise error
+        return handled
+
+    def pump_ready(self, limit):
+        """Handle up to `limit` ready requests now (review 040-e1bw-r1 MED-3); returns how many ran."""
+        handled = 0
+        while handled < limit and self.pump():
+            handled += 1
         return handled
 
     def close(self, *, record_exit=None):

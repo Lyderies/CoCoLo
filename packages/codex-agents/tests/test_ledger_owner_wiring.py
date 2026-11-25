@@ -438,3 +438,381 @@ class LedgerOwnerWiringTests(unittest.TestCase):
         self.assertLessEqual(len(self.server._published_health), 8)
         self.assertNotIn(str(roots[0].resolve()), self.server._published_health)
         self.assertIn(str(roots[-1].resolve()), self.server._published_health)
+
+
+# Review fix round (040-e1bw-r1): each check below ran red on 34caee73.
+def _controlled_queue(test):
+    """The owner's queue reads a test clock: its deadline checks see time pass only when a request moves it."""
+    import functools
+    import time
+    from codex_agents import ledger_owner, ledger_owner_queue
+    offset = [0]
+    factory = functools.partial(ledger_owner_queue.LedgerOwnerQueue, clock_ns=lambda: time.monotonic_ns() + offset[0])
+    patch = mock.patch.object(ledger_owner, 'LedgerOwnerQueue', factory)
+    patch.start()
+    test.addCleanup(patch.stop)
+    return offset
+
+
+LATE_NS = 2 * DEFAULT_LEDGER_QUEUE_LIMITS.max_wait_ns
+
+
+class LedgerOwnerReviewFixTests(unittest.TestCase):
+    """HIGH-1/2, MED-2, LOW-1/2/3 of review 040-e1bw-r1, through the real owner."""
+    __why_not_scenario__ = LedgerOwnerWiringTests.__why_not_scenario__
+    # The same disposable state and owner thread as the checks above, without running those checks twice.
+    setUp = LedgerOwnerWiringTests.setUp
+    start_owner = LedgerOwnerWiringTests.start_owner
+
+    def health(self, root=None, server=None):
+        return (server or self.server)._dispatch({'protocol': 1, 'op': 'health', 'project_root': str(root or self.root)})
+
+    # HIGH-1 (E1b-4): late only refuses work that has not started; work that ran keeps its answer.
+    @requirements('E1b-4', 'E1b-5')
+    def test_review_owner_thread_request_that_runs_late_keeps_its_answer(self):
+        from codex_agents.ledger_owner import LedgerOwner
+        from codex_agents.sql_read_budget import SQLReadError
+        offset = _controlled_queue(self)
+        owner = LedgerOwner(self.state)
+        self.addCleanup(owner.close)
+        project = owner.ledger.register_project(self.root)
+        def late():
+            offset[0] += LATE_NS  # The request itself runs past its deadline.
+            owner.ledger.health_increment(project, 'conflict')
+            return 'committed'
+        self.assertEqual('committed', owner.call(late, project_id=project, caller='account'))
+        offset[0] = 0
+        self.assertEqual(1, owner.ledger.health_snapshot(project)['conflict']['count'])
+        # Work whose deadline passed before it started is still refused, and nothing ran.
+        ran = []
+        ahead = owner.offer(lambda: offset.__setitem__(0, offset[0] + LATE_NS), project_id=project)
+        with self.assertRaises(SQLReadError):
+            owner.call(lambda: ran.append(1), project_id=project, caller='account')
+        self.assertTrue(ahead.handled.is_set())
+        self.assertEqual([], ran)
+
+    def claim_jobs_fixture(self):
+        from tests.test_account_claim_jobs import AccountClaimJobTests
+        fixture = AccountClaimJobTests(methodName='test_C5_a_submitted_claim_is_busy_in_the_lane_notes')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.addCleanup(fixture.tearDown)  # Runs first: drains the disposable workers.
+        return fixture
+
+    @requirements('E1b-4', 'E1b-5')
+    def test_review_late_deferred_claim_publication_is_delivered_not_lost(self):
+        from codex_agents.account_api import decode_account_response
+        from codex_agents.ledger_owner import LedgerOwner
+        from codex_agents.sql_read_budget import SQLReadError
+        import time
+        offset = _controlled_queue(self)
+        fixture = self.claim_jobs_fixture()
+        owner = LedgerOwner(ledger=fixture.ledger)
+        self.addCleanup(owner.queue.close)
+        ticket = fixture.begin()
+        self.assertIs(object, type(ticket))
+        real_take = fixture.jobs.take
+        def take(ticket, **options):
+            reply = real_take(ticket, **options)
+            if reply is not None:
+                offset[0] += LATE_NS  # Consumed; the publication now finishes past its deadline.
+            return reply
+        started, raw = time.monotonic(), None
+        with mock.patch.object(fixture.jobs, 'take', side_effect=take):
+            while raw is None:
+                fixture.service.drive_claims()
+                try:
+                    raw = fixture.service.take_claim_reply(ticket)
+                except SQLReadError:
+                    self.fail('a late publication answered busy after consuming its completion (reply lost)')
+                finally:
+                    offset[0] = 0
+                self.assertLess(time.monotonic() - started, 10, 'deferred claim did not finish')
+                if raw is None:
+                    time.sleep(.002)
+        self.assertEqual('claimed', decode_account_response(raw, fixture.request())['state'])
+        self.assertEqual(0, fixture.jobs.snapshot()['tickets'])
+
+    @requirements('E1b-4', 'E1b-5')
+    def test_review_late_deferred_begin_keeps_its_ticket(self):
+        from codex_agents.account_api import decode_account_response
+        from codex_agents.ledger_owner import LedgerOwner
+        offset = _controlled_queue(self)
+        fixture = self.claim_jobs_fixture()
+        owner = LedgerOwner(ledger=fixture.ledger)
+        self.addCleanup(owner.queue.close)
+        real_submit = fixture.jobs.submit
+        def submit(*args, **options):
+            ticket = real_submit(*args, **options)
+            offset[0] += LATE_NS  # Registered; the begin request now finishes past its deadline.
+            return ticket
+        with mock.patch.object(fixture.jobs, 'submit', side_effect=submit):
+            ticket = fixture.begin()
+        offset[0] = 0
+        self.assertIs(object, type(ticket), 'a late begin answered busy while its ticket stayed registered')
+        self.assertEqual(1, fixture.jobs.snapshot()['tickets'])
+        self.assertEqual('claimed', decode_account_response(fixture.pump(ticket), fixture.request())['state'])
+        self.assertEqual(0, fixture.jobs.snapshot()['tickets'])
+
+    # HIGH-2 (E1b-6): values that depend on the time are as of the read, as before the wiring.
+    @requirements('E1b-6')
+    def test_review_published_health_ages_an_idle_project_at_read_time(self):
+        import time
+        from codex_agents import learning_store
+        self.start_owner()
+        accepted = time.time_ns() // 1_000_000
+        self.owner.call(lambda: self.owner.ledger._connection.execute(
+            "INSERT INTO hook_ingestion VALUES(?,?,?,?)", (self.project, 'turn_started', 1, accepted)).close(),
+            project_id=self.project)
+        self.assertEqual('fresh', self.health()['ingestion']['freshness']['state'])
+        later = accepted + learning_store.INGESTION_FRESH_MS + 1
+        expected = self.owner.call(lambda: self.owner.ledger.ingestion_snapshot(self.project, now_ms=later))['freshness']
+        with mock.patch.object(learning_store.time, 'time_ns', return_value=later * 1_000_000):
+            reply = self.health()
+        self.assertEqual('idle', expected['state'])
+        self.assertEqual(expected, reply['ingestion']['freshness'])
+
+    @requirements('E1b-6')
+    def test_review_published_health_counts_a_run_slot_that_passed_its_deadline_since_publication(self):
+        import tests.test_account_claim_operation as claims
+        from codex_agents import learning_store
+        from codex_agents.ledger_owner import LedgerOwner
+        case = claims.AccountClaimOperationTests('test_handler_claims_with_owner_deadline_and_returns_known_state')
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        owner = LedgerOwner(ledger=case.ledger)
+        self.addCleanup(owner.queue.close)
+        self.assertEqual('claimed', case.claim()['state'])
+        row = case.ledger._connection.execute(
+            'SELECT deadline_at_ms,execution_deadline_ns FROM active_run_capacity').fetchone()
+        root = dict(case.ledger.active_project_roots())[case.project]
+        server = CollectorServer(owner.client)
+        def read():
+            replies = []
+            front = threading.Thread(target=lambda: replies.append(self.health(root, server)))
+            front.start()
+            while front.is_alive():
+                owner.queue.wait_for_work(.01)
+                owner.pump()
+            front.join()
+            return replies[0]
+        self.assertEqual(0, read()['account_slots']['runs_past_deadline'])
+        with mock.patch.object(learning_store.time, 'time_ns', return_value=(row[0] + 1) * 1_000_000), \
+                mock.patch.object(learning_store.time, 'monotonic_ns', return_value=row[1] + 1):
+            reply = read()
+        self.assertNotIn('ledger_busy', reply)
+        self.assertEqual(1, reply['account_slots']['runs_past_deadline'])
+
+    # MED-2: a write is acknowledged without display reads, and a display failure cannot change its answer.
+    @requirements('E1b-4', 'E1b-6')
+    def test_review_a_write_is_acknowledged_without_rereading_published_health(self):
+        self.start_owner()
+        other = self.root.parent / 'other'
+        (other / '.git').mkdir(parents=True)
+        self.owner.client.register_project(other)
+        self.assertTrue(self.health(other)['ok'])
+        reads = []
+        real = self.owner.ledger.account_slot_health
+        with mock.patch.object(self.owner.ledger, 'account_slot_health',
+                               side_effect=lambda project: reads.append(project) or real(project)):
+            self.owner.client.health_increment(self.project, 'conflict')
+        self.assertEqual([], reads)
+        self.assertEqual(1, self.health()['collector_health']['conflict']['count'])
+
+    @requirements('E1b-4', 'E1b-5', 'E1b-6')
+    def test_review_a_display_read_failure_never_fails_a_committed_write(self):
+        self.start_owner()
+        with mock.patch.object(self.owner.ledger, 'account_slot_health',
+                               side_effect=sqlite3.DatabaseError('display read failed')):
+            self.assertIsNone(self.owner.call(
+                lambda: self.owner.ledger.health_increment(self.project, 'conflict'), project_id=self.project))
+        self.assertEqual([], self.errors)
+        self.assertTrue(self.thread.is_alive())
+        self.assertEqual(1, self.health()['collector_health']['conflict']['count'])
+
+    # LOW-1: a cold project is not refused because another project's refresh is outstanding.
+    @requirements('E1b-6')
+    def test_review_cold_project_answers_while_another_refresh_is_outstanding(self):
+        self.start_owner()
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        pause = self.owner.offer(lambda: (entered.set(), release.wait(2)))
+        self.assertTrue(entered.wait(2))
+        self.assertTrue(self.health()['ok'])  # Published: answered, and its refresh is now outstanding.
+        unregistered = self.root.parent / 'unregistered'
+        (unregistered / '.git').mkdir(parents=True)
+        offered, real_offer = threading.Event(), self.owner.queue.offer
+        def offer(project_id, operation, **options):
+            handle = real_offer(project_id, operation, **options)
+            if options.get('caller') == 'health' and self.owner.queue.snapshot()['retained'] >= 3:
+                offered.set()
+            return handle
+        replies = []
+        with mock.patch.object(self.owner.queue, 'offer', side_effect=offer):
+            front = threading.Thread(target=lambda: replies.append(self.health(unregistered)))
+            front.start()
+            offered.wait(1)
+            release.set()
+            front.join(2)
+        self.assertTrue(pause.handled.wait(2))
+        self.assertEqual([{'ok': False, 'code': 'project_unregistered'}], replies)
+
+    # LOW-2: a busy owner leaves the owner-key report's fail-closed answer, never an unexpected error.
+    @requirements('E1b-4', 'E1b-5')
+    def test_review_owner_key_report_fails_closed_when_the_owner_is_busy(self):
+        self.start_owner()
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        self.owner.offer(lambda: (entered.set(), release.wait(3)))
+        self.assertTrue(entered.wait(2))
+        report = self.state.owner_key_report()
+        release.set()
+        self.assertEqual('mismatch', report['state'])
+
+    # LOW-3: errors handed back from the owner keep their attributes and constructors.
+    @requirements('E1b-5')
+    def test_review_handed_back_errors_keep_their_attributes(self):
+        from codex_agents.collector_contracts import CollectorError
+        from codex_agents.contracts import RESULT_VALIDATION_REASON_CODES, ResultContractError
+        from codex_agents.history_contracts import HistoryError
+        self.start_owner()
+        reason = sorted(RESULT_VALIDATION_REASON_CODES)[0]
+        cases = (
+            (CollectorError('refused', code='e1bw_code'), lambda error: error.code == 'e1bw_code'),
+            (FileNotFoundError(2, 'missing'), lambda error: (error.errno, error.strerror) == (2, 'missing')),
+            (ResultContractError(reason, 'bad result'),
+             lambda error: (error.reason_code, str(error)) == (reason, 'bad result')),
+            (HistoryError('history_service_unavailable', message='hidden'),
+             lambda error: (error.reason_code, str(error)) == ('history_service_unavailable', 'hidden')),
+        )
+        for raised, check in cases:
+            with self.subTest(kind=type(raised).__name__):
+                def fail(raised=raised):
+                    raise raised
+                with self.assertRaises(type(raised)) as caught:
+                    self.owner.call(fail, contain_errors=True)
+                self.assertTrue(check(caught.exception), vars(caught.exception))
+
+
+_PROCESS_PROBE = '''
+import json, os, signal, sqlite3, sys, threading
+sys.path.insert(0, sys.argv[1])
+from codex_agents import account_host, learning_store
+from codex_agents.sql_read_budget import SQLReadError
+RESULT = os.path.join(sys.argv[2], "e1bw-result.json")
+def finish(results):
+    with open(RESULT, "w") as handle:
+        json.dump(results, handle)
+    os.kill(os.getpid(), signal.SIGTERM)
+'''
+
+# MED-1: the production collector's connection refuses every native use from another thread.
+SOLE_OWNER_PROBE = _PROCESS_PROBE + '''
+real_start = learning_store.CollectorServer.start
+def start(self):
+    real_start(self)
+    connection = self.ledger.owner.ledger._connection
+    cursor = sqlite3.Connection.cursor(connection)
+    results = {}
+    def attempt(name, action):
+        try:
+            action()
+            results[name] = "allowed"
+        except (sqlite3.ProgrammingError, SQLReadError):
+            results[name] = "refused"
+        except Exception as error:
+            results[name] = type(error).__name__
+    def other():
+        attempt("execute", lambda: sqlite3.Connection.execute(connection, "SELECT 1").fetchone())
+        attempt("cursor", lambda: cursor.execute("SELECT 1").fetchone())
+        attempt("function", lambda: connection.create_function("e1bw", 0, lambda: 1))
+        attempt("backup", lambda: connection.backup(sqlite3.connect(":memory:")))
+        attempt("interrupt", connection.interrupt)
+        attempt("close", connection.close)
+    thread = threading.Thread(target=other)
+    thread.start()
+    thread.join()
+    attempt("owner", lambda: sqlite3.Connection.execute(connection, "SELECT 1").fetchone())
+    finish(results)
+learning_store.CollectorServer.start = start
+sys.argv = [sys.argv[1] + "/collector_host.py", "--state-root", sys.argv[2]]
+import runpy
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+
+# MED-3: ready owner requests are drained per host loop pass, not one per 2 ms tick.
+THROUGHPUT_PROBE = _PROCESS_PROBE + '''
+passes, looping = [0], threading.Event()
+real_serve = account_host.AccountServiceHost.serve_once
+def serve_once(self):
+    passes[0] += 1
+    looping.set()
+    return real_serve(self)
+account_host.AccountServiceHost.serve_once = serve_once
+real_start = learning_store.CollectorServer.start
+def start(self):
+    real_start(self)
+    owner = self.ledger.owner
+    def producer():
+        if not looping.wait(30):
+            return finish({"error": "the host loop never ran"})
+        # A gate holds the owner while the requests arrive, so all of them are ready at once.
+        entered, release = threading.Event(), threading.Event()
+        gate = owner.offer(lambda: (entered.set(), release.wait(10)), caller="e1bw_gate")
+        if not entered.wait(10):
+            return finish({"error": "the gate never ran"})
+        handles = [owner.offer(lambda: None, project_id=label, caller="e1bw_probe")
+                   for label in ("prj_" + "1" * 32, "prj_" + "2" * 32) for _ in range(4)]
+        released = passes[0]
+        release.set()
+        handled = gate.handled.wait(10) and all(handle.handled.wait(10) for handle in handles)
+        finish({"handled": handled, "passes": passes[0] - released})
+    threading.Thread(target=producer, daemon=True).start()
+learning_store.CollectorServer.start = start
+sys.argv = [sys.argv[1] + "/collector_host.py", "--state-root", sys.argv[2]]
+import runpy
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+
+
+@unittest.skipUnless(__import__('sys').platform.startswith('linux') or Path('/usr/bin/sandbox-exec').is_file(),
+                     'account signature workers need the reviewed macOS sandbox')
+class LedgerOwnerHostProcessTests(unittest.TestCase):
+    """The real collector_host.py process (MED-1, MED-3 of review 040-e1bw-r1)."""
+    __why_not_scenario__ = "The real collector host process; the probe only observes its connection and loop."
+
+    def setUp(self):
+        import tempfile
+        from tests.learning_support import generate_test_owner_key
+        from tests.support import ORCHESTRATION_ROOT
+        from codex_agents.learning_store import authorize_collector_runtime
+        temporary = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
+        self.addCleanup(temporary.cleanup)
+        base = Path(temporary.name)
+        self.state = LearningState(base / 'state')
+        authorize_collector_runtime(self.state, ORCHESTRATION_ROOT / 'cli.py')
+        _, public = generate_test_owner_key(base)
+        self.state.install_owner_public_key(public)
+        self.orchestration = ORCHESTRATION_ROOT
+
+    def run_host(self, source):
+        import json
+        import subprocess
+        import sys
+        process = subprocess.Popen([sys.executable, '-I', '-B', '-S', '-c', source, str(self.orchestration),
+                                    str(self.state.root)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        process.wait(timeout=60)
+        return json.loads((self.state.root / 'e1bw-result.json').read_text())
+
+    @requirements('E1b-1')
+    def test_review_production_connection_refuses_every_use_from_another_thread(self):
+        self.assertEqual({'execute': 'refused', 'cursor': 'refused', 'function': 'refused', 'backup': 'refused',
+                          'interrupt': 'refused', 'close': 'refused', 'owner': 'allowed'},
+                         self.run_host(SOLE_OWNER_PROBE))
+
+    @requirements('E1b-3', 'E1b-4')
+    def test_review_host_loop_drains_ready_requests_each_pass(self):
+        result = self.run_host(THROUGHPUT_PROBE)
+        self.assertTrue(result.get('handled'), result)
+        self.assertLessEqual(result['passes'], 1, result)

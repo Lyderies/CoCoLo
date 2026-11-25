@@ -2054,7 +2054,11 @@ class LearningState:
 
         owner = getattr(self, "_ledger_owner", None)
         if owner is not None and not owner.owns_thread():
-            return owner.call(self.recorded_owner_key, caller="owner_key")
+            try:
+                return owner.call(self.recorded_owner_key, caller="owner_key")
+            except SQLReadError:
+                # LOW-2: a busy owner is a ledger that cannot be read now, which fails closed as before.
+                raise StateError("the owner key record could not be read") from None
         if self.database.is_symlink():
             raise StateError("database path is unsafe")
         if not self.database.is_file() or self.database.stat().st_size == 0:
@@ -2270,6 +2274,27 @@ class _ClaimRequest:
 # S1-H1a: SQLite VM steps allowed for one slot-health read.
 SLOT_HEALTH_STEPS = 200_000
 MAX_PUBLISHED_PROJECT_HEALTH = 8
+# Review 040-e1bw-r1 HIGH-2: published account sections (slot deadlines, live holds and bindings) depend on the
+# time; older than this, a health read refreshes them first (with the old 250 ms ledger wait) instead.
+PUBLISHED_HEALTH_MAX_AGE_MS = 1000
+
+
+def ingestion_freshness(last_accepted: int | None, now_ms: int) -> dict[str, Any]:
+    """The hook freshness rule, at `now_ms` (also applied when published health is read)."""
+    age = None if last_accepted is None else max(0, now_ms - last_accepted)
+    freshness = (
+        "awaiting_hook_review_or_first_event"
+        if age is None
+        else "fresh" if age <= INGESTION_FRESH_MS else "idle"
+    )
+    return {
+        "state": freshness, "age_ms": age,
+        "message": (
+            "No events since the hooks were installed; open /hooks on the main checkout."
+            if age is None else "Hooks have delivered events; no recent activity."
+            if freshness == "idle" else "Hooks are delivering events."
+        ),
+    }
 
 class LearningLedger:
     """The only SQLite writer. Callers receive scoped repositories, never its connection."""
@@ -13080,25 +13105,12 @@ class LearningLedger:
                 last_rejected = updated if last_rejected is None else max(last_rejected, updated)
         snapshot = empty_ingestion_snapshot(registered=True)
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        age = None if last_accepted is None else max(0, timestamp - last_accepted)
-        freshness = (
-            "awaiting_hook_review_or_first_event"
-            if age is None
-            else "fresh" if age <= INGESTION_FRESH_MS else "idle"
-        )
         snapshot.update(
             accepted_hook_event_count=sum(counts.values()),
             last_accepted_hook_event_at_ms=last_accepted,
             rejected_hook_event_count=rejected_count,
             last_rejected_hook_event_at_ms=last_rejected,
-            freshness={
-                "state": freshness, "age_ms": age,
-                "message": (
-                    "No events since the hooks were installed; open /hooks on the main checkout."
-                    if age is None else "Hooks have delivered events; no recent activity."
-                    if freshness == "idle" else "Hooks are delivering events."
-                ),
-            },
+            freshness=ingestion_freshness(last_accepted, timestamp),
             hook_event_counts=counts,
             managed_lifecycle={
                 "orchestrations_active": sum(
@@ -13552,8 +13564,10 @@ class CollectorServer:
     ) -> None:
         self.ledger = ledger
         self._ledger_owner = getattr(ledger, "owner", None)
+        # root -> (project_id, snapshot, published monotonic ns; None once a write may have changed it).
         self._published_health = {}
-        self._health_refresh = None
+        self._health_refresh = {}  # root -> its one outstanding refresh (LOW-1: per project, not one in all)
+        self._health_refresh_lock = threading.Lock()
         self.state = ledger.state
         self._bindings: dict[str, SessionBinding] = {}
         self._stop = threading.Event()
@@ -13583,15 +13597,18 @@ class CollectorServer:
             Path(__file__).resolve().parent.parent / "config" / "learning-clients.json"
         )
         if self._ledger_owner is not None:
+            # A warm start only: a display read that fails here never stops the collector (it is read again
+            # on demand), as there was no such read before the wiring.
             try:
-                for _, root in self.ledger.active_project_roots()[:MAX_PUBLISHED_PROJECT_HEALTH]:
-                    try:
-                        self._ledger_owner.call(lambda root=root: self.publish_health(Path(root)), caller="health_startup",
-                                                contain_errors=True)
-                    except (LedgerError, StateError, SQLReadError, ValueError) as error:
-                        self.sweep_error = type(error).__name__
-            except (LedgerError, StateError, SQLReadError) as error:
-                self.sweep_error = type(error).__name__
+                roots = self.ledger.active_project_roots()[:MAX_PUBLISHED_PROJECT_HEALTH]
+            except Exception as error:
+                roots, self.sweep_error = [], type(error).__name__
+            for _, root in roots:
+                try:
+                    self._ledger_owner.call(lambda root=root: self.publish_health(Path(root)), caller="health_startup",
+                                            contain_errors=True)
+                except Exception as error:
+                    self.sweep_error = type(error).__name__
             self._published_generation = self._ledger_owner.ledger._connection.total_changes
             self._ledger_owner.after_request = self._publish_changes
 
@@ -13600,60 +13617,96 @@ class CollectorServer:
         if self._ledger_owner is not None:
             self._ledger_owner.guard()
         root = str(_canonical_project_root(project_root))
-        project_id = self.ledger.project_for_root(Path(root))
-        snapshot = {
-            "provider_attestations": self.ledger.provider_attestation_status(project_id),
-            "collector_health": self.ledger.health_snapshot(project_id),
-            "account_capacity": self.ledger.account_capacity(project_id),
-            "account_slots": self.ledger.account_slot_health(project_id),
-            "ingestion": self.ledger.ingestion_snapshot(project_id),
-        }
+        try:
+            project_id = self.ledger.project_for_root(Path(root))
+            snapshot = {
+                "provider_attestations": self.ledger.provider_attestation_status(project_id),
+                "collector_health": self.ledger.health_snapshot(project_id),
+                "account_capacity": self.ledger.account_capacity(project_id),
+                "account_slots": self.ledger.account_slot_health(project_id),
+                "ingestion": self.ledger.ingestion_snapshot(project_id),
+            }
+        except ProjectNotRegisteredError:
+            published = dict(self._published_health)
+            if published.pop(root, None) is not None:
+                self._published_health = published
+            raise
         published = dict(self._published_health)
         published.pop(root, None)
-        published[root] = (project_id, snapshot)
+        published[root] = (project_id, snapshot, time.monotonic_ns())
         while len(published) > MAX_PUBLISHED_PROJECT_HEALTH:  # Decision 304: the queue's project ceiling.
             del published[next(iter(published))]
         self._published_health = published
 
-    def _publish_changes(self):
-        """Owner request epilogue; snapshots change atomically after ledger writes."""
+    def _publish_changes(self, project_id: str, before: int | None) -> None:
+        """Owner request epilogue, after the operation and before its acknowledgement. No SQL (review
+        040-e1bw-r1 MED-2): a write only marks the publications it may have changed, which the next health read
+        refreshes on demand, so it never pays display reads and a display read can never fail it."""
         generation = self._ledger_owner.ledger._connection.total_changes
-        if generation == self._published_generation:
+        if before == self._published_generation and generation == before:
             return
-        for root in tuple(self._published_health):
-            try:
-                self.publish_health(Path(root))
-            except ProjectNotRegisteredError:
-                published = dict(self._published_health)
-                published.pop(root, None)
-                self._published_health = published
+        # Changes made outside a request, or by a request not tied to one project, may touch any project.
+        every = before != self._published_generation or project_id == "prj_" + "0" * 32
         self._published_generation = generation
+        self._published_health = {
+            root: (owner, snapshot, None if every or owner == project_id else published_ns)
+            for root, (owner, snapshot, published_ns) in self._published_health.items()}
+
+    def _health_refresh_for(self, root: str, project_id: str, deadline_ns: int | None):
+        """At most one outstanding refresh per project root; returns (handle, offered by this call)."""
+        with self._health_refresh_lock:
+            for key in [key for key, handle in self._health_refresh.items() if handle.handled.is_set()]:
+                del self._health_refresh[key]
+            handle = self._health_refresh.get(root)
+            if handle is not None:
+                return handle, False
+            if len(self._health_refresh) >= MAX_PUBLISHED_PROJECT_HEALTH:
+                return None, False
+            try:
+                handle = self._ledger_owner.offer(lambda: self.publish_health(Path(root)), project_id=project_id,
+                                                  caller="health", deadline_ns=deadline_ns, contain_errors=True)
+            except SQLReadError:
+                return None, False
+            self._health_refresh[root] = handle
+            return handle, True
+
+    @staticmethod
+    def _published_answer(entry):
+        """A copy, with hook freshness as of this read (HIGH-2), exactly as ingestion_snapshot computes it."""
+        from copy import deepcopy
+        project_id, snapshot = entry[0], deepcopy(entry[1])
+        ingestion = snapshot.get("ingestion")
+        if isinstance(ingestion, dict) and "freshness" in ingestion:
+            ingestion["freshness"] = ingestion_freshness(
+                ingestion.get("last_accepted_hook_event_at_ms"), time.time_ns() // 1_000_000)
+        return project_id, snapshot
 
     def _published_project(self, project_root: Path):
-        from copy import deepcopy
         root = str(_canonical_project_root(project_root))
         published = self._published_health.get(root)
-        # One outstanding refresh. A published project is never waited for.
-        if self._health_refresh is None or self._health_refresh.handled.is_set():
-            cold = published is None
+        if published is not None and published[2] is not None and (
+                time.monotonic_ns() - published[2] < PUBLISHED_HEALTH_MAX_AGE_MS * 1_000_000):
+            # E1b-6: a current publication is answered without any owner wait; one refresh keeps it current.
+            self._health_refresh_for(root, published[0], None)
+            return self._published_answer(published)
+        # Nothing published, changed by a write, or older than its time-derived values allow (HIGH-2): wait for
+        # one refresh at most as long as the old ledger-lock wait, so the answer is as of now, as before the
+        # wiring. A refusal such as ProjectNotRegisteredError reaches the caller's handler unchanged (E1b-5); a
+        # late or refused refresh stays the existing ledger_busy answer.
+        handle, offered = self._health_refresh_for(
+            root, published[0] if published else "prj_" + "0" * 32,
+            time.monotonic_ns() + HEALTH_LEDGER_WAIT_MS * 1_000_000)
+        if handle is None:
+            return None
+        if offered:
             try:
-                handle = self._ledger_owner.offer(
-                    lambda: self.publish_health(Path(root)),
-                    project_id=published[0] if published else "prj_" + "0" * 32, caller="health",
-                    deadline_ns=(time.monotonic_ns() + HEALTH_LEDGER_WAIT_MS * 1_000_000) if cold else None)
+                self._ledger_owner.result(handle)
             except SQLReadError:
-                handle = None
-            self._health_refresh = handle
-            if cold and handle is not None:
-                # Nothing is published yet: the project's existing answer (E1b-5) needs this one read, so wait
-                # for it as long as the old ledger-lock wait did. A refusal such as ProjectNotRegisteredError
-                # reaches the caller's handler unchanged; a late or refused wait stays the existing ledger_busy.
-                try:
-                    self._ledger_owner.result(handle)
-                except SQLReadError:
-                    return None
-                published = self._published_health.get(root)
-        return deepcopy(published)
+                return None
+        elif not handle.handled.wait(HEALTH_LEDGER_WAIT_MS / 1000):
+            return None
+        published = self._published_health.get(root)
+        return None if published is None else self._published_answer(published)
 
     def _pump_ledger(self):
         if self._ledger_owner is not None:

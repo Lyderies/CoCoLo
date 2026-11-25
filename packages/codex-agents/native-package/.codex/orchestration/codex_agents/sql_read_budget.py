@@ -193,6 +193,14 @@ class SQLReadConnection(FencedConnection):
         if self._sql_unusable:
             raise SQLReadError("sql_read_unavailable")
 
+    def interrupt(self) -> None:
+        """SQLite lets any thread interrupt; a sole-owner connection refuses it from another thread too, as
+        check_same_thread refuses every other native use (review 040-e1bw-r1 MED-1)."""
+        if self._sql_sole_owner and (self._sql_origin[0] != os.getpid()
+                                    or self._sql_origin[1] is not threading.current_thread()):
+            raise SQLReadError("sql_read_wrong_owner")
+        super().interrupt()
+
     def _read_owner(self) -> None:
         if self._sql_origin[0] != os.getpid() or self._sql_origin[1] is not threading.current_thread():
             raise SQLReadError("sql_read_wrong_owner")
