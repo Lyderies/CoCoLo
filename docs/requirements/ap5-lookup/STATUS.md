@@ -93,13 +93,118 @@ is expected to fail because the collector runtime changed. VERSION and
 `runtime-releases.json` are deliberately untouched; the primary owns release
 bookkeeping at merge. The index is additive only; record/table/column formats
 are unchanged. Project-history and project-holds builders were not edited.
-AP4 first-open timing and full-suite validation are outside this requested slice
-and remain for the primary; no requested requirement check is unrun.
+The first-open measurement requested in the review is completed in the fix round
+below. Full-suite validation remains for the primary.
+
+## Fix round
+
+Scope: review corrections MED-1, MED-2 and LOW only, on `d8d6e192`, based on
+`230c2fc0` (VERSION 0.8.62). No owner ledger was read or copied. Changes are left
+uncommitted in this worktree as instructed for the sandbox.
+
+### MED-1 / AP3: large synthetic first-open cost — PASS
+
+`CandidateIndexBuildTests.test_AP3_large_synthetic_first_open_index_cost` builds
+a new disposable account ledger using **230,000 public `LearningLedger.append`
+calls**, one project, unique event IDs/content digests, and normal optional
+configuration/tool/item digest fields. Every append reports stored and the exact
+next sequence. No bulk SQL fixture inserts, mocked writes, or owner data.
+
+The ledger reaches 306.9 MiB before compaction. After dropping the new index,
+populating, compacting and checkpointing, the pre-index database is **286.461 MiB
+(300,376,064 bytes)**. Normal `LearningLedger` open recreates the index under its
+usual writer fence. A timing wrapper delegates the actual connection `execute`
+unchanged and measures just that `CREATE INDEX`; wall-clock open timings include
+the rest of normal startup. Checkpointed database growth is **24.984 MiB
+(26,198,016 bytes)**, to **311.445 MiB (326,574,080 bytes)**. Both opens retain
+all 230,000 rows and the index exists.
+
+| Measurement | Seconds |
+| --- | ---: |
+| Synthetic population through public append | 54.632 |
+| First open with index absent | 0.205403 |
+| Actual digest index build, within first open | 0.198591 |
+| Reopen with index already present | 0.005369 |
+| Idempotent existing-index DDL, within reopen | 0.000048 |
+
+**The build is below one second at this synthetic scale.** This is a local macOS,
+Python 3.14 / SQLite 3.53.4 measurement with filesystem caches warmed by synthetic
+population/compaction, not a cold-disk latency guarantee. The fixture consists of
+synthetic events; it does not measure a growing feedback history.
+
+The initial minimal-event fixture also passed all measurement assertions:
+260,000 public appends, 272.891 MiB compacted database, first open 0.246943 s,
+index build 0.240047 s, reopen 0.005515 s, index growth 28.246 MiB. Its 63.6 s
+worker time exceeded the scenario budget. Filling the three ordinary optional
+digest fields reaches the requested byte scale with fewer real appends; all
+assertions are unchanged. The final worker is **56.5 s**, below the 60 s budget.
+
+### MED-2 / AP3, AP5-3: index recovery and plain errors — PASS
+
+- `test_AP3_reopen_recreates_digest_index_and_preserves_lookup_answers`: drops
+  the populated ledger's index, reopens normally, then invokes **both** pinned
+  queries. Accepted evidence and owner-rejected evidence give the same answers
+  as the frozen former validator; invalidation returns false/true respectively.
+- `test_AP5_3_missing_digest_index_gives_plain_ledger_error`: drops the index on
+  the live connection and invokes each query independently. Red: two raw SQLite
+  `OperationalError`s. Green: both raise only `LedgerError` with the exact plain
+  message `candidate evidence lookup is unavailable; reopen the ledger`.
+  Both query sites translate SQLite failures, suppress raw exception chaining,
+  and the index-creation site documents the normal-open invariant.
+
+### LOW / AP3: unavailable previous source in shallow CI — PASS (allowed fallback)
+
+The checked-in previous-release catalogue contains the Claude bundle and a
+source-commit pointer, not the previous Codex runtime. Compatibility therefore
+still extracts the actual recorded 0.8.61 Codex source. If Git, the recorded
+object, or the archive operation is unavailable, it now fails plainly naming
+**release 0.8.61 and source commit `782a7eed`**, with shallow-CI fetch guidance.
+It never skips or substitutes current code. Existing real previous-runtime
+version/path/schema/read/validate/append/integrity/reopen assertions remain.
+
+`test_AP3_missing_previous_source_has_actionable_failure` was red for missing
+object, archive timeout and missing executable (three raw exceptions), then green
+for all three explicit failures. The unchanged real previous-release compatibility
+test also passes with the source available here. Assertion accounting is in
+[assertions.md](assertions.md): raw archive failure → explicit named-source
+failure; no existing compatibility assertion was weakened or removed.
+
+### Named validation and handoff
+
+All fix-round runner invocations use `$PY -B scripts/parallel_tests.py` from the
+repository root with the listed modules supplied as separate `--module codex:…`
+arguments. Every invocation reports **`metadata_errors: []`**. The large module
+is registered in layers (scenario), stages (integration), timings, and AP3's
+requirement checks. No new requirement IDs or record/schema shapes were added.
+
+1. Red, `tests.test_candidate_evidence_lookup`: 8 tests, 5 error subcases in the
+   two new diagnostic tests; 2.2 s worker, 7.09 s preflight. The new normal-reopen
+   test already passed and needed no recovery implementation change.
+2. First measurement/regression run: `tests.test_candidate_index_build`,
+   `tests.test_candidate_evidence_lookup`, `tests.test_append_lookup`,
+   `tests.test_type_lookups`, `tests.test_runtime_release`: **18/19 tests pass**,
+   63.6 s wall / 69.222 s worker sum, 7.16 s preflight. Measurement assertions
+   pass; initial measurement module is 3.6 s over budget, corrected as above.
+   The only test failure is the expected unchanged runtime-release digest pin.
+   Append/type regression modules pass **7/7**, workers 1.1 s / 1.4 s.
+3. Final run, `tests.test_candidate_index_build` and
+   `tests.test_candidate_evidence_lookup`: **9/9 pass**, 56.5 s wall / 59.198 s
+   worker sum, 6.92 s preflight; **no budget failures**, no requirement failures.
+   This includes the final explicit-error wording and real previous-release test.
+   AP5-2 remains flat: 162 → 146 VM steps, former scan 8,004 → 148,004.
+
+VERSION and the runtime digest catalogue are unchanged. The primary still owns
+release bookkeeping; the expected runtime pin failure is not suppressed. No
+full suite or unrelated copier/backup run was needed: this round changes only
+error translation and tests/docs, not tables, columns or record shapes. No
+requested check needs a socket or PTY. The existing sandbox socket limitations
+and primary reruns listed above remain; those modules were not rerun this round.
 
 ## Files changed
 
 - `packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py`
 - `packages/codex-agents/tests/test_candidate_evidence_lookup.py` (new)
+- `packages/codex-agents/tests/test_candidate_index_build.py` (fix round, new)
 - `scripts/test-layers.json`
 - `scripts/test-stages.json`
 - `scripts/test-timings.json`

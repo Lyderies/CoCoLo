@@ -75,6 +75,7 @@
  "codex:tests.test_bridge_deadline_delivery": "scenario",
  "codex:tests.test_bridge_liveness": "scenario",
  "codex:tests.test_candidate_evidence_lookup": "scenario",
+ "codex:tests.test_candidate_index_build": "scenario",
  "codex:tests.test_capacity_status_api": "scenario",
  "codex:tests.test_catalog": "unit",
  "codex:tests.test_claim_denial_recovery": "scenario",

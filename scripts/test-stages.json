@@ -75,6 +75,7 @@
  "codex:tests.test_bridge_deadline_delivery": "integration",
  "codex:tests.test_bridge_liveness": "integration",
  "codex:tests.test_candidate_evidence_lookup": "integration",
+ "codex:tests.test_candidate_index_build": "integration",
  "codex:tests.test_capacity_status_api": "integration",
  "codex:tests.test_catalog": "unit",
  "codex:tests.test_claim_denial_recovery": "integration",

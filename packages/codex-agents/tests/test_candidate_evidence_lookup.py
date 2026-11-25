@@ -205,14 +205,62 @@ class CandidateEvidenceLookupTests(AppendLookupTests):
         self.assertEqual(version, self.ledger._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assertEqual(before, schema())
 
+    @requirements('AP3', 'AP5-3', why_not_scenario='Real dropped index, normal reopen, and both candidate lookups against the frozen oracle.')
+    def test_AP3_reopen_recreates_digest_index_and_preserves_lookup_answers(self):
+        proposed, champion, _ = self.mixed()
+        for invalidated in (False, True):
+            with self.subTest(invalidated=invalidated):
+                if invalidated:
+                    self.put({'record_id': 'feedback-reopen', 'record_type': 'feedback',
+                              'label': 'rejected', 'run_id': champion['run_id']})
+                self.ledger._connection.execute('DROP INDEX records_project_digest')
+                self.reopen()
+                self.assertEqual(invalidated,
+                                 self.ledger._candidate_evidence_invalidated_locked(self.project, proposed))
+                if invalidated:
+                    for check in (lambda: former_candidate_check(self.ledger, self.project, proposed),
+                                  lambda: self.ledger._validate_evidence_links_locked(self.project, proposed)):
+                        with self.assertRaisesRegex(LedgerError, '^candidate evidence was invalidated by owner feedback$'):
+                            check()
+                else:
+                    former_candidate_check(self.ledger, self.project, proposed)
+                    self.ledger._validate_evidence_links_locked(self.project, proposed)
+
+    @requirements('AP5-3', why_not_scenario='Real connection loses its index after open; neither pinned query may leak SQLite errors.')
+    def test_AP5_3_missing_digest_index_gives_plain_ledger_error(self):
+        proposed, _, _ = self.mixed()
+        self.ledger._connection.execute('DROP INDEX records_project_digest')
+        for lookup in (self.ledger._validate_evidence_links_locked,
+                       self.ledger._candidate_evidence_invalidated_locked):
+            with self.subTest(lookup=lookup.__name__):
+                with self.assertRaisesRegex(LedgerError, '^candidate evidence lookup is unavailable; reopen the ledger$'):
+                    lookup(self.project, proposed)
+
+    @requirements('AP3', why_not_scenario='Simulate unavailable previous source in shallow CI; compatibility check must fail explicitly, never skip.')
+    def test_AP3_missing_previous_source_has_actionable_failure(self):
+        for error in (subprocess.CalledProcessError(128, ['git', 'archive'], stderr=b'raw git details'),
+                      subprocess.TimeoutExpired(['git', 'archive'], 20),
+                      FileNotFoundError('git')):
+            with self.subTest(error=type(error).__name__):
+                with mock.patch.object(subprocess, 'run', side_effect=error):
+                    with self.assertRaisesRegex(AssertionError,
+                                                r'AP3 compatibility needs previous Codex release 0\.8\.61 source commit 782a7eed'):
+                        self.test_AP3_indexed_copy_opens_reads_and_appends_with_real_previous_release()
+
     @requirements('AP3', why_not_scenario='Extract recorded prior release source and reopen an indexed ledger copy in a real subprocess.')
     def test_AP3_indexed_copy_opens_reads_and_appends_with_real_previous_release(self):
         root = REPOSITORY_ROOT.parents[1]
         releases = json.loads((root / 'packages/claude-agents/previous-releases.json').read_text())['releases']
         previous = next(r for r in releases if r['release'] == '0.8.61')
-        archive = subprocess.run(['git', 'archive', '--format=zip', previous['source_commit'],
-                                  'packages/codex-agents/native-package'], cwd=root,
-                                 capture_output=True, check=True, timeout=20)
+        try:
+            archive = subprocess.run(['git', 'archive', '--format=zip', previous['source_commit'],
+                                      'packages/codex-agents/native-package'], cwd=root,
+                                     capture_output=True, check=True, timeout=20)
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            raise self.failureException(
+                f"AP3 compatibility needs previous Codex release {previous['release']} "
+                f"source commit {previous['source_commit']}; make that Git object available "
+                "(fetch release history in shallow CI) and rerun this check") from None
         extracted = Path(self.store.temporary.name) / 'previous-source'
         with zipfile.ZipFile(io.BytesIO(archive.stdout)) as bundle:
             bundle.extractall(extracted)

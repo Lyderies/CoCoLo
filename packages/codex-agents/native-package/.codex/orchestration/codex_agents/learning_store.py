@@ -2335,6 +2335,8 @@ class LearningLedger:
             )
             # AP5-2: evidence names content identities, so seek just those within the project.
             # Additive and non-unique: existing ledgers and older same-schema readers stay valid.
+            # Both pinned candidate queries rely on every normal open completing this DDL;
+            # losing the index on an open connection gives a LedgerError asking for reopen.
             self._connection.execute(
                 "CREATE INDEX IF NOT EXISTS records_project_digest ON records(project_id, content_digest)"
             )
@@ -10247,11 +10249,14 @@ class LearningLedger:
         if checked["record_type"] == "candidate":
             linked = checked["evidence_digests"]
             placeholders = ",".join("?" for _ in linked)
-            evidence_rows = self._connection.execute(
-                "SELECT record_type,content,content_digest FROM records INDEXED BY records_project_digest "
-                f"WHERE project_id=? AND content_digest IN ({placeholders})",
-                (project_id, *linked),
-            ).fetchall()
+            try:
+                evidence_rows = self._connection.execute(
+                    "SELECT record_type,content,content_digest FROM records INDEXED BY records_project_digest "
+                    f"WHERE project_id=? AND content_digest IN ({placeholders})",
+                    (project_id, *linked),
+                ).fetchall()
+            except sqlite3.Error:
+                raise LedgerError("candidate evidence lookup is unavailable; reopen the ledger") from None
             evidence = {
                 str(row["content_digest"]): (
                     str(row["record_type"]), json.loads(bytes(row["content"]))
@@ -10965,11 +10970,14 @@ class LearningLedger:
         placeholders = ",".join("?" for _ in linked)
         # Pin the identity seek: the type index otherwise lets SQLite scan all project outcomes.
         with self._held():
-            rows = self._connection.execute(
-                "SELECT content,content_digest FROM records INDEXED BY records_project_digest WHERE project_id=? "
-                f"AND content_digest IN ({placeholders}) AND record_type='outcome'",
-                (project_id, *linked),
-            ).fetchall()
+            try:
+                rows = self._connection.execute(
+                    "SELECT content,content_digest FROM records INDEXED BY records_project_digest WHERE project_id=? "
+                    f"AND content_digest IN ({placeholders}) AND record_type='outcome'",
+                    (project_id, *linked),
+                ).fetchall()
+            except sqlite3.Error:
+                raise LedgerError("candidate evidence lookup is unavailable; reopen the ledger") from None
         invalidated_outcomes = {
             str(row["content_digest"])
             for row in rows
