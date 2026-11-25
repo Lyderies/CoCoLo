@@ -22,6 +22,8 @@ MANIFEST = '.e2e-owner.json'
 PROCESSES = '.e2e-processes'
 _CLIENT_PATHS = {}
 _LIBPROC = []
+SPAWN_ENV = 'COCOLO_E2E_SPAWN'
+UNINSPECTABLE = 'uninspectable'  # identity() value: the process exists but this user cannot read its start time
 
 
 def identity(pid):
@@ -37,10 +39,18 @@ def identity(pid):
         size = lib.proc_pidinfo(pid, 3, 0, info, len(info))
         if size != len(info):
             error = ctypes.get_errno()
-            # EPERM/EACCES: a setuid or privileged image (/bin/ps) cannot be inspected, and this user cannot
-            # signal it either, so it is never ours to stop. It must not make its caller's spawn fail.
-            if error in (0, errno.ESRCH, errno.ENOENT, errno.EPERM, errno.EACCES):
+            if error in (0, errno.ESRCH, errno.ENOENT):
                 return None
+            if error in (errno.EPERM, errno.EACCES):
+                # A privileged image (/bin/ps) cannot be inspected. That is "exists, uninspectable", not "gone":
+                # only ESRCH from a signal-0 probe proves it exited. Callers never signal an uninspectable pid.
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    return None
+                except PermissionError:
+                    pass
+                return UNINSPECTABLE
             raise OSError(error, 'cannot verify e2e process identity')
         if int.from_bytes(info.raw[4:8], sys.byteorder) == 5:  # SZOMB
             return None
@@ -115,8 +125,10 @@ def _register(base, pid):
     if not owner or owner.get('base') != str(base.resolve()):
         raise RuntimeError('e2e World has no ownership marker')
     start = identity(pid)
-    if start is None:
-        return None  # A short-lived child already exited.
+    if start is None or start == UNINSPECTABLE:
+        # Exited already, or a privileged image whose start time cannot be confirmed: no record can be
+        # trusted for a later signal, and this user cannot signal it anyway.
+        return None
     record = {'pid': pid, 'start': start, 'base': owner['base'], 'marker': owner['marker']}
     write_json(base / PROCESSES / f'{pid}.json', record)
     return record
@@ -128,6 +140,20 @@ def register(base, pid):
         return _register(base, pid)
 
 
+def _spawn_note(base, nonce):
+    return base / PROCESSES / f'{nonce}.spawn'
+
+
+def _spawned_by_tracked_parent(base):
+    """True only for a child that its direct parent's tracked Popen started and therefore records itself."""
+    nonce = os.environ.get(SPAWN_ENV, '')
+    if len(nonce) != 32 or any(c not in '0123456789abcdef' for c in nonce):
+        return False
+    note = read_json(_spawn_note(base, nonce))
+    owner = read_json(base / MANIFEST)
+    return bool(note and owner and note.get('marker') == owner.get('marker') and note.get('parent') == os.getppid())
+
+
 def install_tracking(base):
     """Called before any product code, including in every detached Python host."""
     base = Path(base).resolve()
@@ -135,10 +161,11 @@ def install_tracking(base):
         register(base, os.getpid())
     except PermissionError:
         # A confined product helper (the signature worker runs under a macOS sandbox profile that denies every
-        # file write) cannot write its own record. Its spawning parent records it (OwnedPopen below), so it is
-        # still owned; a helper nobody recorded cannot exist, because every spawn in a World goes through
-        # the tracked Popen.
-        pass
+        # file write) cannot write its own record. That is tolerated only when its direct parent's tracked Popen
+        # started it (it carries that spawn's nonce, whose note names this parent) and so recorded it. A process
+        # started any other way (os.posix_spawn) or a grandchild inheriting the nonce fails closed.
+        if not _spawned_by_tracked_parent(base):
+            raise
     original = subprocess.Popen
     # A subclass preserves Popen's class interface used by some clients.
     class OwnedPopen(original):
@@ -146,22 +173,35 @@ def install_tracking(base):
             with locked(base, shared=True):
                 if (base / '.e2e-closing').exists():
                     raise RuntimeError('e2e World is closing')
-                super().__init__(*args, **kwargs)
+                owner = read_json(base / MANIFEST)
+                nonce = os.urandom(16).hex()
+                note = _spawn_note(base, nonce)
+                write_json(note, {'marker': owner and owner.get('marker'), 'parent': os.getpid()})
+                self._e2e_note = note
+                kwargs['env'] = {**(kwargs.get('env') if kwargs.get('env') is not None else os.environ), SPAWN_ENV: nonce}
+                try:
+                    super().__init__(*args, **kwargs)
+                except BaseException:
+                    note.unlink(missing_ok=True)
+                    raise
                 try:
                     self._e2e_record = _register(base, self.pid)
                 except BaseException:
                     self.kill()
                     self.wait()
+                    note.unlink(missing_ok=True)
                     raise
         def wait(self, *args, **kwargs):
             result = super().wait(*args, **kwargs)
             forget(base, getattr(self, '_e2e_record', None))
+            self._e2e_note.unlink(missing_ok=True)
             return result
 
         def poll(self):
             result = super().poll()
             if result is not None:
                 forget(base, getattr(self, '_e2e_record', None))
+                self._e2e_note.unlink(missing_ok=True)
             return result
     subprocess.Popen = OwnedPopen
 
@@ -181,8 +221,9 @@ def survivors(base, owner):
         if (record and record.get('marker') == owner.get('marker') and record.get('base') == str(base)
                 and type(record.get('pid')) is int and record['pid'] not in (os.getpid(), owner.get('owner_pid'))
                 and isinstance(record.get('start'), str)):
-            if identity(record['pid']) == record['start']:
-                found.append(record)
+            current = identity(record['pid'])
+            if current == record['start'] or current == UNINSPECTABLE:
+                found.append(record)  # uninspectable but alive: fail closed, report it, never signal it
             else:
                 forget(base, record)
     return found

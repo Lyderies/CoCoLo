@@ -22,3 +22,13 @@ wait/poll/dead-record pruning with a live detached positive control, MED4 cached
 discovery, MED6 outside/prefix/symlink refusal, LOW8 handler restoration and LOW9 original
 exception/live-registry preservation. They add assertions to E2ELEAK-1 through -4; no new
 requirement IDs or test modules are introduced. MED7 corrects recovery wording only.
+
+## Final round (uninspectable processes, permission tolerance)
+
+Changed assertion: `test_tracking_does_not_break_privileged_binaries_or_confined_helpers`, sub-case `confined`.
+Old: a process whose record write and lock append are denied (read-only records folder) calls `install_tracking`
+and must exit 0 ("confined ok"), whoever started it. New: the same untracked process must now fail closed
+(non-zero exit, `PermissionError`), because tolerance is only for a helper started by a tracked Popen. The
+`ps` sub-case is unchanged. The tolerated case moves to the new
+`test_confined_helper_spawned_by_tracked_popen_is_recorded_by_parent_and_stopped`, which also proves the
+parent recorded it and teardown stops it. No other assertion is changed or removed.

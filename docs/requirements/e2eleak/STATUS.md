@@ -101,3 +101,14 @@ read-only records/lock), green now. Side by side `--flows L1` on the base and th
 base 308.1 s, branch 314.9 s (+2.2 %); identical results (the two L1.2 checks fail the same way on both and
 are unrelated). Named cleanup modules: 274 tests green, `metadata_errors: []`, no budget failures. No
 e2e process or world of this run was left behind.
+
+## Final round (2026-11-25): uninspectable processes kept, permission tolerance only for parent-recorded children
+
+Scope: harness only (`scripts/e2e_processes.py`, `tests/test_e2e_process_cleanup.py`, this folder, the
+E2ELEAK-2 check list in `scripts/test-requirements.json`). No product code, no VERSION or digest change.
+
+| Finding | Requirement | Test | Evidence |
+|---|---|---|---|
+| HIGH `identity()` None on EPERM/EACCES pruned live records | E2ELEAK-2 | `test_identity_distinguishes_uninspectable_from_exited_on_permission_error`, `test_uninspectable_live_recorded_child_is_kept_and_reported_exited_one_pruned` | Red: no `UNINSPECTABLE` value, survivors treated it as gone. Green: EPERM then `os.kill(pid, 0)`: ESRCH is gone (pruned), anything else is `UNINSPECTABLE`; survivors keeps and reports it, `_signal` never signals it (start time unconfirmed), cleanup fails with live recorded processes. A tracked spawn of a privileged binary writes no record (start time unconfirmable), so `/bin/ps` still never fails its caller. |
+| HIGH blanket `PermissionError` swallow | E2ELEAK-2 | `test_denied_registration_outside_tracked_popen_fails_closed` (posix_spawn and tracked-grandchild cases) | Red: both printed "tolerated". Green: tolerated only when `COCOLO_E2E_SPAWN` carries a nonce whose spawn note (written by the parent's tracked Popen before the child starts) names this process's direct parent and the World marker. posix_spawn children and grandchildren inheriting the nonce fail closed. Notes are removed on wait/poll. |
+| MED lifetime witnesses | E2ELEAK-2 | `test_confined_helper_spawned_by_tracked_popen_is_recorded_by_parent_and_stopped` | (a) denied helper recorded by its parent, stopped at teardown; (b) and (c) above. Changed assertion listed in `assertions.md`. |

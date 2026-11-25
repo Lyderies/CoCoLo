@@ -494,12 +494,125 @@ class WorldCleanupTests(unittest.TestCase):
                     "finally:\n"
                     "    os.chmod(base/owned.PROCESSES,0o700)\n"
                     "print('confined ok')\n")
-        for name, code, expect in (('ps', source, 'ps ok'), ('confined', confined, 'confined ok')):
+        # Final round: a confined process nobody's tracked Popen recorded now fails closed (the tolerated case,
+        # a helper spawned by a tracked Popen, is witnessed by the confined-helper lifetime test).
+        with tempfile.TemporaryDirectory() as folder:
+            done = subprocess.run([sys.executable, '-B', '-c', source, folder],
+                                  env={**os.environ, 'PYTHONPATH': str(ROOT / 'scripts')}, capture_output=True, text=True)
+            self.assertEqual(0, done.returncode, done.stderr)
+            self.assertIn('ps ok', done.stdout)
+        with tempfile.TemporaryDirectory() as folder:
+            done = subprocess.run([sys.executable, '-B', '-c', confined, folder],
+                                  env={**os.environ, 'PYTHONPATH': str(ROOT / 'scripts')}, capture_output=True, text=True)
+            self.assertNotEqual(0, done.returncode)
+            self.assertIn('PermissionError', done.stderr)
+
+    CONFINE = ("import e2e_processes as owned\n"
+               "def _deny(*a, **k): raise PermissionError(1, 'denied')\n"
+               "owned.write_json = _deny\n")
+
+    def run_parent(self, source, folder, *extra):
+        return subprocess.run([sys.executable, '-B', '-c', source, folder, *extra], capture_output=True, text=True,
+                              env={**os.environ, 'PYTHONPATH': str(ROOT / 'scripts')}, timeout=60)
+
+    @requirements('E2ELEAK-2')
+    def test_confined_helper_spawned_by_tracked_popen_is_recorded_by_parent_and_stopped(self):
+        # (a) A helper whose own registration is denied is still owned: its tracked parent recorded it.
+        helper = self.CONFINE + ("import sys,time\nfrom pathlib import Path\n"
+                                 "owned.install_tracking(Path(sys.argv[1]))\nprint('ready',flush=True)\ntime.sleep(60)\n")
+        parent = ("import e2e_processes as owned,subprocess,sys,time\nfrom pathlib import Path\n"
+                  "base=Path(sys.argv[1]); owned.initialize(base); owned.install_tracking(base)\n"
+                  "child=subprocess.Popen([sys.executable,'-B','-c',sys.argv[2],str(base)],stdout=subprocess.PIPE,text=True)\n"
+                  "assert child.stdout.readline().strip()=='ready'\n"
+                  "assert (base/owned.PROCESSES/f'{child.pid}.json').exists(),'parent did not record the helper'\n"
+                  "print(child.pid,flush=True)\ntime.sleep(60)\n")
+        import e2e_processes as owned
+        with tempfile.TemporaryDirectory() as folder:
+            process = subprocess.Popen([sys.executable, '-B', '-c', parent, folder, helper],
+                                       stdout=subprocess.PIPE, text=True,
+                                       env={**os.environ, 'PYTHONPATH': str(ROOT / 'scripts')})
+            pid = None
+            try:
+                pid = int(process.stdout.readline())
+                self.assertIsNotNone(owned.identity(pid))
+                owned.cleanup(Path(folder), remove=False)
+                self.assertTrue(wait_for(lambda: owned.identity(pid) is None), 'confined helper survived teardown')
+            finally:
+                for target in (pid, process.pid):
+                    if target and owned.identity(target) is not None: os.kill(target, signal.SIGKILL)
+                process.wait(timeout=5)
+                process.stdout.close()
+
+    @requirements('E2ELEAK-2')
+    def test_denied_registration_outside_tracked_popen_fails_closed(self):
+        # (b) Product code starts helpers with os.posix_spawn; one that cannot record itself must not be tolerated,
+        # even when it inherited a tracked environment (a grandchild of a tracked helper).
+        helper = self.CONFINE + ("import sys\nfrom pathlib import Path\n"
+                                 "try:\n    owned.install_tracking(Path(sys.argv[1]))\nexcept PermissionError:\n"
+                                 "    print('refused')\nelse:\n    print('tolerated')\n")
+        grand = ("import os,sys\nos.environ['PYTHONPATH']=sys.argv[3]\n"
+                 "pid=os.posix_spawn(sys.executable,[sys.executable,'-B','-c',sys.argv[2],sys.argv[1]],os.environ)\n"
+                 "os.waitpid(pid,0)\n")
+        direct = ("import os,sys\nsys.path.insert(0,sys.argv[3])\nimport e2e_processes as owned\nfrom pathlib import Path\n"
+                  "owned.initialize(Path(sys.argv[1]))\n"
+                  "pid=os.posix_spawn(sys.executable,[sys.executable,'-B','-c',sys.argv[2],sys.argv[1]],"
+                  "{**os.environ,'PYTHONPATH':sys.argv[3]})\nos.waitpid(pid,0)\n")
+        tracked_then_posix = ("import e2e_processes as owned,subprocess,sys\nfrom pathlib import Path\n"
+                              "base=Path(sys.argv[1]); owned.initialize(base); owned.install_tracking(base)\n"
+                              "subprocess.run([sys.executable,'-B','-c',sys.argv[4],sys.argv[1],sys.argv[2],sys.argv[3]],check=True)\n")
+        scripts = str(ROOT / 'scripts')
+        for name, source, args in (('posix_spawn', direct, (helper, scripts)),
+                                   ('tracked_grandchild', tracked_then_posix, (helper, scripts, grand))):
             with self.subTest(name), tempfile.TemporaryDirectory() as folder:
-                done = subprocess.run([sys.executable, '-B', '-c', code, folder],
-                                      env={**os.environ, 'PYTHONPATH': str(ROOT / 'scripts')}, capture_output=True, text=True)
+                done = self.run_parent(source, folder, *args)
                 self.assertEqual(0, done.returncode, done.stderr)
-                self.assertIn(expect, done.stdout)
+                self.assertIn('refused', done.stdout)
+                self.assertNotIn('tolerated', done.stdout)
+
+    @requirements('E2ELEAK-2')
+    def test_uninspectable_live_recorded_child_is_kept_and_reported_exited_one_pruned(self):
+        # (c) EPERM/EACCES on inspection means "exists, cannot inspect", never "gone".
+        from unittest import mock
+        import e2e_processes as owned
+        with tempfile.TemporaryDirectory() as folder, self.watched_world(Path(folder)) as world:
+            live = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], start_new_session=True)
+            gone = subprocess.Popen([sys.executable, '-c', 'pass'])
+            try:
+                gone_record = owned.register(world.base, gone.pid)
+                live_record = owned.register(world.base, live.pid)
+                self.assertTrue(live_record and gone_record or live_record)
+                real = owned.identity
+                def denied(pid):
+                    return owned.UNINSPECTABLE if pid == live.pid else real(pid)
+                owner = owned.read_json(world.base / owned.MANIFEST)
+                gone.wait(timeout=5)
+                with mock.patch.object(owned, 'identity', denied), mock.patch.object(owned.os, 'kill') as kill:
+                    found = owned.survivors(world.base, owner)
+                    self.assertEqual([live.pid], [r['pid'] for r in found], 'uninspectable live child was dropped')
+                    owned._signal(live_record, signal.SIGTERM)
+                    kill.assert_not_called()  # start time cannot be confirmed: never signal
+                self.assertTrue((world.base / owned.PROCESSES / f'{live.pid}.json').exists(), 'record pruned')
+                self.assertFalse((world.base / owned.PROCESSES / f'{gone.pid}.json').exists(), 'exited record kept')
+            finally:
+                live.kill()
+                live.wait(timeout=3)
+
+    @requirements('E2ELEAK-2')
+    @unittest.skipUnless(sys.platform == 'darwin', 'proc_pidinfo permission semantics are macOS only')
+    def test_identity_distinguishes_uninspectable_from_exited_on_permission_error(self):
+        import ctypes
+        import errno
+        from unittest import mock
+        import e2e_processes as owned
+        class Lib:
+            def proc_pidinfo(self, *args):
+                ctypes.set_errno(errno.EPERM)
+                return 0
+        dead = subprocess.Popen([sys.executable, '-c', 'pass'])
+        dead.wait(timeout=5)
+        with mock.patch.object(owned, '_LIBPROC', [Lib()]):
+            self.assertEqual(owned.UNINSPECTABLE, owned.identity(os.getppid()))  # exists, cannot inspect
+            self.assertIsNone(owned.identity(dead.pid))  # reaped and gone
 
     @requirements('E2ELEAK-3')
     def test_drained_client_discovery_is_cached_and_skipped_without_socket(self):
