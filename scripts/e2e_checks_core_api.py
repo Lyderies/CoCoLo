@@ -1,18 +1,19 @@
-"""API-1..6, API-24, API-25, TERM-5: the core API's process, socket, framing, handshake, contract, limits and
-neutrality (T7 slice S6, part 1; part 2 is scripts/e2e_checks_core_records.py).
+"""API-2, 4, 5, 6, 24, 25: the core API's socket, framing, handshake, contract, limits and neutrality (T7 slice S6,
+part 1; part 2 is scripts/e2e_checks_core_records.py).
 
 A REAL HEADLESS CORE PROCESS: `python -m codex_agents.core_api --records DIR --socket S`, run from the INSTALLED
 project's own copy of the package (never the source tree), through the World's stand-in Python, with no terminal and
 no stdin. Everything the checks learn comes over the unix socket as newline-delimited JSON-RPC (the `Wire` client
 below speaks the wire itself, so it does not trust the product's own client), plus reads that do not go through
-the call under test: the socket file's stat, `ps`, `lsof`, the audit files, the records on disk. The product's own
-`CoreClient` and `in_process` adapter are used in one helper process, for the API-6 parity assertion and the
-TERM-5 separate-client assertion only.
+the call under test: the socket file's stat, `lsof`, the audit files, the records on disk. The product's own
+`CoreClient` and `in_process` adapter are used in helper processes, for the API-6 parity assertions only.
 
 The producer of the records (the runner, A5/A6 of the plan) is not built yet: the records the core reads are written
 by hand here, in the shapes of packages/codex-agents/tests/test_core_api_terminal.py. Every check says so in its reason
-code (`records_hand_written_runner_not_built`). API-3 (a connection from another Unix user) is NOT checked: it needs a
-second Unix user the harness does not have.
+code (`records_hand_written_runner_not_built`); each ID here is about the core's own behaviour, which does not need the
+producer. NOT checked, each marked `deferred` with its reason in tests/e2e/requirements.json (decision 259: a check is
+green only through the real product path): API-1 (runner survival and `orch` fall-back: no runner, no `orch` command
+in 0.8.60), API-3 (a second Unix user), TERM-5 (no terminal client exists in 0.8.60).
 
 Test-only wiring, all of it the constructor's own documented arguments, never a product knob: a limits core
 (`Core(limits=...)`) is the same installed CoreService built with small caps or a fake clock, in its own process.
@@ -24,6 +25,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import stat
@@ -39,7 +41,7 @@ import e2e_support  # noqa: E402
 from e2e_checks_shared import write_patches  # noqa: E402
 from e2e_core import _SCENES, Phase, check  # noqa: E402
 
-A_IDS = ("API-1", "API-2", "API-4", "API-5", "API-6", "API-24", "API-25", "TERM-5")
+A_IDS = ("API-2", "API-4", "API-5", "API-6", "API-24", "API-25")
 HAND_WRITTEN = "records_hand_written_runner_not_built"
 
 # The slice's fault: a test-only rewrite of the installed core, applied by the stand-in Python as the named module is
@@ -72,7 +74,14 @@ FAULTS = {
         {"module": "codex_agents.core_api",
          "old": "        unit[\"extra\"] = extra\n        return unit\n",
          "new": "        unit.update(extra)\n        unit[\"extra\"] = {}\n        return unit\n"}]}
-FAULT_TARGETS = {"core_api_broken": ("API-2", "API-4", "API-5", "API-6", "API-24", "API-25")}
+# A second, narrower fault: seq_at is dropped from the answers of CHANGES only, so API-6 is red on its mutation
+# assertions alone (the bundle above is red on its first read assertion and proves nothing about them).
+FAULTS["core_api_mutation_seq_broken"] = [
+    {"module": "codex_agents.core_api",
+     "old": "            result[\"seq_at\"] = self._seq\n            return result\n",
+     "new": "            if not mutation:\n                result[\"seq_at\"] = self._seq\n            return result\n"}]
+FAULT_TARGETS = {"core_api_broken": ("API-2", "API-4", "API-5", "API-6", "API-24", "API-25"),
+                 "core_api_mutation_seq_broken": ("API-6",)}
 FAULT_ALSO_RED: dict[str, tuple] = {name: () for name in FAULT_TARGETS}
 
 
@@ -80,17 +89,26 @@ def fault_patches() -> list:
     return FAULTS[FAULT] if FAULT else []
 
 
-def fault_isolated(normal: dict, fault: dict, name: str = "core_api_broken", ids: tuple = A_IDS) -> dict:
-    """Compare a normal report with a fault report over EVERY requirement ID of the run: the fault must turn every
-    target ID red and change no other ID."""
+def compare_fault(normal: dict, fault: dict, targets: tuple, also_red: tuple, ids: tuple) -> dict:
+    """Compare a normal report with a fault report over EVERY requirement ID of the module: every ID must be green in
+    the normal report, every target must go green -> red, no other ID may change, and both reports must name every ID.
+    Two reports that are both red (or equal) are never `isolated`."""
     before, after = normal.get("requirements") or {}, fault.get("requirements") or {}
-    changed = sorted(i for i in set(before) & set(after) if bool(before[i].get("passed")) != bool(after[i].get("passed")))
-    allowed = set(FAULT_TARGETS[name]) | set(FAULT_ALSO_RED.get(name, ()))
-    outside = [i for i in changed if i not in allowed]
-    not_red = sorted(i for i in FAULT_TARGETS[name] if (after.get(i) or {}).get("passed") is not False)
     missing = sorted(set(before) ^ set(after)) + sorted(i for i in ids if i not in before or i not in after)
-    return {"isolated": not outside and not not_red and not missing, "changed": changed,
-            "changed_outside_targets": outside, "targets_not_red": not_red, "ids_differ": missing}
+    baseline_not_green = sorted(i for i in ids if (before.get(i) or {}).get("passed") is not True)
+    turned_red = sorted(i for i in ids if (before.get(i) or {}).get("passed") is True and (after.get(i) or {}).get("passed") is False)
+    changed = sorted(i for i in set(before) & set(after) if bool(before[i].get("passed")) != bool(after[i].get("passed")))
+    allowed = set(targets) | set(also_red)
+    outside = [i for i in changed if i not in allowed]
+    not_red = sorted(i for i in targets if i not in turned_red)
+    return {"isolated": bool(targets) and not outside and not not_red and not missing and not baseline_not_green,
+            "changed": changed, "changed_outside_targets": outside, "targets_not_red": not_red, "ids_differ": missing,
+            "baseline_not_green": baseline_not_green}
+
+
+def fault_isolated(normal: dict, fault: dict, name: str = "core_api_broken", ids: tuple = A_IDS) -> dict:
+    """The fault must turn every target ID red (from a green normal run) and change no other ID."""
+    return compare_fault(normal, fault, FAULT_TARGETS[name], FAULT_ALSO_RED.get(name, ()), ids)
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -255,13 +273,44 @@ finally:
     service.stop()
 print(json.dumps(out))
 """
-SEPARATE_CLIENT = """\
+# Changes through both adapters, on two copies of the same records: the product's in-process service on the copy, its
+# CoreClient on the core under test. A change that needs the confirm step is made in both steps. What is compared is
+# everything the answer says; only the values that differ by their nature are masked (still required to be present):
+# the random confirm id and operation id, and the clock's `as_of`; the wire's own `code` echo is not part of the data.
+PARITY_CHANGES = """\
 import json, os, sys
 sys.path.insert(0, {orchestration!r})
 from codex_agents import core_api
-client = core_api.CoreClient({socket!r}, token={token!r})
-client.call("initialize", {{"protocol": "1.0"}})
-print(json.dumps({{"pid": os.getpid(), "state": client.call("state.get")["state"]}}))
+copy = {copy!r}
+service = core_api.CoreService(copy, os.path.join(os.path.dirname({socket!r}), "m.sock"))
+service.start()
+
+def masked(result):
+    return {{k: ("masked" if k in ("op_id", "as_of") else v) for k, v in result.items()}}
+
+def step(client, method, params):
+    first = None
+    try:
+        try:
+            return {{"result": masked(client.call(method, params))}}
+        except core_api.ApiError as error:
+            if error.code != "confirm_required":
+                return {{"error": error.code}}
+            first = {{k: ("masked" if k == "confirm_id" else v) for k, v in error.data.items() if k != "code"}}
+            confirm = error.data["confirm_id"]
+        return {{"first": first, "result": masked(client.call(method, dict(params, confirm_id=confirm)))}}
+    except core_api.ApiError as error:
+        return {{"first": first, "error": error.code}}
+
+try:
+    local = core_api.in_process(service, {token!r})
+    local.call("initialize", {{"protocol": "1.0"}})
+    remote = core_api.CoreClient({socket!r}, token={token!r})
+    remote.call("initialize", {{"protocol": "1.0"}})
+    out = [[method, step(local, method, params), step(remote, method, params)] for method, params in {calls!r}]
+finally:
+    service.stop()
+print(json.dumps(out))
 """
 
 UNITS = [
@@ -289,9 +338,20 @@ class CoreWorld(e2e_support.World):
     """A World that also stops the core processes it started (the scene's teardown calls __exit__)."""
 
     def __exit__(self, *exc) -> None:
+        """Stop every core, whatever one of them does: each stop is isolated, the World's own cleanup always runs, and
+        a failure is raised only after all of it (nothing is skipped because an earlier stop raised)."""
+        failures = []
         for core in list(getattr(self, "cores", [])):
-            core.stop()
-        super().__exit__(*exc)
+            try:
+                core.stop()
+            except BaseException as error:  # noqa: BLE001 - every core is stopped; the first failure is raised after
+                failures.append(error)
+        try:
+            super().__exit__(*exc)
+        except BaseException as error:  # noqa: BLE001
+            failures.append(error)
+        if failures:
+            raise e2e_support.HarnessError("the teardown of a core or the World failed") from failures[0]
 
 
 class Core:
@@ -377,11 +437,12 @@ class Core:
         if proc is None:
             return
         if proc.poll() is None:
-            proc.terminate()
+            with contextlib.suppress(OSError):
+                proc.terminate()
             try:
                 proc.wait(10)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                proc.kill()  # the process is ended whatever it does; a kill that fails raises (and is reported)
                 proc.wait(10)
 
     def kill9(self) -> None:
@@ -435,18 +496,6 @@ class Core:
         return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def processes(world, *, skip: int | None = None) -> dict[int, str]:
-    """Every process of this World (those whose command line holds the World's folder), by pid; read with `ps`."""
-    listing = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True,
-                             env=e2e_support.child_environment(os.environ)).stdout
-    found = {}
-    for line in listing.splitlines():
-        parts = line.strip().split(None, 1)
-        if len(parts) == 2 and str(world.base) in parts[1] and int(parts[0]) not in (os.getpid(), skip):
-            found[int(parts[0])] = parts[1]
-    return found
-
-
 def lsof(*args: str) -> str:
     """`lsof` output (a missing lsof fails the check: nothing is skipped)."""
     done = subprocess.run(["lsof", "-nP", *args], capture_output=True, text=True,
@@ -470,72 +519,6 @@ def core_scene():
 
 def secure_records_note(phase: Phase) -> None:
     phase.reason(HAND_WRITTEN)
-
-
-# ---------------------------------------------------------------------------------------------------------
-# API-1, TERM-5
-
-@check("API-1", group="core_api")
-def api1_core_starts_headless_and_the_installed_commands_do_not_need_it(phase: Phase) -> None:
-    scene = core_scene()
-    world = scene.world
-    secure_records_note(phase)
-    phase.expect(scene.setup.code == 0, "the scripted setup that installs the project exits 0")
-    core = Core(world, "headless").start()
-    tty = subprocess.run(["/bin/ps", "-o", "tty=", "-p", str(core.pid)], capture_output=True, text=True).stdout.strip()
-    phase.expect(tty.startswith("?"), "the core runs with no controlling terminal (ps names none)")
-    phase.expect(subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(core.pid)], capture_output=True,
-                                text=True).stdout.strip() != "", "the core process exists")
-    phase.expect(core.reader().call("state.get")["state"]["phase"] == "build",
-                 "a headless core answers over its socket")
-    # The services the installed project runs by itself (the collector and the project service: stand-ins for the
-    # runner, which is not built yet) are processes of this World other than the cores. The owner commands and the
-    # services must not depend on the core.
-    code, before, _ = world.cli("learning-status")
-    others = {pid: command for pid, command in processes(world, skip=core.pid).items() if "core_api" not in command}
-    phase.reason("runner_not_built_services_stand_in")
-    phase.expect(code == 0 and (before or {}).get("ready") is True, "an owner command answers while the core runs")
-    phase.expect(any("collector_host" in command for command in others.values()), "the collector is running")
-    phase.expect(any("project_host" in command or "service_host" in command for command in others.values()),
-                 "the project service is running")
-    core.kill9()
-    phase.expect(not core.alive(), "the core is dead")
-    survivors = processes(world, skip=core.pid)
-    phase.expect(all(pid in survivors for pid in others), "every service that was running is still running after the core died")
-    code, after, _ = world.cli("learning-status")
-    phase.expect(code == 0 and (after or {}).get("ready") is True,
-                 "an owner command still answers from the files after the core died")
-    phase.expect((before or {}).get("started_at_ms") == (after or {}).get("started_at_ms"),
-                 "it is answered by the same collector, which never stopped")
-    refused = False
-    try:
-        Wire(core.socket, timeout=2).close()
-    except OSError:
-        refused = True
-    phase.expect(refused, "a dead core's socket refuses connections")
-    phase.expect((core.records / "units.jsonl").read_text() == "".join(json.dumps(u) + "\n" for u in UNITS),
-                 "the records on disk are untouched by the core's death")
-
-
-@check("TERM-5", group="core_api")
-def term5_terminal_and_core_are_separate_processes_and_the_core_is_headless(phase: Phase) -> None:
-    scene = core_scene()
-    core = scene.core
-    secure_records_note(phase)
-    phase.expect(core.pid != os.getpid(), "the core is not this process")
-    command = subprocess.run(["/bin/ps", "-o", "command=", "-p", str(core.pid)], capture_output=True,
-                             text=True).stdout
-    phase.expect("core_api" in command, "the core's own command line names the core module")
-    phase.expect(subprocess.run(["/bin/ps", "-o", "tty=", "-p", str(core.pid)], capture_output=True,
-                                text=True).stdout.strip().startswith("?"), "the core has no terminal")
-    listing = lsof("-a", "-p", str(core.pid), "-U")
-    phase.expect(str(core.socket) in listing, "the socket is held by the core process (lsof)")
-    phase.expect(str(core.socket) not in lsof("-a", "-p", str(os.getpid()), "-U"), "this process does not hold it")
-    out = json.loads(core.helper(SEPARATE_CLIENT, token=scene.read))
-    phase.expect(out["pid"] not in (core.pid, os.getpid()), "a terminal-side client is a third process")
-    phase.expect(out["state"]["phase"] == "build", "that client read the state through the core")
-    phase.expect(core.alive(), "the core keeps running after its client process has ended")
-    phase.expect(core.wire(scene.read).call("state.get")["state"]["session"] == "S-7", "and still answers")
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -716,6 +699,56 @@ def api6_schema_lists_the_contract_seq_at_everywhere_and_adapters_agree(phase: P
     # ... and the independent wire reads the same as the library's client did.
     phase.expect(json.loads(json.dumps(wire.call("runs.list"))) == out["runs.list{}"][1],
                  "this wire client reads what the library's socket client read")
+    changes_say_seq_at_and_agree_across_adapters(phase, scene.world)
+
+
+# Changes of the contract (a change needs the confirm step when the contract says so; the list is the plan's, not the
+# core's), all callable by an owner token.
+TWO_STEP = {"control.pause", "control.resume", "control.handoff", "control.stop", "unit.cancel", "routing.set"}
+CHANGES = [("context.push", {"kind": "note", "text": "six"}),
+           ("query.ask", {"text": "Should we rewrite the parser?", "mode": "forward"}),
+           ("unit.verdict", {"id": "U-0001", "verdict": "pass"}),
+           ("control.pause", {}), ("control.resume", {}), ("unit.cancel", {"id": "U-0001"}),
+           ("routing.set", {"profile": "p", "providers": ["a"], "rows": []}),
+           ("unit.message", {"id": "U-0001", "text": "hello"})]
+
+
+def change(wire: Wire, method: str, params: dict) -> tuple[dict | None, dict]:
+    """One change over the wire: (the confirm_required data, or None, and the reply of the executed call)."""
+    reply = wire.request(method, params)
+    first = None
+    if ((reply.get("error") or {}).get("data") or {}).get("code") == "confirm_required":
+        first = reply["error"]["data"]
+        reply = wire.request(method, {**params, "confirm_id": first["confirm_id"]})
+    return first, reply
+
+
+def changes_say_seq_at_and_agree_across_adapters(phase: Phase, world) -> None:
+    """API-6, the changes: every successful change (and its confirm step) says which event it was current to, the
+    value is the events file's last seq, and the two adapters give the same answer to the same change."""
+    core = Core(world, "mut6").start()
+    owner = core.mint("owner", "e2e-owner6")
+    copy = core.folder / "copy"
+    shutil.copytree(core.records, copy)  # the same records twice, before any change
+    out = json.loads(core.helper(PARITY_CHANGES, token=owner, copy=str(copy), calls=CHANGES))
+    phase.expect(len(out) == len(CHANGES), "every change was made through both adapters")
+    for method, local, remote in out:
+        phase.expect("result" in local and "result" in remote, "the change succeeded in both adapters: " + method)
+        phase.expect(local == remote, "the in-process adapter and the socket give identical answers to a change: " + method)
+        phase.expect("seq_at" in remote["result"], "a change's answer through the product's own client names seq_at: " + method)
+    wire = core.wire(owner)
+    advanced = 0
+    for method, params in CHANGES:
+        before = last_seq(core.records)
+        first, reply = change(wire, method, params)
+        if first is not None:
+            phase.expect(first.get("seq_at") == before, "the confirm step names the current seq_at: " + method)
+        phase.expect("result" in reply, "the change succeeded over the wire: " + method)
+        now = last_seq(core.records)
+        phase.expect(reply["result"].get("seq_at") == now, "a successful change carries seq_at, the events file's last seq: " + method)
+        advanced += 1 if now > before else 0
+    phase.expect(advanced >= 5, "the changes that announce themselves moved the event sequence on")
+    core.stop()
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -723,10 +756,11 @@ def api6_schema_lists_the_contract_seq_at_everywhere_and_adapters_agree(phase: P
 
 @check("API-24", group="core_api")
 def api24_request_string_method_time_connection_and_subscription_caps(phase: Phase) -> None:
-    scene = core_scene()
-    world, core = scene.world, scene.core
+    world = core_scene().world
     secure_records_note(phase)
-    wire = core.wire(scene.read)
+    core = Core(world, "caps").start()  # its own core: the connection count must not depend on what earlier checks left open
+    read = core.mint("read", "e2e-read24")
+    wire = core.wire(read)
     # request size: the shipped line cap (1 MiB), and the free-text cap (2 KiB) with its own code.
     wire.send(b'{"jsonrpc":"2.0","id":1,"method":"schema.get","params":{"x":"' + b"y" * (1 << 20) + b'"}}\n')
     phase.expect(((wire.message(30) or {}).get("error") or {}).get("data", {}).get("code") == "too_large",
@@ -757,14 +791,14 @@ def api24_request_string_method_time_connection_and_subscription_caps(phase: Pha
     healthy = False
     while time.monotonic() < deadline and not healthy:
         try:
-            probe = core.wire(scene.read)
+            probe = core.wire(read)
             healthy = probe.call("state.get")["state"]["phase"] == "build"
             probe.close()
         except (Refused, OSError):
             time.sleep(0.3)
     phase.expect(healthy, "a slot is free again once the connections are closed")
     # subscription count: 8 per token, 16 in all.
-    tokens = [scene.read, *core.mint_many([("read", "e2e-sub-b"), ("read", "e2e-sub-c")])]
+    tokens = [read, *core.mint_many([("read", "e2e-sub-b"), ("read", "e2e-sub-c")])]
     streams = []
 
     def subscribe(token: str) -> str | None:
@@ -792,6 +826,7 @@ def api24_request_string_method_time_connection_and_subscription_caps(phase: Pha
     phase.expect(slow_wire.refusal("state.get") == "timeout", "a method over its time limit is refused (timeout)")
     phase.expect(any(r.get("outcome") == "timeout" for r in slow.audit()), "the timeout is a row of the audit file")
     slow.stop()
+    core.stop()
 
 
 # ---------------------------------------------------------------------------------------------------------

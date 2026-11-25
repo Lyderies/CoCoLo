@@ -1,28 +1,27 @@
-"""API-7..23, TERM-7, TERM-13, TERM-17: what the core API answers and does with the records, the events, the talk,
-the tokens, the scopes, the confirm step, the owner wall and the audit (T7 slice S6, part 2; part 1 is
+"""API-7..15, 17..23, TERM-13: what the core API answers and does with the records, the events, the talk, the tokens,
+the scopes, the confirm step, the owner wall and the audit (T7 slice S6, part 2; part 1 is
 scripts/e2e_checks_core_api.py, whose real-process harness this module reuses).
 
 Same ground rules as part 1: a REAL headless core process from the installed project's own package, spoken to only
 over the unix socket as JSON-RPC; every value is compared with something read another way (the records on disk, the
 audit files, the token store, a helper process of the product's own library). The producer of the records (the
 runner, A5/A6) is not built, so the records are written by hand, and each check says so in its reason code
-(`records_hand_written_runner_not_built`); the numbers TERM-7 compares are the real ones of a real run on the same
-World (a fake Claude child that reported 1234 input and 56 output tokens, read back with `learning-usage-report`).
+(`records_hand_written_runner_not_built`); each ID here is about what the CORE does with records it is given.
 
-NOT checked here, and why:
-- TERM-6: its statement says the run counts match `learning-orchestration-status`; that command reports the
-  orchestration's lifecycle (status, sequence, started and ended times, goal usage) and carries NO run counts (the
-  counts are in `learning-orchestration-report`, `runs`). The statement cannot be met as written; see S6-STATUS.md.
+NOT checked here, each marked `deferred` with its reason in tests/e2e/requirements.json (decision 259: a check is
+green only through the real product path; the stand-in versions are in commit bb7ae3cd):
+- API-16 (delivery at real safe points: nothing in 0.8.60 calls the core's safe-point delivery), TERM-6 and TERM-7
+  (run counts and usage from a real run into the core's records: no runner writes them), TERM-5 and TERM-17 (no
+  terminal client exists to drive).
 - API-3: a connection from another Unix user needs a second Unix user the harness does not have.
 - API-26, API-27: later adapters (dashboard milestone, tested last).
 
 Test-only wiring is the constructor's own documented arguments (a limits core: small caps, a fake clock), never a
-product knob. The one fault is chosen ONLY by the runner's explicit `--fault NAME` argument."""
+product knob. The faults are chosen ONLY by the runner's explicit `--fault NAME` argument."""
 
 from __future__ import annotations
 
 import collections
-import datetime
 import hashlib
 import json
 import os
@@ -36,14 +35,12 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))  # -I leaves the script's own folder off the path
 import e2e_support  # noqa: E402
-import e2e_checks_shared as shared  # noqa: E402
-from e2e_checks_core_api import HAND_WRITTEN, UNITS, Core, CoreWorld, Refused, Wire  # noqa: E402
-from e2e_checks_run import child_answer, trusted_interpreter_checks  # noqa: E402
+from e2e_checks_core_api import HAND_WRITTEN, TWO_STEP, compare_fault, UNITS, Core, CoreWorld, Refused, Wire, change  # noqa: E402
 from e2e_checks_shared import write_patches  # noqa: E402
 from e2e_core import _SCENES, Phase, check  # noqa: E402
 
-B_IDS = ("API-7", "API-8", "API-9", "API-10", "API-11", "API-12", "API-13", "API-14", "API-15", "API-16", "API-17",
-         "API-18", "API-19", "API-20", "API-21", "API-22", "API-23", "TERM-7", "TERM-13", "TERM-17")
+B_IDS = ("API-7", "API-8", "API-9", "API-10", "API-11", "API-12", "API-13", "API-14", "API-15", "API-17",
+         "API-18", "API-19", "API-20", "API-21", "API-22", "API-23", "TERM-13")
 
 FAULT: str | None = None
 FAULTS = {
@@ -86,8 +83,34 @@ FAULTS = {
         {"module": "codex_agents.core_api",
          "old": "        summary = {k: self._audit_value(k, v, method, params) for k, v in params.items() if k in self.AUDIT_KEYS}\n",
          "new": "        summary = dict(params)\n"}]}
+# Two narrower faults, so each ID they name is red on the assertion it is about (the bundle above is red on the FIRST
+# failing assertion of an ID, which for API-18 is the owner wall and proves nothing about revocation).
+FAULTS["core_records_revocation_broken"] = [
+    # API-18: a revoked token keeps working on a connection that is already open.
+    {"module": "codex_agents.core_api",
+     "old": "        if session.token_id is not None and self._lookup_token_by_id(session.token_id) is None:\n            raise ApiError(\"unauthorized\", \"the token was revoked\")\n",
+     "new": "        if False:\n            raise ApiError(\"unauthorized\", \"the token was revoked\")\n"}]
+FAULTS["core_records_reads_broken"] = [
+    # API-9: damage to the state record is no longer a finding.
+    {"module": "codex_agents.core_api",
+     "old": "        elif self._state() is None:\n            add(\"state_unreadable\"",
+     "new": "        elif False:\n            add(\"state_unreadable\""},
+    # API-10: the core keeps a cache file beside the records.
+    {"module": "codex_agents.core_api",
+     "old": "        self._clear_stale(path)\n        self._seq = self._last_seq_in_file()\n",
+     "new": "        self._clear_stale(path)\n        (self.records / \"units.cache\").write_text(\"cached\")\n        self._seq = self._last_seq_in_file()\n"},
+    # API-11: a live subscriber is told a wrong sequence number for a confirmed command (the file keeps the right one).
+    {"module": "codex_agents.core_api",
+     "old": "                    sub.offer(event)\n",
+     "new": "                    sub.offer(dict(event, seq=event[\"seq\"] + 1) if kind == \"command.requested\" else event)\n"},
+    # API-15: a canned answer is said to have cost tokens.
+    {"module": "codex_agents.core_api",
+     "old": "        return {\"answered_by\": \"records\", \"text\": text, \"tokens_used\": 0, \"sources\": sources, \"as_of\": self.clock()}\n",
+     "new": "        return {\"answered_by\": \"records\", \"text\": text, \"tokens_used\": 7, \"sources\": sources, \"as_of\": self.clock()}\n"}]
 FAULT_TARGETS = {"core_records_broken": ("API-7", "API-8", "API-12", "API-13", "API-14", "API-17", "API-18", "API-19",
-                                         "API-20", "API-21", "API-22", "API-23", "TERM-13")}
+                                         "API-20", "API-21", "API-22", "API-23", "TERM-13"),
+                 "core_records_revocation_broken": ("API-18",),
+                 "core_records_reads_broken": ("API-9", "API-10", "API-11", "API-15")}
 FAULT_ALSO_RED: dict[str, tuple] = {name: () for name in FAULT_TARGETS}
 
 
@@ -96,21 +119,14 @@ def fault_patches() -> list:
 
 
 def fault_isolated(normal: dict, fault: dict, name: str = "core_records_broken", ids: tuple = B_IDS) -> dict:
-    """Compare a normal report with a fault report over EVERY requirement ID of the run: the fault must turn every
-    target ID red and change no other ID."""
-    before, after = normal.get("requirements") or {}, fault.get("requirements") or {}
-    changed = sorted(i for i in set(before) & set(after) if bool(before[i].get("passed")) != bool(after[i].get("passed")))
-    allowed = set(FAULT_TARGETS[name]) | set(FAULT_ALSO_RED.get(name, ()))
-    outside = [i for i in changed if i not in allowed]
-    not_red = sorted(i for i in FAULT_TARGETS[name] if (after.get(i) or {}).get("passed") is not False)
-    missing = sorted(set(before) ^ set(after)) + sorted(i for i in ids if i not in before or i not in after)
-    return {"isolated": not outside and not not_red and not missing, "changed": changed,
-            "changed_outside_targets": outside, "targets_not_red": not_red, "ids_differ": missing}
+    """The fault must turn every target ID red (from a green normal run) and change no other ID."""
+    return compare_fault(normal, fault, FAULT_TARGETS[name], FAULT_ALSO_RED.get(name, ()), ids)
 
 
 # ---------------------------------------------------------------------------------------------------------
 # The records the producer would write (by hand, until the runner exists).
 
+USAGE = {"input": 1234, "output": 56}
 EVENT_COUNT = 1100  # more than the core keeps for a resume (1000), so an old cursor really has expired
 SECRETS = ("SECRET-TRANSCRIPT-TEXT", "tok-SECRET-VALUE", "pw-SECRET-VALUE", "hunter2hunter2", "abcdefghijklmnop")
 STOP = {"type": "stop", "id": "H-2", "code": "guard_context", "reason": "The context window was nearly full.",
@@ -161,6 +177,30 @@ def state_for(usage: dict) -> dict:
             "versions": {"installed": "0.8.60"}, "claude_session_id": "abc",
             "usage": {"input": usage["input"], "output": usage["output"],
                       "windows": [{"label": "5h", "pct": 40, "resets": "later", "spend": 9}]}}
+
+
+NEUTRAL_UNIT = ("id", "kind", "state", "title", "role", "started", "last", "result", "exit", "verdict", "verdict_by",
+                "verdict_ts")
+NEUTRAL_STATE = ("phase", "session", "now", "ctx", "window", "usage", "ci", "versions", "handoff_replies")
+
+
+def as_unit(row: dict) -> dict:
+    """What a unit record looks like through the contract: neutral fields on top, the rest under `extra`."""
+    return {**{k: v for k, v in row.items() if k in NEUTRAL_UNIT}, "extra": {k: v for k, v in row.items() if k not in NEUTRAL_UNIT}}
+
+
+def as_usage(usage: dict) -> dict:
+    """A usage record through the contract: its counts, and its windows by label and percentage only (no spend)."""
+    return {"input": usage["input"], "output": usage["output"],
+            "windows": [{"label": w["label"], "pct": w["pct"]} for w in usage["windows"]]}
+
+
+def as_state(row: dict) -> dict:
+    """A state record through the contract: what the record lacks reads "unknown", provider detail is under `extra`."""
+    out = {k: row.get(k, "unknown") for k in ("phase", "session", "now", "ctx", "window", "handoff_replies")}
+    out.update(usage=as_usage(row["usage"]), ci=row["ci"], versions=row["versions"])
+    out["extra"] = {k: v for k, v in row.items() if k not in NEUTRAL_STATE}
+    return out
 
 
 def files_of(records: Path, *, skip: tuple = ()) -> dict[str, bytes]:
@@ -225,40 +265,19 @@ print(core_api.revoke_token({records!r}, {token!r}))
 """
 
 
-def usage_window() -> tuple[str, str]:
-    now = datetime.datetime.now(datetime.timezone.utc)
-    iso = lambda moment: moment.strftime("%Y-%m-%dT%H:%M:%SZ")
-    return iso(now - datetime.timedelta(hours=1)), iso(now + datetime.timedelta(hours=1))
-
-
 def records_scene():
-    """One installed fake project with one real, finished run (a fake Claude child that reported 1234 input and 56
-    output tokens), then a core process over hand-written records that carry the usage the real report shows."""
+    """One installed fake project (a real setup), then a core process over hand-written records."""
     if "core_records" in _SCENES:
         return _SCENES["core_records"]
     world = CoreWorld().__enter__()
-    scene = SimpleNamespace(world=world)
+    scene = SimpleNamespace(world=world, usage=USAGE)
     _SCENES["core_records"] = scene
-    trusted_interpreter_checks(world)
     write_patches(world, fault_patches())
-    shared.set_up(world, "core")
-    ctl = scene.ctl = shared.Ctl(world, "p")
-    run = ctl.child()
-    template = (ctl.host("result-preflight", *run.common)[1] or {}).get("template")
-    answer = child_answer(template, False)
-    shared.child_frames(world, {"type": "result", "subtype": "success", "is_error": False, "result": json.dumps(answer),
-                                "structured_output": answer, "usage": {"input_tokens": 1234, "output_tokens": 56}})
-    ctl.dispatch(run)
-    ctl.record(run)
-    since, until = usage_window()
-    scene.run_code = run.code
-    scene.report = ctl.host("learning-usage-report", "--since", since, "--until", until)[1] or {}
-    scene.status = ctl.host("learning-orchestration-status", "--orchestration-handle", ctl.handle)[1] or {}
-    models = scene.report.get("models") or []
-    scene.usage = {"input": sum(m.get("input_tokens") or 0 for m in models),
-                   "output": sum(m.get("output_tokens") or 0 for m in models)}
+    scene.setup = world.setup(world.answers())
+    if scene.setup.code != 0:
+        raise e2e_support.HarnessError("the scripted setup that installs the project did not finish")
     core = scene.core = Core(world, "main", seed=False)
-    write_records(core.records, scene.usage)
+    write_records(core.records, USAGE)
     core.start()
     scopes = ("read", "agent", "orchestrator", "confirm", "owner")
     scene.tokens = dict(zip(scopes, core.mint_many([(scope, "e2e-" + scope) for scope in scopes])))
@@ -286,25 +305,25 @@ def api7_state_units_and_runs_equal_the_record_files(phase: Phase) -> None:
     latest = {}
     for row in rows:
         latest[row["id"]] = row
+    # Every unit, field for field: the contract's neutral fields at the top, everything else under `extra`.
     listed = wire.call("units.list")["units"]
     phase.expect([u["id"] for u in listed] == list(latest), "units.list names every unit of the file, once, in file order")
     for unit in listed:
-        row = latest[unit["id"]]
-        for key in ("kind", "state", "title", "role", "started", "last"):
-            phase.expect(unit.get(key) == row.get(key), "a listed unit equals its record field for field: " + key)
-        phase.expect({**{k: v for k, v in unit.items() if k not in ("extra",)}, **unit["extra"]} == row,
-                     "nothing of the record is lost: neutral fields plus extra give the record back")
-    phase.expect(wire.call("units.get", {"id": "U-0003"})["unit"]["state"] == "failed", "units.get gives one unit")
+        phase.expect(unit == as_unit(latest[unit["id"]]), "a listed unit equals its record, every field: " + unit["id"])
+        phase.expect(wire.call("units.get", {"id": unit["id"]})["unit"] == as_unit(latest[unit["id"]]),
+                     "units.get equals the record, every field: " + unit["id"])
+        every = [as_unit(row) for row in rows if row["id"] == unit["id"]]
+        phase.expect(wire.call("units.history", {"id": unit["id"]})["records"] == every,
+                     "units.history gives every record of the unit, oldest first, every field: " + unit["id"])
     phase.expect(refusal_of(wire, "units.get", {"id": "U-9999"}) == "not_found", "an unknown unit is not_found")
-    history = wire.call("units.history", {"id": "U-0001"})["records"]
-    phase.expect([r["state"] for r in history] == ["running", "done"], "units.history gives every record of a unit, oldest first")
     runs = wire.call("runs.list")
     counts = collections.Counter(row["state"] for row in latest.values())
     phase.expect(runs["total"] == len(latest) and runs["counts"] == dict(counts),
                  "runs.list total and counts equal the states in the file")
+    phase.expect(runs["runs"] == [as_unit(row) for row in latest.values()], "runs.list lists the runs, every field")
     state = wire.call("state.get")["state"]
     on_disk = json.loads((core.records / "state.json").read_text())
-    phase.expect(all(state[k] == on_disk[k] for k in ("phase", "session", "ctx", "window")), "state.get equals the state record")
+    phase.expect(state == as_state(on_disk), "state.get equals the state record, every field")
     # A change in the file shows at once (the file stays canonical): a new unit, then an update of one.
     with Restore(core.records / "units.jsonl"):
         with open(core.records / "units.jsonl", "a") as handle:
@@ -319,16 +338,21 @@ def api8_usage_history_ci_versions_equal_records_and_unknown_is_never_a_number(p
     note(phase)
     wire = wire_of(scene, "read")
     on_disk = json.loads((core.records / "state.json").read_text())
-    usage = wire.call("usage.get")["usage"]
-    phase.expect(usage["input"] == on_disk["usage"]["input"] and usage["output"] == on_disk["usage"]["output"],
-                 "usage.get equals the record's input and output")
-    phase.expect(usage["windows"] == [{"label": "5h", "pct": 40}], "usage windows keep their label and percentage only")
+    phase.expect(wire.call("usage.get")["usage"] == as_usage(on_disk["usage"]),
+                 "usage.get equals the record: counts, and windows by label and percentage")
     phase.expect(wire.call("ci.get")["ci"] == on_disk["ci"], "ci.get equals the record")
     phase.expect(wire.call("versions.get")["versions"] == on_disk["versions"], "versions.get equals the record")
-    samples = wire.call("usage.history")["samples"]
-    phase.expect([s.get("input") for s in samples] == [100, 1234], "usage.history equals the usage record, in order")
-    phase.expect([h["id"] for h in wire.call("history.list")["history"]] == ["H-1", "H-2", "H-3"],
-                 "history.list equals the history record")
+    usage_rows = [json.loads(line) for line in (core.records / "usage.jsonl").read_text().splitlines()]
+    expected = []
+    for row in usage_rows:
+        sample = {k: v for k, v in row.items() if k in ("ts", "input", "output", "total", "windows")}
+        if any(k not in sample for k in row):
+            sample["extra"] = {k: v for k, v in row.items() if k not in sample}
+        expected.append(sample)
+    phase.expect(wire.call("usage.history")["samples"] == expected,
+                 "usage.history equals the usage record, in order, every field (provider detail under extra)")
+    history_rows = [json.loads(line) for line in (core.records / "history.jsonl").read_text().splitlines()]
+    phase.expect(wire.call("history.list")["history"] == history_rows, "history.list equals the history record, every entry, every field")
     # Unreadable or missing data is "unknown", never a guessed number.
     state_file = core.records / "state.json"
     with Restore(state_file):
@@ -354,8 +378,8 @@ def api8_usage_history_ci_versions_equal_records_and_unknown_is_never_a_number(p
         with open(core.records / "history.jsonl", "a") as handle:
             handle.write("{damaged\n")
         reply = wire.call("history.list")
-        phase.expect(reply.get("damaged_lines") == 1 and len(reply["history"]) == 3,
-                     "a damaged line is skipped and counted, never hidden")
+        phase.expect(reply.get("damaged_lines") == 1 and reply["history"] == history_rows,
+                     "a damaged line is skipped and counted, never hidden, and the sound entries are all there")
 
 
 @check("API-9", group="core_records")
@@ -608,69 +632,6 @@ def api15_canned_questions_are_answered_from_records_and_nothing_is_queued(phase
                  "a read token cannot forward")
 
 
-@check("API-16", group="core_records")
-def api16_judgment_questions_queue_only_in_the_inbox_and_replies_come_back(phase: Phase) -> None:
-    scene = records_scene()
-    world = scene.world
-    note(phase)
-    clock = Core(world, "clock16", limits={}).start()
-    tokens = dict(zip(("confirm", "orchestrator", "read"), clock.mint_many([(s, "e2e-" + s) for s in ("confirm", "orchestrator", "read")])))
-    skipped = ("inbox.jsonl", "commands.jsonl", "audit.jsonl", "ids.json", "events.jsonl")
-    others_before = files_of(clock.records, skip=skipped)
-    events_before = len((clock.records / "events.jsonl").read_text().splitlines())
-    asker = clock.wire(tokens["confirm"])
-    ids = []
-    for index in range(20):
-        ids.append(asker.call("query.ask", {"text": f"Question {index} " + "x" * 100, "mode": "forward"})["query_id"])
-    inbox = [json.loads(line) for line in (clock.records / "inbox.jsonl").read_text().splitlines()]
-    phase.expect([row["query_id"] for row in inbox] == ids, "each judgment question is one row of the inbox")
-    phase.expect(all(row["kind"] == "query" and row["trust"] == "untrusted" and row["ttl"] == 3600 and
-                     abs(row["expires"] - row["ts"] - row["ttl"]) < 1 for row in inbox), "each row is untrusted and has its TTL")
-    phase.expect(files_of(clock.records, skip=skipped) == others_before,
-                 "no other record changed: the question is queued only in the inbox")
-    announced = [json.loads(line) for line in (clock.records / "events.jsonl").read_text().splitlines()[events_before:]]
-    phase.expect(len(announced) == 20 and {e["kind"] for e in announced} == {"query.queued"} and
-                 all(set(e["data"]) == {"query_id"} for e in announced), "the only other trace is one query.queued event (an id) each")
-    reader = clock.wire(tokens["read"])
-    phase.expect(reader.call("queries.get", {"id": ids[0]})["query"]["state"] == "queued", "an undelivered question is queued")
-    # The safe point (the runner's call, made here by a helper process of the product's library): one capped block.
-    blocks = json.loads(clock.helper(DELIVER, shift=0, rounds=2))
-    first = blocks[0]
-    phase.expect(first["trust"] == "untrusted" and 0 < len(first["text"].encode()) <= 300, "a delivery is at most 300 tokens (bytes), untrusted")
-    lines = first["text"].splitlines()
-    phase.expect(all(isinstance(json.loads(line), dict) for line in lines[1:]), "each message is one quoted JSON line")
-    phase.expect(first["query_ids"] and first["query_ids"][0] == ids[0], "the first question goes first")
-    delivered = [json.loads(line) for line in (clock.records / "deliveries.jsonl").read_text().splitlines()]
-    phase.expect(delivered and delivered[0]["ids"] == first["query_ids"], "the delivery is recorded in the deliveries file")
-    phase.expect(reader.call("queries.get", {"id": first["query_ids"][0]})["query"]["state"] == "delivered", "a delivered question says so")
-    phase.expect(blocks[1]["query_ids"] != first["query_ids"], "the next safe point goes on with the next ones")
-    # TTL: an hour later a question that was never delivered is expired and not delivered.
-    clock.advance(3601)
-    late = json.loads(clock.helper(DELIVER, shift=3601, rounds=1))[0]
-    phase.expect(late["query_ids"] == [] and late["text"] == "", "an expired question is not delivered")
-    undelivered = [i for i in ids if i not in {x for d in delivered for x in d["ids"]}]
-    phase.expect(reader.call("queries.get", {"id": undelivered[-1]})["query"]["state"] == "expired", "and reads as expired")
-    # query.reply produces query.answered for the asker.
-    fresh = clock.wire(tokens["confirm"]).call("query.ask", {"text": "Merge it?", "mode": "forward"})["query_id"]
-    seen = {}
-    waiter = threading.Thread(target=lambda: seen.update(zip(("events", "notices", "raw"), stream(
-        clock, tokens["confirm"], {"filter": {"kinds": ["query.answered"]}}, count=1, timeout=8))))
-    waiter.start()
-    time.sleep(0.5)
-    answerer = clock.wire(tokens["orchestrator"])
-    answerer.call("query.reply", {"query_id": fresh, "text": "Yes, merge.", "tokens_used": 120})
-    waiter.join(12)
-    events = seen.get("events", [])
-    phase.expect(len(events) == 1 and events[0]["kind"] == "query.answered" and events[0]["data"] == {"query_id": fresh},
-                 "the asker receives query.answered, naming the query only")
-    query = clock.wire(tokens["confirm"]).call("queries.get", {"id": fresh})["query"]
-    phase.expect(query["state"] == "answered" and query["reply"] == "Yes, merge." and query["tokens_used"] == 120,
-                 "the reply is read back from the query")
-    phase.expect(refusal_of(clock.wire(tokens["confirm"]), "query.reply", {"query_id": fresh, "text": "x"}) == "forbidden",
-                 "only an orchestrator or owner token may reply")
-    clock.stop()
-
-
 @check("API-17", group="core_records")
 def api17_pushes_are_labelled_capped_quoted_untrusted_and_never_a_decision(phase: Phase) -> None:
     scene = records_scene()
@@ -760,45 +721,95 @@ def api18_tokens_are_256_bit_hashed_revocable_and_minted_only_at_the_owners_term
     core.stop()
 
 
-# Methods by who may call them, from the requirement and the tests (tests/test_core_api_talk_control.py).
-READS = [("schema.get", {}), ("state.get", {}), ("units.list", {}), ("units.get", {"id": "U-0001"}),
-         ("units.history", {"id": "U-0001"}), ("runs.list", {}), ("usage.get", {}), ("usage.history", {}), ("ci.get", {}),
-         ("versions.get", {}), ("history.list", {}), ("decisions.list", {}), ("queries.list", {}),
-         ("queries.get", {"id": "Q-9999"}), ("health.get", {}), ("query.ask", {"text": "What is the status?"}),
-         ("units.activity", {"id": "U-0001"}), ("changes.list", {}), ("messages.list", {}), ("routing.get", {}),
-         ("commands.list", {}), ("commands.get", {"id": "C-9999"})]
-PUSHES = [("context.push", {"kind": "note", "text": "hello"})]
-CONFIRMS = [("control.pause", {}), ("control.resume", {}), ("control.handoff", {}), ("unit.cancel", {"id": "U-0001"})]
-REPLIES = [("query.reply", {"query_id": "Q-9999", "text": "x"})]
-OWNERS = [("control.stop", {}), ("decision.answer", {"id": "D-9999", "choice": "yes"}),
-          ("unit.verdict", {"id": "U-9999", "verdict": "pass"}), ("unit.message", {"id": "U-9999", "text": "hi"}),
-          ("routing.set", {"profile": "p", "providers": [], "rows": []})]
+# Methods by who may call them, from the requirement and the tests (tests/test_core_api_talk_control.py). Each entry is
+# the method and a function of the records the call reaches (ids the matrix core made) that gives parameters under
+# which the call SUCCEEDS: an allowed method must really answer, not merely "not be forbidden".
+ROUTING = {"profile": "p", "providers": ["a"], "rows": []}
+READS = [("schema.get", lambda ids: {}), ("state.get", lambda ids: {}), ("units.list", lambda ids: {}),
+         ("units.get", lambda ids: {"id": "U-0001"}), ("units.history", lambda ids: {"id": "U-0001"}),
+         ("runs.list", lambda ids: {}), ("usage.get", lambda ids: {}), ("usage.history", lambda ids: {}),
+         ("ci.get", lambda ids: {}), ("versions.get", lambda ids: {}), ("history.list", lambda ids: {}),
+         ("decisions.list", lambda ids: {}), ("queries.list", lambda ids: {}),
+         ("queries.get", lambda ids: {"id": ids["query"]}), ("health.get", lambda ids: {}),
+         ("events.subscribe", lambda ids: {}), ("query.ask", lambda ids: {"text": "What is the status?"}),
+         ("units.activity", lambda ids: {"id": "U-0001"}), ("changes.list", lambda ids: {}),
+         ("changes.diff", lambda ids: {"path": "a.py"}), ("messages.list", lambda ids: {}),
+         ("routing.get", lambda ids: {}), ("commands.list", lambda ids: {}),
+         ("commands.get", lambda ids: {"id": ids["command"]})]
+PUSHES = [("context.push", lambda ids: {"kind": "note", "text": "hello"})]
+CONFIRMS = [("control.pause", lambda ids: {}), ("control.resume", lambda ids: {}), ("control.handoff", lambda ids: {}),
+            ("unit.cancel", lambda ids: {"id": "U-0001"})]
+REPLIES = [("query.reply", lambda ids: {"query_id": ids["reply"], "text": "Yes."})]
+OWNERS = [("control.stop", lambda ids: {}), ("decision.answer", lambda ids: {"id": "D-0001", "choice": "yes"}),
+          ("unit.verdict", lambda ids: {"id": "U-0001", "verdict": "pass"}),
+          ("unit.message", lambda ids: {"id": "U-0001", "text": "hi"}), ("routing.set", lambda ids: ROUTING)]
 ALLOWED = {"read": READS, "agent": READS + PUSHES, "orchestrator": READS + PUSHES + REPLIES,
            "confirm": READS + PUSHES + CONFIRMS, "owner": READS + PUSHES + CONFIRMS + REPLIES + OWNERS}
 EVERY = READS + PUSHES + CONFIRMS + REPLIES + OWNERS
+CHANGES_OF_MATRIX = {m for m, _ in PUSHES + CONFIRMS + REPLIES + OWNERS}
+
+
+def matrix_core(scene):
+    """A core of its own (the matrix changes records: decisions, commands, queries) whose records make every method
+    of the contract answerable, with one token of each scope and the ids the calls need."""
+    core = Core(scene.world, "matrix", seed=False)
+    write_records(core.records, USAGE)
+    (core.records / "activity.jsonl").write_text(jsonl([{"ts": 1, "unit_id": "U-0001", "kind": "tool", "name": "Edit", "text": "edit a.py"},
+                                                        {"ts": 2, "unit_id": "U-0001", "kind": "output", "text": "done"}]))
+    (core.records / "changes.json").write_text(json.dumps({"worktrees": [{"name": "w", "branch": "b", "files": [
+        {"path": "a.py", "status": "M"}], "commits": [{"id": "abc", "summary": "a change"}]}]}))
+    (core.records / "diffs.jsonl").write_text(jsonl([{"path": "a.py", "diff": "@@ -1 +1 @@\n-a\n+b\n"}]))
+    (core.records / "messages.jsonl").write_text(jsonl([{"id": "M-1", "ts": 1, "role": "orchestrator", "text": "hi", "unit_id": "U-0001"}]))
+    (core.records / "routing.json").write_text(json.dumps({"profile": "p", "providers": ["a"], "rows": [], "set_by": "owner", "ts": 1}))
+    core.start()
+    scopes = ("read", "agent", "orchestrator", "confirm", "owner")
+    tokens = dict(zip(scopes, core.mint_many([(scope, "e2e-" + scope) for scope in scopes])))
+    asker = core.wire(tokens["confirm"])
+    queries = [asker.call("query.ask", {"text": f"Judgment question {n}?", "mode": "forward"})["query_id"] for n in range(3)]
+    first, reply = change(asker, "control.pause", {})  # a command record for commands.get
+    return core, tokens, queries, reply["result"]["command_id"]
 
 
 @check("API-19", group="core_records")
 def api19_each_scope_may_call_exactly_its_methods_and_the_rest_is_forbidden(phase: Phase) -> None:
     scene = records_scene()
     note(phase)
-    schema = wire_of(scene, "read").call("schema.get")["methods"]
+    core, tokens, queries, command = matrix_core(scene)
+    expected_changes = []
     for scope, allowed in ALLOWED.items():
-        wire = wire_of(scene, scope)
+        wire = core.wire(tokens[scope])
+        ids = {"query": queries[0], "command": command,
+               "reply": {"orchestrator": queries[1], "owner": queries[2]}.get(scope)}
         names = {m for m, _ in allowed}
         for method, params in EVERY:
-            code = refusal_of(wire, method, params)
+            body = params(ids)
             if method in names:
-                phase.expect(code != "forbidden", f"{scope} may call {method}")
+                first, reply = change(wire, method, body)
+                result = reply.get("result")
+                phase.expect(result is not None and isinstance(result, dict) and "error" not in reply,
+                             f"{scope} calls {method} and it really answers")
+                phase.expect((first is not None) == (method in TWO_STEP), f"{method} asks for the confirm step exactly when the contract says so")
+                if method in CHANGES_OF_MATRIX:
+                    expected_changes.append((scope, method))
             else:
-                phase.expect(code == "forbidden", f"{scope} is refused {method} (forbidden)")
+                reply = wire.request(method, body)
+                phase.expect(((reply.get("error") or {}).get("data") or {}).get("code") == "forbidden",
+                             f"{scope} is refused {method} (forbidden, before any confirm step)")
         wire.close()
+    # What the answers claim is on record: each change made by a scope is an ok line of commands.jsonl under that caller.
+    ok = {(r["caller"].split(":")[0], r["method"]) for r in core.audit("commands.jsonl") if r.get("outcome") == "ok"}
+    phase.expect(set(expected_changes) <= ok, "every change a scope made is an ok line of commands.jsonl under its own caller")
+    reader = core.wire(tokens["read"])
+    phase.expect(reader.call("changes.diff", {"path": "a.py"})["diff"].startswith("@@ -1 +1 @@"), "an allowed read answers with the record")
+    phase.expect(reader.call("decisions.list")["decisions"][0]["answer"] == "yes", "the owner's decision answer is on record")
     # The core's own declaration agrees with what was observed: every method names the least scope that may call it.
+    schema = reader.call("schema.get")["methods"]
     order = ["read", "agent", "orchestrator", "confirm", "owner"]
-    for method, params in EVERY:
+    for method, _ in EVERY:
         lowest = next(s for s in order if method in {m for m, _ in ALLOWED[s]})
         phase.expect(schema[method]["scope"] == lowest or (method in ("query.reply",) and schema[method]["scope"] == "orchestrator"),
                      "schema.get names the scope of " + method)
+    core.stop()
 
 
 @check("API-20", group="core_records")
@@ -965,65 +976,3 @@ def term13_authority_is_decided_by_the_core_not_by_what_the_client_says(phase: P
     rows = core.audit()
     phase.expect(any(r["outcome"] == "forbidden" and r["method"] == "control.stop" for r in rows),
                  "the refusals are rows of the core's own audit file")
-
-
-# ---------------------------------------------------------------------------------------------------------
-# TERM-7, TERM-17
-
-@check("TERM-7", group="core_records")
-def term7_usage_through_the_api_matches_the_usage_report_and_is_unknown_when_unreadable(phase: Phase) -> None:
-    scene = records_scene()
-    core = scene.core
-    note(phase)
-    phase.expect(scene.run_code == 0, "the real run finished (its fake Claude child reported its usage)")
-    report = scene.report
-    phase.expect(report.get("ready") is True and len(report.get("runs") or []) == 1, "the usage report lists the one real run")
-    row = report["runs"][0]
-    phase.expect((row["input_tokens"], row["output_tokens"]) == (1234, 56), "the report holds the tokens the child reported")
-    phase.expect(scene.usage == {"input": 1234, "output": 56}, "the record the producer would write is built from the report's totals")
-    wire = wire_of(scene, "read")
-    usage = wire.call("usage.get")["usage"]
-    phase.expect((usage["input"], usage["output"]) == (row["input_tokens"], row["output_tokens"]),
-                 "usage through the API equals the usage report of the same run")
-    phase.expect(wire.call("query.ask", {"text": "What is the usage?"})["text"].count("1234") == 1, "and so does the canned answer")
-    state_file = core.records / "state.json"
-    with Restore(state_file):
-        state_file.write_text("{broken")
-        phase.expect(wire.call("usage.get")["usage"] == "unknown", "unreadable usage is unknown")
-        state_file.write_text(json.dumps({"phase": "build", "ci": {"status": "green"}}))
-        phase.expect(wire.call("usage.get")["usage"] == "unknown", "a state record with no usage: usage is unknown, not zero")
-    phase.expect(wire.call("usage.get")["usage"]["input"] == 1234, "and the records are sound again")
-
-
-@check("TERM-17", group="core_records")
-def term17_every_read_goes_through_the_api_which_reads_the_files_fresh_and_writes_nothing(phase: Phase) -> None:
-    scene = records_scene()
-    core = scene.core
-    note(phase)
-    wire = wire_of(scene, "read")
-    schema = wire.call("schema.get")["methods"]
-    reads = {m for m, info in schema.items() if info["scope"] == "read"}
-    needed = {"state.get", "units.list", "units.get", "units.history", "runs.list", "usage.get", "usage.history", "ci.get",
-              "versions.get", "history.list", "decisions.list", "queries.list", "health.get", "units.activity",
-              "changes.list", "changes.diff", "messages.list", "routing.get", "commands.list", "query.ask"}
-    phase.expect(needed <= reads, "every screen's read is a read method of the contract")
-    before = files_of(core.records, skip=("audit.jsonl",))
-    audit_before = len(core.audit())
-    for method, params in READS:
-        try:
-            wire.call(method, params)
-        except Refused as refused:
-            phase.expect(refused.code in ("not_found", "unavailable"), "a read is answered or refused for its target only: " + method)
-    stream(core, scene.tokens["read"], {"from_seq": EVENT_COUNT - 2, "limit": 1}, count=1)
-    phase.expect(files_of(core.records, skip=("audit.jsonl",)) == before, "no read method wrote any record file")
-    grown = core.audit()[audit_before:]
-    phase.expect(all(row["outcome"] in ("not_found", "unavailable") for row in grown),
-                 "the audit file grew only by refusals of unknown targets (reads themselves are never audited)")
-    # The core reads the file at each call: a change shows in the next answer, with no restart and no cache.
-    with Restore(core.records / "state.json"):
-        data = json.loads((core.records / "state.json").read_text())
-        data["phase"] = "review"
-        (core.records / "state.json").write_text(json.dumps(data))
-        phase.expect(wire.call("state.get")["state"]["phase"] == "review", "a record changed on disk is read at the next call")
-    phase.expect(wire.call("state.get")["state"]["phase"] == "build", "and changed back")
-    phase.expect(core.alive(), "the same core process answered all of it")
