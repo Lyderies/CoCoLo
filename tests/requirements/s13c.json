@@ -8,7 +8,7 @@
   },
   {
    "id": "S13C-2",
-   "statement": "`codex:tests.test_project_start::StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client` is deterministic under load: the starter's own interval bounds when each start begins, and each due project serves within the start's own deadline (`project_host_client.START_TIMEOUT_SECONDS`) of its own `begin` event, not within a fixed second after the interval.",
+   "statement": "`codex:tests.test_project_start::StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client` is restored to the base (`ce81bd96`) text: its \"serving within one interval\" assertions are not loosened. Under load it is a known flake whose cause (project-host start cost) is plan step S13e; it stays until S13e lands.",
    "source": "tests/requirements/s13c.json#S13C-2"
   },
   {

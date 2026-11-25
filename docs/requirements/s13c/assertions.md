@@ -5,30 +5,10 @@ host_slots 10, lost_run_settlement 27). The pairs below are the only changed ass
 
 ## Changed assertions (old -> new)
 
-- `test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client`, serving check
-  (reason: two real host processes cannot be on the clock of a fixed second after the interval under load; S13C-2. Round 1
-  fix: the first S13C version widened the bound to the start's 8 s deadline from `begin`, which a 2 s delay between `begin`
-  and the spawn passed; that is withdrawn):
-  - old (base): `served` = the time both `serving('never')` and `serving('stopped')` answered true, polled until `deadline`
-    (`ready + STARTER_CHECK_SECONDS + min(STARTER_TICK_SECONDS, STARTER_CHECK_SECONDS) + 1.0`);
-    `assertIsNotNone(served, 'the due projects were not serving within one interval')` and `assertLessEqual(served, deadline)`.
-  - new (after round 1 fix): the bound is split at the process boundary and each part is measured from its own event.
-    (1) The starter's own part: per project, `spawned_at - begun_at <= SPAWN_BOUND` (1.0 s; the `spawned` event is
-    logged when `os.posix_spawn` of the host returns), measured 0.06 s quiet and 0.1 to 0.3 s at `--jobs 16` beside
-    `root:test_install` and `root:test_setup_wizard_direct`. (2) The host process: both projects serve within
-    `project_host_client.START_TIMEOUT_SECONDS` of their own spawn (`assertEqual(['never', 'stopped'], sorted(served))` and,
-    per project, `assertLessEqual(served_at, spawned_at + START_TIMEOUT_SECONDS)`). The assertion that each start BEGINS
-    within one interval of the collector being ready (`assertLessEqual(begun[0]['t'], deadline)`, unchanged) and that the
-    idle project is never started stay as they were.
-  - Mutation (a `time.sleep(2)` before `posix_spawn` of the host, in the test's collector launcher): old base assertion red
-    ("not serving within one interval"), the withdrawn 8 s version green (the weakness), this version RED
-    ("2.08 not less than or equal to 1.0 : never: the start took longer than 1.0 s from begin to spawning its host").
-  - What is looser than the base: the host's own start-up (spawn to serving) is bounded by the product's 8 s deadline, not
-    by about 1.2 s from `begin`. The host compiles the runtime itself (`-B -X pycache_prefix=/dev/null`, a product flag set), so
-    no test cache can remove that cost: begin to serving was 0.6 s quiet and 0.75 to 1.3 s loaded, past the old 1.2 s.
-    A product step to bring the end-to-end bound back is in `s13c/STATUS.md`.
-  - Fixture (no assertion): `StarterBase.setUpClass` compiles the runtime into the class's bytecode cache
-    (`compileall` with `-X pycache_prefix`) before any test's clock starts.
+- None. `test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client` is restored to
+  the base `ce81bd96` text (`git diff ce81bd96` shows no change to its assertions; its decorator only gained `S13C-1` and
+  `S13C-3`). Under load it is a known flake attributed to plan step S13e until that lands. The only related fixture change
+  is `StarterBase.setUpClass` compiling the runtime into the class bytecode cache before any test's clock starts (no assertion).
 
 ## Changed waits (old -> new), assertions kept
 
@@ -67,4 +47,4 @@ host_slots 10, lost_run_settlement 27). The pairs below are the only changed ass
 
 ## Registration only
 
-`@requirements` gained `S13C-1`, `S13C-2`, `S13C-3` on the tests named in `scripts/test-requirements.json`.
+`@requirements` gained `S13C-1`, `S13C-3` on the tests named in `scripts/test-requirements.json`.

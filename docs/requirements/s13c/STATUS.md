@@ -39,27 +39,17 @@ Verdict: S13C-1 (80% of ceiling) is NOT met for any of the four modules; every u
 
 `test_host_slots` is back inside its 60 s budget (it was over it at 68 s on 0.8.67) and `test_lost_run_settlement` inside
 its ceiling, but neither has the 80% margin. The cost of all four is the fixed per-test product path, not a regression: see
-below. S13C-2 (E2c-1 deterministic under load) is met without weakening, see "E2c-1 round 1 fix" below.
+below. E2c-1 is restored to base and is a known load flake attributed to S13e, see "E2c-1" below.
 
-## E2c-1 round 1 fix (review reviews/040-s13c-r1, HIGH)
+## E2c-1: restored to base, load flake attributed to S13e
 
-The first S13C version bounded serving at 8 s from `begin`, which a 2 s delay between `begin` and the spawn passed. Now the
-bound is split at the spawn, each part from its own event: the starter's `begin` -> `spawned` at most `SPAWN_BOUND` (1.0 s;
-0.06 s quiet, 0.1 to 0.3 s loaded), and each host serving within `START_TIMEOUT_SECONDS` of its spawn. The class
-bytecode cache is prebuilt (`compileall`) in `setUpClass`. Mutation, `time.sleep(2)` before the host `posix_spawn` in the
-collector launcher: RED ("2.08 not less than or equal to 1.0 ... from begin to spawning its host"); unmutated GREEN.
-Loaded result: five runs of `--jobs 16 --module codex:tests.test_project_start --module root:test_install
---module root:test_setup_wizard_direct`: E2c-1 passed 5 of 5 (failed_units [] and `metadata_errors: []` in each; start module
-sum 188 to 203 s). Final check, `--module codex:tests.test_project_start --module codex:tests.test_lost_run_settlement`
-(quiet-ish machine, load 12 from other work): failed_units [], `metadata_errors: []`, start 185.5 s. One earlier run of that
-command failed `test_E2c_4_a_crash_loop_parks_and_only_the_owner_unparks` once (`waits[1] > waits[0]`: 1.2276 not greater
-than 1.2343); the rerun passed. It is the same latency-assertion class as item 3 of the proposed product steps
-(two backoff waits compared to each other include each start's own duration); not changed here.
-
-What is not recovered: the host process compiles the runtime itself (`-B -X pycache_prefix=/dev/null`, product flags), so
-`begin` -> serving was 0.6 s quiet and 0.75 to 1.3 s loaded, which cannot be held to the base's about 1.2 s under load by a
-test. Proposed product step (not done, test-only unit): let a project host use a verified bytecode cache (or import less
-at start) so host start-up fits well inside one interval, then restore the end-to-end bound `serving <= begin + 1.2 s`.
+E2c-1's assertions are the base `ce81bd96` text ("serving within one interval" from `begin`); nothing is loosened, split or
+bounded differently (`git diff ce81bd96` shows no change to them). The cause of its failure under load is project-host start
+cost: the host process compiles the runtime itself (`-B -X pycache_prefix=/dev/null`, product flags), so `begin` -> serving
+was 0.6 s quiet and 0.75 to 1.3 s loaded against about 1.2 s. That is plan step S13e (`PLAN-0.4.0-v2.md`); until it lands
+E2c-1 may fail under load and is a known flake, not fixed here. `StarterBase.setUpClass` still compiles the runtime into the
+class cache (fixture only). Two other latency assertions in the module failed once each under load
+(`test_E2c_4_a_crash_loop_parks_and_only_the_owner_unparks`, `test_E2c_3_claim_batches_...`; see item 3 below); not changed.
 
 ## What the profile showed
 
@@ -86,7 +76,7 @@ at start) so host start-up fits well inside one interval, then restore the end-t
    failed once in a loaded run with a single 62 ms claim outlier against its 50 ms bound (`test_project_start.py`
    `assertLess(max(settled), 0.050)`); `test_E2c_4_a_crash_loop_parks_and_only_the_owner_unparks` failed once in a loaded run
    (`failures >= 3` within its 2 s park window, two attempts fit). Both are latency assertions that need a derived bound or a
-   retry-on-quiet design, as E2c-1 now has; not changed here.
+   retry-on-quiet design; not changed here.
 
 ## Not done / next
 
