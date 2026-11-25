@@ -327,6 +327,8 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
             # marked its jobs `unknown` with the fault, so that step ends the runs waiting on it
             # (run_unavailable, O10 D12) and their status shows the fault before the service goes.
             if faulted:
+                from .health_holds import stop_faulted_service
+                stop_faulted_service(host, project_id)
                 return True
             faulted.append(True)
             return False

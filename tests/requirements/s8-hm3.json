@@ -1,0 +1,35 @@
+{
+ "authority": "docs/requirements/s8-hm3.md",
+ "requirements": [
+  {
+   "id": "S8-HM3-1",
+   "source": "tests/requirements/s8-hm3.json#S8-HM3-1",
+   "statement": "Report account and project hold register/source disagreement without releasing or repairing rows."
+  },
+  {
+   "id": "S8-HM3-2",
+   "source": "tests/requirements/s8-hm3.json#S8-HM3-2",
+   "statement": "Report project holds more than one sweep interval behind their deadline and eligible check, using the persisted clock floor without advancing it."
+  },
+  {
+   "id": "S8-HM3-3",
+   "source": "tests/requirements/s8-hm3.json#S8-HM3-3",
+   "statement": "Report a faulted writer service before stopping it through D13; preserve successor settlement and report stop failures."
+  },
+  {
+   "id": "S8-HM3-4",
+   "source": "tests/requirements/s8-hm3.json#S8-HM3-4",
+   "statement": "Report SH-7 custody/context, byte-budget and publication-material disagreement; healthy stores remain quiet."
+  },
+  {
+   "id": "S8-HM3-5",
+   "source": "tests/requirements/s8-hm3.json#S8-HM3-5",
+   "statement": "Bound read-only source reads using keyset pages, existing indexes and deadlines; continue past page limits without a lifetime refusal."
+  },
+  {
+   "id": "S8-HM3-6",
+   "source": "tests/requirements/s8-hm3.json#S8-HM3-6",
+   "statement": "Use project-scoped findings with fixed plain owner wording and no private content; register the holds check in the monitor."
+  }
+ ]
+}

@@ -3937,5 +3937,66 @@
   ],
   "source": "tests/requirements/u1.json#O0C-U1-5",
   "statement": "Prove independent boundaries, exact replay, reserved close, repeated past-cap operation, rollback and abrupt process exit with fast tests."
+ },
+ "S8-HM3-1": {
+  "source": "tests/requirements/s8-hm3.json#S8-HM3-1",
+  "statement": "Report account and project hold register/source disagreement without releasing or repairing rows.",
+  "checks": [
+   "codex:tests.test_health_holds.HoldsTests.test_account_orphan_is_reported",
+   "codex:tests.test_health_holds.HoldsTests.test_project_orphan_is_reported",
+   "codex:tests.test_health_holds.HoldsTests.test_missing_hold_is_reported"
+  ]
+ },
+ "S8-HM3-2": {
+  "source": "tests/requirements/s8-hm3.json#S8-HM3-2",
+  "statement": "Report project holds more than one sweep interval behind their deadline and eligible check, using the persisted clock floor without advancing it.",
+  "checks": [
+   "codex:tests.test_health_holds.HoldsTests.test_overdue_boundary_and_backoff",
+   "codex:tests.test_health_holds.HoldsTests.test_clock_floor",
+   "codex:tests.test_health_holds.HoldsTests.test_account_due_binding_is_reported_without_release"
+  ]
+ },
+ "S8-HM3-3": {
+  "source": "tests/requirements/s8-hm3.json#S8-HM3-3",
+  "statement": "Report a faulted writer service before stopping it through D13; preserve successor settlement and report stop failures.",
+  "checks": [
+   "codex:tests.test_health_holds.HoldsTests.test_faulted_service_reported_then_stopped",
+   "codex:tests.test_health_holds.HoldsTests.test_service_stop_failure",
+   "codex:tests.test_health_holds.HoldsTests.test_healthy_service"
+  ]
+ },
+ "S8-HM3-4": {
+  "source": "tests/requirements/s8-hm3.json#S8-HM3-4",
+  "statement": "Report SH-7 custody/context, byte-budget and publication-material disagreement; healthy stores remain quiet.",
+  "checks": [
+   "codex:tests.test_health_holds.HoldsTests.test_custody_drift",
+   "codex:tests.test_health_holds.HoldsTests.test_healthy_store",
+   "codex:tests.test_health_holds.HoldsTests.test_publication_material_is_checked",
+   "codex:tests.test_health_holds.HoldsTests.test_context_byte_budget_across_pages",
+   "codex:tests.test_health_holds.HoldsTests.test_context_byte_budget_does_not_combine_changed_snapshots"
+  ]
+ },
+ "S8-HM3-5": {
+  "source": "tests/requirements/s8-hm3.json#S8-HM3-5",
+  "statement": "Bound read-only source reads using keyset pages, existing indexes and deadlines; continue past page limits without a lifetime refusal.",
+  "checks": [
+   "codex:tests.test_health_holds.HoldsTests.test_past_page_limit",
+   "codex:tests.test_health_holds.HoldsTests.test_query_plans_and_read_only",
+   "codex:tests.test_health_holds.HoldsTests.test_deadline",
+   "codex:tests.test_health_holds.HoldsTests.test_unreadable_account_is_plain_machine_finding",
+   "codex:tests.test_health_holds.HoldsTests.test_account_projects_past_page_limit",
+   "codex:tests.test_health_holds.HoldsTests.test_context_byte_budget_across_pages",
+   "codex:tests.test_health_holds.HoldsTests.test_past_legacy_evidence_limit"
+  ]
+ },
+ "S8-HM3-6": {
+  "source": "tests/requirements/s8-hm3.json#S8-HM3-6",
+  "statement": "Use project-scoped findings with fixed plain owner wording and no private content; register the holds check in the monitor.",
+  "checks": [
+   "codex:tests.test_health_holds.HoldsTests.test_scoping_and_private_text",
+   "codex:tests.test_health_holds.HoldsTests.test_registration",
+   "codex:tests.test_health_holds.HoldsTests.test_unreadable_account_is_plain_machine_finding",
+   "codex:tests.test_health_holds.HoldsTests.test_findings_survive_other_project_pass_and_say_when_stale"
+  ]
  }
 }
