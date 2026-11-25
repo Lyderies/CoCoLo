@@ -2585,6 +2585,7 @@
  "codex:tests.test_trial_run_driver_bugs.TrialRunDriverTests.test_the_result_reservation_outlasts_the_longest_route_time_limit": 2.42,
  "codex:tests.test_trial_run_driver_bugs.TrialRunDriverTests.test_verifier_prechecks_succeed_while_another_child_runs": 2.42,
  "codex:tests.test_type_lookups": 0.96,
+ "codex:tests.test_updfix": 2.5,
  "codex:tests.test_upgrade_handover": 4.3,
  "codex:tests.test_usage_recheck": 0.5,
  "codex:tests.test_usage_recheck_live": 9.8,

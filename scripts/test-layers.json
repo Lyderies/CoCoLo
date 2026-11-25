@@ -324,6 +324,7 @@
  "codex:tests.test_synchronized_races": "scenario",
  "codex:tests.test_trial_run_driver_bugs": "scenario",
  "codex:tests.test_type_lookups": "scenario",
+ "codex:tests.test_updfix": "scenario",
  "codex:tests.test_upgrade_handover": "scenario",
  "codex:tests.test_usage_recheck": "component",
  "codex:tests.test_usage_recheck_live": "scenario",

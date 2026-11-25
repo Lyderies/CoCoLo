@@ -49,3 +49,20 @@ Requirement ids served are the lifecycle test's own (tests/e2e/requirements.json
 | UPDFIX-5 | packages/codex-agents/tests/test_updfix.py `WakeKeyKeptTests` |
 | UPDFIX-3, UPDFIX-4 | tests/test_setup_update.py `test_UPDFIX_*` |
 | UPDFIX-1, UPDFIX-6 | the lifecycle checks above (scripts/e2e_lifecycle.py --execute ...) |
+
+## Status (2026-11-25) and evidence
+
+Done and committed on fix/update-refusal; nothing pushed, installed or merged; VERSION and runtime-releases.json untouched.
+- Code: cli.py `_update_check_report` and `learning-update-check`; service_enrollment.py `keep_wake_capability` used by the
+  collector's `register` op (learning_store.py); scripts/setup_wizard/flow.py `child_would_refuse_update` (step 2) and the step 5
+  line `CHILD_STARTED_LATER`; docs/troubleshooting.md.
+- Red -> green: test_updfix.py 4 failures + 10 errors (command and function missing) -> 8 OK; tests/test_setup_update.py 3
+  failures (`test_UPDFIX_3_*` x2, `test_UPDFIX_4_*`) with flow.py as before -> 21 OK (161 s). Lifecycle checks, run with
+  `scripts/e2e_lifecycle.py --execute <names>`: before the fix l1_setup_again_with_answers_changes_nothing and
+  l1_update_on_installed_project_changes_nothing failed on one file (`client-runtimes/<digest>.wake.cap`, re-issued by every
+  `register`), and with the wizard as before l12_3_refused_update..._changes_nothing (changed_files/head/commits/records) and
+  l12_3_the_update_after_..._has_ended (step_5_failed) failed; after the fix all of them pass.
+- Known not run: the full suite (the primary's job). `codex:tests.test_runtime_release` now fails by design until the primary
+  refreshes the 0.8.60/next runtime digest (a runtime file changed: cli.py, learning_store.py, service_enrollment.py).
+- Residual: a child started in the seconds between step 2's check and step 5 is still refused at step 5 after step 4 updated the
+  project (UPDFIX-4 says so truthfully); the project is then half-updated until the update is run again.
