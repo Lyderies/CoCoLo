@@ -1,5 +1,62 @@
 # RECOV status — 2026-11-25
 
+## Review correction round — base 18929e7e
+
+Completed the four requested corrections in this worktree; no commit (sandbox instruction), VERSION bump, runtime
+catalogue change, schema/record-shape change, or change to another worktree. Requirements were updated first, then
+tests run red before the two behavioral fixes. No assertion present at the review base was changed or removed;
+[assertions.md](assertions.md) also records two corrections to initial drafts of the newly added tests.
+
+All test names below are in `codex:tests.test_recovery_line`.
+
+| Item / requirement | Test / change | Red → green evidence |
+| --- | --- | --- |
+| 1 / RECOV-2, E2a-7 | `BackoffTests.test_release_then_crash_before_exact_leaves_collector_pending_instead_of_later_B6_retry` | Red on review base: ledger stays `exact`, due **86531000**, after committed release resets effective due to **86401000**. Green: ledger stays `pending` with the earlier due when transaction settlement is lost; draining cannot restore stale exact. Release now calls `wake_before` with the held orchestration's due before resetting B6; corrected release comment. |
+| 2 / RECOV-1, RECOV-3 | `RecoveryTests.test_persistently_failed_substeps_do_not_renew_progress_and_warning_returns_at_threshold` | Red on review base for all seven sub-steps: each advanced the check through persistent failures. Green for `end_earlier`, `end_idle`, `settle_earlier_registrations`, `release_earlier_unarmed_leases`, `expire_result_leases`, `_adopt_committed`, and `record_pass`: three failed passes complete cleanup requests without renewing; null at threshold − 1 ms, exact E2c-9 warning at threshold. Pass renews only when every wrapped maintenance step succeeds. RECOV-1/3 text updated. |
+| 3 / RECOV-2 query documentation | `next_hold_due` docstring; existing `BackoffTests.test_B6_backoff_is_published_and_other_holds_and_release_reset_still_win` | Documentation-only correction: ordinary minima use indexed deadlines, orchestration expression scans capped open orchestrations. The review base docstring already omitted “index seeks”; made the distinction explicit. Existing query regression stays green; no index change or behavioral red claimed. |
+| 4 / RECOV-1, RECOV-3 | `RecoveryTests.test_real_hold_transaction_between_passes_preserves_without_renewing_the_floor` | Coverage-only addition, already green on review base. Real `reserve_result` on the history writer commits real `take_hold` between passes; floor survives, warning returns at original threshold, next successful pass renews it. Fault-sensitivity red: removing only the transaction publication floor in memory drops **1795572640229** to **1795572520223**. Restoring production behavior is green. |
+
+Red evidence: corrected fixtures on unchanged review-base runtime, **10 tests, 8 assertion failures, 10.066 s**
+(one crash test and seven sub-step subtests); `metadata_errors: []`. Initial drafts additionally exposed one
+exclusive-writer fixture error (10 tests, 8 failures + 1 error, 4.423 s), corrected before implementation.
+Floor fault campaign: named RECOV module, **10 tests, 2 failures, 4.951 s**, including the real-transaction floor
+assertion and the pre-existing synthetic-write floor assertion. The mutation existed only in process memory.
+Final unmodified runtime: RECOV module **10/10 pass, 4.9 s worker time**, `metadata_errors: []`.
+
+Named validation (no full run):
+
+- `tests.test_recovery_line`, `tests.test_b6_unattended_close`, `tests.test_project_holds_schema`: **91/91 pass**;
+  worker times **5.1 / 7.6 / 1.4 s**, batch elapsed **7.6 s**, job-seconds **14.020**;
+  `metadata_errors: []`, no budget failures.
+- `tests.test_b2_service_outcome_sweep`: **19/19 pass, 10.369 s** (worker 11.1 s), including
+  `test_the_cleanup_runs_even_when_the_record_pass_fails_unexpectedly`.
+- `tests.test_result_persistence`: **25 tests, 6 failures, 11.229 s**. Loading the two edited runtime modules from
+  **18929e7e** in memory and running the same named module gives the same six names and failures,
+  **25 tests, 6 failures, 10.480 s**: actual client usage, lost commit reply, full-sized body, original assignment,
+  slow database/second intake, validator reason. These native child/provider fixture failures predate this round.
+- `tests.test_e2a_wake_wire`: **31 tests, 6 failures + 6 errors, 21.134 s**; socket binds fail with
+  `PermissionError: [Errno 1] Operation not permitted`, and process inspection is denied. All non-socket cases
+  pass. Real collector/wire/crash scenarios still require an unsandboxed rerun; the new release-crash test uses
+  the real ledger directly and passes here. No pty-dependent check was needed or claimed.
+- `tests.test_runtime_release`: expected **1 failure / 3 tests, 0.012 s**: recorded digest remains
+  `152fc5bf7e3df433f177baf8ea2418c6835598dd840eb4546c296930b85c86d2`, runtime is now
+  `5a6dfd177d09f750de0e557abfde9d897ccd3406d9db097c7655993a35c51b63`. Primary owns catalogue/version at merge.
+- The latter four-module batch had `metadata_errors: []`, no budget failures, **21.6 s elapsed / 44.961 job-seconds**.
+  Existing module registration is unchanged; new checks and exact requirement statements are synchronized in the
+  registry/source JSON. No module was added or renamed. No schema/copier/backup/move checks required. All runs ended.
+
+Round files: `project_holds_schema.py` (items 1, 3); `result_persistence.py` (item 2);
+`packages/codex-agents/tests/test_recovery_line.py` (items 1, 2, 4); `docs/requirements/recov.md`,
+`tests/requirements/recov.json`, `scripts/test-requirements.json` (requirements/check mappings);
+`docs/requirements/recov/assertions.md` and this file (evidence).
+
+Unsandboxed rerun with the supplied venv: `"$RECOV_PY" -B scripts/parallel_tests.py --module
+codex:tests.test_e2a_wake_wire --module codex:tests.test_result_persistence`.
+The original E2c-9 collector scenario remains unverified here as noted below; this round did not rerun
+`tests.test_project_start`, the full suite, live probes, or installation.
+
+## Original implementation evidence — 18929e7e
+
 Implemented in `fix/recovery-line`, based on `cbc757d5` (0.8.60). Changes remain uncommitted as instructed for this
 sandbox. Requirements preceded regression tests; failing tests preceded each behavior change. No existing test
 assertion was edited or removed; see [assertions.md](assertions.md). VERSION and runtime-releases.json are unchanged.

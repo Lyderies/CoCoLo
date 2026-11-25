@@ -11,12 +11,14 @@ WHY = 'Real history writer and ledger with controlled time; publisher transport 
 def setUpModule():
     # Fixture modules load schemas and runtime digests: defer them until execution, never test discovery/import.
     global b6, accounts, persistence, assignment, binding, holds, project_start, project_wake, HistoryError
+    global orchestration_store, service_record
     from tests import test_b6_unattended_close as b6
     from tests import test_account_launch_claims as accounts
     from tests import test_result_persistence as persistence
     from tests.learning_support import assignment
     from tests.test_project_history import binding
     from codex_agents import project_holds_schema as holds, project_start, project_wake
+    from codex_agents import orchestration_store, service_record
     from codex_agents.history_contracts import HistoryError
 
 
@@ -128,6 +130,56 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual('recovery pending: service unresponsive', self.line())
 
     @requirements('RECOV-1', 'RECOV-3', why_not_scenario=WHY)
+    def test_real_hold_transaction_between_passes_preserves_without_renewing_the_floor(self):
+        self.pass_once()
+        checked = self.ledger.start_record(self.project)['due_at_ms']
+        self.now += 30_000
+        self.writer._wall_origin_ns += 30_000 * 1_000_000
+        target = binding(2, project=self.writer.project)
+        # Use the existing exclusive writer, dispatching a real history operation with its real transaction.
+        # The fixture bypasses only the public open-binding operation allowlist, not the store or hold hooks.
+        request = persistence.result_persistence._EarlierLeases('open_binding', arguments=(
+            'reserve_result', (target, assignment()),
+            {'hard_deadline_at_ms': self.writer.fixture_time_ns() // 1_000_000 + 1000}))
+        reservation = self.writer.answered(self.writer.lane._queue_counted(
+            request, '_earlier_held', persistence.result_persistence.EARLIER_SLOTS))
+        self.assertEqual(('reserved', target), (reservation.state, reservation.binding))
+        self.publisher.drain()
+        self.assertEqual(checked, self.ledger.start_record(self.project)['due_at_ms'])
+        grace = int(project_start.START_RECHECK_SECONDS * 1000)
+        self.assertIsNone(self.line(checked + grace - 1))
+        self.assertEqual('recovery pending: service unresponsive', self.line(checked + grace))
+        self.pass_once()
+        self.assertGreater(self.ledger.start_record(self.project)['due_at_ms'], checked)
+
+    @requirements('RECOV-1', 'RECOV-3', why_not_scenario=WHY)
+    def test_persistently_failed_substeps_do_not_renew_progress_and_warning_returns_at_threshold(self):
+        steps = (
+            (orchestration_store.OrchestrationOwner, 'end_earlier'),
+            (orchestration_store.OrchestrationOwner, 'end_idle'),
+            (persistence.ProjectHistory, 'settle_earlier_registrations'),
+            (persistence.ProjectHistory, 'release_earlier_unarmed_leases'),
+            (persistence.ProjectHistory, 'expire_result_leases'),
+            (self.writer.lane, '_adopt_committed'),
+            (service_record, 'record_pass'),
+        )
+        grace = int(project_start.START_RECHECK_SECONDS * 1000)
+        for owner, name in steps:
+            with self.subTest(step=name):
+                self.pass_once()
+                checked = self.ledger.start_record(self.project)['due_at_ms']
+                error = RuntimeError('record pass failed') if name == 'record_pass' else HistoryError('history_unavailable')
+                with mock.patch.object(owner, name, side_effect=error) as failed:
+                    for _ in range(3):
+                        self.now += grace // 3
+                        self.writer._wall_origin_ns += (grace // 3) * 1_000_000
+                        self.pass_once()  # suppressed failure still allows the cleanup/request to finish
+                    self.assertEqual(3, failed.call_count)
+                self.assertEqual(checked, self.ledger.start_record(self.project)['due_at_ms'])
+                self.assertIsNone(self.line(checked + grace - 1))
+                self.assertEqual('recovery pending: service unresponsive', self.line(checked + grace))
+
+    @requirements('RECOV-1', 'RECOV-3', why_not_scenario=WHY)
     def test_future_and_null_deadlines_and_clean_stop_are_preserved(self):
         self.pass_once()
         self.writer.stop_lane(self.writer.lane)
@@ -153,6 +205,44 @@ class RecoveryTests(unittest.TestCase):
 
 
 class BackoffTests(unittest.TestCase):
+    @requirements('RECOV-2', 'E2a-7', why_not_scenario=WHY)
+    def test_release_then_crash_before_exact_leaves_collector_pending_instead_of_later_B6_retry(self):
+        fixture = b6.OrchestrationStore(methodName='runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        account = accounts.AccountLaunchClaimsTests(methodName='runTest')
+        account.setUp()
+        self.addCleanup(account.doCleanups)
+        snapshot = fixture.open()
+        handle = snapshot['orchestration_handle']
+        fixture.block(handle)
+        blocker = 'clm_' + handle[-8:]
+        db, project = fixture.store._connection, fixture.store.project_id
+        with fixture.store._transaction():
+            holds.take_hold(db, project, 'reservation', blocker, now_ms=fixture.now)
+        fixture.now += b6.ORCHESTRATION_IDLE_MS + 120_000
+        publisher = project_wake.WakePublisher(None, None, project, start_sender=False,
+            send=lambda payload, timeout: account.ledger.publish_wake(account.project, now_ms=fixture.now, **payload))
+        self.addCleanup(publisher.close)
+        holds.install_wake_guard(project, publisher)
+        self.addCleanup(holds.install_wake_guard, project, None)
+        publisher.open(db)
+        publisher.drain()
+        self.assertEqual(0, fixture.owner.end_idle())
+        publisher.drain()
+        retry = fixture.now + holds.UNATTENDED_BACKOFF_MS
+        self.assertEqual(retry, account.ledger.start_record(account.project)['due_at_ms'])
+        # Commit the release, then lose the process before its transaction can queue/send exact.
+        with mock.patch.object(holds, 'wake_settled'):
+            with fixture.store._transaction():
+                holds.release_hold(db, project, 'reservation', blocker, 'lost', now_ms=fixture.now)
+        self.assertEqual(snapshot['started_at_ms'] + b6.ORCHESTRATION_IDLE_MS, holds.next_hold_due(db))
+        publisher.drain()  # no stale queued exact may overwrite the pending either
+        row = account.ledger._connection.execute('SELECT state,due_at_ms FROM project_wake WHERE project_id=?',
+                                                (account.project,)).fetchone()
+        self.assertEqual('pending', row['state'])
+        self.assertTrue(row['due_at_ms'] is None or row['due_at_ms'] <= holds.next_hold_due(db))
+
     @requirements('RECOV-2', why_not_scenario='Real orchestration owner and hold register with a recording publisher.')
     def test_B6_backoff_is_published_and_other_holds_and_release_reset_still_win(self):
         fixture = b6.OrchestrationStore(methodName='runTest')

@@ -285,7 +285,9 @@ def wake_checked(project_id: str, connection, *, now_ms: int) -> None:
 
 def next_hold_due(connection) -> int | None:
     """The earliest outstanding check (never tombstones): hold deadlines, B6's effective orchestration check,
-    or a releasing open binding's withdrawal retry. Evidence obligations retain conservative deadlines here."""
+    or a releasing open binding's withdrawal retry. Evidence obligations retain conservative deadlines here.
+    Ordinary minima use indexed deadlines; the orchestration expression scans the capped open orchestrations.
+    """
     found = None
     for kind in HOLD_KINDS:
         for state in ("held", "releasing"):
@@ -347,9 +349,15 @@ def release_hold(connection, project_id: str, kind: str, identity: str, release_
     # B6 (RS-B-B6-4): releasing an execution hold of an orchestration has its unattended close checked again at once.
     handle = _orchestration_of(connection, project_id, kind, identity)
     if handle is not None:
+        row = connection.execute("SELECT due_at_ms FROM project_holds WHERE project_id=? "
+                                 "AND kind='orchestration' AND identity=? AND state='held'",
+                                 (project_id, handle)).fetchone()
+        if row is not None:
+            # E2a-7: resetting B6 backoff can move the effective check earlier; invalidate before the reset.
+            wake_before(project_id, row[0])
         connection.execute("UPDATE project_holds SET next_check_ms=0,evidence=NULL WHERE project_id=? "
                            "AND kind='orchestration' AND identity=? AND state='held'", (project_id, handle))
-    wake_touch(project_id)  # E2a-7: the next due may move later
+    wake_touch(project_id)  # Releasing the hold itself can move the next due later; the reset above may move it earlier.
 
 
 def adopt_orchestrations(connection, project_id: str, orchestrations) -> None:
