@@ -394,5 +394,9 @@
  "root:test_test_framework_r3": "integration",
  "root:test_test_framework_review": "integration",
  "root:test_test_stages": "integration",
- "root:test_wizard_clock": "integration"
+ "root:test_wizard_clock": "integration",
+ "codex:tests.test_u4_probe_capacity": "integration",
+ "codex:tests.test_u4_probe_execution_capacity": "integration",
+ "codex:tests.test_u4_probe_live_capacity": "integration",
+ "codex:tests.test_u4_probe_product_capacity": "integration"
 }

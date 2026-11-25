@@ -1711,6 +1711,36 @@
   "source": "REQUIREMENTS-merge-review.md#ML-R91",
   "statement": "**ML-R91 \u2014 Recorded empty folder trees.** Owner decision 91=A: a folder that holds only other empty folders CoCoLo itself made counts as empty, provided there is nothing else inside and every folder matches the device/inode identity CoCoLo recorded. Foreign files, unrecorded folders, and replaced folder identities do not qualify. The two C-3 checks must enforce this rule without accepting foreign contents."
  },
+ "O0C-U4-1": {
+  "checks": [
+   "codex:tests.test_u4_probe_capacity.ProbeCapacityTests.test_expired_reservations_past_the_cap_release_once_with_a_live_control",
+   "codex:tests.test_u4_probe_execution_capacity.DeniedProbeCapacityTests.test_denials_past_the_cap_keep_the_admitted_control_and_replay",
+   "codex:tests.test_u4_probe_execution_capacity.CompletedProbeCapacityTests.test_completed_history_past_the_cap_still_replays"
+  ],
+  "source": "tests/requirements/u4.json#O0C-U4-1",
+  "statement": "Completed, denied and expired-reserved probe histories beyond a reduced MAX_PROBE_REQUESTS preserve sealed history and replay without exhausting capacity."
+ },
+ "O0C-U4-2": {
+  "checks": [
+   "codex:tests.test_u4_probe_live_capacity.LiveProbeCapacityTests.test_a_running_model_stays_charged_while_reservations_expire"
+  ],
+  "source": "tests/requirements/u4.json#O0C-U4-2",
+  "statement": "A genuinely running probe stays charged while expired reservations release, and fills the reduced cap with one other live request."
+ },
+ "O0C-U4-3": {
+  "checks": [],
+  "deferred": true,
+  "reason": "C5 probe journal/reaper parked with the container phase (decision 110)",
+  "source": "tests/requirements/u4.json#O0C-U4-3",
+  "statement": "Repeated restarted admitted probe lifecycles release exactly once on the accepted 3.3 journal and reaper evidence, preserve replay and keep live executions charged."
+ },
+ "O0C-U4-4": {
+  "checks": [
+   "codex:tests.test_u4_probe_product_capacity.ProductProbeCapacityTests.test_history_past_the_cap_allows_a_normal_claim_and_probe"
+  ],
+  "source": "tests/requirements/u4.json#O0C-U4-4",
+  "statement": "After past-cap probe history a normal claim and billing probe succeed through the CLI and product services."
+ },
  "P4-REPORT": {
   "checks": [],
   "source": "docs/requirements/rsd-s3/requirements.md#P4-REPORT",
