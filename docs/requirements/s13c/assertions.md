@@ -6,7 +6,7 @@ host_slots 10, lost_run_settlement 27). The pairs below are the only changed ass
 ## Changed assertions (old -> new)
 
 - None. `test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client` is restored to
-  the base `ce81bd96` text (`git diff ce81bd96` shows no change to its assertions; its decorator only gained `S13C-1` and
+  the base `ce81bd96` text (`git diff ce81bd96` shows no change to its assertions; its decorator only gained `S13C-1`, `S13C-2` and
   `S13C-3`). Under load it is a known flake attributed to plan step S13e until that lands. The only related fixture change
   is `StarterBase.setUpClass` compiling the runtime into the class bytecode cache before any test's clock starts (no assertion).
 
@@ -47,4 +47,4 @@ host_slots 10, lost_run_settlement 27). The pairs below are the only changed ass
 
 ## Registration only
 
-`@requirements` gained `S13C-1`, `S13C-3` on the tests named in `scripts/test-requirements.json`.
+`@requirements` gained `S13C-1`, `S13C-2`, `S13C-3` on the tests named in `scripts/test-requirements.json`.

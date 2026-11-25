@@ -421,7 +421,7 @@ def overlaps(events):
 
 
 class StartTests(StarterBase):
-    @requirements('E2c-1', 'S13C-1', 'S13C-3', why_not_scenario=SCENARIO)
+    @requirements('E2c-1', 'S13C-1', 'S13C-2', 'S13C-3', why_not_scenario=SCENARIO)
     def test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client(self):
         self.add('never')  # never ran: unknown, so due at collector start
         self.add('stopped')
