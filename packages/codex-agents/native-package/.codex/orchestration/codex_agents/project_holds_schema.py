@@ -107,6 +107,10 @@ PROJECT_HOLDS_COLUMNS = {
 
 def attempt_identity(run_handle: str, attempt: int) -> str:
     """The register identity of an attempt's holds (lease, driver entry, preparation, open binding, custody)."""
+    # history_contracts._RUN is hrn_[0-9a-f]{48}; SQL report joins split here
+    # to seek each source's (project_id, run_handle, attempt) primary key.
+    if ':' in run_handle:
+        raise ValueError('attempt identities require a colon-free run handle')
     return f"{run_handle}:{attempt}"
 
 

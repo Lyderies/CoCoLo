@@ -1,12 +1,13 @@
 """Closed, content-free B7a status reply. Safe to import in a client without a store."""
 from .history_contracts import HistoryError, valid_integer
+from .recovery_report import RECOVERY_REASONS
 
 HOLD_KINDS = ('driver_entry', 'preparation', 'lease', 'reservation', 'orchestration', 'open_binding', 'result_custody')
 UNTRACKED_KINDS = frozenset({'driver_entry', 'preparation', 'orchestration'})
 TIMER_KINDS = frozenset({'orchestration', 'result_custody'})
 MAX_REPAIR_ENTRIES = 20
 CONTEXT_BYTES_LIMIT = 256 * 1_048_576
-REPORT_FIELDS = frozenset({'project_holds', 'result_custody', 'result_retirement_repairs'})
+REPORT_FIELDS = frozenset({'project_holds', 'result_custody', 'result_retirement_repairs', 'recovery_pending'})
 HOLD_FIELDS = frozenset({'tracking', 'held', 'releasing', 'past_due', 'next_eligible', 'oldest_taken_at_ms'})
 CUSTODY_FIELDS = frozenset({'live', 'context_bytes', 'max_live_context_bytes', 'retained_until_ms',
                            'awaiting_verifier', 'legacy_no_context', 'ended_by_update_unrecorded'})
@@ -72,4 +73,9 @@ def checked_holds_report(value):
         require(entry in (DIRECTORY_REPAIR, OPERATOR_REPAIR) if entry['operator_needed'] else entry == RETRY_REPAIR)
         require(not (retry_seen and entry['operator_needed']))
         retry_seen |= not entry['operator_needed']
+    recovery = value['recovery_pending']
+    require(_closed(recovery, {'reasons', 'stale'}) and type(recovery['stale']) is bool)
+    require(_closed(recovery['reasons'], set(RECOVERY_REASONS)))
+    require(all(count is None if recovery['stale'] else valid_integer(count, maximum=1 << 32)
+                for count in recovery['reasons'].values()))
     return value

@@ -86,6 +86,7 @@ from .codex_preparation import (
 from .collector_client import COLLECTOR_RUNTIME_DIGEST
 from . import container_launch
 from .container_recovery import ContainerRecovery
+from .recovery_report import EXPIRY_SECONDS, RECOVERY_REASONS
 from .control_api import ControlScope
 from .dispatch_api import dispatch_request_digest
 from .execution_grant import ExecutionRegistrationInput, checked_execution_grant
@@ -181,7 +182,6 @@ _PUBLISH_REFUSALS = frozenset({'history_invalid_input', 'history_conflict', 'his
 # How often the journal is checked for runs of stopped earlier services, and how long
 # one settlement request may take.
 SWEEP_SECONDS = 1.0
-EXPIRY_SECONDS = 10.0  # Result cleanup; at least once a minute (0.3.4 R2).
 SETTLE_TIMEOUT_SECONDS = 10
 # The runtime this code runs from, as for preparation: the client capabilities a
 # result is admitted against come from here, as the CLI reads them from its runtime.
@@ -1825,6 +1825,11 @@ class RunDriver:
         account no longer holds it. A refused or unreachable settlement is asked again later.
         """
         now = self._clock()
+        notes = getattr(getattr(getattr(self, '_runtime', None), 'persistence', None), 'recovery_notes', None)
+        if notes is not None:
+            notes.update_own(run.key[0] for run in self._runs.values()
+                             if not run.own_settled and run.launch_token is not None
+                             and run.receipt is not None and run.state == 'failed')
         for run in self._runs.values():
             if (run.own_settled or run.launch_token is None or run.receipt is None or run.state != 'failed'
                     or run.future is not None):
@@ -1835,7 +1840,12 @@ class RunDriver:
                 future, run.own_settle = run.own_settle, None
                 try:
                     run.own_reply, run.own_settle_at = future.result(), None
-                except Exception:
+                    if notes is not None:
+                        notes.own_gone(run.key[0], account_unreachable=False)
+                except Exception as error:
+                    if notes is not None:
+                        notes.own_gone(run.key[0], account_unreachable=(
+                            isinstance(error, AccountError) and error.reason_code == 'account_unavailable'))
                     run.own_settle_failures += 1
                     run.own_settle_at = now + container_launch.stop_retry_delay(run.own_settle_failures)
                     continue
@@ -1869,6 +1879,8 @@ class RunDriver:
             if entry['state'] != 'gone' or entry['instance'] != self._journal.instance:
                 continue
             run.own_workspace = entry['workspace']
+            if notes is not None:
+                notes.own_gone(run.key[0])
             run.own_settle = self._sweeper.submit(self._settle_entry, entry)
 
     def _settled_own(self, run):
@@ -1913,94 +1925,146 @@ class RunDriver:
         # nothing) may be pruned; an entry it never saw, or one whose recovery failed, stays.
         inspected = set()
         entries = journal.entries()
-        claimed_requests = {entry['claim_request_id'] for entry in entries if entry.get('version') == 1}
-        for entry in entries:
-            # B4s confirming check: one entry's failure never aborts the sweep for the later ones.
-            try:
-                if entry['state'] is None:
-                    continue
-                handle, host_client = entry['run_handle'], entry['host_client']
-                if entry.get('version') == 3:
-                    # B4s r1 HIGH 3: a process intent; only a stopped instance's is settled (`_settle_intent`).
+        pending, process_pending, stops, unreachable = set(), set(), set(), set()
+        complete = True
+        call = getattr(self, '_call', None)
+        if call is not None:
+            call.recovery_unreachable = unreachable
+        try:
+            claimed_requests = {entry['claim_request_id'] for entry in entries if entry.get('version') == 1}
+            for entry in entries:
+                # B4s confirming check: one entry's failure never aborts the sweep for the later ones.
+                try:
+                    if entry['state'] is None:
+                        complete = False
+                        continue
+                    handle, host_client = entry['run_handle'], entry['host_client']
+                    if entry.get('version') == 3:
+                        # B4s r1 HIGH 3: a process intent; only a stopped instance's is settled (`_settle_intent`).
+                        if entry['state'] == 'settled':
+                            inspected.add(launch_journal_key(entry))
+                            if entry['outcome'] != 'fenced':
+                                lost[handle] = (host_client, 'released')
+                        elif entry['instance'] != journal.instance and stopped.setdefault(
+                                entry['instance'], journal.instance_stopped(entry['instance'])) is True:
+                            try:
+                                outcome = self._settle_intent(entry, entry['claim_request_id'] in claimed_requests)
+                            except AccountError as error:
+                                pending.add(handle)
+                                if error.reason_code == 'account_unavailable':
+                                    unreachable.add(handle)
+                                continue
+                            if outcome in {'settled', 'fenced'}:
+                                pending.discard(handle)
+                                if outcome == 'settled':
+                                    lost[handle] = (host_client, 'released')
+                            elif outcome != 'removed':
+                                pending.add(handle)
+                        continue
                     if entry['state'] == 'settled':
-                        inspected.add(launch_journal_key(entry))
-                        if entry['outcome'] != 'fenced':
-                            lost[handle] = (host_client, 'released')
-                    elif entry['instance'] != journal.instance and stopped.setdefault(
-                            entry['instance'], journal.instance_stopped(entry['instance'])) is True:
-                        if self._settle_intent(entry, entry['claim_request_id'] in claimed_requests) == 'settled':
-                            lost[handle] = (host_client, 'released')
-                    continue
-                if entry['state'] == 'settled':
-                    lost[handle] = (host_client, 'released')
-                    if self._recover_settled(entry):
-                        inspected.add(launch_journal_key(entry))
-                    else:
-                        # s2fix round 2 (L14.1): the project store has not recorded this older entry's settlement
-                        # yet (its report counts the run pending), so run-status does not say `released` early.
-                        lost[handle] = (host_client, 'held')
-                    continue
-                instance = entry['instance']
-                adopted = entry.get('version') == 2 and recovery is not None and recovery.owns(entry['token'])
-                if adopted:
-                    pass
-                elif instance == journal.instance:
-                    if not own:
+                        lost[handle] = (host_client, 'released')
+                        if self._recover_settled(entry):
+                            inspected.add(launch_journal_key(entry))
+                        else:
+                            # s2fix round 2 (L14.1): the project store has not recorded this older entry's settlement
+                            # yet (its report counts the run pending), so run-status does not say `released` early.
+                            lost[handle] = (host_client, 'held')
+                            pending.add(handle)
                         continue
-                elif stopped.setdefault(instance, journal.instance_stopped(instance)) is not True:
-                    continue
-                lost[handle] = (host_client, 'held')
-                if entry.get('version') == 2:
-                    if adopted or (instance != journal.instance and not own):
-                        if recovery is not None:
-                            recovering.append(entry)
+                    instance = entry['instance']
+                    adopted = entry.get('version') == 2 and recovery is not None and recovery.owns(entry['token'])
+                    if adopted:
+                        pass
+                    elif instance == journal.instance:
+                        if not own:
+                            # This service still owns its failed stop; it is recovery work,
+                            # even though ordinary live runs of this instance are excluded.
+                            if entry.get('version') == 2 and entry['state'] == 'stop_failed':
+                                pending.add(handle)
+                                process_pending.add(handle)
+                                stops.add(handle)
+                            continue
+                    elif stopped.setdefault(instance, journal.instance_stopped(instance)) is not True:
                         continue
-                    if instance != journal.instance or not self._own_container_gone(entry):
+                    lost[handle] = (host_client, 'held')
+                    pending.add(handle)
+                    if entry.get('version') == 2:
+                        if entry['state'] != 'gone':
+                            process_pending.add(handle)
+                        if entry['state'] == 'stop_failed':
+                            stops.add(handle)
+                        if adopted or (instance != journal.instance and not own):
+                            if recovery is not None:
+                                recovering.append(entry)
+                            continue
+                        if instance != journal.instance or not self._own_container_gone(entry):
+                            continue
+                    elif entry.get('version') == 1 and entry['state'] == 'watched':
+                        # Decision 221: the same two-sample proof, recorded once here; the settlement reads it back as `gone`.
+                        try:
+                            journal.process_gone(entry['bridge_run_id'])
+                        except JournalError:
+                            process_pending.add(handle)
+                            continue
+                    elif tree_state(entry) != 'gone':
+                        process_pending.add(handle)
                         continue
-                elif entry.get('version') == 1 and entry['state'] == 'watched':
-                    # Decision 221: the same two-sample proof, recorded once here; the settlement reads it back as `gone`.
                     try:
-                        journal.process_gone(entry['bridge_run_id'])
+                        reply = self._settle_entry(entry)
+                    except AccountError as error:
+                        if error.reason_code == 'account_unavailable':
+                            unreachable.add(handle)
+                        continue
+                    except Exception:
+                        continue  # A local failure is not evidence that the account is unreachable.
+                    if not self._remove_workspace(entry['workspace']):
+                        continue  # B4s r1 (MED 2): not confirmed gone; the next sweep replays the identical settlement
+                    try:
+                        journal.settled(launch_journal_key(entry), reply['state'])
                     except JournalError:
                         continue
-                elif tree_state(entry) != 'gone':
-                    continue
-                try:
-                    reply = self._settle_entry(entry)
+                    lost[handle] = (host_client, 'released')
+                    pending.discard(handle)
                 except Exception:
-                    continue  # The account is unreachable or refused: asked again on the next sweep.
-                if not self._remove_workspace(entry['workspace']):
-                    continue  # B4s r1 (MED 2): not confirmed gone; the next sweep replays the identical settlement
+                    complete = False
+                    continue  # Asked again on the next sweep.
+            if recovery is not None:
                 try:
-                    journal.settled(launch_journal_key(entry), reply['state'])
-                except JournalError:
-                    continue
-                lost[handle] = (host_client, 'released')
-            except Exception:
-                continue  # Asked again on the next sweep.
-        if recovery is not None:
+                    recovered = recovery.recover(recovering, orphans=not own)
+                except Exception:
+                    complete = False
+                    recovered = {}  # Asked again on the next sweep.
+                for entry in recovering:
+                    if entry['token'] in recovered:
+                        lost[entry['run_handle']] = (entry['host_client'], 'released')
+                        pending.discard(entry['run_handle'])
+                        process_pending.discard(entry['run_handle'])
+                        stops.discard(entry['run_handle'])
             try:
-                recovered = recovery.recover(recovering, orphans=not own)
+                pruned = frozenset(journal.prune(only=frozenset(inspected), keep=frozenset(self._settled_retry)))
             except Exception:
-                recovered = {}  # Asked again on the next sweep.
-            for entry in recovering:
-                if entry['token'] in recovered:
-                    lost[entry['run_handle']] = (entry['host_client'], 'released')
-        try:
-            pruned = frozenset(journal.prune(only=frozenset(inspected), keep=frozenset(self._settled_retry)))
-        except Exception:
-            pruned = frozenset()
-        checked = self._settled_checked - pruned
-        if len(checked) > MAX_SETTLED_CHECKED:
-            checked = checked & inspected  # bounded: a key forgotten here is checked once more, harmlessly
-        self._settled_checked = frozenset(checked)
-        for instance in journal.instances():
-            if instance != journal.instance:
-                try:
-                    journal.forget_instance(instance)
-                except Exception:
-                    pass  # Asked again on the next sweep.
-        return lost
+                pruned = frozenset()
+            checked = self._settled_checked - pruned
+            if len(checked) > MAX_SETTLED_CHECKED:
+                checked = checked & inspected  # bounded: a key forgotten here is checked once more, harmlessly
+            self._settled_checked = frozenset(checked)
+            for instance in journal.instances():
+                if instance != journal.instance:
+                    try:
+                        journal.forget_instance(instance)
+                    except Exception:
+                        pass  # Asked again on the next sweep.
+            notes = getattr(getattr(getattr(self, '_runtime', None), 'persistence', None), 'recovery_notes', None)
+            if notes is not None and complete:
+                counts = dict.fromkeys(RECOVERY_REASONS, 0)
+                counts.update(needs_settlement=len(pending), needs_process_evidence=len(process_pending),
+                              stop_failed=len(stops), account_unreachable=len(unreachable & pending))
+                notes.publish(counts, runs={'needs_settlement': pending, 'needs_process_evidence': process_pending,
+                                            'stop_failed': stops, 'account_unreachable': unreachable & pending})
+            return lost
+        finally:
+            if call is not None:
+                call.recovery_unreachable = None
 
     def _settle_intent(self, entry, claimed):
         """Sweep thread, B4s r1 HIGH 3 (decision 146): a stopped instance's process intent with no later entry.
@@ -2198,6 +2262,11 @@ class RunDriver:
                 return {'state': 'released' if opened['release_kind'] == 'released_unacknowledged' else 'settled',
                         'known': True}
             closure = None if outbox != 'releasing' else client.lost_run_closure(settle, request_id=request_id)
+        except AccountError as error:
+            failed = getattr(call, 'recovery_unreachable', None)
+            if error.reason_code == 'account_unavailable' and failed is not None:
+                failed.add(entry['run_handle'])
+            raise
         finally:
             call.role = call.host_client = call.context = None
         if closure is not None:
@@ -2222,6 +2291,11 @@ class RunDriver:
                                    timeout=SETTLE_TIMEOUT_SECONDS)
             return client.fence_claim(
                 fence, request_id='recover-' + hashlib.sha256(entry['token'].encode()).hexdigest()[:32])
+        except AccountError as error:
+            failed = getattr(call, 'recovery_unreachable', None)
+            if error.reason_code == 'account_unavailable' and failed is not None:
+                failed.add(entry['run_handle'])
+            raise
         finally:
             call.role = call.host_client = call.context = None
 

@@ -99,7 +99,7 @@ class HoldsReportTests(dr.LeaseBackedFixture):
 
     def test_B7_1_empty_has_every_kind_and_explicit_zero_null_fields(self):
         value = report(self.store)
-        self.assertEqual({'project_holds', 'result_custody', 'result_retirement_repairs'}, set(value))
+        self.assertEqual({'project_holds', 'result_custody', 'result_retirement_repairs', 'recovery_pending'}, set(value))
         self.assertEqual(KINDS, set(value['project_holds']))
         for kind, counts in value['project_holds'].items():
             self.assertEqual(FIELDS, set(counts))
@@ -498,7 +498,8 @@ class HoldsClientStatusTests(unittest.TestCase):
     def test_B7_6_learning_status_prints_sections_and_nulls_when_unavailable(self):
         import cli
         safe = {'project_holds': {'lease': {'held': 2}}, 'result_custody': {'live': 3},
-                'result_retirement_repairs': {'entries': [], 'truncated': False}}
+                'result_retirement_repairs': {'entries': [], 'truncated': False},
+                'recovery_pending': {'reasons': {}, 'stale': True}}
         for value in (safe, None):
             with mock.patch('sys.argv', ['cli.py', 'learning-status', '--state-root', '/tmp/unused',
                                         '--project-root', '/tmp/unused-project']), \
