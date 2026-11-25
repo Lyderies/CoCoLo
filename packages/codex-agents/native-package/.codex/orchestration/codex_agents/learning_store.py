@@ -2398,10 +2398,11 @@ class LearningLedger:
             self._connection.execute(
                 "CREATE INDEX IF NOT EXISTS records_type_project ON records(record_type, project_id)"
             )
-            from .run_retention import RETENTION_INDEX, PROTECTION_INDEXES
+            from .run_retention import RETENTION_INDEX, PROTECTION_INDEXES, initialize
             self._connection.execute(RETENTION_INDEX)
             for index in PROTECTION_INDEXES:
                 self._connection.execute(index)
+            initialize(self)
             # AP5-2: evidence names content identities, so seek just those within the project.
             # Additive and non-unique: existing ledgers and older same-schema readers stay valid.
             # Both pinned candidate queries rely on every normal open completing this DDL;
@@ -11270,6 +11271,11 @@ class LearningLedger:
             ),
         )
         self._auto_link_locked(project_id, checked)
+        if checked['record_type'] == 'retention_summary':
+            from .run_retention import index_summary
+            index_summary(self, project_id, checked)
+        elif expires is not None and (expires, project_id, sequence) <= getattr(self, '_run_retention_after', (-1, '', 0)):
+            self._run_retention_after = (-1, '', 0)
         return {
             "stored": True,
             "duplicate": False,
@@ -12052,22 +12058,28 @@ class LearningLedger:
             raise LedgerError("canary case does not resolve to exactly one candidate")
         return case, active[0]
 
-    def _retention_detail(self, project_id, identifier, *, by_digest=False):
-        """Bound historical lookup too; an exhausted read gives a plain age answer."""
-        from .run_retention import RUN_RETENTION_READ_LIMITS
-        field = 'record_content_digests' if by_digest else 'record_id_digests'
+    def _retention_detail(self, project_id, identifier, *, by_digest=False, record_type=None):
+        """An indexed membership proof; budget refusal never invents history."""
+        from .run_retention import RUN_RETENTION_READ_LIMITS, HISTORY_TYPES
         target = identifier if by_digest else content_digest(identifier)
+        if record_type is not None and record_type not in HISTORY_TYPES:
+            return None
+        kind = HISTORY_TYPES.index(record_type) if record_type is not None else None
+        try:
+            target_bytes = bytes.fromhex(target)
+        except (ValueError, TypeError):
+            return None
+        if len(target_bytes) != 32:
+            return None
         def read():
             return self._connection.execute(
-                "SELECT content FROM records r WHERE project_id=? AND record_type='retention_summary' "
-                "AND EXISTS(SELECT 1 FROM json_each(CAST(r.content AS TEXT),?) WHERE value=?) "
-                "ORDER BY source_sequence DESC LIMIT 1", (project_id, '$.'+field, target)).fetchone()
+                "SELECT r.content FROM retention_members m JOIN records r "
+                "ON r.project_id=? AND r.source_sequence=m.summary_sequence "
+                "WHERE m.project_ref=(SELECT rowid FROM projects WHERE project_id=?) AND m.digest=? AND m.lookup_kind=? "
+                "AND (? IS NULL OR m.record_type=?) LIMIT 1",
+                (project_id, project_id, target_bytes, int(by_digest), kind, kind)).fetchone()
         with self._held():
-            try:
-                row = self._connection.read_in_current_mode(RUN_RETENTION_READ_LIMITS, read)
-            except SQLReadError:
-                return {'record_type': 'retention_summary', 'older_than_days': 90,
-                        'detail': 'Details older than 90 days are unavailable.'}
+            row = self._connection.read_in_current_mode(RUN_RETENTION_READ_LIMITS, read)
         return json.loads(bytes(row[0])) if row else None
 
     def record_by_digest(
@@ -12088,7 +12100,7 @@ class LearningLedger:
             ).fetchall()
         if len(rows) != 1:
             if record_type == 'outcome':
-                summary = self._retention_detail(project_id, digest, by_digest=True)
+                summary = self._retention_detail(project_id, digest, by_digest=True, record_type=record_type)
                 if summary is not None:
                     return summary
             raise LedgerError("controller evidence record was not found")
@@ -13571,8 +13583,8 @@ class ProjectRepository:
 
     def record(self, record_id: str, record_type: str | None = None) -> dict[str, Any]:
         """Return one immutable record from this project partition."""
-        from .learning_contracts import RETAINABLE_DETAIL_TYPES
-        lookup_types = RETAINABLE_DETAIL_TYPES | {'retention_summary'}
+        from .learning_contracts import STORED_RETENTION_DETAIL_TYPES
+        lookup_types = STORED_RETENTION_DETAIL_TYPES | {'retention_summary'}
         if record_type is None or record_type in lookup_types:
             with self.__ledger._held():
                 row = self.__ledger._connection.execute(
@@ -13582,7 +13594,7 @@ class ProjectRepository:
             if row is not None and row[0] in lookup_types:
                 return validate_learning_record(json.loads(bytes(row[1])), stored=True)
             if row is None:
-                summary = self.__ledger._retention_detail(self.project_id, record_id)
+                summary = self.__ledger._retention_detail(self.project_id, record_id, record_type=record_type)
                 if summary is not None:
                     return summary
                 raise LedgerError('project record was not found')

@@ -1,6 +1,7 @@
 """S14b real open/claim, owner thread and original-source copy boundaries. No sockets."""
 import json
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -37,8 +38,9 @@ class RunRetentionIntegrationTests(unittest.TestCase):
                                       request_id=state['scope'].claim_request_id)
         self.assertEqual('claimed', claimed['state'])
         now = ledger._clock_ms()
-        outcome = {**verification_outcome('retention-outcome'), 'observed_at_ms': now}
-        ledger._append_checked_locked(project, outcome, producer='verifier', timestamp=now)
+        outcome = {**verification_outcome('retention-outcome'), 'observed_at_ms': now,
+                   'run_id': state['scope'].run_id}
+        retention.store_product_row(ledger, project, outcome, 'verifier')
         before = sum(column_bytes(db, table, mark) for table, mark in marks.items())
         old = now+92*retention.DAY
         # Authority remains while the original open and run slot exist.
@@ -46,6 +48,7 @@ class RunRetentionIntegrationTests(unittest.TestCase):
                               "AND json_extract(CAST(content AS TEXT),'$.run_id')=?", (state['scope'].run_id,)).fetchone()[0]
         ledger.sweep_run_retention(now_ms=old)
         self.assertIsNotNone(db.execute('SELECT 1 FROM records WHERE record_id=?', (dispatch,)).fetchone())
+        self.assertIsNotNone(db.execute('SELECT 1 FROM records WHERE record_id=?', (outcome['record_id'],)).fetchone())
         with mock.patch.object(ledger, '_clock_ms', return_value=old), \
                 mock.patch.object(ledger, '_capacity_clock_reference', return_value=1<<62):
             ledger.release_due_account_holds()
@@ -67,13 +70,17 @@ class RunRetentionIntegrationTests(unittest.TestCase):
         overhead = 1.745*.972
         runs, horizon = 774, 1825
         event_bytes = runs*(103*7+3*30)*1367 + runs*90*1536
-        projected = overhead*runs*(after*horizon+before*92)+event_bytes
-        self.assertLess(projected, 16*1024**3, (before, after, projected/1024**3))
+        self.membership_entries_per_run = db.execute('SELECT COUNT(*) FROM retention_members').fetchone()[0]
+        # Measured at years scale: 50.53 bytes/member; reserve 64 for B-tree
+        # variance. This live derived index is not duplicated in backups.
+        membership_bytes = runs*horizon*self.membership_entries_per_run*64
+        projected = overhead*runs*(after*horizon+before*92)+event_bytes+membership_bytes
         # Isolated restore validates replay/capacity coverage after the real purge.
         path = ledger.state.root/'retired.sqlite3'
         path.touch(mode=0o600)
         project_backup.write(db, path, project, schema)
         project_backup.verify(path, project_id=project, compare=db)
+        self.assertLess(projected, 16*1024**3, (before, after, projected/1024**3))
 
     @requirements('S14b-3')
     def test_collector_sweep_sql_runs_on_the_E1b_owner_thread(self):
@@ -83,8 +90,7 @@ class RunRetentionIntegrationTests(unittest.TestCase):
         fixture.start_owner()  # default sockets=False
         owner = fixture.owner
         def seed():
-            owner.ledger._append_checked_locked(fixture.project, retention.identity('old'),
-                                                producer='provider', timestamp=retention.START)
+            retention.store_product_row(owner.ledger, fixture.project, retention.identity('old'))
         owner.call(seed)
         with mock.patch.object(owner.ledger, '_clock_ms', return_value=retention.START+91*retention.DAY):
             fixture.server._sweep_cycle()
@@ -97,6 +103,35 @@ class RunRetentionIntegrationTests(unittest.TestCase):
         self.assertIsNot(threading.current_thread(), fixture.thread)
         owner.call(seed)  # ordinary work still runs after maintenance
 
+    @requirements('S14b-3')
+    def test_pinned_ledger_reaches_idle_without_delaying_owner_requests(self):
+        from codex_agents.ledger_waits import LEDGER_REQUEST_WAIT_MS
+        fixture = wiring.LedgerOwnerWiringTests(methodName='runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.start_owner()
+        owner = fixture.owner
+        def seed():
+            with owner.ledger._account_transaction():
+                for i in range(256):
+                    identifier = f'pinned-{i}'
+                    retention.store_product_row(owner.ledger, fixture.project, retention.identity(identifier))
+                    owner.ledger._connection.execute('INSERT INTO record_links VALUES(?,?,?,?)',
+                                                     (fixture.project, identifier, identifier, 'evidence'))
+        owner.call(seed)
+        latencies = []
+        with mock.patch.object(owner.ledger, '_clock_ms', return_value=retention.START+91*retention.DAY):
+            for _ in range(12):
+                handle = owner.offer(fixture.server._sweep_cycle, caller='sweeps')
+                started = time.monotonic()
+                self.assertEqual(fixture.project, owner.call(lambda: fixture.project))
+                latencies.append(time.monotonic()-started)
+                self.assertTrue(handle.handled.wait(LEDGER_REQUEST_WAIT_MS/1000))
+            self.assertFalse(owner.call(lambda: owner.ledger._run_retention_more))
+            for _ in range(5):
+                self.assertIsNone(fixture.server._sweep_cycle())
+        self.assertLess(max(latencies), LEDGER_REQUEST_WAIT_MS/1000)
+
     @requirements('S14b-4', 'S14b-5')
     def test_summary_survives_original_source_image_and_learning_transfer(self):
         fixture = sources.LearningSourceTransferTests(methodName='runTest')
@@ -107,8 +142,7 @@ class RunRetentionIntegrationTests(unittest.TestCase):
         # Keep them explicitly cited so this test isolates the one new detail.
         ledger._connection.execute('INSERT OR IGNORE INTO record_links '
                                    "SELECT project_id,record_id,record_id,'evidence' FROM records")
-        ledger._append_checked_locked(fixture.project, retention.identity('old'),
-                                      producer='provider', timestamp=retention.START)
+        retention.store_product_row(ledger, fixture.project, retention.identity('old'))
         ledger.sweep_run_retention(now_ms=retention.START+91*retention.DAY)
         fixture.file_id = 'retention_copy'
         fixture.backup = ledger.create_sanitized_backup(fixture.project, file_id=fixture.file_id,

@@ -1,6 +1,6 @@
 """S14b: account detail retention, called only by collector maintenance.
 
-Controlled outcomes and replay/provenance rows are deliberately outside this sweep.
+Live and controlled evidence and replay/provenance fences are preserved.
 An indexed page is bounded BEFORE protection checks, so permanent evidence
 cannot make a pass scan an entire ledger. The in-memory cursor is only an
 optimisation; deletion and immutable summaries are the durable checkpoint.
@@ -17,6 +17,7 @@ RUN_RETENTION_BATCH = 32
 RUN_DETAIL_KEEP_MS = 90 * 86_400_000
 RUN_RETENTION_READ_LIMITS = SQLReadLimits(2048, 25, 4*1_048_576)
 DETAIL_SQL = ','.join("'"+kind+"'" for kind in sorted(RETAINABLE_DETAIL_TYPES))
+COMPONENT_SQL = DETAIL_SQL+",'event'"
 RETENTION_INDEX = (
     'CREATE INDEX IF NOT EXISTS records_run_retention ON records(expires_at_ms,project_id,source_sequence) '
     f'WHERE record_type IN ({DETAIL_SQL})'
@@ -29,34 +30,121 @@ PROTECTION_INDEXES = (
 )
 
 
+def initialize(ledger):
+    """Derived indexes: summaries remain the sole durable history, including in backups."""
+    db = ledger._connection
+    db.execute('CREATE TEMP TABLE retention_members(project_ref INTEGER, digest BLOB, lookup_kind INTEGER, '
+               'record_type INTEGER, summary_sequence INTEGER, PRIMARY KEY(project_ref,digest,lookup_kind,record_type)) WITHOUT ROWID')
+    db.execute('CREATE TEMP TABLE retention_revision(n INTEGER)')
+    db.execute('INSERT INTO retention_revision VALUES(0)')
+    # Only mutations that can release protection invalidate the completed walk.
+    for table in ('record_links', 'stored_files', 'owner_attestations', 'consumed_grants',
+                  'account_open_requests', 'host_run_bindings', 'active_run_capacity', 'capacity_completions', 'projects'):
+        for operation in ('DELETE', 'UPDATE'):
+            db.execute(f'CREATE TEMP TRIGGER retention_{table}_{operation} AFTER {operation} ON main.{table} '
+                       'BEGIN UPDATE retention_revision SET n=n+1; END')
+    rebuild_history_index(ledger)
+
+
+def rebuild_history_index(ledger):
+    db = ledger._connection
+    db.execute('DELETE FROM retention_members')
+    cursor = db.execute("SELECT p.rowid,r.source_sequence,r.content FROM records r JOIN projects p "
+                        "ON p.project_id=r.project_id WHERE r.record_type='retention_summary'")
+    while rows := cursor.fetchmany(256):
+        members = []
+        for row in rows:
+            members.extend(_summary_members(row[0], row[1], json.loads(bytes(row[2]))))
+        db.executemany('INSERT OR IGNORE INTO retention_members VALUES(?,?,?,?,?)', members)
+    cursor.close()
+
+
+# Append-only numeric vocabulary for the rebuildable index, independent of live writers.
+HISTORY_TYPES = ('', 'admission_decision', 'dispatch_intent', 'event', 'outcome',
+                 'provider_billing', 'provider_headroom', 'provider_identity')
+
+
+def _summary_members(project_ref, sequence, summary):
+    types = summary.get('record_id_types')
+    if types is None:
+        # Earlier summaries prove untyped membership; a mixed summary cannot
+        # establish an individual member's type. Never guess a typed identity.
+        kinds = list(summary['record_counts'])
+        types = [kinds[0] if len(kinds) == 1 else ''] * len(summary['record_id_digests'])
+    rows = [(project_ref, bytes.fromhex(digest), 0, HISTORY_TYPES.index(kind), sequence)
+            for digest, kind in zip(summary['record_id_digests'], types)]
+    # Legacy summaries sometimes included non-outcome content digests too. Only
+    # typed new summaries, or all-outcome legacy summaries, prove this type.
+    if 'record_id_types' in summary or set(summary['record_counts']) == {'outcome'}:
+        rows.extend((project_ref, bytes.fromhex(digest), 1, HISTORY_TYPES.index('outcome'), sequence)
+                    for digest in summary['record_content_digests'])
+    return rows
+
+
+def index_summary(ledger, project, summary):
+    project_ref = ledger._connection.execute('SELECT rowid FROM projects WHERE project_id=?', (project,)).fetchone()[0]
+    sequence = ledger._connection.execute('SELECT source_sequence FROM records WHERE project_id=? AND record_id=?',
+                                          (project, summary['record_id'])).fetchone()[0]
+    ledger._connection.executemany('INSERT OR IGNORE INTO retention_members VALUES(?,?,?,?,?)',
+                                   _summary_members(project_ref, sequence, summary))
+
+
 def _protected_ids(ledger, candidates, now):
-    """One SELECT for the bounded page, within the shared 16-cursor limit."""
+    """Recheck all live authority under the same write lock as summary and deletion."""
     from .account_service import _ADMISSION_INPUT_SCOPE
     parameters = {'a': now}
     values = []
     for i, (row, record) in enumerate(candidates):
         values.append(f'(:p{i},:r{i},:run{i})')
         parameters.update({f'p{i}': row['project_id'], f'r{i}': row['record_id'], f'run{i}': record.get('run_id')})
-    # Each row is tested in its own project scope. Account-wide Claude/window
-    # rules inside the existing scope keep their original cross-project meaning.
     scope = _ADMISSION_INPUT_SCOPE.replace(':p', 'r.project_id')
+    # An internal edge is ignored only for distinct expired members of the same
+    # run. External edges and explicit self-links continue to pin full evidence.
+    links = []
+    for own, other in (('from_record_id', 'to_record_id'), ('to_record_id', 'from_record_id')):
+        links.append('EXISTS(SELECT 1 FROM record_links l WHERE l.project_id=p.project_id '
+                     f'AND l.{own}=p.record_id AND NOT EXISTS(SELECT 1 FROM page q '
+                     f'WHERE q.project_id=p.project_id AND q.record_id=l.{other} '
+                     'AND q.record_id<>p.record_id AND q.run_id=p.run_id))')
     sql = (
-        'WITH page(project_id,record_id,run_id) AS (VALUES '+','.join(values)+') '
-        'SELECT p.project_id,p.record_id FROM page p CROSS JOIN records r '
+        'WITH RECURSIVE page(project_id,record_id,run_id) AS (VALUES '+','.join(values)+'), '
+        'protected(project_id,record_id) AS ('
+        'SELECT p.project_id,p.record_id FROM page p JOIN records r '
         'ON r.project_id=p.project_id AND r.record_id=p.record_id WHERE '
-        'EXISTS(SELECT 1 FROM projects x WHERE x.project_id=p.project_id AND x.status<>\'active\') OR '
-        'EXISTS(SELECT 1 FROM record_links l WHERE l.project_id=p.project_id AND l.from_record_id=p.record_id) OR '
-        'EXISTS(SELECT 1 FROM record_links l WHERE l.project_id=p.project_id AND l.to_record_id=p.record_id) OR '
+        "EXISTS(SELECT 1 FROM projects x WHERE x.project_id=p.project_id AND x.status<>'active') OR "
+        + ' OR '.join(links) + ' OR '
         'EXISTS(SELECT 1 FROM stored_files f WHERE f.project_id=p.project_id AND f.source_record_id=p.record_id) OR '
         'EXISTS(SELECT 1 FROM owner_attestations a WHERE a.project_id=p.project_id AND a.subject_record_id=p.record_id) OR '
         'EXISTS(SELECT 1 FROM consumed_grants g WHERE g.project_id=p.project_id AND g.grant_id=p.record_id) OR '
         'EXISTS(SELECT 1 FROM consumed_grants g WHERE g.project_id=p.project_id AND g.promotion_record_id=p.record_id) OR '
+        'EXISTS(SELECT 1 FROM capacity_completions c WHERE c.project_id=p.project_id AND c.terminal_record_id=p.record_id) OR '
         + scope + ' OR (p.run_id IS NOT NULL AND ('
         'EXISTS(SELECT 1 FROM account_open_requests q WHERE q.project_id=p.project_id AND q.run_id=p.run_id) OR '
         'EXISTS(SELECT 1 FROM host_run_bindings h WHERE h.project_id=p.project_id AND h.run_id=p.run_id) OR '
         'EXISTS(SELECT 1 FROM active_run_capacity c WHERE c.project_id=p.project_id AND c.run_id=p.run_id '
-        'AND c.released_at_ms IS NULL)))')
+        'AND c.released_at_ms IS NULL))) '
+        'UNION SELECT q.project_id,q.record_id FROM protected x JOIN record_links l ON l.project_id=x.project_id '
+        'AND (l.from_record_id=x.record_id OR l.to_record_id=x.record_id) JOIN page q ON q.project_id=x.project_id '
+        'AND (q.record_id=l.from_record_id OR q.record_id=l.to_record_id)) '
+        'SELECT project_id,record_id FROM protected')
     return {(row[0], row[1]) for row in ledger._connection.execute(sql, parameters).fetchall()}
+
+
+def _component(db, row, now, batch):
+    """Bounded linked closure; oversize components stay full, never partly deleted."""
+    return [dict(r) for r in db.execute(
+        'WITH RECURSIVE members(record_id) AS (SELECT ? UNION '
+        'SELECT r.record_id FROM members m JOIN record_links l ON l.project_id=? '
+        'AND (l.from_record_id=m.record_id OR l.to_record_id=m.record_id) '
+        'JOIN records r ON r.project_id=l.project_id AND '
+        '(r.record_id=l.from_record_id OR r.record_id=l.to_record_id) '
+        f'WHERE r.record_type IN ({COMPONENT_SQL}) AND (r.record_type<>\'event\' OR r.source=\'host\') '
+        'AND r.expires_at_ms<=? AND r.ingested_at_ms<=? AND r.observed_at_ms<=? '
+        "AND json_valid(CAST(r.content AS TEXT)) AND json_extract(CAST(r.content AS TEXT),'$.run_id')="
+        "json_extract(CAST(? AS TEXT),'$.run_id') LIMIT ?) "
+        'SELECT r.* FROM members m JOIN records r ON r.project_id=? AND r.record_id=m.record_id',
+        (row['record_id'], row['project_id'], now, now-RUN_DETAIL_KEEP_MS, now-RUN_DETAIL_KEEP_MS,
+         row['content'], batch+1, row['project_id'])).fetchall()]
 
 
 def sweep(ledger, now, batch):
@@ -67,71 +155,114 @@ def sweep(ledger, now, batch):
         ledger._run_retention_more = False
         if ledger._readers() or db.in_transaction:
             return 0
+        revision = db.execute('SELECT n FROM retention_revision').fetchone()[0]
+        # Keep the high-water mark on short pages. Only a changed dependency or
+        # a timed admission-window review starts another walk; quiet pinned ledgers
+        # do one indexed empty-tail check per full maintenance interval.
+        if (revision != getattr(ledger, '_run_retention_revision', revision)
+                or now >= getattr(ledger, '_run_retention_review_at', now+1)):
+            ledger._run_retention_after = (-1, '', 0)
+        if now >= getattr(ledger, '_run_retention_review_at', now+1):
+            del ledger._run_retention_review_at
+        ledger._run_retention_revision = revision
         after = getattr(ledger, '_run_retention_after', (-1, '', 0))
         def page():
             return [dict(row) for row in db.execute(
                 'SELECT r.* FROM records r INDEXED BY records_run_retention '
-                f'WHERE r.record_type IN ({DETAIL_SQL}) AND r.expires_at_ms<=? '
-                'AND (r.expires_at_ms,r.project_id,r.source_sequence)>(?,?,?) '
-                'ORDER BY r.expires_at_ms,r.project_id,r.source_sequence LIMIT ?',
-                (now, *after, batch)).fetchall()]
+                f"WHERE r.record_type IN ({DETAIL_SQL}) AND (r.record_type<>'event' OR r.source='host') "
+                'AND r.expires_at_ms<=? AND (r.expires_at_ms,r.project_id,r.source_sequence)>(?,?,?) '
+                'ORDER BY r.expires_at_ms,r.project_id,r.source_sequence LIMIT ?', (now, *after, batch)).fetchall()]
         try:
             rows = db.read_call(RUN_RETENTION_READ_LIMITS, page)
         except SQLReadError:
-            return 0  # cooperative budget refusal is never a run's refusal
-        candidates, eligible = [], []
+            return 0
+        if not rows:
+            return 0
+        candidates, visited, oversized = {}, [], set()
         def select():
+            component_queries = 0
             for row in rows:
-                if row['ingested_at_ms']+RUN_DETAIL_KEEP_MS > now:
+                key = (row['project_id'], row['record_id'])
+                if key in candidates or key in oversized:
+                    visited.append(row)
                     continue
                 try:
-                    record = validate_learning_record(json.loads(bytes(row['content'])), stored=True)
-                except (ValueError, TypeError, KeyError):
-                    continue  # malformed detail stays readable by older tools
-                if (record['record_type'] != row['record_type'] or record['record_id'] != row['record_id']
-                        or not row['observed_at_ms'] <= now-RUN_DETAIL_KEEP_MS):
+                    run = json.loads(bytes(row['content'])).get('run_id')
+                except (ValueError, TypeError, AttributeError):
+                    visited.append(row)
                     continue
-                if row['source'] not in SOURCES or content_digest(record) != row['content_digest']:
+                if run is not None:
+                    if component_queries == 12:
+                        break
+                    component = _component(db, row, now, batch)
+                    component_queries += 1
+                else:
+                    component = [row]
+                if len(component) > batch:
+                    oversized.update((member['project_id'], member['record_id']) for member in component)
+                    visited.append(row)
                     continue
-                candidates.append((row, record))
-            if candidates:
-                protected = _protected_ids(ledger, candidates, now)
-                eligible.extend(row for row, _ in candidates if (row['project_id'], row['record_id']) not in protected)
+                additions = {}
+                for member in component:
+                    if member['ingested_at_ms']+RUN_DETAIL_KEEP_MS > now or member['observed_at_ms']+RUN_DETAIL_KEEP_MS > now:
+                        continue
+                    try:
+                        record = validate_learning_record(json.loads(bytes(member['content'])), stored=True)
+                    except (ValueError, TypeError, KeyError):
+                        continue
+                    if (record['record_type'] != member['record_type'] or record['record_id'] != member['record_id']
+                            or member['source'] not in SOURCES or content_digest(record) != member['content_digest']):
+                        continue
+                    additions[(member['project_id'], member['record_id'])] = (member, record)
+                if len(candidates.keys() | additions.keys()) > batch:
+                    break
+                candidates.update(additions)
+                visited.append(row)
         try:
             db.read_call(RUN_RETENTION_READ_LIMITS, select)
         except SQLReadError:
-            eligible = []
-        groups = {}
-        for row in eligible:
-            groups.setdefault(row['project_id'], []).append(row)
-        # No cursor advancement until the entire transaction succeeds. A crash
-        # re-reads the same rows; no summary can be counted twice.
-        if eligible:
-            with ledger._account_transaction():
-                for project, group in groups.items():
-                    keys = [[r['record_id'], r['source_sequence'], r['content_digest']] for r in group]
-                    summary = {
-                        'schema_version': 1, 'record_type': 'retention_summary',
-                        'record_id': 'retsum-'+content_digest(keys),
-                        'observed_at_ms': now, 'keep_days': 90,
-                        'first_observed_at_ms': min(r['observed_at_ms'] for r in group),
-                        'last_observed_at_ms': max(r['observed_at_ms'] for r in group),
-                        'record_count': len(group),
-                        'record_counts': dict(Counter(r['record_type'] for r in group)),
-                        'record_id_digests': sorted({content_digest(r['record_id']) for r in group}),
-                        # Typed digest lookup exists for outcomes only. Other
-                        # detail keeps its ID digest without duplicating an
-                        # unused content-digest index in permanent summaries.
-                        'record_content_digests': sorted({r['content_digest'] for r in group if r['record_type'] == 'outcome'}),
-                        'outcome_counts': dict(Counter(json.loads(bytes(r['content']))['status']
-                                                       for r in group if r['record_type'] == 'outcome')),
-                        'source_counts': dict(Counter(r['source'] for r in group)),
-                        'detail': 'Details older than 90 days; counts only.',
-                    }
-                    ledger._append_checked_locked(project, validate_learning_record(summary), producer='lifecycle', timestamp=now)
-                    db.executemany('DELETE FROM records WHERE project_id=? AND record_id=?',
-                                   [(project, r['record_id']) for r in group])
-        ledger._run_retention_after = ((rows[-1]['expires_at_ms'], rows[-1]['project_id'], rows[-1]['source_sequence'])
-                                       if len(rows) == batch else (-1, '', 0))
-        ledger._run_retention_more = len(rows) == batch
+            return 0
+        eligible = []
+        if candidates:
+            try:
+                with ledger._account_transaction():
+                    protected = db.read_in_current_mode(RUN_RETENTION_READ_LIMITS,
+                                                        lambda: _protected_ids(ledger, list(candidates.values()), now))
+                    eligible = [row for key, (row, _) in candidates.items() if key not in protected]
+                    timed = any(key in protected and row['record_type'] in {'provider_headroom', 'provider_billing', 'admission_decision'}
+                                for key, (row, _) in candidates.items())
+                    groups = {}
+                    for row in eligible:
+                        groups.setdefault(row['project_id'], []).append(row)
+                    for project, group in groups.items():
+                        keys = [[r['record_id'], r['source_sequence'], r['content_digest']] for r in group]
+                        members = sorted((content_digest(r['record_id']), r['record_type']) for r in group)
+                        summary = {
+                            'schema_version': 1, 'record_type': 'retention_summary',
+                            'record_id': 'retsum-'+content_digest(keys), 'observed_at_ms': now, 'keep_days': 90,
+                            'first_observed_at_ms': min(r['observed_at_ms'] for r in group),
+                            'last_observed_at_ms': max(r['observed_at_ms'] for r in group),
+                            'record_count': len(group), 'record_counts': dict(Counter(r['record_type'] for r in group)),
+                            'record_id_digests': [digest for digest, _ in members],
+                            'record_id_types': [kind for _, kind in members],
+                            'record_content_digests': sorted({r['content_digest'] for r in group if r['record_type']=='outcome'}),
+                            'outcome_counts': dict(Counter(json.loads(bytes(r['content']))['status'] for r in group if r['record_type']=='outcome')),
+                            'source_counts': dict(Counter(r['source'] for r in group)),
+                            'detail': 'Details older than 90 days; counts only.',
+                        }
+                        checked = validate_learning_record(summary)
+                        ledger._validate_evidence_links_locked(project, checked)
+                        ledger._append_checked_locked(project, checked, producer='lifecycle', timestamp=now)
+                        db.executemany('DELETE FROM records WHERE project_id=? AND record_id=?',
+                                       [(project, r['record_id']) for r in group])
+            except SQLReadError:
+                return 0
+        # Neither failed transactions nor read-budget refusals advance the walk.
+        if visited:
+            last = visited[-1]
+            ledger._run_retention_after = (last['expires_at_ms'], last['project_id'], last['source_sequence'])
+        ledger._run_retention_more = len(rows) == batch or len(visited) < len(rows)
+        ledger._run_retention_revision = db.execute('SELECT n FROM retention_revision').fetchone()[0]
+        if candidates and timed and not hasattr(ledger, '_run_retention_review_at'):
+            ledger._run_retention_review_at = now+86_400_000
         return len(eligible)

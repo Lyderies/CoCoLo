@@ -2206,9 +2206,9 @@ def validate_observation_unavailable(data: Any) -> dict[str, Any]:
 # Never shrink this vocabulary: a summary is a stored historical record.
 STORED_RETENTION_DETAIL_TYPES = frozenset({
     'provider_identity', 'provider_headroom', 'provider_billing', 'admission_decision', 'dispatch_intent',
-    'outcome',
+    'outcome', 'event',
 })
-RETAINABLE_DETAIL_TYPES = STORED_RETENTION_DETAIL_TYPES
+RETAINABLE_DETAIL_TYPES = STORED_RETENTION_DETAIL_TYPES - {'event'}
 # Stored history has its own additive vocabulary, independent of live writers.
 STORED_RETENTION_SOURCES = frozenset({
     'hook', 'app_server', 'host', 'evaluator', 'verifier', 'owner', 'lifecycle', 'provider',
@@ -2222,7 +2222,7 @@ def validate_retention_summary(data: Any) -> dict[str, Any]:
     data = _closed(data, {'schema_version', 'record_type', 'record_id', 'observed_at_ms', 'keep_days',
                          'first_observed_at_ms', 'last_observed_at_ms', 'record_count',
                          'record_counts', 'source_counts', 'record_id_digests', 'record_content_digests',
-                         'outcome_counts', 'detail'}, 'retention_summary')
+                         'outcome_counts', 'detail'} | ({'record_id_types'} if type(data) is dict and 'record_id_types' in data else set()), 'retention_summary')
     _base(data, 'retention_summary')
     for name in ('observed_at_ms', 'first_observed_at_ms', 'last_observed_at_ms'):
         _integer(data[name], name)
@@ -2230,6 +2230,12 @@ def validate_retention_summary(data: Any) -> dict[str, Any]:
     _integer(data['record_count'], 'record_count', minimum=1, maximum=32)
     _digest_list(data['record_id_digests'], 'record_id_digests')
     _digest_list(data['record_content_digests'], 'record_content_digests')
+    if 'record_id_types' in data:
+        types = data['record_id_types']
+        if (type(types) is not list or len(types) != data['record_count']
+                or any(type(kind) is not str or kind not in STORED_RETENTION_DETAIL_TYPES for kind in types)
+                or {kind: types.count(kind) for kind in set(types)} != data['record_counts']):
+            raise ContractError('invalid retention identity types')
     if len(data['record_id_digests']) != data['record_count']:
         raise ContractError('retention identities do not add up')
     if not data['first_observed_at_ms'] <= data['last_observed_at_ms'] <= data['observed_at_ms']-90*86_400_000:

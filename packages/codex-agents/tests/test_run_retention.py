@@ -1,13 +1,15 @@
 """S14b bounded maintenance, summaries and history; synthetic ledgers only."""
 import json
+import contextlib
 import sqlite3
+import time
 import unittest
 from unittest import mock
 
 from test_framework import requirements
 from tests import test_learning_store as legacy
 from tests.support import REPOSITORY_ROOT
-from tests.learning_support import verification_outcome
+from tests.learning_support import verification_outcome, event_record
 from codex_agents import learning_store
 from codex_agents.contracts import ContractError
 from codex_agents.learning_contracts import validate_learning_record
@@ -24,6 +26,22 @@ def identity(identifier, observed=START):
                 client_version='1.0.0', observed_at_ms=observed)
 
 
+def store_product_row(ledger, project, record, source='provider'):
+    """Use the product validation/append/auto-link sequence, including host provenance."""
+    checked = validate_learning_record(record)
+    timestamp = checked['observed_at_ms']
+    with ledger._held(), (contextlib.nullcontext() if ledger._connection.in_transaction else ledger._account_transaction()):
+        if checked['record_type'] == 'outcome':
+            event = event_record('evt_'+checked['record_id'], observed_at_ms=timestamp)
+            for field in ('run_id', 'assignment_id', 'model', 'effort', 'role', 'task_slice',
+                          'topology', 'configuration_digest', 'coverage', 'usage'):
+                event[field] = checked[field]
+            event.update(event_code='item_completed', status='completed', item_digest=checked['evidence_digests'][0])
+            store_product_row(ledger, project, event, 'host')
+        ledger._validate_evidence_links_locked(project, checked)
+        return ledger._append_checked_locked(project, checked, producer=source, timestamp=timestamp)
+
+
 @requirements(why_not_scenario='Direct synthetic-ledger maintenance and SQL assertions; no socket service is opened.')
 class RunRetentionTests(unittest.TestCase):
     def setUp(self):
@@ -35,8 +53,7 @@ class RunRetentionTests(unittest.TestCase):
         self.db = self.ledger._connection
 
     def append(self, record, source='provider'):
-        return self.ledger._append_checked_locked(self.project, validate_learning_record(record),
-                                                  producer=source, timestamp=record['observed_at_ms'])
+        return store_product_row(self.ledger, self.project, record, source)
 
     def summaries(self):
         return [json.loads(bytes(row[0])) for row in self.db.execute(
@@ -98,6 +115,11 @@ class RunRetentionTests(unittest.TestCase):
         self.assertIsNone(self.db.execute("SELECT expires_at_ms FROM records WHERE record_type='retention_summary'").fetchone()[0])
 
     @requirements('S14b-4')
+    def test_mistyped_content_digest_is_not_found(self):
+        with self.assertRaisesRegex(learning_store.LedgerError, 'not found'):
+            self.ledger.record_by_digest(self.project, 'mistyped-digest', 'outcome')
+
+    @requirements('S14b-4')
     def test_old_detail_resolves_its_own_summary_after_other_batches(self):
         self.append(identity('first'))
         self.assertEqual(1, self.sweep(batch=1))
@@ -109,6 +131,11 @@ class RunRetentionTests(unittest.TestCase):
             self.assertEqual(first, reader.record(first['record_id'], 'retention_summary'))
             with self.assertRaisesRegex(learning_store.LedgerError, 'not found'):
                 reader.record('never-written', 'provider_identity')
+        from codex_agents.run_retention import rebuild_history_index
+        self.db.execute('DELETE FROM retention_members')
+        rebuild_history_index(self.ledger)
+        with self.ledger.repository(self.project) as reader:
+            self.assertEqual(first, reader.record('first', 'provider_identity'))
 
     @requirements('S14b-3')
     def test_sql_work_is_bounded_even_when_every_row_is_protected(self):
@@ -214,30 +241,165 @@ class RunRetentionTests(unittest.TestCase):
         self.db.execute('INSERT INTO stored_files VALUES(?,?,?,?,?,?,?)',
                         (self.project, 'f', 'export', 'exports/synthetic', 'f'*64, 'file-backed', START))
         self.assertEqual(0, self.sweep())
-        self.assertEqual(3, self.db.execute('SELECT COUNT(*) FROM records WHERE project_id=?', (self.project,)).fetchone()[0])
+        self.assertEqual(4, self.db.execute('SELECT COUNT(*) FROM records WHERE project_id=?', (self.project,)).fetchone()[0])
 
     @requirements('S14b-2', 'S14b-4')
     def test_unreferenced_outcome_leaves_status_counts_and_digest_lookup_answer(self):
         from codex_agents.learning_contracts import content_digest
         outcome = verification_outcome('old-outcome')
         self.append(outcome, 'verifier')
-        self.assertEqual(1, self.sweep())
+        self.assertEqual(2, self.sweep())
         [summary] = self.summaries()
-        self.assertEqual({'outcome': 1}, summary['record_counts'])
+        self.assertEqual({'event': 1, 'outcome': 1}, summary['record_counts'])
         self.assertEqual({outcome['status']: 1}, summary['outcome_counts'])
         self.assertEqual(summary, self.ledger.record_by_digest(self.project, content_digest(outcome), 'outcome'))
 
     @requirements('S14b-3', 'S14b-4')
-    def test_historical_lookup_past_SQL_work_limit_returns_plain_age_answer(self):
-        from codex_agents.learning_contracts import content_digest
+    def test_historical_lookup_budget_failure_does_not_invent_membership(self):
         from codex_agents.sql_read_budget import SQLReadError
-        outcome = verification_outcome('old-outcome')
-        self.append(outcome, 'verifier')
+        self.append(identity('old'))
         self.sweep()
         with mock.patch.object(self.db, 'read_in_current_mode', side_effect=SQLReadError('sql_read_work_limit')) as bounded:
-            answer = self.ledger.record_by_digest(self.project, content_digest(outcome), 'outcome')
+            with self.ledger.repository(self.project) as reader:
+                with self.assertRaises(SQLReadError):
+                    reader.record('never-written', 'provider_identity')
         bounded.assert_called_once()
-        self.assertEqual('Details older than 90 days are unavailable.', answer['detail'])
+
+    @requirements('S14b-4')
+    def test_typed_history_and_years_of_summaries_use_indexed_membership(self):
+        self.append(identity('first'))
+        self.sweep()
+        first = self.summaries()[0]
+        with self.ledger.repository(self.project) as reader:
+            with self.assertRaisesRegex(learning_store.LedgerError, 'not found'):
+                reader.record('first', 'outcome')
+        # Five years at about 200 batches/day. Each summary enters through the
+        # same validated product append and indexing path; no unlinked outcome.
+        import copy
+        from codex_agents.learning_contracts import content_digest
+        with self.ledger._account_transaction():
+            for i in range(365_000):
+                summary = copy.deepcopy(first)
+                summary.update(record_id=f'retsum-history-{i}', record_id_digests=[content_digest(f'history-{i}')])
+                self.append(summary, 'lifecycle')
+        from codex_agents import run_retention
+        # Build indexes against a years-sized ledger, with real detail in the
+        # partial index as well as summaries. All rows use product validation.
+        with self.ledger._account_transaction():
+            for i in range(50_000):
+                self.append(identity(f'index-detail-{i}', START+92*DAY))
+        size = self.db.execute('PRAGMA page_size').fetchone()[0] * self.db.execute('PRAGMA page_count').fetchone()[0]
+        ddl = (run_retention.RETENTION_INDEX, *run_retention.PROTECTION_INDEXES)
+        for sql in ddl:
+            self.db.execute('DROP INDEX '+sql.split('EXISTS ')[1].split(' ON ')[0])
+        started = time.perf_counter()
+        for sql in ddl:
+            self.db.execute(sql)
+        persistent_seconds = time.perf_counter()-started
+        started = time.perf_counter()
+        run_retention.rebuild_history_index(self.ledger)
+        history_seconds = time.perf_counter()-started
+        index_bytes = (self.db.execute('PRAGMA temp.page_size').fetchone()[0]
+                       * self.db.execute('PRAGMA temp.page_count').fetchone()[0])
+        self.scale_measurements = dict(summary_count=365_001, detail_count=50_000, ledger_bytes=size,
+                                       persistent_index_build_seconds=persistent_seconds,
+                                       membership_index_build_seconds=history_seconds,
+                                       membership_index_bytes=index_bytes,
+                                       membership_bytes_per_entry=index_bytes/365_001)
+        # The reviewed implementation's JSON walk cannot reach the oldest
+        # member under the read budget. Keep this as the regression oracle.
+        from codex_agents.sql_read_budget import SQLReadError
+        def old_scan():
+            return self.db.execute("SELECT content FROM records r WHERE project_id=? AND record_type='retention_summary' "
+                                   "AND EXISTS(SELECT 1 FROM json_each(CAST(r.content AS TEXT),'$.record_id_digests') WHERE value=?) "
+                                   "ORDER BY source_sequence DESC LIMIT 1", (self.project, content_digest('first'))).fetchone()
+        with self.assertRaises(SQLReadError):
+            self.db.read_in_current_mode(run_retention.RUN_RETENTION_READ_LIMITS, old_scan)
+        started = time.perf_counter()
+        with self.ledger.repository(self.project) as reader:
+            self.assertEqual(first, reader.record('first', 'provider_identity'))
+            with self.assertRaisesRegex(learning_store.LedgerError, 'not found'):
+                reader.record('first', 'outcome')
+            with self.assertRaisesRegex(learning_store.LedgerError, 'not found'):
+                reader.record('typo-first', 'provider_identity')
+
+        self.scale_measurements['three_lookup_seconds'] = time.perf_counter()-started
+
+    @requirements('S14b-2', 'S14b-3')
+    def test_protected_tail_reaches_idle_and_does_not_wrap_on_short_pages(self):
+        for i in range(70):
+            self.append(identity(f'pinned-{i}'))
+            self.db.execute('INSERT INTO record_links VALUES(?,?,?,?)',
+                            (self.project, f'pinned-{i}', f'pinned-{i}', 'evidence'))
+        for _ in range(4):
+            self.sweep()
+        self.assertFalse(self.ledger._run_retention_more)
+        with mock.patch.object(self.db, 'read_call', wraps=self.db.read_call) as reads:
+            for i in range(20):
+                self.assertEqual(0, self.ledger.sweep_run_retention(now_ms=START+91*DAY+i*60_000))
+                self.assertFalse(self.ledger._run_retention_more)
+        self.assertLessEqual(reads.call_count, 20)  # at most the indexed empty tail
+
+    @requirements('S14b-2')
+    def test_protection_is_checked_inside_write_transaction_and_propagates(self):
+        self.append(verification_outcome('atomic-outcome'), 'verifier')
+        from codex_agents import run_retention
+        original = run_retention._protected_ids
+        def checked(*args):
+            self.assertTrue(self.db.in_transaction)
+            return original(*args)
+        with mock.patch.object(run_retention, '_protected_ids', side_effect=checked):
+            self.assertEqual(2, self.sweep())
+        self.assertEqual({'event': 1, 'outcome': 1}, self.summaries()[0]['record_counts'])
+
+    @requirements('S14b-2', 'S14b-3')
+    def test_oversize_linked_group_stays_atomic_without_starving_later_work(self):
+        for i in range(17):
+            outcome = {**verification_outcome(f'large-{i}'), 'run_id': 'large-run'}
+            self.append(outcome, 'verifier')
+            if i:
+                self.db.execute('INSERT INTO record_links VALUES(?,?,?,?)',
+                                (self.project, f'large-{i-1}', f'large-{i}', 'derived_from'))
+        self.append(verification_outcome('small'), 'verifier')
+        removed = [self.sweep() for _ in range(4)]
+        self.assertEqual(2, sum(removed))
+        self.assertLessEqual(max(removed), 32)
+        self.assertEqual(34, self.db.execute("SELECT COUNT(*) FROM records WHERE record_type IN ('event','outcome')").fetchone()[0])
+        self.assertFalse(self.ledger._run_retention_more)
+        self.append(identity('ordinary-work', START+92*DAY))
+
+    @requirements('S14b-2')
+    def test_completion_replay_fence_pins_expired_outcome_and_its_event(self):
+        outcome = verification_outcome('fenced-outcome')
+        self.append(outcome, 'verifier')
+        handle, bridge = '1'*64, 'brg_'+'2'*32
+        self.db.execute('INSERT INTO launch_claims VALUES(?,?,?,?,?,?)',
+                        (self.project, handle, outcome['run_id'], 'claimed', START, bridge))
+        self.db.execute('INSERT INTO active_run_capacity(project_id,handle_digest,run_id,bridge_run_id,kind,'
+                        'claimed_at_ms,released_at_ms,release_digest) VALUES(?,?,?,?,?,?,?,?)',
+                        (self.project, handle, outcome['run_id'], bridge, 'legacy_unknown', START, START+1, 'a'*64))
+        from codex_agents.learning_contracts import content_digest
+        self.db.execute('INSERT INTO capacity_completions VALUES(?,?,?,?,?,?,?,?)',
+                        (self.project, handle, outcome['run_id'], bridge, outcome['record_id'],
+                         content_digest(outcome), START+1, 'b'*64))
+        self.assertEqual(0, self.sweep())
+        self.assertEqual(2, self.db.execute("SELECT COUNT(*) FROM records WHERE record_type IN ('event','outcome')").fetchone()[0])
+
+    @requirements('S14b-2')
+    def test_linked_group_rolls_back_together_and_reconsiders_released_protection(self):
+        self.append(verification_outcome('group-outcome'), 'verifier')
+        self.db.execute('INSERT INTO owner_attestations VALUES(?,?,?,?)',
+                        (self.project, 'group-outcome', b'synthetic', START))
+        self.assertEqual(0, self.sweep())
+        self.db.execute('DELETE FROM owner_attestations WHERE project_id=?', (self.project,))
+        self.db.execute("CREATE TEMP TRIGGER stop_group BEFORE DELETE ON records WHEN OLD.record_id='group-outcome' "
+                        "BEGIN SELECT RAISE(ABORT,'stop'); END")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.sweep()
+        self.assertEqual([], self.summaries())
+        self.assertEqual(2, self.db.execute('SELECT COUNT(*) FROM records').fetchone()[0])
+        self.db.execute('DROP TRIGGER stop_group')
+        self.assertEqual(2, self.sweep())
 
     @requirements('S14b-4')
     def test_summary_stays_readable_when_live_writer_vocabulary_shrinks(self):
@@ -262,7 +424,7 @@ class RunRetentionTests(unittest.TestCase):
         outcome = {**verification_outcome('old-outcome'), 'run_id': 'not-in-history'}
         self.append(outcome, 'verifier')
         with mock.patch.object(run_retention, 'RUN_RETENTION_READ_LIMITS', SQLReadLimits(64, 25, 4*1_048_576)):
-            self.assertEqual(1, self.sweep())
+            self.assertEqual(2, self.sweep())
 
     @requirements('S14b-3')
     def test_collector_maintenance_contains_failure_and_is_the_only_automatic_entry(self):
@@ -282,7 +444,7 @@ class RunRetentionTests(unittest.TestCase):
         self.sweep()
         [summary] = self.summaries()
         for changes in ({'record_count': 2}, {'record_count': 33}, {'record_counts': {'invented': 1}}, {'record_counts': None},
-                        {'source_counts': {'invented': 1}}, {'extra': 1},
+                        {'source_counts': {'invented': 1}}, {'extra': 1}, {'record_id_types': [[]]},
                         {'first_observed_at_ms': START+1}):
             with self.subTest(changes=changes), self.assertRaises(ContractError):
                 validate_learning_record({**summary, **changes})

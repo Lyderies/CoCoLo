@@ -2098,8 +2098,13 @@
   },
   "learning_store.py::_retention_detail": {
    "checks": 1,
-   "ends": "Historical lookup returns one summary under the existing 2048-callback/25-ms read budget; a past-budget lookup returns a plain older-than-90-days answer, never a run refusal. Summary rows remain permanent history.",
-   "test": "test_historical_lookup_past_SQL_work_limit_returns_plain_age_answer"
+   "ends": "Historical lookup seeks one proven, typed summary member under the existing 2048-callback/25-ms read budget. Missing IDs stay not found; a budget refusal propagates without inventing membership. The connection-local index rebuilds from permanent summaries.",
+   "test": "test_typed_history_and_years_of_summaries_use_indexed_membership"
+  },
+  "run_retention.py::_component": {
+   "checks": 1,
+   "ends": "The bounded recursive page ends at batch+1; oversized linked groups stay full and later candidates advance. No admission capacity limit.",
+   "test": "test_oversize_linked_group_stays_atomic_without_starving_later_work"
   }
  }
 }

@@ -1,140 +1,160 @@
-# S14b handoff
+# Fix round — S14b / review 040-s14b-r1
 
-Implementation and sandbox checks complete on `feat/s14b-retention`, base
-`ce81bd96` (0.8.67). Changes are uncommitted because this builder is sandboxed.
-VERSION and `runtime-releases.json` are unchanged. This is not a completed
-master-plan gate: real signature execution, service/socket flows, Linux,
-other-provider review and the primary's batch/full-suite gates remain pending.
+**NOT READY: S14b-1 still fails.** Functional retention, idle and lookup fixes
+are in the worktree; the corrected five-year projection is **16.464 GiB**, or
+**0.464 GiB over** the unchanged 16 GiB ceiling. This supersedes the earlier
+14.219 GiB claim, whose outcome fixture bypassed product provenance.
 
-## Requirement evidence
+Branch `feat/s14b-retention`, starting at `ef0c6eb4`, base `ce81bd96`.
+No commit was attempted under the sandbox rule. VERSION and the runtime digest
+catalogue are unchanged. No sockets, installed services, PTYs, full suite,
+merge, installation or push were used.
 
-Test abbreviations: `R = tests.test_run_retention.RunRetentionTests`,
-`I = tests.test_run_retention_integration.RunRetentionIntegrationTests`.
+## Requirement → test → evidence
 
-| Requirement | Test / evidence | Result |
+`R` = `tests.test_run_retention.RunRetentionTests`;
+`I` = `tests.test_run_retention_integration.RunRetentionIntegrationTests`.
+
+| Requirement / finding | Test | Evidence |
 | --- | --- | --- |
-| S14b-1 | R.test_five_year_projection_at_double_peak_includes_every_family | Red on base: 22.12 GiB even after crediting OP-2; red again before outcome retention: 22.42 GiB. Green after implementation. |
-| S14b-1 | I.test_real_open_claim_footprint_retires_to_measured_metadata_and_summary; scripts/measure_s14b_retention.py | Real persistence with a stand-in signature executor: **15,090 → 5,209 retained column bytes; 14.219 GiB at 774 runs/day for five years**, below 16 GiB. Includes released hold receipts, partial summaries, all backed-up tables in the fixture, 92 days of recent detail, weighted events and event summaries. Real signature executor timed out before open completion in this sandbox; primary must rerun it. |
-| S14b-2 | R.test_cutoff_summary_counts_and_old_detail_answer; R.test_unreferenced_outcome_leaves_status_counts_and_digest_lookup_answer | Missing sweep / outcome removal red first; green. Exact 90-day cutoff, counts, observation range and permanent summaries verified. |
-| S14b-2 | R.test_full_outcomes_and_attested_and_file_backed_rows_stay; R.test_live_windows_Claude_bootstrap_and_latest_reading_preserve_admission_answers | Green: linked outcomes, files, attestations, first Claude pass, latest older reading and unreset windows survive. Admission's selected identities agree before/after. |
-| S14b-3 | R.test_past_batch_limit_and_protected_prefix_drain_without_starvation; R.test_sql_work_is_bounded_even_when_every_row_is_protected; R.test_released_capacity_history_does_not_exhaust_retention_work_budget | Green: bounded pages, progress beyond protected prefixes, cooperative work refusal and 5,000 released capacity rows under a reduced read budget. |
-| S14b-3 | R.test_summary_failure_rolls_back_and_readers_and_transactions_skip; R.test_failed_fast_continuation_stops_and_batch_ceiling_never_limits_a_run; R.test_collector_maintenance_contains_failure_and_is_the_only_automatic_entry | Green: failed append/delete rolls back, readers/transactions skip, no hot retry after failure, and ordinary writes still work. |
-| S14b-3 | I.test_collector_sweep_sql_runs_on_the_E1b_owner_thread | Green, no socket: real ledger owner thread executes the sweep SQL; subsequent ordinary owner work succeeds. |
-| S14b-4 | R.test_old_detail_resolves_its_own_summary_after_other_batches; R.test_historical_lookup_past_SQL_work_limit_returns_plain_age_answer | Red first (wrong summary / unbounded lookup); green. Exact ID-digest lookup, typed outcome digest lookup, and plain age answer past the read budget. Unknown IDs still refuse normally when the bounded lookup completes. |
-| S14b-4 | R.test_summary_stays_readable_when_live_writer_vocabulary_shrinks; R.test_summary_contract_is_closed_and_old_vocabulary_remains_readable | Red first on shrinking writer vocabulary and malformed count map; green. Independent additive stored vocabularies; 33 represented rows refused; existing record/code validators retained. |
-| S14b-5 | I.test_summary_survives_original_source_image_and_learning_transfer; R.test_summary_contract_is_closed_and_old_vocabulary_remains_readable | Green: summary copied through original source imaging, inert learning transfer and streamed backup verification. |
-| S14b-5 | Named backup, restore, corpus, upgrade and enumeration modules below | Green except the intentional release digest pin; runtime file-set/sort check fixed and green on the targeted followup. |
+| S14b-1 / HIGH-1 sizing | I.test_real_open_claim_footprint_retires_to_measured_metadata_and_summary | **FAIL**, 16.464 GiB at 774 runs/day for 1,825 days; no threshold relaxation. Product validation and auto-linking, matching terminal host event, and actual claimed run replace the unlinked fixture. Before/retained columns: 16,280 → 5,589. |
+| S14b-2 / HIGH-1 behavior | R.test_unreferenced_outcome_leaves_status_counts_and_digest_lookup_answer | Red first: expected 2 swept rows, got 0 with real auto-links. Green: expired terminal host event + outcome commit with one summary, exact counts/status and digest answer. |
+| S14b-2 / LOW-1 | R.test_protection_is_checked_inside_write_transaction_and_propagates | Red first: protection check saw no write transaction. Green: recheck is inside BEGIN IMMEDIATE, sharing summary append and deletion. |
+| S14b-2 live dependencies | R.test_completion_replay_fence_pins_expired_outcome_and_its_event; R.test_full_outcomes_and_attested_and_file_backed_rows_stay; R.test_live_windows_Claude_bootstrap_and_latest_reading_preserve_admission_answers | Completion-fence regression red first (2 rows incorrectly removed), then green. Full linked group survives any live/controlled member, file, attestation, outside link or completion fence. Existing admission selection remains unchanged. |
+| S14b-2 atomicity / progress | R.test_linked_group_rolls_back_together_and_reconsiders_released_protection; R.test_oversize_linked_group_stays_atomic_without_starving_later_work | Green: summary + both detail rows roll back together; releasing protection revisits them. Oversized-group progress test red first (later pair not reached), then green: 34-row group stays full while a later pair sweeps. |
+| S14b-3 / MED-1 | R.test_protected_tail_reaches_idle_and_does_not_wrap_on_short_pages | Red first: continuation remained true; 40 read scopes instead of at most 20 for idle checks. Green: 70 pinned rows reach idle; 20 subsequent full-interval checks read only the empty indexed tail. |
+| S14b-3 owner budget | I.test_pinned_ledger_reaches_idle_without_delaying_owner_requests; I.test_collector_sweep_sql_runs_on_the_E1b_owner_thread | Green without sockets: 256 pinned rows drain the walk to idle, later maintenance reports no more work, ordinary owner requests remain below the existing 800 ms budget; SQL stays on the owner thread. |
+| S14b-3 bounds / failure | R.test_sql_work_is_bounded_even_when_every_row_is_protected; R.test_released_capacity_history_does_not_exhaust_retention_work_budget; R.test_summary_failure_rolls_back_and_readers_and_transactions_skip; R.test_failed_fast_continuation_stops_and_batch_ceiling_never_limits_a_run | Green: bounded SQL, released-history seek, active-reader/transaction skip, rollback, and no 10 ms continuation on refusal/failure. |
+| S14b-4 / MED-2 / LOW-4 | R.test_typed_history_and_years_of_summaries_use_indexed_membership | Wrong-type lookup red first. Green at 365,001 summaries: exact old summary, wrong type not found, typo not found. The reviewed JSON scan demonstrably exhausts the same read budget; indexed lookups finish within it. |
+| S14b-4 membership / refusal | R.test_historical_lookup_budget_failure_does_not_invent_membership; R.test_mistyped_content_digest_is_not_found; R.test_old_detail_resolves_its_own_summary_after_other_batches | False age-answer regression red first, then green: read refusal propagates, never invents membership. Invalid content digest returns not found. Lookup is also correct after rebuilding the derived index solely from retained summaries. |
+| S14b-4 stored vocabulary | R.test_summary_stays_readable_when_live_writer_vocabulary_shrinks; R.test_summary_contract_is_closed_and_old_vocabulary_remains_readable | Green: stored vocabularies stay independent; malformed member-type arrays refuse cleanly. Legacy summary shape remains accepted. |
+| S14b-5 copying / restore | I.test_summary_survives_original_source_image_and_learning_transfer; R.test_summary_contract_is_closed_and_old_vocabulary_remains_readable; named copier modules below | Green: optional typed membership survives summary validation, original-source imaging, inert learning transfer and streamed backup verification. Corrected footprint case verifies backup before its failing size assertion. |
 
-The original keep-every-outcome decision failed measured sizing. Its replacement
-is documented before outcome implementation in [assertions.md](assertions.md):
-unreferenced outcomes expire with the existing learning window; linked outcomes
-remain full. No assertions in tests present on the base were changed.
+## Measured footprint and build cost
 
-## Implementation bounds and readers
+[fix-measurement.json](fix-measurement.json) is the corrected product-path
+measurement. The signature executor was substituted only in this measurement;
+persistence, validation, terminal provenance, auto-links, release, purge,
+summaries and backup verification run normally. It does **not** prove real
+signature-worker execution. Account attestations measure zero added bytes/run;
+no synthetic per-run signature allowance is credited as a saving.
 
-The collector maintenance request calls one page of at most 32 candidates, with
-two cooperative read scopes (each 2,048 callbacks, 25 ms, 4 MiB). Protection is
-one bulk SELECT, staying inside the shared 16-cursor limit. Selection is indexed
-by expiry/project/sequence; the memory cursor advances over protected/malformed
-rows and resets at the end. Restart re-reads durable rows safely. Summary append
-and removal are one transaction. A failed pass clears immediate continuation.
-The existing maintenance loop yields between batches. Open/claim/dispatch never
-invoke the new sweep. Small writes remain bounded by the page size; this is not
-a hard real-time guarantee against operating-system I/O stalls.
+The retained/recent/event projection is 15.201 GiB before the live membership
+index. There are 15 indexed members/run. Reserving 64 bytes/member over five
+years adds 1.263 GiB, bringing the total to **16.464 GiB**. The accepted S14
+1.745 database/column × 0.972 planned-backup/database factor remains the source
+for persistent overhead; the rebuildable index is counted once, without backup
+duplication. Even using the measured ~50.54 bytes/member instead of the 64-byte
+reserve leaves the projection above 16 GiB. There is no positive stated margin.
+Payload variance, controlled evidence and long-lived runs cannot improve this
+result. Further storage reduction or an owner-approved plan revision is needed.
 
-Permanent replay/provenance families and their sizes/readers are in
-[readers.md](readers.md) and [record-readers.md](record-readers.md). OP-2's existing
-finished-open purge is retained. Controlled evidence, signed evidence, file
-lineage, live bindings and unreleased slots pin detail. Summary vocabulary is
-independent of live writer vocabularies. Existing row layouts/schema remain 17;
-the record type and copier vocabulary are additive. `runtime_files.py` includes
-the new module; the digest catalogue is untouched.
+[fix-index-measurement.json](fix-index-measurement.json): 365,001 summaries,
+50,000 product-path detail records, **545,497,088 bytes (520.2 MiB)** ledger.
+Rebuilding the five persistent indexes took **0.197 s**; rebuilding the derived
+membership index took **4.243 s**, with **18,448,384 bytes** of temp pages,
+**50.543 bytes/member**. Three old/wrong-type/unknown lookups took **0.518 ms**
+total under the existing 2,048-callback / 25 ms / 4 MiB SQL read budget. Persistent
+index creation is an upgrade cost; the derived index rebuild recurs on each
+ledger open, so its startup cost remains material at larger sizes.
 
-Projection scope follows accepted S14: installed retention, typical 106-event
-runs, the sourced 387/day peak doubled, ordinary unreferenced outcomes. The
-SQLite/backup overhead extrapolation is still S14's 1.745 × 0.972, not a new
-five-year physical-database measurement. Explicit owner-controlled evidence,
-unusual long-lived runs, owner-selected maximum event retention and different
-payload sizes can require more space; the sweep preserves their authority.
+The real worker was attempted and timed out before open completion (20.627 s
+including cleanup); [fix-real-signatures.json](fix-real-signatures.json) records
+that no real-worker footprint was collected. Primary must rerun it unsandboxed.
 
-## Checks run
+## Implementation bounds
 
-- Named runner: 19 modules, 213 tests, 37.103 seconds, **metadata_errors []**,
-  no budget failures. Seventeen modules passed completely. The integration
-  module's owner-thread and source-transfer cases passed; its real signature
-  fixture timed out. Release checks had the expected digest pin plus a file-list
-  ordering issue; ordering was then fixed. Sanitised results:
-  [test-evidence.json](test-evidence.json).
-- Targeted followup: 39 tests in 4.401 seconds; 38 passed, only the intentionally
-  unchanged release digest pin failed. Includes all 15 new direct tests, weighted
-  event retention excluding its socket-starting class, and runtime file-set/order.
-- Additional named learning copier/read modules: 36 tests in 4.284 seconds,
-  metadata_errors []; all passed (`test_learning_cycle_core`,
-  `test_learning_chunk_membership`, `test_learning_outcome_pages`,
-  `test_learning_analysis`).
-- Final point-lookup followup: all 15 direct retention tests passed in 1.666
-  seconds, including lookup of the retained summary itself by its identifier.
-- Core reader/expiry checks plus non-CLI migration classes: 19 tests in 5.936
-  seconds; all passed. Includes immutable reviewed-case lookup, frozen case
-  lineage, expiry lineage and partition-backup removal.
-- Earlier copier run: 12 modules in 35.6 seconds. Two migration CLI cases failed
-  at unavailable project-service boundaries; core migration tests passed. Those
-  CLI cases are primary reruns, not passing evidence.
-- `git diff --check` passed. Ruff was unavailable in the supplied interpreter
-  (`No module named ruff`); no dependency was installed. No full suite was run.
+A seed page contains at most 32 detail rows. Expired linked host events are
+included through bounded same-run closure, never by sweeping arbitrary host
+history. Distinct expired same-run members can retire together; external links,
+self-links, stable control and live authority protect the whole component.
+Groups larger than the page bound remain intact. At most 12 component queries
+share one selection read scope, avoiding the shared 16-cursor limit. Page,
+selection and transactional protection each have a cooperative 25 ms SQL scope;
+these are not hard OS I/O latency guarantees.
 
-Passing complete named modules in the final 19-module run: `test_run_retention`,
-`test_lifetime_cap_guard`, `test_learning_contracts`, `test_owner_backup_streamed`,
+The cursor survives short pages instead of wrapping. Dependency-release TEMP
+triggers invalidate the completed walk; historical inserts also rewind it.
+Stable pinned rows stay skipped while dependencies are unchanged. Time-sensitive
+admission evidence gets a daily reconsideration, with full-interval backoff;
+empty tails report no more work. Restart safely rewalks durable rows. No new
+work is called from open/claim/dispatch.
+
+Summaries remain durable authority-free history. An optional aligned
+`record_id_types` array proves each new member's type. A compact TEMP B-tree
+maps project, digest, lookup kind and type to the permanent summary sequence;
+it is rebuilt at open and updated atomically with new summaries. No main table,
+column, schema version or backup layout changes. Older mixed summaries cannot
+prove an individual member's type: they remain readable and support untyped
+membership, but ambiguous typed lookups refuse rather than guess. Reader and
+copier inventories remain in [readers.md](readers.md) and
+[copy-module-inventory.md](copy-module-inventory.md).
+
+## Checks completed
+
+- Named 23-module run: **255 tests, 53.6 s, metadata_errors []**. Retention direct
+  tests and all selected copier modules passed. Failures: new component cap was
+  not yet registered (fixed and rerun green below); real worker timed out;
+  intentional runtime-release digest pin. Sanitised runner result:
+  [fix-named-evidence.json](fix-named-evidence.json).
+- Final named followup: **74 tests across 7 modules, 49.7 s, all green,
+  metadata_errors [], budget_failures []**. Includes all 22 direct retention
+  tests, cap guard, contracts, learning retention and append/type/candidate
+  lookup readers. [fix-followup-evidence.json](fix-followup-evidence.json).
+- Non-socket migration classes (`LearningMigrationTests`, `EmptyRetirementTests`,
+  `ActivationSchemaTests`, `DrainedRuleTests`) and event-retention classes
+  (`RetentionPolicyTests`, `EventRetentionTests`): **36 tests, 7.091 s, green**.
+- Final non-worker retention integration cases + cap guard: **7 tests, 1.280 s,
+  green**. Exact-once read-refusal followup: **1 test, 0.103 s, green**.
+- Stand-in corrected footprint: **1 test, 0.771 s, FAIL only at unchanged size
+  cap**, after product-path retirement and backup verification passed.
+- Dedicated scale measurement: **1 test, 44.540 s, green** (includes fixture
+  population, index builds and bounded lookup comparisons).
+- `git diff --check` passed. No full-suite run. The runtime digest failure is
+  intentionally left for primary release bookkeeping; VERSION/catalogue remain
+  unchanged. Assertion replacements are recorded in [assertions.md](assertions.md).
+
+The 23-module run covered `test_run_retention`,
+`test_run_retention_integration`, `test_lifetime_cap_guard`,
+`test_learning_contracts`, `test_owner_backup_streamed`,
 `test_large_project_backups`, `test_learning_source_image`,
 `test_learning_source_image_legacy`, `test_learning_source_transfer`,
 `test_account_observation_backup`, `test_backup_installed_project`,
 `test_backup_reply_private`, `test_project_learning_corpus`, `test_refusal_steps`,
 `test_reply_shape_compatibility`, `test_learning_chunk_upgrade`,
-`test_learning_qa_upgrade`, `test_legacy_capacity_upgrade`.
+`test_learning_qa_upgrade`, `test_legacy_capacity_upgrade`,
+`test_learning_cycle_core`, `test_learning_chunk_membership`,
+`test_learning_outcome_pages`, `test_learning_analysis`, `test_runtime_release`.
 
-Reproduce the measured sandbox check from repository root, using the supplied
-test interpreter as `$PY`:
+## Primary reruns / unmet gates
 
-```sh
-$PY -B scripts/measure_s14b_retention.py --stand-in-signatures --output docs/requirements/s14b/measurement.json
-$PY -B scripts/parallel_tests.py --module codex:tests.test_run_retention --module codex:tests.test_run_retention_integration --module codex:tests.test_lifetime_cap_guard
-```
+1. **S14b-1 storage gate remains failed**; do not merge as satisfying the 16 GiB
+   requirement. Decide the next storage reduction/re-plan outside this one round.
+2. Run `scripts/measure_s14b_retention.py` without `--stand-in-signatures`, and
+   `test_run_retention_integration`, where real signature workers can execute.
+   Reproduce scale cost with `scripts/measure_s14b_retention.py --index-scale`.
+3. Socket/service suites not run here: `test_account_original_open`,
+   `test_account_claim_jobs`, `test_open_request_lifetime`,
+   `test_active_run_capacity`, `test_run_holds`, `test_ledger_owner_wiring`
+   (socket cases), `test_event_retention.CollectorSweepTests`,
+   `test_learning_migration.MigrationCliTests`, `test_learning_engine`
+   (socket/confinement cases), `test_learning_cli`, `test_reply_shape_live`,
+   `test_upgrade_handover`. Use the builder rules' short TMPDIR and clean env.
+   No PTY checks were run.
+4. Run the remaining conservative copier/enumeration inventory, primary affected
+   and batch/full-suite gates, macOS/Linux lifecycle/settlement flows, accepted
+   S14 backup boundaries after batch assembly, and review. The optional summary
+   shape was exercised in all selected non-socket copier modules above; this is
+   not a claim that every service-containing inventory module was run here.
+5. Primary owns VERSION/digest-catalogue bookkeeping and the release-pin rerun.
 
-The second command intentionally retains the real-worker integration gate;
-do not interpret the stand-in check as cryptographic or worker-confinement proof.
+## Files changed in this round
 
-## Primary reruns and remaining gates
-
-1. Unsandboxed real-worker check: `test_run_retention_integration`, then run the
-   measurement script **without** `--stand-in-signatures`.
-2. Socket/service suites: `test_account_original_open`, `test_account_claim_jobs`,
-   `test_open_request_lifetime`, `test_active_run_capacity`, `test_run_holds`,
-   `test_ledger_owner_wiring`, `test_event_retention` (CollectorSweepTests),
-   `test_learning_retention`, `test_learning_migration` (MigrationCliTests),
-   `test_learning_engine` (includes socket/confinement checks),
-   `test_learning_cli`, `test_reply_shape_live`, `test_upgrade_handover`.
-   Use a short temporary socket directory and a clean environment as builder
-   rules require. No PTY check was run here.
-3. Merge the accepted S14 tests/evidence first when forming the batch, then rerun
-   its `test_owner_backup_streamed` U7 backup/upgrade boundary cases and
-   `test_learning_source_image` source-image boundary case. These assertions are
-   absent from this unit's required base and were not copied or weakened here.
-4. Run the conservative copier/enumeration inventory in
-   [copy-module-inventory.md](copy-module-inventory.md), the primary's
-   `--affected ce81bd96`, and affected lifecycle flows (especially L10.3,
-   L11.1/L11.2 and account open/claim/settlement) on macOS and Linux. Then the
-   quiet batch full-suite gate, review and confirming review.
-5. Primary owns VERSION/digest catalogue bookkeeping and the release-pin rerun.
-   Run Ruff where available. No commit, merge, install or push was attempted.
-
-## Changed files
-
-- Runtime: `learning_store.py`, `learning_contracts.py`, `run_retention.py`,
-  `project_learning_corpus.py`, `runtime_files.py`.
+- Runtime: `learning_store.py`, `learning_contracts.py`, `run_retention.py`.
 - Tests: `test_run_retention.py`, `test_run_retention_integration.py`,
-  `lifetime_caps.json`; `tests/requirements/s14b.json`.
-- Tool/registration: `scripts/measure_s14b_retention.py`, `test-layers.json`,
-  `test-stages.json`, `test-timings.json`, `test-requirements.json`.
-- Documentation: `docs/requirements/s14b.md` and this directory's requirements
-  evidence, inventories, assertion map and measurements. No absolute home paths
-  or raw test logs are stored in these documents.
+  `lifetime_caps.json`; registration: `scripts/test-requirements.json`.
+- Measurement tool: `scripts/measure_s14b_retention.py`.
+- Requirements/evidence: `docs/requirements/s14b.md`, this STATUS,
+  `assertions.md`, `fix-measurement.json`, `fix-index-measurement.json`,
+  `fix-real-signatures.json`, `fix-named-evidence.json`,
+  `fix-followup-evidence.json`.

@@ -3948,10 +3948,15 @@
  },
  "S14b-2": {
   "checks": [
+   "codex:tests.test_run_retention.RunRetentionTests.test_completion_replay_fence_pins_expired_outcome_and_its_event",
    "codex:tests.test_run_retention.RunRetentionTests.test_cutoff_summary_counts_and_old_detail_answer",
    "codex:tests.test_run_retention.RunRetentionTests.test_full_outcomes_and_attested_and_file_backed_rows_stay",
+   "codex:tests.test_run_retention.RunRetentionTests.test_linked_group_rolls_back_together_and_reconsiders_released_protection",
    "codex:tests.test_run_retention.RunRetentionTests.test_live_windows_Claude_bootstrap_and_latest_reading_preserve_admission_answers",
+   "codex:tests.test_run_retention.RunRetentionTests.test_oversize_linked_group_stays_atomic_without_starving_later_work",
    "codex:tests.test_run_retention.RunRetentionTests.test_past_batch_limit_and_protected_prefix_drain_without_starvation",
+   "codex:tests.test_run_retention.RunRetentionTests.test_protected_tail_reaches_idle_and_does_not_wrap_on_short_pages",
+   "codex:tests.test_run_retention.RunRetentionTests.test_protection_is_checked_inside_write_transaction_and_propagates",
    "codex:tests.test_run_retention.RunRetentionTests.test_released_capacity_history_does_not_exhaust_retention_work_budget",
    "codex:tests.test_run_retention.RunRetentionTests.test_summary_failure_rolls_back_and_readers_and_transactions_skip",
    "codex:tests.test_run_retention.RunRetentionTests.test_unreferenced_outcome_leaves_status_counts_and_digest_lookup_answer",
@@ -3964,13 +3969,16 @@
   "checks": [
    "codex:tests.test_run_retention.RunRetentionTests.test_collector_maintenance_contains_failure_and_is_the_only_automatic_entry",
    "codex:tests.test_run_retention.RunRetentionTests.test_failed_fast_continuation_stops_and_batch_ceiling_never_limits_a_run",
-   "codex:tests.test_run_retention.RunRetentionTests.test_historical_lookup_past_SQL_work_limit_returns_plain_age_answer",
+   "codex:tests.test_run_retention.RunRetentionTests.test_historical_lookup_budget_failure_does_not_invent_membership",
    "codex:tests.test_run_retention.RunRetentionTests.test_live_windows_Claude_bootstrap_and_latest_reading_preserve_admission_answers",
+   "codex:tests.test_run_retention.RunRetentionTests.test_oversize_linked_group_stays_atomic_without_starving_later_work",
    "codex:tests.test_run_retention.RunRetentionTests.test_past_batch_limit_and_protected_prefix_drain_without_starvation",
+   "codex:tests.test_run_retention.RunRetentionTests.test_protected_tail_reaches_idle_and_does_not_wrap_on_short_pages",
    "codex:tests.test_run_retention.RunRetentionTests.test_released_capacity_history_does_not_exhaust_retention_work_budget",
    "codex:tests.test_run_retention.RunRetentionTests.test_sql_work_is_bounded_even_when_every_row_is_protected",
    "codex:tests.test_run_retention.RunRetentionTests.test_summary_failure_rolls_back_and_readers_and_transactions_skip",
-   "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_collector_sweep_sql_runs_on_the_E1b_owner_thread"
+   "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_collector_sweep_sql_runs_on_the_E1b_owner_thread",
+   "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_pinned_ledger_reaches_idle_without_delaying_owner_requests"
   ],
   "source": "tests/requirements/s14b.json#S14b-3",
   "statement": "Retention is bounded owner-thread maintenance and cannot block work."
@@ -3978,10 +3986,12 @@
  "S14b-4": {
   "checks": [
    "codex:tests.test_run_retention.RunRetentionTests.test_cutoff_summary_counts_and_old_detail_answer",
-   "codex:tests.test_run_retention.RunRetentionTests.test_historical_lookup_past_SQL_work_limit_returns_plain_age_answer",
+   "codex:tests.test_run_retention.RunRetentionTests.test_historical_lookup_budget_failure_does_not_invent_membership",
+   "codex:tests.test_run_retention.RunRetentionTests.test_mistyped_content_digest_is_not_found",
    "codex:tests.test_run_retention.RunRetentionTests.test_old_detail_resolves_its_own_summary_after_other_batches",
    "codex:tests.test_run_retention.RunRetentionTests.test_summary_contract_is_closed_and_old_vocabulary_remains_readable",
    "codex:tests.test_run_retention.RunRetentionTests.test_summary_stays_readable_when_live_writer_vocabulary_shrinks",
+   "codex:tests.test_run_retention.RunRetentionTests.test_typed_history_and_years_of_summaries_use_indexed_membership",
    "codex:tests.test_run_retention.RunRetentionTests.test_unreferenced_outcome_leaves_status_counts_and_digest_lookup_answer",
    "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_summary_survives_original_source_image_and_learning_transfer"
   ],
