@@ -1,0 +1,683 @@
+{
+  "base": "ce81bd96",
+  "version": "0.8.67",
+  "status": "E2c-1 loaded acceptance unproved; sandbox blocks serving",
+  "original_start_test_module_unchanged": true,
+  "original_start_test_module_sha256": "4fc0c11fc223c5ea58718fbafd1ab74ae4e937743ae31026604d3543a6340bd4",
+  "import_measurements": {
+    "quiet": {
+      "base": "ce81bd96",
+      "jobs": 1,
+      "samples_per_build": 5,
+      "measurement": "fresh host service and driver imports; excludes host initialization and readiness",
+      "python": "3.14.7",
+      "before": {
+        "summary": {
+          "import_seconds": {
+            "min": 0.366891,
+            "median": 0.369142,
+            "max": 0.389757
+          },
+          "process_seconds": {
+            "min": 0.393178,
+            "median": 0.395556,
+            "max": 0.419419
+          }
+        },
+        "samples": [
+          {
+            "import_seconds": 0.389757,
+            "process_seconds": 0.419419
+          },
+          {
+            "import_seconds": 0.369142,
+            "process_seconds": 0.395556
+          },
+          {
+            "import_seconds": 0.36951,
+            "process_seconds": 0.396161
+          },
+          {
+            "import_seconds": 0.366891,
+            "process_seconds": 0.393178
+          },
+          {
+            "import_seconds": 0.368639,
+            "process_seconds": 0.394835
+          }
+        ]
+      },
+      "after": {
+        "summary": {
+          "import_seconds": {
+            "min": 0.327246,
+            "median": 0.344689,
+            "max": 0.361447
+          },
+          "process_seconds": {
+            "min": 0.356363,
+            "median": 0.370359,
+            "max": 0.390324
+          }
+        },
+        "samples": [
+          {
+            "import_seconds": 0.361447,
+            "process_seconds": 0.390324
+          },
+          {
+            "import_seconds": 0.327246,
+            "process_seconds": 0.356363
+          },
+          {
+            "import_seconds": 0.337787,
+            "process_seconds": 0.364242
+          },
+          {
+            "import_seconds": 0.353624,
+            "process_seconds": 0.380468
+          },
+          {
+            "import_seconds": 0.344689,
+            "process_seconds": 0.370359
+          }
+        ]
+      }
+    },
+    "concurrent_16": {
+      "base": "ce81bd96",
+      "jobs": 16,
+      "samples_per_build": 16,
+      "measurement": "fresh host service and driver imports; excludes host initialization and readiness",
+      "python": "3.14.7",
+      "before": {
+        "summary": {
+          "import_seconds": {
+            "min": 0.525168,
+            "median": 0.5412809999999999,
+            "max": 0.546715
+          },
+          "process_seconds": {
+            "min": 0.569875,
+            "median": 0.5857675,
+            "max": 0.595516
+          }
+        },
+        "samples": [
+          {
+            "import_seconds": 0.526356,
+            "process_seconds": 0.569875
+          },
+          {
+            "import_seconds": 0.541905,
+            "process_seconds": 0.590567
+          },
+          {
+            "import_seconds": 0.546035,
+            "process_seconds": 0.58368
+          },
+          {
+            "import_seconds": 0.54141,
+            "process_seconds": 0.582289
+          },
+          {
+            "import_seconds": 0.543082,
+            "process_seconds": 0.593998
+          },
+          {
+            "import_seconds": 0.541152,
+            "process_seconds": 0.58589
+          },
+          {
+            "import_seconds": 0.543447,
+            "process_seconds": 0.587967
+          },
+          {
+            "import_seconds": 0.529617,
+            "process_seconds": 0.579748
+          },
+          {
+            "import_seconds": 0.543494,
+            "process_seconds": 0.590896
+          },
+          {
+            "import_seconds": 0.525168,
+            "process_seconds": 0.580778
+          },
+          {
+            "import_seconds": 0.525833,
+            "process_seconds": 0.579892
+          },
+          {
+            "import_seconds": 0.546715,
+            "process_seconds": 0.595516
+          },
+          {
+            "import_seconds": 0.543945,
+            "process_seconds": 0.594659
+          },
+          {
+            "import_seconds": 0.541119,
+            "process_seconds": 0.591278
+          },
+          {
+            "import_seconds": 0.530592,
+            "process_seconds": 0.585645
+          },
+          {
+            "import_seconds": 0.535241,
+            "process_seconds": 0.583367
+          }
+        ]
+      },
+      "after": {
+        "summary": {
+          "import_seconds": {
+            "min": 0.47529,
+            "median": 0.4904845,
+            "max": 0.515459
+          },
+          "process_seconds": {
+            "min": 0.516372,
+            "median": 0.5343745,
+            "max": 0.55125
+          }
+        },
+        "samples": [
+          {
+            "import_seconds": 0.498402,
+            "process_seconds": 0.539836
+          },
+          {
+            "import_seconds": 0.493561,
+            "process_seconds": 0.53392
+          },
+          {
+            "import_seconds": 0.482862,
+            "process_seconds": 0.522104
+          },
+          {
+            "import_seconds": 0.47529,
+            "process_seconds": 0.516372
+          },
+          {
+            "import_seconds": 0.495178,
+            "process_seconds": 0.537211
+          },
+          {
+            "import_seconds": 0.487079,
+            "process_seconds": 0.53823
+          },
+          {
+            "import_seconds": 0.490122,
+            "process_seconds": 0.534829
+          },
+          {
+            "import_seconds": 0.493209,
+            "process_seconds": 0.538029
+          },
+          {
+            "import_seconds": 0.492935,
+            "process_seconds": 0.539952
+          },
+          {
+            "import_seconds": 0.515459,
+            "process_seconds": 0.55125
+          },
+          {
+            "import_seconds": 0.500413,
+            "process_seconds": 0.540471
+          },
+          {
+            "import_seconds": 0.483953,
+            "process_seconds": 0.524788
+          },
+          {
+            "import_seconds": 0.482564,
+            "process_seconds": 0.527381
+          },
+          {
+            "import_seconds": 0.48733,
+            "process_seconds": 0.530876
+          },
+          {
+            "import_seconds": 0.488342,
+            "process_seconds": 0.532781
+          },
+          {
+            "import_seconds": 0.490847,
+            "process_seconds": 0.531866
+          }
+        ]
+      }
+    },
+    "named_jobs_16_load_pairs": [
+      {
+        "before": {
+          "process_seconds": 0.613,
+          "import_seconds": 0.5652
+        },
+        "after": {
+          "process_seconds": 0.5478,
+          "import_seconds": 0.5024
+        }
+      },
+      {
+        "after": {
+          "process_seconds": 0.5667,
+          "import_seconds": 0.5243
+        },
+        "before": {
+          "process_seconds": 0.6187,
+          "import_seconds": 0.5748
+        }
+      },
+      {
+        "before": {
+          "process_seconds": 0.594,
+          "import_seconds": 0.5516
+        },
+        "after": {
+          "process_seconds": 0.5495,
+          "import_seconds": 0.5109
+        }
+      },
+      {
+        "after": {
+          "process_seconds": 0.5759,
+          "import_seconds": 0.536
+        },
+        "before": {
+          "process_seconds": 0.6229,
+          "import_seconds": 0.5791
+        }
+      },
+      {
+        "before": {
+          "process_seconds": 0.6437,
+          "import_seconds": 0.6015
+        },
+        "after": {
+          "process_seconds": 0.526,
+          "import_seconds": 0.4891
+        }
+      }
+    ]
+  },
+  "runs": {
+    "red-ready": {
+      "elapsed_seconds": 2.934,
+      "jobs": 1,
+      "metadata_errors": [],
+      "modules": {
+        "codex:tests.test_project_host_start_cost": {
+          "job_seconds": 2.926,
+          "outcomes": {
+            "passed": 1,
+            "failed": 1
+          }
+        }
+      },
+      "failed_test_ids": [
+        "codex:tests.test_project_host_start_cost.ProjectHostStartCostTests.test_idle_host_imports_and_history_lifecycle_do_not_load_execution_or_learning"
+      ]
+    },
+    "final-green": {
+      "elapsed_seconds": 15.357,
+      "jobs": 16,
+      "metadata_errors": [],
+      "modules": {
+        "codex:tests.test_codex_preparation": {
+          "job_seconds": 8.75,
+          "outcomes": {
+            "passed": 30
+          }
+        },
+        "codex:tests.test_project_host_start_cost": {
+          "job_seconds": 3.356,
+          "outcomes": {
+            "passed": 2
+          }
+        },
+        "codex:tests.test_project_learning_live": {
+          "job_seconds": 0.609,
+          "outcomes": {
+            "passed": 18
+          }
+        },
+        "codex:tests.test_project_qa_check_receipts": {
+          "job_seconds": 15.349,
+          "outcomes": {
+            "passed": 23
+          }
+        }
+      },
+      "failed_test_ids": []
+    },
+    "regressions": {
+      "elapsed_seconds": 16.741,
+      "jobs": 16,
+      "metadata_errors": [],
+      "modules": {
+        "codex:tests.test_codex_preparation": {
+          "job_seconds": 10.32,
+          "outcomes": {
+            "passed": 30
+          }
+        },
+        "codex:tests.test_codex_worker": {
+          "job_seconds": 10.764,
+          "outcomes": {
+            "failed": 9,
+            "passed": 12
+          }
+        },
+        "codex:tests.test_history_api": {
+          "job_seconds": 1.579,
+          "outcomes": {
+            "passed": 27,
+            "failed": 4
+          }
+        },
+        "codex:tests.test_project_host_start_cost": {
+          "job_seconds": 3.908,
+          "outcomes": {
+            "passed": 2
+          }
+        },
+        "codex:tests.test_project_learning_live": {
+          "job_seconds": 0.765,
+          "outcomes": {
+            "passed": 18
+          }
+        },
+        "codex:tests.test_project_qa_check_receipts": {
+          "job_seconds": 16.734,
+          "outcomes": {
+            "passed": 23
+          }
+        },
+        "codex:tests.test_project_qa_commit": {
+          "job_seconds": 25.55,
+          "outcomes": {
+            "passed": 29,
+            "failed": 1
+          }
+        },
+        "codex:tests.test_runtime_release": {
+          "job_seconds": 0.43,
+          "outcomes": {
+            "failed": 1,
+            "passed": 2
+          }
+        }
+      },
+      "failed_test_ids": [
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_a_worker_without_a_keeper_reports_no_kept_answer_and_still_returns",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_an_invalid_answer_on_the_worker_path_is_kept_owner_only_with_its_digest",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_cancel_during_slow_result_validation_fences_and_discards_the_late_success",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_completion_receipt_before_at_and_after_limits_has_deterministic_precedence",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_fixed_return_before_late_owner_poll_and_cancel_retains_exact_valid_result",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_process_signal_uses_custody_guard_after_worker_reaped_root",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_safe_validator_reason_survives_worker_and_owner_delivery_without_rejected_content",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_supported_full_size_raw_result_is_handed_off_without_owner_body_parsing_or_copy",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_unknown_native_model_text_is_not_retained_as_report_metadata",
+        "codex:tests.test_history_api.HistoryProcessApiTests.test_actual_b_api_commits_while_a_owner_holds_a_write_transaction",
+        "codex:tests.test_history_api.HistoryProcessApiTests.test_explicit_record_read_frame_can_exceed_the_ordinary_reply_limit",
+        "codex:tests.test_history_api.HistoryProcessApiTests.test_lost_reply_is_not_retried_and_explicit_retry_returns_first_metadata",
+        "codex:tests.test_history_api.HistoryProcessApiTests.test_terminal_delivery_and_acknowledgement_replay_survive_process_restart",
+        "codex:tests.test_project_qa_commit.ProjectQASocketCommitTests.test_actual_separate_writer_and_sqlite_free_client_commit_and_read_qa",
+        "codex:tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version"
+      ]
+    },
+    "baseline-regressions": {
+      "elapsed_seconds": 18.302,
+      "jobs": 16,
+      "metadata_errors": [],
+      "modules": {
+        "codex:tests.test_codex_worker": {
+          "job_seconds": 12.779,
+          "outcomes": {
+            "failed": 9,
+            "passed": 12
+          }
+        },
+        "codex:tests.test_history_api": {
+          "job_seconds": 1.501,
+          "outcomes": {
+            "passed": 27,
+            "failed": 4
+          }
+        },
+        "codex:tests.test_project_qa_commit": {
+          "job_seconds": 35.962,
+          "outcomes": {
+            "passed": 29,
+            "failed": 1
+          }
+        }
+      },
+      "failed_test_ids": [
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_a_worker_without_a_keeper_reports_no_kept_answer_and_still_returns",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_an_invalid_answer_on_the_worker_path_is_kept_owner_only_with_its_digest",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_cancel_during_slow_result_validation_fences_and_discards_the_late_success",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_completion_receipt_before_at_and_after_limits_has_deterministic_precedence",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_fixed_return_before_late_owner_poll_and_cancel_retains_exact_valid_result",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_process_signal_uses_custody_guard_after_worker_reaped_root",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_safe_validator_reason_survives_worker_and_owner_delivery_without_rejected_content",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_supported_full_size_raw_result_is_handed_off_without_owner_body_parsing_or_copy",
+        "codex:tests.test_codex_worker.CodexWorkerTests.test_unknown_native_model_text_is_not_retained_as_report_metadata",
+        "codex:tests.test_history_api.HistoryProcessApiTests.test_actual_b_api_commits_while_a_owner_holds_a_write_transaction",
+        "codex:tests.test_history_api.HistoryProcessApiTests.test_explicit_record_read_frame_can_exceed_the_ordinary_reply_limit",
+        "codex:tests.test_history_api.HistoryProcessApiTests.test_lost_reply_is_not_retried_and_explicit_retry_returns_first_metadata",
+        "codex:tests.test_history_api.HistoryProcessApiTests.test_terminal_delivery_and_acknowledgement_replay_survive_process_restart",
+        "codex:tests.test_project_qa_commit.ProjectQASocketCommitTests.test_actual_separate_writer_and_sqlite_free_client_commit_and_read_qa"
+      ]
+    },
+    "load": {
+      "elapsed_seconds": 30.013,
+      "jobs": 16,
+      "metadata_errors": [],
+      "modules": {
+        "codex:tests.test_host_commands": {
+          "job_seconds": 59.828,
+          "outcomes": {
+            "passed": 43,
+            "skipped": 10,
+            "failed": 1
+          }
+        },
+        "codex:tests.test_project_start": {
+          "job_seconds": 60.059,
+          "outcomes": {
+            "error": 4,
+            "passed": 6,
+            "failed": 28
+          }
+        },
+        "root:test_install": {
+          "job_seconds": 85.346,
+          "outcomes": {
+            "passed": 42,
+            "error": 2,
+            "failed": 2
+          }
+        },
+        "root:test_setup_wizard_direct": {
+          "job_seconds": 6.447,
+          "outcomes": {
+            "error": 42,
+            "skipped": 18
+          }
+        }
+      },
+      "failed_test_ids": [
+        "codex:tests.test_host_commands.OwnRootTests.test_own_project_and_default_state_still_work",
+        "codex:tests.test_project_start.BackoffTests.test_E2c_4_a_crash_loop_parks_and_only_the_owner_unparks",
+        "codex:tests.test_project_start.BackoffTests.test_E2c_4_an_early_exit_counts_failed_and_a_lasting_start_ends_the_streak",
+        "codex:tests.test_project_start.BudgetTests.test_E2c_10_the_stranded_pass_reaches_every_claim_past_one_page",
+        "codex:tests.test_project_start.BudgetTests.test_E2c_3_a_collector_drains_1000_due_projects_within_60_seconds_and_starts_no_later",
+        "codex:tests.test_project_start.FairnessTests.test_E2c_2_past_the_queue_and_slot_limits_every_due_project_is_still_started",
+        "codex:tests.test_project_start.OtherVersionTests.test_E2c_7_a_real_host_of_an_earlier_runtime_is_not_replaced",
+        "codex:tests.test_project_start.OwnerCommandTests.test_E2c_4_the_owner_start_command_unparks_with_the_collector_down",
+        "codex:tests.test_project_start.OwnershipTests.test_E2c_10_a_child_whose_pid_record_is_refused_is_still_timed_killed_and_reaped",
+        "codex:tests.test_project_start.OwnershipTests.test_E2c_2_refused_ledger_steps_are_retried_and_no_worker_ends",
+        "codex:tests.test_project_start.ProbationDeadlineTests.test_E2c_4_a_host_that_died_early_is_failed_when_the_restart_comes_after_its_deadline",
+        "codex:tests.test_project_start.ProbationTests.test_E2c_4_a_probation_is_kept_across_a_collector_restart",
+        "codex:tests.test_project_start.ProbationTests.test_E2c_4_a_serving_recheck_never_replaces_an_active_probation",
+        "codex:tests.test_project_start.ProductionIntervalTests.test_E2c_3_1000_due_projects_with_launch_records_drain_within_60_seconds",
+        "codex:tests.test_project_start.RecordRefusedTests.test_E2c_10_a_clean_stop_never_releases_an_unrecorded_live_child_s_claim",
+        "codex:tests.test_project_start.RecordRefusedTests.test_E2c_10_after_the_collector_s_loss_an_unrecorded_child_keeps_its_claim_until_it_is_gone",
+        "codex:tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2a_1_a_released_0_8_59_ledger_backs_up_restores_and_moves_after_the_upgrade",
+        "codex:tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2c_10_a_released_0_8_59_ledger_opens_and_works_under_this_build",
+        "codex:tests.test_project_start.SlotTests.test_E2c_2_surviving_stranded_children_hold_their_slots",
+        "codex:tests.test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client",
+        "codex:tests.test_project_start.StartTests.test_E2c_2_a_start_blocked_in_its_spawn_holds_no_ledger_lock",
+        "codex:tests.test_project_start.StartTests.test_E2c_2_limits_and_round_robin_with_two_projects_ending_at_once",
+        "codex:tests.test_project_start.StartTests.test_E2c_5_the_child_is_the_copy_s_entry_with_isolation_flags_and_a_bare_environment",
+        "codex:tests.test_project_start.StartTests.test_E2c_6_a_changed_or_missing_install_starts_nothing",
+        "codex:tests.test_project_start.StartTests.test_E2c_7_another_version_s_live_host_is_not_replaced",
+        "codex:tests.test_project_start.StartTests.test_E2c_8_pre_start_steps",
+        "codex:tests.test_project_start.StatusTests.test_E2c_9_status_is_the_owner_s_and_learning_status_shows_it",
+        "codex:tests.test_project_start.StopTests.test_E2c_11_a_stop_with_the_collector_s_intake_closed_is_not_delayed",
+        "codex:tests.test_project_start.StrandedTests.test_E2c_10_a_host_that_does_not_serve_in_time_is_killed_at_twice_the_timeout",
+        "codex:tests.test_project_start.StrandedTests.test_E2c_10_a_killed_service_starts_and_a_restart_keeps_the_backoff",
+        "codex:tests.test_project_start.StrandedTests.test_E2c_10_claims_left_by_a_dead_collector_are_reconciled",
+        "codex:tests.test_project_start.TimeoutSlotTests.test_E2c_2_a_surviving_child_s_slot_is_freed_only_once_it_is_killed_and_gone",
+        "codex:tests.test_project_start.TrustBoundaryTests.test_E2c_6_location_refusals_hold_in_the_product_path",
+        "root:test_install.OwnerCommandsFromThisCheckoutTests.test_configure_owner_key_writes_the_same_record_from_either_copy",
+        "root:test_install.UmbrellaInstallTests.test_a_plumbing_commit_refuses_when_the_branch_moved",
+        "root:test_install.UmbrellaInstallTests.test_a_plumbing_commit_takes_only_its_paths_and_runs_no_project_program",
+        "root:test_install.UmbrellaInstallTests.test_checkout_local_hooks_are_never_committed_and_an_old_tracked_copy_is_untracked",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_C6_any_other_reason_still_fails_at_once",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_H1a_6c_setup_waits_for_a_collector_whose_ledger_is_busy",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_a_codex_session_able_to_write_this_clone_is_warned_about",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_a_collector_that_did_not_start_after_registration_is_not_called_an_unfinished_registration",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_a_failed_attestation_offers_try_again_and_succeeds_on_retry",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_a_failed_path_helper_stages_and_commits_nothing",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_a_failure_after_the_upgrade_is_never_described_as_records_left_unchanged",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_a_modified_orchestrator_is_never_run",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_a_project_codex_session_is_not_warned_about",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_a_stale_rule_left_unchanged_keeps_its_undo_instruction",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_an_earlier_versions_records_are_upgraded_only_when_approved",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_an_unsupported_codex_home_is_explained_with_its_fix",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_an_untrusted_python_is_explained_and_nothing_is_written",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_an_upgrade_that_failed_before_changing_anything_says_so",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_an_upgrade_whose_outcome_cannot_be_read_tells_the_owner_to_keep_everything",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_another_folder_asks_for_a_path",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_cannot_open_without_a_home_match_offers_no_guess",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_declining_the_move_registers_nothing",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_declining_the_upgrade_changes_nothing",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_failure_menu_defaults_to_the_main_menu_and_the_summary_can_go_back",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_going_back_does_not_leak_the_last_attempts_choices_into_the_next",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_helpers_in_the_project_settings_stop_setup_before_any_git_porcelain",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_home_markers_in_the_project_path_are_expanded",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_no_move_no_records_sentence",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_old_records_are_shown_and_moved_only_when_approved",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_only_paths_with_changes_are_committed",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_path_starting_with_a_dash_is_resolved",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_projects_set_up_before_are_offered_in_a_list",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_question_mark_shows_what_ran_in_the_step",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_replace_a_lost_owner_key_is_offered_and_can_be_backed_out_of",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_sessions_able_to_write_the_records_or_a_set_up_project_are_warned_about",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_started_from_the_orchestrator_it_suggests_no_project_and_refuses_itself",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_summary_defaults_to_the_home_folder",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_summary_inside_a_git_working_tree_asks_first",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_summary_says_commit_failed_when_git_refuses",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_summary_says_not_committed_and_lists_what_is_left",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_the_commit_never_runs_project_hooks",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_the_hooks_are_offered_for_trust_only_after_the_runtime_check",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_the_one_time_move_of_the_records_is_explained",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_the_wizard_only_ends_on_quit_after_failures",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_verify_reports_the_codex_commands_rule_without_writing_it",
+        "root:test_setup_wizard_direct.WizardDirectTests.test_verify_retry_back_and_the_summary_return_to_the_menu"
+      ]
+    }
+  },
+  "readiness_observer": {
+    "before_quiet": {
+      "base": "ce81bd96",
+      "loaded": false,
+      "python": "3.14.7",
+      "test": "tests.test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client",
+      "samples": [
+        {
+          "passed": false,
+          "test_seconds": 1.1248880829662085,
+          "projects": {},
+          "failures": 1,
+          "errors": 0,
+          "load_active_throughout": false
+        }
+      ],
+      "load_returncode": null,
+      "all_passed": false,
+      "loaded_gate_passed": false,
+      "elapsed_seconds": 1.7909947079606354
+    },
+    "after_loaded": {
+      "base": null,
+      "loaded": true,
+      "python": "3.14.7",
+      "test": "tests.test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client",
+      "samples": [
+        {
+          "passed": false,
+          "test_seconds": 1.0828183750854805,
+          "projects": {},
+          "failures": 1,
+          "errors": 0,
+          "load_active_throughout": true
+        },
+        {
+          "passed": false,
+          "test_seconds": 1.0870197910116985,
+          "projects": {},
+          "failures": 1,
+          "errors": 0,
+          "load_active_throughout": true
+        },
+        {
+          "passed": false,
+          "test_seconds": 1.0687244579894468,
+          "projects": {},
+          "failures": 1,
+          "errors": 0,
+          "load_active_throughout": true
+        },
+        {
+          "passed": false,
+          "test_seconds": 1.0886008749948815,
+          "projects": {},
+          "failures": 1,
+          "errors": 0,
+          "load_active_throughout": true
+        },
+        {
+          "passed": false,
+          "test_seconds": 1.0546216659713537,
+          "projects": {},
+          "failures": 1,
+          "errors": 0,
+          "load_active_throughout": true
+        }
+      ],
+      "load_returncode": 1,
+      "all_passed": false,
+      "loaded_gate_passed": false,
+      "elapsed_seconds": 32.73466824996285
+    }
+  },
+  "socket_probe": {
+    "operation": "AF_UNIX bind under short TMPDIR",
+    "error": "PermissionError",
+    "errno": 1
+  },
+  "not_run": [
+    "working-socket quiet before/after start measurement",
+    "working-fixture E2c-1 5/5 jobs16 acceptance",
+    "Linux/container flows",
+    "other-provider review",
+    "affected run and batch full suite (primary gate)"
+  ]
+}

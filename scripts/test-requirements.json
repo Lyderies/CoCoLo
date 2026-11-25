@@ -4087,5 +4087,12 @@
    "codex:tests.test_health_holds.HoldsTests.test_findings_survive_other_project_pass_and_say_when_stale",
    "codex:tests.test_health_holds.HoldsTests.test_registration_does_not_edit_primary_owned_files_or_builtin_api"
   ]
+ },
+ "S13E-2": {
+  "checks": [
+   "codex:tests.test_project_host_start_cost.ProjectHostStartCostTests.test_host_and_deferred_imports_ignore_planted_and_stale_bytecode"
+  ],
+  "source": "tests/requirements/s13e.json#S13E-2",
+  "statement": "## S13E-2 \u2014 No unverified bytecode\n\nKeep `PYTHON_ISOLATION_FLAGS` unchanged, including `-B -X pycache_prefix=/dev/null`.\nNo product bytecode cache is introduced. A planted timestamp-valid, stale, hash-based or source-less\n`.pyc` must never execute, for both startup modules and modules first imported on demand. Source remains\nthe sole runtime input. Acceptance plants executable canaries in a temporary runtime copy and exercises\nthe actual host entry and deferred imports with the product isolation flags; no canary runs or cache grows.\n\nVERSION and the runtime digest catalogue stay unchanged."
  }
 }
