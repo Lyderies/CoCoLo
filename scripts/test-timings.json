@@ -2990,7 +2990,7 @@
  "root:test_setup_sh.WizardTerminalTests.test_verify_reports_the_codex_commands_rule_without_writing_it": 0.89,
  "root:test_setup_sh.WizardTerminalTests.test_verify_retry_back_and_the_summary_return_to_the_menu": 1.59,
  "root:test_setup_sh.WizardTerminalTests.test_wildcard_named_obsolete_file_is_removed_without_touching_its_neighbour": 0.98,
- "root:test_setup_straight": 84.34,
+ "root:test_setup_straight": 101.42,
  "root:test_setup_update": 91.97,
  "root:test_setup_wizard_direct": 160.93,
  "root:test_setup_wizard_direct.WizardDirectTests.test_C6_any_other_reason_still_fails_at_once": 2.87,

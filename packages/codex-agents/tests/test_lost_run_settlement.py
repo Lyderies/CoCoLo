@@ -237,6 +237,7 @@ class LedgerReadHelperTests(LostRunHarness):
     sees the half-written state (a run's binding already `abandoned/service_lost`, its slot not yet released),
     so under load a poll saw `counted() == 0` with the slot still unreleased. Reads wait for the write instead."""
 
+    @__import__('test_framework').requirements('TESTSPEED2-2', 'TESTSPEED2-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED2).')
     def test_the_ledger_read_helpers_wait_for_a_write_the_collector_has_open(self):
         for name, read in (('counted', self.counted), ('claimed_bindings', self.claimed_bindings)):
             with self.subTest(name):

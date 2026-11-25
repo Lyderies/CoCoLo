@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from test_framework import requirements  # noqa: E402
 from test_setup_update import REGISTERED, SetupUpdateTests  # noqa: E402
 
 
@@ -150,6 +151,7 @@ class SetupStraightTests(SetupUpdateTests):
     MISSING = ATTESTED.replace('"claude": {"state": "present"}', '"claude": {"state": "missing"}')
     OBSERVED = '{"ready": true, "provider": "claude"}'
 
+    @requirements('TESTSPEED2-1', 'TESTSPEED2-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED2).')
     def test_S4_3_update_skips_billing_when_attested_and_runs_it_otherwise(self):
         project = self.installed()
         identity = self.ATTESTED.replace('"claude": {"state": "present"}', '"claude": {"state": "identity_missing"}')
@@ -221,6 +223,7 @@ class SetupStraightTests(SetupUpdateTests):
         self.send("\r")
         self.expect("attest stub run 1")
 
+    @requirements('TESTSPEED2-1', 'TESTSPEED2-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED2).')
     def test_S4_3_an_answers_file_skips_a_current_signature_signs_when_not_current_or_when_asked(self):
         # Owner decision 37: an answers-file re-run skips the billing statements when this project's
         # attestation is already signed and current, as an update does; `billing_sign_again: true` signs again.
@@ -241,6 +244,7 @@ class SetupStraightTests(SetupUpdateTests):
                 self.assertEqual(runs == 0, "already attested" in screen)
                 self._reap()
 
+    @requirements('TESTSPEED2-1', 'TESTSPEED2-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED2).')
     def test_S4_3_an_answers_rerun_signs_for_every_signature_that_is_not_current_and_shows_no_private_value(self):
         # Review 040-screens-r1 MED-1 (owner decisions 36 and 37): an expired or unknown state, a signature of a
         # replaced key (status "missing"), an account with no identity, an unavailable status or an observation

@@ -112,6 +112,7 @@ class DirectDriverMixin:
     # is really made is changed: the argument list the wizard builds and the logs record are untouched.
     shared_pycache = False
     _pycache: str | None = None
+    _getconf_answers: dict = {}
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -339,8 +340,16 @@ class DirectDriverMixin:
         if self._pycache:
             run = subprocess.run
             prefix = self._pycache
-            patched = mock.patch.object(
-                subprocess, "run", lambda command, *a, **k: run(self.with_shared_pycache(command, prefix), *a, **k))
+            answers = self._getconf_answers
+
+            def shared_run(command, *a, **k):
+                # getconf names the per-user temporary folders: the same answer every time in one run
+                if isinstance(command, list) and len(command) == 2 and command[0] == "/usr/bin/getconf":
+                    if tuple(command) not in answers:
+                        answers[tuple(command)] = run(command, *a, **k)
+                    return answers[tuple(command)]
+                return run(self.with_shared_pycache(command, prefix), *a, **k)
+            patched = mock.patch.object(subprocess, "run", shared_run)
             patched.start()
             shared.append(patched.stop)
         here = os.getcwd()
