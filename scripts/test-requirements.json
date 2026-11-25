@@ -1718,6 +1718,8 @@
    "codex:tests.test_memory_holds.MemoryHoldTests.test_M5_recovery_once_and_graceful_stop",
    "codex:tests.test_memory_holds.MemoryHoldTests.test_M7_registration_refusal_preserves_duty",
    "codex:tests.test_memory_holds.MemoryHoldTests.test_live_memory_prevents_attempt_source_purge",
+   "codex:tests.test_memory_holds.MemoryHoldTests.test_register_requires_explicit_journal_directory",
+   "codex:tests.test_memory_holds.MemoryHoldTests.test_register_uses_explicit_non_sibling_journal_directory",
    "codex:tests.test_memory_holds.MemoryHoldTests.test_registration_rollback_validator_and_status",
    "codex:tests.test_memory_holds.MemoryHoldTests.test_status_memory_blocks_close_eligibility_and_has_holds",
    "codex:tests.test_memory_holds.MemoryHoldTests.test_validator_refuses_missing_tracked_registration_hold",

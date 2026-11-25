@@ -31,7 +31,8 @@ class MemoryFixture(b6.OrchestrationStore):
 
     def register(self, key=None):
         key = key or self.key
-        return memory().register(self.store, self.handle, *key, 'run-' + key[0][-4:], self.instance)
+        return memory().register(self.store, self.handle, *key, 'run-' + key[0][-4:], self.instance,
+                                 launches=self.journal.directory)
 
     def row(self, kind, key=None):
         key = key or self.key
@@ -47,6 +48,29 @@ class MemoryFixture(b6.OrchestrationStore):
 
 
 class MemoryHoldTests(MemoryFixture):
+    @requirements('RS-B-4', why_not_scenario=WHY)
+    def test_register_requires_explicit_journal_directory(self):
+        # The sibling lock exists: finding it must not authorize an omitted directory.
+        for options in ({}, {'launches': None}):
+            with self.subTest(options=options):
+                with self.assertRaisesRegex(HistoryError, 'history_invalid_input'):
+                    memory().register(self.store, self.handle, *self.key, 'run', self.instance, **options)
+                self.assertEqual(0, self.store._connection.execute(
+                    'SELECT COUNT(*) FROM project_registered_runs').fetchone()[0])
+                self.assertIsNone(self.row('driver_entry'))
+
+    @requirements('RS-B-4', why_not_scenario=WHY)
+    def test_register_uses_explicit_non_sibling_journal_directory(self):
+        journal = LaunchJournal(self.directory / 'custom-journal')
+        self.addCleanup(journal.release)
+        memory().register(self.store, self.handle, *self.key, 'run', journal.instance,
+                          launches=journal.directory)
+        row = self.row('driver_entry')
+        self.assertEqual(('held', journal.instance), (row['state'], row['instance']))
+        info = (journal.directory / (journal.instance + '.lock')).stat()
+        facts = json.loads(row['evidence'])
+        self.assertEqual((info.st_dev, info.st_ino), (facts['lock_device'], facts['lock_inode']))
+
     @requirements('RS-B-4', why_not_scenario=WHY)
     def test_M3_close_and_takes_both_orders(self):
         self.register()
@@ -108,9 +132,12 @@ class MemoryHoldTests(MemoryFixture):
         from codex_agents.project_holds_report import holds_report
         from codex_agents.holds_report_contracts import checked_holds_report
         report = checked_holds_report(holds_report(self.store))
-        for kind in ('driver_entry', 'preparation', 'orchestration'):
+        for kind in ('driver_entry', 'preparation'):
             self.assertEqual('tracked', report['project_holds'][kind]['tracking'])
             self.assertEqual(1, report['project_holds'][kind]['held'])
+        self.assertEqual({'tracking': 'not_tracked', 'held': 0, 'releasing': 0,
+            'past_due': 0, 'next_eligible': None, 'oldest_taken_at_ms': None},
+            report['project_holds']['orchestration'])
         self.store._connection.execute("UPDATE project_holds SET instance='foreign' WHERE kind='preparation'")
         self.assertFalse(project_holds_schema.register_consistent(self.store._connection))
 
@@ -160,19 +187,18 @@ class MemoryHoldTests(MemoryFixture):
         from codex_agents.recovery_report import RecoveryNotes, RECOVERY_REASONS
         self.store._recovery_notes = RecoveryNotes()
         self.store._recovery_notes.publish(dict.fromkeys(RECOVERY_REASONS,0))
-        self.assertEqual(self.now+b6.ORCHESTRATION_IDLE_MS,
-            holds_report(self.store)['project_holds']['orchestration']['next_eligible'])
+        untracked = {'tracking': 'not_tracked', 'held': 0, 'releasing': 0,
+            'past_due': 0, 'next_eligible': None, 'oldest_taken_at_ms': None}
+        self.assertEqual(untracked, holds_report(self.store)['project_holds']['orchestration'])
         self.register()
         self.now += b6.ORCHESTRATION_IDLE_MS
         report = holds_report(self.store)
         self.assertEqual(1,report['project_holds']['driver_entry']['held'])
-        self.assertEqual(0,report['project_holds']['orchestration']['past_due'])
-        self.assertIsNone(report['project_holds']['orchestration']['next_eligible'])
+        self.assertEqual(untracked,report['project_holds']['orchestration'])
         self.assertEqual(1,report['recovery_pending']['reasons']['has_holds'])
         self.release('driver_entry')
         report = holds_report(self.store)
-        self.assertEqual(1,report['project_holds']['orchestration']['past_due'])
-        self.assertIsNotNone(report['project_holds']['orchestration']['next_eligible'])
+        self.assertEqual(untracked,report['project_holds']['orchestration'])
         self.assertEqual(0,report['recovery_pending']['reasons']['has_holds'])
 
     @requirements('RS-B-4', why_not_scenario=WHY)

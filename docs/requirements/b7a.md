@@ -1,7 +1,7 @@
 # B7a status projection (CoCoLo 0.4.0)
 
 Source: `~/Code/temp/orchestrator-child-liveness/ANALYSIS-0.4.0-rsb-b4-b7.md`, section 7.
-Scope: RS-B-B7-1, RS-B-B7-2, RS-B-B7-3, RS-B-B7-6. Decision 129.1 A is implemented by RS-B memory holds: every kind is tracked.
+Scope: RS-B-B7-1, RS-B-B7-2, RS-B-B7-3, RS-B-B7-6. Decision 129.1 A tracks memory kinds through RS-B memory holds; decision 286 leaves orchestration untracked in this slice.
 B7b (`recovery_pending`, stale readings and budget measurements) is excluded. No schema or lifecycle writes.
 
 ## RS-B-B7-1
@@ -11,8 +11,9 @@ B7b (`recovery_pending`, stale readings and budget measurements) is excluded. No
 
 Acceptance: `history.holds_report` returns `project_holds` with every kind: `driver_entry`, `preparation`, `lease`,
 `reservation`, `orchestration`, `open_binding`, `result_custody`. Every kind has exactly `tracking`, `held`, `releasing`,
-`past_due`, `next_eligible`, `oldest_taken_at_ms`. `tracking` is `tracked` for every kind (B2 memory holds and B6 orchestrations).
-Empty counts are zero and timestamps null (orchestration `past_due` is zero).
+`past_due`, `next_eligible`, `oldest_taken_at_ms`. `tracking` is `not_tracked` for orchestration and `tracked` otherwise,
+including driver_entry and preparation under B2. Untracked counts are zero and timestamps null (orchestration
+`past_due` is zero); the orchestration tracking switch belongs to B7b per B6, not this slice.
 `held` counts only held rows; `releasing` only releasing rows; oldest is the minimum taken time of held rows only.
 Per draft 3 §10, lease, reservation and open_binding are evidence-only: `past_due` and `next_eligible` are always null.
 Custody deadlines apply only to committed/recorded contexts or legacy committed reservations; an unfinished execution

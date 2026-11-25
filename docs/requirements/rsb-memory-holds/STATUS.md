@@ -1,9 +1,67 @@
 # RS-B-4 memory holds — handoff
 
-Implemented on `feat/rsb-memory-holds`, base `4a00f22d` (0.8.62), and left
-uncommitted as requested. VERSION and the runtime digest catalogue are unchanged.
+Implemented on `feat/rsb-memory-holds`, base `230c2fc0` (0.8.62), plus accepted RS-F
+S6 at `1aabb8e5`. Implementation and registration repair are committed through
+`f69ff690`; the decision-286 review fixes below remain uncommitted as requested.
+VERSION and the runtime digest catalogue are unchanged.
 No schema step, installation, merge, push or live-service changes. No test run
 remains in flight. The requirement map preceded tests and implementation.
+
+## Review fix round (decision 286; current evidence)
+
+This round changes only MED-1 and LOW-1 through LOW-4. Requirement text and
+matching tests preceded the runtime changes. All checks use existing requirement
+IDs; the two new methods are reciprocally registered under RS-B-4 in the existing
+scenario module. No schema, persisted record shape, operation set or release
+kind changed, so no new copier/backup/move/enumeration run is required.
+`git diff --check` and the identifier scan pass; no absolute home paths or raw
+logs were added to the documentation.
+
+| Review item / requirement | Test or inspection | Evidence |
+|---|---|---|
+| MED-1 / RS-B-B7-1, RS-B-B7-6, RS-B-4 | `HoldsReportTests.test_B7_1_empty_has_every_kind_and_explicit_zero_null_fields`; `MemoryHoldTests.test_registration_rollback_validator_and_status`; `test_status_memory_blocks_close_eligibility_and_has_holds` | RED before runtime edits, GREEN after. Orchestration is not_tracked with its pre-unit zero/null report, before and after the idle deadline and memory retirement. Memory kinds stay tracked; recovery has_holds still changes 1 to 0. Removed the orchestration eligibility query and corrected B7a's scope. |
+| LOW-1 / RS-B-4 | `MemoryHoldTests.test_register_requires_explicit_journal_directory`; `test_register_uses_explicit_non_sibling_journal_directory`; all memory crash/lane checks | Omitted and null directories both RED (no refusal) then GREEN (history_invalid_input, no source or hold). Explicit non-sibling directory and recorded lock identity pass before/after; no red claimed for that compatibility case. Store/crash fixtures pass their own journal directory. |
+| LOW-2 | Header here and in `rsb-memory-holds.md`, checked against git ancestry/history | Correct base 230c2fc0 plus accepted S6 1aabb8e5; implementation/repair committed through f69ff690, current review fixes uncommitted. VERSION/catalogue untouched. |
+| LOW-3 / M4/M5 | Requirement limitation, inspected against `LaunchJournal.forget_instance` and `memory_holds.recover`; existing `MemoryCrashTests.test_M4_hung_and_missing_lock` | Documented the two-services/one-project window between recover passes and the resulting instance_unproven capacity leak. Rows remain held; absence never releases them. Existing missing-lock regression GREEN; no new test or fix of the stale-set window is claimed. |
+| LOW-4 / M2/M5 | Requirement boundary, inspected against `RunDriver.settle_on_exit`; existing `DriverMemoryTests.test_M2_unknown_cleanup_keeps_both_holds` and `MemoryLaneTests.test_M5_graceful_stop_retires_rows_before_unlock` | Documented unknown-cleanup preparations retiring as retired at graceful stop even if workspace remains on disk, because holds count in-process capacity. Existing running-retention and graceful-stop checks GREEN; this item changes documentation only. |
+
+Registered red run: 46 tests across `tests.test_holds_report` and
+`tests.test_memory_holds`, 1.3 s wall, five assertion failure events (including
+both missing-directory variants), `metadata_errors: []`. Final green run:
+**68 tests / five modules / 5.6 s wall**, `failed_units: []`,
+`metadata_errors: []`, `budget_failures: []`. Modules:
+
+- `tests.test_holds_report` (26)
+- `tests.test_memory_holds` (20)
+- `tests.test_memory_holds_crash` (4)
+- `tests.test_memory_holds_lane` (7)
+- `tests.test_rsf_s6_classify` (11)
+
+`tests.test_runtime_release`: three tests / 0.2 s wall, two pass and the current
+version's digest check is expected RED; `metadata_errors: []`. The primary owns
+VERSION/catalogue release bookkeeping. No socket or PTY test was run in this
+round. The primary must rerun the changed budget pin and report transport in a
+socket-capable environment, from the repository root with the supplied interpreter:
+
+```sh
+$PY -B scripts/parallel_tests.py --module codex:tests.test_b7b_budgets --module codex:tests.test_holds_report_socket
+```
+
+The budget module probes socket binding, so it was left entirely unrun here;
+its numeric assertions remain unchanged. Rerun `tests.test_runtime_release`
+after release bookkeeping. Earlier evidence/environment notes below describe
+prior rounds, including the accepted primary 25-module repair gate.
+
+Changed files this round (12): `docs/requirements/b7a.md`,
+`docs/requirements/rsb-memory-holds.md`, this `STATUS.md`, `assertions.md`;
+runtime `holds_report_contracts.py`, `project_holds_report.py`, `memory_holds.py`;
+tests `test_holds_report.py`, `test_b7b_budgets.py`, `test_memory_holds.py`,
+`memory_holds_fixture.py`; and `scripts/test-requirements.json`.
+The four assertion replacements are paired in [assertions.md](assertions.md):
+orchestration tracking/counts/eligibility revert to the pre-unit contract while
+memory tracking, S6 historical-memory assertions and budget measurements remain.
+
+## Earlier implementation evidence
 
 The three new scenario modules have reciprocal RS-B-4 registry links and
 `metadata_errors: []`. The final memory/limit run passes **33 tests in 5.595 s**:
@@ -152,9 +210,8 @@ which a driver without memory custody (the warm-up gate tests) never sets.
 - `project_history.record_registered_run(memory=...)` now takes that directory
   (`None` = reporting only) and hands it to `registration_hold`.
 - `memory_holds.registration_hold(..., launches)` uses the given directory and no
-  longer infers it. The store-level `register` operation takes an optional
-  `launches`; its default (sibling `launches`) serves only store tests that open a
-  history directly.
+  longer infers it. That repair left a sibling-directory fallback in store-level
+  `register`; LOW-1 in the review fix round below removes that fallback too.
 - `project_driver._unheld_reply`: the retired-run lookup runs only with memory custody.
 
 **Evidence.** Red before the fix: one `HostVerificationTests` dispatch reproduced
@@ -165,12 +222,11 @@ including `test_project_driver` (11 fragments), `test_project_hold_register`,
 `test_open_withdrawal` and the three memory-holds modules. `test_runtime_release`
 is expected to fail until VERSION and digests are bumped (not done here).
 
-**Assertion review (no revert).** The holds-report and S6 `tracked` changes follow
-decision 129.1 A (memory kinds report `not_tracked` only until this slice). Two items
-for the primary: (1) `UNTRACKED_KINDS` also drops `orchestration` and adds its
-`past_due`/`next_eligible` computation; that switch is listed in `b6.md` as B7b's,
-not 129.1's. (2) `test_b7b_budgets`'s old tripwire asked for full B1/B6 measurements
-once tracking changed; the replacement keeps B1/B6 `unmeasured` with reasons and adds
-memory-only numbers, so whether full B1/B6 budgets are now owed is a primary decision.
+**Assertion review.** The holds-report and S6 memory `tracked` changes follow
+decision 129.1 A (memory kinds report `not_tracked` only until this slice).
+Decision 286 keeps orchestration untracked in this slice; its review-head
+tracking and eligibility changes are reverted below. The budget assertion keeps
+B1/B6 `unmeasured` with reasons and adds memory-only numbers; this round retains
+that scope and restores orchestration to the untracked-kind pin.
 The `lifetime_caps.json` entry registers the new bounded tombstone map (a registry
 addition, not a changed assertion).

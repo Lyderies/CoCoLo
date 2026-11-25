@@ -36,7 +36,7 @@ def main(stage):
         sys.stdin.read()
         raise RuntimeError('checkpoint must be killed')
     if stage == 'hung':
-        mh.register(store, handle, *key, 'run', journal.instance)
+        mh.register(store, handle, *key, 'run', journal.instance, launches=journal.directory)
         store.close()
         checkpoint()
     if stage == 'registration_transaction':
@@ -46,8 +46,8 @@ def main(stage):
             if args[2] == 'driver_entry':
                 checkpoint()
         with mock.patch.object(schema, 'take_hold', hold):
-            mh.register(store, handle, *key, 'run', journal.instance)
-    mh.register(store, handle, *key, 'run', journal.instance)
+            mh.register(store, handle, *key, 'run', journal.instance, launches=journal.directory)
+    mh.register(store, handle, *key, 'run', journal.instance, launches=journal.directory)
     if stage == 'registration_commit':
         checkpoint()
     mh.take_preparation(store, *key, journal.instance)

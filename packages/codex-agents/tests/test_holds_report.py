@@ -103,7 +103,7 @@ class HoldsReportTests(dr.LeaseBackedFixture):
         self.assertEqual(KINDS, set(value['project_holds']))
         for kind, counts in value['project_holds'].items():
             self.assertEqual(FIELDS, set(counts))
-            self.assertEqual({'tracking': 'tracked', 'held': 0,
+            self.assertEqual({'tracking': 'not_tracked' if kind == 'orchestration' else 'tracked', 'held': 0,
                 'releasing': 0, 'past_due': 0 if kind in {'orchestration', 'result_custody'} else None,
                 'next_eligible': None, 'oldest_taken_at_ms': None}, counts)
         self.assertEqual({'live': 0, 'context_bytes': 0, 'max_live_context_bytes': 256 * 1024 * 1024,

@@ -85,10 +85,11 @@ def registration_hold(history, handle, run_handle, attempt, instance, now, launc
 
 @_operation
 def register(history, handle, run_handle, attempt, run_id, instance, launches=None):
-    """Store-level registration. `launches` defaults to a store test's sibling journal directory."""
+    """Store-level registration requires the instance's launch-journal directory."""
+    if launches is None:
+        raise HistoryError('history_invalid_input')
     history.record_registered_run(handle, run_handle, run_id, attempt, instance=instance,
-                                  now_ms=history._hold_now(),
-                                  memory=history._directory.parent / 'launches' if launches is None else launches)
+                                  now_ms=history._hold_now(), memory=launches)
 
 
 @_operation

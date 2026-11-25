@@ -59,7 +59,7 @@ class BudgetMeasurements(unittest.TestCase):
         # B2 closes memory tracking. These real memory transactions do not establish
         # the full normal-run delta or the generic recurring-arrival scheduler above.
         from codex_agents.holds_report_contracts import UNTRACKED_KINDS
-        self.assertEqual(set(),set(UNTRACKED_KINDS))
+        self.assertEqual({'orchestration'},set(UNTRACKED_KINDS))
         memory = measurements['B1']['numbers']
         self.assertEqual(3,len(memory['memory_transactions_samples_ms']))
         self.assertTrue(all(len(row)==4 for row in memory['memory_transactions_samples_ms']))
