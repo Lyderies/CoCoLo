@@ -1,17 +1,58 @@
 """Fresh CLI with database/takeover traps; native enrollment is synthetic."""
 import builtins
+import contextlib
 import io
 import os
 from pathlib import Path
 import runpy
 import sqlite3
 import sys
+import types
 from unittest import mock
 
 _CALLER_ENV = {name: os.environ.get(name) for name in
               ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID',
                'CLAUDE_CODE_USE_BEDROCK', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY')}
 from tests.support import ORCHESTRATION_ROOT  # noqa: E402 -- capture markers before test bootstrap changes them.
+
+
+# TESTSPEED-3: a fixture with no collector and no project service makes the CLI start both, best effort, and
+# both starts always end at once (the collector with status 2, the service without serving), each after a
+# full isolated interpreter start of about a second. A test that opts in (this variable) gets those two spawns
+# replaced by an immediate end; the product code around them (the wait, the health counter, the refusal) still
+# runs. Real starts keep their own tests (test_project_start, test_learning_cli, test_host_commands).
+NO_SERVICE_SPAWN = 'COCOLO_TEST_ENDED_SERVICE_STARTS'
+
+
+class _EndedProcess:
+    returncode = 2
+
+    def poll(self):
+        return 2
+
+
+def _ended_service_starts(stack):
+    import subprocess
+    from codex_agents import collector_runtime, project_host_client
+    real_popen, real_spawn = subprocess.Popen, os.posix_spawn
+
+    def popen(argv, *args, **kwargs):
+        return _EndedProcess() if 'learning-serve' in argv else real_popen(argv, *args, **kwargs)
+
+    def spawn(path, argv, env, **kwargs):
+        # The host's own start becomes a process that ends at once; its file actions (report file) are kept.
+        return real_spawn(path, [path, '-I', '-S', '-B', '-c', 'pass'], env, **kwargs)
+
+    class Shim(types.ModuleType):
+        def __init__(self, module, **replaced):
+            super().__init__(module.__name__)
+            self._module, self._replaced = module, replaced
+
+        def __getattr__(self, name):
+            return self._replaced[name] if name in self._replaced else getattr(self._module, name)
+
+    stack.enter_context(mock.patch.object(collector_runtime, 'subprocess', new=Shim(subprocess, Popen=popen)))
+    stack.enter_context(mock.patch.object(project_host_client, 'os', new=Shim(os, posix_spawn=spawn)))
 
 
 def main():
@@ -51,11 +92,15 @@ def main():
         namespace['main'].__globals__['_installed_route'] = lambda args, task: json_input(args.route)
         namespace['main'].__globals__['CollectorMaintenance'].acquire = forbidden
         from codex_agents import bridge, providers
-        with mock.patch.object(providers, 'observe_codex', new=forbidden), \
-                mock.patch.object(providers, 'observe_claude', new=forbidden), \
-                mock.patch.object(bridge, 'claude_billing_probe', new=forbidden), \
-                mock.patch.object(bridge, 'run_child', new=forbidden):
+        with contextlib.ExitStack() as stack:
+            if os.environ.get(NO_SERVICE_SPAWN) == '1':
+                _ended_service_starts(stack)
+            stack.enter_context(mock.patch.object(providers, 'observe_codex', new=forbidden))
+            stack.enter_context(mock.patch.object(providers, 'observe_claude', new=forbidden))
+            stack.enter_context(mock.patch.object(bridge, 'claude_billing_probe', new=forbidden))
+            stack.enter_context(mock.patch.object(bridge, 'run_child', new=forbidden))
             return namespace['main']()
+
 
 
 if __name__ == '__main__':

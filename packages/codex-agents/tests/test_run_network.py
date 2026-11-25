@@ -31,6 +31,7 @@ import time
 import unittest
 
 import tests.support  # noqa: F401
+from test_framework import requirements
 from tests.support import SHORT_TMP
 
 from codex_agents import container_runtime as cr
@@ -1066,7 +1067,32 @@ class RealNetworkTests(unittest.TestCase):
         info = json.loads(self.podman("container", "inspect", container).stdout)[0]
         return info["NetworkSettings"]["Networks"][network]["IPAddress"]
 
-    def test_real_allowlist_isolation_and_record(self):
+    SCENARIOS = ("allowlist_isolation_and_record", "proxy_down_means_no_network", "release_and_sweep")
+
+    @requirements('TESTSPEED-1', 'TESTSPEED-2', 'TESTSPEED-6', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED).')
+    def test_real_scenarios_run_together(self):
+        """CN-1..CN-5 against real podman: the three long scenarios below, run at the same moment.
+
+        TESTSPEED-6: they share nothing (each has its own project name, proxy, networks and folder) and nearly
+        all of their time is spent waiting on podman, so one after another they cost the sum and together the
+        longest. Each runs as its own unchanged test case (its own setUp and cleanups) and is reported here as
+        its own sub-test, with the failure text of that case."""
+        started = {}
+        for name in self.SCENARIOS:
+            case, result = type(self)("scenario_" + name), unittest.TestResult()
+            thread = threading.Thread(target=case.run, args=(result,), name="scenario " + name)
+            thread.start()
+            started[name] = (thread, result)
+        for name, (thread, result) in started.items():
+            thread.join()
+            with self.subTest(scenario=name):
+                problems = [text for _, text in result.failures + result.errors]
+                if problems:
+                    self.fail("scenario " + name + " failed:\n" + "\n".join(problems))
+                for _, reason in result.skipped:
+                    self.skipTest(reason)
+
+    def scenario_allowlist_isolation_and_record(self):
         """CN-2/3/4: allowed host via the proxy; denied host 403; direct IP and host loopback blocked;
         two runs cannot reach each other; each run only its own provider; the record shows each attempt."""
         started = time.monotonic()
@@ -1121,7 +1147,7 @@ class RealNetworkTests(unittest.TestCase):
             self.assertIn(expected, seen)
         print(f"  record: {len(rows)} rows, e.g. {rows[0]}", file=sys.stderr)
 
-    def test_real_proxy_down_means_no_network(self):
+    def scenario_proxy_down_means_no_network(self):
         """CN-5: with the proxy stopped a child reaches nothing; ensure_proxy brings it back."""
         network = self.networks.prepare_run("run:down", "codex")
         self.assertIsInstance(network, rn.RunNetwork, network)
@@ -1142,7 +1168,7 @@ class RealNetworkTests(unittest.TestCase):
         self.assertTrue(up["tls chatgpt.com"].startswith("tls TLSv1."), up)
         print(f"\n[CN-5 real] proxy stopped: {down}; restarted: {up}", file=sys.stderr)
 
-    def test_real_release_and_sweep(self):
+    def scenario_release_and_sweep(self):
         """CN-1: the network goes with its run; a network still in use is kept; orphans are swept."""
         held = self.networks.prepare_run("run:held", "claude")
         self.assertIsInstance(held, rn.RunNetwork, held)
