@@ -2080,6 +2080,26 @@
    "checks": 4,
    "ends": "U1: registration attempt rows, open report rows, mixed distinct report runs and journal events belong to one orchestration. At each safe-point continuation the product atomically closes it and opens a successor before admitting more work; the old report and replay remain available during existing retention.",
    "test": "test_events_replay_and_reserved_close_roll_repeatedly_past_limit"
+  },
+  "health_holds.py::execute": {
+   "checks": 2,
+   "ends": "HM-3 observation pages only, never admission limits. Each statement seeks its last key through an existing index, and exhaustion wraps. Deleted sources leave the set; later pages remain reachable. No retained-history count can refuse work.",
+   "test": "test_past_page_limit"
+  },
+  "health_holds.py::check_account": {
+   "checks": 2,
+   "ends": "HM-3 observation pages only, never admission limits. Each statement seeks its last key through an existing index, and exhaustion wraps. Deleted sources leave the set; later pages remain reachable. No retained-history count can refuse work.",
+   "test": "test_account_projects_past_page_limit"
+  },
+  "health_holds.py::projects_page": {
+   "checks": 1,
+   "ends": "HM-3 observation pages only, never admission limits. Each statement seeks its last key through an existing index, and exhaustion wraps. Deleted sources leave the set; later pages remain reachable. No retained-history count can refuse work.",
+   "test": "test_account_projects_past_page_limit"
+  },
+  "health_holds.py::_legacy_deadline": {
+   "checks": 1,
+   "ends": "Two matching retained intents prove ambiguity, so later matches cannot change the answer. The existing records_run index seeks the run, and the two-row evidence window is rebuilt for each check. Three matching rows still yield ambiguous, and removing two restores the single-intent answer.",
+   "test": "test_past_legacy_evidence_limit"
   }
  }
 }

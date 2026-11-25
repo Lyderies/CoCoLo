@@ -408,5 +408,6 @@
  "codex:tests.test_u1_orchestration_lifetime": "scenario",
  "codex:tests.test_collector_first_response": "scenario",
  "codex:tests.test_s7_owner_load": "scenario",
- "root:test_e2e_owner_load": "unit"
+ "root:test_e2e_owner_load": "unit",
+ "codex:tests.test_health_holds": "scenario"
 }

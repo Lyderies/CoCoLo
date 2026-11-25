@@ -3981,5 +3981,78 @@
    "codex:tests.test_collector_first_response.CollectorFirstResponseTests.test_S1_U9_first_answer_comes_within_one_second_of_the_sockets_being_up",
    "codex:tests.test_collector_first_response.CollectorFirstResponseTests.test_S1_U9_first_project_answer_comes_within_one_second_of_the_sockets_being_up"
   ]
+ },
+ "S8-HM3-1": {
+  "source": "tests/requirements/s8-hm3.json#S8-HM3-1",
+  "statement": "Report account and project hold register/source disagreement without releasing or repairing rows.",
+  "checks": [
+   "codex:tests.test_health_holds.HoldsTests.test_account_orphan_is_reported",
+   "codex:tests.test_health_holds.HoldsTests.test_project_orphan_is_reported",
+   "codex:tests.test_health_holds.HoldsTests.test_missing_hold_is_reported"
+  ]
+ },
+ "S8-HM3-2": {
+  "source": "tests/requirements/s8-hm3.json#S8-HM3-2",
+  "statement": "Report account and project holds more than one sweep late on every pass, using the saved project clock floor without advancing it.",
+  "checks": [
+   "codex:tests.test_health_holds.HoldsTests.test_overdue_boundary_and_backoff",
+   "codex:tests.test_health_holds.HoldsTests.test_clock_floor",
+   "codex:tests.test_health_holds.HoldsTests.test_account_due_binding_is_reported_without_release",
+   "codex:tests.test_health_holds.HoldsTests.test_project_overdue_stays_present_past_live_page",
+   "codex:tests.test_health_holds.HoldsTests.test_account_overdue_stays_present_and_project_scoped_past_live_page",
+   "codex:tests.test_health_holds.HoldsTests.test_account_overdue_uses_saved_project_clock_floor_without_advancing"
+  ]
+ },
+ "S8-HM3-3": {
+  "source": "tests/requirements/s8-hm3.json#S8-HM3-3",
+  "statement": "Persist a faulted writer service finding before D13 stop, including stop-signal-first shutdown; expose it in health status, preserve successor settlement and report failed stops.",
+  "checks": [
+   "codex:tests.test_health_holds.HoldsTests.test_faulted_service_reported_then_stopped",
+   "codex:tests.test_health_holds.HoldsTests.test_service_stop_failure",
+   "codex:tests.test_health_holds.HoldsTests.test_healthy_service",
+   "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_HM3_faulted_service_reaches_health_monitor_status",
+   "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_HM3_stop_signal_first_reaches_health_monitor_status",
+   "codex:tests.test_health_holds.HoldsTests.test_durable_service_status_reaches_monitor_and_clears_on_recovery",
+   "codex:tests.test_health_holds.HoldsTests.test_durable_service_fault_survives_unreadable_history",
+   "codex:tests.test_health_holds.HoldsTests.test_report_io_failure_still_attempts_service_close"
+  ]
+ },
+ "S8-HM3-4": {
+  "source": "tests/requirements/s8-hm3.json#S8-HM3-4",
+  "statement": "Report SH-7 custody/context, byte-budget and publication-material disagreement; healthy stores remain quiet.",
+  "checks": [
+   "codex:tests.test_health_holds.HoldsTests.test_custody_drift",
+   "codex:tests.test_health_holds.HoldsTests.test_healthy_store",
+   "codex:tests.test_health_holds.HoldsTests.test_publication_material_is_checked",
+   "codex:tests.test_health_holds.HoldsTests.test_context_byte_budget_across_pages",
+   "codex:tests.test_health_holds.HoldsTests.test_context_byte_budget_does_not_combine_changed_snapshots"
+  ]
+ },
+ "S8-HM3-5": {
+  "source": "tests/requirements/s8-hm3.json#S8-HM3-5",
+  "statement": "Bound indexed source reads by pages and deadlines; execute every ledger statement through the sole owner and keep project history readers read-only.",
+  "checks": [
+   "codex:tests.test_health_holds.HoldsTests.test_past_page_limit",
+   "codex:tests.test_health_holds.HoldsTests.test_query_plans_and_read_only",
+   "codex:tests.test_health_holds.HoldsTests.test_deadline",
+   "codex:tests.test_health_holds.HoldsTests.test_unreadable_account_is_plain_machine_finding",
+   "codex:tests.test_health_holds.HoldsTests.test_account_projects_past_page_limit",
+   "codex:tests.test_health_holds.HoldsTests.test_context_byte_budget_across_pages",
+   "codex:tests.test_health_holds.HoldsTests.test_past_legacy_evidence_limit",
+   "codex:tests.test_health_holds.HoldsTests.test_runtime_account_sql_runs_only_on_owner_without_opening_reader",
+   "codex:tests.test_health_holds.HoldsTests.test_project_id_is_bound_in_validator_queries",
+   "codex:tests.test_health_holds.HoldsTests.test_unrelated_lifetime_caps_bytes_are_preserved"
+  ]
+ },
+ "S8-HM3-6": {
+  "source": "tests/requirements/s8-hm3.json#S8-HM3-6",
+  "statement": "Use scoped fixed plain findings; preserve builtin registration API and defer collector registration to the primary after S5.",
+  "checks": [
+   "codex:tests.test_health_holds.HoldsTests.test_scoping_and_private_text",
+   "codex:tests.test_health_holds.HoldsTests.test_registration",
+   "codex:tests.test_health_holds.HoldsTests.test_unreadable_account_is_plain_machine_finding",
+   "codex:tests.test_health_holds.HoldsTests.test_findings_survive_other_project_pass_and_say_when_stale",
+   "codex:tests.test_health_holds.HoldsTests.test_registration_does_not_edit_primary_owned_files_or_builtin_api"
+  ]
  }
 }

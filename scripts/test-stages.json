@@ -408,5 +408,6 @@
  "codex:tests.test_u1_orchestration_lifetime": "integration",
  "codex:tests.test_collector_first_response": "integration",
  "codex:tests.test_s7_owner_load": "integration",
- "root:test_e2e_owner_load": "unit"
+ "root:test_e2e_owner_load": "unit",
+ "codex:tests.test_health_holds": "integration"
 }
