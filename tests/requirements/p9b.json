@@ -1,0 +1,20 @@
+{
+ "authority": "docs/requirements/p9b.md",
+ "requirements": [
+  {
+   "id": "P9b-1",
+   "statement": "### P9b-1 \u2014 Only definitive verifier results are cached\n\nAn unsafe verifier executable or parent (symlink, wrong owner, writable mode),\nor an unavailable, killed, out-of-memory or otherwise failed verifier, must\nraise in the maintenance authority's `raise_verifier_failures` mode. Its row\nstays unchecked, charged and retryable without restart. Only a clean successful\nverification or clean definitive ssh-keygen signature-invalid result can be\ncached. Existing non-maintenance callers continue to fail closed.",
+   "source": "tests/requirements/p9b.json#P9b-1"
+  },
+  {
+   "id": "P9b-2",
+   "statement": "### P9b-2 \u2014 Candidate membership contains only attestations\n\n`temp.capture_candidates` contains billing attestations only. Insert, update,\nrestart and projection rebuild preserve that restriction. Candidate count and\nthe per-open candidate rebuild's SQLite VM work are independent of unrelated\nnon-attestation history. Admission still captures all relevant evidence families\nunder its existing time, project, source and quota rules, excluding unrelated\nhistory. Both public capture boundaries retain bounded superseded-history work.",
+   "source": "tests/requirements/p9b.json#P9b-2"
+  },
+  {
+   "id": "P9b-3",
+   "statement": "### P9b-3 \u2014 Record deletion restores surviving predecessors\n\nDeleting a billing attestation by any record-deletion path rebuilds the derived\nsupersession state for its project/account/provider. Deleting the newest valid\nrow immediately restores the latest surviving verified predecessor as a capture\ncandidate, without restart or re-verification. Other accounts and providers\nremain independent. Deleting superseded rows must preserve bounded sweep work.",
+   "source": "tests/requirements/p9b.json#P9b-3"
+  }
+ ]
+}

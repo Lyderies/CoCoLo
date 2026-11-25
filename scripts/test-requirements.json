@@ -1596,6 +1596,31 @@
   "source": "tests/requirements/p9.json#P9-4",
   "statement": "### P9-4 \u2014 Remaining capture candidates retain hard quotas\n\nAfter maintenance, exact checked foreign-provider rows are excluded from signature capture. Unknown or changed rows are conservatively charged before provider filtering. Row and byte quotas still refuse overflow before copying bodies, and malformed metadata still refuses safely. Cited superseded history is retained independently of these capture quotas.\n\nThe P9-4 header, body and admission selection queries use indexed materialized candidate membership before ordering and limiting. SQLite VM work for a claim with zero versus 10,000 retained cited superseded rows differs by only a small constant. Unchecked rows remain charged.\n\nWork-budget and deadline refusal tests exercise unchecked candidate history, which is still charged, while unrelated events can be skipped by the candidate index. Refusal still precedes body copying and restores the read scope and owner connection."
  },
+ "P9b-1": {
+  "checks": [
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_clean_signature_invalid_is_cached",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_failed_verifier_process_is_retryable_without_restart",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_unsafe_verifier_leaves_genuine_rows_unchecked_until_repaired"
+  ],
+  "source": "tests/requirements/p9b.json#P9b-1",
+  "statement": "### P9b-1 \u2014 Only definitive verifier results are cached\n\nAn unsafe verifier executable or parent (symlink, wrong owner, writable mode),\nor an unavailable, killed, out-of-memory or otherwise failed verifier, must\nraise in the maintenance authority's `raise_verifier_failures` mode. Its row\nstays unchecked, charged and retryable without restart. Only a clean successful\nverification or clean definitive ssh-keygen signature-invalid result can be\ncached. Existing non-maintenance callers continue to fail closed."
+ },
+ "P9b-2": {
+  "checks": [
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_keeps_other_evidence_outside_candidate_table",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_count_and_open_rebuild_ignore_non_attestation_history",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_membership_tracks_record_type_changes"
+  ],
+  "source": "tests/requirements/p9b.json#P9b-2",
+  "statement": "### P9b-2 \u2014 Candidate membership contains only attestations\n\n`temp.capture_candidates` contains billing attestations only. Insert, update,\nrestart and projection rebuild preserve that restriction. Candidate count and\nthe per-open candidate rebuild's SQLite VM work are independent of unrelated\nnon-attestation history. Admission still captures all relevant evidence families\nunder its existing time, project, source and quota rules, excluding unrelated\nhistory. Both public capture boundaries retain bounded superseded-history work."
+ },
+ "P9b-3": {
+  "checks": [
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deleting_newest_restores_predecessor_for_every_record_delete_path"
+  ],
+  "source": "tests/requirements/p9b.json#P9b-3",
+  "statement": "### P9b-3 \u2014 Record deletion restores surviving predecessors\n\nDeleting a billing attestation by any record-deletion path rebuilds the derived\nsupersession state for its project/account/provider. Deleting the newest valid\nrow immediately restores the latest surviving verified predecessor as a capture\ncandidate, without restart or re-verification. Other accounts and providers\nremain independent. Deleting superseded rows must preserve bounded sweep work."
+ },
  "RS-B-5": {
   "checks": [
    "codex:tests.test_hold_lifecycle.HoldLifecycleTests.test_B0_1_a_run_refused_before_launch_frees_its_account_binding_by_itself",

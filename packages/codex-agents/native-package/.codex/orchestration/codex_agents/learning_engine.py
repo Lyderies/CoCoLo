@@ -3925,7 +3925,7 @@ class OwnerGrantAuthority:
                 or executable_stat.st_uid != 0
                 or executable_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
             ):
-                return False
+                raise OSError("owner signature verifier executable is unsafe")
             for parent in (executable.parent, executable.parent.parent):
                 parent_stat = parent.lstat()
                 if (
@@ -3934,7 +3934,7 @@ class OwnerGrantAuthority:
                     or parent_stat.st_uid != 0
                     or parent_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
                 ):
-                    return False
+                    raise OSError("owner signature verifier parent is unsafe")
             with tempfile.NamedTemporaryFile(
                 dir=self.allowed_signers.parent, prefix="owner-signature-", delete=False
             ) as handle:
@@ -3957,12 +3957,27 @@ class OwnerGrantAuthority:
                     "-s", str(signature_path),
                 ],
                 input=payload,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE if self.raise_verifier_failures else subprocess.DEVNULL,
+                stderr=subprocess.PIPE if self.raise_verifier_failures else subprocess.DEVNULL,
                 timeout=5,
                 check=False,
             )
-            return completed.returncode == 0
+            if completed.returncode == 0:
+                return True
+            if not self.raise_verifier_failures:
+                return False
+            # Exit 255 alone also covers unavailable files, internal failures
+            # and resource exhaustion. Only a clean cryptographic mismatch or
+            # a known malformed-signature rejection is a definitive negative.
+            if (completed.returncode == 255
+                    and completed.stdout.splitlines() == [b"Could not verify signature."]
+                    and completed.stderr.splitlines() in (
+                        [b"Signature verification failed: incorrect signature"],
+                        [b"Couldn't parse signature: missing header",
+                         b"sig_verify: sshsig_armor: incomplete message"],
+                    )):
+                return False
+            raise OSError("owner signature verifier did not return a definitive verdict")
         except (OSError, subprocess.SubprocessError):
             # Maintenance must distinguish a definitive invalid signature from
             # an unavailable verifier before caching a negative verdict.

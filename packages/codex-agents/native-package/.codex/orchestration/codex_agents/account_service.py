@@ -99,10 +99,15 @@ _ADMISSION_INPUT_SCOPE = (
     " AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000)))))"
 )
 _ADMISSION_INPUT_JOIN = (
-    " FROM temp.capture_candidates c CROSS JOIN records r LEFT JOIN owner_attestations a "
+    # Attestations start from bounded projected membership. Other admission
+    # evidence comes from the record-type index and retains its original scope;
+    # unrelated record families never enter either branch.
+    " FROM (SELECT record_rowid FROM temp.capture_candidates WHERE consumer=:provider AND project_id=:p "
+    "UNION ALL SELECT r.rowid FROM records r WHERE r.record_type IN "
+    "('provider_identity','admission_decision','probe_admission','provider_billing','provider_headroom') "
+    "AND " + _ADMISSION_INPUT_SCOPE + ") c CROSS JOIN records r LEFT JOIN owner_attestations a "
     "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
-    "WHERE c.consumer=:provider AND r.rowid=c.record_rowid AND "
-    + _ADMISSION_INPUT_SCOPE + " ORDER BY c.record_rowid LIMIT :limit"
+    "WHERE r.rowid=c.record_rowid ORDER BY c.record_rowid LIMIT :limit"
 )
 
 

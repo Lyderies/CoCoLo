@@ -1530,6 +1530,7 @@
  "codex:tests.test_owner_terminal_flow": 1.65,
  "codex:tests.test_owner_terminal_flow.OwnerTerminalFlowTests.test_status_observation_and_attestation_work_from_the_owners_terminal": 1.12,
  "codex:tests.test_owner_terminal_flow.OwnerTerminalFlowTests.test_the_owners_terminal_cannot_run_the_lifecycle": 0.27,
+ "codex:tests.test_p9b_attestation_followups": 3.02,
  "codex:tests.test_phase_report": 0.11,
  "codex:tests.test_phase_report_exit": 0.11,
  "codex:tests.test_prepared_dispatch": 1.61,

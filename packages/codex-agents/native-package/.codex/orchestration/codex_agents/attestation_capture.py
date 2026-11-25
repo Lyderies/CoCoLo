@@ -30,7 +30,7 @@ def initialize(connection):
     connection.execute('CREATE INDEX temp.attestation_checks_identity ON attestation_checks(project_id,record_id)')
     connection.execute('CREATE INDEX temp.attestation_checks_due ON attestation_checks('
                        'current,superseded,record_rowid)')
-    # Materialize membership for both public providers, including unchecked rows.
+    # Materialize attestation membership for both providers, including unchecked rows.
     # All reads start at these indexes, never at retained superseded history.
     connection.execute('CREATE TEMP TABLE capture_candidates('
                        'consumer TEXT,record_rowid INTEGER,project_id TEXT,record_type TEXT,'
@@ -54,7 +54,8 @@ def initialize(connection):
     # These TEMP triggers observe the sole writer connection. Mutations restore
     # conservative membership atomically, including dependants of a changed
     # superseder. Cached exact checks survive a reverted edit, as before.
-    connection.execute('CREATE TEMP TRIGGER capture_record_insert AFTER INSERT ON main.records BEGIN '
+    connection.execute('CREATE TEMP TRIGGER capture_record_insert AFTER INSERT ON main.records '
+                       "WHEN NEW.record_type='billing_attestation' BEGIN "
                        'INSERT INTO capture_candidates SELECT consumer,NEW.rowid,NEW.project_id,'
                        'NEW.record_type,NEW.source_sequence FROM '
                        "(SELECT 'codex' consumer UNION ALL SELECT 'claude'); END")
@@ -66,10 +67,25 @@ def initialize(connection):
                        'BEGIN DELETE FROM capture_candidates WHERE record_rowid=OLD.rowid;'
                        'INSERT INTO capture_candidates SELECT consumer,NEW.rowid,NEW.project_id,'
                        'NEW.record_type,NEW.source_sequence FROM '
-                       "(SELECT 'codex' consumer UNION ALL SELECT 'claude'); END")
+                       "(SELECT 'codex' consumer UNION ALL SELECT 'claude') "
+                       "WHERE NEW.record_type='billing_attestation'; END")
     connection.execute('CREATE TEMP TRIGGER capture_record_delete AFTER DELETE ON main.records BEGIN '
                        'DELETE FROM capture_candidates WHERE record_rowid=OLD.rowid;'
                        'DELETE FROM attestation_checks WHERE record_rowid=OLD.rowid; END')
+    # Record deletion must restore the surviving predecessor even when there is
+    # no signature-delete cascade. Only deleting a current valid group winner
+    # needs this indexed repair; ordinary superseded-row sweeps stay bounded.
+    connection.execute('CREATE TEMP TRIGGER capture_check_delete AFTER DELETE ON attestation_checks '
+                       'WHEN OLD.current=1 AND OLD.valid=1 AND OLD.superseded=0 BEGIN '
+                       'UPDATE attestation_checks SET superseded=0 WHERE record_rowid=('
+                       'SELECT record_rowid FROM attestation_checks WHERE project_id=OLD.project_id '
+                       'AND provider=OLD.provider AND account_fingerprint=OLD.account_fingerprint '
+                       'AND current=1 AND valid=1 ORDER BY observed_at_ms DESC,source_sequence DESC LIMIT 1);'
+                       'INSERT OR IGNORE INTO capture_candidates '
+                       "SELECT provider,record_rowid,project_id,'billing_attestation',source_sequence "
+                       'FROM attestation_checks WHERE project_id=OLD.project_id AND provider=OLD.provider '
+                       'AND account_fingerprint=OLD.account_fingerprint AND current=1 AND valid=1 '
+                       'AND superseded=0; END')
     for event in ('INSERT', 'UPDATE', 'DELETE'):
         reference = 'OLD' if event == 'DELETE' else 'NEW'
         identity = f'(c.project_id={reference}.project_id AND c.record_id={reference}.subject_record_id)'
@@ -93,7 +109,8 @@ def _populate_sql():
         'INSERT INTO capture_candidates SELECT providers.consumer,r.rowid,r.project_id,r.record_type,r.source_sequence '
         "FROM records r CROSS JOIN (SELECT 'codex' consumer UNION ALL SELECT 'claude') providers "
         'LEFT JOIN attestation_checks c ON c.record_rowid=r.rowid '
-        'WHERE c.current IS NOT 1 OR (c.valid=1 AND c.superseded=0 AND c.provider=providers.consumer)'
+        "WHERE r.record_type='billing_attestation' AND (c.current IS NOT 1 "
+        'OR (c.valid=1 AND c.superseded=0 AND c.provider=providers.consumer))'
     )
 
 
