@@ -4,6 +4,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.62: RS-F S3: an interrupted hold-store upgrade resumes class by class from its saved cursor (bounded batches, published only after validation).
+
 - Package 0.8.61: release batch.
   - RECOV: the status line shows recovery state correctly.
   - RS-B B7b: recovery reasons and measured budgets.
