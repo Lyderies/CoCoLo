@@ -337,6 +337,7 @@
  "root:test_check_identifiers": "unit",
  "root:test_ci_stages": "unit",
  "root:test_e2e_learning_guard": "scenario",
+ "root:test_e2e_process_cleanup": "scenario",
  "root:test_e2e_recovery": "unit",
  "root:test_e2e_requirements": "scenario",
  "root:test_e2e_run_control": "scenario",

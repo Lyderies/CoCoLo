@@ -455,6 +455,48 @@
   "source": "docs/requirements/e1.md#E1-WS",
   "statement": "**E1-WS \u2014 Wizard source safety.** The Python setup wizard keeps the source-level safety properties setup.sh's source tests checked (audited launch builders, literal non-porcelain git with the trusted binary and helpers off, isolated Python, provider clients never run by name, product naming and screen wording). Source: tests/test_setup_wizard_source.py module docstring (S5) and owner decision 112b A (2026-11-24)."
  },
+ "E2ELEAK-1": {
+  "checks": [
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_discarded_world_is_still_owned_until_cleanup",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_failure_mid_flow_leaves_no_collector_or_world",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_late_boot_without_ownership_helper_never_runs_product_code",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_lifecycle_parent_sigterm_stops_workers_and_their_worlds",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_pass_exit_and_timeout_leave_no_survivor",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_sigterm_and_hard_owner_death_remove_detached_collector"
+  ],
+  "source": "tests/requirements/e2eleak.json#E2ELEAK-1",
+  "statement": "**E2ELEAK-1 \u2014 Every World ends cleanly.** After pass, assertion failure, exception, step timeout, partial construction failure, interpreter exit or SIGTERM, every process started by that World is stopped and its e2e directory is removed. Detached collectors, project services and clients are included. Cleanup is idempotent and bounded."
+ },
+ "E2ELEAK-2": {
+  "checks": [
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_late_boot_without_ownership_helper_never_runs_product_code",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_reaper_uses_world_marker_and_start_time_across_sessions",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_verified_exiting_child_is_not_gone_until_waitpid_releases_it"
+  ],
+  "source": "tests/requirements/e2eleak.json#E2ELEAK-2",
+  "statement": "**E2ELEAK-2 \u2014 Safe recorded ownership.** Persist World identity and process pid plus operating-system start time before running product code. Only matching records belonging to that World may be signalled; pid reuse, another World, malformed records and unrecorded lookalikes must never select a process. No process-name scan is permitted."
+ },
+ "E2ELEAK-3": {
+  "checks": [
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_drained_stop_precedes_term_and_kill_and_closed_world_refuses_spawn",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_drained_stop_uses_world_installed_client_without_starting_collector",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_failure_mid_flow_leaves_no_collector_or_world",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_pass_exit_and_timeout_leave_no_survivor"
+  ],
+  "source": "tests/requirements/e2eleak.json#E2ELEAK-3",
+  "statement": "**E2ELEAK-3 \u2014 Drained stop before escalation.** Teardown first requests the collector's own shutdown_if_drained operation using the World's installed runtime and socket, without starting a collector. Then signal matching recorded survivors with SIGTERM and finally SIGKILL, verifying exit before removing the World directory. Registration closes during teardown so a late child cannot escape."
+ },
+ "E2ELEAK-4": {
+  "checks": [
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_lifecycle_parent_sigterm_stops_workers_and_their_worlds",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_reaper_uses_world_marker_and_start_time_across_sessions",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_runner_reaps_detached_registered_hosts_on_all_exit_paths",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_sigterm_and_hard_owner_death_remove_detached_collector",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_verified_exiting_child_is_not_gone_until_waitpid_releases_it"
+  ],
+  "source": "tests/requirements/e2eleak.json#E2ELEAK-4",
+  "statement": "**E2ELEAK-4 \u2014 Runner recovery crosses sessions and cache roots.** Each worker records its Worlds in its assigned runner folder. On completion, failure, timeout or runner SIGTERM/interruption, the runner reaps these recorded Worlds as well as its worker group, including detached processes outside TMPDIR. A World guardian also handles abrupt owner death. Discovery never scans other e2e directories or touches pre-existing leaked processes."
+ },
  "E2a-1": {
   "checks": [
    "codex:tests.test_e2a_launch_record.LedgerSchemaTests.test_E2a_1_additive_columns_and_wake_table_keep_the_schema_version",
