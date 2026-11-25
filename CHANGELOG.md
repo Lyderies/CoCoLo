@@ -4,6 +4,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.66: the records cleanup no longer holds the account records lock for seconds when a backlog builds up (it works in small batches), and status, project health and open admission checks stay fast as history grows (LOCKHOLD).
+
 - Package 0.8.65: database reads stay fast as history grows (U3; malformed duplicate-guard records now refuse instead of being skipped); probe capacity past its limits proven (U4, tests); a standalone ledger owner queue (E1b, not yet wired); faster, steadier tests (TESTSPEED-2).
 
 - Package 0.8.64: RS-B memory holds: driver entries and preparation slots are recorded holds, released only after retirement and kept on an unproven stop; a run opened during service start-up now registers. TESTSPEED: three slow test modules run 3x faster (tests only).
