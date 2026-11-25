@@ -11,9 +11,7 @@ Integration stage: real services, sockets and stores; only the step boundaries a
 import ast
 import json
 import os
-import shutil
 import sqlite3
-import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -43,13 +41,6 @@ def requirements(*ids):
 class SettlementHarness(LostRunHarness):
     """The stop-and-restart helpers of the lost-run tests (copied, so that module's tests do not run twice)."""
 
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        # TESTSPEED3-3: the separate dispatches of one class share one bytecode cache outside the source tree.
-        cls.dispatch_pycache = tempfile.mkdtemp(prefix='settle-pyc-')
-        cls.addClassCleanup(shutil.rmtree, cls.dispatch_pycache, ignore_errors=True)
-
     def setUp(self):
         self._host_stop = threading.Event()
         original = DriverHarness.start_project_host
@@ -57,12 +48,8 @@ class SettlementHarness(LostRunHarness):
         def first(harness, project, stop=None):
             return original(harness, project, stop or self._host_stop)
 
-        # TESTSPEED3-5: a successor host picks up what its predecessor left at its next sweep, which is one second in
-        # the product; nothing here asserts that cadence, so the sweep runs every 0.1 s and a test waits tenths of a
-        # second instead of seconds for each restart (no deadline or retry rule of the product changes).
-        patcher = mock.patch.object(project_driver, 'SWEEP_SECONDS', 0.1)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        # TESTSPEED3-3 and TESTSPEED3-5 (kept by S13C): the per-class bytecode cache and the 0.1 s sweep now come from
+        # `DriverHarness` (`dispatch_pycache`, `sweep_seconds`), so the settlement tests run exactly as before.
         with mock.patch.object(DriverHarness, 'start_project_host', first):
             super().setUp()
 

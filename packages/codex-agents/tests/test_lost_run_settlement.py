@@ -137,7 +137,7 @@ class LostRunAfterCrashTests(LostRunHarness):
                   'bundle': str(self.bundle)}
         log = open(base / 'crash-host.log', 'ab')
         self.addCleanup(log.close)
-        self.host_process = subprocess.Popen([sys.executable, '-B', str(FIXTURE), json.dumps(config)],
+        self.host_process = subprocess.Popen([sys.executable, '-X', 'pycache_prefix=' + self.dispatch_pycache, str(FIXTURE), json.dumps(config)],
                                              cwd=REPOSITORY_ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
         process = self.host_process
         self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait(10)))
@@ -159,9 +159,33 @@ class LostRunAfterCrashTests(LostRunHarness):
         self.host_process.kill()  # SIGKILL: no cleanup of any kind runs in the host.
         self.host_process.wait(10)
         dispatch.communicate(timeout=30)
+        self.count_sweeps()
         DriverHarness.start_project_host(self, self.project)
         return orchestration, run_handle, self.launches()[0]
 
+    def count_sweeps(self):
+        """S13C-1: the sweeps the next host has collected so far (`self.sweeps`), so a test that watches a hold over
+        "several sweeps" waits for that many sweeps instead of a fixed number of seconds."""
+        self.sweeps = []
+        original = project_driver.RunDriver._settle_lost
+        sweeps = self.sweeps
+
+        def counted(driver, *arguments, **options):
+            try:
+                return original(driver, *arguments, **options)
+            finally:
+                sweeps.append(time.monotonic())
+
+        patcher = mock.patch.object(project_driver.RunDriver, '_settle_lost', counted)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def through_sweeps(self, count):
+        """Wait until the next host has collected `count` more sweeps (bounded 60 s)."""
+        target = len(self.sweeps) + count
+        self.wait_for(lambda: len(self.sweeps) >= target, seconds=60)
+
+    @__import__('test_framework').requirements('S13C-1', 'S13C-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds, interpreters or waits were changed; the requirement is how fast and how reliably they run, not a new outcome (S13C).')
     def test_a_crashed_hosts_finished_child_is_settled_by_the_next_host_within_seconds(self):
         orchestration, run_handle, child = self.crash_while_running(2)
         # The child writes into its dead host's pipe and ends; its watchdog follows.
@@ -179,13 +203,16 @@ class LostRunAfterCrashTests(LostRunHarness):
         self.assertEqual(2, len(self.launches()))
         self.assertEqual(child['pid'], self.launches()[0]['pid'])
 
+    @__import__('test_framework').requirements('S13C-1', 'S13C-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds, interpreters or waits were changed; the requirement is how fast and how reliably they run, not a new outcome (S13C).')
     def test_a_crashed_hosts_child_that_still_runs_keeps_its_capacity_until_it_ends(self):
         orchestration, run_handle, child = self.crash_while_running(60)
         # The child sleeps on in its own session; the new host must not settle it.
-        end = time.monotonic() + 6
-        while time.monotonic() < end:
+        # S13C-1: held across as many sweeps as the old 6 s held it across (one a second), each one collected.
+        target = len(self.sweeps) + 6
+        while len(self.sweeps) < target:
             self.assertEqual(1, self.counted())
-            time.sleep(0.25)
+            seen = len(self.sweeps)
+            self.wait_for(lambda: len(self.sweeps) > seen, seconds=60)
         self.assertEqual([('pending', None, 0)], self.claimed_bindings())
         os.killpg(child['pgid'], 0)  # Still there, untouched.
         self.assert_lost_status(orchestration, run_handle, 'held')
@@ -194,6 +221,7 @@ class LostRunAfterCrashTests(LostRunHarness):
         self.assertEqual([('abandoned', 'service_lost', 1)], self.claimed_bindings())
         self.assertEqual('result', self.next_run(orchestration, 'next2')['bridge_report']['outcome'])
 
+    @__import__('test_framework').requirements('S13C-1', 'S13C-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds, interpreters or waits were changed; the requirement is how fast and how reliably they run, not a new outcome (S13C).')
     def test_missing_or_unreadable_launch_evidence_falls_back_to_the_timed_rule(self):
         context, route_path, orchestration, run_handle = self.open_run()
         self.frames('codex', [{'type': 'thread.started', 'thread_id': 'orphan'}, {'sleep': 3},
@@ -210,8 +238,9 @@ class LostRunAfterCrashTests(LostRunHarness):
         entries[0].write_text(entries[0].read_text()[:40])  # Damaged: no longer evidence of anything.
         child = self.launches()[0]
         self.wait_for(lambda: self.gone(child), seconds=30)
+        self.count_sweeps()
         DriverHarness.start_project_host(self, self.project)
-        time.sleep(5)  # Several sweeps of the new host.
+        self.through_sweeps(5)  # Several sweeps of the new host (S13C-1: five collected, not five seconds).
         self.assertEqual(1, self.counted())
         self.assertEqual([('pending', None, 0)], self.claimed_bindings())
         self.assertTrue(entries[0].exists())  # Left as it was found.

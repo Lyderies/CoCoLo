@@ -108,6 +108,7 @@ class HostSlotHarness(DriverHarness):
 
 
 class HostSlotLifecycleTests(HostSlotHarness):
+    @requirements('S13C-1', 'S13C-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds, interpreters or waits were changed; the requirement is how fast and how reliably they run, not a new outcome (S13C).')
     def test_M1_M3_M4_four_runs_end_on_their_failure_exits_then_a_fifth_dispatches_without_a_restart(self):
         """B0-6 invariant, host slots: with 3 slots, four runs end on these paths (cancel before spawn,
         spawn failure, admitted then failed, orphan preparation), then a fifth dispatches with no restart.

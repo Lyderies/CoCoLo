@@ -34,7 +34,7 @@ from tests.learning_support import generate_test_owner_key
 from tests.support import ORCHESTRATION_ROOT, SHORT_TMP
 from tests.test_host_commands import install_package
 
-from codex_agents import host_commands, learning_store, project_start
+from codex_agents import host_commands, learning_store, project_host_client, project_start
 from codex_agents.account_api import AccountRequest, decode_account_response, encode_account_request
 from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient
 from codex_agents.collector_paths import CollectorPaths
@@ -150,6 +150,18 @@ def wait_for(test, predicate, seconds=20.0, message='condition never held'):
 class StarterBase(unittest.TestCase):
     CONSTANTS = {'STARTER_CHECK_SECONDS': 0.2, 'START_RECHECK_SECONDS': 1.0}
     STORE = {}
+    pycache = None  # the class's shared bytecode cache for its test-only interpreters (S13C-1)
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.pycache = tempfile.mkdtemp(prefix='start-pyc-', dir=SHORT_TMP)
+        cls.addClassCleanup(shutil.rmtree, cls.pycache, ignore_errors=True)
+
+    @classmethod
+    def python_flags(cls, *flags):
+        """`flags` (isolation) and the class's shared bytecode cache instead of `-B`."""
+        return [*flags, '-X', 'pycache_prefix=' + cls.pycache]
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(dir=SHORT_TMP)
@@ -217,7 +229,7 @@ class StarterBase(unittest.TestCase):
         errors = open(self.base / 'collector.err', 'ab')
         self.addCleanup(errors.close)
         self.collector = subprocess.Popen(
-            [sys.executable, '-I', '-B', '-c', LAUNCHER, str(orchestration), str(self.home), str(self.state.root),
+            [sys.executable, *self.python_flags('-I'), '-c', LAUNCHER, str(orchestration), str(self.home), str(self.state.root),
              json.dumps(options)], env={'PATH': os.defpath, 'TMPDIR': SHORT_TMP, **(env or {})},
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errors, start_new_session=True)
         end = time.monotonic() + 30
@@ -330,7 +342,7 @@ class StarterBase(unittest.TestCase):
         for variable in ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'):
             env.pop(variable, None)
         env.update(CODEX_THREAD_ID='e2c-primary', TMPDIR=SHORT_TMP)
-        done = subprocess.run([sys.executable, '-I', '-B', '-S', str(ORCHESTRATION_ROOT / 'cli.py'), command,
+        done = subprocess.run([sys.executable, *self.python_flags('-I', '-S'), str(ORCHESTRATION_ROOT / 'cli.py'), command,
                                '--state-root', str(self.state.root), '--project-root', str(self.root(name))],
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=90, check=False)
         return done.returncode, json.loads(done.stdout or b'{}')
@@ -405,7 +417,7 @@ def overlaps(events):
 
 
 class StartTests(StarterBase):
-    @requirements('E2c-1', why_not_scenario=SCENARIO)
+    @requirements('E2c-1', 'S13C-1', 'S13C-2', 'S13C-3', why_not_scenario=SCENARIO)
     def test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client(self):
         self.add('never')  # never ran: unknown, so due at collector start
         self.add('stopped')
@@ -426,15 +438,23 @@ class StartTests(StarterBase):
             begun = wait_for(self, lambda: self.events('begin', name), max(0.0, deadline - time.monotonic()),
                              f'{name}: no start began within one interval')
             self.assertLessEqual(begun[0]['t'], deadline)
-        # Review round 2 (decision 243, MED 2): serving, not only begun, by that same deadline.
-        served = None
-        while served is None and time.monotonic() <= deadline:
-            if self.serving('never') and self.serving('stopped'):
-                served = time.monotonic()  # both checks answered serving by this time
-            else:
-                time.sleep(0.05)
-        self.assertIsNotNone(served, 'the due projects were not serving within one interval')
-        self.assertLessEqual(served, deadline)
+        # Review round 2 (decision 243, MED 2): serving, not only begun. S13C-2: a host is a real process whose
+        # start-up (a runtime compile, a socket, a ledger open) takes a variable time on a loaded machine, so the
+        # bound is not one fixed second after the interval but the start's own deadline: each project serves
+        # within `START_TIMEOUT_SECONDS` of its own start beginning (the starter fails and reports the start
+        # past that), measured from that start's `begin` event.
+        start_timeout = project_host_client.START_TIMEOUT_SECONDS
+        begun_at = {name: self.events('begin', name)[0]['t'] for name in ('never', 'stopped')}
+        served = {}
+        end = max(begun_at.values()) + start_timeout
+        while len(served) < len(begun_at) and time.monotonic() <= end:
+            for name in begun_at:
+                if name not in served and self.serving(name):
+                    served[name] = time.monotonic()
+            time.sleep(0.05)
+        self.assertEqual(sorted(begun_at), sorted(served), 'the due projects were not serving within their start deadline')
+        for name, at in served.items():
+            self.assertLessEqual(at, begun_at[name] + start_timeout, name)
         time.sleep(1.0)
         self.assertFalse(self.serving('idle'))
         self.assertEqual([], self.events('begin', 'idle'))
@@ -699,7 +719,7 @@ class StrandedTests(StarterBase):
         constants = {'START_BACKOFF_FIRST_SECONDS': 300.0, 'START_PROBATION_SECONDS': 1.0}
         self.launch(constants=constants)
         root, project_id, copy = self.projects['killed']
-        done = subprocess.run([sys.executable, '-I', '-B', '-c', KILLER, str(ORCHESTRATION_ROOT), str(self.state.root),
+        done = subprocess.run([sys.executable, *self.python_flags('-I'), '-c', KILLER, str(ORCHESTRATION_ROOT), str(self.state.root),
                                str(root), project_id, 'after_commit'], capture_output=True, text=True, timeout=60,
                               env={'PATH': os.defpath, 'TMPDIR': SHORT_TMP})
         self.assertEqual(-signal.SIGKILL, done.returncode, done.stderr)

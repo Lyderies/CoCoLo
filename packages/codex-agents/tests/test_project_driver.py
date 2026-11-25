@@ -6,6 +6,7 @@ they resolve. Everything else is the product path: the in-process CLI, the
 hosts' enrollment, the run driver and the original owners.
 """
 import base64
+import functools
 import dataclasses
 import io
 import contextlib
@@ -14,8 +15,10 @@ import json
 import argparse
 import os
 import socket
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -30,7 +33,7 @@ from tests.test_bridge import (
     CLEAN, PARENT_GRANT, RATE_LIMIT, CliTestCase, cli, git, init_frame, null_filled, result, result_frame,
 )
 
-from codex_agents import codex_preparation, codex_worker, learning_store, project_driver
+from codex_agents import codex_preparation, codex_worker, host_paths, learning_store, project_driver
 from codex_agents.account_api import AccountClient, AccountError
 from codex_agents.rate_limit_contracts import RateLimitError
 from codex_agents.liveness_clock import LivenessLimits
@@ -41,8 +44,30 @@ SECOND = 1_000_000_000
 class DriverHarness(ServiceHarness, CliTestCase):
     """In-process collector, account and project hosts; the CLI and run driver are the product."""
     primary = 'codex'  # Which primary host class drives the CLI.
+    # S13C-1: the project driver's sweep runs every 0.1 s here instead of every second (the TESTSPEED3-5 technique, now
+    # for every driver-based class). Nothing in these modules asserts the one-second cadence; a class that needs the
+    # product's own value sets this to None. The patch ends with the test, so the value is restored.
+    sweep_seconds = 0.1
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # S13C-1 (TESTSPEED3-3 for every driver-based class): the separate dispatches (and, in the lost-run tests, the
+        # separate host process) of one class share one bytecode cache outside the source tree.
+        cls.dispatch_pycache = tempfile.mkdtemp(prefix='driver-pyc-')
+        cls.addClassCleanup(shutil.rmtree, cls.dispatch_pycache, ignore_errors=True)
+        # S13C-1: the per-user Darwin temp directory `getconf` reports never changes during a test, but every
+        # `temp_roots()` call (some twenty-five per run, from each git and executable-location check) starts a
+        # `getconf` process. The class asks once; the answer is the product's own function's answer.
+        patcher = mock.patch.object(host_paths, 'darwin_directory', functools.cache(host_paths.darwin_directory))
+        patcher.start()
+        cls.addClassCleanup(patcher.stop)
 
     def setUp(self):
+        if self.sweep_seconds is not None:
+            patcher = mock.patch.object(project_driver, 'SWEEP_SECONDS', self.sweep_seconds)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         super().setUp()
         if self.primary == 'claude':
             patcher = mock.patch.dict(os.environ)
@@ -109,7 +134,7 @@ class DriverHarness(ServiceHarness, CliTestCase):
             self.fail(f'{len(launched())} of {count} children launched within {seconds} s; dispatches: '
                       f'{report}; driver stops: {self.stopped_runs[-6:]}')
 
-    dispatch_pycache = None
+    dispatch_pycache = None  # set per class by setUpClass
 
     def separate_dispatch(self, context, route_path, run_handle, project=None):
         """A second primary process waits on dispatch while this one inspects the run."""
@@ -190,6 +215,7 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual([], [entry for entry in self.stopped_runs if len(entry) == 2 and entry[0] in
                               {'recording_open', 'claiming', 'registering', 'terminal', 'releasing'}])
 
+    @__import__('test_framework').requirements('S13C-1', 'S13C-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds, interpreters or waits were changed; the requirement is how fast and how reliably they run, not a new outcome (S13C).')
     def test_a_running_child_reports_live_status_and_stops_on_cancellation(self):
         context, route_path, orchestration, run_handle = self.open_run()
         # The child starts, then goes quiet well inside every bound.
