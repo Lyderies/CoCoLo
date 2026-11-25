@@ -450,6 +450,61 @@ class CodexPreparationTests(unittest.TestCase):
         self.assertTrue(codex_preparation.remove_recorded_workspace(str(made)))
         self.assertFalse(made.exists())
 
+    @requirements('HM2A-1', why_not_scenario='Real preparation worker and folder; the marker is the HM-2a owner proof.')
+    def test_HM2A_1_a_preparation_folder_names_the_service_that_owns_it(self):
+        handle, prepared = self.prepare()
+        self.assertFalse((prepared.workspace/'cocolo-owner.json').exists())  # a lane told no owner writes none
+        self.discard(handle)
+        state_root, instance = self.fixture.state.root, 'f'*32
+        self.lane.set_owner(state_root, self.scope.project_id, instance)
+        with self.assertRaisesRegex(PreparationError, 'preparation_invalid_input'):
+            self.lane.set_owner(state_root, self.scope.project_id, 'not-an-instance')
+        handle, prepared = self.prepare()
+        marker = prepared.workspace/'cocolo-owner.json'
+        info = os.lstat(marker)
+        self.assertEqual((0o600, os.geteuid()), (info.st_mode & 0o777, info.st_uid))
+        self.assertEqual({'version': 1, 'kind': 'cocolo_preparation', 'state_root': os.path.realpath(state_root),
+                          'project_id': self.scope.project_id, 'instance': instance}, json.loads(marker.read_text()))
+        self.assertEqual(['control', 'export', 'tmp'], sorted(set(os.listdir(prepared.workspace)) - {marker.name}))
+        workspace = prepared.workspace
+        self.discard(handle)
+        self.assertFalse(workspace.exists())
+
+    @requirements('HM2A-1', why_not_scenario='Real preparation worker and folder; the marker close is made to fail.')
+    def test_HM2A_1_a_marker_that_fails_to_close_leaves_a_report_only_folder(self):
+        from codex_agents import health_monitor, health_workspaces
+        state_root, instance = Path(os.path.realpath(self.fixture.state.root)), 'e'*32
+        launches = state_root/'projects'/self.scope.project_id/'launches'
+        launches.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (launches/(instance + '.lock')).touch(mode=0o600)  # free: with a valid marker the folder would be removable
+        self.lane.set_owner(state_root, self.scope.project_id, instance)
+        real_open, real_close, markers = os.open, os.close, set()
+
+        def opener(path, flags, *args, **options):
+            descriptor = real_open(path, flags, *args, **options)
+            if str(path).endswith('cocolo-owner.json') and flags & os.O_CREAT:
+                markers.add(descriptor)
+            return descriptor
+
+        def closer(descriptor):
+            real_close(descriptor)
+            if descriptor in markers:
+                markers.discard(descriptor)
+                raise OSError(5, 'injected close failure')
+
+        with mock.patch.object(os, 'open', opener), mock.patch.object(os, 'close', closer):
+            handle, prepared = self.prepare()  # preparation still succeeds
+        workspace, marker = prepared.workspace, prepared.workspace/'cocolo-owner.json'
+        self.assertFalse(os.path.lexists(marker))  # no valid marker: the folder is report-only
+        later = int((time.time() + 2 * health_workspaces.MIN_ORPHAN_AGE_SECONDS) * 1000)
+        found = health_workspaces.WorkspaceCheck(container=workspace.parent, live=lambda: set(), pending=lambda: set(),
+                                                 state_root=state_root).run(
+            health_monitor.CheckContext(deadline=time.monotonic() + 30, now_ms=later, since_last_pass_ms=None))
+        self.assertIn(('owner_unknown', workspace.name), [(item.reason_code, item.subject) for item in found])
+        self.assertTrue(workspace.is_dir())
+        self.discard(handle)
+        self.assertFalse(workspace.exists())
+
     def test_a_failed_cleanup_is_asked_again_and_then_frees_its_slot(self):
         handle, prepared = self.prepare()
         with self.assertRaisesRegex(PreparationError, 'preparation_busy'):

@@ -104,6 +104,7 @@ RUNTIME_FILES = (
     "codex_agents/health_containers.py",
     "codex_agents/health_holds.py",
     "codex_agents/health_monitor.py",
+    "codex_agents/health_workspaces.py",
     "codex_agents/history_api.py",
     "codex_agents/history_contracts.py",
     "codex_agents/history_service.py",

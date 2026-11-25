@@ -11,6 +11,7 @@ learning state and the rest of the home directory stay read-only to it.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import pwd
 import secrets
@@ -150,6 +151,28 @@ STATE_FOLDER = "codex-agents"
 # (scripts/attest.py SCRATCH_CONTAINER), both under host_scratch_base().
 BRIDGE_SCRATCH_CONTAINER = "codex-agents-scratch"
 OWNER_SCRATCH_CONTAINER = "agent-orchestration-owner"
+# HM-2a: a preparation folder's owner marker, written when the folder is made. It names the learning
+# state and the launch-journal instance of the service that made it, so a later cleanup can prove that
+# service gone (the instance's lock is free) before it removes the folder (health_workspaces).
+PREPARATION_OWNER_MARKER = "cocolo-owner.json"
+PREPARATION_OWNER_KIND = "cocolo_preparation"
+_OWNER_PROJECT_ID = "prj_"
+_HEX = frozenset("0123456789abcdef")
+
+
+def preparation_owner_marker(state_root, project_id, instance) -> bytes:
+    """The owner marker's bytes (canonical JSON); ValueError for anything that is not a valid owner."""
+
+    def hexadecimal(text, length):
+        return type(text) is str and len(text) == length and set(text) <= _HEX
+
+    if (not isinstance(state_root, (str, Path)) or not os.path.isabs(state_root) or type(project_id) is not str
+            or not project_id.startswith(_OWNER_PROJECT_ID)
+            or not hexadecimal(project_id[len(_OWNER_PROJECT_ID):], 32) or not hexadecimal(instance, 32)):
+        raise ValueError("not a preparation owner")
+    value = {"instance": instance, "kind": PREPARATION_OWNER_KIND, "project_id": project_id,
+             "state_root": os.path.realpath(state_root), "version": 1}
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
 XDG_STATE_REFUSED = (

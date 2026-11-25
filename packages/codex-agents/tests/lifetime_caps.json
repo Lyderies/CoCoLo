@@ -2100,6 +2100,46 @@
    "checks": 1,
    "ends": "Two matching retained intents prove ambiguity, so later matches cannot change the answer. The existing records_run index seeks the run, and the two-row evidence window is rebuilt for each check. Three matching rows still yield ambiguous, and removing two restores the single-intent answer.",
    "test": "test_past_legacy_evidence_limit"
+  },
+  "health_workspaces.py::_pass": {
+   "checks": 4,
+   "ends": "HM-2a: MAX_REMOVALS_PER_PASS counts removals in one pass only (it starts again at 0 every pass; the folders left over are reported as waiting and removed at the next pass, and a folder that is removed leaves the listing); PENDING_REPORT_PASSES is a number of passes a folder is pending, kept only for folders pending now and dropped when the driver removes the folder; MIN_ORPHAN_AGE_SECONDS (twice) is an age, not a count, and never alone allows a removal (the owner's free lock does)",
+   "test": "test_HM2A_6_more_orphans_than_one_pass_removes_wait_and_all_go"
+  },
+  "health_workspaces.py::read": {
+   "checks": 4,
+   "ends": "HM-2a: MAX_ENTRIES_SCANNED (entries of the projects folder), MAX_JOURNAL_PROJECTS, MAX_JOURNAL_NAMES (names in launch folders) and MAX_JOURNAL_ENTRIES bound one read of the launch journals, each counted while listing; past any of them the live set is reported as incomplete and nothing is removed that pass; journals are pruned by the driver (settled entries end after their tombstone time) and the count is taken afresh at every pass",
+   "test": "test_HM2A_7_a_projects_folder_longer_than_the_reader_scans_is_incomplete"
+  },
+  "health_workspaces.py::_listing": {
+   "checks": 1,
+   "ends": "HM-2a: MAX_ENTRIES_SCANNED and MAX_FOLDERS_LISTED bound what one pass reads of the scratch container: every entry read counts, and the time share is checked every _LISTING_DEADLINE_EVERY entries; the listing a pass stopped in is kept (one open listing of the pinned container, closed when it ends, when the container at that path is another folder, on an error, or by close()) and the next pass goes on with it, so entries past the cap are reached at later passes and a pass never reads more than the cap",
+   "test": "test_HM2A_6_a_cursor_deep_in_a_huge_folder_stays_within_the_cap_and_progresses"
+  },
+  "health_workspaces.py::_records": {
+   "checks": 2,
+   "ends": "HM-2a: MAX_RECORD_ITEMS (items, repeats included) and MAX_RECORD_PATHS (distinct paths, counted after deduplication) bound what a record reader may hand back in one pass; past either the set is incomplete, nothing is removed and the pass says so; nothing is stored between passes",
+   "test": "test_HM2A_7_a_reader_handing_back_more_items_than_the_check_reads_is_incomplete"
+  },
+  "health_workspaces.py::spent": {
+   "checks": 1,
+   "ends": "HM-2a: MAX_REMOVAL_ENTRIES_PER_PASS counts entries removed in one pass only (a new budget every pass); a folder not finished keeps its owner marker (removed last) and its removal goes on at the next pass",
+   "test": "test_HM2A_6_removal_inside_one_folder_stops_at_its_entry_limit_and_resumes"
+  },
+  "health_workspaces.py::_remove_tree": {
+   "checks": 1,
+   "ends": "HM-2a: MAX_REMOVAL_DEPTH bounds how deep the descriptor remover goes (one descriptor per level); a folder deeper than that is reported as not removed at every pass and left for a person (it keeps its marker); nothing is counted across passes",
+   "test": "test_HM2A_6_a_folder_deeper_than_the_remover_goes_is_reported_and_kept"
+  },
+  "health_workspaces.py::_owner": {
+   "checks": 1,
+   "ends": "HM-2a: MAX_MARKER_BYTES is a size check on one owner marker read (not a count); a larger file is not a marker, so its folder is only reported",
+   "test": "test_HM2A_1_an_oversized_marker_is_not_owner_proof"
+  },
+  "health_workspaces.py::_finish": {
+   "checks": 1,
+   "ends": "HM-2a: MAX_MARKER_BYTES is a size check on the owner marker read once more just before it is removed (to put it back if the folder's rmdir fails); not a count, nothing is kept",
+   "test": "test_HM2A_6_a_folder_rmdir_failing_after_its_marker_went_is_still_resumed"
   }
  }
 }

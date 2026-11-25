@@ -17,7 +17,7 @@ from .codex_worker import MAX_INPUT_BYTES, CodexWorkerError, CodexWorkerPool, _d
 from .contracts import validate_assignment
 from .history_api import HistoryClient
 from .history_contracts import valid_integer
-from .host_paths import remove_private_directory
+from .host_paths import PREPARATION_OWNER_MARKER, preparation_owner_marker, remove_private_directory
 from .learning_contracts import canonical_json, parse_bounded_json
 from .open_scope_contracts import OpenScopeContext, open_inputs_digest
 from .orchestration_api import OrchestrationScope
@@ -142,6 +142,39 @@ def _remove(workspace):
     return False
 
 
+def _write_owner_marker(workspace, marker):
+    """HM-2a: name the service that owns a new preparation folder (see host_paths.PREPARATION_OWNER_MARKER).
+
+    Written once, owner-only, never followed or replaced. A failure never fails the preparation: a folder whose
+    marker could not be written in full (an error from open, write or close, or a short write) is left with no
+    marker (a partial one is removed), so it has no owner proof and the health check only reports it, never removes
+    it. Returns None when written, else the failure recorded as a fixed reason code."""
+    if marker is None:
+        return None
+    path = workspace/PREPARATION_OWNER_MARKER
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                             | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0), 0o600)
+    except OSError:
+        return 'owner_marker_not_written'
+    failure = None
+    try:
+        if os.write(descriptor, marker) != len(marker):
+            failure = 'owner_marker_not_written'
+    except OSError:
+        failure = 'owner_marker_not_written'
+    try:
+        os.close(descriptor)
+    except OSError:
+        failure = 'owner_marker_not_closed'  # what was written may not be all there: it is not owner proof
+    if failure is not None:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    return failure
+
+
 def remove_recorded_workspace(recorded):
     """Remove a folder an earlier service recorded as not yet removed (PREPCLEAN-4); True once it is observed absent.
 
@@ -197,7 +230,7 @@ def _worker_input(prospective, endpoint, supplied=None):
     return parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)
 
 
-def _build(payload, scope):
+def _build(payload, scope, marker=None):
     workspace, started, stage = None, False, 'decode'
     try:
         value = parse_bounded_json(payload, max_bytes=MAX_INPUT_BYTES)
@@ -248,6 +281,7 @@ def _build(payload, scope):
         started = True
         stage = 'workspace'
         workspace = bridge.private_workspace('prepare-', claude=claude, project_root=root)
+        _write_owner_marker(workspace, marker)
         try:
             metadata = bridge.export_committed_snapshot(root, paths, workspace/'export',
                 expected_commit=value['expected_export_commit'])
@@ -306,6 +340,7 @@ class CodexPreparationLane:
         self._lock, self._jobs = threading.Lock(), {}
         self._slots = [_Slot() for _ in range(limits.workers)]
         self._closing = self._busy = False
+        self._marker = None  # HM-2a: the owner marker each new preparation folder gets (set_owner)
         try:
             for slot in self._slots:
                 slot.thread = threading.Thread(target=self._worker, args=(slot,), daemon=True)
@@ -320,6 +355,18 @@ class CodexPreparationLane:
         if self._pid != os.getpid() or self._owner_thread is not threading.current_thread():
             raise PreparationError('preparation_not_authorized')
         self._pool._owner()
+
+    def set_owner(self, state_root, project_id, instance):
+        """HM-2a: name the service that owns this lane's preparation folders from now on: its learning state, its
+        project and its launch-journal instance, whose lock that service holds while it runs. Each new folder gets a
+        marker saying so, which is what lets a later cleanup prove the owner gone."""
+        self._owner()
+        try:
+            marker = preparation_owner_marker(state_root, project_id, instance)
+        except ValueError:
+            raise PreparationError('preparation_invalid_input') from None
+        with self._lock:
+            self._marker = marker
 
     def _job(self, handle):
         self._owner()
@@ -534,8 +581,9 @@ class CodexPreparationLane:
                         continue
                     if state == 'queued':
                         job.state = 'exporting'
+                    marker = self._marker
                 if state == 'queued':
-                    artifact, reason, workspace, unknown = _build(job.payload, self._scope)
+                    artifact, reason, workspace, unknown = _build(job.payload, self._scope, marker)
                     with self._lock:
                         job.artifact, job.reason, job.workspace = artifact, reason, workspace
                         cleanup = artifact is not None and (job.cancelled or self._closing)
