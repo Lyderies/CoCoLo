@@ -26,6 +26,8 @@ class LiveProbeCapacityTests(unittest.TestCase):
                 case.owner.reserve(case.fixture.project_id, 'a' * 64, 'b' * 64,
                     'over-cap', case.context, before_commit=lambda: True)
             case.clock = original.deadline + admission.PROBE_ORPHAN_GRACE_MS + 1
+            # Reference 0 makes the due-hold sweep treat the crashed claim as due now, so release_due_account_holds runs;
+            # the live child's charged row must still stay held (asserted next).
             with mock.patch.object(case.ledger, '_capacity_clock_reference', return_value=0):
                 self.assertEqual(1, case.ledger.release_due_account_holds(limit=1))
                 self.assertEqual(0, case.ledger.release_due_account_holds(limit=1))

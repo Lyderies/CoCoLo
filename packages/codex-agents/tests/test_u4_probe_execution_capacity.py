@@ -47,10 +47,18 @@ class CompletedProbeCapacityTests(unittest.TestCase):
         case.reserve = lambda: case.owner.reserve(case.fixture.project_id, 'a' * 64, 'b' * 64,
             identity[0], case.context, before_commit=lambda: case.allowed)
         rows = []
+        answers = {}
         # The shared fixture's row() reads the first row of the table, which is right for its single-lifecycle
         # tests. With history kept, the lifecycle under test is the one not yet committed (else the newest).
-        case.row = lambda: dict(case.ledger._connection.execute(
-            "SELECT * FROM account_billing_probe_requests ORDER BY state='committed', created_at_ms DESC, request_key DESC LIMIT 1").fetchone())
+        def row():
+            found = [dict(r) for r in case.ledger._connection.execute(
+                "SELECT * FROM account_billing_probe_requests WHERE state<>'committed'")]
+            if found:
+                self.assertEqual(1, len(found))  # exactly one lifecycle is in flight
+                return found[0]
+            return dict(case.ledger._connection.execute(
+                'SELECT * FROM account_billing_probe_requests ORDER BY created_at_ms DESC, request_key DESC LIMIT 1').fetchone())
+        case.row = row
         for number in range(3):
             identity[0] = 'completed-' + str(number)
             handle, _, supervisor = case.launch()
@@ -60,6 +68,7 @@ class CompletedProbeCapacityTests(unittest.TestCase):
             self.assertEqual(0, case.ledger.account_capacity(case.fixture.project_id)['billing_probes']['live'])
             rows.append([dict(r) for r in case.ledger._connection.execute(
                 'SELECT * FROM account_billing_probe_requests ORDER BY request_key')])
+            answers[identity[0]] = reply
             self.assertEqual({**reply, 'known': True}, case.admit(case.reserve()))
             self.assertEqual(number + 1, len(case.model_invocations()))
             if number < 2:
@@ -69,6 +78,21 @@ class CompletedProbeCapacityTests(unittest.TestCase):
             'SELECT * FROM account_billing_probe_requests ORDER BY request_key')]
         self.assertEqual(3, len(final))
         self.assertEqual(rows[-1], final)  # replay preserves the historical sealed rows
+        # Past the cap, the sealed rows taken BEFORE the later lifecycles must be unchanged now.
+        for earlier in rows[:-1]:
+            for old in earlier:
+                self.assertIn(old, final)
+        # Replay the oldest and a middle identity after the history passed the cap. A completed request is judged
+        # afresh on replay (decision 44: its records may have aged out), so the cited records may differ from the
+        # original; what must stay is the verdict, its origin time, no new launch and the sealed rows.
+        for name in ('completed-0', 'completed-1'):
+            identity[0] = name
+            again = case.admit(case.reserve())
+            self.assertEqual(('completed', True, answers[name]['reason_code'], answers[name]['observed_at_ms']),
+                (again['probe'], again['known'], again['reason_code'], again['observed_at_ms']))
+            self.assertEqual(3, len(case.model_invocations()))
+        self.assertEqual(final, [dict(r) for r in case.ledger._connection.execute(
+            'SELECT * FROM account_billing_probe_requests ORDER BY request_key')])
         self.assertTrue(all(r['state'] == 'committed' for r in final))
         self.assertEqual(3, len(case.model_invocations()))
 
