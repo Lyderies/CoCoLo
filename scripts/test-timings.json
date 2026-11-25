@@ -2399,6 +2399,7 @@
  "codex:tests.test_run_provenance.RunProvenanceTests.test_snapshot_work_and_duration_exhaustion_restore_connection_policy": 0.66,
  "codex:tests.test_run_provenance.RunProvenanceTests.test_sql_budget_exhaustion_refuses_and_restores_original_connection_policy": 0.67,
  "codex:tests.test_run_provenance.RunProvenanceTests.test_valid_mac_for_wrong_provider_family_or_registered_claim_cannot_consume": 0.73,
+ "codex:tests.test_run_retention": 3.0,
  "codex:tests.test_runtime_release": 0.12,
  "codex:tests.test_runtime_release.RuntimeReleaseTests.test_the_runtime_file_set_is_exactly_the_package_orchestration_files": 0.01,
  "codex:tests.test_service_harness": 0.48,
@@ -3098,5 +3099,6 @@
  "root:test_setup_wizard_steps": 0.12,
  "root:test_setup_wizard_terminal": 0.06,
  "root:test_test_stages": 2.03,
- "root:test_wizard_clock": 0.27
+ "root:test_wizard_clock": 0.27,
+ "codex:tests.test_run_retention_integration": 15.0
 }

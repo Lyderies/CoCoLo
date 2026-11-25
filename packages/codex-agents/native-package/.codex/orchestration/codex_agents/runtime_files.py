@@ -203,6 +203,7 @@ RUNTIME_FILES = (
     "codex_agents/run_holds_schema.py",
     "codex_agents/run_network.py",
     "codex_agents/run_provenance.py",
+    "codex_agents/run_retention.py",
     "codex_agents/runtime_files.py",
     "codex_agents/service_enrollment.py",
     "codex_agents/service_host.py",

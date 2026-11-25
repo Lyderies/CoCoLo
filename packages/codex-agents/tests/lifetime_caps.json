@@ -2080,6 +2080,26 @@
    "checks": 4,
    "ends": "U1: registration attempt rows, open report rows, mixed distinct report runs and journal events belong to one orchestration. At each safe-point continuation the product atomically closes it and opens a successor before admitting more work; the old report and replay remain available during existing retention.",
    "test": "test_events_replay_and_reserved_close_roll_repeatedly_past_limit"
+  },
+  "run_retention.py::page": {
+   "checks": 1,
+   "ends": "An indexed maintenance page of at most 32 records. The cursor advances even over protected rows; records end in immutable summaries. No admission cap.",
+   "test": "test_past_batch_limit_and_protected_prefix_drain_without_starvation"
+  },
+  "run_retention.py::sweep": {
+   "checks": 5,
+   "ends": "One page at most 32 records; only maintenance, resumes after the page and skips readers/transactions. Not a run admission cap. SQL selection is limited to 2048 callbacks and 25 ms.",
+   "test": "test_past_batch_limit_and_protected_prefix_drain_without_starvation"
+  },
+  "learning_contracts.py::validate_retention_summary": {
+   "checks": 1,
+   "ends": "Stored summaries have at most 32 represented records, the maintenance page bound. This is a record shape bound, never admission or accumulated history. Keep the stored-reader bound even if the live page shrinks.",
+   "test": "test_summary_contract_is_closed_and_old_vocabulary_remains_readable"
+  },
+  "learning_store.py::_retention_detail": {
+   "checks": 1,
+   "ends": "Historical lookup returns one summary under the existing 2048-callback/25-ms read budget; a past-budget lookup returns a plain older-than-90-days answer, never a run refusal. Summary rows remain permanent history.",
+   "test": "test_historical_lookup_past_SQL_work_limit_returns_plain_age_answer"
   }
  }
 }

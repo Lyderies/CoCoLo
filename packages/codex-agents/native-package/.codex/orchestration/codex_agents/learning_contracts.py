@@ -61,6 +61,7 @@ DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 RECORD_TYPES = {
     "event",
     "event_summary",
+    "retention_summary",
     "outcome",
     "feedback",
     "evaluation_case",
@@ -2202,6 +2203,62 @@ def validate_observation_unavailable(data: Any) -> dict[str, Any]:
     return data
 
 
+# Never shrink this vocabulary: a summary is a stored historical record.
+STORED_RETENTION_DETAIL_TYPES = frozenset({
+    'provider_identity', 'provider_headroom', 'provider_billing', 'admission_decision', 'dispatch_intent',
+    'outcome',
+})
+RETAINABLE_DETAIL_TYPES = STORED_RETENTION_DETAIL_TYPES
+# Stored history has its own additive vocabulary, independent of live writers.
+STORED_RETENTION_SOURCES = frozenset({
+    'hook', 'app_server', 'host', 'evaluator', 'verifier', 'owner', 'lifecycle', 'provider',
+})
+STORED_RETENTION_OUTCOME_STATUSES = frozenset({
+    'accepted', 'rejected', 'unverified', 'failed', 'cancelled', 'interrupted',
+})
+
+
+def validate_retention_summary(data: Any) -> dict[str, Any]:
+    data = _closed(data, {'schema_version', 'record_type', 'record_id', 'observed_at_ms', 'keep_days',
+                         'first_observed_at_ms', 'last_observed_at_ms', 'record_count',
+                         'record_counts', 'source_counts', 'record_id_digests', 'record_content_digests',
+                         'outcome_counts', 'detail'}, 'retention_summary')
+    _base(data, 'retention_summary')
+    for name in ('observed_at_ms', 'first_observed_at_ms', 'last_observed_at_ms'):
+        _integer(data[name], name)
+    _integer(data['keep_days'], 'keep_days', minimum=90, maximum=90)
+    _integer(data['record_count'], 'record_count', minimum=1, maximum=32)
+    _digest_list(data['record_id_digests'], 'record_id_digests')
+    _digest_list(data['record_content_digests'], 'record_content_digests')
+    if len(data['record_id_digests']) != data['record_count']:
+        raise ContractError('retention identities do not add up')
+    if not data['first_observed_at_ms'] <= data['last_observed_at_ms'] <= data['observed_at_ms']-90*86_400_000:
+        raise ContractError('retention summary times are inconsistent')
+    for field, allowed in (('record_counts', STORED_RETENTION_DETAIL_TYPES), ('source_counts', STORED_RETENTION_SOURCES)):
+        counts = data[field]
+        if type(counts) is not dict or not counts or not set(counts) <= allowed:
+            raise ContractError('invalid retention counts')
+        for value in counts.values():
+            _integer(value, field, minimum=1, maximum=32)
+        if sum(counts.values()) != data['record_count']:
+            raise ContractError('retention counts do not add up')
+    if len(data['record_content_digests']) not in {data['record_count'], data['record_counts'].get('outcome', 0)}:
+        raise ContractError('retention content identities do not add up')
+    counts = data['outcome_counts']
+    if type(counts) is not dict or not set(counts) <= STORED_RETENTION_OUTCOME_STATUSES:
+        raise ContractError('invalid historical outcome counts')
+    for value in counts.values():
+        _integer(value, 'outcome_counts', minimum=1, maximum=32)
+    if sum(counts.values()) != data['record_counts'].get('outcome', 0):
+        raise ContractError('outcome counts do not add up')
+    if type(data['detail']) is not str or data['detail'] not in {
+        'Details older than 90 days; counts only.',
+        'Individual details older than 90 days were removed; these are historical counts only.',
+    }:
+        raise ContractError('invalid retention explanation')
+    return data
+
+
 EVENT_SUMMARY_FIELDS = {
     "schema_version", "record_type", "record_id", "run_id", "day", "observed_at_ms",
     "first_observed_at_ms", "last_observed_at_ms", "span_ms", "event_count", "event_counts",
@@ -2428,6 +2485,7 @@ def validate_host_open_provenance(data: Any) -> dict[str, Any]:
 
 
 VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
+    "retention_summary": validate_retention_summary,
     "host_open_provenance": validate_host_open_provenance,
     "execution_provenance": validate_execution_provenance,
     "host_result_admission": validate_host_result_admission,

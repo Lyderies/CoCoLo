@@ -1,0 +1,100 @@
+{
+ "named_module_count": 19,
+ "tests": 213,
+ "elapsed_seconds": 37.103,
+ "metadata_errors": [],
+ "budget_failures": [],
+ "modules": [
+  {
+   "module": "codex:tests.test_account_observation_backup",
+   "seconds": 1.103
+  },
+  {
+   "module": "codex:tests.test_backup_installed_project",
+   "seconds": 1.313
+  },
+  {
+   "module": "codex:tests.test_backup_reply_private",
+   "seconds": 7.077
+  },
+  {
+   "module": "codex:tests.test_large_project_backups",
+   "seconds": 40.065
+  },
+  {
+   "module": "codex:tests.test_learning_chunk_upgrade",
+   "seconds": 0.402
+  },
+  {
+   "module": "codex:tests.test_learning_contracts",
+   "seconds": 0.229
+  },
+  {
+   "module": "codex:tests.test_learning_qa_upgrade",
+   "seconds": 0.549
+  },
+  {
+   "module": "codex:tests.test_learning_source_image",
+   "seconds": 4.811
+  },
+  {
+   "module": "codex:tests.test_learning_source_image_legacy",
+   "seconds": 4.488
+  },
+  {
+   "module": "codex:tests.test_learning_source_transfer",
+   "seconds": 7.594
+  },
+  {
+   "module": "codex:tests.test_legacy_capacity_upgrade",
+   "seconds": 2.54
+  },
+  {
+   "module": "codex:tests.test_lifetime_cap_guard",
+   "seconds": 1.241
+  },
+  {
+   "module": "codex:tests.test_owner_backup_streamed",
+   "seconds": 49.61
+  },
+  {
+   "module": "codex:tests.test_project_learning_corpus",
+   "seconds": 1.357
+  },
+  {
+   "module": "codex:tests.test_refusal_steps",
+   "seconds": 0.608
+  },
+  {
+   "module": "codex:tests.test_reply_shape_compatibility",
+   "seconds": 0.229
+  },
+  {
+   "module": "codex:tests.test_run_retention",
+   "seconds": 2.123
+  },
+  {
+   "module": "codex:tests.test_run_retention_integration",
+   "seconds": 22.192
+  },
+  {
+   "module": "codex:tests.test_runtime_release",
+   "seconds": 0.349
+  }
+ ],
+ "failures": [
+  {
+   "test": "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_real_open_claim_footprint_retires_to_measured_metadata_and_summary",
+   "result": "failed"
+  },
+  {
+   "test": "codex:tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version",
+   "result": "failed"
+  },
+  {
+   "test": "codex:tests.test_runtime_release.RuntimeReleaseTests.test_the_runtime_file_set_is_exactly_the_package_orchestration_files",
+   "result": "failed"
+  }
+ ],
+ "followup": "runtime file-list ordering corrected; 39-test targeted followup has only the intentionally unchanged release digest pin failing. Real signature-worker fixture remains a primary gate."
+}

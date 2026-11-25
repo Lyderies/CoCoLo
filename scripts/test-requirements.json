@@ -3937,5 +3937,64 @@
   ],
   "source": "tests/requirements/u1.json#O0C-U1-5",
   "statement": "Prove independent boundaries, exact replay, reserved close, repeated past-cap operation, rollback and abrupt process exit with fast tests."
+ },
+ "S14b-1": {
+  "checks": [
+   "codex:tests.test_run_retention.RunRetentionTests.test_five_year_projection_at_double_peak_includes_every_family",
+   "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_real_open_claim_footprint_retires_to_measured_metadata_and_summary"
+  ],
+  "source": "tests/requirements/s14b.json#S14b-1",
+  "statement": "Five-year storage at twice the accepted peak fits 16 GiB."
+ },
+ "S14b-2": {
+  "checks": [
+   "codex:tests.test_run_retention.RunRetentionTests.test_cutoff_summary_counts_and_old_detail_answer",
+   "codex:tests.test_run_retention.RunRetentionTests.test_full_outcomes_and_attested_and_file_backed_rows_stay",
+   "codex:tests.test_run_retention.RunRetentionTests.test_live_windows_Claude_bootstrap_and_latest_reading_preserve_admission_answers",
+   "codex:tests.test_run_retention.RunRetentionTests.test_past_batch_limit_and_protected_prefix_drain_without_starvation",
+   "codex:tests.test_run_retention.RunRetentionTests.test_released_capacity_history_does_not_exhaust_retention_work_budget",
+   "codex:tests.test_run_retention.RunRetentionTests.test_summary_failure_rolls_back_and_readers_and_transactions_skip",
+   "codex:tests.test_run_retention.RunRetentionTests.test_unreferenced_outcome_leaves_status_counts_and_digest_lookup_answer",
+   "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_real_open_claim_footprint_retires_to_measured_metadata_and_summary"
+  ],
+  "source": "tests/requirements/s14b.json#S14b-2",
+  "statement": "Expired run detail is summarised atomically while live authority and learning remain."
+ },
+ "S14b-3": {
+  "checks": [
+   "codex:tests.test_run_retention.RunRetentionTests.test_collector_maintenance_contains_failure_and_is_the_only_automatic_entry",
+   "codex:tests.test_run_retention.RunRetentionTests.test_failed_fast_continuation_stops_and_batch_ceiling_never_limits_a_run",
+   "codex:tests.test_run_retention.RunRetentionTests.test_historical_lookup_past_SQL_work_limit_returns_plain_age_answer",
+   "codex:tests.test_run_retention.RunRetentionTests.test_live_windows_Claude_bootstrap_and_latest_reading_preserve_admission_answers",
+   "codex:tests.test_run_retention.RunRetentionTests.test_past_batch_limit_and_protected_prefix_drain_without_starvation",
+   "codex:tests.test_run_retention.RunRetentionTests.test_released_capacity_history_does_not_exhaust_retention_work_budget",
+   "codex:tests.test_run_retention.RunRetentionTests.test_sql_work_is_bounded_even_when_every_row_is_protected",
+   "codex:tests.test_run_retention.RunRetentionTests.test_summary_failure_rolls_back_and_readers_and_transactions_skip",
+   "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_collector_sweep_sql_runs_on_the_E1b_owner_thread"
+  ],
+  "source": "tests/requirements/s14b.json#S14b-3",
+  "statement": "Retention is bounded owner-thread maintenance and cannot block work."
+ },
+ "S14b-4": {
+  "checks": [
+   "codex:tests.test_run_retention.RunRetentionTests.test_cutoff_summary_counts_and_old_detail_answer",
+   "codex:tests.test_run_retention.RunRetentionTests.test_historical_lookup_past_SQL_work_limit_returns_plain_age_answer",
+   "codex:tests.test_run_retention.RunRetentionTests.test_old_detail_resolves_its_own_summary_after_other_batches",
+   "codex:tests.test_run_retention.RunRetentionTests.test_summary_contract_is_closed_and_old_vocabulary_remains_readable",
+   "codex:tests.test_run_retention.RunRetentionTests.test_summary_stays_readable_when_live_writer_vocabulary_shrinks",
+   "codex:tests.test_run_retention.RunRetentionTests.test_unreferenced_outcome_leaves_status_counts_and_digest_lookup_answer",
+   "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_summary_survives_original_source_image_and_learning_transfer"
+  ],
+  "source": "tests/requirements/s14b.json#S14b-4",
+  "statement": "Swept detail has a plain historical answer and stored vocabulary remains readable."
+ },
+ "S14b-5": {
+  "checks": [
+   "codex:tests.test_run_retention.RunRetentionTests.test_summary_contract_is_closed_and_old_vocabulary_remains_readable",
+   "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_real_open_claim_footprint_retires_to_measured_metadata_and_summary",
+   "codex:tests.test_run_retention_integration.RunRetentionIntegrationTests.test_summary_survives_original_source_image_and_learning_transfer"
+  ],
+  "source": "tests/requirements/s14b.json#S14b-5",
+  "statement": "Retention summaries survive backup, upgrade, source imaging and transfer."
  }
 }
