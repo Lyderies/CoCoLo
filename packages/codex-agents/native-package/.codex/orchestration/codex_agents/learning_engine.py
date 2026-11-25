@@ -3966,22 +3966,25 @@ class OwnerGrantAuthority:
                 return True
             if not self.raise_verifier_failures:
                 return False
-            # Wrong-key signatures can produce only the rejection stdout, with
-            # no stderr. Parser rejections are also deterministic, but known
-            # environment/resource failures always take precedence over them.
-            diagnostic = completed.stderr.lower()
-            infrastructure_failure = any(pattern in diagnostic for pattern in (
-                b"cannot open", b"no such file", b"permission denied", b"allocate",
-                b"out of memory", b"internal error", b"killed by signal",
-            ))
-            malformed_signature = any(pattern in diagnostic for pattern in (
-                b"invalid format", b"decode base64", b"missing footer", b"missing header",
-                b"incomplete message", b"namespace does not match",
-            ))
+            # Wrong-key rejection can have empty stderr. Otherwise accept only
+            # exact deterministic lines observed from ssh-keygen; any unknown
+            # line (including resource or I/O failures) leaves the row retryable.
+            signature_diagnostics = {
+                b"Couldn't parse signature: missing footer",
+                b"Couldn't parse signature: missing header",
+                b"sig_verify: sshsig_armor: invalid format",
+                b"sig_verify: sshsig_armor: incomplete message",
+                b"sshsig_dearmor: decode base64: invalid format",
+                b"Couldn't verify signature: invalid format",
+                b"sshsig_peek_hashalg: parse signature object: incomplete message",
+                b"Couldn't verify signature: namespace does not match",
+                b"Signature verification failed: incorrect signature",
+            }
             if (completed.returncode == 255
-                    and not infrastructure_failure
-                    and (completed.stdout.splitlines() == [b"Could not verify signature."]
-                         or malformed_signature)):
+                    and completed.stdout in (b"Could not verify signature.",
+                                             b"Could not verify signature.\n",
+                                             b"Could not verify signature.\r\n")
+                    and all(line in signature_diagnostics for line in completed.stderr.splitlines())):
                 return False
             raise OSError("owner signature verifier did not return a definitive verdict")
         except (OSError, subprocess.SubprocessError):

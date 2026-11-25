@@ -12,19 +12,43 @@ stays unchecked, charged and retryable without restart. Only a clean successful
 verification or clean definitive ssh-keygen signature-invalid result can be
 cached. Existing non-maintenance callers continue to fail closed.
 
-Review fix round on `9333772e`: exit 255 with stdout exactly
-`Could not verify signature.` (allowing its line terminator) is definitive
-invalid, including a well-formed signature from the previous owner key. Exit
-255 with deterministic malformed-signature diagnostics (`invalid format`,
-`decode base64`, `missing footer`, `missing header`, `incomplete message`, or
-`namespace does not match`) is also definitive invalid. In either case,
-stderr indicating `cannot open`, `no such file`, `permission denied`,
-`allocate`, `out of memory`, `internal error`, or `killed by signal` takes
-precedence and leaves the row unchecked. Unsafe prechecks, timeouts, signals,
-other exit codes and all other ambiguous results remain non-definitive.
-Real ssh-keygen regressions must prove wrong-key and truncated signatures
-are cached invalid without verification on the next maintenance pass, while
-unsafe verifier metadata remains retryable.
+Final targeted fix on `1e6b5e13` (confirming review `040-p9b-r2c`): a
+nonzero verifier result is definitive invalid only for exit 255 with stdout
+exactly `Could not verify signature.` (optionally terminated by LF or CRLF),
+and stderr either empty or containing only exact allowlisted diagnostic lines.
+The allowlist is the following eight lines observed from real OpenSSH 10.5p1
+malformed/truncated, payload-mismatch or wrong-namespace signatures (LF and CRLF are accepted):
+
+- `Couldn't parse signature: missing footer`
+- `Couldn't parse signature: missing header`
+- `sig_verify: sshsig_armor: invalid format`
+- `sshsig_dearmor: decode base64: invalid format`
+- `Couldn't verify signature: invalid format`
+- `sshsig_peek_hashalg: parse signature object: incomplete message`
+- `Couldn't verify signature: namespace does not match`
+- `Signature verification failed: incorrect signature`
+
+Any other stderr line, including an extra unknown line after a known diagnostic,
+is non-definitive. Infrastructure diagnostics always take precedence, including
+`memory allocation failed`, `libcrypto error: x`, `error in libcrypto`,
+`Unable to open allowed keys file F: Too many open files`,
+`Unable to open allowed keys file F: Input/output error`, and
+`Couldn't read signature file: Input/output error`; arbitrary strerror text is
+never allowlisted. Unsafe prechecks, timeouts, signals, other exit codes,
+missing/extra stdout and all other ambiguous results remain non-definitive.
+Their rows stay unchecked, capturable and retryable without restart. Existing
+infrastructure-precedence assertions remain in place.
+
+Real ssh-keygen regressions must prove wrong-key, truncated and wrong-namespace
+signatures are cached invalid without verification on the next maintenance
+pass. With this OpenSSH version an empty allowed-signers file or a directory
+used as allowed-signers can produce exit 255, exact rejection stdout and empty
+stderr, just like a wrong key: those outputs are deliberately definitive invalid
+under this contract. A reported allowed-signers or signature-file I/O diagnostic
+is non-definitive regardless of its strerror. Existing constructor checks still
+reject a directory already present at authority creation; the output contract
+also covers a path changed after that check. No new signer-path precheck is
+part of this fix.
 
 ### P9b-2 — Candidate membership contains only attestations
 

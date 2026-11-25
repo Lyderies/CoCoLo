@@ -12,6 +12,212 @@
  },
  "base": "38911cd4",
  "branch": "fix/o0c-p9b",
+ "final_targeted_allowlist_fix": {
+  "base": "1e6b5e13",
+  "corrected_red": {
+   "budget_failures": [],
+   "discovery_seconds": 3.331176665960811,
+   "elapsed_seconds": 3.7357181248953566,
+   "metadata_errors": [],
+   "partial": false,
+   "preflight_seconds": 9.550157709047198,
+   "workers": [
+    {
+     "outcomes": {
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_keeps_other_evidence_outside_candidate_table": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_union_uses_indexes_and_bounds_rows_before_final_sort": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_count_and_open_rebuild_ignore_non_attestation_history": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_membership_tracks_record_type_changes": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_clean_signature_invalid_is_cached": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deleting_newest_restores_predecessor_for_every_record_delete_path": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deterministic_malformed_signature_diagnostics_are_definitive": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_failed_verifier_process_is_retryable_without_restart": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_infrastructure_and_ambiguous_results_raise_and_leave_rows_unchecked": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_previous_owner_key_signature_is_cached_invalid_without_reverification": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_rejection_requires_exact_stdout_and_only_allowlisted_stderr_lines": "failed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_truncated_signature_is_cached_invalid_without_reverification": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_unallowlisted_stderr_is_not_cached_and_recovers_without_restart": "failed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_unsafe_verifier_leaves_genuine_rows_unchecked_until_repaired": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_wrong_namespace_signature_is_cached_invalid_without_reverification": "passed"
+     },
+     "returncode": 1,
+     "seconds": 3.7264589589321986,
+     "summary": "failures=48",
+     "tests": 15,
+     "timed_out": false,
+     "unit": "tests.test_p9b_attestation_followups",
+     "violations": []
+    }
+   ]
+  },
+  "corrections": "Preserve the existing payload-mismatch caching assertion by allowlisting the exact real incorrect-signature diagnostic; give each new retryability case a distinct account (exclude the setUp account). Corrected tests rerun red against original runtime before final implementation.",
+  "first_green_attempt": {
+   "budget_failures": [],
+   "discovery_seconds": 3.4426059999968857,
+   "elapsed_seconds": 5.9163364169653505,
+   "metadata_errors": [],
+   "partial": false,
+   "preflight_seconds": 10.277279959060252,
+   "workers": [
+    {
+     "outcomes": {
+      "codex:tests.test_owner_key_contracts.OwnerKeyContractTests.test_format_comments_options_and_noncanonical_base64_are_refused": "passed",
+      "codex:tests.test_owner_key_contracts.OwnerKeyContractTests.test_legacy_rsa_identity_remains_stable_while_new_read_rejects_padding": "passed",
+      "codex:tests.test_owner_key_contracts.OwnerKeyContractTests.test_malformed_key_fields_and_trailing_data_are_refused": "passed",
+      "codex:tests.test_owner_key_contracts.OwnerKeyContractTests.test_maximal_current_signer_line_is_supported_and_larger_is_refused": "passed",
+      "codex:tests.test_owner_key_contracts.OwnerKeyContractTests.test_supported_canonical_public_formats_and_exact_stored_line": "passed"
+     },
+     "returncode": 0,
+     "seconds": 0.15948708297219127,
+     "summary": "",
+     "tests": 5,
+     "timed_out": false,
+     "unit": "tests.test_owner_key_contracts",
+     "violations": []
+    },
+    {
+     "outcomes": {
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_keeps_other_evidence_outside_candidate_table": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_union_uses_indexes_and_bounds_rows_before_final_sort": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_count_and_open_rebuild_ignore_non_attestation_history": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_membership_tracks_record_type_changes": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_clean_signature_invalid_is_cached": "failed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deleting_newest_restores_predecessor_for_every_record_delete_path": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deterministic_malformed_signature_diagnostics_are_definitive": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_failed_verifier_process_is_retryable_without_restart": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_infrastructure_and_ambiguous_results_raise_and_leave_rows_unchecked": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_previous_owner_key_signature_is_cached_invalid_without_reverification": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_rejection_requires_exact_stdout_and_only_allowlisted_stderr_lines": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_truncated_signature_is_cached_invalid_without_reverification": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_unallowlisted_stderr_is_not_cached_and_recovers_without_restart": "failed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_unsafe_verifier_leaves_genuine_rows_unchecked_until_repaired": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_wrong_namespace_signature_is_cached_invalid_without_reverification": "passed"
+     },
+     "returncode": 1,
+     "seconds": 5.908397791092284,
+     "summary": "failures=2",
+     "tests": 15,
+     "timed_out": false,
+     "unit": "tests.test_p9b_attestation_followups",
+     "violations": []
+    }
+   ]
+  },
+  "green": {
+   "budget_failures": [],
+   "discovery_seconds": 3.0705433749826625,
+   "elapsed_seconds": 3.247421458014287,
+   "metadata_errors": [],
+   "partial": false,
+   "preflight_seconds": 7.894413499976508,
+   "workers": [
+    {
+     "outcomes": {
+      "codex:tests.test_owner_key_contracts.OwnerKeyContractTests.test_format_comments_options_and_noncanonical_base64_are_refused": "passed",
+      "codex:tests.test_owner_key_contracts.OwnerKeyContractTests.test_legacy_rsa_identity_remains_stable_while_new_read_rejects_padding": "passed",
+      "codex:tests.test_owner_key_contracts.OwnerKeyContractTests.test_malformed_key_fields_and_trailing_data_are_refused": "passed",
+      "codex:tests.test_owner_key_contracts.OwnerKeyContractTests.test_maximal_current_signer_line_is_supported_and_larger_is_refused": "passed",
+      "codex:tests.test_owner_key_contracts.OwnerKeyContractTests.test_supported_canonical_public_formats_and_exact_stored_line": "passed"
+     },
+     "returncode": 0,
+     "seconds": 0.10740500001702458,
+     "summary": "",
+     "tests": 5,
+     "timed_out": false,
+     "unit": "tests.test_owner_key_contracts",
+     "violations": []
+    },
+    {
+     "outcomes": {
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_keeps_other_evidence_outside_candidate_table": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_union_uses_indexes_and_bounds_rows_before_final_sort": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_count_and_open_rebuild_ignore_non_attestation_history": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_membership_tracks_record_type_changes": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_clean_signature_invalid_is_cached": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deleting_newest_restores_predecessor_for_every_record_delete_path": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deterministic_malformed_signature_diagnostics_are_definitive": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_failed_verifier_process_is_retryable_without_restart": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_infrastructure_and_ambiguous_results_raise_and_leave_rows_unchecked": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_previous_owner_key_signature_is_cached_invalid_without_reverification": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_rejection_requires_exact_stdout_and_only_allowlisted_stderr_lines": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_truncated_signature_is_cached_invalid_without_reverification": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_unallowlisted_stderr_is_not_cached_and_recovers_without_restart": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_unsafe_verifier_leaves_genuine_rows_unchecked_until_repaired": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_wrong_namespace_signature_is_cached_invalid_without_reverification": "passed"
+     },
+     "returncode": 0,
+     "seconds": 3.238266500062309,
+     "summary": "",
+     "tests": 15,
+     "timed_out": false,
+     "unit": "tests.test_p9b_attestation_followups",
+     "violations": []
+    }
+   ]
+  },
+  "green_notes": "15 P9b tests and 5 owner-key contract tests passed; real wrong-key, truncated, wrong-namespace and payload-mismatch signatures cached invalid once. Seven transient/unknown diagnostics, each alone and appended to an allowlisted line, stay unchecked, capturable and recover on real verification without restart.",
+  "initial_red": {
+   "budget_failures": [],
+   "discovery_seconds": 3.13596524996683,
+   "elapsed_seconds": 3.7984550420660526,
+   "metadata_errors": [],
+   "partial": false,
+   "preflight_seconds": 9.406865415978245,
+   "workers": [
+    {
+     "outcomes": {
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_keeps_other_evidence_outside_candidate_table": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_union_uses_indexes_and_bounds_rows_before_final_sort": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_count_and_open_rebuild_ignore_non_attestation_history": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_membership_tracks_record_type_changes": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_clean_signature_invalid_is_cached": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deleting_newest_restores_predecessor_for_every_record_delete_path": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deterministic_malformed_signature_diagnostics_are_definitive": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_failed_verifier_process_is_retryable_without_restart": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_infrastructure_and_ambiguous_results_raise_and_leave_rows_unchecked": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_previous_owner_key_signature_is_cached_invalid_without_reverification": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_rejection_requires_exact_stdout_and_only_allowlisted_stderr_lines": "failed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_truncated_signature_is_cached_invalid_without_reverification": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_unallowlisted_stderr_is_not_cached_and_recovers_without_restart": "failed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_unsafe_verifier_leaves_genuine_rows_unchecked_until_repaired": "passed",
+      "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_wrong_namespace_signature_is_cached_invalid_without_reverification": "passed"
+     },
+     "returncode": 1,
+     "seconds": 3.7939132909523323,
+     "summary": "failures=48",
+     "tests": 15,
+     "timed_out": false,
+     "unit": "tests.test_p9b_attestation_followups",
+     "violations": []
+    }
+   ]
+  },
+  "no_test_run_in_flight": true,
+  "openssh_observations": {
+   "all_rejections": {
+    "returncode": 255,
+    "stdout": "Could not verify signature.\n"
+   },
+   "method": "Temporary ed25519 key, allowed-signers file, signed payload; real ssh-keygen -Y verify against altered signature armor/binary, namespace or payload. Temporary data removed after probing.",
+   "stderr_by_fixture": {
+    "bad_binary_magic": "Couldn't verify signature: invalid format\r\n",
+    "directory_allowed_signers": "",
+    "empty_allowed_signers": "",
+    "incomplete_binary": "sshsig_peek_hashalg: parse signature object: incomplete message\r\n",
+    "invalid_base64": "sshsig_dearmor: decode base64: invalid format\r\nsig_verify: sshsig_armor: invalid format\r\n",
+    "missing_armor_header": "Couldn't parse signature: missing header\r\nsig_verify: sshsig_armor: invalid format\r\n",
+    "truncated_armor": "Couldn't parse signature: missing footer\r\nsig_verify: sshsig_armor: invalid format\r\n",
+    "wrong_namespace": "Couldn't verify signature: namespace does not match\r\n",
+    "wrong_payload": "Signature verification failed: incorrect signature\r\n"
+   },
+   "version": "OpenSSH_10.5p1, LibreSSL 3.3.6"
+  },
+  "red_notes": "Two failing tests, 48 assertion failures: 34 exact-output/diagnostic cases and all 14 transient/unknown cache cases. All 13 other tests passed; no fixture errors.",
+  "registration": "Existing module remains scenario layer, integration stage, with timing registration. Three new test checks registered for existing P9b-1; no new module or requirement ID.",
+  "requirement": "P9b-1",
+  "review": "040-p9b-r2c",
+  "unrun": "No full suite, socket/PTY-dependent expansion or runtime-release module. No schema/record-shape change. Release catalogue intentionally unchanged and expected to reject modified runtime files until primary merge."
+ },
  "initial_red_fixture_run": {
   "counts": {
    "failed": 6,

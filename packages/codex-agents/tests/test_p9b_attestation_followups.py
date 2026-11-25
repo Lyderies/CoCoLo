@@ -22,6 +22,19 @@ from codex_agents.signature_inputs import SignatureCaptureLimits
 from codex_agents.sql_read_budget import SQLReadLimits
 
 
+# Exact lines observed with real OpenSSH 10.5p1, not substring fragments.
+DETERMINISTIC_SIGNATURE_DIAGNOSTICS = (
+    b"Couldn't parse signature: missing footer",
+    b"Couldn't parse signature: missing header",
+    b'sig_verify: sshsig_armor: invalid format',
+    b'sshsig_dearmor: decode base64: invalid format',
+    b"Couldn't verify signature: invalid format",
+    b'sshsig_peek_hashalg: parse signature object: incomplete message',
+    b"Couldn't verify signature: namespace does not match",
+    b'Signature verification failed: incorrect signature',
+)
+
+
 class P9bAttestationTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
@@ -147,17 +160,72 @@ class P9bAttestationTests(unittest.TestCase):
                            (signature[:len(signature) // 2], self.record['record_id']))
         self.assert_invalid_cached_once()
 
-    @requirements('P9b-1', why_not_scenario='Pin deterministic parser diagnostics independently of the installed OpenSSH version.')
+    @requirements('P9b-1', why_not_scenario='Sign the real record in the wrong namespace and exercise the maintenance cache.')
+    def test_wrong_namespace_signature_is_cached_invalid_without_reverification(self):
+        payload = OwnerGrantAuthority.owner_record_payload(self.project, self.record)
+        completed = subprocess.run(
+            [str(learning_engine.SSH_KEYGEN_PATH), '-Y', 'sign', '-f', str(self.key),
+             '-n', 'wrong-namespace'], input=payload, capture_output=True, check=True)
+        self.ledger._connection.execute(
+            'UPDATE owner_attestations SET signature=? WHERE subject_record_id=?',
+            (completed.stdout, self.record['record_id']))
+        self.assert_invalid_cached_once()
+
+    @requirements('P9b-1', why_not_scenario='Pin exact observed diagnostics independently of the installed OpenSSH version.')
     def test_deterministic_malformed_signature_diagnostics_are_definitive(self):
         authority = OwnerGrantAuthority(self.state.allowed_signers_path, raise_verifier_failures=True)
-        diagnostics = [b'invalid format', b'decode base64', b'missing footer',
-                       b'missing header', b'incomplete message', b'namespace does not match']
-        for diagnostic in diagnostics:
-            with self.subTest(diagnostic=diagnostic):
-                completed = subprocess.CompletedProcess(['ssh-keygen'], 255, b'',
-                    b"Couldn't parse signature: " + diagnostic + b'\n')
+        for diagnostic in DETERMINISTIC_SIGNATURE_DIAGNOSTICS:
+            for terminator in (b'', b'\n', b'\r\n'):
+                with self.subTest(diagnostic=diagnostic, terminator=terminator):
+                    completed = subprocess.CompletedProcess(['ssh-keygen'], 255,
+                        b'Could not verify signature.' + terminator, diagnostic + terminator)
+                    with mock.patch.object(learning_engine.subprocess, 'run', return_value=completed):
+                        self.assertFalse(authority.verify_owner_record(self.project, self.record, b'bad-signature'))
+        completed = subprocess.CompletedProcess(['ssh-keygen'], 255, b'Could not verify signature.\n',
+            b'\r\n'.join(DETERMINISTIC_SIGNATURE_DIAGNOSTICS) + b'\r\n')
+        with mock.patch.object(learning_engine.subprocess, 'run', return_value=completed):
+            self.assertFalse(authority.verify_owner_record(self.project, self.record, b'bad-signature'))
+
+    @requirements('P9b-1', why_not_scenario='Exact stdout and every stderr line are required for a definitive invalid verdict.')
+    def test_rejection_requires_exact_stdout_and_only_allowlisted_stderr_lines(self):
+        authority = OwnerGrantAuthority(self.state.allowed_signers_path, raise_verifier_failures=True)
+        rejection = b'Could not verify signature.\n'
+        outcomes = [(stdout, diagnostic + b'\n')
+                    for diagnostic in DETERMINISTIC_SIGNATURE_DIAGNOSTICS
+                    for stdout in (b'', b' Could not verify signature.\n', rejection + b'extra\n',
+                                   rejection + b'\n')]
+        outcomes += [(rejection, diagnostic)
+                     for diagnostic in (b"Couldn't parse signature: invalid format\n",
+                         b'invalid format\n', b"Couldn't verify signature: invalid format extra\n",
+                         b"couldn't verify signature: invalid format\n",
+                         b" Couldn't verify signature: invalid format\n",
+                         b"Couldn't verify signature: invalid format\n\n")]
+        for stdout, stderr in outcomes:
+            with self.subTest(stdout=stdout, stderr=stderr):
+                completed = subprocess.CompletedProcess(['ssh-keygen'], 255, stdout, stderr)
                 with mock.patch.object(learning_engine.subprocess, 'run', return_value=completed):
-                    self.assertFalse(authority.verify_owner_record(self.project, self.record, b'bad-signature'))
+                    with self.assertRaises(OSError):
+                        authority.verify_owner_record(self.project, self.record, b'bad-signature')
+
+    @requirements('P9b-1', why_not_scenario='Transient and unknown stderr must leave real signed rows unchecked until an unmocked retry.')
+    def test_unallowlisted_stderr_is_not_cached_and_recovers_without_restart(self):
+        diagnostics = (b'memory allocation failed', b'libcrypto error: x', b'error in libcrypto',
+                       b'Unable to open allowed keys file F: Too many open files',
+                       b'Unable to open allowed keys file F: Input/output error',
+                       b"Couldn't read signature file: Input/output error", b'unknown extra line')
+        for number, diagnostic in enumerate(diagnostics):
+            for mixed in (False, True):
+                with self.subTest(diagnostic=diagnostic, mixed=mixed):
+                    record = self.attest(account='0123456789bcdef'[2 * number + int(mixed)])
+                    stderr = ((DETERMINISTIC_SIGNATURE_DIAGNOSTICS[0] + b'\n') if mixed else b'')
+                    completed = subprocess.CompletedProcess(['ssh-keygen'], 255,
+                        b'Could not verify signature.\n', stderr + diagnostic + b'\n')
+                    with mock.patch.object(learning_engine.subprocess, 'run', return_value=completed):
+                        self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=100))
+                        self.assertIsNone(self.ledger._connection.execute(
+                            'SELECT valid FROM temp.attestation_checks WHERE record_id=?',
+                            (record['record_id'],)).fetchone())
+                    self.assert_unchecked_then_recovered(record)
 
     @requirements('P9b-1', why_not_scenario='Infrastructure diagnostics override rejection text; ambiguous results remain unchecked and retryable.')
     def test_infrastructure_and_ambiguous_results_raise_and_leave_rows_unchecked(self):
