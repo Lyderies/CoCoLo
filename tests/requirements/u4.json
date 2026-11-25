@@ -1,0 +1,25 @@
+{
+ "authority": "docs/requirements/u4.md",
+ "requirements": [
+  {
+   "id": "O0C-U4-1",
+   "source": "tests/requirements/u4.json#O0C-U4-1",
+   "statement": "Completed, denied and expired-reserved probe histories beyond a reduced MAX_PROBE_REQUESTS preserve sealed history and replay without exhausting capacity."
+  },
+  {
+   "id": "O0C-U4-2",
+   "source": "tests/requirements/u4.json#O0C-U4-2",
+   "statement": "A genuinely running probe stays charged while expired reservations release, and fills the reduced cap with one other live request."
+  },
+  {
+   "id": "O0C-U4-3",
+   "source": "tests/requirements/u4.json#O0C-U4-3",
+   "statement": "Repeated restarted admitted probe lifecycles release exactly once on the accepted 3.3 journal and reaper evidence, preserve replay and keep live executions charged."
+  },
+  {
+   "id": "O0C-U4-4",
+   "source": "tests/requirements/u4.json#O0C-U4-4",
+   "statement": "After past-cap probe history a normal claim and billing probe succeed through the CLI and product services."
+  }
+ ]
+}
