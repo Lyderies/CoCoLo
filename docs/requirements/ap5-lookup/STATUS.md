@@ -277,3 +277,8 @@ and primary reruns listed above remain; those modules were not rerun this round.
 - `docs/requirements/ap5-lookup.md` (new)
 - `docs/requirements/ap5-lookup/STATUS.md` (new)
 - `docs/requirements/ap5-lookup/assertions.md` (new)
+
+## Primary correction after the confirming check
+The missing-index guard caught every sqlite3.Error, so a busy/locked/I-O error would read "reopen the ledger". It now maps only
+"no such index" / "no query solution" OperationalErrors; every other error keeps its existing answer. Missing-index tests and
+ledger_busy_answers stay green.

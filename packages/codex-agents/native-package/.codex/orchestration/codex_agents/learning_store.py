@@ -10255,7 +10255,10 @@ class LearningLedger:
                     f"WHERE project_id=? AND content_digest IN ({placeholders})",
                     (project_id, *linked),
                 ).fetchall()
-            except sqlite3.Error:
+            except sqlite3.OperationalError as error:
+                # Only a missing/unusable index is "reopen"; busy, locked and I/O errors keep their own answers.
+                if "no such index" not in str(error) and "no query solution" not in str(error):
+                    raise
                 raise LedgerError("candidate evidence lookup is unavailable; reopen the ledger") from None
             evidence = {
                 str(row["content_digest"]): (
@@ -10976,7 +10979,10 @@ class LearningLedger:
                     f"AND content_digest IN ({placeholders}) AND record_type='outcome'",
                     (project_id, *linked),
                 ).fetchall()
-            except sqlite3.Error:
+            except sqlite3.OperationalError as error:
+                # Only a missing/unusable index is "reopen"; busy, locked and I/O errors keep their own answers.
+                if "no such index" not in str(error) and "no query solution" not in str(error):
+                    raise
                 raise LedgerError("candidate evidence lookup is unavailable; reopen the ledger") from None
         invalidated_outcomes = {
             str(row["content_digest"])
