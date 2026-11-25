@@ -6,6 +6,8 @@ import time
 import unittest
 from unittest import mock
 
+from test_framework import requirements
+
 import tests.support  # noqa: F401
 from tests import test_project_open_scope as fixtures
 
@@ -307,6 +309,76 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
             service.drive_claims()
             self.assertLess(time.monotonic()-started, 10)
             time.sleep(.002)
+
+    @requirements('M11-1', 'M11-3', why_not_scenario='Socket-free real account owner with synthetic project registration replies.')
+    def test_M11_refused_registration_retries_the_retained_open_after_availability_refresh(self):
+        from codex_agents import client_runtime
+        from codex_agents.control_api import ControlScope
+        from codex_agents.open_scope_contracts import open_inputs_digest
+
+        p = self.reference
+        service, _ = self.wire_service()
+        endpoints = [Path('/private/tmp/m11/control.sock'), Path('/private/tmp/m11/history.sock'),
+                     Path('/private/tmp/m11/account.sock')]
+        requests = []
+
+        def exchange(path, raw, **options):
+            requests.append(account_api.decode_account_request(raw))
+            return self.pump_wire(service, service.begin(raw, self.token))
+
+        def scope(*args):
+            # A real project proof over the current original inputs; only transport is replaced.
+            p.refresh_context()
+            return p.context.project_scope
+
+        def open_run():
+            return client_runtime.open_codex_client(self.ledger.state.root, p.base.bridge.project,
+                p.request.orchestration_handle, p.base.task, p.base.route, p.base.assignment,
+                p.base.context.parent_grant, host_client='codex-host-v1')
+
+        with (mock.patch.object(client_runtime, '_hint_cause', return_value=None),
+              mock.patch.object(client_runtime, '_read_runtime_endpoints',
+                  return_value=(ControlScope(**p.base.scope.as_data()), endpoints)),
+              mock.patch.object(client_runtime, 'enroll_clients', side_effect=lambda *a, **k: {}),
+              mock.patch.object(client_runtime.HistoryClient, 'original_open_scope', side_effect=scope),
+              mock.patch.object(client_runtime.HistoryClient, 'worker_input',
+                  return_value={'worker': p.base.context.snapshot()[1]['worker']}),
+              mock.patch.object(account_api, 'exchange_frame', side_effect=exchange),
+              mock.patch.object(client_runtime, '_run_driver', side_effect=[
+                  {'protocol': 1, 'state': 'refused', 'reason_code': 'history_service_unavailable'},
+                  {'protocol': 1, 'state': 'preparing', 'reason_code': None}]) as register):
+            first = open_run()
+            self.assertFalse(first['project_host_registered'])
+            self.assertFalse(first['known'])
+            row = self.ledger._connection.execute('SELECT state,handle_digest FROM account_open_requests '
+                'WHERE run_id=?', (first['run_id'],)).fetchone()
+            self.assertEqual('committed', row['state'])
+            self.assertEqual('pending', self.ledger._connection.execute(
+                'SELECT binding_state FROM host_run_bindings WHERE run_id=?', (first['run_id'],)).fetchone()[0])
+            self.assertEqual('held', self.ledger._connection.execute(
+                "SELECT state FROM run_holds WHERE kind='binding' AND identity=?", (row['handle_digest'],)).fetchone()[0])
+            for table in ('launch_claims', 'active_run_capacity'):
+                self.assertEqual(0, self.ledger._connection.execute(
+                    'SELECT COUNT(*) FROM '+table+' WHERE run_id=?', (first['run_id'],)).fetchone()[0])
+            counts = {table: self.ledger._connection.execute('SELECT COUNT(*) FROM '+table).fetchone()[0]
+                for table in ('account_open_requests', 'account_open_receipts', 'host_run_bindings', 'run_holds',
+                              'records', 'launch_claims', 'active_run_capacity')}
+            original_digest = open_inputs_digest(p.base.assignment, p.base.task, p.base.route,
+                                                 p.base.context.parent_grant)
+            p.base.route = {**p.base.route, 'availability': {**p.base.route.get('availability', {}),
+                                                         'evaluated_at_ms': p.base.worker.fixture.base.stamp + 1000,
+                                                         'snapshot_ref': 'e'*64}}
+            p.base.context = replace(p.base.context, route=p.base.route)
+            self.assertEqual(original_digest, open_inputs_digest(p.base.assignment, p.base.task, p.base.route,
+                                                                 p.base.context.parent_grant))
+            with (mock.patch.object(self.ledger, '_clock_ms', side_effect=AssertionError('retry renewed clock')),
+                  mock.patch.object(self.jobs._intake, 'capture_admission', side_effect=AssertionError('retry admission'))):
+                retried = open_run()
+            self.assertEqual({**first, 'known': True, 'project_host_registered': True}, retried)
+            self.assertEqual(requests[0], requests[1])
+            self.assertEqual(2, register.call_count)
+            self.assertEqual(counts, {table: self.ledger._connection.execute('SELECT COUNT(*) FROM '+table).fetchone()[0]
+                                      for table in counts})
 
     def managed_lifecycle(self):
         p = self.reference

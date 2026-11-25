@@ -209,6 +209,7 @@
  "codex:tests.test_merge_library_states": "integration",
  "codex:tests.test_merge_library_table": "integration",
  "codex:tests.test_open_request_lifetime": "integration",
+ "codex:tests.test_open_retry_identity": "unit",
  "codex:tests.test_open_withdrawal": "integration",
  "codex:tests.test_open_withdrawal_successor": "integration",
  "codex:tests.test_owned_execution": "integration",

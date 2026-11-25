@@ -209,6 +209,7 @@
  "codex:tests.test_merge_library_states": "crash",
  "codex:tests.test_merge_library_table": "crash",
  "codex:tests.test_open_request_lifetime": "scenario",
+ "codex:tests.test_open_retry_identity": "unit",
  "codex:tests.test_open_withdrawal": "scenario",
  "codex:tests.test_open_withdrawal_successor": "scenario",
  "codex:tests.test_owned_execution": "scenario",
