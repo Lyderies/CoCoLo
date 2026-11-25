@@ -104,3 +104,36 @@ repeat only its failed/incomplete modules, in small named batches, with the same
 worker timeout. No full suite, install, push or merge was run. No PTY-dependent
 check was required for the terminal-list change; the terminal render unit tests
 passed. Socket-backed end-to-end checks remain unverified here.
+
+## Fix round (S2, after the primary's affected run)
+
+The primary's `--affected` run reported three failures beyond the expected
+digest pin. All three pass on the base (0.8.66).
+
+1. `tests.test_memory_holds_crash` (M1 entry-delete and transition-kill): not a
+   product interaction with the memory holds. The crash fixture starts a bare
+   child (`python -m tests.memory_holds_fixture`) that imports
+   `tests.test_codex_preparation`. This change added `from test_framework import
+   requirements` at the top of that module, before the `tests.test_bridge`
+   import that puts the scripts folder on `sys.path`, so the bare child died
+   with `ModuleNotFoundError`. Fix: the import now follows the fixtures import
+   (test-file import order only; no assertion changed, no existing test edited).
+   The memory-hold rules (M1/M2/M5) and the product code were not touched.
+2. `tests.test_b7b_budgets` (B3, 50.33 ms against the 50 ms limit): a load
+   failure, not caused by this change. B3 times `release_earlier_unarmed_leases`
+   in the account store, which this change does not touch. With machine load
+   around 8 to 20, the branch passed 2 of 3 runs and failed 1 of 3; the base
+   (0.8.66) failed 2 of 2 completed runs with the same B3 assertion.
+3. `tests.test_host_commands` `OwnRootTests.test_every_allowlisted_command_runs_under_the_exact_prefix`:
+   a temporary-directory cleanup race under load (`Directory not empty` while
+   removing the test's home state folder), not caused by this change. Run alone
+   three times each, it passed 3 of 3 on the branch and 3 of 3 on the base.
+
+No product code changed in this round.
+
+Fix-round verification (unsandboxed, 9 modules: memory_holds_crash, memory_holds,
+memory_holds_lane, b7b_budgets, host_commands, codex_preparation,
+run_driver_retries, host_slots, project_driver; 259 tests, 23 units, jobs 8, 154 s,
+machine loaded): `failed_units: []`, `metadata_errors: []`. The slow-module
+budget lines in that output (host_commands, project_driver and others) were
+over their time budgets because of load and are not test failures.

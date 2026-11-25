@@ -9,9 +9,7 @@ import time
 import unittest
 from unittest import mock
 
-from test_framework import requirements
-
-from tests import test_bridge as fixtures
+from tests import test_bridge as fixtures  # puts the repository scripts folder on sys.path
 from tests import test_project_runtime as runtime_fixtures
 
 from codex_agents import bridge, codex_preparation, codex_worker
@@ -29,6 +27,8 @@ from codex_agents.project_runtime import ProjectRuntime
 from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
 from codex_agents.service_protocol import ServiceTarget
 from tests.test_project_results import KEY
+
+from test_framework import requirements  # after the fixtures import, which adds scripts/ to sys.path (a bare child process imports this module)
 
 
 class CodexPreparationTests(unittest.TestCase):
