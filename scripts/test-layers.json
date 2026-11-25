@@ -404,5 +404,6 @@
  "codex:tests.test_u4_probe_execution_capacity": "scenario",
  "codex:tests.test_u4_probe_live_capacity": "scenario",
  "codex:tests.test_u4_probe_product_capacity": "scenario",
- "codex:tests.test_ledger_owner_wiring": "scenario"
+ "codex:tests.test_ledger_owner_wiring": "scenario",
+ "codex:tests.test_u1_orchestration_lifetime": "scenario"
 }

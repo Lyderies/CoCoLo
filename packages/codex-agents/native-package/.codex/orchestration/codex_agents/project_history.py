@@ -165,6 +165,11 @@ CREATE TABLE project_host_opens(
  FOREIGN KEY(project_id,run_handle,attempt) REFERENCES result_leases(project_id,run_handle,attempt),
  FOREIGN KEY(project_id,record_id) REFERENCES records(project_id,record_id));
 """
+# U1: optional derived index; no schema-version or record-shape change. Keep it
+# outside historical schemas so old-layout copies remain genuine.
+HOST_OPEN_ORCHESTRATION_INDEX = """CREATE INDEX project_host_opens_orchestration
+ ON project_host_opens(project_id,json_extract(CAST(binding AS TEXT),'$.orchestration_handle'),
+ json_extract(CAST(binding AS TEXT),'$.run_id'))"""
 _SCHEMA_V6 = _SCHEMA_V5 + _HOST_OPEN_SCHEMA
 _SCHEMA_V7 = _SCHEMA_V6 + CHECK_SCHEMA
 _SCHEMA_V8 = _SCHEMA_V7 + QA_SCHEMA
@@ -426,6 +431,11 @@ class ProjectHistory:
             self._fence.connection = self._connection
             self._connection._write_fence = self._fence
             self._initialize()
+            # Initialization validates the exact optional index SQL; every successful
+            # upgrade/reopen path then installs it with the normal writer fence.
+            with self._transaction():
+                self._connection.execute(HOST_OPEN_ORCHESTRATION_INDEX.replace(
+                    'CREATE INDEX ', 'CREATE INDEX IF NOT EXISTS ', 1))
             if self._result_key is not None:
                 self._initialize_results()
                 # D1 (RS-D draft 3 §6): orphan and partial context files go before anything is served.
@@ -524,7 +534,11 @@ class ProjectHistory:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         application = connection.execute("PRAGMA application_id").fetchone()[0]
         objects = connection.execute("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL").fetchall()
-        actual_schema = {_normalized_sql(row[2]) for row in objects}
+        # Only this exact derived index is optional, never an arbitrary same-named
+        # schema object. Legacy layout fixtures explicitly drop it.
+        actual_schema = {_normalized_sql(row[2]) for row in objects
+                         if not (row[0] == 'index' and row[1] == 'project_host_opens_orchestration'
+                                 and _normalized_sql(row[2]) == _normalized_sql(HOST_OPEN_ORCHESTRATION_INDEX))}
         def schema_set(schema):
             return {_normalized_sql(statement) for statement in schema.split(";") if statement.strip()}
         if pending(connection):

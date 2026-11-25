@@ -18,6 +18,7 @@ def legacy_orchestration_state_layout(store):
     store._connection._write_fence = None
     store._fence.epoch = None
     store._connection.execute("DROP TABLE IF EXISTS runtime_takeover")
+    store._connection.execute("DROP INDEX IF EXISTS project_host_opens_orchestration")  # U1 additive index
     for name in ('project_orchestrations_state', 'result_reservations_live', 'project_holds_orchestration_check',
                  'result_reservations_orchestration', 'result_leases_orchestration',
                  'project_execution_consumptions_orchestration'):  # the sixth: B6 final fix (decision 210)

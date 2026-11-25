@@ -1324,6 +1324,35 @@ def _goal_usage(snapshot):
             'goal_usage_source': 'unavailable' if tokens is None and seconds is None else 'host_reported'}
 
 
+def orchestration_lifetime_client(state_root, project_root, *, host_client, orchestration_handle,
+                                  expected_sequence, request_id, session_id, next_session_id, cause):
+    """Runner safe-point call: enroll normally, then one atomic continuation exchange.
+
+    Persist all arguments before sending. An ambiguous reply is reconciled by
+    explicitly calling again with those exact arguments; there is no auto retry.
+    Capacity checks run before each new registration or journal mutation, with
+    admission serialized by the runner until the returned handle is adopted.
+    """
+    if not matches(request_id, _ID):
+        raise RuntimeOrchestrationError('history_invalid_request', request_id=request_id)
+    try:
+        state = CollectorPaths(state_root)
+        scope, control, endpoint = read_runtime_hint(state, project_root)
+        enroll_clients(state, project_root, scope, (control, endpoint), host_client=host_client)
+        client = OrchestrationClient(endpoint, OrchestrationScope(**vars(scope)), timeout=10)
+        result = client.call('orchestration.rollover', {
+            'orchestration_handle': orchestration_handle, 'expected_sequence': expected_sequence,
+            'session_id': session_id, 'next_session_id': next_session_id, 'cause': cause}, request_id=request_id)
+        if result['current']['snapshot']['client_version'] != host_client:
+            raise HostClientMismatch('host_client_mismatch')
+        return result
+    except DispatchError:
+        raise RuntimeOrchestrationError('orchestration_client_unavailable', request_id=request_id) from None
+    except (HistoryError, HostClientMismatch) as error:
+        raise RuntimeOrchestrationError(error.reason_code, request_id=request_id,
+                                       expected_sequence=expected_sequence) from None
+
+
 def orchestration_client(state_root, project_root, operation, *, host_client, orchestration_handle=None,
                          request_id=None, expected_sequence=None, goal_tokens_used=None, goal_time_used_seconds=None,
                          status=None):
