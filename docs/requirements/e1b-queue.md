@@ -4,7 +4,8 @@ Base: `7322d61f` (0.8.64 plus U3/U4); candidate 0.8.65. Source: PLAN-0.4.0
 E1b-3/4/7 and the p38 inventory, slice 6. This slice supplies a standalone
 same-process queue, with trusted callbacks and an explicit `execute_next()` owner
 pump. It does not open a ledger, start a service, or change existing callers.
-E1b-1/2/5/6/8, lifecycle/error translation and collector wiring remain later work.
+E1b-1/2/8 and collector/service wiring remain later work. The fix round below
+adds the standalone E1b-5/6 error and shutdown contracts.
 
 ## Contract and tests
 
@@ -31,19 +32,52 @@ callback payload bytes: only trusted internal callers may submit bounded work.
 accepts a callable, never wire-selected code. Busy reasons are the existing
 `account_busy`, `open_account_busy`, or `operation_rejected`; queue causes are
 internal counters (`queue_full`, `project_full`, `project_limit`, `deadline`,
-and `abandoned` when an abandoned caller still requests an answer).
+`closed`, and `abandoned` when an abandoned caller still requests an answer).
 Counters count one terminal refusal per accepted request and each refused offer.
 Abandonment alone is not a refusal. Calling `wait()` on an abandoned handle
 answers busy and records its refusal once. Completed handles belong to callers;
 the queue releases its references and slots before setting `handled`.
 
-The owner pump binds to its first calling thread. It does no blocking wait for
-new work. Handler errors release custody and set `handled`, then propagate to
-the owner; caller error mapping belongs to the later E1b-5 integration. No
-database, file or thread creation occurs at module import or queue construction.
+The owner pump binds to its first calling thread, including an empty call.
+`wait_for_work(timeout)` supports blocking owner waits without binding it.
+Operation Exceptions return a plain error result; process-control exceptions
+stay with the owner, as defined below. No database, file or thread creation
+occurs at module import or queue construction.
 
 The unit harness forbids blocking thread waits (TF-12). Running-state tests use
 an event handoff to a synchronous frontend continuation inside the operation;
 this deterministically exercises the same custody transitions. `handled` waits
 observe ready events, and the pending caller wait is tested with a controlled
-Event wait and clock. Real thread contention remains later integration evidence.
+Event wait and clock. The fix-round component module adds event-coordinated real thread
+lifecycle evidence; ledger/service contention remains later integration work.
+
+## Fix round contract (review 040, base 7322d61f)
+
+- E1b-6 / MED-1: `close()` atomically stops admission (existing caller busy
+  reason, internal cause `closed`), signals an idle owner, and is idempotent.
+  A running callback completes whole; only then are queued callbacks refused,
+  acknowledged and released without execution. With no running callback close
+  drains immediately. Close never waits for a callback and visits at most the
+  configured retained-request bound. `drain(timeout)` closes and waits at most
+  the supplied finite nonnegative seconds for all acknowledgements, returning
+  false on timeout and true once drained; it cannot cancel a running callback.
+- E1b-5 / MED-2: catch only Exception from operations. Return a fresh plain
+  `{"ok": false, "reason_code": "operation_rejected"}` result, retaining neither
+  the exception nor its traceback. The owner continues to the next request.
+  KeyboardInterrupt/SystemExit propagate only on the owner; their handle is
+  acknowledged with the same plain error result, never a false success.
+- E1b-3 / MED-3: `wait_for_work(timeout)` uses a Condition and a finite
+  nonnegative seconds timeout; returns true for pending work, false for timeout
+  or closure. Offer and close notify waiters. Waiting does not bind the owner.
+- E1b-3 / LOW-3: refusal counters retain at most 16 caller buckets, including
+  reserved `other`; the first 15 non-reserved labels keep individual counters and
+  subsequent labels aggregate into `other`, preserving totals without eviction.
+- LOW-1 documented: first execute_next (even empty) permanently binds the owner;
+  startup code must call it only on the final owner thread.
+- LOW-2 documented: deadline wins over abandonment if both are observed before
+  a refusal is counted. An existing terminal refusal is never counted twice.
+- LOW-4 documented: an on-time result collected at/after its deadline still
+  answers busy. Future retrying adapters must keep operations idempotent.
+
+Fix-round tests are in `tests.test_ledger_owner_queue_lifecycle`; its component
+layer permits event-coordinated real threads. No sleeps or polling are used.

@@ -1,4 +1,4 @@
-"""E1b-3/4/7: bounded custody and fair scheduling for a future ledger owner.
+"""E1b-3/4/5/6/7: bounded custody and fair scheduling for a future ledger owner.
 
 Trusted same-process callers submit whole operations; the owner calls
 execute_next(). This module creates no owner thread, opens no ledger and grants
@@ -20,6 +20,7 @@ from .service_queue import MAX_PENDING_ITEMS, MAX_PROJECTS, ProjectFairQueue, Qu
 
 _PROJECT = re.compile(r"prj_[0-9a-f]{32}")
 _BUSY_REASONS = frozenset({"account_busy", "open_account_busy", "operation_rejected"})
+MAX_REFUSAL_CALLERS = 16  # Includes the reserved aggregate bucket, "other".
 
 
 @dataclass(frozen=True)
@@ -74,7 +75,7 @@ class LedgerRequestHandle:
         self._abandoned = False
         self._refusal: str | None = None
         self._response: Any = None
-        self._error: BaseException | None = None
+        self._failed = False
         self._ready = threading.Event()
         self.handled = threading.Event()
 
@@ -99,6 +100,10 @@ class LedgerOwnerQueue:
         self._pid = os.getpid()
         self._key = object()
         self._lock = threading.Lock()
+        self._work = threading.Condition(self._lock)
+        self._drained = threading.Event()
+        self._drained.set()
+        self._closed = False
         self._pending = ProjectFairQueue(QueueLimits(limits.projects, limits.per_project, 8))
         self._jobs: dict[bytes, LedgerRequestHandle] = {}
         self._projects: dict[str, int] = {}
@@ -118,6 +123,9 @@ class LedgerOwnerQueue:
         return handle
 
     def _count(self, caller: str, cause: str) -> None:
+        if (caller not in self._refusals and caller != "other"
+                and len(self._refusals) - ("other" in self._refusals) >= MAX_REFUSAL_CALLERS - 1):
+            caller = "other"
         counts = self._refusals.setdefault(caller, {})
         counts[cause] = counts.get(cause, 0) + 1
 
@@ -147,7 +155,9 @@ class LedgerOwnerQueue:
         with self._lock:
             now = self._clock_ns()
             cause = None
-            if deadline_ns <= now:
+            if self._closed:
+                cause = "closed"
+            elif deadline_ns <= now:
                 cause = "deadline"
             elif len(self._jobs) >= self._limits.requests:
                 cause = "queue_full"
@@ -169,13 +179,72 @@ class LedgerOwnerQueue:
             self._pending.offer(project_id, token)
             self._jobs[token] = handle
             self._projects[project_id] = self._projects.get(project_id, 0) + 1
+            self._drained.clear()
+            self._work.notify()
             return handle
+
+    @staticmethod
+    def _validate_timeout(timeout: float) -> None:
+        if type(timeout) not in (int, float) or not 0 <= timeout <= threading.TIMEOUT_MAX:
+            raise ValueError("invalid ledger queue timeout")
+
+    def wait_for_work(self, timeout: float) -> bool:
+        """Wait without polling; closure/timeout returns False. Does not bind owner."""
+        self._guard()
+        self._validate_timeout(timeout)
+        with self._work:
+            self._work.wait_for(
+                lambda: self._closed or self._pending.snapshot().pending > 0, timeout)
+            return not self._closed and self._pending.snapshot().pending > 0
+
+    def _acknowledge(self, token: bytes, handle: LedgerRequestHandle) -> None:
+        """Publish completion and release custody; caller holds the queue lock."""
+        handle._state = "handled"
+        del self._jobs[token]
+        remaining = self._projects[handle._project] - 1
+        if remaining:
+            self._projects[handle._project] = remaining
+        else:
+            del self._projects[handle._project]
+        handle._ready.set()
+        handle.handled.set()
+        if not self._jobs:
+            self._drained.set()
+
+    def _close_pending(self) -> None:
+        """Refuse at most limits.requests queued entries, with the lock held."""
+        while (item := self._pending.take_nowait()) is not None:
+            handle = self._jobs[item.payload]
+            self._refuse(handle, "closed")
+            self._acknowledge(item.payload, handle)
+
+    def close(self) -> None:
+        """Stop admission without waiting; finish running work before queued refusals.
+
+        Idempotent and bounded by retained capacity. Does not bind the owner.
+        A blocked callback remains the owner's responsibility; use drain(timeout)
+        to await its completion within a bounded caller wait.
+        """
+        self._guard()
+        with self._lock:
+            self._closed = True
+            self._work.notify_all()
+            if not self._executing:
+                self._close_pending()
+
+    def drain(self, timeout: float) -> bool:
+        """Close and wait up to timeout seconds for every retained acknowledgement."""
+        self._guard()
+        self._validate_timeout(timeout)
+        self.close()
+        return self._drained.wait(timeout)
 
     def execute_next(self) -> bool:
         """Owner-only nonblocking pump; True means one request was handled.
 
-        Errors propagate after releasing custody and acknowledging completion.
-        The later owner integration supplies today's error mapping/lifecycle.
+        First call, including an empty call, permanently binds the owner thread.
+        Operation Exceptions become plain error results; BaseExceptions propagate
+        only here, after releasing custody and acknowledging completion.
         """
         self._guard()
         with self._lock:
@@ -195,30 +264,25 @@ class LedgerOwnerQueue:
             handle._operation = None
             handle._state = "running"
         response = None
-        error = None
+        completed = False
         try:
             if operation is not None:
                 response = operation()
-        except BaseException as caught:
-            error = caught
-            raise
+            completed = True
+        except Exception:
+            # Never retain an exception/traceback or raise it on a second thread.
+            pass
         finally:
             with self._lock:
                 if self._clock_ns() >= handle._deadline_ns:
                     self._refuse(handle, "deadline")
                 if not handle._abandoned:
                     handle._response = response
-                    handle._error = error
-                handle._state = "handled"
-                del self._jobs[item.payload]
-                remaining = self._projects[handle._project] - 1
-                if remaining:
-                    self._projects[handle._project] = remaining
-                else:
-                    del self._projects[handle._project]
+                    handle._failed = not completed
                 self._executing = False
-                handle._ready.set()
-                handle.handled.set()
+                self._acknowledge(item.payload, handle)
+                if self._closed:
+                    self._close_pending()
         return True
 
     def wait(self, handle: LedgerRequestHandle) -> Any:
@@ -242,8 +306,8 @@ class LedgerOwnerQueue:
                 self._refuse(handle, "abandoned")
             if handle._refusal is not None:
                 raise LedgerQueueBusy(handle._busy_reason)
-            if handle._error is not None:
-                raise handle._error
+            if handle._failed:
+                return {"ok": False, "reason_code": "operation_rejected"}
             return handle._response
 
     def abandon(self, handle: LedgerRequestHandle) -> None:

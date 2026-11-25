@@ -186,6 +186,7 @@
  "codex:tests.test_ledger_busy_answers": "integration",
  "codex:tests.test_ledger_lock_limits": "integration",
  "codex:tests.test_ledger_owner_queue": "unit",
+ "codex:tests.test_ledger_owner_queue_lifecycle": "integration",
  "codex:tests.test_ledger_startup": "unit",
  "codex:tests.test_ledger_waits": "unit",
  "codex:tests.test_legacy_capacity_upgrade": "integration",

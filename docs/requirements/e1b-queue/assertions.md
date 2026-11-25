@@ -23,3 +23,17 @@ layer, not a relaxation of queue behavior or a guard bypass.
 
 Real threaded contention belongs to later owner integration. This slice makes
 no claim of a process/thread stress run.
+
+## Fix round
+
+No assertions from the reviewed commit are changed or removed. The new
+BaseException test initially escaped the unittest worker when the buggy caller
+re-raised KeyboardInterrupt. Its `assertEqual(queue.wait(handle), ERROR)` is
+replaced by `assertEqual(error_result(handle), ERROR)`: the helper turns any
+caller BaseException into an assertion failure, retaining the identical plain
+result assertion and allowing all red tests to finish. Runtime code was still
+unchanged for this fixture correction.
+
+The wakeup tests additionally assert that Condition.wait returned true (notified),
+so a timeout followed by discovery of pending work/closure cannot pass. These
+are added assertions; no reviewed assertion was removed or weakened.
