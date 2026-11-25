@@ -138,6 +138,11 @@ The command needs the shared ledger to itself, and a child is running (or its se
 not yet settled it) in some project. Nothing was stopped. Wait for the child to finish, or ask the
 primary to cancel it, and run the command again.
 
+An update (`./setup.sh --update`) asks first, before it installs anything: with a child running and an earlier version's
+collector or project service to replace, it stops in step 2 with `child_run_active` and the same words, and changes nothing. Run
+it again when the child has finished. (A child that starts in the few seconds between that check and step 5 is refused at
+step 5; setup then says that step 4 had already updated the project's files and to run the update again.)
+
 ## `ledger_upgrade_required`, or "these records were written by an earlier version"
 
 Your orchestrator records come from an earlier version. Nothing was stopped or changed. Run `./setup.sh`

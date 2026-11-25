@@ -301,6 +301,61 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
         self.assertIn("project_service_other_version", screen)
         self.assertEqual(0, self.attested())  # stopped at the collector step
 
+    # UPDFIX (L12.3) ----------------------------------------------------------------------------------
+
+    CHILD = '{"ready": true, "children_running": true, "would_replace": true, "refused": true}'
+
+    def snapshot(self, project: Path) -> tuple:
+        """The manifest's bytes, Git's HEAD and the commit count: what a refused update must leave alone."""
+        import subprocess
+        manifest = project / ".codex" / "orchestration" / "install-manifest.json"
+        head = subprocess.run(["git", "-C", str(project), "rev-parse", "HEAD"], capture_output=True, text=True,
+                              env=self.env).stdout.strip()
+        return manifest.read_bytes(), head, self.commit_count(project)
+
+    def test_UPDFIX_3_an_update_with_a_child_running_is_refused_before_anything_is_installed(self):
+        project = self.installed()
+        before = self.snapshot(project)
+        code, screen = self.update(project, {**REGISTERED, "FAKE_CHILDREN": self.CHILD})
+        flat = " ".join(screen.split())
+        self.assertEqual(1, code, screen[-1500:])
+        self.assertIn("child_run_active", flat)
+        for words in ("a child run is active", "nothing was changed", "try again when none is running"):
+            self.assertIn(words, flat)
+        self.assertEqual(before, self.snapshot(project))  # no file written, nothing committed
+        self.assertNotIn("Installing", screen)  # the installer never ran
+        self.assertEqual(0, self.attested())
+        calls = (self.base / "register.log").read_text().splitlines()
+        self.assertEqual(1, len(calls))  # only the read-only check: nothing was registered or started
+        self.assertIn("learning-update-check", calls[0])
+        self.assertIn(str(project), calls[0])
+
+    def test_UPDFIX_3_a_check_that_does_not_refuse_leaves_the_update_as_it_was(self):
+        project = self.installed()
+        for reply in ('{"ready": true, "children_running": true, "would_replace": false, "refused": false}',
+                      '{"ready": true, "children_running": false, "would_replace": true, "refused": false}',
+                      "not json at all"):
+            with self.subTest(reply=reply):
+                code, screen = self.update(project, {**REGISTERED, "FAKE_CHILDREN": reply})
+                self.assertEqual(0, code, screen[-1500:])
+                self.assertNotIn("child_run_active", screen)
+
+    def test_UPDFIX_3_a_refused_project_is_not_remembered(self):
+        project = self.installed()
+        listed = self.home / ".local" / "state" / "codex-agents" / "installer" / "setup-projects"
+        listed.write_text("")
+        code, _ = self.update(project, {**REGISTERED, "FAKE_CHILDREN": self.CHILD})
+        self.assertEqual(1, code)
+        self.assertEqual("", listed.read_text())
+
+    def test_UPDFIX_4_a_child_that_started_later_is_told_the_files_were_already_updated(self):
+        project = self.installed()
+        code, screen = self.update(project, {"FAKE_REGISTER_BUSY": "1"})
+        flat = " ".join(screen.split())
+        self.assertEqual(1, code, screen[-1500:])
+        self.assertIn("had already updated this project's files in step 4", flat)
+        self.assertIn("run the update again when no child is running", flat)
+
 
 def load_tests(loader, tests, pattern):
     """Only the tests defined here; the inherited terminal tests run in their own modules."""

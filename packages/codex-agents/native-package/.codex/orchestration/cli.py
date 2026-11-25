@@ -139,6 +139,8 @@ from codex_agents.admission_metadata import api_keys_present  # noqa: E402
 from codex_agents.host_paths import PYTHON_ISOLATION_FLAGS  # noqa: E402
 from codex_agents.cli_reports import command_report, unavailable_cycle  # noqa: E402
 from codex_agents.collector_contracts import (  # noqa: E402
+    CollectorBuildConflictError,
+    CollectorUpgradeRequired,
     CollectorError,
     CollectorTransportError,
     CollectorRestartError,
@@ -579,6 +581,44 @@ def _replace_other_version_host(args):
     except CollectorError as error:
         raise CollectorRestartError(_COLLECTOR_RESTART_ERROR) from error
     return replaced
+
+
+def _update_check_report(state_root, project_root):
+    """UPDFIX-2 (L12.3): whether an update of this project would be refused for a running child, read only.
+
+    The collector's own rule for its drained stop (`CollectorMaintenance.acquire`, `_replace_other_version_host`): a child may
+    be running when the ledger holds an unreleased claim that is not long crashed (a run admitted but never claimed has no
+    child). The update would have to stop the collector when the one running is not this build, and withdraw the project's
+    service when another version started it. Setup asks this BEFORE it installs anything, so a refusal changes nothing.
+    Nothing is stopped, started, written or created here; whatever cannot be read leaves that fact false and the later
+    steps decide as they always did.
+    """
+    from codex_agents.learning_source_image import _drained
+
+    children = False
+    replace = False
+    try:
+        state = LearningState(state_root, create=False)
+        client = CollectorClient(state.socket)
+        try:
+            client.health()
+        except (CollectorUpgradeRequired, CollectorBuildConflictError):
+            replace = True
+        except CollectorError:
+            pass  # not running, or newer than this build: nothing here can replace it
+        if not replace and other_version_host(state_root, project_root) is not None:
+            replace = True
+        connection = sqlite3.connect(state.database.as_uri() + "?mode=ro", uri=True, timeout=5)
+        try:
+            _drained(connection, time.time_ns() // 1_000_000, children_only=True)
+        except HistoryError:
+            children = True
+        finally:
+            connection.close()
+    except (StateError, OSError, sqlite3.Error, ValueError):
+        pass
+    return {"ready": True, "children_running": children, "would_replace": replace,
+            "refused": children and replace}
 
 
 from codex_agents.learning_migration import START_REASONS, clear_start_failure, record_start_failure  # noqa: E402
@@ -1846,6 +1886,13 @@ def build_parser() -> argparse.ArgumentParser:
     learning_start_service.add_argument("--state-root", type=Path)
     learning_start_service.add_argument("--project-root", required=True, type=Path)
 
+    learning_update_check = subparsers.add_parser(
+        "learning-update-check",
+        help="read only: would an update of this project be refused for a running child (setup asks before it installs)",
+    )
+    learning_update_check.add_argument("--state-root", type=Path)
+    learning_update_check.add_argument("--project-root", required=True, type=Path)
+
     learning_status = subparsers.add_parser(
         "learning-status", help="report persistent collector and redacted client health"
     )
@@ -2787,6 +2834,8 @@ def main() -> int:
                               error="this project's service did not start; run learning-status for the collector")
                 _print(report)
                 return 2
+        elif args.command == "learning-update-check":
+            report = _update_check_report(args.state_root, args.project_root)
         elif args.command == "learning-status":
             _start_collector_quietly(args)
             report = status_client(args.state_root, args.project_root)

@@ -26,6 +26,11 @@ GIT_READ_ONLY = {("--version",), ("rev-parse", "--show-toplevel"), ("rev-parse",
 GIT_ENV = {"xcrun_nocache": "1", "GIT_ALLOW_PROTOCOL": "", "GIT_NO_LAZY_FETCH": "1"}
 CLAUDE_MODELS_ALL = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")
 FAIL_HINT_DEFAULT = "Press ? to see what ran in this step and why it stopped."
+# UPDFIX-3: the words of the collector's own refusal, said before anything is installed.
+CHILD_REFUSAL = "a child run is active; nothing was changed, try again when none is running"
+# UPDFIX-4: a child that started after that check and was refused at the collector step, when step 4 had already run.
+CHILD_STARTED_LATER = ("A child run started while this update was running. Setup had already updated this project's "
+                       "files in step 4: run the update again when no child is running.")
 COMMIT_MSG_1 = "Install COCOLO"
 COMMIT_MSG_2 = "Adds the managed Codex and Claude agent packages and the provider routing configuration."
 PROFILE_CONTENT = 'sandbox_mode = "workspace-write"\n\n[sandbox_workspace_write]\nnetwork_access = true'
@@ -546,6 +551,17 @@ class Wizard:
             return "Uncommitted changes exist in managed paths (.codex, .agents, .claude). Commit or discard them first."
         return ""
 
+    def child_would_refuse_update(self, folder: str) -> bool:
+        """UPDFIX-2: this clone's read-only `learning-update-check` says a child is running AND the update would have to
+        replace the collector or the project's service (which it can only do with no child running). Anything it cannot
+        say does not refuse here: step 5 decides as before."""
+        done = self.t.call(self.python_argv(str(CLONE_CLI), "learning-update-check", "--project-root", folder))
+        try:
+            reply = json.loads(done.stdout)
+        except ValueError:
+            return False
+        return done.returncode == 0 and isinstance(reply, dict) and reply.get("refused") is True
+
     def prepare_project_inputs(self, folder: str) -> None:
         self.install_opts = []
         inputs = self.logdir / "inputs"
@@ -679,6 +695,16 @@ class Wizard:
                 if self.update:
                     raise Stop(1, "The update stopped (managed_files_uncommitted): " + problem + " Nothing was changed.")
                 self.choose_another()
+                default = folder
+                continue
+            if self.install_exists and self.child_would_refuse_update(folder):
+                # UPDFIX-1, UPDFIX-3 (L12.3): decided before the installer writes or commits anything.
+                t.list_add("fail", folder)
+                t.list_sub(CHILD_REFUSAL)
+                if self.update:
+                    raise Stop(1, "The update stopped (child_run_active): " + CHILD_REFUSAL + ".")
+                self.record_failure("a child run is active", "nothing was changed; try again when none is running")
+                self.choose_another(CHILD_REFUSAL)
                 default = folder
                 continue
             if self.install_exists and self.update:  # Accepted: remembered now (review 040-s1-update).
@@ -1227,6 +1253,9 @@ class Wizard:
         if status != 0:
             self.failure_detail("Collector registration failed")
             self.version_hint()
+            if steps.get(self.last_reply, "reason_code") == "collector_busy" or "a child run is active" in steps.raw(self.last_reply):
+                # UPDFIX-4: a child that started after step 2's check; step 4 has already updated the project.
+                t.list_sub(CHILD_STARTED_LATER)
             for line in lines[1:]:
                 t.list_sub(line)
             self.mark_step(5, "fail", "registration failed")
