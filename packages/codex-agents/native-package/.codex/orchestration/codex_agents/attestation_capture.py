@@ -150,14 +150,23 @@ def sweep(ledger, batch, cited_sql):
     with ledger._held():
         if ledger._readers() or connection.in_transaction:
             return 0
-        owner = ledger._owner_generation_locked()
-        signer = ledger._current_signer_bytes()
-        if owner is None or owner[1] != signer:
-            return 0
         after = getattr(ledger, '_attestation_sweep_after', 0)
         rows = connection.execute(
             _ROW_SELECT + "WHERE r.record_type='billing_attestation' AND r.rowid>? ORDER BY r.rowid LIMIT ?",
             (MAX_RECORD_BYTES, after, batch)).fetchall()
+        if not rows:
+            ledger._attestation_sweep_after = 0
+            # An empty inspection page can still have pending deletions from a
+            # previous pass. Neither cursor needs owner inputs when both are empty.
+            if connection.execute(
+                    'SELECT 1 FROM temp.attestation_checks WHERE current=1 AND superseded=1 LIMIT 1'
+            ).fetchone() is None:
+                ledger._attestation_due_after = 0
+                return 0
+        owner = ledger._owner_generation_locked()
+        signer = ledger._current_signer_bytes()
+        if owner is None or owner[1] != signer:
+            return 0
         pending = []
         for row in rows:
             values = tuple(row)
@@ -197,6 +206,11 @@ def sweep(ledger, batch, cited_sql):
 
     with ledger._held():
         if ledger._readers() or connection.in_transaction:
+            return 0
+        if not verdicts and connection.execute(
+                'SELECT 1 FROM temp.attestation_checks WHERE current=1 AND superseded=1 LIMIT 1'
+        ).fetchone() is None:
+            ledger._attestation_due_after = 0
             return 0
         if ledger._owner_generation_locked() != owner or ledger._current_signer_bytes() != signer:
             return 0
