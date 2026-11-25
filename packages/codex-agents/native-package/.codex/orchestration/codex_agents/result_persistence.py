@@ -1230,7 +1230,7 @@ class ResultPersistenceLane:
         return self._queue_counted(_EarlierLeases('memory', arguments=(operation, arguments)),
                                    '_earlier_held', EARLIER_SLOTS)
 
-    def retire_memory_after_stop(self, instance):
+    def retire_memory_after_stop(self, instance, pending=None):
         """Owner after every runtime thread stopped; never callable on a serving writer."""
         self._check_owner()
         if not self._closed or self._fault or self._writer.is_alive():
@@ -1238,7 +1238,7 @@ class ResultPersistenceLane:
         store = self._open()
         try:
             from .memory_holds import retire_instance
-            return retire_instance(store, instance)
+            return retire_instance(store, instance, pending)
         finally:
             store.close()
 

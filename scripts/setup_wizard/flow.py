@@ -1252,6 +1252,8 @@ class Wizard:
         while True:
             self.run_owner_cli(label, "learning-status", "--project-root", self.project, draw=draw)
             draw = None
+            for warning in steps.status_warnings(self.last_reply):
+                self.t.list_add("warn", warning)
             if steps.get(self.last_reply, "ready") == "true":
                 return True
             if steps.get(self.last_reply, "reason_code") not in ("status_collector_transport_unavailable",

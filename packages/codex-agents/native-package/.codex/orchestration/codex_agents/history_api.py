@@ -363,9 +363,11 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
                        or not valid_integer(value['live'], maximum=1 << 32)
                        or (value['limit'] is not None and not valid_integer(value['limit'], minimum=1, maximum=1 << 32))
                        for name, value in result.items() if name != 'run_slots')
-                or ('run_slots' in result and (type(slots) is not dict or set(slots) - {'warm_up'} != {'stuck', 'limit'}
+                or ('run_slots' in result and (type(slots) is not dict or set(slots) - {'warm_up', 'cleanup_pending', 'cleanup_unlocated'} != {'stuck', 'limit'}
                                                or not valid_integer(slots['stuck'], maximum=64)
                                                or not valid_integer(slots['limit'], minimum=1, maximum=64)
+                                               or ('cleanup_pending' in slots and not valid_integer(slots['cleanup_pending'], maximum=64))
+                                               or ('cleanup_unlocated' in slots and not valid_integer(slots['cleanup_unlocated'], maximum=64))
                                                or ('warm_up' in slots and not _warm_up_shape(slots['warm_up']))))):
             raise HistoryError('history_invalid_response')
     elif operation == 'history.orchestration_report':

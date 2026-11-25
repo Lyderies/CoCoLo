@@ -150,18 +150,157 @@ class GivenBackPreparationTests(unittest.TestCase):
         self.assertEqual(([], {}), (value._giving_back, value._cleanup_retry))
 
 
-    def test_a_removal_that_keeps_being_refused_is_asked_a_bounded_number_of_times_and_kept(self):
+    @requirements('PREPCLEAN-2')
+    def test_PREPCLEAN_2_retries_continue_past_twelve_with_capped_monotone_backoff(self):
         value = driver()
         value._giving_back = ['preparation']
-        value._preparation.snapshot.side_effect = lambda handle: {'state': 'unknown'}
+        value._preparation.snapshot.return_value = {'state': 'unknown'}
         value._preparation.retry_cleanup.side_effect = project_driver.PreparationError('preparation_busy')
-        for _ in range(project_driver.MAX_CLEANUP_ATTEMPTS + 5):
+        pauses = []
+        for number in range(20):
+            before = value._clock.now
             value._retire_given_back()
-            value._clock.now += project_driver.CLEANUP_RETRY_MAX_SECONDS
-        self.assertEqual(project_driver.MAX_CLEANUP_ATTEMPTS, value._preparation.retry_cleanup.call_count)
-        # Its workspace may still be there, so it is kept rather than counted free.
+            self.assertEqual(number + 1, value._preparation.retry_cleanup.call_count)
+            _, deadline = value._cleanup_retry['preparation']
+            pauses.append(deadline - before)
+            value._clock.now = deadline - .001
+            value._retire_given_back()
+            self.assertEqual(number + 1, value._preparation.retry_cleanup.call_count)
+            value._clock.now = deadline
+        self.assertEqual([1., 2., 4., 8., 16., 32.] + [60.] * 14, pauses)
         self.assertEqual(['preparation'], value._giving_back)
         value._preparation.retire.assert_not_called()
+        # A long-lived job keeps a bounded delay rather than an ever-growing exponent/counter.
+        self.assertLessEqual(value._cleanup_retry['preparation'][0], project_driver.CLEANUP_RETRY_MAX_SECONDS)
+        value._preparation.snapshot.return_value = {'state': 'cleaned'}
+        value._retire_given_back()
+        self.assertEqual(([], {}), (value._giving_back, value._cleanup_retry))
+        value._preparation.retire.assert_called_once_with('preparation')
+
+
+class CleanupWarningTests(unittest.TestCase):
+    @requirements('PREPCLEAN-3')
+    def test_PREPCLEAN_3_plain_warning_and_clear(self):
+        from tests.test_bridge import cli
+        warning = ('A preparation folder could not be removed. The project service keeps retrying in the '
+                   'background and holds its slot until removal is confirmed.')
+        pending = cli._service_slots({'stuck': 1, 'limit': 3, 'cleanup_pending': 1})
+        self.assertEqual([warning], pending['warnings'])
+        self.assertIn(warning, pending['summary'])
+        self.assertFalse(pending['replaced_when_idle'])
+        cleared = cli._service_slots({'stuck': 0, 'limit': 3, 'cleanup_pending': 0})
+        self.assertEqual([], cleared['warnings'])
+        self.assertNotIn(warning, cleared['summary'])
+        # Older capacity reports remain readable and do not invent a warning.
+        self.assertEqual([], cli._service_slots({'stuck': 0, 'limit': 3})['warnings'])
+
+    @requirements('PREPCLEAN-3')
+    def test_PREPCLEAN_3_summary_never_promises_replacement_while_cleanup_is_pending(self):
+        from tests.test_bridge import cli
+        pending = cli._service_slots({'stuck': 1, 'limit': 3, 'cleanup_pending': 1})
+        self.assertFalse(pending['replaced_when_idle'])
+        for text in ('replaced by a fresh service', 'once no run is under way'):
+            self.assertNotIn(text, pending['summary'])
+        self.assertIn('not be replaced automatically', pending['summary'])
+        # Without a pending folder the promise is true, and is still made.
+        clear = cli._service_slots({'stuck': 1, 'limit': 3, 'cleanup_pending': 0})
+        self.assertTrue(clear['replaced_when_idle'])
+        self.assertIn('replaced by a fresh service', clear['summary'])
+
+    @requirements('PREPCLEAN-3')
+    def test_PREPCLEAN_3_a_folder_without_a_known_location_is_named_in_the_warning(self):
+        from tests.test_bridge import cli
+        status = cli._service_slots({'stuck': 0, 'limit': 3, 'cleanup_pending': 2, 'cleanup_unlocated': 1})
+        self.assertEqual(2, len(status['warnings']))
+        self.assertIn('1 of these folders has no known location', status['warnings'][1])
+        self.assertIn('location', status['warnings'][1])
+        self.assertIn('restart', status['warnings'][1])
+        self.assertEqual(1, status['cleanup_unlocated'])
+        # Only folders it can name are described by the first sentence alone.
+        located = cli._service_slots({'stuck': 0, 'limit': 3, 'cleanup_pending': 1, 'cleanup_unlocated': 0})
+        self.assertEqual(1, len(located['warnings']))
+        self.assertEqual(0, cli._service_slots({'stuck': 0, 'limit': 3})['cleanup_unlocated'])
+
+
+class InheritedRemovalTests(unittest.TestCase):
+    """PREPCLEAN-4: the successor service continues a folder removal the earlier service recorded."""
+
+    def inherited(self, folders):
+        from concurrent.futures import Future
+        value = driver()
+        value._memory = mock.Mock()
+        value._memory_start = SimpleNamespace(state='done')
+        value._journal = SimpleNamespace(instance='a' * 32)
+        value.warm_up = lambda: ('ready', 0, None, None)  # start-up checks done
+        value._removals, value._removals_asked = {}, None
+        value._removals_loaded, value._removals_full = False, False
+        value._removal_proofs = {}
+
+        class Inline:
+            def submit(self, function, *arguments):
+                future = Future()
+                future.set_result(function(*arguments))
+                return future
+
+        value._removal_pool = Inline()
+        requests = []
+
+        def hold(operation, *arguments):
+            requests.append((operation, arguments))
+            if operation == 'removal_proven':  # as the store: a proven record is no longer offered
+                folders[:] = [record for record in folders if record[0] != arguments[0]]
+            result = list(folders) if operation == 'pending_removals' else None
+            return SimpleNamespace(state='done', result=result, reason=None)
+
+        value._runtime.persistence.memory_hold.side_effect = hold
+        return value, requests
+
+    @requirements('PREPCLEAN-4')
+    def test_PREPCLEAN_4_inherited_removal_retries_with_capped_backoff_until_proven(self):
+        from codex_agents import codex_preparation
+        value, requests = self.inherited([('identity-1', '/scratch/prepare-x')])
+        calls = []
+        refuse = [True]
+
+        def removal(path):
+            calls.append(value._clock.now)
+            return not refuse[0]
+
+        with mock.patch.object(codex_preparation, 'remove_recorded_workspace', removal):
+            value._step_removals()  # asks the store for the recorded removals; the next step has them
+            pauses = []
+            for number in range(20):
+                value._step_removals()
+                self.assertEqual(number + 1, len(calls))
+                self.assertEqual(1, value.pending_cleanup())  # the warning stays while it is pending
+                deadline = value._removals['identity-1'][2]
+                pauses.append(deadline - value._clock.now)
+                value._clock.now = deadline - .001
+                value._step_removals()
+                self.assertEqual(number + 1, len(calls))  # nothing asked before its deadline
+                value._clock.now = deadline
+            self.assertEqual([1., 2., 4., 8., 16., 32.] + [60.] * 14, pauses)
+            self.assertNotIn('removal_proven', [name for name, _ in requests])
+            refuse[0] = False
+            value._step_removals()
+        self.assertEqual(0, value.pending_cleanup())
+        self.assertEqual([('removal_proven', ('identity-1',))], [r for r in requests if r[0] == 'removal_proven'])
+
+
+    @requirements('PREPCLEAN-4')
+    def test_PREPCLEAN_4_a_full_read_is_asked_again_once_every_record_is_done(self):
+        from codex_agents import codex_preparation
+        value, requests = self.inherited([('identity-1', '/scratch/prepare-a'), ('identity-2', '/scratch/prepare-b')])
+        with mock.patch.object(project_driver, 'MAX_PENDING_REMOVALS', 2), \
+                mock.patch.object(codex_preparation, 'remove_recorded_workspace', return_value=True):
+            for _ in range(6):
+                value._step_removals()
+        asked = [name for name, _ in requests if name == 'pending_removals']
+        # Both were found (the bound), both proven, so the store is asked for any further records.
+        self.assertGreaterEqual(len(asked), 2)
+        self.assertEqual(2, len([name for name, _ in requests if name == 'removal_proven']))
+        self.assertEqual(0, value.pending_cleanup())
+
 
 class RetiredMonitorSlotTests(unittest.TestCase):
     BINDING = ('binding',)
@@ -214,18 +353,30 @@ class StuckSlotTests(unittest.TestCase):
         value._dispatch = SimpleNamespace(_jobs={})
         return value
 
-    def test_M4_a_preparation_whose_removal_was_given_up_is_kept_and_counted_stuck(self):
+    @requirements('PREPCLEAN-2')
+    def test_M4_pending_cleanup_keeps_custody_and_defers_replacement(self):
         value = self.stuck_driver()
         value._giving_back = ['preparation']
-        value._preparation.snapshot.side_effect = lambda handle: {'state': 'unknown'}
+        value._preparation.snapshot.return_value = {'state': 'unknown'}
         value._preparation.retry_cleanup.side_effect = project_driver.PreparationError('preparation_busy')
         self.assertEqual(0, value.stuck_slots())
-        for _ in range(project_driver.MAX_CLEANUP_ATTEMPTS + 1):
+        for _ in range(14):
             value._retire_given_back()
             value._clock.now += project_driver.CLEANUP_RETRY_MAX_SECONDS
-        self.assertEqual(['preparation'], value._giving_back)  # kept: its workspace may still be there
+        self.assertEqual(14, value._preparation.retry_cleanup.call_count)
+        self.assertEqual(['preparation'], value._giving_back)
+        self.assertEqual(0, value.stuck_slots())
+        self.assertFalse(value.replace_when_idle())
+        stranded = fencing_run(state='failed', receipt={'state': 'claimed'})
+        value._runs[stranded.key] = stranded
+        value._dispatch._jobs = dict.fromkeys(range(project_driver.DISPATCH_SLOTS))
         self.assertEqual(1, value.stuck_slots())
+        self.assertFalse(value.replace_when_idle())
+        self.assertFalse(value.exhausted())
+        value._preparation.snapshot.return_value = {'state': 'cleaned'}
+        value._retire_given_back()
         self.assertTrue(value.replace_when_idle())
+        self.assertTrue(value.exhausted())
 
     def test_M7_a_monitor_attempt_given_up_is_counted_stuck(self):
         value = self.stuck_driver()
@@ -460,3 +611,4 @@ class MemoryHoldLimitTests(unittest.TestCase):
             value._release_registers()
             self.assertEqual([], value._register_waiting)
             self.assertEqual([1, 2, 3], [call.args[2]['attempt'] for call in value._answer.call_args_list])
+

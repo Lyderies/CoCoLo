@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import queue
+import stat
 import threading
 
 from .preparation_reasons import PREPARATION_STAGE_REASONS
@@ -128,12 +129,41 @@ def preparation_payload(prospective, project_root, bundle_root, environ, *, expe
 def _remove(workspace):
     try:
         remove_private_directory(workspace)
+    except BaseException:
+        pass
+    # The remover may raise ENOENT for a child. Only observing this directory's
+    # absence proves cleanup, whatever the remover returned or raised.
+    try:
         workspace.lstat()
     except FileNotFoundError:
         return True
     except BaseException:
         pass
     return False
+
+
+def remove_recorded_workspace(recorded):
+    """Remove a folder an earlier service recorded as not yet removed (PREPCLEAN-4); True once it is observed absent.
+
+    The record is data from the store, never trusted as a path: only this host's own preparation folder (a real
+    directory of this user, named `prepare-*`, directly in the scratch container) is removed. A record that names
+    anything else is not ours and has nothing to remove (True). Something else standing where our folder was (a link,
+    a file, another owner's entry) is left alone and is not proof of removal (False)."""
+    try:
+        path = Path(recorded)
+        container = Path(os.path.realpath(bridge.scratch_base())) / bridge.SCRATCH_CONTAINER
+        if (not path.is_absolute() or '..' in path.parts or not path.name.startswith('prepare-')
+                or path.parent != container):
+            return True
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            return True
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or os.path.realpath(container) != str(container):
+            return False
+    except Exception:
+        return False
+    return _remove(path)
 
 
 def _worker_input(prospective, endpoint, supplied=None):
@@ -436,6 +466,18 @@ class CodexPreparationLane:
             except queue.Full:
                 job.state = 'unknown'
                 raise PreparationError() from None
+
+    def workspace_of(self, handle):
+        """The folder of a given-back preparation whose removal is not observed, or None (PREPCLEAN-4)."""
+        job = self._job(handle)
+        with self._lock:
+            return job.workspace if job.state == 'unknown' and job.cancelled else None
+
+    def unlocated(self, handle):
+        """Whether a given-back preparation's removal is unconfirmed and no folder is known for it (PREPCLEAN-3)."""
+        job = self._job(handle)
+        with self._lock:
+            return job.state == 'unknown' and job.cancelled and job.workspace is None
 
     def retire(self, handle):
         job = self._job(handle)

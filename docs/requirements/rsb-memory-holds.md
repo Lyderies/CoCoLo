@@ -58,6 +58,12 @@ M2/M5 graceful-stop boundary: graceful stop retires preparations whose workspace
 cleanup is unknown and records `retired`, even if their workspace remains on
 disk. Memory holds account for in-process capacity, so M2 retains those holds
 while running and M5 releases them after actual in-process retirement at stop.
+PREPCLEAN-4 adds one thing to that boundary without changing it: the preparation row's
+evidence also records the folder (`removal: pending`, `workspace`) when removal is first
+refused and, at the graceful stop, for each preparation still owed. The memory hold is
+released as before; the record stays in the tombstone, and a successor service keeps
+retrying the removal and the warning until the folder is observed absent
+([prep-cleanup.md](prep-cleanup.md)).
 
 M4/M5 recovery limitation: if two services run for one project, an instance can
 start, take memory rows and die between another service's recover passes. Its

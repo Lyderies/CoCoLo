@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(1, str(ORCHESTRATION))
 
 from setup_wizard import steps  # noqa: E402
+from test_framework import requirements  # noqa: E402
 
 
 class BillingCurrentTests(unittest.TestCase):
@@ -605,3 +606,26 @@ class RoutingBridgeTests(unittest.TestCase):
                               (b'not json', False)):
             with self.subTest(raw=raw):
                 self.assertIs(expected, steps.routing_bridges(raw))
+
+
+class StatusWarningTests(unittest.TestCase):
+    @requirements('PREPCLEAN-3')
+    def test_PREPCLEAN_3_status_warning_list(self):
+        warning = ('A preparation folder could not be removed. The project service keeps retrying in the '
+                   'background and holds its slot until removal is confirmed.')
+        self.assertEqual([warning], steps.status_warnings({'project_service': {'warnings': [warning]}}))
+        self.assertEqual([], steps.status_warnings({'project_service': {'warnings': []}}))
+        self.assertEqual([], steps.status_warnings({}))
+
+    @requirements('PREPCLEAN-3')
+    def test_PREPCLEAN_3_status_warning_reaches_terminal_list(self):
+        from unittest import mock
+        from setup_wizard import flow
+        wizard = object.__new__(flow.Wizard)
+        wizard.t = mock.Mock()
+        wizard.project = 'fixture-project'
+        wizard.collector_ready_seconds = 1
+        wizard.last_reply = {'ready': True, 'project_service': {'warnings': ['Preparation cleanup warning.']}}
+        wizard.run_owner_cli = mock.Mock()
+        self.assertTrue(wizard.wait_collector_ready())
+        wizard.t.list_add.assert_called_once_with('warn', 'Preparation cleanup warning.')

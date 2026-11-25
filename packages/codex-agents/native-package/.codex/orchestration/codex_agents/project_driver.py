@@ -51,11 +51,13 @@ O0c M1, M3, M4, M7: every way a run ends gives back every host slot it took. An
 execution that provably never launched is clean once its worker returns, so the
 normal release frees it; a preparation whose removal did not finish at retirement
 is given back and its removal retried. What nothing here can free (a run failed
-after its claim was admitted, a child whose cleanup is unconfirmed, a removal or a
+after its claim was admitted, a child whose cleanup is unconfirmed, or a
 monitor slot given up) keeps its slot, since a process may live, and is counted
 (`stuck_slots`, shown in learning-status): the host is then replaced once idle, at
 once if no slot is left, and the stopping service settles those runs on the
-kernel's evidence, or the next one does.
+kernel's evidence, or the next one does. Decision 309: pending preparation folder
+cleanup keeps retrying with capped backoff and defers automatic replacement until
+observed removal and retirement, retaining its slot and memory holds meanwhile.
 
 D1 (RS-D D5): nothing a later record, verifier or QA needs is kept here. The run's record context (its assignment,
 task, route, the client capability it was prepared with and its host class) is stored with its lease by the project
@@ -84,13 +86,14 @@ from .codex_preparation import (
     preparation_payload,
 )
 from .collector_client import COLLECTOR_RUNTIME_DIGEST
-from . import container_launch
+from . import codex_preparation, container_launch
 from .container_recovery import ContainerRecovery
 from .recovery_report import EXPIRY_SECONDS, RECOVERY_REASONS
 from .control_api import ControlScope
 from .dispatch_api import dispatch_request_digest
 from .execution_grant import ExecutionRegistrationInput, checked_execution_grant
 from .history_contracts import AttemptBinding, HistoryError, _DIGEST, _ID, matches
+from .project_holds_schema import attempt_identity
 from .host_open_contracts import OpenProvenanceInput
 from .hosts import HOST_CLIENTS
 from .launch_journal import JournalError, LaunchJournal, new_process_token, tree_state
@@ -168,10 +171,11 @@ FENCE_OUTAGES = frozenset({'account_unavailable', 'account_closed_without_reply'
 # never forgotten, so its slot then stays taken, and the host is replaced once idle (O0c M7).
 CLEANUP_RETRY_SECONDS = 1.0
 CLEANUP_RETRY_MAX_SECONDS = 60.0
-# After this many refused removals a given-back preparation is no longer asked: it
-# stays listed (its workspace may still be there), so its place is never counted free.
-MAX_CLEANUP_ATTEMPTS = 12
+# Decision 309: preparation removal keeps being retried while this host owns it.
+# Save a capped delay, never an unbounded attempt count/exponent.
 MAX_FORGET_ATTEMPTS = 12
+# PREPCLEAN-4: recorded folder removals read from the store at one time (the capacity report's run-slot bound).
+MAX_PENDING_REMOVALS = 64
 # O10 D4: a result publication that failed while this service runs is retried from the packet
 # the writer still holds, after this long, doubling up to the cap, until it commits or the
 # run's own deadline (its claim's `deadline_at_ms`) passes. These refusals can never succeed
@@ -360,6 +364,9 @@ class _RateLimitRecorder:
 
 class RunDriver:
     _memory = None
+    # PREPCLEAN-4: read-only until __init__ gives each driver its own table of inherited folder removals.
+    _removals = types.MappingProxyType({})
+    _removal_pool = None
     # C2: the container launcher; None while containers are switched off (`container_launch.SETTINGS`).
     _containers = None
     # C4: the recovery of earlier instances' container entries, made on its first use (containers only).
@@ -381,6 +388,12 @@ class RunDriver:
         # Preparations of runs that failed or were abandoned before launch, until their slot is free;
         # and, for one whose cleanup did not finish, (attempts, when it is tried again).
         self._giving_back, self._cleanup_retry = [], {}
+        # PREPCLEAN-4: folder removals an earlier service recorded and left to this one: identity -> [folder, pause,
+        # deadline, running removal]; and the request that reads them, whether it ran, whether it filled its bound,
+        # and the removals whose proof is still being recorded.
+        self._removals, self._removals_asked, self._removals_loaded, self._removals_full = {}, None, False, False
+        self._removal_proofs = {}
+        self._removal_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='project-driver-removal')
         # Released and retired runs: key -> (host class, orchestration handle); and the
         # bindings whose monitor slots are still to be freed: binding -> (refusals, next try).
         self._retired, self._forgetting = {}, {}
@@ -1026,13 +1039,86 @@ class RunDriver:
                 pass  # Still cleaning up; asked again on the next step.
 
     def _retry_cleanup(self, handle):
-        attempts, when = self._cleanup_retry.get(handle, (0, self._clock()))
-        if self._clock() < when or attempts >= MAX_CLEANUP_ATTEMPTS:
+        now = self._clock()
+        pause, when = self._cleanup_retry.get(handle, (0.0, now))
+        if now < when:
             return
-        attempts += 1
-        self._cleanup_retry[handle] = (attempts, self._clock() + min(
-            CLEANUP_RETRY_MAX_SECONDS, CLEANUP_RETRY_SECONDS * 2 ** (attempts - 1)))
+        pause = min(CLEANUP_RETRY_MAX_SECONDS, max(CLEANUP_RETRY_SECONDS, pause * 2))
+        self._cleanup_retry[handle] = (pause, now + pause)
         self._preparation.retry_cleanup(handle)
+
+    def _step_removals(self):
+        """PREPCLEAN-4 (decision 309): carry on the folder removals an earlier service left recorded.
+
+        Once the start-up checks are done (`warm_up` ready), the store's pending records of other instances are read (at most
+        MAX_PENDING_REMOVALS; read again when that many were found and all are done). Each is retried off this
+        thread with the same capped backoff as an in-process one, no attempt count kept, and recorded as removed
+        only after the folder is observed absent. Until then it is a pending cleanup, shown as the warning."""
+        # Not before the start-up checks are done: a removal never competes with settling earlier runs.
+        if self._memory is None or self.warm_up()[0] != 'ready':
+            return
+        asked = self._removals_asked
+        if asked is not None and asked.state != 'queued':
+            self._removals_asked = None
+            if asked.state == 'done':
+                found = asked.result or ()
+                for identity, workspace in found:
+                    if identity not in self._removals and identity not in self._removal_proofs:
+                        self._removals[identity] = [workspace, 0.0, self._clock(), None]
+                self._removals_loaded, self._removals_full = True, len(found) >= MAX_PENDING_REMOVALS
+        if self._removals_asked is None and (not self._removals_loaded or (self._removals_full and not self._removals)):
+            try:
+                self._removals_asked = self._runtime.persistence.memory_hold('pending_removals', self._journal.instance)
+            except HistoryError:
+                pass
+        now = self._clock()
+        for identity, entry in list(self._removals.items()):
+            if entry[3] is None and now >= entry[2]:
+                entry[1] = min(CLEANUP_RETRY_MAX_SECONDS, max(CLEANUP_RETRY_SECONDS, entry[1] * 2))
+                entry[2] = now + entry[1]
+                try:
+                    entry[3] = self._removal_pool.submit(codex_preparation.remove_recorded_workspace, entry[0])
+                except RuntimeError:
+                    continue  # The pool is closed: this service is stopping, and the record stays for the next.
+            if entry[3] is not None and entry[3].done():
+                future, entry[3] = entry[3], None
+                try:
+                    proven = future.result() is True
+                except BaseException:
+                    proven = False
+                if proven:
+                    del self._removals[identity]
+                    self._removal_proofs[identity] = None
+        for identity, request in list(self._removal_proofs.items()):
+            if request is not None and request.state == 'done':
+                del self._removal_proofs[identity]
+            elif request is None or request.state == 'failed':
+                try:
+                    self._removal_proofs[identity] = self._runtime.persistence.memory_hold('removal_proven', identity)
+                except HistoryError:
+                    self._removal_proofs[identity] = None
+
+    def unlocated_cleanup(self):
+        """Given-back preparations whose removal is unconfirmed and whose folder this service never learned."""
+        count = 0
+        for handle in self._giving_back:
+            try:
+                count += self._preparation.unlocated(handle) is True
+            except Exception:
+                pass
+        return count
+
+    def _pending_workspaces(self):
+        """Identity -> folder of each preparation this service still holds whose removal it could not observe."""
+        found = {}
+        for handle, (key, _reason) in self._memory.preparations.items():
+            try:
+                workspace = self._preparation.workspace_of(handle)
+            except Exception:
+                continue
+            if isinstance(workspace, (str, Path)):
+                found[attempt_identity(*key)] = str(workspace)
+        return found
 
     # The dispatch service names only runs this driver has made ready.
     def _authorize_dispatch(self, request, token):
@@ -1103,6 +1189,7 @@ class RunDriver:
             self._memory.step()
         self._read_intake()
         self._retire_given_back()
+        self._step_removals()
         self._forget_retired()
         self._sweep_lost()
         self._settle_own_ended()
@@ -2454,6 +2541,8 @@ class RunDriver:
         """
         self._sweeper.shutdown(wait=True)
         self._executor.shutdown(wait=True)
+        if self._removal_pool is not None:
+            self._removal_pool.shutdown(wait=True)
         if not settle:
             if self._containers is not None:
                 self._containers.close()
@@ -2475,6 +2564,7 @@ class RunDriver:
         if self._memory is not None:
             try:
                 # No runtime thread can launch or publish. Drop the actual retained memory before the receipt.
+                pending = self._pending_workspaces()  # PREPCLEAN-4: recorded for the next service before it is cleared
                 self._runtime.persistence._jobs.clear()
                 self._runtime.persistence._by_worker.clear()
                 self._runtime.pool._jobs.clear()
@@ -2486,7 +2576,7 @@ class RunDriver:
                 self._giving_back.clear()
                 self._memory.takes.clear()
                 self._memory.preparations.clear()
-                self._runtime.persistence.retire_memory_after_stop(self._journal.instance)
+                self._runtime.persistence.retire_memory_after_stop(self._journal.instance, pending)
                 self._journal.keep_lock = False
             except Exception:
                 settled = False  # Keep stopping evidence for the next start.
@@ -2527,24 +2617,30 @@ class RunDriver:
             return False
         return run.persistence is not None or run.prepared is not None
 
+    def pending_cleanup(self):
+        """Folder removals still owed here: discarded preparations kept until observed cleanup and retirement,
+        and removals an earlier service recorded (PREPCLEAN-4).
+
+        Keep custody through unknown, queued retry and cleaned-but-not-retired
+        states. A live host must not turn an idle timeout into abandoned folders.
+        This keeps the idle and exhaustion replacement waiting; it never keeps a host an update or uninstall
+        has withdrawn, since the removal is recorded for the next service.
+        """
+        return len(self._giving_back) + len(self._removals)
+
     def stuck_slots(self):
-        """O0c M1, M3, M4, M7: host slots held by what nothing in this service will free: stranded runs,
-        given-back preparations whose removal was asked MAX_CLEANUP_ATTEMPTS times, and monitor attempts
-        given up. Each is held until the host is replaced: never freed while a process may live."""
-        preparations = sum(1 for handle in self._giving_back
-                           if self._cleanup_retry.get(handle, (0, 0.0))[0] >= MAX_CLEANUP_ATTEMPTS)
-        return sum(1 for run in self._runs.values() if self._stranded(run)) + preparations + len(self._stuck_monitor)
+        """Stranded runs and abandoned monitor slots; cleanup keeps its live retry duty."""
+        return sum(1 for run in self._runs.values() if self._stranded(run)) + len(self._stuck_monitor)
 
     def replace_when_idle(self):
-        """O0c M3: something here holds a slot it will never free, so a fresh host replaces this one
-        once no run is under way and no client has called for the idle period."""
-        return not self.busy() and self.stuck_slots() > 0
+        """Replace stranded work only after pending folder cleanup has retired."""
+        return not self.pending_cleanup() and not self.busy() and self.stuck_slots() > 0
 
     def exhausted(self):
-        """No room for another run in this host's lifetime; a fresh host has it all."""
-        # O0c M3: with every run slot stuck nothing can run here, so it is replaced at once when idle.
-        return not self.busy() and (len(self._runs) >= MAX_RUNS or len(self._dispatch._jobs) >= DISPATCH_SLOTS
-                                    or self.stuck_slots() >= PREPARATION_SLOTS)
+        """No room for another run; preserve the live cleanup custodian before replacement."""
+        return not self.pending_cleanup() and not self.busy() and (
+            len(self._runs) >= MAX_RUNS or len(self._dispatch._jobs) >= DISPATCH_SLOTS
+            or self.stuck_slots() >= PREPARATION_SLOTS)
 
     def close(self):
         if self._closed:
@@ -2560,3 +2656,5 @@ class RunDriver:
             run.waiters = []
         self._executor.shutdown(wait=False, cancel_futures=True)
         self._sweeper.shutdown(wait=False, cancel_futures=True)
+        if self._removal_pool is not None:
+            self._removal_pool.shutdown(wait=False, cancel_futures=True)

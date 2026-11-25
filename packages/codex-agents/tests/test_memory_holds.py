@@ -301,6 +301,60 @@ class DriverMemoryTests(MemoryFixture):
             self.assertEqual('held', self.row(kind)['state'])
         self.assertEqual('cleanup_unknown', json.loads(self.row('preparation')['evidence'])['reason'])
 
+    @requirements('PREPCLEAN-4', why_not_scenario=WHY)
+    def test_PREPCLEAN_4_pending_removal_is_recorded_in_the_preparation_row_and_outlives_its_release(self):
+        folder = '/scratch/prepare-abc'
+        identity = project_holds_schema.attempt_identity(*self.key)
+        self.register()
+        self.prep()
+        memory().note_cleanup(self.store, *self.key, self.instance, folder)
+        facts = json.loads(self.row('preparation')['evidence'])
+        self.assertEqual(('cleanup_unknown', 'pending', folder), (facts['reason'], facts['removal'], facts['workspace']))
+        # This instance keeps retrying in process; only another instance is offered the record.
+        self.assertEqual([], list(memory().pending_removals(self.store, self.instance)))
+        # A graceful stop releases the memory hold, never the record of the folder.
+        memory().retire_instance(self.store, self.instance)
+        self.assertEqual(('released', 'retired'), (self.row('preparation')['state'], self.row('preparation')['release_kind']))
+        self.assertEqual([(identity, folder)], list(memory().pending_removals(self.store, 'e' * 32)))
+        memory().removal_proven(self.store, identity)
+        memory().removal_proven(self.store, identity)  # repeated proof changes nothing
+        self.assertEqual([], list(memory().pending_removals(self.store, 'e' * 32)))
+        facts = json.loads(self.row('preparation')['evidence'])
+        self.assertEqual(('removed', None), (facts['removal'], facts.get('workspace')))
+
+    @requirements('PREPCLEAN-4', why_not_scenario=WHY)
+    def test_PREPCLEAN_4_stop_records_a_removal_whose_note_had_not_landed_and_retirement_clears_it(self):
+        folder = '/scratch/prepare-def'
+        identity = project_holds_schema.attempt_identity(*self.key)
+        self.register()
+        self.prep()
+        memory().retire_instance(self.store, self.instance, {identity: folder})
+        self.assertEqual([(identity, folder)], list(memory().pending_removals(self.store, 'e' * 32)))
+        # A preparation retired in process after observed removal never leaves a pending record.
+        other = ('hrn_' + 'c' * 48, 1)
+        self.register(other)
+        self.prep(other)
+        memory().note_cleanup(self.store, *other, self.instance, '/scratch/prepare-ghi')
+        self.release('preparation', key=other)
+        self.assertEqual('removed', json.loads(self.row('preparation', other)['evidence'])['removal'])
+        self.assertEqual([(identity, folder)], list(memory().pending_removals(self.store, 'e' * 32)))
+
+    @requirements('PREPCLEAN-4', why_not_scenario=WHY)
+    def test_PREPCLEAN_4_a_successor_reads_at_most_the_pending_removal_bound_at_a_time(self):
+        keys = [('hrn_' + str(n) * 48, 1) for n in range(3)]
+        for key in keys:
+            self.register(key)
+            self.prep(key)
+            memory().note_cleanup(self.store, *key, self.instance, '/scratch/prepare-%s' % key[0][4])
+        memory().retire_instance(self.store, self.instance)
+        with mock.patch.object(memory(), 'MAX_PENDING_REMOVALS', 2):
+            first = list(memory().pending_removals(self.store, 'e' * 32))
+            self.assertEqual(2, len(first))
+            for identity, _ in first:
+                memory().removal_proven(self.store, identity)
+            # The rest are read once those are done.
+            self.assertEqual(1, len(memory().pending_removals(self.store, 'e' * 32)))
+
     @requirements('RS-B-4', why_not_scenario=WHY)
     def test_M2_abandon_does_not_drop_entry_before_preparation_retirement(self):
         import hashlib

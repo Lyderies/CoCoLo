@@ -710,7 +710,8 @@
   },
   "history_service.py::__post_init__": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "PREPCLEAN-3: cleanup_pending uses the existing run-slot diagnostic wire range 0..64, not an admission limit; malformed counts and the past-bound value 65 are refused by authorization and response validation. Count falls to zero only after preparation retirement.",
+   "test": "test_PREPCLEAN_3_capacity_transport_warning_and_clear"
   },
   "history_service.py::_wire_operation": {
    "checks": 1,
@@ -1302,7 +1303,8 @@
   },
   "project_driver.py::_retry_cleanup": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "PREPCLEAN-2 (decision 309): retries have no attempt limit. The saved pause doubles from one second to the existing sixty-second cap; only the capped pause and next deadline are retained. Observed folder removal and retirement delete retry state. The past-the-limit test makes twenty due requests and checks exact capped monotone pauses and no early request.",
+   "test": "test_PREPCLEAN_2_retries_continue_past_twelve_with_capped_monotone_backoff"
   },
   "project_driver.py::_settle_lost": {
    "checks": 1,
@@ -1311,7 +1313,7 @@
   },
   "project_driver.py::exhausted": {
    "checks": 2,
-   "ends": "O0c M3: MAX_RUNS and DISPATCH_SLOTS as audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); stuck_slots() >= PREPARATION_SLOTS is not a limit on new work but the trigger that replaces the host: the replacement ends every stuck hold (the stopping service settles its runs on kernel evidence, the next starts with all slots free)",
+   "ends": "O0c M3: MAX_RUNS and DISPATCH_SLOTS trigger idle replacement when no work runs. PREPCLEAN-2 keeps the current host while given-back preparation cleanup is pending, even at exhaustion; observed removal and retirement unblock replacement. Other stuck slots retain the existing kernel-evidence settlement policy.",
    "test": "test_M3_with_every_slot_stuck_the_host_is_replaced_at_once_when_no_run_is_under_way"
   },
   "project_driver.py::handle": {
@@ -1323,9 +1325,9 @@
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
   "project_driver.py::stuck_slots": {
-   "checks": 1,
-   "ends": "O0c M4: counts given-back preparations whose removal was asked MAX_CLEANUP_ATTEMPTS times; each is retired once its retried removal finishes, and all end when the host they hold is replaced once idle",
-   "test": "test_M4_a_preparation_whose_removal_was_given_up_is_kept_and_counted_stuck"
+   "checks": 0,
+   "ends": "PREPCLEAN-2: pending folder cleanup is no longer abandoned or counted as a stuck slot; its live custodian blocks automatic replacement until observed removal. Other stranded runs and monitor slots keep their existing replacement policy.",
+   "test": "test_M4_pending_cleanup_keeps_custody_and_defers_replacement"
   },
   "project_history.py::<module>": {
    "checks": 1,
@@ -2053,6 +2055,21 @@
    "checks": 1,
    "ends": "moved from ingestion_snapshot (review 040-e1bw-r1): the hook freshness age comparison; counts nothing; BOUNDED",
    "test": "test_review_published_health_ages_an_idle_project_at_read_time"
+  },
+  "history_api.py::_validate_result": {
+   "checks": 1,
+   "ends": "PREPCLEAN-3: optional run_slots.cleanup_pending and run_slots.cleanup_unlocated share the existing 0..64 diagnostic wire range; no stored record or admission limit changes. The bound plus one (65), bool, negative and noninteger values are refused; observed retirement makes the diagnostics zero.",
+   "test": "test_PREPCLEAN_3_capacity_transport_warning_and_clear"
+  },
+  "memory_holds.py::pending_removals": {
+   "checks": 1,
+   "ends": "PREPCLEAN-4 (decision 309): a successor reads at most MAX_PENDING_REMOVALS (64, the run-slot diagnostic bound) recorded folder removals of other instances per read. A record ends when the folder is observed absent (removal_proven rewrites it as removed with no folder), after which it is no longer read; a full read is repeated once every record of it is done. The record lives in the preparation row's evidence, which stays as that row's tombstone, so no new table or hold kind exists.",
+   "test": "test_PREPCLEAN_4_a_successor_reads_at_most_the_pending_removal_bound_at_a_time"
+  },
+  "project_driver.py::_step_removals": {
+   "checks": 1,
+   "ends": "PREPCLEAN-4 (decision 309): at most MAX_PENDING_REMOVALS inherited removals are in memory (the read bound); each keeps only its folder, capped pause and deadline (the sixty-second cap of cleanup retries, no attempt count) and ends when the folder is observed absent and its proof recorded. The read is asked again only after a full one is all done.",
+   "test": "test_PREPCLEAN_4_a_full_read_is_asked_again_once_every_record_is_done"
   }
  }
 }

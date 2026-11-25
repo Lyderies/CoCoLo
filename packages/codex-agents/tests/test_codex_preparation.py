@@ -1,14 +1,16 @@
 """Actual committed exports and fixed workers; native authorization is synthetic."""
 from copy import copy
 from dataclasses import replace
+import json
 import os
+from pathlib import Path
 import socket
 import threading
 import time
 import unittest
 from unittest import mock
 
-from tests import test_bridge as fixtures
+from tests import test_bridge as fixtures  # puts the repository scripts folder on sys.path
 from tests import test_project_runtime as runtime_fixtures
 
 from codex_agents import bridge, codex_preparation, codex_worker
@@ -26,6 +28,8 @@ from codex_agents.project_runtime import ProjectRuntime
 from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
 from codex_agents.service_protocol import ServiceTarget
 from tests.test_project_results import KEY
+
+from test_framework import requirements  # after the fixtures import, which adds scripts/ to sys.path (a bare child process imports this module)
 
 
 class CodexPreparationTests(unittest.TestCase):
@@ -238,6 +242,213 @@ class CodexPreparationTests(unittest.TestCase):
         with self.assertRaisesRegex(PreparationError, 'preparation_full'):
             self.lane.submit(self.context)
         codex_preparation.remove_private_directory(prepared.workspace)  # Fixture-owned orphan cleanup only.
+
+    @requirements('PREPCLEAN-1', why_not_scenario='Real preparation worker, filesystem removal and capacity boundary; no service restart needed.')
+    def test_PREPCLEAN_1_twelve_physical_failures_then_observed_removal(self):
+        handle, prepared = self.prepare()
+        original = codex_preparation.remove_private_directory
+        calls = []
+        completed = threading.Event()
+
+        def remove(path):
+            calls.append(path)
+            if len(calls) == 13:
+                original(path)
+            completed.set()
+
+        with mock.patch.object(codex_preparation, 'remove_private_directory', side_effect=remove):
+            self.lane.discard(handle)
+            for number in range(1, 14):
+                self.assertTrue(completed.wait(5))
+                self.until(lambda: self.lane.snapshot(handle)['state'] in {'unknown', 'cleaned'})
+                self.assertEqual(number, len(calls))
+                if number <= 12:
+                    self.assertTrue(prepared.workspace.is_dir())
+                    self.assertEqual('unknown', self.lane.snapshot(handle)['state'])
+                    self.assertEqual(1, self.lane.capacity()['jobs'])
+                    self.assertEqual(MAX_PREPARATION_BYTES, self.lane.capacity()['retained_bytes_reserved'])
+                    self.assertEqual(MAX_PREPARATION_EXPORT_BYTES, self.lane.capacity()['export_bytes_reserved'])
+                    with self.assertRaisesRegex(PreparationError, 'preparation_busy'):
+                        self.lane.retire(handle)
+                    with self.assertRaisesRegex(PreparationError, 'preparation_full'):
+                        self.lane.submit(self.context)
+                    completed.clear()
+                    self.lane.retry_cleanup(handle)
+        self.assertFalse(prepared.workspace.exists())
+        self.assertEqual('cleaned', self.lane.snapshot(handle)['state'])
+        self.lane.retire(handle)
+        self.assertEqual(0, self.lane.capacity()['jobs'])
+        self.discard(self.prepare()[0])
+
+    @requirements('PREPCLEAN-1', why_not_scenario='Fault at the remover/lstat proof boundary: a missing child is not a missing preparation directory.')
+    def test_PREPCLEAN_1_missing_child_is_not_workspace_removal(self):
+        handle, prepared = self.prepare()
+        with mock.patch.object(codex_preparation, 'remove_private_directory', side_effect=FileNotFoundError):
+            self.assertFalse(codex_preparation._remove(prepared.workspace))
+        self.assertTrue(prepared.workspace.is_dir())
+        self.discard(handle)
+
+    @requirements('PREPCLEAN-1', 'PREPCLEAN-2', why_not_scenario='Real worker and folder with direct driver/host predicates; runnable when Unix socket binding is denied.')
+    def test_PREPCLEAN_real_cleanup_keeps_host_and_slot_until_thirteenth_removal(self):
+        from types import SimpleNamespace
+        from tests.test_run_driver_retries import driver
+        from codex_agents.service_host import ProjectServiceHost
+        value = driver()
+        value._preparation = self.lane
+        value._runs, value._dispatch = {}, SimpleNamespace(_jobs={})
+        handle, prepared = self.prepare()
+        value._giving_back = [handle]
+        original = codex_preparation.remove_private_directory
+        attempts = []
+        completed = threading.Event()
+        def remove(path):
+            attempts.append(path)
+            if len(attempts) == 13:
+                original(path)
+            completed.set()
+        host = object.__new__(ProjectServiceHost)
+        host._owner = mock.Mock()
+        host._driver = value
+        host._clock_ns = lambda: 2_000_000_000_000
+        host._frontend = SimpleNamespace(last_enrolled_ns=0)
+        host._runtime = SimpleNamespace(pool=self.runtime.pool, persistence=SimpleNamespace(_jobs={}))
+        with mock.patch.object(codex_preparation, 'remove_private_directory', side_effect=remove):
+            self.lane.discard(handle)
+            for number in range(1, 14):
+                self.assertTrue(completed.wait(5))
+                self.until(lambda: self.lane.snapshot(handle)['state'] in {'unknown', 'cleaned'})
+                self.assertEqual(number, len(attempts))
+                if number <= 12:
+                    self.assertTrue(prepared.workspace.is_dir())
+                    self.assertTrue(host.holding())
+                    self.assertEqual(0, host.idle_ns())  # even past the automatic replacement deadline
+                    self.assertFalse(host.replacing())
+                    self.assertFalse(host.exhausted())
+                    self.assertEqual(1, self.lane.capacity()['jobs'])
+                    completed.clear()
+                    value._clock.now += 60
+                    value._retire_given_back()
+            self.assertFalse(prepared.workspace.exists())
+            value._retire_given_back()
+        self.assertEqual([], value._giving_back)
+        self.assertEqual(0, self.lane.capacity()['jobs'])
+        self.assertFalse(host.holding())
+        self.assertEqual(2_000_000_000_000, host.idle_ns())
+
+    @requirements('PREPCLEAN-3', why_not_scenario='Real framed history service encode/decode with live owner diagnostics, including malformed and past-bound counts; no socket privilege required.')
+    def test_PREPCLEAN_3_capacity_transport_warning_and_clear(self):
+        from codex_agents.history_api import (HistoryRequest, history_request_digest,
+            encode_history_request, decode_history_response)
+        from codex_agents.history_service import HistoryAuthorization, HistoryService
+        from codex_agents.history_contracts import HistoryError
+        from tests.test_bridge import cli
+        directory = self.fixture.state.root / 'cleanup-status-history'
+        directory.mkdir(mode=0o700)
+        count = [1]
+        def authorize(request, token):
+            return HistoryAuthorization(self.scope.project_id, self.scope.runtime_digest,
+                history_request_digest(request), 'host', frozenset({'history.capacity_report'}),
+                run_slots=(0, 3), preparation_cleanup_pending=count[0])
+        service = HistoryService(self.scope.project_id, self.scope.runtime_digest,
+            lambda: ProjectHistory(directory, self.scope.project_id, result_key=KEY,
+                result_capacity=ResultCapacity(8, 2*MAX_RESULT_BODY_BYTES, 1_800_000, 120_000)), authorizer=authorize)
+        self.addCleanup(service.close)
+        request = HistoryRequest(1, 'history.capacity_report', 'capacity',
+                                 self.scope.project_id, self.scope.runtime_digest, {})
+        for pending in (1, 0):
+            count[0] = pending
+            raw = service.handle(encode_history_request(request), None)
+            report = decode_history_response(raw, request)
+            self.assertEqual(pending, report['run_slots']['cleanup_pending'])
+            status = cli._service_slots(report['run_slots'])
+            self.assertEqual(bool(pending), bool(status['warnings']))
+            self.assertNotIn(str(directory), str(status))
+            for bad in (-1, True, 65, 'one'):
+                malformed = json.loads(raw)
+                malformed['result']['run_slots']['cleanup_pending'] = bad
+                with self.assertRaisesRegex(HistoryError, 'history_invalid_response'):
+                    decode_history_response(canonical_json(malformed), request)
+        # The diagnostic shares the existing run-slot wire bound (64), not a new admission cap.
+        for bad in (-1, True, 65, 'one'):
+            count[0] = bad
+            with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
+                authorize(request, None)
+
+    @requirements('PREPCLEAN-3', why_not_scenario='Real framed history service encode/decode of the unlocated-folder count, with malformed and past-bound values.')
+    def test_PREPCLEAN_3_unlocated_count_transport(self):
+        from codex_agents.history_api import (HistoryRequest, history_request_digest,
+            encode_history_request, decode_history_response)
+        from codex_agents.history_service import HistoryAuthorization, HistoryService
+        from codex_agents.history_contracts import HistoryError
+        directory = self.fixture.state.root / 'cleanup-unlocated-history'
+        directory.mkdir(mode=0o700)
+
+        def authorize(request, token, unlocated=2):
+            return HistoryAuthorization(self.scope.project_id, self.scope.runtime_digest,
+                history_request_digest(request), 'host', frozenset({'history.capacity_report'}),
+                run_slots=(0, 3), preparation_cleanup_pending=3, preparation_cleanup_unlocated=unlocated)
+        service = HistoryService(self.scope.project_id, self.scope.runtime_digest,
+            lambda: ProjectHistory(directory, self.scope.project_id, result_key=KEY,
+                result_capacity=ResultCapacity(8, 2*MAX_RESULT_BODY_BYTES, 1_800_000, 120_000)), authorizer=authorize)
+        self.addCleanup(service.close)
+        request = HistoryRequest(1, 'history.capacity_report', 'capacity',
+                                 self.scope.project_id, self.scope.runtime_digest, {})
+        raw = service.handle(encode_history_request(request), None)
+        report = decode_history_response(raw, request)
+        self.assertEqual((3, 2), (report['run_slots']['cleanup_pending'], report['run_slots']['cleanup_unlocated']))
+        for bad in (-1, True, 65, 'one'):
+            malformed = json.loads(raw)
+            malformed['result']['run_slots']['cleanup_unlocated'] = bad
+            with self.assertRaisesRegex(HistoryError, 'history_invalid_response'):
+                decode_history_response(canonical_json(malformed), request)
+            with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
+                authorize(request, None, unlocated=bad)
+
+    @requirements('PREPCLEAN-3', why_not_scenario='Real lane job states: a given-back job knows its folder, or says it never learned it.')
+    def test_PREPCLEAN_3_lane_says_whether_a_pending_folder_is_located(self):
+        handle, prepared = self.prepare()
+        job = self.lane._jobs[handle]
+        self.assertEqual((None, False), (self.lane.workspace_of(handle), self.lane.unlocated(handle)))  # not given back
+        with self.lane._lock:
+            job.state, job.cancelled = 'unknown', True
+        self.assertEqual((prepared.workspace, False), (self.lane.workspace_of(handle), self.lane.unlocated(handle)))
+        with self.lane._lock:
+            job.workspace = None
+        self.assertEqual((None, True), (self.lane.workspace_of(handle), self.lane.unlocated(handle)))
+        with self.lane._lock:
+            job.state, job.workspace = 'exported', prepared.workspace
+        self.discard(handle)
+
+    @requirements('PREPCLEAN-4', why_not_scenario='Real folders: a recorded path is removed only when it is one of this host\'s own preparation folders, and only observed absence is proof.')
+    def test_PREPCLEAN_4_recorded_folder_removal_checks_ownership_and_proves_by_absence(self):
+        handle, prepared = self.prepare()
+        folder = prepared.workspace
+        self.lane.discard(handle)
+        self.until(lambda: self.lane.snapshot(handle)['state'] == 'cleaned')
+        self.lane.retire(handle)
+        self.assertFalse(folder.exists())
+        self.assertTrue(codex_preparation.remove_recorded_workspace(str(folder)))  # already absent: proven
+        # A record that is not one of this host's own preparation folders is never touched (nothing of ours to remove).
+        outside = self.fixture.state.root / 'prepare-elsewhere'
+        outside.mkdir(mode=0o700)
+        for foreign in ('relative/prepare-x', str(outside.parent / 'not-a-preparation'), str(outside)):
+            with self.subTest(path=foreign):
+                self.assertTrue(codex_preparation.remove_recorded_workspace(foreign))
+        self.assertTrue(outside.is_dir())
+        # A link standing where a folder of ours was is not removed, and is not proof of removal.
+        link = folder.parent / 'prepare-link'
+        os.symlink(outside, link)
+        self.addCleanup(lambda: link.is_symlink() and link.unlink())
+        self.assertFalse(codex_preparation.remove_recorded_workspace(str(link)))
+        self.assertTrue(link.is_symlink() and outside.is_dir())
+        link.unlink()
+        # A real one of ours is removed; a refused removal is not proof.
+        made = codex_preparation.bridge.private_workspace('prepare-', claude=False, project_root=None)
+        with mock.patch.object(codex_preparation, 'remove_private_directory'):
+            self.assertFalse(codex_preparation.remove_recorded_workspace(str(made)))
+        self.assertTrue(made.is_dir())
+        self.assertTrue(codex_preparation.remove_recorded_workspace(str(made)))
+        self.assertFalse(made.exists())
 
     def test_a_failed_cleanup_is_asked_again_and_then_frees_its_slot(self):
         handle, prepared = self.prepare()
