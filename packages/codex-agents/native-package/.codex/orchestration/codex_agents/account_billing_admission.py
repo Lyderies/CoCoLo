@@ -351,7 +351,7 @@ class AccountBillingAdmission:
         return (reservation.project, reservation.key, reservation.parameters, reservation.created,
                 reservation.deadline, reservation.deadline_ns)
 
-    def _original(self, reservation, keys=True):
+    def _original(self, reservation, keys=True, lost=False):
         self._guard()
         if (type(reservation) is not _Reservation
                 or self._pending.get((reservation.project, reservation.key)) is not reservation):
@@ -361,7 +361,8 @@ class AccountBillingAdmission:
                 or reservation.context is not captured[1] or reservation.snapshot != captured[2]
                 or reservation.authorize is not captured[3]):
             raise ProbeAdmissionError('probe_not_authorized')
-        self._authorize(reservation.context, reservation.snapshot, reservation.authorize, keys)
+        # S12 Q3(b): a lost probe's records reach no caller, so its caller's callback is not asked, only its context.
+        self._authorize(reservation.context, reservation.snapshot, (lambda: True) if lost else reservation.authorize, keys)
         self._project(reservation.project, reservation.context)
         row = self._row(reservation.project, reservation.key)
         if reservation.history is not None:  # a repeat: judged against its unchanged committed row
@@ -984,7 +985,7 @@ class AccountBillingAdmission:
         return type(value) is dict and value.get('probe') == 'denied' and value.get(
             'reason_code') == 'probe_unlaunched_expired'
 
-    def _execution(self, permit, *, launching=False):
+    def _execution(self, permit, *, launching=False, lost=False):
         """Original owner data only. Native launch authority is checked by its adapter."""
         self._guard()
         if type(permit) is not ProbeAdmission:
@@ -995,7 +996,7 @@ class AccountBillingAdmission:
                 or (permit.account_fingerprint, permit.admission_record_id, permit.admission_digest,
                     permit.admitted_at_ms) != inputs.permit_fields):
             raise ProbeAdmissionError('probe_not_authorized')
-        row = self._original(inputs.reservation)
+        row = self._original(inputs.reservation, lost=lost)
         if (row['state'] != 'admitted' or (row['account_fingerprint'], row['admission_record_id'],
                 row['admission_digest']) != inputs.permit_fields[:3]):
             raise ProbeAdmissionError('probe_conflict')

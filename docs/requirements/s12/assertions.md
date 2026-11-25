@@ -29,4 +29,10 @@ Port of off-branch `2ef61423`:
 - The ported N1/N4 process waits and cleanup waits now have five-second bounds.
   Their assertions remain unchanged.
 
+- No assertion changed for the M9/M10 collector scenarios. `publication.assert_not_called()` stayed as written
+  (Q3(b): a lost probe's records commit without the caller's publication callback; `account_billing_execution.complete_ended`
+  documents "not the caller's publication callback"). It was red because the product asked that callback anyway: `complete_ended`
+  -> `_completion` / records loop -> `account_billing_admission._execution` -> `_original` -> `_authorize(reservation.authorize)`,
+  and the refusing callback turned the records into a denial. Fixed in the product (`lost=` flag, context still checked, callback not asked).
+
 No other existing assertion is removed or weakened.

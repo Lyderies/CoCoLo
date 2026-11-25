@@ -1,9 +1,25 @@
 # S12 status
 
-Base `ce81bd96` (0.8.67), branch `feat/s12-lanes`. Work is uncommitted because the
-managed sandbox cannot write git metadata. No VERSION or runtime catalogue edit.
-Implementation and regression tests are present; release acceptance is pending
-unsandboxed macOS/Linux scenarios and the primary's affected/full-suite gates.
+Base `ce81bd96` (0.8.67), branch `feat/s12-lanes`. No VERSION or runtime catalogue edit.
+Codex built it in a sandbox (commit 6251a165); the unsandboxed finish found one product defect
+(below), fixed it, and ran the named modules and `--affected ce81bd96` (results at the end).
+Release acceptance still needs the primary's batch gates and review.
+
+## Unsandboxed finish (defect found and fixed)
+
+`test_M9_billing_tree_clears_once_and_next_probe_succeeds` and `test_M10_..._next_probe_succeeds` failed at
+`publication.assert_not_called()` (called once). Cause: product, not test. Q3(b) (plan Q3, P:2031-2032, 2045-2046) and the
+`complete_ended` docstring say a lost probe's records commit without the caller's publication callback. The commit path
+still asked it through `_completion` / the records loop -> `account_billing_admission._execution` -> `_original` ->
+`_authorize(reservation.authorize)`; a refusing (lost) caller made the commit raise, so the records were replaced by a denial.
+Publication was not early: it happened at settlement, after the proof cleared. Fix: `_original`/`_execution` take
+`lost=`; `account_billing_execution._completion` and the records loop pass `lost=kept_workspace`, so a lost probe checks
+its project context only. No test edited. Named S12 + 7 billing/owned/signature modules: 265 tests, no failures,
+`metadata_errors: []`.
+
+Affected run `--jobs 6 --affected ce81bd96` after the fix: 499 units (claude 134, codex 6467, root 1179 tests), only
+`codex:tests.test_runtime_release` failed (runtime digest, primary owns release bookkeeping); `metadata_errors: []`,
+`requirement_failures: []`. The known L15.1 flake did not occur.
 
 ## Requirement evidence
 
