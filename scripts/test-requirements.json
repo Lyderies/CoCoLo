@@ -2831,6 +2831,59 @@
   "source": "PLAN-0.4.0-terminal.md section 4",
   "statement": "Usage through the API matches `learning-usage-report --since --until` and is 'unknown' when unreadable."
  },
+ "TESTSPEED-1": {
+  "checks": [
+   "codex:tests.test_cli_billing_runtime.CliBillingRuntimeTests.test_both_primary_hosts_use_account_api_and_preserve_launched_projection_and_redaction",
+   "codex:tests.test_cli_billing_runtime.CliBillingRuntimeTests.test_second_project_fresh_cli_observes_while_first_probe_process_is_held",
+   "codex:tests.test_cli_open_client_runtime.CliOpenClientRuntimeTests.test_claude_primary_fresh_open_and_dispatch_use_original_apis_without_database_or_collector_takeover",
+   "codex:tests.test_cli_open_client_runtime.CliOpenClientRuntimeTests.test_codex_primary_fresh_open_and_dispatch_use_original_apis_without_database_or_collector_takeover",
+   "codex:tests.test_run_network.RealNetworkTests.test_real_scenarios_run_together"
+  ],
+  "source": "tests/requirements/testspeed.json#TESTSPEED-1",
+  "statement": "each of the three modules totals at most 45 s with full-run parallelism (`--jobs 16` beside heavy modules), measured as the sum of its fragments' seconds, which is what the budget check counts."
+ },
+ "TESTSPEED-2": {
+  "checks": [
+   "codex:tests.test_cli_billing_runtime.CliBillingRuntimeTests.test_second_project_fresh_cli_observes_while_first_probe_process_is_held",
+   "codex:tests.test_run_network.RealNetworkTests.test_real_scenarios_run_together"
+  ],
+  "source": "tests/requirements/testspeed.json#TESTSPEED-2",
+  "statement": "no assertion is removed or weakened. Every changed assertion, renamed test or changed fixture behaviour is paired old -> new in [`testspeed/assertions.md`](testspeed/assertions.md)."
+ },
+ "TESTSPEED-3": {
+  "checks": [
+   "codex:tests.test_cli_billing_runtime.CliBillingRuntimeTests.test_both_primary_hosts_use_account_api_and_preserve_launched_projection_and_redaction",
+   "codex:tests.test_cli_billing_runtime.CliBillingRuntimeTests.test_second_project_fresh_cli_observes_while_first_probe_process_is_held",
+   "codex:tests.test_cli_open_client_runtime.CliOpenClientRuntimeTests.test_claude_primary_fresh_open_and_dispatch_use_original_apis_without_database_or_collector_takeover",
+   "codex:tests.test_cli_open_client_runtime.CliOpenClientRuntimeTests.test_codex_primary_fresh_open_and_dispatch_use_original_apis_without_database_or_collector_takeover"
+  ],
+  "source": "tests/requirements/testspeed.json#TESTSPEED-3",
+  "statement": "a fresh-CLI test that has no collector and no project service must not pay for starting them. The CLI's best-effort starts of the collector and of the project service end at once in such a fixture; the fixture ends them at once instead of starting an isolated interpreter that is bound to end. Only tests that opt in get this; real starts keep their own tests."
+ },
+ "TESTSPEED-4": {
+  "checks": [
+   "codex:tests.test_cli_billing_runtime.CliBillingRuntimeTests.test_both_primary_hosts_use_account_api_and_preserve_launched_projection_and_redaction",
+   "codex:tests.test_cli_billing_runtime.CliBillingRuntimeTests.test_second_project_fresh_cli_observes_while_first_probe_process_is_held",
+   "codex:tests.test_cli_open_client_runtime.CliOpenClientRuntimeTests.test_claude_primary_fresh_open_and_dispatch_use_original_apis_without_database_or_collector_takeover",
+   "codex:tests.test_cli_open_client_runtime.CliOpenClientRuntimeTests.test_codex_primary_fresh_open_and_dispatch_use_original_apis_without_database_or_collector_takeover"
+  ],
+  "source": "tests/requirements/testspeed.json#TESTSPEED-4",
+  "statement": "the fresh CLI processes of one test class share one bytecode cache outside the source tree."
+ },
+ "TESTSPEED-5": {
+  "checks": [
+   "codex:tests.test_cli_billing_runtime.CliBillingRuntimeTests.test_second_project_fresh_cli_observes_while_first_probe_process_is_held"
+  ],
+  "source": "tests/requirements/testspeed.json#TESTSPEED-5",
+  "statement": "a held fake provider child waits on a gate file the test opens, not on a fixed sleep."
+ },
+ "TESTSPEED-6": {
+  "checks": [
+   "codex:tests.test_run_network.RealNetworkTests.test_real_scenarios_run_together"
+  ],
+  "source": "tests/requirements/testspeed.json#TESTSPEED-6",
+  "statement": "independent real-podman scenarios that share nothing run at the same moment."
+ },
  "TF-1": {
   "checks": [
    "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",

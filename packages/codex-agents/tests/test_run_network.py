@@ -31,6 +31,7 @@ import time
 import unittest
 
 import tests.support  # noqa: F401
+from test_framework import requirements
 from tests.support import SHORT_TMP
 
 from codex_agents import container_runtime as cr
@@ -1068,6 +1069,7 @@ class RealNetworkTests(unittest.TestCase):
 
     SCENARIOS = ("allowlist_isolation_and_record", "proxy_down_means_no_network", "release_and_sweep")
 
+    @requirements('TESTSPEED-1', 'TESTSPEED-2', 'TESTSPEED-6', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED).')
     def test_real_scenarios_run_together(self):
         """CN-1..CN-5 against real podman: the three long scenarios below, run at the same moment.
 

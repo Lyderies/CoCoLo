@@ -274,6 +274,7 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
             self.assertEqual((3, True), (reconciled['attempts'], reconciled['identical']))
         self.assertEqual(0, child['process'].wait(timeout=10))
 
+    @__import__('test_framework').requirements('TESTSPEED-1', 'TESTSPEED-3', 'TESTSPEED-4', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED).')
     def test_codex_primary_fresh_open_and_dispatch_use_original_apis_without_database_or_collector_takeover(self):
         self.run_original_workflow('codex')
 
@@ -287,5 +288,6 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
         self.record_results = True
         self.run_original_workflow('claude')
 
+    @__import__('test_framework').requirements('TESTSPEED-1', 'TESTSPEED-3', 'TESTSPEED-4', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED).')
     def test_claude_primary_fresh_open_and_dispatch_use_original_apis_without_database_or_collector_takeover(self):
         self.run_original_workflow('claude')

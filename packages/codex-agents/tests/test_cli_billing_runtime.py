@@ -124,6 +124,7 @@ class CliBillingRuntimeTests(unittest.TestCase):
                 time.sleep(.005)
         fixtures.AccountBillingJobTests.stop(self)
 
+    @__import__('test_framework').requirements('TESTSPEED-1', 'TESTSPEED-3', 'TESTSPEED-4', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED).')
     def test_both_primary_hosts_use_account_api_and_preserve_launched_projection_and_redaction(self):
         for host in ('codex', 'claude'):
             code, result = self.take(self.start(host=host))
@@ -250,6 +251,7 @@ class CliBillingRuntimeTests(unittest.TestCase):
         code, alone = self.take(self.start(identity='probe-after-overlap'))
         self.assertEqual((0, None), (code, alone.get('reason_code')), alone)
 
+    @__import__('test_framework').requirements('TESTSPEED-1', 'TESTSPEED-2', 'TESTSPEED-3', 'TESTSPEED-4', 'TESTSPEED-5', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED).')
     def test_second_project_fresh_cli_observes_while_first_probe_process_is_held(self):
         # The first probe is held until the test lets it go, however long a fresh CLI process takes to start
         # on a slow machine (TESTSPEED-5: a gate file, not a fixed 8 s sleep every run pays).
