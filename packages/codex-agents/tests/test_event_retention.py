@@ -283,11 +283,15 @@ class EventRetentionTests(unittest.TestCase):
         self.assertEqual(set(), self._raw_ids())
         self.assertEqual(1501, sum(s["event_count"] for s in self._summaries()))
 
-    def test_one_collector_sweep_pass_leaves_no_expired_events(self):
+    def test_collector_sweep_cycles_drain_expired_events_in_bounded_batches(self):
         start = int(datetime(2026, 10, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
         self._seed(1501, start)
+        server = learning_store.CollectorServer(self.ledger)
         with mock.patch.object(self.ledger, "_clock_ms", return_value=start + 8 * DAY):
-            learning_store.CollectorServer(self.ledger)._sweep_cycle()
+            for remaining in (1001, 501, 1, 0):
+                server._sweep_cycle()
+                self.assertEqual(remaining, len(self._raw_ids()))
+                self.assertFalse(self.connection.in_transaction)
         self.assertEqual(set(), self._raw_ids())
         self.assertEqual(1501, sum(s["event_count"] for s in self._summaries()))
 

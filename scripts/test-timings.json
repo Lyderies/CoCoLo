@@ -1431,6 +1431,7 @@
  "codex:tests.test_lifecycle_cli_runtime.LifecycleCliRuntimeTests.test_unconfigured_frontend_and_missing_runtime_have_no_direct_fallback": 0.76,
  "codex:tests.test_lifetime_cap_guard": 0.64,
  "codex:tests.test_liveness_clock": 0.12,
+ "codex:tests.test_lockhold": 2.0,
  "codex:tests.test_lost_run_settlement": 70.17,
  "codex:tests.test_lost_run_settlement.LostRunAfterCrashTests.test_a_crashed_hosts_child_that_still_runs_keeps_its_capacity_until_it_ends": 5.11,
  "codex:tests.test_lost_run_settlement.LostRunAfterCrashTests.test_a_crashed_hosts_finished_child_is_settled_by_the_next_host_within_seconds": 5.11,

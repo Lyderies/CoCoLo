@@ -1,0 +1,20 @@
+{
+ "authority": "docs/requirements/lockhold.md",
+ "requirements": [
+  {
+   "id": "LOCKHOLD-1",
+   "statement": "Collector event-retention backlogs drain automatically in transactional batches of at most 500 events, one batch per lock hold and cycle, with identical final records and resumability.",
+   "source": "tests/requirements/lockhold.json#LOCKHOLD-1"
+  },
+  {
+   "id": "LOCKHOLD-2",
+   "statement": "Provider attestation status and project health have flat SQLite VM work with fixed provider evidence as unrelated history grows, preserving answers and owner verification.",
+   "source": "tests/requirements/lockhold.json#LOCKHOLD-2"
+  },
+  {
+   "id": "LOCKHOLD-3",
+   "statement": "Bound the full-scan admission evaluation in host opens using selective existing indexes, preserving preflight and write-time decisions.",
+   "source": "tests/requirements/lockhold.json#LOCKHOLD-3"
+  }
+ ]
+}

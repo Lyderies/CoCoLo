@@ -196,6 +196,7 @@
  "codex:tests.test_lifecycle_cli_runtime": "scenario",
  "codex:tests.test_lifetime_cap_guard": "unit",
  "codex:tests.test_liveness_clock": "unit",
+ "codex:tests.test_lockhold": "scenario",
  "codex:tests.test_lost_run_settlement": "scenario",
  "codex:tests.test_memory_holds": "scenario",
  "codex:tests.test_memory_holds_crash": "scenario",
