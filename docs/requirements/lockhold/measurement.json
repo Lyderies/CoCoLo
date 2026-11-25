@@ -1,0 +1,136 @@
+{
+  "base": "51623740",
+  "synthetic_only": true,
+  "reads": [
+    {
+      "unrelated_events": 1000,
+      "vm_steps": {
+        "provider_attestation_status": 139,
+        "health_with_project": 821,
+        "admission_evaluation": 440
+      },
+      "former_scan_vm_steps": {
+        "provider_attestation_status": 20196,
+        "health_with_project": 20519,
+        "admission_evaluation": 5366
+      },
+      "answers_equal": {
+        "provider_attestation_status": true,
+        "health_with_project": true,
+        "admission_evaluation": true
+      }
+    },
+    {
+      "unrelated_events": 100000,
+      "vm_steps": {
+        "provider_attestation_status": 133,
+        "health_with_project": 461,
+        "admission_evaluation": 355
+      },
+      "former_scan_vm_steps": {
+        "provider_attestation_status": 2000191,
+        "health_with_project": 2000519,
+        "admission_evaluation": 500366
+      },
+      "answers_equal": {
+        "provider_attestation_status": true,
+        "health_with_project": true,
+        "admission_evaluation": true
+      }
+    }
+  ],
+  "retention": {
+    "former_rows_per_hold": [
+      20000
+    ],
+    "former_hold_ms": 2650.865,
+    "expired_events": 20000,
+    "rows_per_hold": [
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500
+    ],
+    "cycle_ms": [
+      77.896,
+      72.38,
+      74.451,
+      71.926,
+      70.868,
+      70.087,
+      73.134,
+      64.972,
+      65.275,
+      67.596,
+      63.475,
+      70.025,
+      65.751,
+      63.241,
+      63.483,
+      63.706,
+      66.197,
+      63.488,
+      61.357,
+      62.212,
+      62.268,
+      65.077,
+      60.526,
+      75.119,
+      77.474,
+      82.209,
+      67.265,
+      68.563,
+      71.24,
+      71.47,
+      78.721,
+      79.15,
+      80.379,
+      77.949,
+      77.409,
+      67.779,
+      78.554,
+      69.154,
+      71.135,
+      61.144,
+      0.393
+    ],
+    "final_records_equal": true,
+    "transaction_left_open": false
+  }
+}

@@ -1,0 +1,236 @@
+{
+  "base": "51623740",
+  "starting_head": "0277f32c",
+  "red": {
+    "command": "\"$PY\" -B scripts/parallel_tests.py --jobs 1 --module codex:tests.test_lockhold",
+    "runtime": "reviewed HEAD 0277f32c",
+    "elapsed_seconds": 4.903210417018272,
+    "metadata_errors": [],
+    "budget_failures": [],
+    "partial": false,
+    "requirements": {
+      "LOCKHOLD-1": "failed",
+      "LOCKHOLD-2": "failed",
+      "LOCKHOLD-3": "passed"
+    },
+    "workers": [
+      {
+        "suite": "codex",
+        "unit": "tests.test_lockhold",
+        "tests": 9,
+        "seconds": 4.8999202500563115,
+        "returncode": 1,
+        "summary": "failures=2, errors=3",
+        "timed_out": false,
+        "violations": [],
+        "outcomes": {
+          "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_2_pinned_lookup_classifies_only_index_errors": "failed",
+          "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_2_status_and_project_health_have_flat_vm_work": "passed",
+          "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_2_status_answers_match_former_lookup": "passed",
+          "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_3_open_admission_has_flat_vm_work_and_same_decision": "passed",
+          "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_appends_between_batches_match_unbounded_drain": "passed",
+          "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_backlog_drains_across_bounded_holds_with_identical_final_state": "passed",
+          "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_failed_batch_rolls_back_and_restarts": "failed",
+          "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_loop_resumes_batches_and_stop_cancels_the_gap": "passed",
+          "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_persistent_batch_failure_waits_for_full_interval": "failed"
+        }
+      }
+    ]
+  },
+  "green": {
+    "command": "\"$PY\" -B scripts/parallel_tests.py --jobs 2 --module codex:tests.test_lockhold --module codex:tests.test_lifetime_cap_guard",
+    "runtime": "fix-round worktree",
+    "elapsed_seconds": 4.358242959016934,
+    "metadata_errors": [],
+    "budget_failures": [],
+    "partial": false,
+    "requirements": {
+      "LOCKHOLD-1": "passed",
+      "LOCKHOLD-2": "passed",
+      "LOCKHOLD-3": "passed"
+    },
+    "workers": [
+      {
+        "suite": "codex",
+        "unit": "tests.test_lifetime_cap_guard",
+        "tests": 4,
+        "seconds": 0.7144559159642085,
+        "returncode": 0,
+        "summary": "",
+        "timed_out": false,
+        "violations": [],
+        "outcomes": {
+          "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_listed_function_gaining_a_limit_is_caught": "passed",
+          "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_listed_test_must_exist": "passed",
+          "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_a_new_limit_is_caught": "passed",
+          "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end": "passed"
+        }
+      },
+      {
+        "suite": "codex",
+        "unit": "tests.test_lockhold",
+        "tests": 9,
+        "seconds": 4.355144583038054,
+        "returncode": 0,
+        "summary": "",
+        "timed_out": false,
+        "violations": [],
+        "outcomes": {
+          "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_2_pinned_lookup_classifies_only_index_errors": "passed",
+          "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_2_status_and_project_health_have_flat_vm_work": "passed",
+          "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_2_status_answers_match_former_lookup": "passed",
+          "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_3_open_admission_has_flat_vm_work_and_same_decision": "passed",
+          "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_appends_between_batches_match_unbounded_drain": "passed",
+          "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_backlog_drains_across_bounded_holds_with_identical_final_state": "passed",
+          "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_failed_batch_rolls_back_and_restarts": "passed",
+          "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_loop_resumes_batches_and_stop_cancels_the_gap": "passed",
+          "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_persistent_batch_failure_waits_for_full_interval": "passed"
+        }
+      }
+    ]
+  },
+  "findings": {
+    "MED-1": {
+      "red": "Persistent SQLITE_FULL after the initial 500-row commit: 20 attempts from simulated 1.00 to 1.19 seconds; failed batch returned more.",
+      "green": "Attempts at simulated 1.00, 1.01, 2.00, 3.00 seconds. Three failed 500-row batches roll back and release the lock; flag false, no idle retry, next full cycle resumes."
+    },
+    "LOW-1": {
+      "red": "Three OperationalError subcases: real dropped index, injected no such index, injected no query solution.",
+      "green": "Plain LedgerError with reopen guidance for only the two OperationalError message patterns; other SQLite exceptions preserved by identity."
+    },
+    "LOW-2": {
+      "red": "Baseline parity guard passed before runtime changes; coverage-only finding.",
+      "green": "Fresh hook/app-server appends between batches survive. 2501 expired events summarised once. Entire final records table equals unbounded drain with identical append ordering."
+    }
+  },
+  "regression": {
+    "command": "TMPDIR=/tmp/lockhold-r1 \"$PY\" -B scripts/parallel_tests.py --jobs 2 --module codex:tests.test_event_retention --module codex:tests.test_ledger_lock_limits --module codex:tests.test_type_lookups --module codex:tests.test_runtime_release",
+    "elapsed_seconds": 16.0211829590844,
+    "metadata_errors": [],
+    "budget_failures": [],
+    "partial": false,
+    "workers": [
+      {
+        "suite": "codex",
+        "unit": "tests.test_ledger_lock_limits#0",
+        "tests": 14,
+        "seconds": 9.654012374929152,
+        "returncode": 0,
+        "summary": "",
+        "timed_out": false,
+        "violations": [],
+        "outcomes": {
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_1_a_held_lock_refuses_a_write_at_the_limit_with_nothing_done": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_1_a_sweep_cycle_gives_up_at_its_deadline_and_counts_once": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_1_every_acquisition_is_bounded_or_listed_as_kept": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_2_a_reader_exit_never_waits_on_the_ledger_and_its_count_recovers": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_2_a_refused_reader_entry_leaves_no_count": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_2_reader_counts_are_read_under_the_readers_lock": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_3_each_refusal_is_counted_once_by_its_caller_and_readable_while_held": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_3_status_shows_the_refusals_as_attention": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_4_re_entry_by_the_holder_is_immediate_and_never_counted": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_T4_maintenance_never_runs_while_a_reader_is_inside": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_RS_A_F12_a_burst_of_1000_due_holds_drains_before_the_next_cycle_with_the_lock_freed_between": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_RS_A_F12_a_stop_ends_the_drain_at_once": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_RS_A_G6_a_held_ledger_does_not_make_idle_checks_spin_or_count_refusals": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_RS_A_G6_an_idle_ledger_with_nothing_due_is_checked_often_by_one_cheap_read": "passed"
+        }
+      },
+      {
+        "suite": "codex",
+        "unit": "tests.test_type_lookups",
+        "tests": 4,
+        "seconds": 1.1557262500282377,
+        "returncode": 0,
+        "summary": "",
+        "timed_out": false,
+        "violations": [],
+        "outcomes": {
+          "codex:tests.test_type_lookups.TypeLookupTests.test_AP5_1_a_type_lookup_reads_only_its_type_as_events_grow": "passed",
+          "codex:tests.test_type_lookups.TypeLookupTests.test_AP5_2_the_grant_check_reads_only_the_five_types_it_uses": "passed",
+          "codex:tests.test_type_lookups.TypeLookupTests.test_AP5_4_a_ledger_without_the_index_gets_it_on_open_and_nothing_else_changes": "passed",
+          "codex:tests.test_type_lookups.TypeLookupTests.test_U9_the_start_up_check_reads_only_evidence_as_events_grow": "passed"
+        }
+      },
+      {
+        "suite": "codex",
+        "unit": "tests.test_event_retention",
+        "tests": 22,
+        "seconds": 2.2993499590083957,
+        "returncode": 1,
+        "summary": "errors=1",
+        "timed_out": false,
+        "violations": [],
+        "outcomes": {
+          "codex:tests.test_event_retention.CollectorSweepTests.test_the_collector_applies_retention_by_itself": "error",
+          "codex:tests.test_event_retention.EventRetentionTests.test_a_database_error_in_one_summary_leaves_only_that_group": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_a_failure_part_way_leaves_every_summary_and_event_as_they_were": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_a_malformed_group_does_not_hold_back_the_others": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_a_reused_event_id_never_shares_a_summary_with_its_predecessor_and_a_taken_id_is_refused": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_a_summary_is_only_written_with_the_removal_it_describes": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_a_summary_record_is_closed_and_consistent": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_an_event_a_stored_file_or_attestation_names_is_left_to_the_owners_expiry": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_an_event_named_by_a_file_that_expire_removes_is_erased_with_no_summary": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_an_ordinary_record_cannot_take_an_event_summary_identifier": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_collector_sweep_cycles_drain_expired_events_in_bounded_batches": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_each_event_is_kept_as_long_as_its_weight_says": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_expired_raw_events_are_summarised_then_removed_in_small_batches": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_learning_expire_and_the_sweep_never_summarise_the_same_events_twice": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_learning_expire_summarises_the_raw_events_it_removes_before_removing_them": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_linked_events_and_existing_expiries_are_left_to_the_owners_expiry": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_one_expire_call_drains_a_backlog_of_1501_events": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_one_expire_call_summarises_a_bounded_batch_and_reports_more": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_the_work_of_one_expire_hold_does_not_grow_with_the_backlog": "passed",
+          "codex:tests.test_event_retention.EventRetentionTests.test_unreadable_rows_never_use_up_a_sweep": "passed",
+          "codex:tests.test_event_retention.RetentionPolicyTests.test_a_policy_that_misses_repeats_or_stretches_a_code_is_refused": "passed",
+          "codex:tests.test_event_retention.RetentionPolicyTests.test_the_installed_policy_weights_every_event_code_once": "passed"
+        }
+      },
+      {
+        "suite": "codex",
+        "unit": "tests.test_runtime_release",
+        "tests": 3,
+        "seconds": 0.22189749998506159,
+        "returncode": 1,
+        "summary": "failures=1",
+        "timed_out": false,
+        "violations": [],
+        "outcomes": {
+          "codex:tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version": "failed",
+          "codex:tests.test_runtime_release.RuntimeReleaseTests.test_the_runtime_file_set_is_exactly_the_package_orchestration_files": "passed",
+          "codex:tests.test_runtime_release.RuntimeReleaseTests.test_versions_increase_and_digests_are_unique": "passed"
+        }
+      },
+      {
+        "suite": "codex",
+        "unit": "tests.test_ledger_lock_limits#1",
+        "tests": 13,
+        "seconds": 16.015150499995798,
+        "returncode": 1,
+        "summary": "errors=1",
+        "timed_out": false,
+        "violations": [],
+        "outcomes": {
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_1_a_read_budget_over_the_limit_is_capped_and_a_shorter_one_kept": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_1_an_account_transaction_is_refused_before_it_begins": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_1_the_inventory_catches_aliases_and_unbounded_timeouts": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_2_a_refused_hold_runs_its_cleanup_before_the_refusal": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_2_a_refused_result_commit_removes_only_the_file_it_wrote": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_3_a_busy_status_still_shows_the_refusals": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_3_refusals_are_published_with_collector_health": "error",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_4_a_wait_that_succeeds_in_time_is_todays_behaviour": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_E1a_T4_a_failing_transaction_body_rolls_back_and_frees_the_lock": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_RS_A_4_the_collectors_sweep_releases_due_account_holds_by_itself": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_RS_A_F12_a_busy_cycle_is_retried_before_the_next_interval": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_RS_A_G6_a_burst_arriving_while_idle_clears_within_60_seconds_of_its_arrival": "passed",
+          "codex:tests.test_ledger_lock_limits.LedgerLockLimitTests.test_RS_A_G6_a_stop_during_an_idle_wait_ends_the_sweep_at_once": "passed"
+        }
+      }
+    ],
+    "limitations": {
+      "socket": "Two collector bind attempts refused with PermissionError Operation not permitted in the sandbox, despite a short TMPDIR. The affected tests require an unsandboxed owner run.",
+      "runtime_release": "Expected catalogue mismatch: collector runtime changed; VERSION and runtime catalogue intentionally untouched.",
+      "not_run": "No full suite, large-data remeasurement or PTY tests. No schema/record-shape change requiring copier/backup/move/enumeration modules."
+    }
+  }
+}

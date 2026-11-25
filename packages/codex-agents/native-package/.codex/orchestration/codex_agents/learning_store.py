@@ -7149,13 +7149,21 @@ class LearningLedger:
     def _provider_records_locked(
         self, project_id: str, record_type: str, provider: str
     ) -> list[tuple[dict[str, Any], str]]:
-        rows = self._connection.execute(
-            "SELECT content,content_digest,source FROM records "
-            "WHERE project_id=? AND record_type=? "
-            "AND json_extract(CAST(content AS TEXT),'$.provider')=? "
-            "ORDER BY source_sequence",
-            (project_id, record_type, provider),
-        ).fetchall()
+        try:
+            rows = self._connection.execute(
+                # LOCKHOLD-2/3: an ORDER BY must not make SQLite walk every event in
+                # the project's sequence index. Sort only this type's evidence rows.
+                "SELECT content,content_digest,source FROM records INDEXED BY records_type_project "
+                "WHERE project_id=? AND record_type=? "
+                "AND json_extract(CAST(content AS TEXT),'$.provider')=? "
+                "ORDER BY source_sequence",
+                (project_id, record_type, provider),
+            ).fetchall()
+        except sqlite3.OperationalError as error:
+            # Match the pinned evidence lookups: other SQLite errors keep their answers.
+            if "no such index" not in str(error) and "no query solution" not in str(error):
+                raise
+            raise LedgerError("provider evidence lookup is unavailable; reopen the ledger") from None
         result = []
         for row in rows:
             record = json.loads(bytes(row["content"]))
@@ -13661,7 +13669,7 @@ class CollectorServer:
     def _sweep_loop(self) -> None:
         """Every WORKER_RESULT_SWEEP_SECONDS from the last cycle's start (as on the request loop), one
         sweep cycle. An unexpected error is recorded by type and the next cycle runs (S1-H1a-6b).
-        O0b RS-A round 1 F12: while due account holds remain, a release batch alone runs every
+        O0b RS-A round 1 F12: while due account holds or event-retention batches remain, a bounded cycle runs every
         SWEEP_BATCH_GAP_SECONDS, each under its own hold of the ledger lock; a busy cycle is retried
         after SWEEP_BUSY_RETRY_SECONDS (never past the next cycle's start). A stop ends either wait.
         Round 2 G6: while idle, due holds are checked every SWEEP_IDLE_CHECK_SECONDS (never past the next
@@ -13794,11 +13802,12 @@ class CollectorServer:
             lock.release()
 
     def _sweep_cycle(self, *, holds_only: bool = False) -> str | None:
-        """The three sweeps in their old order, under one hold of the ledger lock, and none while a
+        """The sweeps in their old order, at most one event batch under one ledger hold, and none while a
         reader (which spans several holds) or a transaction is active (review 040-h1a6-design). The
         lock is never waited on past a stop. O0b RS-A round 1 F12: `holds_only` runs the account hold
-        release alone; returns "busy" when nothing ran for a held ledger or a reader inside, "more" when
-        the release filled its batch (more may be due), else None."""
+        release plus any pending event batch; returns "busy" when nothing ran for a held ledger or a reader inside,
+        "more" when either filled its batch (more may be due), else None. Event rows are the durable cursor:
+        each committed batch disappears, so a later collector resumes without a separate checkpoint."""
         lock = self.ledger._lock
         deadline = time.monotonic() + LEDGER_LOCK_WAIT_MS / 1000  # E1a-2: a busy ledger skips the cycle
         while True:
@@ -13824,22 +13833,27 @@ class CollectorServer:
             # O0b RS-A-4: due account holds are released here, with no client action, in batches of 64. Until
             # M4b E1b's owner thread exists this runs where the other account sweeps run, under the ledger lock.
             def drain_event_retention():
-                # Continue in this pass while a full batch went (more may be due), unless stopping. A sweep
-                # that reports no count (None) is treated as nothing removed: the pass ends (decision 220).
-                while not self._sweeps_stop.is_set() and (self.ledger.sweep_event_retention() or 0) >= EVENT_SWEEP_BATCH:
-                    pass
+                # LOCKHOLD-1: one whole transaction per cycle. The loop schedules
+                # the next batch after releasing the outer lock and waiting its
+                # cancellable gap. None still means nothing removed (decision 220).
+                # A suppressed failure ends this pass until the next full interval.
+                self._event_retention_more = False
+                self._event_retention_more = (self.ledger.sweep_event_retention() or 0) >= EVENT_SWEEP_BATCH
             sweeps = [(self.ledger.sweep_worker_results, (LedgerError, OSError, sqlite3.Error)),
                       (drain_event_retention, loose),
                       (self.ledger.sweep_learning_retention, loose),  # O0c P8: cases and candidates past the window
                       (self.ledger.sweep_superseded_attestations, loose),  # O0c P9: only the latest attestation stays
                       (self.ledger.sweep_account_retention, loose),
                       (release_holds, loose)]
-            for sweep, errors in sweeps[5:] if holds_only else sweeps:
+            pending_events = getattr(self, "_event_retention_more", False)
+            selected = ([sweeps[1], sweeps[5]] if pending_events else sweeps[5:]) if holds_only else sweeps
+            for sweep, errors in selected:
                 if self._sweeps_stop.is_set():
                     return None
                 with contextlib.suppress(*errors):
                     sweep()
-            return "more" if released == [ACCOUNT_HOLD_RELEASE_BATCH] else None
+            return "more" if (released == [ACCOUNT_HOLD_RELEASE_BATCH]
+                              or getattr(self, "_event_retention_more", False)) else None
         finally:
             lock.release()
 

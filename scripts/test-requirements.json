@@ -1150,6 +1150,33 @@
   "source": "packages/codex-agents/tests/test_hold_lifecycle.py#LEGACY-HOLD-LIFECYCLE-B0-2",
   "statement": "**LEGACY-HOLD-LIFECYCLE-B0-2 \u2014 Deferred run supervisor reservation settlement.**\nA reservation left by a stopped service exists and eventually receives its lost terminal. B0-2 gates the run\nsupervisor and remains skipped under the owner's narrowed B0 scope of 2026-11-20. Its registered executable\nobligation remains not_run and supplies no passing coverage until that deferred work is executed."
  },
+ "LOCKHOLD-1": {
+  "checks": [
+   "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_backlog_drains_across_bounded_holds_with_identical_final_state",
+   "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_failed_batch_rolls_back_and_restarts",
+   "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_persistent_batch_failure_waits_for_full_interval",
+   "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_appends_between_batches_match_unbounded_drain",
+   "codex:tests.test_lockhold.LockHoldRetentionTests.test_LOCKHOLD_1_loop_resumes_batches_and_stop_cancels_the_gap"
+  ],
+  "source": "tests/requirements/lockhold.json#LOCKHOLD-1",
+  "statement": "Collector event-retention backlogs drain automatically in transactional batches of at most 500 events, one batch per lock hold and cycle, with identical final records and resumability."
+ },
+ "LOCKHOLD-2": {
+  "checks": [
+   "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_2_status_and_project_health_have_flat_vm_work",
+   "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_2_status_answers_match_former_lookup",
+   "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_2_pinned_lookup_classifies_only_index_errors"
+  ],
+  "source": "tests/requirements/lockhold.json#LOCKHOLD-2",
+  "statement": "Provider attestation status and project health have flat SQLite VM work with fixed provider evidence as unrelated history grows, preserving answers and owner verification."
+ },
+ "LOCKHOLD-3": {
+  "checks": [
+   "codex:tests.test_lockhold.LockHoldReadTests.test_LOCKHOLD_3_open_admission_has_flat_vm_work_and_same_decision"
+  ],
+  "source": "tests/requirements/lockhold.json#LOCKHOLD-3",
+  "statement": "Bound the full-scan admission evaluation in host opens using selective existing indexes, preserving preflight and write-time decisions."
+ },
  "M11-1": {
   "checks": [
    "codex:tests.test_account_original_open.OriginalAccountOpenJobTests.test_M11_refused_registration_retries_the_retained_open_after_availability_refresh",
