@@ -855,6 +855,145 @@ class CursorTests(Case):
         self.assertIn('orphan_removed', self.reasons(second))
 
 
+class FinalFixTests(Case):
+    """Final fix (confirming check r2c): no mode change before owner proof and only through a verified descriptor;
+    the marker goes only right before the folder's rmdir, after the last budget check; the container listing counts
+    every entry it reads and checks the time share (the marker write is in the codex_preparation tests)."""
+
+    @requirements('HM2A-1')
+    def test_HM2A_1_a_folder_whose_owner_is_not_proven_keeps_its_mode(self):
+        unproven = self.folder(marker=False)
+        os.chmod(unproven, 0o300)  # not listable: looking for its marker must not make it so
+        self.addCleanup(lambda: os.path.isdir(unproven) and os.chmod(unproven, 0o700))
+        found = self.run_check()
+        self.assertEqual(0o300, os.lstat(unproven).st_mode & 0o777)
+        self.assertEqual(['owner_unknown'], self.reasons(found))
+        self.assertTrue(os.path.lexists(unproven))
+
+    @requirements('HM2A-5')
+    def test_HM2A_5_permission_recovery_never_changes_a_folder_swapped_in_before_it(self):
+        orphan = self.folder()
+        export = orphan / 'export'
+        os.chmod(export, 0o100)  # not listable: emptying it needs a mode change
+        state = {'done': False}
+        real_open = os.open
+
+        def opener(path, flags, mode=0o777, *, dir_fd=None):
+            if not state['done'] and dir_fd is not None and path == 'export':
+                state['done'] = True  # after the remover looked at `export`, before it opens or recovers it
+                os.chmod(export, 0o700)
+                os.rename(export, orphan / 'export-away')
+                os.mkdir(export, 0o700)
+                os.chmod(export, 0o100)  # a replacement, also not listable
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        self.addCleanup(lambda: os.path.isdir(export) and os.chmod(export, 0o700))
+        with mock.patch.object(os, 'open', opener):
+            found = self.run_check()
+            self.assertTrue(state['done'])
+            replacement = os.lstat(export)
+        self.assertEqual(0o100, replacement.st_mode & 0o777)  # the swapped-in folder's mode is unchanged
+        self.assertNotIn('orphan_removed', self.reasons(found))
+        self.assertTrue((orphan / MARKER).is_file())
+        if hasattr(os, 'O_SEARCH'):  # where a mode can be changed through a descriptor, later passes finish it
+            for _ in range(3):
+                self.run_check()
+            self.assertFalse(os.path.lexists(orphan))
+
+    @requirements('HM2A-6')
+    def test_HM2A_6_a_deadline_at_any_removal_step_leaves_the_folder_resumable(self):
+        calls, finished = 0, False
+        while not finished and calls <= 80:
+            orphan = self.folder()
+            with self.subTest(calls=calls):
+                found = workspaces().WorkspaceCheck(container=self.container, live=lambda: set(),
+                                                    pending=lambda: set(), state_root=self.state).run(
+                    CountedContext(calls))
+                finished = 'orphan_removed' in self.reasons(found)
+                if not finished:
+                    self.assertTrue((orphan / MARKER).is_file())  # a stopped folder keeps its owner proof
+                    for _ in range(3):
+                        self.run_check()
+                    self.assertFalse(os.path.lexists(orphan))
+            calls += 1
+        self.assertTrue(finished)
+        self.assertGreater(calls, 5)  # it stopped at each step in between
+
+    @requirements('HM2A-6')
+    def test_HM2A_6_a_folder_rmdir_failing_after_its_marker_went_is_still_resumed(self):
+        orphan = self.folder()
+        real_rmdir, failed = os.rmdir, []
+
+        def rmdir(path, *, dir_fd=None):
+            if not failed and path == orphan.name:
+                failed.append(path)
+                raise OSError(5, 'injected')
+            return real_rmdir(path, dir_fd=dir_fd)
+
+        with mock.patch.object(os, 'rmdir', rmdir):
+            found = self.run_check()
+        self.assertEqual([orphan.name], failed)
+        self.assertEqual(['orphan_removal_failed'], self.reasons(found))
+        self.assertTrue((orphan / MARKER).is_file())
+        self.assertEqual(['orphan_removed'], self.reasons(self.run_check()))
+        self.assertFalse(os.path.lexists(orphan))
+
+    @requirements('HM2A-6')
+    def test_HM2A_6_a_cursor_deep_in_a_huge_folder_stays_within_the_cap_and_progresses(self):
+        hw = workspaces()
+        total = 3 * hw.MAX_ENTRIES_SCANNED + 10
+        for number in range(total):
+            (self.container / ('other-%05d' % number)).touch()
+        orphan = self.folder()  # listed last
+        pinned = os.lstat(self.container)
+        real = os.scandir
+        pulled = []
+
+        class Listing:  # the container's entries in name order, counting each one read
+            def __init__(self, entries):
+                self.entries = iter(entries)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                entry = next(self.entries)
+                pulled[-1] += 1
+                return entry
+
+            def close(self):
+                pass
+
+        def scandir(path='.'):
+            info = os.fstat(path) if type(path) is int else os.stat(path)
+            if (info.st_dev, info.st_ino) != (pinned.st_dev, pinned.st_ino):
+                return real(path)
+            with real(path) as listing:
+                return Listing(sorted(listing, key=lambda entry: (entry.name.startswith('prepare-'), entry.name)))
+
+        check = self.check()
+        passes = 0
+        with mock.patch.object(os, 'scandir', scandir):
+            while os.path.lexists(orphan) and passes < 8:
+                pulled.append(0)
+                self.run_check(check)
+                passes += 1
+                self.assertLessEqual(pulled[-1], hw.MAX_ENTRIES_SCANNED, pulled)
+                if passes == 2:  # a pass whose time share is over stops listing soon, deep cursor or not
+                    pulled.append(0)
+                    check.run(CountedContext(0))
+                    self.assertLessEqual(pulled[-1], hw._LISTING_DEADLINE_EVERY, pulled)
+        self.assertFalse(os.path.lexists(orphan))
+        self.assertLessEqual(passes, (total + 1) // hw.MAX_ENTRIES_SCANNED + 2)
+        self.assertGreaterEqual(sum(pulled), total + 1)  # every entry was read, a cap's worth at a time
+
+
 class OwnerThreadTests(unittest.TestCase):
     __why_not_scenario__ = "A source scan of the module; it isolates one rule of the same scenario."
 

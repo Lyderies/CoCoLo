@@ -3940,7 +3940,9 @@
  },
  "HM2A-1": {
   "checks": [
+   "codex:tests.test_codex_preparation.CodexPreparationTests.test_HM2A_1_a_marker_that_fails_to_close_leaves_a_report_only_folder",
    "codex:tests.test_codex_preparation.CodexPreparationTests.test_HM2A_1_a_preparation_folder_names_the_service_that_owns_it",
+   "codex:tests.test_health_workspaces.FinalFixTests.test_HM2A_1_a_folder_whose_owner_is_not_proven_keeps_its_mode",
    "codex:tests.test_health_workspaces.OrphanTests.test_HM2A_1_a_removal_that_does_not_prove_the_folder_gone_is_reported_and_retried",
    "codex:tests.test_health_workspaces.OrphanTests.test_HM2A_1_an_orphan_folder_is_removed_and_reported_fixed",
    "codex:tests.test_health_workspaces.OwnerProofTests.test_HM2A_1_a_check_without_a_state_root_removes_nothing",
@@ -3953,7 +3955,7 @@
    "codex:tests.test_health_workspaces.OwnerProofTests.test_HM2A_1_the_driver_names_its_journal_instance_as_its_preparations_owner"
   ],
   "source": "tests/requirements/s11.json#HM2A-1",
-  "statement": "A leftover prepare-* folder is removed only with positive proof that its owner is gone: its owner marker (written when the folder was made) names this state root and a launch-journal instance whose lock is free, and no live or pending record names it; no marker, another state root, a missing lock or a held lock (even after a clock jump) is never a removal. Removal is proven only by FileNotFoundError and reported fixed; a removal not proven is reported and retried."
+  "statement": "A leftover prepare-* folder is removed only with positive proof that its owner is gone: its owner marker (written when the folder was made) names this state root and a launch-journal instance whose lock is free, and no live or pending record names it; no marker, another state root, a missing lock or a held lock (even after a clock jump) is never a removal. Removal is proven only by FileNotFoundError and reported fixed; a removal not proven is reported and retried. No mode is changed before that proof (a folder that is not listable is looked into through a search-only descriptor or not at all). A marker that could not be written in full (an open, write or close error) never fails the preparation and leaves no marker, so its folder is only reported."
  },
  "HM2A-2": {
   "checks": [
@@ -3982,6 +3984,7 @@
  },
  "HM2A-5": {
   "checks": [
+   "codex:tests.test_health_workspaces.FinalFixTests.test_HM2A_5_permission_recovery_never_changes_a_folder_swapped_in_before_it",
    "codex:tests.test_health_workspaces.PathSafetyTests.test_HM2A_5_a_container_that_is_a_link_is_reported_and_nothing_is_removed",
    "codex:tests.test_health_workspaces.PathSafetyTests.test_HM2A_5_names_outside_the_prepare_pattern_are_never_listed",
    "codex:tests.test_health_workspaces.PathSafetyTests.test_HM2A_5_the_path_test_matches_remove_recorded_workspace_case_by_case",
@@ -3989,7 +3992,7 @@
    "codex:tests.test_health_workspaces.PinnedRemovalTests.test_HM2A_5_a_subfolder_swapped_for_a_link_mid_removal_never_reaches_the_link_target"
   ],
   "source": "tests/requirements/s11.json#HM2A-5",
-  "statement": "Path safety equals remove_recorded_workspace: absolute, no .., prepare-* name, the real scratch container as parent, a real folder owned by this user; an unsafe container removes nothing. Removal goes through pinned, fstat-verified directory descriptors, so swapping the container or a subfolder for a link mid-removal never reaches the link target."
+  "statement": "Path safety equals remove_recorded_workspace: absolute, no .., prepare-* name, the real scratch container as parent, a real folder owned by this user; an unsafe container removes nothing. Removal goes through pinned, fstat-verified directory descriptors, so swapping the container or a subfolder for a link mid-removal never reaches the link target. After owner proof a mode is changed only through fchmod on a descriptor opened O_NOFOLLOW and verified by fstat (device, inode, user), never by name, so a folder swapped in before the change keeps its mode."
  },
  "HM2A-6": {
   "checks": [
@@ -4001,12 +4004,15 @@
    "codex:tests.test_health_workspaces.BoundTests.test_HM2A_6_removal_stops_when_the_time_share_ends",
    "codex:tests.test_health_workspaces.CursorTests.test_HM2A_6_leftovers_behind_live_folders_are_reached_by_later_passes",
    "codex:tests.test_health_workspaces.CursorTests.test_HM2A_6_more_entries_than_one_pass_scans_are_reached_by_later_passes",
+   "codex:tests.test_health_workspaces.FinalFixTests.test_HM2A_6_a_cursor_deep_in_a_huge_folder_stays_within_the_cap_and_progresses",
+   "codex:tests.test_health_workspaces.FinalFixTests.test_HM2A_6_a_deadline_at_any_removal_step_leaves_the_folder_resumable",
+   "codex:tests.test_health_workspaces.FinalFixTests.test_HM2A_6_a_folder_rmdir_failing_after_its_marker_went_is_still_resumed",
    "codex:tests.test_health_workspaces.FolderBoundTests.test_HM2A_6_a_folder_deeper_than_the_remover_goes_is_reported_and_kept",
    "codex:tests.test_health_workspaces.FolderBoundTests.test_HM2A_6_removal_inside_one_folder_stops_at_its_entry_limit_and_resumes",
    "codex:tests.test_health_workspaces.FolderBoundTests.test_HM2A_6_removal_inside_one_folder_stops_when_the_time_share_ends"
   ],
   "source": "tests/requirements/s11.json#HM2A-6",
-  "statement": "Reads and work are bounded (entries examined and folders listed per pass with a rotating cursor so nothing is starved, removals and removed entries per pass, removal depth, the time share checked before every removal step, journal projects, names and entries, record items and paths); a folder not finished keeps its marker and resumes at the next pass; each limit is in lifetime_caps.json with a past-the-limit test."
+  "statement": "Reads and work are bounded (entries examined and folders listed per pass with a rotating cursor so nothing is starved, removals and removed entries per pass, removal depth, the time share checked before every removal step, journal projects, names and entries, record items and paths); a folder not finished keeps its marker and resumes at the next pass (the last check comes before the marker goes, the folder's rmdir follows it at once, and a failed rmdir puts the marker back); every container entry read, however far the listing has gone, counts toward the scan cap and the time share is checked while listing, the listing going on across passes; each limit is in lifetime_caps.json with a past-the-limit test."
  },
  "HM2A-7": {
   "checks": [

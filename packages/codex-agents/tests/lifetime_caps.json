@@ -2093,8 +2093,8 @@
   },
   "health_workspaces.py::_listing": {
    "checks": 1,
-   "ends": "HM-2a: MAX_ENTRIES_SCANNED and MAX_FOLDERS_LISTED bound what one pass examines of the scratch container; a rotating cursor starts the next pass where this one stopped (and wraps at the end), so entries past them are reached at later passes; nothing else is kept between passes",
-   "test": "test_HM2A_6_more_entries_than_one_pass_scans_are_reached_by_later_passes"
+   "ends": "HM-2a: MAX_ENTRIES_SCANNED and MAX_FOLDERS_LISTED bound what one pass reads of the scratch container: every entry read counts, and the time share is checked every _LISTING_DEADLINE_EVERY entries; the listing a pass stopped in is kept (one open listing of the pinned container, closed when it ends, when the container at that path is another folder, on an error, or by close()) and the next pass goes on with it, so entries past the cap are reached at later passes and a pass never reads more than the cap",
+   "test": "test_HM2A_6_a_cursor_deep_in_a_huge_folder_stays_within_the_cap_and_progresses"
   },
   "health_workspaces.py::_records": {
    "checks": 2,
@@ -2115,6 +2115,11 @@
    "checks": 1,
    "ends": "HM-2a: MAX_MARKER_BYTES is a size check on one owner marker read (not a count); a larger file is not a marker, so its folder is only reported",
    "test": "test_HM2A_1_an_oversized_marker_is_not_owner_proof"
+  },
+  "health_workspaces.py::_finish": {
+   "checks": 1,
+   "ends": "HM-2a: MAX_MARKER_BYTES is a size check on the owner marker read once more just before it is removed (to put it back if the folder's rmdir fails); not a count, nothing is kept",
+   "test": "test_HM2A_6_a_folder_rmdir_failing_after_its_marker_went_is_still_resumed"
   }
  }
 }

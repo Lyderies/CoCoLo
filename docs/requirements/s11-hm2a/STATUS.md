@@ -62,3 +62,23 @@ green, 16 s. Not run here (primary, before merge): `tests.test_project_driver` (
 
 Open for the primary: leftovers of a service that stopped NORMALLY have no lock file (a normal release removes it),
 so they are only reported; under decision 309 such folders are pending records that the next driver retries.
+
+## Final fix (confirming check r2c: NOT-READY, 1 HIGH, 3 MED)
+
+Review: `reviews/040-s11-r2c/RESULT-codex.md` in the control checkout. Last round: only the four listed items were
+fixed. Principle kept: deletion needs positive proof that the owner is gone; when in doubt nothing is removed. Each
+new test was run red on `e9d54732` (the e9d54732 `health_workspaces.py` and `codex_preparation.py` with the new
+tests: 6 failures, the 44 earlier tests green) and is green now.
+
+| Item | Change | Red on e9d54732 -> green |
+| --- | --- | --- |
+| HIGH HM2A-5 chmod by name | `_open_folder` no longer chmods by name. Before owner proof `_owner` uses `_look_folder` (read-only open, else an O_SEARCH open; never a mode change). After owner proof an unlistable level is opened O_SEARCH, O_DIRECTORY, O_NOFOLLOW, verified by fstat (dev, ino, uid, directory), fchmodded through that descriptor, then reopened and verified again. No O_SEARCH (or mode 000): left and reported. | `FinalFixTests.test_HM2A_5_permission_recovery_never_changes_a_folder_swapped_in_before_it` (a 0o100 replacement swapped in before the open: old 0o100 -> 0o700, now unchanged; later passes still remove the real folder), `test_HM2A_1_a_folder_whose_owner_is_not_proven_keeps_its_mode` (no marker, 0o300: old -> 0o700, now unchanged, `owner_unknown`) |
+| MED HM2A-6 marker before final check | `_finish`: the last budget/deadline check runs before the marker goes; the marker is read, unlinked and the folder rmdir'd at once with nothing between; a failed rmdir puts the marker back (same bytes, atime/mtime via futimes). | `test_HM2A_6_a_deadline_at_any_removal_step_leaves_the_folder_resumable` (CountedContext 0..N; old failed at calls=15: marker gone, folder never removed), `test_HM2A_6_a_folder_rmdir_failing_after_its_marker_went_is_still_resumed` |
+| MED HM2A-6 cursor skipping | The positional cursor (`self.cursor`) is replaced by a kept listing (`self._scan`: container dev/ino and its open scandir). The next pass goes on with it, so nothing is skipped; every entry read counts toward `MAX_ENTRIES_SCANNED`; the time share is checked every `_LISTING_DEADLINE_EVERY` (64) entries (a small container is still listed by an expired pass, as `test_HM2A_6_removal_stops_when_the_time_share_ends` requires). Closed at the end, on an error, when the container path names another folder, by `close()` and `__del__`. | `test_HM2A_6_a_cursor_deep_in_a_huge_folder_stays_within_the_cap_and_progresses` (3,082 entries: old pass read 1,025 then cursor+1,024; now each pass <= 1,024, an expired pass <= 64, orphan removed within 5 passes) |
+| MED runtime marker close | `_write_owner_marker` catches OSError from close (and a short write), unlinks the partial marker and returns a fixed reason code (`owner_marker_not_closed` / `owner_marker_not_written`) instead of raising. | `tests.test_codex_preparation...test_HM2A_1_a_marker_that_fails_to_close_leaves_a_report_only_folder` (old: `preparation_failed_at_workspace`; now ready, no marker, the check reports `owner_unknown` and keeps the folder) |
+
+Run (unsandboxed, TMPDIR a short new folder under /tmp/claude-501): `scripts/parallel_tests.py --jobs 4 --module
+codex:tests.test_health_workspaces --module codex:tests.test_codex_preparation --module codex:tests.test_health_monitor
+--module codex:tests.test_lifetime_cap_guard --module codex:tests.test_host_paths`: 131 tests, `failed_units: []`,
+`metadata_errors: []`, 25 s wall. VERSION and digest unchanged. Not run here (primary, before merge): the
+`--affected` run and `tests.test_project_driver`.

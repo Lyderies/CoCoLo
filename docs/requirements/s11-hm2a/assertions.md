@@ -34,3 +34,23 @@ No assertion was removed or weakened. Changed, old -> new, with the reason:
   to the fix-round clauses; the earlier clause text is contained in each.
 - `too_many_folders` finding text: old "holds more than 256 preparation folders" -> new "holds more entries than one
   check looks at" (it now also covers the entry scan); no test asserted the old text.
+
+## Final fix (confirming check r2c)
+
+No existing test assertion was removed, weakened or changed; six tests were added (five in `test_health_workspaces`
+`FinalFixTests`, one in `test_codex_preparation`). Changed, old -> new, with the reason:
+
+- `tests/lifetime_caps.json` `health_workspaces.py::_listing`: "ends" old, a rotating cursor and "nothing else is kept
+  between passes" -> new, the kept listing (every entry read counts, deadline every `_LISTING_DEADLINE_EVERY`
+  entries, when it is closed); witness old `test_HM2A_6_more_entries_than_one_pass_scans_are_reached_by_later_passes`
+  (still present and green) -> new `test_HM2A_6_a_cursor_deep_in_a_huge_folder_stays_within_the_cap_and_progresses`
+  (it is the test that goes past the cap with a deep position). Reason: review MED, the cursor is gone.
+- `tests/lifetime_caps.json`: new `health_workspaces.py::_finish` (1 check, the `MAX_MARKER_BYTES` size check on the
+  marker read before it is removed), witness `test_HM2A_6_a_folder_rmdir_failing_after_its_marker_went_is_still_resumed`.
+- Requirement statements HM2A-1, -5 and -6 amended (s11-hm2a.md, tests/requirements/s11.json,
+  scripts/test-requirements.json, where the new checks are listed); each earlier clause is kept, the final-fix
+  clause is added. In s11-hm2a.md the limit line "chmod by name needs a no-follow chmod" is replaced by the
+  O_SEARCH descriptor rule, and "(removed last)" by the check-then-unlink-then-rmdir order.
+- `WorkspaceCheck.cursor` (an attribute no test read) is replaced by `WorkspaceCheck._scan` and `close()`.
+- `codex_preparation._write_owner_marker` now returns None or a fixed reason code instead of always None; its caller
+  ignores the value (the folder without a marker is the record the health check reads).

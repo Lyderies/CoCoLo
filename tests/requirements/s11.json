@@ -4,7 +4,7 @@
   {
    "id": "HM2A-1",
    "source": "tests/requirements/s11.json#HM2A-1",
-   "statement": "A leftover prepare-* folder is removed only with positive proof that its owner is gone: its owner marker (written when the folder was made) names this state root and a launch-journal instance whose lock is free, and no live or pending record names it; no marker, another state root, a missing lock or a held lock (even after a clock jump) is never a removal. Removal is proven only by FileNotFoundError and reported fixed; a removal not proven is reported and retried."
+   "statement": "A leftover prepare-* folder is removed only with positive proof that its owner is gone: its owner marker (written when the folder was made) names this state root and a launch-journal instance whose lock is free, and no live or pending record names it; no marker, another state root, a missing lock or a held lock (even after a clock jump) is never a removal. Removal is proven only by FileNotFoundError and reported fixed; a removal not proven is reported and retried. No mode is changed before that proof (a folder that is not listable is looked into through a search-only descriptor or not at all). A marker that could not be written in full (an open, write or close error) never fails the preparation and leaves no marker, so its folder is only reported."
   },
   {
    "id": "HM2A-2",
@@ -24,12 +24,12 @@
   {
    "id": "HM2A-5",
    "source": "tests/requirements/s11.json#HM2A-5",
-   "statement": "Path safety equals remove_recorded_workspace: absolute, no .., prepare-* name, the real scratch container as parent, a real folder owned by this user; an unsafe container removes nothing. Removal goes through pinned, fstat-verified directory descriptors, so swapping the container or a subfolder for a link mid-removal never reaches the link target."
+   "statement": "Path safety equals remove_recorded_workspace: absolute, no .., prepare-* name, the real scratch container as parent, a real folder owned by this user; an unsafe container removes nothing. Removal goes through pinned, fstat-verified directory descriptors, so swapping the container or a subfolder for a link mid-removal never reaches the link target. After owner proof a mode is changed only through fchmod on a descriptor opened O_NOFOLLOW and verified by fstat (device, inode, user), never by name, so a folder swapped in before the change keeps its mode."
   },
   {
    "id": "HM2A-6",
    "source": "tests/requirements/s11.json#HM2A-6",
-   "statement": "Reads and work are bounded (entries examined and folders listed per pass with a rotating cursor so nothing is starved, removals and removed entries per pass, removal depth, the time share checked before every removal step, journal projects, names and entries, record items and paths); a folder not finished keeps its marker and resumes at the next pass; each limit is in lifetime_caps.json with a past-the-limit test."
+   "statement": "Reads and work are bounded (entries examined and folders listed per pass with a rotating cursor so nothing is starved, removals and removed entries per pass, removal depth, the time share checked before every removal step, journal projects, names and entries, record items and paths); a folder not finished keeps its marker and resumes at the next pass (the last check comes before the marker goes, the folder's rmdir follows it at once, and a failed rmdir puts the marker back); every container entry read, however far the listing has gone, counts toward the scan cap and the time share is checked while listing, the listing going on across passes; each limit is in lifetime_caps.json with a past-the-limit test."
   },
   {
    "id": "HM2A-7",

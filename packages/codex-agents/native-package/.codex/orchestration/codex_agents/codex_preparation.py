@@ -145,21 +145,34 @@ def _remove(workspace):
 def _write_owner_marker(workspace, marker):
     """HM-2a: name the service that owns a new preparation folder (see host_paths.PREPARATION_OWNER_MARKER).
 
-    Written once, owner-only, never followed or replaced. A folder whose marker could not be written has no
-    owner proof, so the health check only reports it and never removes it."""
+    Written once, owner-only, never followed or replaced. A failure never fails the preparation: a folder whose
+    marker could not be written in full (an error from open, write or close, or a short write) is left with no
+    marker (a partial one is removed), so it has no owner proof and the health check only reports it, never removes
+    it. Returns None when written, else the failure recorded as a fixed reason code."""
     if marker is None:
-        return
+        return None
+    path = workspace/PREPARATION_OWNER_MARKER
     try:
-        descriptor = os.open(workspace/PREPARATION_OWNER_MARKER, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
                              | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0), 0o600)
     except OSError:
-        return
+        return 'owner_marker_not_written'
+    failure = None
     try:
-        os.write(descriptor, marker)
+        if os.write(descriptor, marker) != len(marker):
+            failure = 'owner_marker_not_written'
     except OSError:
-        pass
-    finally:
+        failure = 'owner_marker_not_written'
+    try:
         os.close(descriptor)
+    except OSError:
+        failure = 'owner_marker_not_closed'  # what was written may not be all there: it is not owner proof
+    if failure is not None:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    return failure
 
 
 def remove_recorded_workspace(recorded):

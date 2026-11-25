@@ -29,16 +29,21 @@ descriptors: the container is opened once per pass with O_DIRECTORY|O_NOFOLLOW a
 this user, the same one its path names); every folder is looked at, opened and removed relative to that pinned
 descriptor, and every level below through its own pinned, fstat-checked descriptor (unlinkat, rmdir and fchmod
 relative to it). No link is ever followed and no path is walked by name, so swapping the container or a subfolder for
-a link mid-removal cannot redirect it. A link, a file or another user's folder is reported and left exactly as it is.
+a link mid-removal cannot redirect it. No mode is changed before the owner is proven gone (the marker is read through a
+search-only descriptor where a folder is not listable); after that, a folder of ours made unlistable gets its mode
+back only through fchmod on a descriptor opened O_NOFOLLOW and verified by fstat, never by name. A link, a file or
+another user's folder is reported and left exactly as it is.
 A folder is proven gone only when looking for it in the pinned container raises FileNotFoundError; any other error
 means not proven.
 
 Bounds (each listed in tests/lifetime_caps.json with a past-the-limit test): one pass examines at most
-`MAX_ENTRIES_SCANNED` entries of the container and `MAX_FOLDERS_LISTED` `prepare-*` folders, starting where the last
-pass stopped (a rotating cursor, so leftovers behind live or other entries are reached), removes at most
+`MAX_ENTRIES_SCANNED` entries of the container (every entry read counts, and the time share is checked while listing)
+and `MAX_FOLDERS_LISTED` `prepare-*` folders, going on with the listing the last pass stopped in (kept between passes,
+so leftovers behind live or other entries are reached however large the container is), removes at most
 `MAX_REMOVALS_PER_PASS` folders and `MAX_REMOVAL_ENTRIES_PER_PASS` entries in them, never deeper than
 `MAX_REMOVAL_DEPTH`, and stops at its deadline (checked before every removal step, so a cut pass leaves nothing
-deleting). A folder not finished is kept with its marker (removed last) and continued at the next pass. A reader may
+deleting). A folder not finished is kept with its marker and continued at the next pass: the last check comes
+before the marker goes, the folder's rmdir follows it at once, and a failed rmdir puts the marker back. A reader may
 hand back at most `MAX_RECORD_ITEMS` items and `MAX_RECORD_PATHS` distinct paths; the journal reader takes at most
 `MAX_ENTRIES_SCANNED` entries of the projects folder, `MAX_JOURNAL_PROJECTS` projects, `MAX_JOURNAL_NAMES` names of
 launch folders and `MAX_JOURNAL_ENTRIES` entries, all counted while it lists. Standard library only.
@@ -78,7 +83,15 @@ MAX_JOURNAL_ENTRIES = 4096
 MAX_JOURNAL_NAMES = 2 * MAX_JOURNAL_ENTRIES
 # Entries named in one listing of a folder being removed (it is listed again until it is empty).
 _REMOVAL_BATCH = 256
+# The container listing checks the time share after every this many entries read (so a pass whose share is over
+# still lists a small container, and reads at most this many entries of a large one).
+_LISTING_DEADLINE_EVERY = 64
 _DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0)
+# Open a folder for search only (no listing): needs only its search bit, so an unlistable folder of ours can be
+# verified by fstat and its mode changed through that descriptor. None where the platform has no O_SEARCH.
+_SEARCH_DIRECTORY = (None if getattr(os, 'O_SEARCH', None) is None
+                     else os.O_SEARCH | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0))
+_MARKER_READ = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NONBLOCK', 0)
 _INSTANCE = re.compile(r'[0-9a-f]{32}')
 _MARKER_FIELDS = {'instance', 'kind', 'project_id', 'state_root', 'version'}
 
@@ -214,23 +227,11 @@ class _Budget:
         return self.used >= MAX_REMOVAL_ENTRIES_PER_PASS or self.context.expired()
 
 
-def _open_folder(parent, name, ident, uid):
-    """A descriptor of `name` in the pinned `parent`, if it is still the folder that was looked at (same device
-    and inode, a directory of `uid`); None otherwise. Never follows a link."""
-    try:
-        descriptor = os.open(name, _DIRECTORY, dir_fd=parent)
-    except PermissionError:
-        # An owner-only folder made unreadable: make it readable again without following a link. Where the
-        # platform cannot change a mode without following, it stays (not removed, reported).
-        if os.chmod not in os.supports_follow_symlinks:
-            return None
-        try:
-            os.chmod(name, 0o700, dir_fd=parent, follow_symlinks=False)
-            descriptor = os.open(name, _DIRECTORY, dir_fd=parent)
-        except (OSError, NotImplementedError):
-            return None
-    except OSError:
-        return None
+def _verified(parent, name, flags, ident, uid):
+    """A descriptor of `name` in the pinned `parent` opened with `flags` (never following a link), if fstat shows it
+    is still the folder that was looked at (same device and inode, a directory of `uid`); None otherwise. A refused
+    open raises (PermissionError and the rest), so the caller can tell 'not readable' from 'not ours'."""
+    descriptor = os.open(name, flags, dir_fd=parent)
     try:
         info = os.fstat(descriptor)
     except OSError:
@@ -239,6 +240,53 @@ def _open_folder(parent, name, ident, uid):
         os.close(descriptor)
         return None
     return descriptor
+
+
+def _look_folder(parent, name, ident, uid):
+    """A descriptor to read the owner marker through, BEFORE any owner proof: nothing is changed. A folder that is
+    not listable is opened for search only where the platform can (O_SEARCH); otherwise None (owner not proven)."""
+    for flags in (_DIRECTORY, _SEARCH_DIRECTORY):
+        if flags is None:
+            continue
+        try:
+            return _verified(parent, name, flags, ident, uid)
+        except PermissionError:
+            continue
+        except OSError:
+            return None
+    return None
+
+
+def _open_folder(parent, name, ident, uid):
+    """A listable descriptor of `name` in the pinned `parent`, if it is still the folder that was looked at; None
+    otherwise. Only called once the owner is proven gone. An owner-only folder made unlistable gets its mode back
+    only through fchmod on a descriptor opened O_NOFOLLOW and verified by fstat (the same device, inode and user),
+    never by name; where the platform cannot open a folder for search (no O_SEARCH) it stays as it is (not
+    removed, reported)."""
+    try:
+        return _verified(parent, name, _DIRECTORY, ident, uid)
+    except PermissionError:
+        pass
+    except OSError:
+        return None
+    if _SEARCH_DIRECTORY is None:
+        return None
+    try:
+        search = _verified(parent, name, _SEARCH_DIRECTORY, ident, uid)
+    except OSError:
+        return None
+    if search is None:
+        return None  # another folder stands there now: it is left exactly as it is
+    try:
+        os.fchmod(search, 0o700)  # the verified folder itself, through its own descriptor
+    except OSError:
+        return None
+    finally:
+        os.close(search)
+    try:
+        return _verified(parent, name, _DIRECTORY, ident, uid)
+    except OSError:
+        return None
 
 
 def _remove_tree(parent, name, ident, uid, budget, depth=0):
@@ -280,13 +328,11 @@ def _remove_tree(parent, name, ident, uid, budget, depth=0):
                     pass
                 budget.used += 1
         if depth == 0:
+            # The last budget check comes BEFORE the marker goes; the marker and the folder then go back to back
+            # (`_finish`), so a pass that stops never leaves a folder without its owner proof.
             if budget.spent():
                 return False
-            try:
-                os.unlink(MARKER, dir_fd=descriptor)
-            except FileNotFoundError:
-                pass
-            budget.used += 1
+            return _finish(parent, name, descriptor, budget)
     except OSError:
         return False
     finally:
@@ -299,6 +345,47 @@ def _remove_tree(parent, name, ident, uid, budget, depth=0):
         return False
     budget.used += 1
     return True
+
+
+def _finish(parent, name, folder, budget):
+    """Remove the emptied top folder's owner marker, then the folder itself at once: no check, no other step
+    between. If the rmdir fails, the marker is put back as it was (the same bytes and times), so the next pass can
+    still prove the owner gone and finish. A marker that is missing or not a marker now removes nothing."""
+    descriptor = os.open(MARKER, _MARKER_READ, dir_fd=folder)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_MARKER_BYTES:
+            return False
+        data = os.read(descriptor, MAX_MARKER_BYTES + 1)
+    finally:
+        os.close(descriptor)
+    os.unlink(MARKER, dir_fd=folder)
+    try:
+        os.rmdir(name, dir_fd=parent)
+    except OSError:
+        _restore_marker(folder, data, info)
+        return False
+    budget.used += 2
+    return True
+
+
+def _restore_marker(folder, data, info):
+    try:
+        descriptor = os.open(MARKER, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                             | getattr(os, 'O_CLOEXEC', 0), 0o600, dir_fd=folder)
+    except OSError:
+        return
+    try:
+        os.write(descriptor, data)
+        if os.utime in os.supports_fd:
+            os.utime(descriptor, ns=(info.st_atime_ns, info.st_mtime_ns))
+    except OSError:
+        pass
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
 
 
 class WorkspaceCheck(Check):
@@ -319,8 +406,10 @@ class WorkspaceCheck(Check):
         self._uid = os.geteuid() if uid is None else uid
         # Passes a folder has been pending: only folders pending now are kept, so it ends with them.
         self.pending_passes = {}
-        # Where the next pass starts examining the container's entries (rotating, so nothing is starved).
-        self.cursor = 0
+        # The container listing the next pass goes on with: (container device and inode, its open listing), or None
+        # to start a new one. Kept between passes so every pass reads at most MAX_ENTRIES_SCANNED entries and still
+        # reaches the end of a huge container (rotating: a listing that ends is closed and the next starts again).
+        self._scan = None
 
     def _container_path(self):
         if self._container is not None:
@@ -331,30 +420,55 @@ class WorkspaceCheck(Check):
         except Exception:
             return None
 
-    def _listing(self, container):
-        """(`prepare-*` names, whether entries were left unexamined) for this pass, from the cursor on. Names only;
-        nothing is followed."""
-        offset = self.cursor
-        while True:
-            names, examined, position, ended = [], 0, 0, True
-            with os.scandir(container) as listing:
-                for entry in listing:
-                    if position < offset:
-                        position += 1
-                        continue
-                    if examined >= MAX_ENTRIES_SCANNED or len(names) >= MAX_FOLDERS_LISTED:
-                        ended = False
+    def close(self):
+        """Close the kept container listing, if any (the next pass starts a new one)."""
+        scan, self._scan = getattr(self, '_scan', None), None
+        if scan is not None:
+            try:
+                scan[1].close()
+            except Exception:
+                pass
+
+    def __del__(self):
+        self.close()
+
+    def _listing(self, container, ident, context):
+        """(`prepare-*` names, whether entries were left unexamined) for this pass, going on from where the last
+        pass stopped. Every entry read counts toward MAX_ENTRIES_SCANNED and the time share is checked every
+        `_LISTING_DEADLINE_EVERY` entries, so a pass never reads more than the cap, however far into the container
+        it is. Names only; nothing is followed."""
+        if self._scan is not None and self._scan[0] != ident:
+            self.close()  # another folder stands at the container's path now: start again there
+        resumed = self._scan is not None
+        names, read = [], 0
+        try:
+            while True:
+                if self._scan is None:
+                    listing = os.scandir(container)
+                    self._scan = (ident, listing, iter(listing))
+                entries, pulled, ended = self._scan[2], 0, False
+                while read < MAX_ENTRIES_SCANNED and len(names) < MAX_FOLDERS_LISTED:
+                    if read and read % _LISTING_DEADLINE_EVERY == 0 and context.expired():
                         break
-                    examined += 1
-                    position += 1
+                    try:
+                        entry = next(entries)
+                    except StopIteration:
+                        ended = True
+                        break
+                    read += 1
+                    pulled += 1
                     if entry.name.startswith(FOLDER_PREFIX):
                         names.append(entry.name)
-            if examined == 0 and offset > 0:
-                offset = 0  # the cursor was past the end: start again from the first entry
-                continue
-            break
-        self.cursor = 0 if ended else position
-        return sorted(names), not ended or offset > 0
+                if ended:
+                    self.close()
+                    if resumed and pulled == 0:
+                        resumed = False  # the kept listing was at its end: start again from the first entry
+                        continue
+                break
+        except BaseException:
+            self.close()
+            raise
+        return sorted(names), not ended or resumed
 
     @staticmethod
     def _records(reader):
@@ -381,12 +495,11 @@ class WorkspaceCheck(Check):
         lock, (None, None) when nothing is proven (no or unreadable marker, another state root, no lock file)."""
         if self._state_root is None:
             return None, None
-        folder = _open_folder(container, name, ident, self._uid)
+        folder = _look_folder(container, name, ident, self._uid)  # no mode is changed before owner proof
         if folder is None:
             return None, None
         try:
-            descriptor = os.open(MARKER, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0)
-                                 | getattr(os, 'O_NONBLOCK', 0), dir_fd=folder)
+            descriptor = os.open(MARKER, _MARKER_READ, dir_fd=folder)
         except OSError:
             return None, None
         finally:
@@ -453,7 +566,7 @@ class WorkspaceCheck(Check):
                 or os.path.realpath(container) != str(container)):
             return [self._unsafe_container()]
         try:
-            names, more = self._listing(fd)  # listed first: the records below are read after it
+            names, more = self._listing(fd, (pinned.st_dev, pinned.st_ino), context)  # listed first: the records below are read after it
         except OSError:
             return [_finding('container', 'reported', 'container_unsafe',
                              'The CoCoLo scratch folder could not be listed, so no leftover preparation folder '
