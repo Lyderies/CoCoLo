@@ -786,6 +786,24 @@ def _snapshot_project_partition(
     }
 
 
+def _refuse_malformed_rows(connection, project_id, record_type):
+    """Fail closed when a project holds an unreadable row of this type (U3 review LOW-1).
+
+    The run-identity expression is guarded with json_valid so an index build and a keyed
+    seek never trip over a corrupt row, but then a corrupt row simply fails to match a
+    duplicate guard ("already dispatched/recorded"). Before U3 the unguarded read raised
+    on it. A corrupt row has a NULL guarded run id, so this seeks the same index for NULL
+    (a handful of rows) and refuses when one of them is not valid JSON.
+    """
+    if connection.execute(
+        "SELECT 1 FROM records WHERE project_id=? "
+        "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END IS NULL "
+        "AND record_type=? AND NOT json_valid(CAST(content AS TEXT)) LIMIT 1",
+        (project_id, record_type),
+    ).fetchone() is not None:
+        raise LedgerError(f"a malformed {record_type} record blocks this check")
+
+
 def _claim_exists(connection, project_id, handle_digest, run_id):
     """Whether a launch claim holds this handle or this run id.
 
@@ -6509,6 +6527,7 @@ class LearningLedger:
                 (project_id, run_id),
             ).fetchone() is None:
                 raise LedgerError("only a dispatched run records its usage")
+            _refuse_malformed_rows(self._connection, project_id, "provider_usage")
             if self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? AND record_type='provider_usage' "
                 "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",
@@ -8731,6 +8750,7 @@ class LearningLedger:
                 raise LedgerError("host run admission differs from the dispatched provider")
             if _claim_exists(self._connection, project_id, handle_digest, run_id):
                 raise LedgerError("host run was already dispatched")
+            _refuse_malformed_rows(self._connection, project_id, "dispatch_intent")
             if self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? AND record_type='dispatch_intent' "
                 "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",
@@ -8830,6 +8850,7 @@ class LearningLedger:
                 raise LedgerError("only the dispatched run records its child's result")
             if client_diagnostics is not None and intent["provider"] != "claude":
                 raise LedgerError("client observations require a Claude dispatch")
+            _refuse_malformed_rows(self._connection, project_id, "dispatch_result")
             if self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? AND record_type='dispatch_result' "
                 "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",

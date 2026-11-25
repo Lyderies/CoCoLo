@@ -3457,7 +3457,12 @@
    "codex:tests.test_read_growth.ReadGrowthTests.test_U3_9_candidate_lineage_looks_up_only_the_named_candidate",
    "codex:tests.test_read_growth.ReadGrowthTests.test_U3_additive_indexes_rebuild_on_reopen_without_changing_rows_or_version",
    "codex:tests.test_read_plans.ReadPlanTests.test_U3_6_every_budgeted_read_that_runs_uses_a_live_or_selective_index",
-   "codex:tests.test_read_plans.ReadPlanTests.test_U3_guard_rejects_residual_scans_and_accepts_expression_seeks"
+   "codex:tests.test_read_plans.ReadPlanTests.test_U3_guard_rejects_residual_scans_and_accepts_expression_seeks",
+   "codex:tests.test_u3_review_fixes.AdmissionQueryEquivalenceTests.test_U3_the_candidate_query_returns_the_rows_and_order_of_the_original_full_scan",
+   "codex:tests.test_u3_review_fixes.DuplicateGuardsFailClosedTests.test_U3_a_malformed_dispatch_intent_blocks_the_already_dispatched_check",
+   "codex:tests.test_u3_review_fixes.DuplicateGuardsFailClosedTests.test_U3_b_a_malformed_provider_usage_blocks_the_already_recorded_check",
+   "codex:tests.test_u3_review_fixes.DuplicateGuardsFailClosedTests.test_U3_c_a_malformed_dispatch_result_blocks_the_already_recorded_check",
+   "codex:tests.test_u3_review_fixes.DuplicateGuardsFailClosedTests.test_U3_d_the_malformed_row_check_seeks_the_run_index"
   ],
   "source": "tests/requirements/u3.json#U3",
   "statement": "Budgeted account and project reads have indexed or otherwise bounded work, unchanged answers and production-budget completion with a fixed live set at 1k and 100k historical rows."

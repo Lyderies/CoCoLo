@@ -1262,6 +1262,50 @@
       },
       "status": "interrupted after repeated deferred-signature timeouts",
       "uncompleted_module": "codex:tests.test_admission_history_growth"
+    },
+    {
+      "name": "review-fix-round",
+      "elapsed_seconds": 26.3,
+      "job_seconds": 111.5,
+      "preflight_seconds": 6.8,
+      "metadata_errors": [],
+      "failed_units": [],
+      "tests": 189,
+      "modules": [
+        "codex:tests.test_read_growth",
+        "codex:tests.test_read_plans",
+        "codex:tests.test_p9b_attestation_followups",
+        "codex:tests.test_claim_denial_recovery",
+        "codex:tests.test_admission_history_growth",
+        "codex:tests.test_account_observation_schema",
+        "codex:tests.test_learning_store",
+        "codex:tests.test_candidate_evidence_lookup",
+        "codex:tests.test_type_lookups",
+        "codex:tests.test_u3_review_fixes"
+      ],
+      "note": "unsandboxed; test_admission_history_growth completes (26.3 s); new tests red on 92abd22e (test_U3_a/b/c: LedgerError not raised), green after",
+      "index_build_measurement": {
+        "rows": 220018,
+        "file_mib_before": 296.2,
+        "first_open_seconds": [
+          0.75,
+          0.79
+        ],
+        "index_build_seconds": [
+          0.38,
+          0.42
+        ],
+        "records_run_seconds": [
+          0.25,
+          0.28
+        ],
+        "reopen_seconds": [
+          0.37,
+          0.38
+        ],
+        "growth_percent": 7.3,
+        "script": "scripts/measure_u3_index_build.py"
+      }
     }
   ]
 }
