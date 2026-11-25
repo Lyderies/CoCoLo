@@ -276,3 +276,14 @@ B1/B6 `unmeasured` with reasons and adds memory-only numbers; this round retains
 that scope and restores orchestration to the untracked-kind pin.
 The `lifetime_caps.json` entry registers the new bounded tombstone map (a registry
 addition, not a changed assertion).
+
+## 0.8.64 batch fix B (full-run failures from the final fix)
+
+- `project_driver`: a driver without memory custody (`_memory` is None) never reads `_memory_start`
+  (`_register`, `_release_registers`); it behaves as before memory holds (fixes the M11
+  `DispatchSlotRegisterTests` AttributeError). The e2a wake-wire `Mock` stub now models such a driver
+  (`_memory=None`).
+- New limits listed in `lifetime_caps.json` with past-the-limit tests (`test_run_driver_retries`,
+  `MemoryHoldLimitTests`, RS-B-4): `_release_failed` (the `_failed_views` map, bounded by `MAX_RETIRED_RUNS`;
+  checks 1 -> 3, two of them time thresholds) and `_request` (held `run.register` intake bounded by `MAX_INTAKE`).
+- No existing assertion changed. 0.8.64 runtime digest re-recorded in place (not installed anywhere).

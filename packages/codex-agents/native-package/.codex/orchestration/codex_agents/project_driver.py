@@ -602,7 +602,7 @@ class RunDriver:
         Once it is done they register as any other; once it failed, `_register` answers as an unavailable
         service did before memory holds (refused history_service_unavailable) and asks for the recovery again.
         One still waiting at its bound is refused the same way."""
-        if not self._register_waiting:
+        if self._memory is None or not self._register_waiting:
             return
         waiting, now, self._register_waiting = self._register_waiting, self._clock(), []
         for item in waiting:
@@ -651,7 +651,7 @@ class RunDriver:
             if known.inputs_digest != inputs_digest or known.run_id != value['run_id']:
                 raise HistoryError('history_conflict')
             return
-        if self._memory_start.state != 'done':
+        if self._memory is not None and self._memory_start.state != 'done':
             if self._memory_start.state == 'failed':
                 self._memory_start = self._runtime.persistence.memory_hold(
                     'recover', self._journal.directory, self._journal.instance)

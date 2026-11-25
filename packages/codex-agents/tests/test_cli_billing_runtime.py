@@ -3,9 +3,11 @@ from dataclasses import asdict
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -25,6 +27,12 @@ from codex_agents.learning_contracts import canonical_json, keyed_digest
                      'original fixed macOS signature worker guard')
 class CliBillingRuntimeTests(unittest.TestCase):
     launches = fixtures.AccountBillingJobTests.launches
+
+    @classmethod
+    def setUpClass(cls):
+        # TESTSPEED-4: the fresh CLIs share one bytecode cache outside the source tree, so only the first compiles.
+        cls.bytecode = tempfile.mkdtemp(prefix='cli-pyc-')
+        cls.addClassCleanup(shutil.rmtree, cls.bytecode, ignore_errors=True)
 
     def setUp(self):
         fixtures.AccountBillingJobTests.setUp(self)
@@ -79,9 +87,11 @@ class CliBillingRuntimeTests(unittest.TestCase):
             env['CODEX_THREAD_ID'] = 'fixture-billing-primary'
         else:
             env.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='fixture-billing-primary')
+        env['COCOLO_TEST_ENDED_SERVICE_STARTS'] = '1'  # TESTSPEED-3: no collector runs here, so its start ends at once
         env.update(environment or {})
         args = [] if identity is None else ['--request-id', identity]
-        process = subprocess.Popen([sys.executable, '-B', '-m', 'tests.dispatch_cli_fixture', 'provider-observe',
+        process = subprocess.Popen([sys.executable, '-X', 'pycache_prefix=' + self.bytecode, '-m', 'tests.dispatch_cli_fixture',
+            'provider-observe',
             '--project-root', str(root or self.fixture.project), '--state-root', str(self.state.root),
             '--provider', provider, *(['--billing-probe'] if billing else []), *args, *extra],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
@@ -114,6 +124,7 @@ class CliBillingRuntimeTests(unittest.TestCase):
                 time.sleep(.005)
         fixtures.AccountBillingJobTests.stop(self)
 
+    @__import__('test_framework').requirements('TESTSPEED-1', 'TESTSPEED-3', 'TESTSPEED-4', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED).')
     def test_both_primary_hosts_use_account_api_and_preserve_launched_projection_and_redaction(self):
         for host in ('codex', 'claude'):
             code, result = self.take(self.start(host=host))
@@ -240,9 +251,13 @@ class CliBillingRuntimeTests(unittest.TestCase):
         code, alone = self.take(self.start(identity='probe-after-overlap'))
         self.assertEqual((0, None), (code, alone.get('reason_code')), alone)
 
+    @__import__('test_framework').requirements('TESTSPEED-1', 'TESTSPEED-2', 'TESTSPEED-3', 'TESTSPEED-4', 'TESTSPEED-5', why_not_scenario='Test-speed requirement: these are existing tests whose seconds and fixture setup were changed; the requirement is how fast and how cheaply they run, not a new outcome (TESTSPEED).')
     def test_second_project_fresh_cli_observes_while_first_probe_process_is_held(self):
-        # The first probe is held well past what a fresh CLI process takes to start on a slow machine.
-        self.fixture.frames('claude', [bridge_fixtures.PROBE_INIT, {'sleep': 8},
+        # The first probe is held until the test lets it go, however long a fresh CLI process takes to start
+        # on a slow machine (TESTSPEED-5: a gate file, not a fixed 8 s sleep every run pays).
+        gate = self.fixture.tools/'held-first-gate'
+        self.addCleanup(lambda: gate.parent.is_dir() and not gate.exists() and gate.write_text('go'))
+        self.fixture.frames('claude', [bridge_fixtures.PROBE_INIT, {'wait_for': str(gate)},
                                      bridge_fixtures.FAVOURABLE, bridge_fixtures.result_frame('OK')])
         first = self.start(identity='held-first')
         self.wait(lambda: any(j.state == 'offered' and j.supervisor is not None
@@ -257,6 +272,7 @@ class CliBillingRuntimeTests(unittest.TestCase):
         self.assertEqual(0, code, observed)
         self.assertLess(time.monotonic()-start, 6)
         self.assertIsNone(first.poll())  # Answered while the first probe was still held.
+        gate.write_text('go')
         self.assertEqual(0, self.take(first)[0])
 
 

@@ -1,0 +1,35 @@
+{
+ "authority": "docs/requirements/testspeed.md",
+ "requirements": [
+  {
+   "id": "TESTSPEED-1",
+   "statement": "each of the three modules totals at most 45 s with full-run parallelism (`--jobs 16` beside heavy modules), measured as the sum of its fragments' seconds, which is what the budget check counts.",
+   "source": "tests/requirements/testspeed.json#TESTSPEED-1"
+  },
+  {
+   "id": "TESTSPEED-2",
+   "statement": "no assertion is removed or weakened. Every changed assertion, renamed test or changed fixture behaviour is paired old -> new in [`testspeed/assertions.md`](testspeed/assertions.md).",
+   "source": "tests/requirements/testspeed.json#TESTSPEED-2"
+  },
+  {
+   "id": "TESTSPEED-3",
+   "statement": "a fresh-CLI test that has no collector and no project service must not pay for starting them. The CLI's best-effort starts of the collector and of the project service end at once in such a fixture; the fixture ends them at once instead of starting an isolated interpreter that is bound to end. Only tests that opt in get this; real starts keep their own tests.",
+   "source": "tests/requirements/testspeed.json#TESTSPEED-3"
+  },
+  {
+   "id": "TESTSPEED-4",
+   "statement": "the fresh CLI processes of one test class share one bytecode cache outside the source tree.",
+   "source": "tests/requirements/testspeed.json#TESTSPEED-4"
+  },
+  {
+   "id": "TESTSPEED-5",
+   "statement": "a held fake provider child waits on a gate file the test opens, not on a fixed sleep.",
+   "source": "tests/requirements/testspeed.json#TESTSPEED-5"
+  },
+  {
+   "id": "TESTSPEED-6",
+   "statement": "independent real-podman scenarios that share nothing run at the same moment.",
+   "source": "tests/requirements/testspeed.json#TESTSPEED-6"
+  }
+ ]
+}
