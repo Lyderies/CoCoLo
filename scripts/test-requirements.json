@@ -3733,5 +3733,34 @@
   ],
   "source": "tests/requirements/usage-recheck.json#UX-HCU-1",
   "statement": "### UX-HCU-1 - host_client_unknown says what to do (LOW)\n\nThe refusal `host_client_unknown` gets its own next step: run the command from the Claude Code or Codex session\nthat is the project's host (or name a host that is running there). It does not say to run learning-status.\n**Acceptance:** `refusal_steps.next_step('host_client_unknown')` names the host session and not learning-status."
+ },
+ "RS-10-DUE": {
+  "checks": [
+   "codex:tests.test_s13_budgets.S13Budgets.test_1000_due_holds_drain_in_batches_of_64_each_under_50_ms_and_well_inside_60_s"
+  ],
+  "source": "tests/requirements/s13.json#RS-10-DUE",
+  "statement": "1,000 due holds drain in batches of 64 within ceil((1000+64)/64)+1 = 18 batches, each batch under 50 ms, and in total well inside 60 s."
+ },
+ "RS-10-FLAT": {
+  "checks": [
+   "codex:tests.test_s13_budgets.S13Budgets.test_b6_start_pass_work_is_equal_with_and_without_released_leases_of_history"
+  ],
+  "source": "tests/requirements/s13.json#RS-10-FLAT",
+  "statement": "The start pass's work is flat as released history grows (small scale in the suite; 100,000 released leases and reservations in scripts/measure_s13.py)."
+ },
+ "RS-B-9-B1": {
+  "checks": [
+   "codex:tests.test_s13_budgets.S13Budgets.test_b1_register_and_memory_writer_work_of_a_normal_run_is_under_5_ms"
+  ],
+  "source": "tests/requirements/s13.json#RS-B-9-B1",
+  "statement": "Per normal run, the added writer work of all RS-B register transactions (reserve, arm, bind, commit, reservation release) plus the memory-hold transactions is under 5 ms in total, measured on the real operations (warm-up, then median of three)."
+ },
+ "RS-B-9-B6": {
+  "checks": [
+   "codex:tests.test_s13_budgets.S13Budgets.test_b6_one_eligible_row_behind_128_blocked_and_50_arrivals_per_batch_within_4_batches",
+   "codex:tests.test_s13_budgets.S13Budgets.test_b6_start_pass_work_is_equal_with_and_without_released_leases_of_history"
+  ],
+  "source": "tests/requirements/s13.json#RS-B-9-B6",
+  "statement": "One eligible unarmed lease behind 128 blocked (live) leases, with 50 new blocked arrivals before every batch, is released within 4 start-pass batches of at most 64, each under 50 ms; the pass does equal SQLite work with and without released lease history."
  }
 }

@@ -1,0 +1,25 @@
+{
+ "authority": "docs/requirements/s13.md",
+ "requirements": [
+  {
+   "id": "RS-B-9-B1",
+   "statement": "Per normal run, the added writer work of all RS-B register transactions (reserve, arm, bind, commit, reservation release) plus the memory-hold transactions is under 5 ms in total, measured on the real operations (warm-up, then median of three).",
+   "source": "tests/requirements/s13.json#RS-B-9-B1"
+  },
+  {
+   "id": "RS-B-9-B6",
+   "statement": "One eligible unarmed lease behind 128 blocked (live) leases, with 50 new blocked arrivals before every batch, is released within 4 start-pass batches of at most 64, each under 50 ms; the pass does equal SQLite work with and without released lease history.",
+   "source": "tests/requirements/s13.json#RS-B-9-B6"
+  },
+  {
+   "id": "RS-10-FLAT",
+   "statement": "The start pass's work is flat as released history grows (small scale in the suite; 100,000 released leases and reservations in scripts/measure_s13.py).",
+   "source": "tests/requirements/s13.json#RS-10-FLAT"
+  },
+  {
+   "id": "RS-10-DUE",
+   "statement": "1,000 due holds drain in batches of 64 within ceil((1000+64)/64)+1 = 18 batches, each batch under 50 ms, and in total well inside 60 s.",
+   "source": "tests/requirements/s13.json#RS-10-DUE"
+  }
+ ]
+}

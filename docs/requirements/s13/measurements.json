@@ -1,0 +1,80 @@
+{
+ "B1": {
+  "limit_ms": 5,
+  "memory_transactions_samples_ms": [
+   [
+    0.431708,
+    0.475334,
+    0.389042,
+    0.431083
+   ],
+   [
+    0.411459,
+    0.4615,
+    0.444875,
+    0.349625
+   ],
+   [
+    0.391583,
+    0.389083,
+    0.433792,
+    0.389791
+   ]
+  ],
+  "memory_writer_ms": 1.667459,
+  "register_calls": {
+   "arm_hold": 1,
+   "release_hold": 2,
+   "take_hold": 3,
+   "wake_before": 1,
+   "wake_settled": 6
+  },
+  "register_ms": 0.126627,
+  "register_samples_ms": [
+   0.126585,
+   0.126627,
+   0.136583
+  ],
+  "reservations_released_completed": 4,
+  "total_ms": 1.794086,
+  "warmup_runs": 1
+ },
+ "B6": [
+  {
+   "arrivals_per_batch": 50,
+   "batch_ms": [
+    0.851208
+   ],
+   "batch_vm_steps": [
+    3067
+   ],
+   "batches": 1,
+   "blocked": 128,
+   "target_state": "expired",
+   "tombstones": 0
+  },
+  {
+   "arrivals_per_batch": 50,
+   "batch_ms": [
+    0.944125
+   ],
+   "batch_vm_steps": [
+    3067
+   ],
+   "batches": 1,
+   "blocked": 128,
+   "target_state": "expired",
+   "tombstones": 100000
+  }
+ ],
+ "B6_start_pass_work_flat": true,
+ "due_holds": {
+  "batch_limit_ms": 50,
+  "batches": 16,
+  "due": 1000,
+  "limit_seconds": 60,
+  "maximum_batch_ms": 21.133333,
+  "released": 1000,
+  "total_seconds": 0.290406248
+ }
+}

@@ -323,6 +323,7 @@
  "codex:tests.test_run_network": "integration",
  "codex:tests.test_run_provenance": "integration",
  "codex:tests.test_runtime_release": "unit",
+ "codex:tests.test_s13_budgets": "integration",
  "codex:tests.test_service_harness": "integration",
  "codex:tests.test_service_host": "integration",
  "codex:tests.test_service_ownership_audit": "integration",
