@@ -42,7 +42,7 @@ DRIVERS = (
         'test_b2_service_outcome', 'test_lost_run_settlement', 'test_account_observation_failure',
         'test_account_billing_execution', 'test_run_holds', 'test_project_orchestration',
         'test_claim_denial_recovery', 'test_project_driver', 'test_account_settlement_driver',
-        'test_account_settlement_recovery')),
+        'test_account_settlement_lifecycle', 'test_account_settlement_recovery')),
     ('host open/billing', (
         'test_project_host_open', 'test_host_open_lane', 'test_required_host_open',
         'test_account_billing_admission', 'test_account_billing_jobs', 'test_account_slot_health')),

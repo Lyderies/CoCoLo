@@ -241,7 +241,7 @@ class ReviewRoundOneDriverTests(SettlementHarness):
         self.assertEqual([], self.journal_states())
 
     # B4s confirming check (decision 154): HIGH 3, a second stop before the intent's journal completion.
-    @requirements('RS-B-B4', 'TESTSPEED3-1', 'TESTSPEED3-2', 'TESTSPEED3-3', 'TESTSPEED3-4')
+    @requirements('RS-B-B4', 'TESTSPEED3-1', 'TESTSPEED3-2', 'TESTSPEED3-3', 'TESTSPEED3-4', 'TESTSPEED3-5')
     def test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace(self):
         """HIGH 3: the successor fenced the intent's claim (the lease expired) and stopped before it could remove
         the workspace and settle the intent; the third service no longer finds a `claim_pending` lease, so it
@@ -270,7 +270,7 @@ class ReviewRoundOneDriverTests(SettlementHarness):
         self.assertEqual(0, self.account_claims())
         self.assertEqual([], self.settlements())
 
-    @requirements('RS-B-B4', 'TESTSPEED3-1', 'TESTSPEED3-2', 'TESTSPEED3-3', 'TESTSPEED3-4')
+    @requirements('RS-B-B4', 'TESTSPEED3-1', 'TESTSPEED3-2', 'TESTSPEED3-3', 'TESTSPEED3-4', 'TESTSPEED3-5')
     def test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it(self):
         """HIGH 3: the successor learned the claim was admitted and settled it (its lease expired with the
         settlement), then stopped before the intent's journal completion; the third service settles the intent."""

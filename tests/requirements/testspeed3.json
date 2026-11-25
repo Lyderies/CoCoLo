@@ -3,7 +3,7 @@
  "requirements": [
   {
    "id": "TESTSPEED3-1",
-   "statement": "`codex:tests.test_account_settlement_driver` and the module split out of it, `codex:tests.test_account_settlement_recovery`, each total at most 45 s, measured as the sum of the module's fragments' seconds (what the budget check counts), with full-run parallelism (`--jobs 16` beside `codex:tests.test_project_driver` and `root:test_install`).",
+   "statement": "`codex:tests.test_account_settlement_driver` and the two modules split out of it, `codex:tests.test_account_settlement_recovery` and `codex:tests.test_account_settlement_lifecycle`, each total at most 45 s, measured as the sum of the module's fragments' seconds (what the budget check counts), with full-run parallelism (`--jobs 16` beside `codex:tests.test_project_driver` and `root:test_install`).",
    "source": "tests/requirements/testspeed3.json#TESTSPEED3-1"
   },
   {
@@ -18,8 +18,13 @@
   },
   {
    "id": "TESTSPEED3-4",
-   "statement": "the review-round class `ReviewRoundOneDriverTests` runs from its own module, `test_account_settlement_recovery`, on the same harness (imported, not copied); every one of its tests runs exactly once, in one module or the other, and is registered in the layer, stage and requirement tables.",
+   "statement": "the review-round class `ReviewRoundOneDriverTests` runs from `test_account_settlement_recovery`, and `ClosureAuthorityTests`, `StatusAgreementTests` and `LostLifecycleLimitTests` from `test_account_settlement_lifecycle`, on the same harness (imported, not copied); every test runs exactly once, in one module or another, and is registered in the layer, stage and requirement tables.",
    "source": "tests/requirements/testspeed3.json#TESTSPEED3-4"
+  },
+  {
+   "id": "TESTSPEED3-5",
+   "statement": "the settlement tests wait for a successor host's sweep in tenths of a second: their harness runs the project driver's sweep every 0.1 s instead of every second; no deadline, retry or fence rule of the product changes, and no test asserts the one-second cadence.",
+   "source": "tests/requirements/testspeed3.json#TESTSPEED3-5"
   }
  ]
 }

@@ -998,8 +998,8 @@
  },
  "L14.1": {
   "checks": [
-   "codex:tests.test_account_settlement_driver.StatusAgreementTests.test_L14_1_a_settled_lost_run_reads_abandoned_in_the_report_as_in_learning_status",
-   "codex:tests.test_account_settlement_driver.StatusAgreementTests.test_L14_1_learning_status_counts_the_projects_orchestrations_by_state"
+   "codex:tests.test_account_settlement_lifecycle.StatusAgreementTests.test_L14_1_a_settled_lost_run_reads_abandoned_in_the_report_as_in_learning_status",
+   "codex:tests.test_account_settlement_lifecycle.StatusAgreementTests.test_L14_1_learning_status_counts_the_projects_orchestrations_by_state"
   ],
   "source": "PLAN-0.4.0.md T7",
   "statement": "learning-status, learning-run-status, earlier_version_runs and learning-orchestration-report give the right values at each phase, and none is private."
@@ -2058,9 +2058,9 @@
    "codex:tests.test_account_settlement.ValidatorTests.test_B4_7_a_lease_only_settlement_needs_its_lease_released_lost_unbound",
    "codex:tests.test_account_settlement.ValidatorTests.test_B4_7_a_settlement_row_whose_hold_has_another_kind_is_refused",
    "codex:tests.test_account_settlement.ValidatorTests.test_B4_7_releasing_without_a_settlement_row_and_a_matching_one_are_accepted",
-   "codex:tests.test_account_settlement_driver.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
+   "codex:tests.test_account_settlement_lifecycle.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
    "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_L14_1_an_old_settled_entry_is_released_in_run_status_only_once_its_recovery_is_done",
-   "codex:tests.test_account_settlement_driver.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
+   "codex:tests.test_account_settlement_lifecycle.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
    "codex:tests.test_account_settlement_driver.SettlementThroughTheDriverTests.test_A1_a_run_lost_after_its_claim_is_settled_in_the_project_store",
    "codex:tests.test_account_settlement_driver.SettlementThroughTheDriverTests.test_A2_a_claim_admitted_but_never_bound_releases_its_lease_lost_unbound",
    "codex:tests.test_account_settlement_driver.SettlementThroughTheDriverTests.test_A3_the_orchestration_of_a_settled_run_closes_and_the_run_reads_lost",
@@ -3049,18 +3049,18 @@
  },
  "TESTSPEED3-1": {
   "checks": [
-   "codex:tests.test_account_settlement_driver.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
-   "codex:tests.test_account_settlement_driver.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
+   "codex:tests.test_account_settlement_lifecycle.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
+   "codex:tests.test_account_settlement_lifecycle.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
    "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it",
    "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace"
   ],
   "source": "tests/requirements/testspeed3.json#TESTSPEED3-1",
-  "statement": "`codex:tests.test_account_settlement_driver` and the module split out of it, `codex:tests.test_account_settlement_recovery`, each total at most 45 s, measured as the sum of the module's fragments' seconds (what the budget check counts), with full-run parallelism (`--jobs 16` beside `codex:tests.test_project_driver` and `root:test_install`)."
+  "statement": "`codex:tests.test_account_settlement_driver` and the two modules split out of it, `codex:tests.test_account_settlement_recovery` and `codex:tests.test_account_settlement_lifecycle`, each total at most 45 s, measured as the sum of the module's fragments' seconds (what the budget check counts), with full-run parallelism (`--jobs 16` beside `codex:tests.test_project_driver` and `root:test_install`)."
  },
  "TESTSPEED3-2": {
   "checks": [
-   "codex:tests.test_account_settlement_driver.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
-   "codex:tests.test_account_settlement_driver.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
+   "codex:tests.test_account_settlement_lifecycle.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
+   "codex:tests.test_account_settlement_lifecycle.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
    "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it",
    "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace"
   ],
@@ -3069,8 +3069,8 @@
  },
  "TESTSPEED3-3": {
   "checks": [
-   "codex:tests.test_account_settlement_driver.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
-   "codex:tests.test_account_settlement_driver.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
+   "codex:tests.test_account_settlement_lifecycle.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
+   "codex:tests.test_account_settlement_lifecycle.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
    "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it",
    "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace"
   ],
@@ -3079,11 +3079,22 @@
  },
  "TESTSPEED3-4": {
   "checks": [
+   "codex:tests.test_account_settlement_lifecycle.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
+   "codex:tests.test_account_settlement_lifecycle.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
    "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it",
    "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace"
   ],
   "source": "tests/requirements/testspeed3.json#TESTSPEED3-4",
-  "statement": "the review-round class `ReviewRoundOneDriverTests` runs from its own module, `test_account_settlement_recovery`, on the same harness (imported, not copied); every one of its tests runs exactly once, in one module or the other, and is registered in the layer, stage and requirement tables."
+  "statement": "the review-round class `ReviewRoundOneDriverTests` runs from `test_account_settlement_recovery`, and `ClosureAuthorityTests`, `StatusAgreementTests` and `LostLifecycleLimitTests` from `test_account_settlement_lifecycle`, on the same harness (imported, not copied); every test runs exactly once, in one module or another, and is registered in the layer, stage and requirement tables."
+ },
+ "TESTSPEED3-5": {
+  "checks": [
+   "codex:tests.test_account_settlement_lifecycle.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace"
+  ],
+  "source": "tests/requirements/testspeed3.json#TESTSPEED3-5",
+  "statement": "the settlement tests wait for a successor host's sweep in tenths of a second: their harness runs the project driver's sweep every 0.1 s instead of every second; no deadline, retry or fence rule of the product changes, and no test asserts the one-second cadence."
  },
  "TF-1": {
   "checks": [
