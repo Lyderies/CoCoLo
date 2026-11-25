@@ -686,22 +686,34 @@ def _start_reply(serving, migration_failure):
 def _service_slots(slots):
     """learning-status: the project service's run slots it can no longer free (O0c M1, M3), with one plain line."""
     stuck, limit = slots['stuck'], slots['limit']
+    pending, unlocated = slots.get('cleanup_pending', 0), slots.get('cleanup_unlocated', 0)
     if stuck == 0:
         summary = f"Project service: none of its {limit} run slots is stuck."
     else:
         summary = (f"Project service: {stuck} of its {limit} run slots {'is' if stuck == 1 else 'are'} held by "
                    "runs it cannot finish (a run failed after its claim, or a child's end could not be confirmed). "
-                   "It keeps them, since a child may still run, and it will be replaced by a fresh service once "
-                   "no run is under way and it has been idle; the new service settles them.")
-    pending = slots.get('cleanup_pending', 0)
+                   "It keeps them, since a child may still run, and ")
+        if pending:
+            # Replacement waits for the folder removal below (PREPCLEAN-2), so it is not promised here.
+            summary += ("the service will not be replaced automatically while a folder removal is still being "
+                        "retried; once it is done, a fresh service settles them.")
+        else:
+            summary += ("it will be replaced by a fresh service once no run is under way and it has been idle; "
+                        "the new service settles them.")
     warnings = []
     if pending:
         warning = ("A preparation folder could not be removed. The project service keeps retrying in the "
                    "background and holds its slot until removal is confirmed.")
         warnings.append(warning)
         summary += " " + warning
+    if unlocated:
+        warning = (f"{unlocated} of these folders {'has' if unlocated == 1 else 'have'} no known location, so removal "
+                   "cannot be retried or checked: the slot stays held until the project service restarts, and the "
+                   "folder may need to be deleted by hand from the CoCoLo scratch area.")
+        warnings.append(warning)
+        summary += " " + warning
     report = {'stuck_run_slots': stuck, 'limit': limit, 'replaced_when_idle': stuck > 0 and pending == 0,
-              'summary': summary, 'cleanup_pending': pending, 'warnings': warnings}
+              'summary': summary, 'cleanup_pending': pending, 'cleanup_unlocated': unlocated, 'warnings': warnings}
     warm_up = slots.get('warm_up')
     if warm_up is not None:
         # LRS-7: a service that cannot finish its start-up checks says so (fixed codes only).

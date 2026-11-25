@@ -554,7 +554,10 @@ class ProjectServiceHost:
                                         else self._driver.warm_up(),
                                         preparation_cleanup_pending=None
                                         if self._driver is None or request.operation != 'history.capacity_report'
-                                        else self._driver.pending_cleanup())
+                                        else self._driver.pending_cleanup(),
+                                        preparation_cleanup_unlocated=None
+                                        if self._driver is None or request.operation != 'history.capacity_report'
+                                        else self._driver.unlocated_cleanup())
         if request.operation == 'history.learning_feedback':
             # The authority is the owner's signature over this record, checked by the
             # account owner that holds the owner key; this process never reads that key.
@@ -678,12 +681,20 @@ class ProjectServiceHost:
         from .project_driver import PREPARATION_SLOTS
         return (0 if self._driver is None else self._driver.stuck_slots(), PREPARATION_SLOTS)
 
-    def holding(self):
-        """Whether any run or unfinished work for one is held here."""
+    def work_held(self):
+        """Whether any run or unfinished work for one is held here (never a folder removal still owed)."""
         self._owner()
         runtime = self._runtime
         return bool(len(runtime.pool._jobs) or len(runtime.persistence._jobs)
-                    or (self._driver is not None and (self._driver.busy() or self._driver.pending_cleanup())))
+                    or (self._driver is not None and self._driver.busy()))
+
+    def holding(self):
+        """Whether this host must keep serving: work held, or a folder removal it still owes.
+
+        An update or uninstall that withdrew this host does not wait for the removal (`work_held`): it is
+        recorded durably and the next service carries it on (PREPCLEAN-4, decisions 309 and 129.2)."""
+        self._owner()
+        return self.work_held() or (self._driver is not None and self._driver.pending_cleanup() > 0)
 
     def faulted(self):
         """O10 D13: whether this host's result writer faulted; it then stops and settles nothing itself."""

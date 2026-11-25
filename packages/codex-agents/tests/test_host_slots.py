@@ -266,6 +266,84 @@ class PreparationCleanupLifecycleTests(HostSlotHarness):
         self.assertEqual((0, 'result'), (code, dispatched.get('bridge_report', {}).get('outcome')), dispatched)
 
 
+    @requirements('PREPCLEAN-4', why_not_scenario='Canonical CLI/service-loop lifecycle: a permanently refused removal, an update that withdraws the host, and the successor service.')
+    def test_PREPCLEAN_4_replacement_proceeds_and_the_successor_resumes_the_removal(self):
+        self.succeed()
+        run = self.open_run()
+        code, dispatched = self.dispatch(run)
+        self.assertEqual((0, 'result'), (code, dispatched.get('bridge_report', {}).get('outcome')), dispatched)
+        first = [t for t in self.threads if t.name.startswith('test-project-host-')][-1]
+        allow, attempts = threading.Event(), []
+        self.addCleanup(allow.set)
+        original_remove = codex_preparation.remove_private_directory
+
+        def remove(path):
+            attempts.append(path)
+            if allow.is_set():
+                original_remove(path)
+
+        history_path = self.state.root / 'projects' / self.project_id / 'history.sqlite3'
+
+        def evidence():
+            with contextlib.closing(sqlite3.connect('file:' + str(history_path) + '?mode=ro', uri=True)) as db:
+                row = db.execute("SELECT state,evidence FROM project_holds WHERE kind='preparation' "
+                                 "ORDER BY taken_at_ms DESC").fetchone()
+            return None if row is None else (row[0], json.loads(row[1] or '{}'))
+
+        warning = ('A preparation folder could not be removed. The project service keeps retrying in the '
+                   'background and holds its slot until removal is confirmed.')
+        with mock.patch.object(codex_preparation, 'remove_private_directory', side_effect=remove), \
+             mock.patch.object(project_driver, 'CLEANUP_RETRY_SECONDS', .001), \
+             mock.patch.object(project_driver, 'CLEANUP_RETRY_MAX_SECONDS', .002):
+            self.record(run[0], run[1], run[3], dispatched)
+            self.wait_for(lambda: len(attempts) >= 3 and (evidence() or ('', {}))[1].get('removal') == 'pending',
+                          seconds=10)
+            folder = attempts[0]
+            self.assertTrue(folder.is_dir())
+            # An update withdraws the service's hint. A pending removal must not keep it alive.
+            client_runtime.runtime_hint_path(self.paths, self.project).unlink()
+            first.join(15)
+            self.assertFalse(first.is_alive(), 'a pending folder removal kept a withdrawn service alive')
+            self.assertTrue(folder.is_dir())
+            state, facts = evidence()
+            self.assertEqual(('released', 'pending', str(folder)), (state, facts['removal'], facts['workspace']))
+            # The successor loads the durable record, warns, and keeps retrying with the same backoff.
+            self.start_project_host(self.project)
+            self.assertIsNot(first, self.threads[-1])
+            self.wait_for(lambda: self.cli('learning-status')['project_service']['warnings'] == [warning],
+                          seconds=15)
+            seen = len(attempts)
+            self.wait_for(lambda: len(attempts) >= seen + 3, seconds=10)
+            self.assertTrue(folder.is_dir())
+            self.assertEqual([warning], self.cli('learning-status')['project_service']['warnings'])
+            allow.set()
+            self.wait_for(lambda: not folder.exists(), seconds=10)
+            self.wait_for(lambda: self.cli('learning-status')['project_service']['warnings'] == [], seconds=10)
+            self.wait_for(lambda: (evidence() or ('', {}))[1].get('removal') == 'removed', seconds=10)
+            self.assertNotIn('workspace', evidence()[1])
+
+
+    @requirements('PREPCLEAN-4', why_not_scenario='Canonical service-loop lifecycle: an update withdraws a host whose folder removal is permanently refused.')
+    def test_PREPCLEAN_4_a_refused_removal_never_keeps_a_withdrawn_host_alive(self):
+        self.succeed()
+        run = self.open_run()
+        code, dispatched = self.dispatch(run)
+        self.assertEqual((0, 'result'), (code, dispatched.get('bridge_report', {}).get('outcome')), dispatched)
+        host = self.hosts[-1]
+        thread = [t for t in self.threads if t.name.startswith('test-project-host-')][-1]
+        attempts = []
+        with mock.patch.object(codex_preparation, 'remove_private_directory', side_effect=attempts.append), \
+             mock.patch.object(project_driver, 'CLEANUP_RETRY_SECONDS', .001), \
+             mock.patch.object(project_driver, 'CLEANUP_RETRY_MAX_SECONDS', .002):
+            self.record(run[0], run[1], run[3], dispatched)
+            self.wait_for(lambda: len(attempts) >= 3 and bool(host._driver._giving_back), seconds=10)
+            self.assertTrue(attempts[0].is_dir())
+            client_runtime.runtime_hint_path(self.paths, self.project).unlink()
+            thread.join(15)
+            self.assertFalse(thread.is_alive(), 'a pending folder removal kept a withdrawn service alive')
+            self.assertTrue(attempts[0].is_dir())  # the folder is still there: its removal stays pending
+
+
 class HostWarmUpStatusTests(HostSlotHarness):
     """LRS-7: learning-status shows whether the project service finished its start-up checks."""
 

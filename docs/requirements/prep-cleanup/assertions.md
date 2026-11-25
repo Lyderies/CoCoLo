@@ -3,6 +3,15 @@
 Owner decision 309 supersedes the former stop-after-twelve policy. No other
 existing assertion is removed or weakened.
 
+Review fix round (S2 r1): no existing assertion changed. The withdrawn-host stop
+uses a new `ProjectServiceHost.work_held()`; `holding()` keeps its meaning (work or a
+removal owed), so `test_PREPCLEAN_real_cleanup_keeps_host_and_slot_until_thirteenth_removal`
+and the idle-boundary lifecycle test still assert `holding()` unchanged. The
+`cleanup_pending` count now also includes inherited removals; `replaced_when_idle` and
+the first warning sentence are unchanged. The summary text for "stuck slots and a
+pending cleanup" changed (it no longer promises replacement): no existing test asserts
+the old text, and `assertIn(warning, summary)` still holds.
+
 - `GivenBackPreparationTests.test_a_removal_that_keeps_being_refused_is_asked_a_bounded_number_of_times_and_kept`:
   old: exactly `MAX_CLEANUP_ATTEMPTS` requests after seventeen due steps;
   replacement: `test_PREPCLEAN_2_retries_continue_past_twelve_with_capped_monotone_backoff`

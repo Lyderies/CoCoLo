@@ -2038,8 +2038,18 @@
   },
   "history_api.py::_validate_result": {
    "checks": 1,
-   "ends": "PREPCLEAN-3: optional run_slots.cleanup_pending shares the existing 0..64 diagnostic wire range; no stored record or admission limit changes. The bound plus one (65), bool, negative and noninteger values are refused; observed retirement makes the diagnostic zero.",
+   "ends": "PREPCLEAN-3: optional run_slots.cleanup_pending and run_slots.cleanup_unlocated share the existing 0..64 diagnostic wire range; no stored record or admission limit changes. The bound plus one (65), bool, negative and noninteger values are refused; observed retirement makes the diagnostics zero.",
    "test": "test_PREPCLEAN_3_capacity_transport_warning_and_clear"
+  },
+  "memory_holds.py::pending_removals": {
+   "checks": 1,
+   "ends": "PREPCLEAN-4 (decision 309): a successor reads at most MAX_PENDING_REMOVALS (64, the run-slot diagnostic bound) recorded folder removals of other instances per read. A record ends when the folder is observed absent (removal_proven rewrites it as removed with no folder), after which it is no longer read; a full read is repeated once every record of it is done. The record lives in the preparation row's evidence, which stays as that row's tombstone, so no new table or hold kind exists.",
+   "test": "test_PREPCLEAN_4_a_successor_reads_at_most_the_pending_removal_bound_at_a_time"
+  },
+  "project_driver.py::_step_removals": {
+   "checks": 1,
+   "ends": "PREPCLEAN-4 (decision 309): at most MAX_PENDING_REMOVALS inherited removals are in memory (the read bound); each keeps only its folder, capped pause and deadline (the sixty-second cap of cleanup retries, no attempt count) and ends when the folder is observed absent and its proof recorded. The read is asked again only after a full one is all done.",
+   "test": "test_PREPCLEAN_4_a_full_read_is_asked_again_once_every_record_is_done"
   }
  }
 }

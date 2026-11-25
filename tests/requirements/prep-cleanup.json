@@ -14,7 +14,12 @@
   {
    "id": "PREPCLEAN-3",
    "source": "tests/requirements/prep-cleanup.json#PREPCLEAN-3",
-   "statement": "Status and the terminal warning list plainly say a preparation folder could not be removed, background retries continue and its slot remains held. Clear the warning after removal and expose no private path or exception text."
+   "statement": "Status and the terminal warning list plainly say a preparation folder could not be removed, background retries continue and its slot remains held. Clear the warning after removal and expose no private path or exception text. The summary never promises automatic replacement while a removal is pending; a pending folder whose location the service never learned says so and says what can be done."
+  },
+  {
+   "id": "PREPCLEAN-4",
+   "source": "tests/requirements/prep-cleanup.json#PREPCLEAN-4",
+   "statement": "A pending folder removal never blocks service replacement or an update: it is recorded durably in the preparation hold row (folder path, removal pending) and survives the stop, release or crash of the service that owned it. The successor loads the records, keeps retrying with the same capped backoff and keeps the warning until the folder is observed absent, then records the removal as proven. Only this host's own preparation folders are ever removed."
   }
  ]
 }

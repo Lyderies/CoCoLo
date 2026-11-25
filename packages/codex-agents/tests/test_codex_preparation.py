@@ -3,6 +3,7 @@ from copy import copy
 from dataclasses import replace
 import json
 import os
+from pathlib import Path
 import socket
 import threading
 import time
@@ -372,6 +373,82 @@ class CodexPreparationTests(unittest.TestCase):
             count[0] = bad
             with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
                 authorize(request, None)
+
+    @requirements('PREPCLEAN-3', why_not_scenario='Real framed history service encode/decode of the unlocated-folder count, with malformed and past-bound values.')
+    def test_PREPCLEAN_3_unlocated_count_transport(self):
+        from codex_agents.history_api import (HistoryRequest, history_request_digest,
+            encode_history_request, decode_history_response)
+        from codex_agents.history_service import HistoryAuthorization, HistoryService
+        from codex_agents.history_contracts import HistoryError
+        directory = self.fixture.state.root / 'cleanup-unlocated-history'
+        directory.mkdir(mode=0o700)
+
+        def authorize(request, token, unlocated=2):
+            return HistoryAuthorization(self.scope.project_id, self.scope.runtime_digest,
+                history_request_digest(request), 'host', frozenset({'history.capacity_report'}),
+                run_slots=(0, 3), preparation_cleanup_pending=3, preparation_cleanup_unlocated=unlocated)
+        service = HistoryService(self.scope.project_id, self.scope.runtime_digest,
+            lambda: ProjectHistory(directory, self.scope.project_id, result_key=KEY,
+                result_capacity=ResultCapacity(8, 2*MAX_RESULT_BODY_BYTES, 1_800_000, 120_000)), authorizer=authorize)
+        self.addCleanup(service.close)
+        request = HistoryRequest(1, 'history.capacity_report', 'capacity',
+                                 self.scope.project_id, self.scope.runtime_digest, {})
+        raw = service.handle(encode_history_request(request), None)
+        report = decode_history_response(raw, request)
+        self.assertEqual((3, 2), (report['run_slots']['cleanup_pending'], report['run_slots']['cleanup_unlocated']))
+        for bad in (-1, True, 65, 'one'):
+            malformed = json.loads(raw)
+            malformed['result']['run_slots']['cleanup_unlocated'] = bad
+            with self.assertRaisesRegex(HistoryError, 'history_invalid_response'):
+                decode_history_response(canonical_json(malformed), request)
+            with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
+                authorize(request, None, unlocated=bad)
+
+    @requirements('PREPCLEAN-3', why_not_scenario='Real lane job states: a given-back job knows its folder, or says it never learned it.')
+    def test_PREPCLEAN_3_lane_says_whether_a_pending_folder_is_located(self):
+        handle, prepared = self.prepare()
+        job = self.lane._jobs[handle]
+        self.assertEqual((None, False), (self.lane.workspace_of(handle), self.lane.unlocated(handle)))  # not given back
+        with self.lane._lock:
+            job.state, job.cancelled = 'unknown', True
+        self.assertEqual((prepared.workspace, False), (self.lane.workspace_of(handle), self.lane.unlocated(handle)))
+        with self.lane._lock:
+            job.workspace = None
+        self.assertEqual((None, True), (self.lane.workspace_of(handle), self.lane.unlocated(handle)))
+        with self.lane._lock:
+            job.state, job.workspace = 'exported', prepared.workspace
+        self.discard(handle)
+
+    @requirements('PREPCLEAN-4', why_not_scenario='Real folders: a recorded path is removed only when it is one of this host\'s own preparation folders, and only observed absence is proof.')
+    def test_PREPCLEAN_4_recorded_folder_removal_checks_ownership_and_proves_by_absence(self):
+        handle, prepared = self.prepare()
+        folder = prepared.workspace
+        self.lane.discard(handle)
+        self.until(lambda: self.lane.snapshot(handle)['state'] == 'cleaned')
+        self.lane.retire(handle)
+        self.assertFalse(folder.exists())
+        self.assertTrue(codex_preparation.remove_recorded_workspace(str(folder)))  # already absent: proven
+        # A record that is not one of this host's own preparation folders is never touched (nothing of ours to remove).
+        outside = self.fixture.state.root / 'prepare-elsewhere'
+        outside.mkdir(mode=0o700)
+        for foreign in ('relative/prepare-x', str(outside.parent / 'not-a-preparation'), str(outside)):
+            with self.subTest(path=foreign):
+                self.assertTrue(codex_preparation.remove_recorded_workspace(foreign))
+        self.assertTrue(outside.is_dir())
+        # A link standing where a folder of ours was is not removed, and is not proof of removal.
+        link = folder.parent / 'prepare-link'
+        os.symlink(outside, link)
+        self.addCleanup(lambda: link.is_symlink() and link.unlink())
+        self.assertFalse(codex_preparation.remove_recorded_workspace(str(link)))
+        self.assertTrue(link.is_symlink() and outside.is_dir())
+        link.unlink()
+        # A real one of ours is removed; a refused removal is not proof.
+        made = codex_preparation.bridge.private_workspace('prepare-', claude=False, project_root=None)
+        with mock.patch.object(codex_preparation, 'remove_private_directory'):
+            self.assertFalse(codex_preparation.remove_recorded_workspace(str(made)))
+        self.assertTrue(made.is_dir())
+        self.assertTrue(codex_preparation.remove_recorded_workspace(str(made)))
+        self.assertFalse(made.exists())
 
     def test_a_failed_cleanup_is_asked_again_and_then_frees_its_slot(self):
         handle, prepared = self.prepare()

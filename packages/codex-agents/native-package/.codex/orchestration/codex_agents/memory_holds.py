@@ -16,7 +16,12 @@ from .project_history import _operation
 from .project_holds_schema import attempt_identity, evidence_json, release_hold, take_hold
 
 KINDS = ('driver_entry', 'preparation')
-OPERATIONS = frozenset({'register', 'take_preparation', 'release', 'hand_over', 'recover', 'note_cleanup'})
+OPERATIONS = frozenset({'register', 'take_preparation', 'release', 'hand_over', 'recover', 'note_cleanup',
+                        'pending_removals', 'removal_proven'})
+# PREPCLEAN-4 (decision 309): a preparation folder whose removal is not yet observed is recorded in its
+# preparation row's evidence (`removal: pending`, `workspace`), which survives the row's release (a tombstone keeps
+# its evidence). A later service reads at most this many such records, the capacity report's run-slot bound.
+MAX_PENDING_REMOVALS = 64
 
 
 def active(history, handle):
@@ -124,18 +129,69 @@ def release(history, kind, run_handle, attempt, instance, reason):
                 raise HistoryError('history_result_not_ready')
             if reason == 'handed_over' and row['state'] != 'releasing':
                 raise HistoryError('history_conflict')
+        evidence = None
+        if kind == 'preparation':
+            # In-process retirement follows observed removal (or no folder): nothing is left pending.
+            facts = json.loads(row['evidence'] or '{}')
+            if facts.get('removal') == 'pending':
+                evidence = evidence_json(**_removed(facts))
         release_hold(history._connection, history.project_id, kind, attempt_identity(*key), reason,
-                     now_ms=history._hold_now())
+                     now_ms=history._hold_now(), evidence=evidence)
+
+
+def _pending(facts, workspace):
+    """The preparation evidence with its folder recorded as awaiting observed removal."""
+    facts = dict(facts)
+    facts['removal'], facts['workspace'] = 'pending', str(workspace)
+    return facts
+
+
+def _removed(facts):
+    facts = dict(facts)
+    if facts.get('removal') == 'pending':
+        facts['removal'] = 'removed'
+    facts.pop('workspace', None)
+    return facts
 
 
 @_operation
-def note_cleanup(history, run_handle, attempt, instance):
+def note_cleanup(history, run_handle, attempt, instance, workspace=None):
     with history._transaction():
         row = _owned(history, 'preparation', (run_handle, attempt), instance)
         facts = json.loads(row['evidence'])
         facts['reason'] = 'cleanup_unknown'
+        if workspace is not None:
+            facts = _pending(facts, workspace)
         history._connection.execute('UPDATE project_holds SET evidence=? WHERE project_id=? AND kind=? AND identity=?',
             (evidence_json(**facts), history.project_id, 'preparation', row['identity']))
+
+
+@_operation
+def pending_removals(history, instance):
+    """(identity, folder) of every preparation folder an instance other than `instance` left to be removed."""
+    found = []
+    for row in history._connection.execute("SELECT identity,evidence FROM project_holds WHERE project_id=? "
+            "AND kind='preparation' AND instance<>? AND evidence LIKE '%\"removal\":\"pending\"%' "
+            "ORDER BY taken_at_ms,identity LIMIT ?", (history.project_id, instance, MAX_PENDING_REMOVALS)):
+        facts = json.loads(row['evidence'] or '{}')
+        if facts.get('removal') == 'pending' and isinstance(facts.get('workspace'), str):
+            found.append((row['identity'], facts['workspace']))
+    return found
+
+
+@_operation
+def removal_proven(history, identity):
+    """The folder of this preparation row was observed absent: its record no longer says pending."""
+    with history._transaction():
+        row = history._connection.execute("SELECT evidence FROM project_holds WHERE project_id=? "
+            "AND kind='preparation' AND identity=?", (history.project_id, identity)).fetchone()
+        if row is None:
+            return
+        facts = json.loads(row['evidence'] or '{}')
+        if facts.get('removal') != 'pending':
+            return
+        history._connection.execute('UPDATE project_holds SET evidence=? WHERE project_id=? AND kind=? AND identity=?',
+            (evidence_json(**_removed(facts)), history.project_id, 'preparation', identity))
 
 
 @_operation
@@ -225,7 +281,10 @@ class DriverMemory:
             return
         key, _ = self.preparations[handle]
         try:
-            self.cleanup_notes[handle] = self.request('note_cleanup', *key, self.instance)
+            # PREPCLEAN-4: the folder is recorded with the note, so a later service can keep removing it.
+            workspace = self.driver._preparation.workspace_of(handle)
+            workspace = str(workspace) if isinstance(workspace, (str, Path)) else None
+            self.cleanup_notes[handle] = self.request('note_cleanup', *key, self.instance, workspace)
         except HistoryError:
             pass
 
@@ -322,12 +381,19 @@ class DriverMemory:
 
 
 @_operation
-def retire_instance(history, instance):
-    """Trusted graceful exit only, after actual memory and every runtime thread retired."""
+def retire_instance(history, instance, pending=None):
+    """Trusted graceful exit only, after actual memory and every runtime thread retired.
+
+    `pending` maps a preparation row's identity to the folder this service still could not remove: its record
+    is kept in the released row's evidence for the next service (PREPCLEAN-4), the memory hold is not."""
+    pending = {} if pending is None else pending
     with history._transaction():
-        rows = history._connection.execute("SELECT kind,identity FROM project_holds INDEXED BY project_holds_due "
+        rows = history._connection.execute("SELECT kind,identity,evidence FROM project_holds INDEXED BY project_holds_due "
             "WHERE project_id=? AND state<>'released' AND instance=? AND kind IN ('driver_entry','preparation') "
             "ORDER BY kind DESC", (history.project_id, instance)).fetchall()
         for row in rows:
+            evidence = None
+            if row['kind'] == 'preparation' and isinstance(pending.get(row['identity']), str):
+                evidence = evidence_json(**_pending(json.loads(row['evidence'] or '{}'), pending[row['identity']]))
             release_hold(history._connection, history.project_id, row['kind'], row['identity'],
-                         'retired', now_ms=history._hold_now())
+                         'retired', now_ms=history._hold_now(), evidence=evidence)

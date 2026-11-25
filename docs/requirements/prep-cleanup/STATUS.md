@@ -137,3 +137,62 @@ run_driver_retries, host_slots, project_driver; 259 tests, 23 units, jobs 8, 154
 machine loaded): `failed_units: []`, `metadata_errors: []`. The slow-module
 budget lines in that output (host_commands, project_driver and others) were
 over their time budgets because of load and are not test failures.
+
+## Review fix round (S2 r1: READY-WITH-CORRECTIONS, 2 MED, 2 LOW)
+
+Owner decisions applied: 309 (retry with bounded backoff until removed, plain
+warning while pending) and 129.2 (an update while work runs goes ahead). Primary
+decision: a pending folder removal never blocks service replacement or an update;
+it becomes durable and the successor continues it. Tests written first, red on
+b615bda4 (new tests failed or errored before any product change), then green.
+
+- MED-1 (withdrawn host kept alive). `project_service.finished()` now stops a
+  withdrawn host on `host.work_held()` (runs and workers only). `holding()` keeps its
+  meaning for idle, so automatic idle/exhaustion replacement still waits while a
+  removal is owed (PREPCLEAN-2 unchanged). Test:
+  `PreparationCleanupLifecycleTests.test_PREPCLEAN_4_a_refused_removal_never_keeps_a_withdrawn_host_alive`
+  (red: host thread still alive 15 s after its hint was withdrawn).
+- MED-2 (retries lost at stop or crash). The preparation row's evidence now records
+  `removal: pending` and `workspace` (`note_cleanup`, and `retire_instance` for each
+  preparation still owed at graceful stop). A released row is a tombstone that keeps
+  its evidence, so the record survives `retired` and `service_stopped`. The successor
+  driver reads the records of other instances (`pending_removals`, at most 64, after
+  its start-up memory pass), retries each off the owner thread with the same capped
+  backoff (`_step_removals`), counts it in `cleanup_pending` (the same warning) and
+  records `removal_proven` only after `lstat` shows the folder absent
+  (`codex_preparation.remove_recorded_workspace`, which removes only this host's own
+  `prepare-*` directories in the scratch container). Tests:
+  `test_PREPCLEAN_4_replacement_proceeds_and_the_successor_resumes_the_removal`
+  (stop, restart, retries resume, warning stays, folder removed, warning clears,
+  record becomes `removed`), `DriverMemoryTests.test_PREPCLEAN_4_*`,
+  `InheritedRemovalTests` (20-step capped backoff, bounded re-read),
+  `test_PREPCLEAN_4_recorded_folder_removal_checks_ownership_and_proves_by_absence`.
+- LOW-1 (contradicting summary). `cli._service_slots` says the service "will not be
+  replaced automatically while a folder removal is still being retried" when one is
+  pending, and keeps the replacement sentence (and `replaced_when_idle` true) otherwise.
+  Test: `test_PREPCLEAN_3_summary_never_promises_replacement_while_cleanup_is_pending`.
+- LOW-2 (folder-less warning). A given-back preparation whose folder was never learned
+  cannot be recorded or retried (no path exists), so it is counted separately
+  (`CodexPreparationLane.unlocated`, wire `run_slots.cleanup_unlocated`, 0..64) and the
+  status adds a second plain warning: how many have no known location, that removal
+  cannot be retried, that the slot stays held until the service restarts, and that
+  the folder may need deleting by hand from the CoCoLo scratch area. Documented in
+  prep-cleanup.md. Tests: `test_PREPCLEAN_3_a_folder_without_a_known_location_is_named_in_the_warning`,
+  `test_PREPCLEAN_3_unlocated_count_transport`, `test_PREPCLEAN_3_lane_says_whether_a_pending_folder_is_located`.
+
+New requirement PREPCLEAN-4 (tests/requirements/prep-cleanup.json, scripts/test-requirements.json);
+new limits registered in tests/lifetime_caps.json (`memory_holds.py::pending_removals`,
+`project_driver.py::_step_removals`). No schema, hold kind, VERSION or digest change.
+No existing assertion changed (see assertions.md).
+
+Fix-round verification (unsandboxed, `parallel_tests.py --jobs 8 --affected afb6f610`, which
+runs everything because the branch changes non-Python files; 496 units, 7708 tests,
+15 min 11 s): `metadata_errors: []`; failed units `codex:tests.test_runtime_release` (the
+expected digest pin) and `codex:tests.test_synchronized_races#1` (a store-owner race under
+load: "store owner was replaced", not a path this change touches; the whole module passed
+twice when run alone, 13 of 13 each). A first affected run found a real defect, fixed:
+`settle_on_exit` used the new removal pool on drivers built without it, and a removal read
+issued during start-up delayed settling earlier runs (`test_lost_run_settlement`,
+`test_open_withdrawal_successor`, `test_account_settlement_driver` saw capacity `held`
+instead of `released`); the read now waits until the start-up checks are done (`warm_up`
+ready), and the three modules pass.

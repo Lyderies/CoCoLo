@@ -194,6 +194,113 @@ class CleanupWarningTests(unittest.TestCase):
         # Older capacity reports remain readable and do not invent a warning.
         self.assertEqual([], cli._service_slots({'stuck': 0, 'limit': 3})['warnings'])
 
+    @requirements('PREPCLEAN-3')
+    def test_PREPCLEAN_3_summary_never_promises_replacement_while_cleanup_is_pending(self):
+        from tests.test_bridge import cli
+        pending = cli._service_slots({'stuck': 1, 'limit': 3, 'cleanup_pending': 1})
+        self.assertFalse(pending['replaced_when_idle'])
+        for text in ('replaced by a fresh service', 'once no run is under way'):
+            self.assertNotIn(text, pending['summary'])
+        self.assertIn('not be replaced automatically', pending['summary'])
+        # Without a pending folder the promise is true, and is still made.
+        clear = cli._service_slots({'stuck': 1, 'limit': 3, 'cleanup_pending': 0})
+        self.assertTrue(clear['replaced_when_idle'])
+        self.assertIn('replaced by a fresh service', clear['summary'])
+
+    @requirements('PREPCLEAN-3')
+    def test_PREPCLEAN_3_a_folder_without_a_known_location_is_named_in_the_warning(self):
+        from tests.test_bridge import cli
+        status = cli._service_slots({'stuck': 0, 'limit': 3, 'cleanup_pending': 2, 'cleanup_unlocated': 1})
+        self.assertEqual(2, len(status['warnings']))
+        self.assertIn('1 of these folders has no known location', status['warnings'][1])
+        self.assertIn('location', status['warnings'][1])
+        self.assertIn('restart', status['warnings'][1])
+        self.assertEqual(1, status['cleanup_unlocated'])
+        # Only folders it can name are described by the first sentence alone.
+        located = cli._service_slots({'stuck': 0, 'limit': 3, 'cleanup_pending': 1, 'cleanup_unlocated': 0})
+        self.assertEqual(1, len(located['warnings']))
+        self.assertEqual(0, cli._service_slots({'stuck': 0, 'limit': 3})['cleanup_unlocated'])
+
+
+class InheritedRemovalTests(unittest.TestCase):
+    """PREPCLEAN-4: the successor service continues a folder removal the earlier service recorded."""
+
+    def inherited(self, folders):
+        from concurrent.futures import Future
+        value = driver()
+        value._memory = mock.Mock()
+        value._memory_start = SimpleNamespace(state='done')
+        value._journal = SimpleNamespace(instance='a' * 32)
+        value.warm_up = lambda: ('ready', 0, None, None)  # start-up checks done
+        value._removals, value._removals_asked = {}, None
+        value._removals_loaded, value._removals_full = False, False
+        value._removal_proofs = {}
+
+        class Inline:
+            def submit(self, function, *arguments):
+                future = Future()
+                future.set_result(function(*arguments))
+                return future
+
+        value._removal_pool = Inline()
+        requests = []
+
+        def hold(operation, *arguments):
+            requests.append((operation, arguments))
+            if operation == 'removal_proven':  # as the store: a proven record is no longer offered
+                folders[:] = [record for record in folders if record[0] != arguments[0]]
+            result = list(folders) if operation == 'pending_removals' else None
+            return SimpleNamespace(state='done', result=result, reason=None)
+
+        value._runtime.persistence.memory_hold.side_effect = hold
+        return value, requests
+
+    @requirements('PREPCLEAN-4')
+    def test_PREPCLEAN_4_inherited_removal_retries_with_capped_backoff_until_proven(self):
+        from codex_agents import codex_preparation
+        value, requests = self.inherited([('identity-1', '/scratch/prepare-x')])
+        calls = []
+        refuse = [True]
+
+        def removal(path):
+            calls.append(value._clock.now)
+            return not refuse[0]
+
+        with mock.patch.object(codex_preparation, 'remove_recorded_workspace', removal):
+            value._step_removals()  # asks the store for the recorded removals; the next step has them
+            pauses = []
+            for number in range(20):
+                value._step_removals()
+                self.assertEqual(number + 1, len(calls))
+                self.assertEqual(1, value.pending_cleanup())  # the warning stays while it is pending
+                deadline = value._removals['identity-1'][2]
+                pauses.append(deadline - value._clock.now)
+                value._clock.now = deadline - .001
+                value._step_removals()
+                self.assertEqual(number + 1, len(calls))  # nothing asked before its deadline
+                value._clock.now = deadline
+            self.assertEqual([1., 2., 4., 8., 16., 32.] + [60.] * 14, pauses)
+            self.assertNotIn('removal_proven', [name for name, _ in requests])
+            refuse[0] = False
+            value._step_removals()
+        self.assertEqual(0, value.pending_cleanup())
+        self.assertEqual([('removal_proven', ('identity-1',))], [r for r in requests if r[0] == 'removal_proven'])
+
+
+    @requirements('PREPCLEAN-4')
+    def test_PREPCLEAN_4_a_full_read_is_asked_again_once_every_record_is_done(self):
+        from codex_agents import codex_preparation
+        value, requests = self.inherited([('identity-1', '/scratch/prepare-a'), ('identity-2', '/scratch/prepare-b')])
+        with mock.patch.object(project_driver, 'MAX_PENDING_REMOVALS', 2), \
+                mock.patch.object(codex_preparation, 'remove_recorded_workspace', return_value=True):
+            for _ in range(6):
+                value._step_removals()
+        asked = [name for name, _ in requests if name == 'pending_removals']
+        # Both were found (the bound), both proven, so the store is asked for any further records.
+        self.assertGreaterEqual(len(asked), 2)
+        self.assertEqual(2, len([name for name, _ in requests if name == 'removal_proven']))
+        self.assertEqual(0, value.pending_cleanup())
+
 
 class RetiredMonitorSlotTests(unittest.TestCase):
     BINDING = ('binding',)
@@ -504,3 +611,4 @@ class MemoryHoldLimitTests(unittest.TestCase):
             value._release_registers()
             self.assertEqual([], value._register_waiting)
             self.assertEqual([1, 2, 3], [call.args[2]['attempt'] for call in value._answer.call_args_list])
+

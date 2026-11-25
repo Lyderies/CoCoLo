@@ -1927,13 +1927,31 @@
  },
  "PREPCLEAN-3": {
   "source": "tests/requirements/prep-cleanup.json#PREPCLEAN-3",
-  "statement": "Status and the terminal warning list plainly say a preparation folder could not be removed, background retries continue and its slot remains held. Clear the warning after removal and expose no private path or exception text.",
+  "statement": "Status and the terminal warning list plainly say a preparation folder could not be removed, background retries continue and its slot remains held. Clear the warning after removal and expose no private path or exception text. The summary never promises automatic replacement while a removal is pending; a pending folder whose location the service never learned says so and says what can be done.",
   "checks": [
    "codex:tests.test_run_driver_retries.CleanupWarningTests.test_PREPCLEAN_3_plain_warning_and_clear",
+   "codex:tests.test_run_driver_retries.CleanupWarningTests.test_PREPCLEAN_3_summary_never_promises_replacement_while_cleanup_is_pending",
+   "codex:tests.test_run_driver_retries.CleanupWarningTests.test_PREPCLEAN_3_a_folder_without_a_known_location_is_named_in_the_warning",
+   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_3_unlocated_count_transport",
+   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_3_lane_says_whether_a_pending_folder_is_located",
    "root:test_setup_wizard_steps.StatusWarningTests.test_PREPCLEAN_3_status_warning_list",
    "codex:tests.test_host_slots.PreparationCleanupLifecycleTests.test_PREPCLEAN_pending_cleanup_defers_idle_replacement_then_removes_and_replaces",
    "root:test_setup_wizard_steps.StatusWarningTests.test_PREPCLEAN_3_status_warning_reaches_terminal_list",
    "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_3_capacity_transport_warning_and_clear"
+  ]
+ },
+ "PREPCLEAN-4": {
+  "source": "tests/requirements/prep-cleanup.json#PREPCLEAN-4",
+  "statement": "A pending folder removal never blocks service replacement or an update: it is recorded durably in the preparation hold row (folder path, removal pending) and survives the stop, release or crash of the service that owned it. The successor loads the records, keeps retrying with the same capped backoff and keeps the warning until the folder is observed absent, then records the removal as proven. Only this host's own preparation folders are ever removed.",
+  "checks": [
+   "codex:tests.test_host_slots.PreparationCleanupLifecycleTests.test_PREPCLEAN_4_a_refused_removal_never_keeps_a_withdrawn_host_alive",
+   "codex:tests.test_host_slots.PreparationCleanupLifecycleTests.test_PREPCLEAN_4_replacement_proceeds_and_the_successor_resumes_the_removal",
+   "codex:tests.test_memory_holds.DriverMemoryTests.test_PREPCLEAN_4_pending_removal_is_recorded_in_the_preparation_row_and_outlives_its_release",
+   "codex:tests.test_memory_holds.DriverMemoryTests.test_PREPCLEAN_4_stop_records_a_removal_whose_note_had_not_landed_and_retirement_clears_it",
+   "codex:tests.test_memory_holds.DriverMemoryTests.test_PREPCLEAN_4_a_successor_reads_at_most_the_pending_removal_bound_at_a_time",
+   "codex:tests.test_run_driver_retries.InheritedRemovalTests.test_PREPCLEAN_4_inherited_removal_retries_with_capped_backoff_until_proven",
+   "codex:tests.test_run_driver_retries.InheritedRemovalTests.test_PREPCLEAN_4_a_full_read_is_asked_again_once_every_record_is_done",
+   "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_4_recorded_folder_removal_checks_ownership_and_proves_by_absence"
   ]
  },
  "RECOV-1": {
