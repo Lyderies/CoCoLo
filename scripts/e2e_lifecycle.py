@@ -43,10 +43,11 @@ import e2e_checks_general  # noqa: E402,F401
 import e2e_checks_run_control  # noqa: E402,F401
 import e2e_checks_recovery  # noqa: E402,F401
 import e2e_checks_learning_guard  # noqa: E402,F401
+import e2e_checks_update_safety  # noqa: E402,F401
 
-# Every slice's test-only product faults (T7 S1 run control, T7 S2 recovery, T7 S3 learning and guard). A fault is chosen ONLY by the runner's
+# Every slice's test-only product faults (T7 S1 run control, S2 recovery, S3 learning and guard, S5 update safety). A fault is chosen ONLY by the runner's
 # explicit --fault argument; it is handed to the one module that owns it, every other module runs with none.
-FAULT_MODULES = (e2e_checks_run_control, e2e_checks_recovery, e2e_checks_learning_guard)
+FAULT_MODULES = (e2e_checks_run_control, e2e_checks_recovery, e2e_checks_learning_guard, e2e_checks_update_safety)
 FAULTS = sorted(name for module in FAULT_MODULES for name in module.FAULTS)
 
 
@@ -294,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--results", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--jobs", type=int, default=1, help="processes to run the scene groups in (default 1)")
     parser.add_argument("--fault", choices=FAULTS,
-                        help="inject this test-only product fault into its slice's scenes (T7 S1 run control, S2 recovery, S3 learning and guard)")
+                        help="inject this test-only product fault into its slice's scenes (T7 S1 run control, S2 recovery, S3 learning and guard, S5 update safety)")
     args = parser.parse_args(argv)
     if args.execute is not None:
         return _worker(args.execute.split(","), args.results, fault=args.fault)

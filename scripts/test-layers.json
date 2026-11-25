@@ -341,6 +341,7 @@
  "root:test_e2e_requirements": "scenario",
  "root:test_e2e_run_control": "scenario",
  "root:test_e2e_strictness": "unit",
+ "root:test_e2e_update_safety": "unit",
  "root:test_entrypoint_inventory": "scenario",
  "root:test_identifiers_parity": "scenario",
  "root:test_install": "scenario",
