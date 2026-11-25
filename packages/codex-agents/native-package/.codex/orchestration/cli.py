@@ -583,6 +583,11 @@ def _replace_other_version_host(args):
     return replaced
 
 
+UPDATE_CHECK_UNREADABLE = ("the update could not tell whether a child run is active; nothing was changed. Close any running "
+                           "child, check that the learning state folder and its database can be read by this account, then "
+                           "try again")
+
+
 def _update_check_report(state_root, project_root):
     """UPDFIX-2 (L12.3): whether an update of this project would be refused for a running child, read only.
 
@@ -590,13 +595,20 @@ def _update_check_report(state_root, project_root):
     be running when the ledger holds an unreleased claim that is not long crashed (a run admitted but never claimed has no
     child). The update would have to stop the collector when the one running is not this build, and withdraw the project's
     service when another version started it. Setup asks this BEFORE it installs anything, so a refusal changes nothing.
-    Nothing is stopped, started, written or created here; whatever cannot be read leaves that fact false and the later
-    steps decide as they always did.
+    Nothing is stopped, started or written here, and no ledger row is changed (SQLite may still create or touch its own
+    -wal/-shm files when it reads a ledger kept in write-ahead mode).
+
+    Decision 265 (fails closed): only a project with no ledger at all (no learning database in the state folder) goes ahead
+    unchecked. A ledger that exists but cannot be opened or evaluated is reported `unreadable` and `refused`.
     """
     from codex_agents.learning_source_image import _drained
+    from codex_agents.legacy_slots import register_legacy_functions
 
     children = False
     replace = False
+    root = Path(state_root).expanduser() if state_root is not None else default_state_root()
+    if not os.path.lexists(root / "learning.sqlite3"):
+        return _update_check_result(children, replace, unreadable=False)  # no ledger at all: nothing to protect
     try:
         state = LearningState(state_root, create=False)
         client = CollectorClient(state.socket)
@@ -610,15 +622,28 @@ def _update_check_report(state_root, project_root):
             replace = True
         connection = sqlite3.connect(state.database.as_uri() + "?mode=ro", uri=True, timeout=5)
         try:
+            # The same functions the collector's connection has: an unreleased earlier-version slot needs them.
+            register_legacy_functions(connection)
             _drained(connection, time.time_ns() // 1_000_000, children_only=True)
         except HistoryError:
             children = True
         finally:
             connection.close()
     except (StateError, OSError, sqlite3.Error, ValueError):
-        pass
-    return {"ready": True, "children_running": children, "would_replace": replace,
-            "refused": children and replace}
+        return _update_check_result(children, replace, unreadable=True)
+    return _update_check_result(children, replace, unreadable=False)
+
+
+def _update_check_result(children, replace, *, unreadable):
+    refused = unreadable or (children and replace)
+    report = {"ready": True, "children_running": children, "would_replace": replace, "unreadable": unreadable,
+              "refused": refused, "reason": None, "message": None}
+    if unreadable:
+        report["reason"], report["message"] = "ledger_unreadable", UPDATE_CHECK_UNREADABLE
+    elif refused:
+        report["reason"] = "child_run_active"
+        report["message"] = "a child run is active; nothing was changed, try again when none is running"
+    return report
 
 
 from codex_agents.learning_migration import START_REASONS, clear_start_failure, record_start_failure  # noqa: E402

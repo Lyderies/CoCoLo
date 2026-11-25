@@ -39,6 +39,16 @@ def dispatch_run_id(raw):
     return run_id if isinstance(run_id, str) else None
 
 
+def register_legacy_functions(connection):
+    """Register the SQLite functions the capacity SQL (`deadline_sql`, `intents_sql`) calls, on any connection that runs it.
+
+    One place for the collector's own connection and the read-only update check (UPDFIX-2): a connection without them
+    cannot evaluate an unreleased earlier-version slot.
+    """
+    connection.create_function("legacy_dispatch_deadline", 4, dispatch_deadline, deterministic=True)
+    connection.create_function("legacy_dispatch_run_id", 1, dispatch_run_id, deterministic=True)
+
+
 def deadline_sql(table):
     # Ambiguous duplicate intents provide no single recorded deadline.
     return ("(SELECT CASE WHEN COUNT(*)=1 THEN MAX(legacy_dispatch_deadline(d.content,d.content_digest,"

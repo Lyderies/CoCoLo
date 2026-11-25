@@ -333,8 +333,7 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
     def test_UPDFIX_3_a_check_that_does_not_refuse_leaves_the_update_as_it_was(self):
         project = self.installed()
         for reply in ('{"ready": true, "children_running": true, "would_replace": false, "refused": false}',
-                      '{"ready": true, "children_running": false, "would_replace": true, "refused": false}',
-                      "not json at all"):
+                      '{"ready": true, "children_running": false, "would_replace": true, "refused": false}'):
             with self.subTest(reply=reply):
                 code, screen = self.update(project, {**REGISTERED, "FAKE_CHILDREN": reply})
                 self.assertEqual(0, code, screen[-1500:])
@@ -348,6 +347,59 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
         self.assertEqual(1, code)
         self.assertEqual("", listed.read_text())
 
+    NOT_REFUSED = '{"ready": true, "children_running": false, "would_replace": false, "refused": false}'
+    UNREADABLE = ('{"ready": true, "children_running": false, "would_replace": false, "unreadable": true, '
+                  '"refused": true, "reason": "ledger_unreadable"}')
+
+    def test_UPDFIX_3_a_check_that_cannot_tell_refuses_before_anything_is_installed(self):
+        # Decision 265: fail closed. A reply that is not a readable answer, or says the ledger is unreadable, refuses.
+        project = self.installed()
+        for reply in (self.UNREADABLE, "not json at all", "[]", '{"ready": true}'):
+            with self.subTest(reply=reply):
+                before = self.snapshot(project)
+                code, screen = self.update(project, {**REGISTERED, "FAKE_CHILDREN": reply})
+                flat = " ".join(screen.split())
+                self.assertEqual(1, code, screen[-1500:])
+                self.assertIn("could not tell whether a child run is active", flat)
+                self.assertIn("nothing was changed", flat)
+                self.assertEqual(before, self.snapshot(project))
+                self.assertNotIn("Installing", screen)
+                self.assertEqual(0, self.attested())
+
+    def test_UPDFIX_3_a_child_that_appears_before_the_install_is_refused_before_any_write(self):
+        # Review r1 MED: the check is repeated right before the installer's --apply (step 4's first write).
+        project = self.installed()
+        before = self.snapshot(project)
+        applies = self.py_full.read_text().count("--apply")
+        code, screen = self.update(project, {**REGISTERED, "FAKE_CHILDREN": self.NOT_REFUSED,
+                                             "FAKE_CHILDREN_LATER": self.CHILD})
+        flat = " ".join(screen.split())
+        self.assertEqual(1, code, screen[-1500:])
+        self.assertIn("child_run_active", flat)
+        self.assertIn("a child run is active", flat)
+        self.assertEqual(before, self.snapshot(project))
+        self.assertEqual(applies, self.py_full.read_text().count("--apply"))  # the installer never wrote
+        calls = (self.base / "register.log").read_text().splitlines()
+        self.assertEqual(2, len(calls))  # step 2's check and the one before --apply; nothing registered
+        self.assertTrue(all("learning-update-check" in call for call in calls))
+        self.assertEqual(0, self.attested())
+
+    def test_UPDFIX_3_an_interactive_refused_update_leaves_the_remembered_projects_alone(self):
+        # Review r1 MED: opening an installed project interactively remembered it before the child check.
+        project = self.installed()
+        listed = self.home / ".local" / "state" / "codex-agents" / "installer" / "setup-projects"
+        listed.write_text("")
+        self.attest_count = self.base / "attest.count"
+        self.start(project, {**REGISTERED, "FAKE_ATTEST": str(self.attest_count), "FAKE_CHILDREN": self.CHILD})
+        self.expect("Everything looks good")
+        self.send("\r")
+        self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\r")
+        self.assertEqual(1, self.finish(timeout=60))
+        self.assertIn("a child run is active", " ".join(self.plain(self.transcript).split()))
+        self.assertEqual("", listed.read_text())
+
     def test_UPDFIX_4_a_child_that_started_later_is_told_the_files_were_already_updated(self):
         project = self.installed()
         code, screen = self.update(project, {"FAKE_REGISTER_BUSY": "1"})
@@ -355,6 +407,9 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
         self.assertEqual(1, code, screen[-1500:])
         self.assertIn("had already updated this project's files in step 4", flat)
         self.assertIn("run the update again when no child is running", flat)
+        # Review r1 MED: the collector's own "nothing was changed" is not shown for a project step 4 already updated.
+        self.assertNotIn("nothing was changed", flat)
+        self.assertNotIn("Nothing was changed", flat)
 
 
 def load_tests(loader, tests, pattern):

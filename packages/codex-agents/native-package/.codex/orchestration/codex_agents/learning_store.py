@@ -2388,9 +2388,8 @@ class LearningLedger:
             connection.row_factory = sqlite3.Row
             # O0b RS-A (F5): the register's triggers record releases at the ledger's own clock.
             connection.create_function("ledger_now_ms", 0, lambda: self._clock_ms())
-            from .legacy_slots import dispatch_deadline, dispatch_run_id
-            connection.create_function("legacy_dispatch_deadline", 4, dispatch_deadline, deterministic=True)
-            connection.create_function("legacy_dispatch_run_id", 1, dispatch_run_id, deterministic=True)
+            from .legacy_slots import register_legacy_functions
+            register_legacy_functions(connection)
             version = connection.execute('PRAGMA user_version').fetchone()[0]
             if version > LEDGER_SCHEMA_VERSION:
                 raise LedgerError('ledger schema is newer than this package')

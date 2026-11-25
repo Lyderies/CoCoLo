@@ -93,6 +93,55 @@ class UpdateCheckTests(unittest.TestCase):
         # No collector runs here and no service of another version: nothing would be replaced, so not refused.
         self.assertEqual((False, False), (report["would_replace"], report["refused"]))
 
+    def test_UPDFIX_2_a_live_child_is_seen_even_when_an_unreleased_earlier_version_slot_exists(self):
+        # Review r1 HIGH: the ledger's legacy deadline functions were not registered on the check's read-only connection,
+        # the SQL error was swallowed, and a live claimed child was reported as no child.
+        now = time.time_ns() // 1_000_000
+        other = self.fixture.project_b_id
+        self.connection.execute("INSERT INTO launch_claims VALUES(?,?,?,?,?,?)",
+                                (other, "c" * 64, "unknown", "legacy_fenced", now, None)).close()
+        self.connection.execute("INSERT INTO active_run_capacity(project_id,handle_digest,run_id,kind,claimed_at_ms) "
+                                "VALUES(?,?,?,?,?)", (other, "c" * 64, "unknown", "legacy_unknown", now)).close()
+        self.claim()
+        code, report, _ = self.run_check()
+        self.assertEqual(0, code, report)
+        self.assertIs(True, report["children_running"], report)
+        self.assertIs(False, report["unreadable"], report)
+
+    def test_UPDFIX_2_the_legacy_slot_functions_are_registered_by_the_collectors_own_function(self):
+        import sqlite3
+        from codex_agents.legacy_slots import register_legacy_functions
+        connection = sqlite3.connect(":memory:")
+        register_legacy_functions(connection)
+        self.assertEqual("r", connection.execute("SELECT legacy_dispatch_run_id('{\"run_id\": \"r\"}')").fetchone()[0])
+
+    def test_UPDFIX_2_a_ledger_that_exists_but_cannot_be_evaluated_refuses_with_a_next_step(self):
+        # Decision 265: fail closed. An evaluation error is never swallowed into "no child".
+        import cli
+        import sqlite3
+        with mock.patch("codex_agents.learning_source_image._drained", side_effect=sqlite3.OperationalError("no such function")):
+            report = cli._update_check_report(self.fixture.state_root, self.fixture.project_a)
+        self.assertEqual((True, True, "ledger_unreadable"), (report["unreadable"], report["refused"], report["reason"]))
+        self.assertIn("nothing was changed", report["message"])
+        self.assertIn("try again", report["message"])
+
+    def test_UPDFIX_2_a_ledger_file_that_is_not_a_database_refuses(self):
+        root = Path(self.fixture.temporary.name) / "garbage-state"
+        root.mkdir(mode=0o700)
+        database = root / "learning.sqlite3"
+        database.write_bytes(b"this is not a sqlite database" * 100)
+        os.chmod(database, 0o600)
+        code, report, _ = self.run_check(state_root=root)
+        self.assertEqual(0, code, report)
+        self.assertEqual((True, True, "ledger_unreadable"), (report["unreadable"], report["refused"], report["reason"]))
+
+    def test_UPDFIX_2_a_state_folder_with_no_ledger_is_not_a_refusal(self):
+        root = Path(self.fixture.temporary.name) / "empty-state"
+        root.mkdir(mode=0o700)
+        code, report, _ = self.run_check(state_root=root)
+        self.assertEqual(0, code, report)
+        self.assertEqual((False, False, False), (report["unreadable"], report["refused"], report["children_running"]))
+
     def decide(self, *, health=None, other_host=None):
         """The command's own decision, in this process, with the collector's identity and the service's version given."""
         import cli
@@ -121,6 +170,8 @@ class UpdateCheckTests(unittest.TestCase):
                                      (report["children_running"], report["would_replace"], report["refused"]))
 
     def test_UPDFIX_2_the_check_changes_nothing(self):
+        # The ledger's own contents (rows, size, mtime) and every other file of the state folder are unchanged. SQLite's -wal and
+        # -shm sidecars are left out on purpose: reading a write-ahead ledger may create or touch them (updfix.md, UPDFIX-1).
         self.claim()
         state = self.fixture.state
         names = sorted(path for path in state.root.rglob("*") if path.is_file())

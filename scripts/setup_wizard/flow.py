@@ -28,9 +28,14 @@ CLAUDE_MODELS_ALL = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")
 FAIL_HINT_DEFAULT = "Press ? to see what ran in this step and why it stopped."
 # UPDFIX-3: the words of the collector's own refusal, said before anything is installed.
 CHILD_REFUSAL = "a child run is active; nothing was changed, try again when none is running"
+# UPDFIX-3 (decision 265): the check could not tell, so the update does not go ahead.
+UPDATE_CHECK_UNKNOWN = ("the update could not tell whether a child run is active; nothing was changed. Close any running "
+                        "child, check that the learning state folder and its database can be read by this account, then "
+                        "try again")
 # UPDFIX-4: a child that started after that check and was refused at the collector step, when step 4 had already run.
 CHILD_STARTED_LATER = ("A child run started while this update was running. Setup had already updated this project's "
                        "files in step 4: run the update again when no child is running.")
+CHILD_STARTED_LATER_WHY = "a child run started after step 2's check (child_run_active)"
 COMMIT_MSG_1 = "Install COCOLO"
 COMMIT_MSG_2 = "Adds the managed Codex and Claude agent packages and the provider routing configuration."
 PROFILE_CONTENT = 'sandbox_mode = "workspace-write"\n\n[sandbox_workspace_write]\nnetwork_access = true'
@@ -140,6 +145,7 @@ class Wizard:
         self.fail_reason = ""
         self.mode = "full"
         self.install_exists = False
+        self.install_applied = False  # UPDFIX-4: the installer has written during this run
         self.profile_wanted = self.profile_ready = self.codex_primary = False
         self.rule_file = self.rule_copy = self.rule_status = self.rule_reason = ""
         self.rule_ready = self.rule_exists = self.temp_project = False
@@ -191,8 +197,9 @@ class Wizard:
         name = self.t.names[self.t.step - 1] if self.t.step > 0 else ""
         self.failures.append(steps.failure_line(self.t.step, name, label, self.last_rc, hint))
 
-    def failure_detail(self, label: str, hint: str = FAIL_HINT_DEFAULT) -> None:
-        why = steps.plain(steps.reason(self.last_reply, self.last_fixed)) if self.last_reply is not None else ""
+    def failure_detail(self, label: str, hint: str = FAIL_HINT_DEFAULT, why: str | None = None) -> None:
+        if why is None:
+            why = steps.plain(steps.reason(self.last_reply, self.last_fixed)) if self.last_reply is not None else ""
         self.record_failure(label, hint)
         self.t.list_add("fail", f"{label} (exit {self.last_rc})")
         if why:
@@ -551,16 +558,23 @@ class Wizard:
             return "Uncommitted changes exist in managed paths (.codex, .agents, .claude). Commit or discard them first."
         return ""
 
-    def child_would_refuse_update(self, folder: str) -> bool:
-        """UPDFIX-2: this clone's read-only `learning-update-check` says a child is running AND the update would have to
-        replace the collector or the project's service (which it can only do with no child running). Anything it cannot
-        say does not refuse here: step 5 decides as before."""
+    def update_refusal(self, folder: str) -> tuple[str, str] | None:
+        """UPDFIX-2, UPDFIX-3: this clone's read-only `learning-update-check`; None when the update may go ahead, else the
+        refusal's (code, plain sentence). Decision 265: it fails closed. A child running while the collector or the
+        project's service must be replaced refuses, and so does any answer that is not a readable `refused: false` (a
+        ledger that exists but could not be evaluated says so itself)."""
         done = self.t.call(self.python_argv(str(CLONE_CLI), "learning-update-check", "--project-root", folder))
         try:
             reply = json.loads(done.stdout)
         except ValueError:
-            return False
-        return done.returncode == 0 and isinstance(reply, dict) and reply.get("refused") is True
+            reply = None
+        if done.returncode != 0 or not isinstance(reply, dict) or not isinstance(reply.get("refused"), bool):
+            return "update_check_unavailable", UPDATE_CHECK_UNKNOWN
+        if not reply["refused"]:
+            return None
+        if reply.get("unreadable") is True or reply.get("reason") == "ledger_unreadable":
+            return "update_check_unavailable", UPDATE_CHECK_UNKNOWN
+        return "child_run_active", CHILD_REFUSAL
 
     def prepare_project_inputs(self, folder: str) -> None:
         self.install_opts = []
@@ -653,8 +667,6 @@ class Wizard:
             self.install_exists = False
             if os.path.isfile(os.path.join(folder, ".codex", "orchestration", "install-manifest.json")):
                 self.install_exists = True
-                if not self.update:  # Offered first next time once chosen; an update remembers it only once accepted.
-                    self.remember_project(folder)
                 t.list_add("ok", f"Project: {folder}")
                 self.owner_key_notice()
                 if not self.update:
@@ -685,6 +697,8 @@ class Wizard:
                 raise Stop(1, f"The update stopped: {folder} has no COCOLO install to update. Run ./setup.sh to "
                               "install it. Nothing was changed.")
             if self.mode != "full":
+                if self.install_exists:  # Verify, attest, passphrase, replace: nothing is installed, so it is accepted now.
+                    self.remember_project(folder)
                 self.project = folder
                 self.mark_step(2, "ok", self.project)
                 return
@@ -697,17 +711,20 @@ class Wizard:
                 self.choose_another()
                 default = folder
                 continue
-            if self.install_exists and self.child_would_refuse_update(folder):
-                # UPDFIX-1, UPDFIX-3 (L12.3): decided before the installer writes or commits anything.
+            refusal = self.update_refusal(folder) if self.install_exists else None
+            if refusal is not None:
+                # UPDFIX-1, UPDFIX-3 (L12.3): decided before the installer writes or commits anything, and before the
+                # project is remembered (review 040-updfix-r1: a refused update changes no setup-projects entry).
+                code, sentence = refusal
                 t.list_add("fail", folder)
-                t.list_sub(CHILD_REFUSAL)
+                t.list_sub(sentence)
                 if self.update:
-                    raise Stop(1, "The update stopped (child_run_active): " + CHILD_REFUSAL + ".")
-                self.record_failure("a child run is active", "nothing was changed; try again when none is running")
-                self.choose_another(CHILD_REFUSAL)
+                    raise Stop(1, f"The update stopped ({code}): {sentence}.")
+                self.record_failure(sentence.split(";")[0], "nothing was changed; try again when none is running")
+                self.choose_another(sentence)
                 default = folder
                 continue
-            if self.install_exists and self.update:  # Accepted: remembered now (review 040-s1-update).
+            if self.install_exists:  # Accepted (an installed project is offered first next time; review 040-s1-update).
                 self.remember_project(folder)
             self.prepare_project_inputs(folder)
             t.screen_reset()
@@ -921,6 +938,18 @@ class Wizard:
             raise Stop(0, "Stopped.")
         t.screen_reset()
         self.begin_step(4)
+        refusal = self.update_refusal(project) if self.install_exists else None  # UPDFIX-3: again, right before the first write
+        if refusal is not None:
+            code, sentence = refusal
+            t.list_add("fail", project)
+            t.list_sub(sentence)
+            if self.update:
+                raise Stop(1, f"The update stopped ({code}): {sentence}.")
+            self.record_failure(sentence.split(";")[0], "nothing was changed; try again when none is running")
+            self.mark_step(4, "fail", code)
+            self.fail_reason = code
+            self.failure_menu()
+            return False
         if self.run_installer("Installing", "install", "--target", project, *self.install_opts, "--apply",
                               draw=t.render) != 0:
             t.screen_reset()
@@ -932,6 +961,7 @@ class Wizard:
             self.failure_menu()
             return False
         applied = self.last_reply
+        self.install_applied = True  # UPDFIX-4: from here the project's files are the new version's
         t.screen_reset()
         self.begin_step(4)
         t.list_add("ok", "Packages installed")
@@ -1251,10 +1281,14 @@ class Wizard:
         reply = {**(self.last_reply if isinstance(self.last_reply, dict) else {}), "ready": status == 0}
         _, lines = steps.registration_outcome(reply, moved if moved.startswith("/") else None)
         if status != 0:
-            self.failure_detail("Collector registration failed")
+            later = (self.install_applied and (
+                steps.get(self.last_reply, "reason_code") == "collector_busy"
+                or "a child run is active" in steps.raw(self.last_reply)))
+            # UPDFIX-4: a child that started after the checks; step 4 has already updated the project, so the
+            # collector's own "nothing was changed" is replaced, never shown for the project.
+            self.failure_detail("Collector registration failed", why=CHILD_STARTED_LATER_WHY if later else None)
             self.version_hint()
-            if steps.get(self.last_reply, "reason_code") == "collector_busy" or "a child run is active" in steps.raw(self.last_reply):
-                # UPDFIX-4: a child that started after step 2's check; step 4 has already updated the project.
+            if later:
                 t.list_sub(CHILD_STARTED_LATER)
             for line in lines[1:]:
                 t.list_sub(line)

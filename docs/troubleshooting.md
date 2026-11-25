@@ -141,7 +141,10 @@ primary to cancel it, and run the command again.
 An update (`./setup.sh --update`) asks first, before it installs anything: with a child running and an earlier version's
 collector or project service to replace, it stops in step 2 with `child_run_active` and the same words, and changes nothing. Run
 it again when the child has finished. (A child that starts in the few seconds between that check and step 5 is refused at
-step 5; setup then says that step 4 had already updated the project's files and to run the update again.)
+step 5; setup then says that step 4 had already updated the project's files and to run the update again.) If the update
+cannot tell whether a child is running because the learning database exists but cannot be read, it stops the same way, in
+step 2, with `update_check_unavailable` and the next step (close any running child, check the state folder is readable by this
+account, try again). It is asked again right before the files are written.
 
 ## `ledger_upgrade_required`, or "these records were written by an earlier version"
 

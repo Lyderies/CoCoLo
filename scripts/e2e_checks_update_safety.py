@@ -417,8 +417,12 @@ def l12_3_update_with_a_running_child_is_refused_plainly_and_the_child_goes_on(p
                  "the refusal says a child run is active, that nothing was changed and to try again when none is running")
     phase.reason("child_run_active")
     # UPDFIX-3: the refusal is decided in step 2, before the installer runs (it was the collector step, after the install).
-    phase.expect(not any(state == "OK" for number, state in states_of(update).items() if 3 <= number <= 8),
+    states = states_of(update)
+    phase.expect(not any(state == "OK" for number, state in states.items() if 3 <= number <= 8),
                  "the refusal comes before the install step: steps 3 to 8 (providers to commands) ran none of their work")
+    # Review r1: the line above alone also passes an empty summary; the refusal itself must be reported, at step 2.
+    phase.expect("The update stopped (child_run_active)" in update.run.text and states.get(2) != "OK",
+                 "the refusal is reported as the update stopping at step 2 (Project) with the reason child_run_active")
     phase.expect(update.before.pids == update.after.pids and all(update.alive_after.values()) and update.alive_after
                  and update.before.service_pids == update.after.service_pids,
                  "the earlier collector and the project's service are the same live processes right after the refusal")

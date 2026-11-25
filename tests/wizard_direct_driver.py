@@ -170,8 +170,12 @@ class DirectDriverMixin:
         if env.get("FAKE_CLIENT_DIRS") and matches("*attest.py client-status *"):
             return self._process([TRUSTED_PY, "-I", "-B", "-S", str(self.fakes / "fake_client_tool.py"), *args], env)
         if env.get("FAKE_CHILDREN") and matches("*cli.py learning-update-check *"):  # UPDFIX-2: the read-only check's reply
-            self._append(self.base / "register.log", joined)
-            return 0, (env["FAKE_CHILDREN"] + "\n").encode(), b""
+            log = self.base / "register.log"
+            earlier = log.read_text().count("learning-update-check") if log.exists() else 0
+            self._append(log, joined)
+            # FAKE_CHILDREN_LATER: the reply of every later check (a child that started after step 2).
+            reply = env["FAKE_CHILDREN_LATER"] if earlier and env.get("FAKE_CHILDREN_LATER") else env["FAKE_CHILDREN"]
+            return 0, (reply + "\n").encode(), b""
         if env.get("FAKE_REGISTER_BUSY") and matches("*cli.py learning-register *"):  # UPDFIX-4: a child started later
             self._append(self.base / "register.log", joined)
             return 2, (b'{"ready": false, "error": "a child run is active; nothing was changed, try again when '
