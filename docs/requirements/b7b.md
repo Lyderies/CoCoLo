@@ -43,6 +43,15 @@ within 4; B6 the latter with re-due blocked rows and 50 arrivals/batch still wit
 0/100,000 tombstones. Measure product operations, not a substitute scheduler.
 Missing operations or unavailable service startup measurements are reported as
 unmeasured/failed, never inferred from design or a cheaper proxy.
+Measured B3, B4, B5 and S3 retirement/lookup limits are executable assertions.
+B4 includes 100,000 released lease and reservation rows as well as custody/context
+tombstones, and measures recovery_pending including its has_holds query. Attempt
+identities split at their single colon: the run-handle grammar excludes colons,
+and the identity constructor must assert that invariant. Missing memory hold
+tracking must stay asserted while B1/B6 remain unmeasured; service startup remains
+separately unmeasured while only store-open timing is collected. A socket-bind
+availability assertion fails if this environment limitation lifts, requiring full
+B2/S3 service startup measurements then.
 
 Tests/harness: `tests.test_b7b_budgets`; measured results and exact scope will be
 recorded below and in `b7b/STATUS.md`.
@@ -56,6 +65,18 @@ project enrollment and authorization. The plain-terminal test checks the real
 new response shape, foreign project rejection, and output privacy. Existing B7a
 exact-top-level assertion must grow with the report; record the replacement in
 `b7b/assertions.md`. No other existing assertions may be weakened.
+When recovery is stale, learning-status also prints the plain sentence
+"Recovery was not checked recently." so zero counts cannot imply a recent check.
+A history-only service (ProjectServiceHost with bundle_root=None) serves the
+report without a RunDriver and must therefore return stale until a completed
+observation exists. A client with an older runtime digest is refused with
+history_not_authorized before authorization or report computation; the gate is
+the service's runtime-digest equality check, not an assumed old-client decoder.
+
+Sweep-local account failure capture is reset in a finally, including when
+post-sweep cleanup/publication raises. A refusal (account_not_authorized or
+account_wrong_owner) beside a transport failure must count only the latter as
+account_unreachable.
 
 ## Requirement-to-test map and measurements
 
@@ -66,16 +87,18 @@ machine/run, not a guaranteed production latency.
 
 | Requirement | Test / evidence | Result |
 |---|---|---|
-| RS-B-B7-4 | `RecoveryTests` (empty/restart, strict 20-second boundary, source-held reservation, sweep blockers/refusals/fences/current failed stop); `RecoveryScopeTests` (two projects, read-only, privacy, has_holds release); `AccountObservationTests`; `OwnRecoveryTests` | Red before implementation; store/driver tests green. Own updates do not refresh sweep age; duplicate identities count once and one specific reason replaces settlement. |
-| RS-B-B7-6 | `RecoveryTests.test_response_requires_closed_reasons_types_and_stale`; `PlainTerminalOutputTests.test_plain_terminal_output_without_socket_privilege`; existing `HoldsProtocolTests`, `HoldsClientStatusTests`; reply compatibility guard | Red missing key -> green, including real report/client/CLI from isolated plain terminal. Real socket tests cannot bind in this sandbox. |
-| RS-B-B7-5 / B1 | `BudgetMeasurements.test_measured_budgets_report_numbers_without_relabelling_failures` | **Partial:** five actual reserve/arm/bind/commit register calls total **0.266 ms**. Full normal-run writer delta, release tail and transaction commit costs **unmeasured**, so no claim against <5 ms. |
-| B2 | same harness, store reopen including validators, three samples each | **Partial:** median empty **2.578 ms**, 1,064 held leases **4.182 ms**, delta **+1.604 ms**. Full service startup against <=+100 ms is **unmeasured** (sockets blocked). Setup bypasses only repeated capacity checks, verifies once with the unmodified check, then reopens/validates before measurement. |
-| B3 | same harness, actual `release_earlier_unarmed_leases(limit=64)` | **Pass for this path:** maximum **18.942 ms <50 ms**, over 16 batches (last has 40 rows). Includes ordinary durable source/register transactions. |
-| B4 | same harness, actual product queries at 0 / 100,000 valid released custody/expired context tombstones | **FAIL:** `_holds` **1,722 -> 9,001,722 VM instructions**. Equal-work budget is not met. No threshold changed. Context candidates **223/223**, reconciliation **157/157**, absent outcome lookup **15/15**; live context plan uses its partial index. Source lease/reservation tombstones are not separately covered. |
-| B5 | same harness, 1,000 eligible unarmed leases behind 64 live/blocked leases | **Pass for this path:** **1,000 released in 16 batches <=18**. Does not establish a memory-kind drain or account round-trip bound. |
-| B6 | same harness, one eligible lease, 128 live blockers and 50 arrivals | **Partial:** target released in **1 batch**, **0.409 ms**. Re-due/backoff with continuing arrivals in the generic register scheduler is **unmeasured**: that scheduler and memory hold tracking are absent. No substitute scheduler was benchmarked. |
-| RS-D S3 | both `BudgetMeasurements` tests | Retirement of ten: **8.625/7.512 ms <50 ms**, **10,512/10,512 VM instructions**. Successful authenticated outcome lookup, maximum of five samples: **0.641/0.663 ms <5 ms**, **491/491 VM instructions**. Context candidate/reconciliation work equal above. Store open with 64 real context files: **2.071 -> 3.385 ms**, **+1.314 ms**. Whole service startup against <=+200 ms remains **unmeasured**. Retirement timings include VM counter overhead. |
+| RS-B-B7-4 | `RecoveryTests`, `RecoveryScopeTests`, `AccountObservationTests`, `OwnRecoveryTests` | Original reasons/staleness/privacy tests retained. New finally exception test red → green. Simultaneous refusal/unreachable test already green: exactly one account_unreachable for either refusal pair. |
+| RS-B-B7-6 | `test_learning_status_notice_only_when_recovery_is_stale`; `PlainTerminalOutputTests`; `test_history_only_service_is_stale_and_runtime_mismatch_never_serves_report`; existing validators/compatibility | Missing plain stale notice red → green. History-only service returns stale zero counts. Runtime mismatch refused as history_not_authorized before authorizer/report; existing gate already green. Real socket tests blocked by EPERM. |
+| RS-B-B7-5 / B1 | `BudgetMeasurements.test_measured_budgets_report_numbers_without_relabelling_failures` | **Unmeasured (partial evidence):** five reserve/arm/bind/commit register calls total **0.175 ms**. Full normal-run writer delta, release tail and commit costs unmeasured; missing memory tracking is asserted. |
+| B2 | same harness, three real store reopen samples each | **Unmeasured (partial evidence):** median empty **2.209 ms**, 1,064 held leases **3.929 ms**, delta **+1.720 ms**. Full service startup <=+100 ms unmeasured. Socket binding must still raise PermissionError; availability fails loudly requiring the full measurement. |
+| B3 | same harness, actual `release_earlier_unarmed_leases(limit=64)` | **Met, asserted:** maximum **16.611 ms <50 ms**, 16 batches (last 40 rows), durable source/register transactions included. |
+| B4 | same harness, real hold/context/recovery/has_holds queries at 0 / 100,000 tombstones | **Met, asserted:** `_holds` **994/994**, recovery_pending **455/455**, has_holds **335/335** VM instructions. Includes 100,000 released lease and 100,000 released reservation source rows/holds, plus custody/expired context tombstones. Context candidates **223/223**, reconciliation **157/157**, absent lookup **15/15**, retirement **10,512/10,512**. All deltas zero (allowed constant <=16); live context partial-index plan asserted. Red before fix: holds **1,722/9,001,722**, recovery **354/3,900,352**, has_holds **252/1,000,250**. Colon-free identity constructor assertion also red → green. |
+| B5 | same harness, 1,000 eligible unarmed leases behind 64 blocked leases | **Met, asserted:** **1,000 released in 16 batches <=18**. Memory-kind drain/account round trips are not established. |
+| B6 | same harness, one eligible lease, 128 live blockers, 50 arrivals | **Unmeasured (partial evidence):** target released in **1 batch**, **0.384 ms**. Generic re-due/backoff scheduler and memory holds remain absent (asserted); recurring-arrival bound is unmeasured. |
+| RS-D S3 | both `BudgetMeasurements` tests | **Met for measured paths, asserted:** retirement of ten **45.986/7.973 ms <50 ms** including VM tracing; successful authenticated lookup maxima of five samples **1.071/0.722 ms <5 ms**, **491/491 VM instructions**. Store open with 64 real context files **2.240 → 3.896 ms**, **+1.656 ms**. Whole service startup <=+200 ms remains separately **unmeasured**, guarded by socket availability. |
 
-B7-5 is **partially measured with a recorded failure**, not an all-budgets-passed
-claim. B4's report query regression and the absent generic scheduler require primary
-follow-up; the other partial rows need full lifecycle/service measurements.
+Final budget named runner: **2 tests, 28.4 s, PASS**,
+`metadata_errors: []`. See [b7b/STATUS.md](b7b/STATUS.md) for all six review items,
+red/green tests, files, assertion replacements and execution limits.
+B1/B2/B6 and S3 service startup remain explicitly unmeasured; measured paths pass
+without changing their timing limits. B4's history-dependent query failure is fixed.

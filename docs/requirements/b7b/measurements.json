@@ -1,53 +1,89 @@
 {
+  "correction_round_red": {
+    "base": "37ebd229",
+    "budget_tests": {
+      "failures": 1,
+      "reason": "B4 status failed now fails the test",
+      "seconds": 27.666,
+      "tests": 2
+    },
+    "comparisons": [
+      {
+        "has_holds_vm_steps": 252,
+        "holds_vm_steps": 1722,
+        "recovery_pending_vm_steps": 354,
+        "tombstones": 0
+      },
+      {
+        "has_holds_vm_steps": 1000250,
+        "holds_vm_steps": 9001722,
+        "recovery_pending_vm_steps": 3900352,
+        "tombstones": 100000
+      }
+    ],
+    "recovery_red": {
+      "errors": 1,
+      "failures": 3,
+      "reason": "Colon-free invariant missing; finally reset missing for instances/publish; stale notice absent",
+      "seconds": 0.091,
+      "tests": 13
+    },
+    "terminal_red": {
+      "reason": "KeyError: recovery_pending_notice"
+    },
+    "unchanged_behavior": "Runtime mismatch and simultaneous refusal/transport classification passed before production edits to those paths."
+  },
   "measurements": {
     "B1": {
       "numbers": {
         "calls": 5,
-        "partial_register_ms": 0.265667
+        "partial_register_ms": 0.17508400000000002
       },
       "scope": "Actual reserve/arm/bind/commit register calls; excludes release tail and transaction commit cost. Full normal-run writer delta is not established.",
-      "status": "unmeasured"
+      "status": "unmeasured",
+      "unmeasured_reason": "Memory hold lifecycle is untracked; full normal-run writer delta including release/commit is not measured."
     },
     "B2": {
       "numbers": {
         "empty_open_ms": [
-          2.595,
-          2.355,
-          2.577791
+          2.05525,
+          2.208917,
+          2.229875
         ],
         "held_1064_open_ms": [
-          5.789167,
-          3.941208,
-          4.181542
+          5.584459,
+          3.733166,
+          3.929
         ],
         "limit_ms": 100,
-        "store_overhead_ms": 1.6037510000000004
+        "store_overhead_ms": 1.7200829999999998
       },
       "scope": "Real store reopen with 1,064 held leases, including validators; whole service startup needs sockets and is unmeasured.",
-      "status": "unmeasured"
+      "status": "unmeasured",
+      "unmeasured_reason": "Only store open is measured; complete service startup requires socket privileges."
     },
     "B3": {
       "numbers": {
         "batch_ms": [
-          16.333792,
-          18.941666,
-          13.730041,
-          12.560209,
-          13.686167,
-          13.772459,
-          12.666583,
-          12.326917,
-          12.931125,
-          12.64725,
-          13.847458,
-          12.912916,
-          13.069084,
-          12.387125,
-          12.252291,
-          7.248667
+          16.610625,
+          15.881041,
+          13.471583,
+          11.928334,
+          13.1875,
+          12.271834,
+          13.062167,
+          11.857375,
+          13.592875,
+          13.097291,
+          13.365833,
+          13.347584,
+          13.336833,
+          13.682334,
+          13.22875,
+          7.490792
         ],
         "limit_ms": 50,
-        "maximum_ms": 18.941666
+        "maximum_ms": 16.610625
       },
       "scope": "Real release_earlier_unarmed_leases(limit=64); individual durable source/register transactions included.",
       "status": "met"
@@ -57,7 +93,9 @@
         "comparisons": [
           {
             "context_sweep_vm_steps": 223,
-            "holds_vm_steps": 1722,
+            "has_holds": 1,
+            "has_holds_vm_steps": 335,
+            "holds_vm_steps": 994,
             "live_index_plan": [
               [
                 3,
@@ -66,17 +104,23 @@
                 "SCAN project_result_contexts USING INDEX project_result_contexts_live"
               ]
             ],
-            "lookup_ms": 0.005875,
+            "lookup_ms": 0.009166,
             "lookup_vm_steps": 15,
+            "pending_settlement": 1,
             "reconcile_vm_steps": 157,
+            "recovery_pending_vm_steps": 455,
+            "released_leases": 0,
+            "released_reservations": 0,
             "retired": 10,
-            "retirement_ms": 8.625208,
+            "retirement_ms": 45.985625,
             "retirement_vm_steps": 10512,
             "tombstones": 0
           },
           {
             "context_sweep_vm_steps": 223,
-            "holds_vm_steps": 9001722,
+            "has_holds": 1,
+            "has_holds_vm_steps": 335,
+            "holds_vm_steps": 994,
             "live_index_plan": [
               [
                 3,
@@ -85,18 +129,22 @@
                 "SCAN project_result_contexts USING INDEX project_result_contexts_live"
               ]
             ],
-            "lookup_ms": 0.005,
+            "lookup_ms": 0.004291,
             "lookup_vm_steps": 15,
+            "pending_settlement": 1,
             "reconcile_vm_steps": 157,
+            "recovery_pending_vm_steps": 455,
+            "released_leases": 100000,
+            "released_reservations": 100000,
             "retired": 10,
-            "retirement_ms": 7.511583,
+            "retirement_ms": 7.972916,
             "retirement_vm_steps": 10512,
             "tombstones": 100000
           }
         ]
       },
-      "scope": "Actual hold report, context candidate sweep, reconciliation and absent outcome lookup at 0/100,000 valid custody tombstones. VM instructions are recorded; source lease/reservation tombstone growth is not covered.",
-      "status": "failed"
+      "scope": "Actual hold report, context candidate sweep, reconciliation, absent outcome lookup and recovery_pending/has_holds at 0/100,000 custody/context and valid sealed released lease/reservation tombstones. VM work must differ by at most 16 instructions.",
+      "status": "met"
     },
     "B5": {
       "numbers": {
@@ -116,17 +164,20 @@
         "limit_batches": 4,
         "released": 1,
         "store_batches": 1,
-        "store_pass_ms": 0.408875
+        "store_pass_ms": 0.384458
       },
       "scope": "Real lease pass releases target behind 128 live rows plus 50 arrivals. Generic re-due/backoff register scheduler and memory holds do not exist; required recurring-arrival scenario is not established.",
-      "status": "unmeasured"
+      "status": "unmeasured",
+      "unmeasured_reason": "Memory holds and their generic recurring-arrival/re-due scheduler are absent."
     },
     "S3": {
       "numbers": {
         "comparisons": [
           {
             "context_sweep_vm_steps": 223,
-            "holds_vm_steps": 1722,
+            "has_holds": 1,
+            "has_holds_vm_steps": 335,
+            "holds_vm_steps": 994,
             "live_index_plan": [
               [
                 3,
@@ -135,17 +186,23 @@
                 "SCAN project_result_contexts USING INDEX project_result_contexts_live"
               ]
             ],
-            "lookup_ms": 0.005875,
+            "lookup_ms": 0.009166,
             "lookup_vm_steps": 15,
+            "pending_settlement": 1,
             "reconcile_vm_steps": 157,
+            "recovery_pending_vm_steps": 455,
+            "released_leases": 0,
+            "released_reservations": 0,
             "retired": 10,
-            "retirement_ms": 8.625208,
+            "retirement_ms": 45.985625,
             "retirement_vm_steps": 10512,
             "tombstones": 0
           },
           {
             "context_sweep_vm_steps": 223,
-            "holds_vm_steps": 9001722,
+            "has_holds": 1,
+            "has_holds_vm_steps": 335,
+            "holds_vm_steps": 994,
             "live_index_plan": [
               [
                 3,
@@ -154,52 +211,65 @@
                 "SCAN project_result_contexts USING INDEX project_result_contexts_live"
               ]
             ],
-            "lookup_ms": 0.005,
+            "lookup_ms": 0.004291,
             "lookup_vm_steps": 15,
+            "pending_settlement": 1,
             "reconcile_vm_steps": 157,
+            "recovery_pending_vm_steps": 455,
+            "released_leases": 100000,
+            "released_reservations": 100000,
             "retired": 10,
-            "retirement_ms": 7.511583,
+            "retirement_ms": 7.972916,
             "retirement_vm_steps": 10512,
             "tombstones": 100000
           }
         ],
-        "empty_store_open_ms": 2.070583,
-        "live_64_store_open_ms": 3.384666,
+        "empty_store_open_ms": 2.239584,
+        "live_64_store_open_ms": 3.895667,
         "lookup_limit_ms": 5,
         "retirement_limit_ms": 50,
         "service_start_overhead_limit_ms": 200,
-        "store_start_overhead_ms": 1.3140830000000001
+        "store_start_overhead_ms": 1.6560830000000002
       },
       "scope": "Real retirement of ten committed bodies/contexts (VM counting enabled, so time includes tracing overhead), absent outcome lookup and context reconciliation at 0/100,000 tombstones; store startup with 64 context files. Successful authenticated lookup is measured separately by measure_lookup; full service startup remains unmeasured.",
-      "status": "unmeasured"
+      "service_startup_status": "unmeasured",
+      "status": "met"
     }
   },
   "successful_lookup": [
     {
       "limit_ms": 5,
-      "lookup_ms": 0.640792,
+      "lookup_ms": 1.0705,
       "lookup_samples_ms": [
-        0.640792,
-        0.619375,
-        0.608917,
-        0.59825,
-        0.588583
+        0.909833,
+        0.773417,
+        1.0705,
+        0.818583,
+        0.713958
       ],
       "lookup_vm_steps": 491,
       "tombstones": 0
     },
     {
       "limit_ms": 5,
-      "lookup_ms": 0.663458,
+      "lookup_ms": 0.72175,
       "lookup_samples_ms": [
-        0.663458,
-        0.633541,
-        0.632,
-        0.622625,
-        0.607542
+        0.72175,
+        0.674667,
+        0.667459,
+        0.648708,
+        0.640875
       ],
       "lookup_vm_steps": 491,
       "tombstones": 100000
     }
-  ]
+  ],
+  "verification": {
+    "elapsed_seconds": 28.4,
+    "failed_units": [],
+    "metadata_errors": [],
+    "tests": {
+      "codex": 2
+    }
+  }
 }

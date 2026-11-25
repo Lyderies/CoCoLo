@@ -58,4 +58,5 @@ with tempfile.TemporaryDirectory(dir=sys.argv[2]) as root:
         value = json.loads(result.stdout)
         self.assertEqual({'reasons': dict.fromkeys(('needs_settlement', 'needs_process_evidence', 'has_holds',
                            'stop_failed', 'account_unreachable'), 0), 'stale': True}, value['recovery_pending'])
+        self.assertEqual('Recovery was not checked recently.', value['recovery_pending_notice'])
         self.assertNotIn('prj_' + 'a' * 32, result.stdout)

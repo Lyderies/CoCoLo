@@ -1873,10 +1873,13 @@
    "codex:tests.test_b7b_recovery.AccountObservationTests.test_fence_and_settlement_failures_survive_helpers_that_swallow_them",
    "codex:tests.test_b7b_recovery.OwnRecoveryTests.test_own_failed_run_account_backoff_is_counted_without_refreshing_sweep_age",
    "codex:tests.test_b7b_recovery.RecoveryScopeTests.test_open_orchestrations_count_once_and_other_projects_never_leak",
+   "codex:tests.test_b7b_recovery.RecoveryTests.test_account_refusal_beside_unreachable_counts_only_transport_failure",
    "codex:tests.test_b7b_recovery.RecoveryTests.test_empty_restart_and_strict_stale_boundary",
    "codex:tests.test_b7b_recovery.RecoveryTests.test_failed_sweep_keeps_observation_age",
    "codex:tests.test_b7b_recovery.RecoveryTests.test_held_reservation_reports_settlement_even_without_a_journal_observation",
+   "codex:tests.test_b7b_recovery.RecoveryTests.test_history_only_service_is_stale_and_runtime_mismatch_never_serves_report",
    "codex:tests.test_b7b_recovery.RecoveryTests.test_sweep_counts_real_blockers_excludes_active_and_clears_on_success",
+   "codex:tests.test_b7b_recovery.RecoveryTests.test_sweep_resets_account_capture_on_cleanup_and_publication_exceptions",
    "codex:tests.test_b7b_terminal.PlainTerminalOutputTests.test_plain_terminal_output_without_socket_privilege",
    "codex:tests.test_b7b_terminal.RecoveryTerminalTests.test_learning_status_recovery_from_plain_terminal"
   ],
@@ -1886,19 +1889,22 @@
  "RS-B-B7-5": {
   "checks": [
    "codex:tests.test_b7b_budgets.BudgetMeasurements.test_measured_budgets_report_numbers_without_relabelling_failures",
-   "codex:tests.test_b7b_budgets.BudgetMeasurements.test_successful_outcome_lookup_at_zero_and_100000_tombstones"
+   "codex:tests.test_b7b_budgets.BudgetMeasurements.test_successful_outcome_lookup_at_zero_and_100000_tombstones",
+   "codex:tests.test_b7b_recovery.RecoveryTests.test_attempt_identity_requires_colon_free_run_handle"
   ],
   "source": "tests/requirements/b7b.json#RS-B-B7-5",
-  "statement": "Measure the combined code, report raw numbers and failures without loosening limits:\nB1 added register writer work of a normal run <5 ms; B2 1,000 held rows startup\noverhead <=100 ms; B3 a 64-row batch <50 ms; B4 equal query work at 0/100,000\ntombstones and partial index plans; B5 1,000 eligible rows behind 64 blocked rows\nwithin ceil((1000+64)/64)+1 = 18 batches, and one eligible behind 128 blocked rows\nwithin 4; B6 the latter with re-due blocked rows and 50 arrivals/batch still within\n4. RS-D S3: retirement of 10 <50 ms, outcome lookup <5 ms, startup overhead with\n64 live contexts <=200 ms; compare retirement/lookup/reconciliation work at\n0/100,000 tombstones. Measure product operations, not a substitute scheduler.\nMissing operations or unavailable service startup measurements are reported as\nunmeasured/failed, never inferred from design or a cheaper proxy.\n\nTests/harness: `tests.test_b7b_budgets`; measured results and exact scope will be\nrecorded below and in `b7b/STATUS.md`."
+  "statement": "Measure the combined code, report raw numbers and failures without loosening limits:\nB1 added register writer work of a normal run <5 ms; B2 1,000 held rows startup\noverhead <=100 ms; B3 a 64-row batch <50 ms; B4 equal query work at 0/100,000\ntombstones and partial index plans; B5 1,000 eligible rows behind 64 blocked rows\nwithin ceil((1000+64)/64)+1 = 18 batches, and one eligible behind 128 blocked rows\nwithin 4; B6 the latter with re-due blocked rows and 50 arrivals/batch still within\n4. RS-D S3: retirement of 10 <50 ms, outcome lookup <5 ms, startup overhead with\n64 live contexts <=200 ms; compare retirement/lookup/reconciliation work at\n0/100,000 tombstones. Measure product operations, not a substitute scheduler.\nMissing operations or unavailable service startup measurements are reported as\nunmeasured/failed, never inferred from design or a cheaper proxy.\nMeasured B3, B4, B5 and S3 retirement/lookup limits are executable assertions.\nB4 includes 100,000 released lease and reservation rows as well as custody/context\ntombstones, and measures recovery_pending including its has_holds query. Attempt\nidentities split at their single colon: the run-handle grammar excludes colons,\nand the identity constructor must assert that invariant. Missing memory hold\ntracking must stay asserted while B1/B6 remain unmeasured; service startup remains\nseparately unmeasured while only store-open timing is collected. A socket-bind\navailability assertion fails if this environment limitation lifts, requiring full\nB2/S3 service startup measurements then.\n\nTests/harness: `tests.test_b7b_budgets`; measured results and exact scope will be\nrecorded below and in `b7b/STATUS.md`."
  },
  "RS-B-B7-6": {
   "checks": [
+   "codex:tests.test_b7b_recovery.RecoveryTests.test_history_only_service_is_stale_and_runtime_mismatch_never_serves_report",
+   "codex:tests.test_b7b_recovery.RecoveryTests.test_learning_status_notice_only_when_recovery_is_stale",
    "codex:tests.test_b7b_recovery.RecoveryTests.test_response_requires_closed_reasons_types_and_stale",
    "codex:tests.test_b7b_terminal.PlainTerminalOutputTests.test_plain_terminal_output_without_socket_privilege",
    "codex:tests.test_b7b_terminal.RecoveryTerminalTests.test_learning_status_recovery_from_plain_terminal"
   ],
   "source": "tests/requirements/b7b.json#RS-B-B7-6",
-  "statement": "Grow report and closed response validator together; require every new key, reject\nextra keys, bool/negative counts and non-bool stale. Capacity report stays unchanged.\n`learning-status` prints recovery_pending (null if unavailable), through the existing\nproject enrollment and authorization. The plain-terminal test checks the real\nnew response shape, foreign project rejection, and output privacy. Existing B7a\nexact-top-level assertion must grow with the report; record the replacement in\n`b7b/assertions.md`. No other existing assertions may be weakened."
+  "statement": "Grow report and closed response validator together; require every new key, reject\nextra keys, bool/negative counts and non-bool stale. Capacity report stays unchanged.\n`learning-status` prints recovery_pending (null if unavailable), through the existing\nproject enrollment and authorization. The plain-terminal test checks the real\nnew response shape, foreign project rejection, and output privacy. Existing B7a\nexact-top-level assertion must grow with the report; record the replacement in\n`b7b/assertions.md`. No other existing assertions may be weakened.\nWhen recovery is stale, learning-status also prints the plain sentence\n\"Recovery was not checked recently.\" so zero counts cannot imply a recent check.\nA history-only service (ProjectServiceHost with bundle_root=None) serves the\nreport without a RunDriver and must therefore return stale until a completed\nobservation exists. A client with an older runtime digest is refused with\nhistory_not_authorized before authorization or report computation; the gate is\nthe service's runtime-digest equality check, not an assumed old-client decoder.\n\nSweep-local account failure capture is reset in a finally, including when\npost-sweep cleanup/publication raises. A refusal (account_not_authorized or\naccount_wrong_owner) beside a transport failure must count only the latter as\naccount_unreachable."
  },
  "RS-D-2-N1": {
   "checks": [

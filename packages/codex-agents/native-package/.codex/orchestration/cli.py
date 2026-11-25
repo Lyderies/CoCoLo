@@ -2799,6 +2799,8 @@ def main() -> int:
             holds = holds_report_client(args.state_root, args.project_root, host_client=label)
             for name in ('project_holds', 'result_custody', 'result_retirement_repairs', 'recovery_pending'):
                 report[name] = None if holds is None else holds[name]
+            if holds is not None and holds['recovery_pending']['stale']:
+                report['recovery_pending_notice'] = 'Recovery was not checked recently.'
             # T7 S2 (L14.1): orchestrations live in the project's own store, so its service's count replaces the
             # ledger's (whose table holds only those of versions before the project store); while the service is
             # not running the counts are unknown (null, with the reason), never the ledger's.

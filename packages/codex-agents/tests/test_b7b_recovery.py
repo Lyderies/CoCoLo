@@ -16,6 +16,112 @@ REASONS = ('needs_settlement', 'needs_process_evidence', 'has_holds', 'stop_fail
 
 
 class RecoveryTests(dr.LeaseBackedFixture):
+    @requirements('RS-B-B7-5', why_not_scenario=WHY)
+    def test_attempt_identity_requires_colon_free_run_handle(self):
+        from dataclasses import replace
+        from tests.test_result_leases import lease_binding
+        from codex_agents.project_holds_schema import attempt_identity
+        lease = lease_binding()
+        self.assertEqual(f'{lease.run_handle}:12', attempt_identity(lease.run_handle, 12))
+        with self.assertRaises(HistoryError):
+            replace(lease, run_handle=lease.run_handle + ':2')
+        with self.assertRaises(AssertionError):
+            attempt_identity(lease.run_handle + ':2', 12)
+
+    @requirements('RS-B-B7-4', 'RS-B-B7-6', why_not_scenario=WHY)
+    def test_history_only_service_is_stale_and_runtime_mismatch_never_serves_report(self):
+        from codex_agents.history_api import encode_history_request
+        from codex_agents import project_holds_report
+        service = b7a.service_for(self.store)  # No runtime or RunDriver.
+        self.addCleanup(service.close)
+        request = b7a.command()
+        value = decode_history_response(service.handle(encode_history_request(request), b7a.TOKEN), request)
+        self.assertEqual({'reasons': dict.fromkeys(REASONS, 0), 'stale': True}, value['recovery_pending'])
+        old = b7a.command(runtime='b' * 64)
+        with mock.patch.object(project_holds_report, 'holds_report', side_effect=AssertionError('report served')), \
+             mock.patch.object(service, '_authorizer', side_effect=AssertionError('authorization reached')):
+            raw = service.handle(encode_history_request(old), b7a.TOKEN)
+        envelope = json.loads(raw)
+        self.assertIsNone(envelope['result'])
+        with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
+            decode_history_response(raw, old)
+
+    @requirements('RS-B-B7-6', why_not_scenario=WHY)
+    def test_learning_status_notice_only_when_recovery_is_stale(self):
+        import cli
+        import contextlib
+        import io
+        from codex_agents.recovery_report import RecoveryNotes
+        for stale in (True, False, None):
+            notes = RecoveryNotes()
+            if stale is False:
+                notes.publish(dict.fromkeys(REASONS, 0))
+            self.store._recovery_notes = notes
+            value = None if stale is None else b7a.report(self.store)
+            with mock.patch('sys.argv', ['cli.py', 'learning-status', '--state-root', '/tmp/unused',
+                                        '--project-root', '/tmp/unused-project']), \
+                 mock.patch.object(cli, '_require_protected_runtime'), mock.patch.object(cli, '_require_own_roots'), \
+                 mock.patch.object(cli, '_start_collector_quietly'), \
+                 mock.patch.object(cli, 'status_client', return_value={'ready': True}), \
+                 mock.patch.object(cli, 'capacity_report_client', return_value=None), \
+                 mock.patch.object(cli, 'holds_report_client', return_value=value), \
+                 contextlib.redirect_stdout(io.StringIO()) as stdout:
+                self.assertEqual(0, cli.main())
+            printed = json.loads(stdout.getvalue())
+            self.assertEqual(None if value is None else value['recovery_pending'], printed['recovery_pending'])
+            if stale is True:
+                self.assertEqual('Recovery was not checked recently.', printed['recovery_pending_notice'])
+            else:
+                self.assertNotIn('recovery_pending_notice', printed)
+
+    @requirements('RS-B-B7-4', why_not_scenario=WHY)
+    def test_sweep_resets_account_capture_on_cleanup_and_publication_exceptions(self):
+        from codex_agents import project_driver as pd
+        from codex_agents.recovery_report import RecoveryNotes
+        for failure in ('instances', 'publish'):
+            with self.subTest(failure=failure):
+                notes = RecoveryNotes()
+                driver = object.__new__(pd.RunDriver)
+                driver._call = pd._Call()
+                driver._runtime = SimpleNamespace(persistence=SimpleNamespace(recovery_notes=notes))
+                driver._containers = None
+                driver._container_recovery = lambda: None
+                driver._settled_retry, driver._settled_checked = {}, frozenset()
+                driver._journal = SimpleNamespace(entries=lambda: [], prune=lambda **kw: [], instances=lambda: [])
+                target = driver._journal if failure == 'instances' else notes
+                with mock.patch.object(target, failure, side_effect=RuntimeError('cut')):
+                    with self.assertRaisesRegex(RuntimeError, 'cut'):
+                        driver._settle_lost(False)
+                self.assertIsNone(driver._call.recovery_unreachable)
+
+    @requirements('RS-B-B7-4', why_not_scenario=WHY)
+    def test_account_refusal_beside_unreachable_counts_only_transport_failure(self):
+        from codex_agents import project_driver as pd
+        from codex_agents.account_api import AccountError
+        from codex_agents.recovery_report import RecoveryNotes
+        for refusal in ('account_not_authorized', 'account_wrong_owner'):
+            with self.subTest(refusal=refusal):
+                notes = RecoveryNotes()
+                driver = object.__new__(pd.RunDriver)
+                driver._call = pd._Call()
+                driver._runtime = SimpleNamespace(persistence=SimpleNamespace(recovery_notes=notes))
+                driver._containers = None
+                driver._container_recovery = lambda: None
+                driver._settled_retry, driver._settled_checked = {}, frozenset()
+                entries = [dict(version=1, state='gone', instance='old', run_handle=handle,
+                                host_client='host', claim_request_id=handle, token=handle, bridge_run_id=handle)
+                           for handle in ('refused', 'unreachable')]
+                driver._journal = SimpleNamespace(instance='current', entries=lambda: entries,
+                    instance_stopped=lambda _: True, prune=lambda **kw: [], instances=lambda: [])
+                def settle(entry):
+                    raise AccountError(refusal if entry['run_handle'] == 'refused' else 'account_unavailable')
+                driver._settle_entry = settle
+                with mock.patch.object(pd, 'tree_state', return_value='gone'):
+                    driver._settle_lost(False)
+                self.assertEqual({**dict.fromkeys(REASONS, 0), 'needs_settlement': 1,
+                                  'account_unreachable': 1}, notes.snapshot()['reasons'])
+                self.assertIsNone(driver._call.recovery_unreachable)
+
     @requirements('RS-B-B7-4', why_not_scenario=WHY)
     def test_held_reservation_reports_settlement_even_without_a_journal_observation(self):
         self.bound()

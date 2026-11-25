@@ -29,7 +29,8 @@ def _holds(history):
     due, past = db.execute(
         "SELECT MIN(h.due_at_ms),COALESCE(SUM(h.due_at_ms<=?),0) "
         "FROM project_holds h INDEXED BY project_holds_due JOIN project_result_contexts c "
-        "ON c.project_id=h.project_id AND h.identity=c.run_handle||':'||c.attempt "
+        "ON c.project_id=h.project_id AND c.run_handle=substr(h.identity,1,instr(h.identity,':')-1) "
+        "AND c.attempt=CAST(substr(h.identity,instr(h.identity,':')+1) AS INTEGER) "
         "WHERE h.project_id=? AND h.state<>'released' AND h.state='held' AND h.kind='result_custody' "
         "AND h.due_at_ms IS NOT NULL AND (c.state IN ('committed','recorded') OR "
         "(c.state='legacy_no_context' AND EXISTS(SELECT 1 FROM result_reservations s "

@@ -69,7 +69,9 @@ def recovery_pending(history):
         "JOIN result_reservations s ON s.project_id=h.project_id AND s.claim_id=h.identity "
         "WHERE h.project_id=? AND h.state<>'released' AND h.kind='reservation' UNION "
         "SELECT l.run_handle FROM project_holds h INDEXED BY project_holds_due "
-        "JOIN result_leases l ON l.project_id=h.project_id AND h.identity=l.run_handle||':'||l.attempt "
+        "JOIN result_leases l ON l.project_id=h.project_id "
+        "AND l.run_handle=substr(h.identity,1,instr(h.identity,':')-1) "
+        "AND l.attempt=CAST(substr(h.identity,instr(h.identity,':')+1) AS INTEGER) "
         "WHERE h.project_id=? AND h.state<>'released' AND h.kind='lease' "
         "AND h.lease_case IN ('closing_denied','admitted_unbound')",
         (history.project_id, history.project_id))}
@@ -80,12 +82,15 @@ def recovery_pending(history):
     result['reasons']['has_holds'] = history._connection.execute(
         "SELECT COUNT(*) FROM project_orchestrations o INDEXED BY project_orchestrations_state "
         "WHERE o.project_id=? AND o.state='open' AND (EXISTS("
-        "SELECT 1 FROM result_reservations s JOIN project_holds h ON h.project_id=s.project_id "
-        "AND h.kind='reservation' AND h.identity=s.claim_id WHERE s.project_id=o.project_id "
-        "AND s.orchestration_handle=o.orchestration_handle AND h.state<>'released') OR EXISTS("
-        "SELECT 1 FROM result_leases l JOIN project_holds h ON h.project_id=l.project_id "
-        "AND h.kind='lease' AND h.identity=l.run_handle||':'||l.attempt "
-        "WHERE l.project_id=o.project_id AND " + LEASE_ORCHESTRATION + "=o.orchestration_handle "
-        "AND l.state IN ('reserved','claim_pending') AND h.state<>'released'))",
+        "SELECT 1 FROM project_holds h INDEXED BY project_holds_due CROSS JOIN result_reservations s "
+        "ON s.project_id=h.project_id AND s.claim_id=h.identity "
+        "WHERE h.project_id=o.project_id AND h.kind='reservation' AND h.state<>'released' "
+        "AND s.orchestration_handle=o.orchestration_handle) OR EXISTS("
+        "SELECT 1 FROM project_holds h INDEXED BY project_holds_due CROSS JOIN result_leases l "
+        "ON l.project_id=h.project_id AND l.run_handle=substr(h.identity,1,instr(h.identity,':')-1) "
+        "AND l.attempt=CAST(substr(h.identity,instr(h.identity,':')+1) AS INTEGER) "
+        "WHERE h.project_id=o.project_id AND h.kind='lease' AND h.state<>'released' "
+        "AND " + LEASE_ORCHESTRATION + "=o.orchestration_handle "
+        "AND l.state IN ('reserved','claim_pending')))",
         (history.project_id,)).fetchone()[0]
     return result
