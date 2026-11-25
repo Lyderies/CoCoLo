@@ -5,9 +5,9 @@
   ],
   "cases": [
     {
-      "test": "test_U3_1_an_open_preflight_reads_only_this_runs_records_as_history_grows",
+      "test": "test_U3_10_open_and_provenance_ignore_released_account_history",
       "passed": true,
-      "seconds": 3.703,
+      "seconds": 4.507,
       "work": [
         {
           "small": 1,
@@ -17,79 +17,300 @@
       ],
       "production_budget_samples": [
         {
-          "seconds": 6.241595838218927e-05,
+          "seconds": 4.3749925680458546e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.733307287096977e-05,
+          "seconds": 4.1500083170831203e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.8958929255604744e-05,
+          "seconds": 3.38749960064888e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.729201853275299e-05,
+          "seconds": 3.170897252857685e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.812497016042471e-05,
+          "seconds": 3.1125033274292946e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.674998879432678e-05,
+          "seconds": 3.8707978092134e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.5415985621511936e-05,
+          "seconds": 6.40839571133256e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.51249473169446e-05,
+          "seconds": 0.00010499998461455107,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.524997737258673e-05,
+          "seconds": 3.991695120930672e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 5.8125006034970284e-05,
+          "seconds": 3.4958007745444775e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 0.00010066700633615255,
+          "seconds": 3.870902583003044e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 8.208293002098799e-05,
+          "seconds": 3.387511242181063e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.2791012674570084e-05,
+          "seconds": 3.38749960064888e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.6791043132543564e-05,
+          "seconds": 4.183303099125624e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.575005732476711e-05,
+          "seconds": 4.258297849446535e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.579107578843832e-05,
+          "seconds": 4.175002686679363e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.975001163780689e-05,
+          "callbacks": 1,
+          "seconds": 0.0010321249719709158
+        },
+        {
+          "seconds": 4.2625004425644875e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.674998879432678e-05,
+          "seconds": 4.212500061839819e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.5375007428228855e-05,
+          "seconds": 3.545801155269146e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.179104533046484e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.10409814119339e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.670796286314726e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 6.0999998822808266e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 4.408403765410185e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.904104232788086e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.750005271285772e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 4.175002686679363e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.574998117983341e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.616604954004288e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.833393566310406e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.766606096178293e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 4.2041996493935585e-05,
+          "query_budget_passed": true
+        },
+        {
+          "callbacks": 0,
+          "seconds": 0.0011105840094387531
+        }
+      ],
+      "plans": [
+        {
+          "query_sha256": "4477406a48ad53bff01afbe784aad05dea3aa751cf8179b93c5e1e6d508ab911",
+          "sql": "SELECT status FROM projects WHERE project_id=?",
+          "plan": [
+            "SEARCH projects USING INDEX sqlite_autoindex_projects_1 (project_id=?)"
+          ]
+        },
+        {
+          "query_sha256": "b172231b538fd4a3388071d9ab6b86bfa09b9c98142bf403c3f6b269b2fabc5f",
+          "sql": "SELECT * FROM launch_receipts WHERE project_id=? AND scope_digest=? AND request_digest=?",
+          "plan": [
+            "SEARCH launch_receipts USING INDEX sqlite_autoindex_launch_receipts_1 (project_id=? AND scope_digest=? AND request_digest=?)"
+          ]
+        },
+        {
+          "query_sha256": "4b8d14d91ef9d26c98f745e50cdb5f92e1b3d9a55a8fc1c024b53b8fd4884ad2",
+          "sql": "SELECT history_owner FROM host_run_bindings WHERE project_id=? AND handle_digest=?",
+          "plan": [
+            "SEARCH host_run_bindings USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)"
+          ]
+        },
+        {
+          "query_sha256": "09c1a585f577bd6e80f58128620f588d869fb074b2edf09c2cbe0f4df183f50c",
+          "sql": "SELECT 1 FROM account_open_receipts WHERE project_id=? AND handle_digest=?",
+          "plan": [
+            "SEARCH account_open_receipts USING COVERING INDEX sqlite_autoindex_account_open_receipts_1 (project_id=? AND handle_digest=?)"
+          ]
+        },
+        {
+          "query_sha256": "7c2c35d5f0da0e6d04227ff310bd2964af1ada6abaf1bdcadfe2d74df8db0d08",
+          "sql": "SELECT 1 FROM account_open_requests WHERE project_id=? AND handle_digest=?",
+          "plan": [
+            "SEARCH account_open_requests USING COVERING INDEX sqlite_autoindex_account_open_requests_2 (project_id=? AND handle_digest=?)"
+          ]
+        },
+        {
+          "query_sha256": "b9fdd8a9fb0bece5f9e728327b02749b62ae3ddf7da6ec9b4b3874169fdbc657",
+          "sql": "SELECT a.*,h.assignment_digest,h.task_digest,h.route_digest,h.configuration_digest,h.client_version,h.native_assignment_id,h.created_at_ms AS opened_at_ms,h.observation_started_at_ms,h.observation_deadline_at_ms,e.owner_digest AS registered_digest FROM active_run_capacity a JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest AND h.run_id=a.run_id JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id WHERE a.project_id=? AND a.handle_digest=? AND a.bridge_run_id=?",
+          "plan": [
+            "SEARCH a USING INDEX sqlite_autoindex_active_run_capacity_1 (project_id=? AND handle_digest=?)",
+            "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_2 (project_id=? AND run_id=?)",
+            "SEARCH e USING INDEX sqlite_autoindex_capacity_executions_1 (project_id=? AND handle_digest=?)"
+          ]
+        },
+        {
+          "query_sha256": "df100b6ac0ccfd44b6e70269c5222a14dd49a8e07817377d5c6a8ad7675ed974",
+          "sql": "SELECT project_id,handle_digest,run_id,assignment_digest,task_digest,task_id_digest,route_digest,configuration_digest,client_version,created_at_ms,expires_at_ms,orchestration_id,observation_started_at_ms,observation_deadline_at_ms,agent_type,history_owner FROM host_run_bindings WHERE project_id=? AND handle_digest=?",
+          "plan": [
+            "SEARCH host_run_bindings USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)"
+          ]
+        },
+        {
+          "query_sha256": "ab36be43bea792dc78c0afabb3e337b926a841f53286ecbe9864477aa023f8b8",
+          "sql": "SELECT request_key,scope_digest,parameters_digest,run_id,length(content) AS size,content_seal FROM account_open_receipts WHERE project_id=? AND handle_digest=?",
+          "plan": [
+            "SEARCH account_open_receipts USING INDEX sqlite_autoindex_account_open_receipts_1 (project_id=? AND handle_digest=?)"
+          ]
+        },
+        {
+          "query_sha256": "c5e29f1372eb0ee2bf2edd724c387df6960d8e693ca21ce3f037ee213796577a",
+          "sql": "SELECT * FROM account_open_requests WHERE project_id=? AND handle_digest=?",
+          "plan": [
+            "SEARCH account_open_requests USING INDEX sqlite_autoindex_account_open_requests_2 (project_id=? AND handle_digest=?)"
+          ]
+        },
+        {
+          "query_sha256": "98a260e5078abf8fb4a3ed127a611b66c2b6074702b98c93cb39b93d22c17809",
+          "sql": "SELECT o.handle_digest FROM host_run_bindings h JOIN orchestrations o ON o.project_id=h.project_id AND o.orchestration_id=h.orchestration_id WHERE h.project_id=? AND h.handle_digest=?",
+          "plan": [
+            "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+            "SEARCH o USING INDEX sqlite_autoindex_orchestrations_1 (project_id=? AND orchestration_id=?)"
+          ]
+        },
+        {
+          "query_sha256": "4e705c3d42e6710dc533bcfb4541c00924858fc455ac1d574f33da65fcf5dd1a",
+          "sql": "SELECT record_id,content,content_digest,source FROM records WHERE project_id=? AND record_type='admission_decision' AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=? LIMIT 2",
+          "plan": [
+            "SEARCH records USING INDEX records_run (project_id=? AND <expr>=? AND record_type=?)"
+          ]
+        },
+        {
+          "query_sha256": "667bc8b28b44df34c04a62a05e9fe6b3e147ffc50272b217d955873fd30a2cbc",
+          "sql": "SELECT record_id,content,content_digest,source FROM records WHERE project_id=? AND record_type='event' AND source='host' AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=? AND json_extract(CAST(content AS TEXT),'$.event_code')='subagent_started' LIMIT 2",
+          "plan": [
+            "SEARCH records USING INDEX records_run (project_id=? AND <expr>=? AND record_type=?)"
+          ]
+        }
+      ]
+    },
+    {
+      "test": "test_U3_11_project_registration_ignores_other_orchestration_history",
+      "passed": true,
+      "seconds": 0.705,
+      "work": [
+        {
+          "small": 29,
+          "large": 29,
+          "slack": 100
+        }
+      ],
+      "production_budget_samples": [
+        {
+          "seconds": 1.5208963304758072e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 7.791910320520401e-06,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 7.750000804662704e-06,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 5.29095996171236e-06,
+          "query_budget_passed": true
+        }
+      ],
+      "plans": [
+        {
+          "query_sha256": "4ffc39ecc33951175462e408d3b4021ebdc2a0fbb69d0418bd4590b68ea735fc",
+          "sql": "SELECT orchestration_handle,run_id,service_instance FROM project_registered_runs WHERE project_id=? AND run_handle=? AND attempt=?",
+          "plan": [
+            "SEARCH project_registered_runs USING INDEX sqlite_autoindex_project_registered_runs_1 (project_id=? AND run_handle=? AND attempt=?)"
+          ]
+        },
+        {
+          "query_sha256": "14d684d8b24cea05d19df15b63cfbef3d57843af17fefad76a68c6ecd62f5373",
+          "sql": "SELECT COUNT(*) FROM project_registered_runs WHERE project_id=? AND orchestration_handle=?",
+          "plan": [
+            "SEARCH project_registered_runs USING COVERING INDEX project_registered_runs_orchestration (project_id=? AND orchestration_handle=?)"
+          ]
+        }
+      ]
+    },
+    {
+      "test": "test_U3_12_completed_probe_history_keeps_owner_reads_bounded",
+      "passed": true,
+      "seconds": 1.438,
+      "work": [
+        {
+          "small": 208,
+          "large": 208,
+          "slack": 200
+        }
+      ],
+      "production_budget_samples": [
+        {
+          "seconds": 4.804192576557398e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 4.2584026232361794e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.416603431105614e-05,
           "query_budget_passed": true
         },
         {
@@ -97,111 +318,532 @@
           "query_budget_passed": true
         },
         {
-          "seconds": 3.5208999179303646e-05,
+          "seconds": 3.7499936297535896e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.5375007428228855e-05,
+          "seconds": 3.316695801913738e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.541703335940838e-05,
+          "seconds": 3.079092130064964e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.358298610895872e-05,
+          "seconds": 3.6958022974431515e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.112499300390482e-05,
+          "seconds": 3.616604954004288e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.700004890561104e-05,
+          "seconds": 8.008303120732307e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.524997737258673e-05,
+          "seconds": 5.425000563263893e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.27919439971447e-05,
+          "seconds": 4.6874978579580784e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.8874917663633823e-05,
+          "seconds": 4.199997056275606e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.67090106010437e-05,
+          "seconds": 3.8958038203418255e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.458303399384022e-05,
+          "seconds": 4.1500083170831203e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.383401781320572e-05,
+          "seconds": 3.63329891115427e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.39999096468091e-05,
+          "seconds": 3.9082951843738556e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.3832970075309277e-05,
+          "seconds": 3.583298530429602e-05,
+          "query_budget_passed": true
+        }
+      ],
+      "plans": [
+        {
+          "query_sha256": "8b34fbe3a8c8a0adcfb66d431474327ca6d0e07e9587f29c4d1278cbd50f5772",
+          "sql": "SELECT canonical_root,status FROM projects WHERE project_id=?",
+          "plan": [
+            "SEARCH projects USING INDEX sqlite_autoindex_projects_1 (project_id=?)"
+          ]
+        },
+        {
+          "query_sha256": "9486e8fd1eb47cfafd2c388aa010a8303985184ab89e13e04f815632606f6ac1",
+          "sql": "SELECT * FROM account_billing_probe_requests WHERE project_id=? AND request_key=?",
+          "plan": [
+            "SEARCH account_billing_probe_requests USING INDEX sqlite_autoindex_account_billing_probe_requests_1 (project_id=? AND request_key=?)"
+          ]
+        },
+        {
+          "query_sha256": "6b27d0f226b9cd83fe67bb5a90e83e1c44a56b6e3b4880493cfd0655146853f4",
+          "sql": "SELECT * FROM account_billing_probe_origins WHERE project_id=? AND request_key=?",
+          "plan": [
+            "SEARCH account_billing_probe_origins USING INDEX sqlite_autoindex_account_billing_probe_origins_1 (project_id=? AND request_key=?)"
+          ]
+        },
+        {
+          "query_sha256": "42df7f6aa5c6361cbffa2227dc3f051b8a74a350ba4f6d983cf85fa51939e282",
+          "sql": "SELECT COUNT(*) FROM (SELECT 1 FROM account_billing_probe_requests WHERE project_id=? AND state<>'committed' LIMIT ?)",
+          "plan": [
+            "CO-ROUTINE (subquery-1)",
+            "SEARCH account_billing_probe_requests USING INDEX billing_probes_in_progress (project_id=?)",
+            "SCAN (subquery-1)"
+          ]
+        },
+        {
+          "query_sha256": "9486e8fd1eb47cfafd2c388aa010a8303985184ab89e13e04f815632606f6ac1",
+          "sql": "SELECT * FROM account_billing_probe_requests WHERE project_id=? AND request_key=?",
+          "plan": [
+            "SEARCH account_billing_probe_requests USING INDEX sqlite_autoindex_account_billing_probe_requests_1 (project_id=? AND request_key=?)"
+          ]
+        },
+        {
+          "query_sha256": "6b27d0f226b9cd83fe67bb5a90e83e1c44a56b6e3b4880493cfd0655146853f4",
+          "sql": "SELECT * FROM account_billing_probe_origins WHERE project_id=? AND request_key=?",
+          "plan": [
+            "SEARCH account_billing_probe_origins USING INDEX sqlite_autoindex_account_billing_probe_origins_1 (project_id=? AND request_key=?)"
+          ]
+        }
+      ]
+    },
+    {
+      "test": "test_U3_13_claude_first_pass_and_latest_older_readings_skip_account_history",
+      "passed": true,
+      "seconds": 2.231,
+      "work": [
+        {
+          "small": 27,
+          "large": 27,
+          "slack": 8
+        }
+      ],
+      "production_budget_samples": [
+        {
+          "seconds": 5.6958990171551704e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.3708056434988976e-05,
+          "seconds": 4.141591489315033e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.216702654957771e-05,
+          "seconds": 0.00025975005701184273,
           "query_budget_passed": true
         },
         {
-          "callbacks": 1,
-          "seconds": 0.0024513748940080404
-        },
-        {
-          "seconds": 5.8083911426365376e-05,
+          "seconds": 4.612491466104984e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.8042042180895805e-05,
+          "seconds": 0.00025158305652439594,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.2750034481287e-05,
+          "callbacks": 27,
+          "seconds": 0.0015517090214416385
+        },
+        {
+          "seconds": 5.962501745671034e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.8624973967671394e-05,
+          "seconds": 4.6749948523938656e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.883300814777613e-05,
+          "seconds": 0.0003322080010548234,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.699993249028921e-05,
+          "seconds": 4.412501584738493e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.5208999179303646e-05,
+          "seconds": 0.00024704099632799625,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.5499921068549156e-05,
+          "callbacks": 27,
+          "seconds": 0.001378707936964929
+        }
+      ],
+      "plans": [
+        {
+          "query_sha256": "7e1c6ada5251fba959f365ee7d6e1dbdb17dc31b4608cc966bd0c2396a106649",
+          "sql": "SELECT CASE status WHEN 'active' THEN 1 ELSE 0 END,CASE WHEN typeof(created_at_ms)='integer' THEN created_at_ms END FROM projects WHERE project_id=?",
+          "plan": [
+            "SEARCH projects USING INDEX sqlite_autoindex_projects_1 (project_id=?)"
+          ]
+        },
+        {
+          "query_sha256": "2004918918698cb3bc4941a37f41f8743e1368e6256bb1bebfca47bec78bd4db",
+          "sql": "SELECT CASE WHEN typeof(sequence)='integer' THEN sequence END,typeof(signer_line),length(signer_line),CASE reason WHEN 'enrolled' THEN 'enrolled' WHEN 'replaced' THEN 'replaced' END,CASE WHEN typeof(recorded_at_ms)='integer' THEN recorded_at_ms END FROM owner_key_history ORDER BY sequence DESC LIMIT 1",
+          "plan": [
+            "SCAN owner_key_history"
+          ]
+        },
+        {
+          "query_sha256": "7893d19e8c5a64c66073340b72dd06be512b544723473b0fb78413ffdfbde31b",
+          "sql": "SELECT r.rowid,typeof(r.project_id),length(CAST(r.project_id AS BLOB)),typeof(r.record_id),length(CAST(r.record_id AS BLOB)),typeof(r.record_type),length(CAST(r.record_type AS BLOB)),typeof(r.content),length(r.content),typeof(r.content_digest),length(CAST(r.content_digest AS BLOB)),typeof(r.source),length(CAST(r.source AS BLOB)),CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,CASE WHEN typeof(r.observed_at_ms)='integer' THEN r.observed_at_ms END,CASE WHEN typeof(r.ingested_at_ms)='integer' THEN r.ingested_at_ms END,typeof(a.signature),length(a.signature) FROM (SELECT record_rowid FROM (SELECT record_rowid FROM temp.capture_candidates WHERE consumer=:provider AND project_id=:p ORDER BY record_rowid LIMIT :limit) UNION ALL SELECT record_rowid FROM (SELECT r.rowid AS record_rowid FROM (WITH RECURSIVE pass(fp) AS (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 UNION ALL SELECT (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 AND account_fingerprint>pass.fp) FROM pass WHERE pass.fp IS NOT NULL), older(t,fp) AS (SELECT k.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=k.t AND account_fingerprint IS NOT NULL) FROM (SELECT 'provider_billing' AS t UNION ALL SELECT 'provider_headroom') k UNION ALL SELECT older.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=older.t AND account_fingerprint>older.fp) FROM older WHERE older.fp IS NOT NULL) SELECT rowid AS id FROM records INDEXED BY records_type_observed WHERE record_type='provider_identity' AND observed_at_ms>=:a-1800000 AND project_id=:p UNION SELECT rowid FROM records INDEXED BY records_foreign_admissions WHERE project_id=:p AND record_type='admission_decision' AND source<>'lifecycle' UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('admission_decision','probe_admission') AND observed_at_ms>=:a-18000000 UNION SELECT (SELECT x.rowid FROM admission_evidence f JOIN records x ON x.project_id=f.project_id AND x.record_id=f.record_id WHERE f.claude_pass=1 AND f.account_fingerprint=pass.fp AND f.source='lifecycle' AND f.provider='claude' ORDER BY f.observed_at_ms,f.project_id,f.record_id LIMIT 1) FROM pass WHERE pass.fp IS NOT NULL UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('provider_billing','provider_headroom') AND observed_at_ms>=:a-86400000 UNION SELECT x.rowid FROM admission_evidence e JOIN records x ON x.project_id=e.project_id AND x.record_id=e.record_id WHERE e.live_until_ms>:a UNION SELECT x.rowid FROM older CROSS JOIN admission_evidence g JOIN records x ON x.project_id=g.project_id AND x.record_id=g.record_id WHERE older.fp IS NOT NULL AND g.provider='claude' AND g.source='provider' AND g.record_type=older.t AND g.account_fingerprint=older.fp AND g.observed_at_ms=(SELECT MAX(h.observed_at_ms) FROM admission_evidence h WHERE h.provider='claude' AND h.source='provider' AND h.record_type=older.t AND h.account_fingerprint=older.fp AND h.observed_at_ms<:a-86400000)) k CROSS JOIN records r ON r.rowid=k.id WHERE r.record_type IN ('provider_identity','admission_decision','probe_admission','provider_billing','provider_headroom') AND ((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000) OR (r.project_id=:p AND r.record_type='billing_attestation') OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle') OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission') AND (r.observed_at_ms>=:a-18000000 OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.claude_pass=1 AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.claude_pass=1 AND f.source='lifecycle' AND f.provider='claude' AND f.account_fingerprint=e.account_fingerprint AND (f.observed_at_ms,f.project_id,f.record_id)<(e.observed_at_ms,e.project_id,e.record_id))))) OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom') AND (r.observed_at_ms>=:a-86400000 OR (r.record_type='provider_headroom' AND EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.live_until_ms>:a)) OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.provider='claude' AND e.account_fingerprint IS NOT NULL AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.provider='claude' AND f.source='provider' AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000))))) ORDER BY r.rowid LIMIT :limit)) c CROSS JOIN records r LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE r.rowid=c.record_rowid ORDER BY c.record_rowid LIMIT :limit",
+          "plan": [
+            "CO-ROUTINE c",
+            "COMPOUND QUERY",
+            "LEFT-MOST SUBQUERY",
+            "CO-ROUTINE (subquery-1)",
+            "SEARCH temp.capture_candidates USING PRIMARY KEY (consumer=?)",
+            "SCAN (subquery-1)",
+            "UNION ALL",
+            "CO-ROUTINE (subquery-26)",
+            "CO-ROUTINE k",
+            "MERGE (UNION)",
+            "LEFT",
+            "MERGE (UNION)",
+            "LEFT",
+            "MERGE (UNION)",
+            "LEFT",
+            "SEARCH records USING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "RIGHT",
+            "SEARCH records USING INDEX records_foreign_admissions (project_id=?)",
+            "RIGHT",
+            "SEARCH records USING COVERING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "RIGHT",
+            "MERGE (UNION)",
+            "LEFT",
+            "MERGE (UNION)",
+            "LEFT",
+            "CO-ROUTINE pass",
+            "SETUP",
+            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass",
+            "RECURSIVE STEP",
+            "SCAN pass",
+            "CORRELATED SCALAR SUBQUERY 4",
+            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass (account_fingerprint>?)",
+            "SCAN pass",
+            "CORRELATED SCALAR SUBQUERY 15",
+            "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=?)",
+            "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "RIGHT",
+            "SEARCH records USING COVERING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "RIGHT",
+            "MERGE (UNION)",
+            "LEFT",
+            "SEARCH e USING INDEX admission_evidence_live (live_until_ms>?)",
+            "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "RIGHT",
+            "CO-ROUTINE older",
+            "SETUP",
+            "CO-ROUTINE k",
+            "COMPOUND QUERY",
+            "LEFT-MOST SUBQUERY",
+            "SCAN CONSTANT ROW",
+            "UNION ALL",
+            "SCAN CONSTANT ROW",
+            "SCAN k",
+            "CORRELATED SCALAR SUBQUERY 6",
+            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
+            "RECURSIVE STEP",
+            "SCAN older",
+            "CORRELATED SCALAR SUBQUERY 10",
+            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
+            "SCAN older",
+            "SEARCH g USING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms=?)",
+            "CORRELATED SCALAR SUBQUERY 19",
+            "SEARCH h USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms<?)",
+            "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "SCAN k",
+            "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
+            "CORRELATED SCALAR SUBQUERY 22",
+            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+            "CORRELATED SCALAR SUBQUERY 21",
+            "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=? AND observed_at_ms<?)",
+            "CORRELATED SCALAR SUBQUERY 23",
+            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+            "CORRELATED SCALAR SUBQUERY 25",
+            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+            "CORRELATED SCALAR SUBQUERY 24",
+            "SEARCH f USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms>? AND observed_at_ms<?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "SCAN (subquery-26)",
+            "SCAN c",
+            "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
+            "SEARCH a USING INDEX sqlite_autoindex_owner_attestations_1 (project_id=? AND subject_record_id=?) LEFT-JOIN",
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        },
+        {
+          "query_sha256": "f78d66d467fcd2e4cb7d28ffc036b5a6033c60a4f364b6eb163fb94035a41ab1",
+          "sql": "SELECT sequence,signer_line,reason,recorded_at_ms FROM owner_key_history ORDER BY sequence DESC LIMIT 1",
+          "plan": [
+            "SCAN owner_key_history"
+          ]
+        },
+        {
+          "query_sha256": "caf1390143026064b8c68776d84ed31be5354c69f2b6089c54a1e94c23e4e9c0",
+          "sql": "SELECT r.rowid,r.project_id,r.record_id,r.source_sequence,r.record_type,r.content,r.content_digest,r.source,r.observed_at_ms,r.ingested_at_ms,a.signature FROM (SELECT record_rowid FROM (SELECT record_rowid FROM temp.capture_candidates WHERE consumer=:provider AND project_id=:p ORDER BY record_rowid LIMIT :limit) UNION ALL SELECT record_rowid FROM (SELECT r.rowid AS record_rowid FROM (WITH RECURSIVE pass(fp) AS (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 UNION ALL SELECT (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 AND account_fingerprint>pass.fp) FROM pass WHERE pass.fp IS NOT NULL), older(t,fp) AS (SELECT k.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=k.t AND account_fingerprint IS NOT NULL) FROM (SELECT 'provider_billing' AS t UNION ALL SELECT 'provider_headroom') k UNION ALL SELECT older.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=older.t AND account_fingerprint>older.fp) FROM older WHERE older.fp IS NOT NULL) SELECT rowid AS id FROM records INDEXED BY records_type_observed WHERE record_type='provider_identity' AND observed_at_ms>=:a-1800000 AND project_id=:p UNION SELECT rowid FROM records INDEXED BY records_foreign_admissions WHERE project_id=:p AND record_type='admission_decision' AND source<>'lifecycle' UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('admission_decision','probe_admission') AND observed_at_ms>=:a-18000000 UNION SELECT (SELECT x.rowid FROM admission_evidence f JOIN records x ON x.project_id=f.project_id AND x.record_id=f.record_id WHERE f.claude_pass=1 AND f.account_fingerprint=pass.fp AND f.source='lifecycle' AND f.provider='claude' ORDER BY f.observed_at_ms,f.project_id,f.record_id LIMIT 1) FROM pass WHERE pass.fp IS NOT NULL UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('provider_billing','provider_headroom') AND observed_at_ms>=:a-86400000 UNION SELECT x.rowid FROM admission_evidence e JOIN records x ON x.project_id=e.project_id AND x.record_id=e.record_id WHERE e.live_until_ms>:a UNION SELECT x.rowid FROM older CROSS JOIN admission_evidence g JOIN records x ON x.project_id=g.project_id AND x.record_id=g.record_id WHERE older.fp IS NOT NULL AND g.provider='claude' AND g.source='provider' AND g.record_type=older.t AND g.account_fingerprint=older.fp AND g.observed_at_ms=(SELECT MAX(h.observed_at_ms) FROM admission_evidence h WHERE h.provider='claude' AND h.source='provider' AND h.record_type=older.t AND h.account_fingerprint=older.fp AND h.observed_at_ms<:a-86400000)) k CROSS JOIN records r ON r.rowid=k.id WHERE r.record_type IN ('provider_identity','admission_decision','probe_admission','provider_billing','provider_headroom') AND ((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000) OR (r.project_id=:p AND r.record_type='billing_attestation') OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle') OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission') AND (r.observed_at_ms>=:a-18000000 OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.claude_pass=1 AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.claude_pass=1 AND f.source='lifecycle' AND f.provider='claude' AND f.account_fingerprint=e.account_fingerprint AND (f.observed_at_ms,f.project_id,f.record_id)<(e.observed_at_ms,e.project_id,e.record_id))))) OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom') AND (r.observed_at_ms>=:a-86400000 OR (r.record_type='provider_headroom' AND EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.live_until_ms>:a)) OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.provider='claude' AND e.account_fingerprint IS NOT NULL AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.provider='claude' AND f.source='provider' AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000))))) ORDER BY r.rowid LIMIT :limit)) c CROSS JOIN records r LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE r.rowid=c.record_rowid ORDER BY c.record_rowid LIMIT :limit",
+          "plan": [
+            "CO-ROUTINE c",
+            "COMPOUND QUERY",
+            "LEFT-MOST SUBQUERY",
+            "CO-ROUTINE (subquery-1)",
+            "SEARCH temp.capture_candidates USING PRIMARY KEY (consumer=?)",
+            "SCAN (subquery-1)",
+            "UNION ALL",
+            "CO-ROUTINE (subquery-26)",
+            "CO-ROUTINE k",
+            "MERGE (UNION)",
+            "LEFT",
+            "MERGE (UNION)",
+            "LEFT",
+            "MERGE (UNION)",
+            "LEFT",
+            "SEARCH records USING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "RIGHT",
+            "SEARCH records USING INDEX records_foreign_admissions (project_id=?)",
+            "RIGHT",
+            "SEARCH records USING COVERING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "RIGHT",
+            "MERGE (UNION)",
+            "LEFT",
+            "MERGE (UNION)",
+            "LEFT",
+            "CO-ROUTINE pass",
+            "SETUP",
+            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass",
+            "RECURSIVE STEP",
+            "SCAN pass",
+            "CORRELATED SCALAR SUBQUERY 4",
+            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass (account_fingerprint>?)",
+            "SCAN pass",
+            "CORRELATED SCALAR SUBQUERY 15",
+            "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=?)",
+            "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "RIGHT",
+            "SEARCH records USING COVERING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "RIGHT",
+            "MERGE (UNION)",
+            "LEFT",
+            "SEARCH e USING INDEX admission_evidence_live (live_until_ms>?)",
+            "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "RIGHT",
+            "CO-ROUTINE older",
+            "SETUP",
+            "CO-ROUTINE k",
+            "COMPOUND QUERY",
+            "LEFT-MOST SUBQUERY",
+            "SCAN CONSTANT ROW",
+            "UNION ALL",
+            "SCAN CONSTANT ROW",
+            "SCAN k",
+            "CORRELATED SCALAR SUBQUERY 6",
+            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
+            "RECURSIVE STEP",
+            "SCAN older",
+            "CORRELATED SCALAR SUBQUERY 10",
+            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
+            "SCAN older",
+            "SEARCH g USING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms=?)",
+            "CORRELATED SCALAR SUBQUERY 19",
+            "SEARCH h USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms<?)",
+            "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "SCAN k",
+            "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
+            "CORRELATED SCALAR SUBQUERY 22",
+            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+            "CORRELATED SCALAR SUBQUERY 21",
+            "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=? AND observed_at_ms<?)",
+            "CORRELATED SCALAR SUBQUERY 23",
+            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+            "CORRELATED SCALAR SUBQUERY 25",
+            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+            "CORRELATED SCALAR SUBQUERY 24",
+            "SEARCH f USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms>? AND observed_at_ms<?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "SCAN (subquery-26)",
+            "SCAN c",
+            "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
+            "SEARCH a USING INDEX sqlite_autoindex_owner_attestations_1 (project_id=? AND subject_record_id=?) LEFT-JOIN",
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        }
+      ]
+    },
+    {
+      "test": "test_U3_1_an_open_preflight_reads_only_this_runs_records_as_history_grows",
+      "passed": true,
+      "seconds": 2.233,
+      "work": [
+        {
+          "small": 1,
+          "large": 0,
+          "slack": 8
+        }
+      ],
+      "production_budget_samples": [
+        {
+          "seconds": 4.299997817724943e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.5667093470692635e-05,
+          "seconds": 4.008400719612837e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.495789133012295e-05,
+          "seconds": 4.045804962515831e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.2625044696033e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.2624928280711174e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.3542048186063766e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.179104533046484e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.083399496972561e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.133295103907585e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.0791969038546085e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.1542032957077026e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.954197745770216e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.120803739875555e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.7041958421468735e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.424996975809336e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 2.9791961424052715e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.083399496972561e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.020802978426218e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 2.954108640551567e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 2.9041897505521774e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 2.9208953492343426e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 2.945796586573124e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.5458942875266075e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 4.016701132059097e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 4.1207997128367424e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.366603050380945e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.054190892726183e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.758398815989494e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.424996975809336e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.054109402000904e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 2.9959017410874367e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 2.962502185255289e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 2.983398735523224e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 2.9499991796910763e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 2.9666000045835972e-05,
           "query_budget_passed": true
         },
         {
@@ -209,79 +851,59 @@
           "query_budget_passed": true
         },
         {
-          "seconds": 4.620896652340889e-05,
+          "callbacks": 1,
+          "seconds": 0.0014106669696047902
+        },
+        {
+          "seconds": 4.304095637053251e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.716698847711086e-05,
+          "seconds": 4.175002686679363e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.145794082432985e-05,
+          "seconds": 3.8207974284887314e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.225003067404032e-05,
+          "seconds": 3.316695801913738e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.450002986937761e-05,
+          "seconds": 3.3374992199242115e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.583298530429602e-05,
+          "seconds": 3.300001844763756e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.5708071663975716e-05,
+          "seconds": 3.179104533046484e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.666698466986418e-05,
+          "seconds": 3.158405888825655e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.487500362098217e-05,
+          "seconds": 3.095902502536774e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 0.0009494589176028967,
+          "seconds": 3.63329891115427e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 6.9458968937397e-05,
+          "seconds": 3.404100425541401e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.3665990233421326e-05,
+          "seconds": 3.858399577438831e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 5.420902743935585e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.8332964070141315e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.004104994237423e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 3.687501884996891e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.3708947487175465e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.1874940507113934e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.066701512783766e-05,
+          "seconds": 3.15000070258975e-05,
           "query_budget_passed": true
         },
         {
@@ -289,28 +911,96 @@
           "query_budget_passed": true
         },
         {
-          "seconds": 3.5541015677154064e-05,
+          "seconds": 3.741704858839512e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.533391281962395e-05,
+          "seconds": 3.112491685897112e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.429211210459471e-05,
+          "seconds": 3.1708041206002235e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 3.5207951441407204e-05,
+          "seconds": 3.091699909418821e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.299997817724943e-05,
+          "seconds": 3.045797348022461e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.0291033908724785e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.033294342458248e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.583298530429602e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.39999096468091e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.733299672603607e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.629201091825962e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.133295103907585e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.0292081646621227e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.550003748387098e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.39999096468091e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.275007475167513e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.058300353586674e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.120908513665199e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.033294342458248e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 2.9959017410874367e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.058300353586674e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 4.0041981264948845e-05,
           "query_budget_passed": true
         },
         {
           "callbacks": 0,
-          "seconds": 0.0027202500496059656
+          "seconds": 0.0015977089060470462
         }
       ],
       "plans": [
@@ -419,7 +1109,7 @@
     {
       "test": "test_U3_2_a_runs_admission_is_found_by_its_run_as_history_grows",
       "passed": true,
-      "seconds": 7.396,
+      "seconds": 2.205,
       "work": [
         {
           "small": 38,
@@ -429,11 +1119,11 @@
       ],
       "production_budget_samples": [
         {
-          "seconds": 0.00014016707427799702,
+          "seconds": 6.966700311750174e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 0.0010913750156760216,
+          "seconds": 8.079095277935266e-05,
           "query_budget_passed": true
         }
       ],
@@ -450,7 +1140,7 @@
     {
       "test": "test_U3_3_evidence_and_links_are_found_by_digest_and_run_as_history_grows",
       "passed": true,
-      "seconds": 5.604,
+      "seconds": 2.269,
       "work": [
         {
           "small": 89,
@@ -460,35 +1150,35 @@
       ],
       "production_budget_samples": [
         {
-          "seconds": 0.00012012501247227192,
+          "seconds": 6.995792500674725e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.870793782174587e-05,
+          "seconds": 3.7708901800215244e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.495796747505665e-05,
+          "seconds": 3.724999260157347e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 5.137501284480095e-05,
+          "seconds": 3.9874925278127193e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 9.099999442696571e-05,
+          "seconds": 7.53339845687151e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.662491846829653e-05,
+          "seconds": 3.8792029954493046e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.1458988562226295e-05,
+          "seconds": 3.5334029234945774e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.795799031853676e-05,
+          "seconds": 3.9708102121949196e-05,
           "query_budget_passed": true
         }
       ],
@@ -526,7 +1216,7 @@
     {
       "test": "test_U3_4_recent_passing_admissions_are_read_from_their_window_as_history_grows",
       "passed": true,
-      "seconds": 4.978,
+      "seconds": 2.062,
       "work": [
         {
           "small": 83,
@@ -536,11 +1226,11 @@
       ],
       "production_budget_samples": [
         {
-          "seconds": 0.0002012500772252679,
+          "seconds": 8.558295667171478e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 0.00020100001711398363,
+          "seconds": 9.029102511703968e-05,
           "query_budget_passed": true
         }
       ],
@@ -557,7 +1247,7 @@
     {
       "test": "test_U3_5_the_project_stores_terminal_conflict_checks_use_its_unique_indexes",
       "passed": true,
-      "seconds": 3.151,
+      "seconds": 1.59,
       "work": [
         {
           "small": 60,
@@ -567,19 +1257,19 @@
       ],
       "production_budget_samples": [
         {
-          "seconds": 2.174999099224806e-05,
+          "seconds": 1.0457937605679035e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 6.041955202817917e-06,
+          "seconds": 4.165922291576862e-06,
           "query_budget_passed": true
         },
         {
-          "seconds": 1.7417012713849545e-05,
+          "seconds": 1.366704236716032e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 5.292007699608803e-06,
+          "seconds": 4.458008334040642e-06,
           "query_budget_passed": true
         }
       ],
@@ -602,62 +1292,62 @@
     {
       "test": "test_U3_6_the_admission_capture_reads_only_evidence_that_can_still_count",
       "passed": true,
-      "seconds": 4.009,
+      "seconds": 2.083,
       "work": [
         {
-          "small": 19,
-          "large": 19,
+          "small": 21,
+          "large": 21,
           "slack": 8
         }
       ],
       "production_budget_samples": [
         {
-          "seconds": 6.970798131078482e-05,
+          "seconds": 5.041598342359066e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 5.579192657023668e-05,
+          "seconds": 3.975001163780689e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 0.00030566693749278784,
+          "seconds": 0.0003374590305611491,
           "query_budget_passed": true
         },
         {
-          "seconds": 5.408294964581728e-05,
+          "seconds": 5.170796066522598e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 0.0005083330906927586,
+          "seconds": 0.0002537081018090248,
           "query_budget_passed": true
         },
         {
-          "callbacks": 19,
-          "seconds": 0.0024284999817609787
+          "callbacks": 21,
+          "seconds": 0.0014120409032329917
         },
         {
-          "seconds": 5.949998740106821e-05,
+          "seconds": 4.6208035200834274e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 5.0416914746165276e-05,
+          "seconds": 4.1958061046898365e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 0.00028445804491639137,
+          "seconds": 0.0002470830222591758,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.7291978262364864e-05,
+          "seconds": 4.0041981264948845e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 0.00028670800384134054,
+          "seconds": 0.00035304203629493713,
           "query_budget_passed": true
         },
         {
-          "callbacks": 19,
-          "seconds": 0.00164079200476408
+          "callbacks": 21,
+          "seconds": 0.0012631249846890569
         }
       ],
       "plans": [
@@ -676,10 +1366,18 @@
           ]
         },
         {
-          "query_sha256": "dc995639c92f7e3a1bcc7c02198767b29ce57f80135d181643e7207b7ee18c1d",
-          "sql": "SELECT r.rowid,typeof(r.project_id),length(CAST(r.project_id AS BLOB)),typeof(r.record_id),length(CAST(r.record_id AS BLOB)),typeof(r.record_type),length(CAST(r.record_type AS BLOB)),typeof(r.content),length(r.content),typeof(r.content_digest),length(CAST(r.content_digest AS BLOB)),typeof(r.source),length(CAST(r.source AS BLOB)),CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,CASE WHEN typeof(r.observed_at_ms)='integer' THEN r.observed_at_ms END,CASE WHEN typeof(r.ingested_at_ms)='integer' THEN r.ingested_at_ms END,typeof(a.signature),length(a.signature) FROM (WITH RECURSIVE pass(fp) AS (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 UNION ALL SELECT (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 AND account_fingerprint>pass.fp) FROM pass WHERE pass.fp IS NOT NULL), reading(t,fp) AS (SELECT k.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=k.t AND account_fingerprint IS NOT NULL) FROM (SELECT 'provider_billing' AS t UNION ALL SELECT 'provider_headroom') k UNION ALL SELECT reading.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=reading.t AND account_fingerprint>reading.fp) FROM reading WHERE reading.fp IS NOT NULL) SELECT rowid AS id FROM records INDEXED BY records_type_observed WHERE record_type='provider_identity' AND observed_at_ms>=:a-1800000 AND project_id=:p UNION SELECT record_rowid FROM temp.capture_candidates WHERE consumer=:provider AND project_id=:p UNION SELECT rowid FROM records INDEXED BY records_foreign_admissions WHERE project_id=:p AND record_type='admission_decision' AND source<>'lifecycle' UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('admission_decision','probe_admission') AND observed_at_ms>=:a-18000000 UNION SELECT (SELECT x.rowid FROM admission_evidence f JOIN records x ON x.project_id=f.project_id AND x.record_id=f.record_id WHERE f.claude_pass=1 AND f.account_fingerprint=pass.fp AND f.source='lifecycle' AND f.provider='claude' ORDER BY f.observed_at_ms,f.project_id,f.record_id LIMIT 1) FROM pass WHERE pass.fp IS NOT NULL UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('provider_billing','provider_headroom') AND observed_at_ms>=:a-86400000 UNION SELECT x.rowid FROM admission_evidence e JOIN records x ON x.project_id=e.project_id AND x.record_id=e.record_id WHERE e.live_until_ms>:a UNION SELECT x.rowid FROM reading CROSS JOIN admission_evidence g JOIN records x ON x.project_id=g.project_id AND x.record_id=g.record_id WHERE reading.fp IS NOT NULL AND g.provider='claude' AND g.source='provider' AND g.record_type=reading.t AND g.account_fingerprint=reading.fp AND g.observed_at_ms=(SELECT MAX(h.observed_at_ms) FROM admission_evidence h WHERE h.provider='claude' AND h.source='provider' AND h.record_type=reading.t AND h.account_fingerprint=reading.fp AND h.observed_at_ms<:a-86400000)) c CROSS JOIN records r ON r.rowid=c.id LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE ((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000) OR (r.project_id=:p AND r.record_type='billing_attestation') OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle') OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission') AND (r.observed_at_ms>=:a-18000000 OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.claude_pass=1 AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.claude_pass=1 AND f.source='lifecycle' AND f.provider='claude' AND f.account_fingerprint=e.account_fingerprint AND (f.observed_at_ms,f.project_id,f.record_id)<(e.observed_at_ms,e.project_id,e.record_id))))) OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom') AND (r.observed_at_ms>=:a-86400000 OR (r.record_type='provider_headroom' AND EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.live_until_ms>:a)) OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.provider='claude' AND e.account_fingerprint IS NOT NULL AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.provider='claude' AND f.source='provider' AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000))))) ORDER BY r.rowid LIMIT :limit",
+          "query_sha256": "7893d19e8c5a64c66073340b72dd06be512b544723473b0fb78413ffdfbde31b",
+          "sql": "SELECT r.rowid,typeof(r.project_id),length(CAST(r.project_id AS BLOB)),typeof(r.record_id),length(CAST(r.record_id AS BLOB)),typeof(r.record_type),length(CAST(r.record_type AS BLOB)),typeof(r.content),length(r.content),typeof(r.content_digest),length(CAST(r.content_digest AS BLOB)),typeof(r.source),length(CAST(r.source AS BLOB)),CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,CASE WHEN typeof(r.observed_at_ms)='integer' THEN r.observed_at_ms END,CASE WHEN typeof(r.ingested_at_ms)='integer' THEN r.ingested_at_ms END,typeof(a.signature),length(a.signature) FROM (SELECT record_rowid FROM (SELECT record_rowid FROM temp.capture_candidates WHERE consumer=:provider AND project_id=:p ORDER BY record_rowid LIMIT :limit) UNION ALL SELECT record_rowid FROM (SELECT r.rowid AS record_rowid FROM (WITH RECURSIVE pass(fp) AS (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 UNION ALL SELECT (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 AND account_fingerprint>pass.fp) FROM pass WHERE pass.fp IS NOT NULL), older(t,fp) AS (SELECT k.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=k.t AND account_fingerprint IS NOT NULL) FROM (SELECT 'provider_billing' AS t UNION ALL SELECT 'provider_headroom') k UNION ALL SELECT older.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=older.t AND account_fingerprint>older.fp) FROM older WHERE older.fp IS NOT NULL) SELECT rowid AS id FROM records INDEXED BY records_type_observed WHERE record_type='provider_identity' AND observed_at_ms>=:a-1800000 AND project_id=:p UNION SELECT rowid FROM records INDEXED BY records_foreign_admissions WHERE project_id=:p AND record_type='admission_decision' AND source<>'lifecycle' UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('admission_decision','probe_admission') AND observed_at_ms>=:a-18000000 UNION SELECT (SELECT x.rowid FROM admission_evidence f JOIN records x ON x.project_id=f.project_id AND x.record_id=f.record_id WHERE f.claude_pass=1 AND f.account_fingerprint=pass.fp AND f.source='lifecycle' AND f.provider='claude' ORDER BY f.observed_at_ms,f.project_id,f.record_id LIMIT 1) FROM pass WHERE pass.fp IS NOT NULL UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('provider_billing','provider_headroom') AND observed_at_ms>=:a-86400000 UNION SELECT x.rowid FROM admission_evidence e JOIN records x ON x.project_id=e.project_id AND x.record_id=e.record_id WHERE e.live_until_ms>:a UNION SELECT x.rowid FROM older CROSS JOIN admission_evidence g JOIN records x ON x.project_id=g.project_id AND x.record_id=g.record_id WHERE older.fp IS NOT NULL AND g.provider='claude' AND g.source='provider' AND g.record_type=older.t AND g.account_fingerprint=older.fp AND g.observed_at_ms=(SELECT MAX(h.observed_at_ms) FROM admission_evidence h WHERE h.provider='claude' AND h.source='provider' AND h.record_type=older.t AND h.account_fingerprint=older.fp AND h.observed_at_ms<:a-86400000)) k CROSS JOIN records r ON r.rowid=k.id WHERE r.record_type IN ('provider_identity','admission_decision','probe_admission','provider_billing','provider_headroom') AND ((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000) OR (r.project_id=:p AND r.record_type='billing_attestation') OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle') OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission') AND (r.observed_at_ms>=:a-18000000 OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.claude_pass=1 AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.claude_pass=1 AND f.source='lifecycle' AND f.provider='claude' AND f.account_fingerprint=e.account_fingerprint AND (f.observed_at_ms,f.project_id,f.record_id)<(e.observed_at_ms,e.project_id,e.record_id))))) OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom') AND (r.observed_at_ms>=:a-86400000 OR (r.record_type='provider_headroom' AND EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.live_until_ms>:a)) OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.provider='claude' AND e.account_fingerprint IS NOT NULL AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.provider='claude' AND f.source='provider' AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000))))) ORDER BY r.rowid LIMIT :limit)) c CROSS JOIN records r LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE r.rowid=c.record_rowid ORDER BY c.record_rowid LIMIT :limit",
           "plan": [
             "CO-ROUTINE c",
+            "COMPOUND QUERY",
+            "LEFT-MOST SUBQUERY",
+            "CO-ROUTINE (subquery-1)",
+            "SEARCH temp.capture_candidates USING PRIMARY KEY (consumer=?)",
+            "SCAN (subquery-1)",
+            "UNION ALL",
+            "CO-ROUTINE (subquery-26)",
+            "CO-ROUTINE k",
             "MERGE (UNION)",
             "LEFT",
             "MERGE (UNION)",
@@ -689,10 +1387,6 @@
             "SEARCH records USING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
             "USE TEMP B-TREE FOR ORDER BY",
             "RIGHT",
-            "SEARCH temp.capture_candidates USING PRIMARY KEY (consumer=?)",
-            "RIGHT",
-            "MERGE (UNION)",
-            "LEFT",
             "SEARCH records USING INDEX records_foreign_admissions (project_id=?)",
             "RIGHT",
             "SEARCH records USING COVERING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
@@ -707,10 +1401,10 @@
             "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass",
             "RECURSIVE STEP",
             "SCAN pass",
-            "CORRELATED SCALAR SUBQUERY 2",
+            "CORRELATED SCALAR SUBQUERY 4",
             "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass (account_fingerprint>?)",
             "SCAN pass",
-            "CORRELATED SCALAR SUBQUERY 14",
+            "CORRELATED SCALAR SUBQUERY 15",
             "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=?)",
             "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
             "USE TEMP B-TREE FOR ORDER BY",
@@ -724,7 +1418,7 @@
             "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
             "USE TEMP B-TREE FOR ORDER BY",
             "RIGHT",
-            "CO-ROUTINE reading",
+            "CO-ROUTINE older",
             "SETUP",
             "CO-ROUTINE k",
             "COMPOUND QUERY",
@@ -733,30 +1427,34 @@
             "UNION ALL",
             "SCAN CONSTANT ROW",
             "SCAN k",
-            "CORRELATED SCALAR SUBQUERY 4",
+            "CORRELATED SCALAR SUBQUERY 6",
             "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
             "RECURSIVE STEP",
-            "SCAN reading",
-            "CORRELATED SCALAR SUBQUERY 8",
+            "SCAN older",
+            "CORRELATED SCALAR SUBQUERY 10",
             "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
-            "SCAN reading",
+            "SCAN older",
             "SEARCH g USING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms=?)",
-            "CORRELATED SCALAR SUBQUERY 18",
+            "CORRELATED SCALAR SUBQUERY 19",
             "SEARCH h USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms<?)",
             "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
             "USE TEMP B-TREE FOR ORDER BY",
-            "SCAN c",
+            "SCAN k",
             "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
-            "CORRELATED SCALAR SUBQUERY 21",
-            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
-            "CORRELATED SCALAR SUBQUERY 20",
-            "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=? AND observed_at_ms<?)",
             "CORRELATED SCALAR SUBQUERY 22",
             "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
-            "CORRELATED SCALAR SUBQUERY 24",
-            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+            "CORRELATED SCALAR SUBQUERY 21",
+            "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=? AND observed_at_ms<?)",
             "CORRELATED SCALAR SUBQUERY 23",
+            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+            "CORRELATED SCALAR SUBQUERY 25",
+            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+            "CORRELATED SCALAR SUBQUERY 24",
             "SEARCH f USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms>? AND observed_at_ms<?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "SCAN (subquery-26)",
+            "SCAN c",
+            "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
             "SEARCH a USING INDEX sqlite_autoindex_owner_attestations_1 (project_id=? AND subject_record_id=?) LEFT-JOIN",
             "USE TEMP B-TREE FOR ORDER BY"
           ]
@@ -769,10 +1467,18 @@
           ]
         },
         {
-          "query_sha256": "3848940c333f11a41f89a6764bfdcbb6da89a869f1022fed4968c4aa9d46d5c5",
-          "sql": "SELECT r.rowid,r.project_id,r.record_id,r.source_sequence,r.record_type,r.content,r.content_digest,r.source,r.observed_at_ms,r.ingested_at_ms,a.signature FROM (WITH RECURSIVE pass(fp) AS (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 UNION ALL SELECT (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 AND account_fingerprint>pass.fp) FROM pass WHERE pass.fp IS NOT NULL), reading(t,fp) AS (SELECT k.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=k.t AND account_fingerprint IS NOT NULL) FROM (SELECT 'provider_billing' AS t UNION ALL SELECT 'provider_headroom') k UNION ALL SELECT reading.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=reading.t AND account_fingerprint>reading.fp) FROM reading WHERE reading.fp IS NOT NULL) SELECT rowid AS id FROM records INDEXED BY records_type_observed WHERE record_type='provider_identity' AND observed_at_ms>=:a-1800000 AND project_id=:p UNION SELECT record_rowid FROM temp.capture_candidates WHERE consumer=:provider AND project_id=:p UNION SELECT rowid FROM records INDEXED BY records_foreign_admissions WHERE project_id=:p AND record_type='admission_decision' AND source<>'lifecycle' UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('admission_decision','probe_admission') AND observed_at_ms>=:a-18000000 UNION SELECT (SELECT x.rowid FROM admission_evidence f JOIN records x ON x.project_id=f.project_id AND x.record_id=f.record_id WHERE f.claude_pass=1 AND f.account_fingerprint=pass.fp AND f.source='lifecycle' AND f.provider='claude' ORDER BY f.observed_at_ms,f.project_id,f.record_id LIMIT 1) FROM pass WHERE pass.fp IS NOT NULL UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('provider_billing','provider_headroom') AND observed_at_ms>=:a-86400000 UNION SELECT x.rowid FROM admission_evidence e JOIN records x ON x.project_id=e.project_id AND x.record_id=e.record_id WHERE e.live_until_ms>:a UNION SELECT x.rowid FROM reading CROSS JOIN admission_evidence g JOIN records x ON x.project_id=g.project_id AND x.record_id=g.record_id WHERE reading.fp IS NOT NULL AND g.provider='claude' AND g.source='provider' AND g.record_type=reading.t AND g.account_fingerprint=reading.fp AND g.observed_at_ms=(SELECT MAX(h.observed_at_ms) FROM admission_evidence h WHERE h.provider='claude' AND h.source='provider' AND h.record_type=reading.t AND h.account_fingerprint=reading.fp AND h.observed_at_ms<:a-86400000)) c CROSS JOIN records r ON r.rowid=c.id LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE ((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000) OR (r.project_id=:p AND r.record_type='billing_attestation') OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle') OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission') AND (r.observed_at_ms>=:a-18000000 OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.claude_pass=1 AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.claude_pass=1 AND f.source='lifecycle' AND f.provider='claude' AND f.account_fingerprint=e.account_fingerprint AND (f.observed_at_ms,f.project_id,f.record_id)<(e.observed_at_ms,e.project_id,e.record_id))))) OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom') AND (r.observed_at_ms>=:a-86400000 OR (r.record_type='provider_headroom' AND EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.live_until_ms>:a)) OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.provider='claude' AND e.account_fingerprint IS NOT NULL AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.provider='claude' AND f.source='provider' AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000))))) ORDER BY r.rowid LIMIT :limit",
+          "query_sha256": "caf1390143026064b8c68776d84ed31be5354c69f2b6089c54a1e94c23e4e9c0",
+          "sql": "SELECT r.rowid,r.project_id,r.record_id,r.source_sequence,r.record_type,r.content,r.content_digest,r.source,r.observed_at_ms,r.ingested_at_ms,a.signature FROM (SELECT record_rowid FROM (SELECT record_rowid FROM temp.capture_candidates WHERE consumer=:provider AND project_id=:p ORDER BY record_rowid LIMIT :limit) UNION ALL SELECT record_rowid FROM (SELECT r.rowid AS record_rowid FROM (WITH RECURSIVE pass(fp) AS (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 UNION ALL SELECT (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 AND account_fingerprint>pass.fp) FROM pass WHERE pass.fp IS NOT NULL), older(t,fp) AS (SELECT k.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=k.t AND account_fingerprint IS NOT NULL) FROM (SELECT 'provider_billing' AS t UNION ALL SELECT 'provider_headroom') k UNION ALL SELECT older.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=older.t AND account_fingerprint>older.fp) FROM older WHERE older.fp IS NOT NULL) SELECT rowid AS id FROM records INDEXED BY records_type_observed WHERE record_type='provider_identity' AND observed_at_ms>=:a-1800000 AND project_id=:p UNION SELECT rowid FROM records INDEXED BY records_foreign_admissions WHERE project_id=:p AND record_type='admission_decision' AND source<>'lifecycle' UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('admission_decision','probe_admission') AND observed_at_ms>=:a-18000000 UNION SELECT (SELECT x.rowid FROM admission_evidence f JOIN records x ON x.project_id=f.project_id AND x.record_id=f.record_id WHERE f.claude_pass=1 AND f.account_fingerprint=pass.fp AND f.source='lifecycle' AND f.provider='claude' ORDER BY f.observed_at_ms,f.project_id,f.record_id LIMIT 1) FROM pass WHERE pass.fp IS NOT NULL UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('provider_billing','provider_headroom') AND observed_at_ms>=:a-86400000 UNION SELECT x.rowid FROM admission_evidence e JOIN records x ON x.project_id=e.project_id AND x.record_id=e.record_id WHERE e.live_until_ms>:a UNION SELECT x.rowid FROM older CROSS JOIN admission_evidence g JOIN records x ON x.project_id=g.project_id AND x.record_id=g.record_id WHERE older.fp IS NOT NULL AND g.provider='claude' AND g.source='provider' AND g.record_type=older.t AND g.account_fingerprint=older.fp AND g.observed_at_ms=(SELECT MAX(h.observed_at_ms) FROM admission_evidence h WHERE h.provider='claude' AND h.source='provider' AND h.record_type=older.t AND h.account_fingerprint=older.fp AND h.observed_at_ms<:a-86400000)) k CROSS JOIN records r ON r.rowid=k.id WHERE r.record_type IN ('provider_identity','admission_decision','probe_admission','provider_billing','provider_headroom') AND ((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000) OR (r.project_id=:p AND r.record_type='billing_attestation') OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle') OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission') AND (r.observed_at_ms>=:a-18000000 OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.claude_pass=1 AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.claude_pass=1 AND f.source='lifecycle' AND f.provider='claude' AND f.account_fingerprint=e.account_fingerprint AND (f.observed_at_ms,f.project_id,f.record_id)<(e.observed_at_ms,e.project_id,e.record_id))))) OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom') AND (r.observed_at_ms>=:a-86400000 OR (r.record_type='provider_headroom' AND EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.live_until_ms>:a)) OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.provider='claude' AND e.account_fingerprint IS NOT NULL AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.provider='claude' AND f.source='provider' AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000))))) ORDER BY r.rowid LIMIT :limit)) c CROSS JOIN records r LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE r.rowid=c.record_rowid ORDER BY c.record_rowid LIMIT :limit",
           "plan": [
             "CO-ROUTINE c",
+            "COMPOUND QUERY",
+            "LEFT-MOST SUBQUERY",
+            "CO-ROUTINE (subquery-1)",
+            "SEARCH temp.capture_candidates USING PRIMARY KEY (consumer=?)",
+            "SCAN (subquery-1)",
+            "UNION ALL",
+            "CO-ROUTINE (subquery-26)",
+            "CO-ROUTINE k",
             "MERGE (UNION)",
             "LEFT",
             "MERGE (UNION)",
@@ -782,10 +1488,6 @@
             "SEARCH records USING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
             "USE TEMP B-TREE FOR ORDER BY",
             "RIGHT",
-            "SEARCH temp.capture_candidates USING PRIMARY KEY (consumer=?)",
-            "RIGHT",
-            "MERGE (UNION)",
-            "LEFT",
             "SEARCH records USING INDEX records_foreign_admissions (project_id=?)",
             "RIGHT",
             "SEARCH records USING COVERING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
@@ -800,10 +1502,10 @@
             "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass",
             "RECURSIVE STEP",
             "SCAN pass",
-            "CORRELATED SCALAR SUBQUERY 2",
+            "CORRELATED SCALAR SUBQUERY 4",
             "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass (account_fingerprint>?)",
             "SCAN pass",
-            "CORRELATED SCALAR SUBQUERY 14",
+            "CORRELATED SCALAR SUBQUERY 15",
             "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=?)",
             "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
             "USE TEMP B-TREE FOR ORDER BY",
@@ -817,7 +1519,7 @@
             "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
             "USE TEMP B-TREE FOR ORDER BY",
             "RIGHT",
-            "CO-ROUTINE reading",
+            "CO-ROUTINE older",
             "SETUP",
             "CO-ROUTINE k",
             "COMPOUND QUERY",
@@ -826,30 +1528,34 @@
             "UNION ALL",
             "SCAN CONSTANT ROW",
             "SCAN k",
-            "CORRELATED SCALAR SUBQUERY 4",
+            "CORRELATED SCALAR SUBQUERY 6",
             "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
             "RECURSIVE STEP",
-            "SCAN reading",
-            "CORRELATED SCALAR SUBQUERY 8",
+            "SCAN older",
+            "CORRELATED SCALAR SUBQUERY 10",
             "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
-            "SCAN reading",
+            "SCAN older",
             "SEARCH g USING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms=?)",
-            "CORRELATED SCALAR SUBQUERY 18",
+            "CORRELATED SCALAR SUBQUERY 19",
             "SEARCH h USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms<?)",
             "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
             "USE TEMP B-TREE FOR ORDER BY",
-            "SCAN c",
+            "SCAN k",
             "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
-            "CORRELATED SCALAR SUBQUERY 21",
-            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
-            "CORRELATED SCALAR SUBQUERY 20",
-            "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=? AND observed_at_ms<?)",
             "CORRELATED SCALAR SUBQUERY 22",
             "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
-            "CORRELATED SCALAR SUBQUERY 24",
-            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+            "CORRELATED SCALAR SUBQUERY 21",
+            "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=? AND observed_at_ms<?)",
             "CORRELATED SCALAR SUBQUERY 23",
+            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+            "CORRELATED SCALAR SUBQUERY 25",
+            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+            "CORRELATED SCALAR SUBQUERY 24",
             "SEARCH f USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms>? AND observed_at_ms<?)",
+            "USE TEMP B-TREE FOR ORDER BY",
+            "SCAN (subquery-26)",
+            "SCAN c",
+            "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
             "SEARCH a USING INDEX sqlite_autoindex_owner_attestations_1 (project_id=? AND subject_record_id=?) LEFT-JOIN",
             "USE TEMP B-TREE FOR ORDER BY"
           ]
@@ -859,7 +1565,7 @@
     {
       "test": "test_U3_7_owner_attestations_are_read_by_type_as_history_grows",
       "passed": true,
-      "seconds": 3.881,
+      "seconds": 2.35,
       "work": [
         {
           "small": 67,
@@ -874,60 +1580,60 @@
       ],
       "production_budget_samples": [
         {
-          "seconds": 0.0003010000800713897,
+          "seconds": 0.00015116704162210226,
           "query_budget_passed": true
         },
         {
-          "seconds": 0.00017854198813438416,
+          "seconds": 3.937492147088051e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 0.00013308296911418438,
+          "seconds": 3.9125094190239906e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 0.00013733399100601673,
+          "seconds": 3.2917014323174953e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 0.00015775009524077177,
+          "seconds": 5.0167087465524673e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 0.0002019589301198721,
-          "query_budget_passed": true
-        },
-        {
-          "callbacks": 0,
-          "seconds": 0.0009192499564960599
-        },
-        {
-          "seconds": 0.00030308403074741364,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 9.008299093693495e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 7.154105696827173e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 5.708297248929739e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 8.516700472682714e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 0.0002032499760389328,
+          "seconds": 5.7458062656223774e-05,
           "query_budget_passed": true
         },
         {
           "callbacks": 0,
-          "seconds": 0.000835416023619473
+          "seconds": 0.0003457090351730585
+        },
+        {
+          "seconds": 0.00016624992713332176,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 4.449998959898949e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 4.2208004742860794e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 3.400002606213093e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 5.183299072086811e-05,
+          "query_budget_passed": true
+        },
+        {
+          "seconds": 4.720909055322409e-05,
+          "query_budget_passed": true
+        },
+        {
+          "callbacks": 0,
+          "seconds": 0.0003619999624788761
         }
       ],
       "plans": [
@@ -975,7 +1681,7 @@
     {
       "test": "test_U3_8_a_registration_counts_only_unreleased_cleanup_receipts_as_history_grows",
       "passed": true,
-      "seconds": 1.757,
+      "seconds": 0.924,
       "work": [
         {
           "small": 102,
@@ -985,11 +1691,11 @@
       ],
       "production_budget_samples": [
         {
-          "seconds": 0.00017499993555247784,
+          "seconds": 6.870809011161327e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 9.612494613975286e-05,
+          "seconds": 8.27079638838768e-05,
           "query_budget_passed": true
         }
       ],
@@ -1009,7 +1715,7 @@
     {
       "test": "test_U3_9_candidate_lineage_looks_up_only_the_named_candidate",
       "passed": true,
-      "seconds": 4.017,
+      "seconds": 2.883,
       "work": [
         {
           "small": 80,
@@ -1019,19 +1725,19 @@
       ],
       "production_budget_samples": [
         {
-          "seconds": 9.645801037549973e-05,
+          "seconds": 8.445791900157928e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 5.00829191878438e-05,
+          "seconds": 4.262488801032305e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 9.366695303469896e-05,
+          "seconds": 8.466700091958046e-05,
           "query_budget_passed": true
         },
         {
-          "seconds": 4.791701212525368e-05,
+          "seconds": 4.624994471669197e-05,
           "query_budget_passed": true
         }
       ],
@@ -1048,680 +1754,6 @@
           "sql": "SELECT record_id,content FROM records WHERE project_id=? AND record_type='candidate' AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.candidate_digest') END=?",
           "plan": [
             "SEARCH records USING INDEX records_candidate (project_id=? AND <expr>=? AND record_type=?)"
-          ]
-        }
-      ]
-    },
-    {
-      "test": "test_U3_10_open_and_provenance_ignore_released_account_history",
-      "passed": true,
-      "seconds": 7.134,
-      "work": [
-        {
-          "small": 1,
-          "large": 0,
-          "slack": 8
-        }
-      ],
-      "production_budget_samples": [
-        {
-          "seconds": 8.683395572006702e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 7.149996235966682e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 5.837506614625454e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 5.41249755769968e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 0.00015312491450458765,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 8.050003089010715e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 0.00010583398398011923,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 7.050007116049528e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 5.6041055358946323e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 5.5416952818632126e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 6.0582999140024185e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 5.333404988050461e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 5.3916010074317455e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 0.00025283393915742636,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 9.099999442696571e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 5.8999983593821526e-05,
-          "query_budget_passed": true
-        },
-        {
-          "callbacks": 1,
-          "seconds": 0.0021239579655230045
-        },
-        {
-          "seconds": 5.7208933867514133e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.9875001423060894e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.299997817724943e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 3.63329891115427e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 3.5125063732266426e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.1291932575404644e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 0.00028212496545165777,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 8.145906031131744e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 6.450002547353506e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 5.7709054090082645e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 6.429199129343033e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 5.379202775657177e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 5.441601388156414e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 5.870801396667957e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 6.145902443677187e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 0.0001247500767931342,
-          "query_budget_passed": true
-        },
-        {
-          "callbacks": 0,
-          "seconds": 0.0023550420301035047
-        }
-      ],
-      "plans": [
-        {
-          "query_sha256": "4477406a48ad53bff01afbe784aad05dea3aa751cf8179b93c5e1e6d508ab911",
-          "sql": "SELECT status FROM projects WHERE project_id=?",
-          "plan": [
-            "SEARCH projects USING INDEX sqlite_autoindex_projects_1 (project_id=?)"
-          ]
-        },
-        {
-          "query_sha256": "b172231b538fd4a3388071d9ab6b86bfa09b9c98142bf403c3f6b269b2fabc5f",
-          "sql": "SELECT * FROM launch_receipts WHERE project_id=? AND scope_digest=? AND request_digest=?",
-          "plan": [
-            "SEARCH launch_receipts USING INDEX sqlite_autoindex_launch_receipts_1 (project_id=? AND scope_digest=? AND request_digest=?)"
-          ]
-        },
-        {
-          "query_sha256": "4b8d14d91ef9d26c98f745e50cdb5f92e1b3d9a55a8fc1c024b53b8fd4884ad2",
-          "sql": "SELECT history_owner FROM host_run_bindings WHERE project_id=? AND handle_digest=?",
-          "plan": [
-            "SEARCH host_run_bindings USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)"
-          ]
-        },
-        {
-          "query_sha256": "09c1a585f577bd6e80f58128620f588d869fb074b2edf09c2cbe0f4df183f50c",
-          "sql": "SELECT 1 FROM account_open_receipts WHERE project_id=? AND handle_digest=?",
-          "plan": [
-            "SEARCH account_open_receipts USING COVERING INDEX sqlite_autoindex_account_open_receipts_1 (project_id=? AND handle_digest=?)"
-          ]
-        },
-        {
-          "query_sha256": "7c2c35d5f0da0e6d04227ff310bd2964af1ada6abaf1bdcadfe2d74df8db0d08",
-          "sql": "SELECT 1 FROM account_open_requests WHERE project_id=? AND handle_digest=?",
-          "plan": [
-            "SEARCH account_open_requests USING COVERING INDEX sqlite_autoindex_account_open_requests_2 (project_id=? AND handle_digest=?)"
-          ]
-        },
-        {
-          "query_sha256": "b9fdd8a9fb0bece5f9e728327b02749b62ae3ddf7da6ec9b4b3874169fdbc657",
-          "sql": "SELECT a.*,h.assignment_digest,h.task_digest,h.route_digest,h.configuration_digest,h.client_version,h.native_assignment_id,h.created_at_ms AS opened_at_ms,h.observation_started_at_ms,h.observation_deadline_at_ms,e.owner_digest AS registered_digest FROM active_run_capacity a JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest AND h.run_id=a.run_id JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id WHERE a.project_id=? AND a.handle_digest=? AND a.bridge_run_id=?",
-          "plan": [
-            "SEARCH a USING INDEX sqlite_autoindex_active_run_capacity_1 (project_id=? AND handle_digest=?)",
-            "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_2 (project_id=? AND run_id=?)",
-            "SEARCH e USING INDEX sqlite_autoindex_capacity_executions_1 (project_id=? AND handle_digest=?)"
-          ]
-        },
-        {
-          "query_sha256": "df100b6ac0ccfd44b6e70269c5222a14dd49a8e07817377d5c6a8ad7675ed974",
-          "sql": "SELECT project_id,handle_digest,run_id,assignment_digest,task_digest,task_id_digest,route_digest,configuration_digest,client_version,created_at_ms,expires_at_ms,orchestration_id,observation_started_at_ms,observation_deadline_at_ms,agent_type,history_owner FROM host_run_bindings WHERE project_id=? AND handle_digest=?",
-          "plan": [
-            "SEARCH host_run_bindings USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)"
-          ]
-        },
-        {
-          "query_sha256": "ab36be43bea792dc78c0afabb3e337b926a841f53286ecbe9864477aa023f8b8",
-          "sql": "SELECT request_key,scope_digest,parameters_digest,run_id,length(content) AS size,content_seal FROM account_open_receipts WHERE project_id=? AND handle_digest=?",
-          "plan": [
-            "SEARCH account_open_receipts USING INDEX sqlite_autoindex_account_open_receipts_1 (project_id=? AND handle_digest=?)"
-          ]
-        },
-        {
-          "query_sha256": "c5e29f1372eb0ee2bf2edd724c387df6960d8e693ca21ce3f037ee213796577a",
-          "sql": "SELECT * FROM account_open_requests WHERE project_id=? AND handle_digest=?",
-          "plan": [
-            "SEARCH account_open_requests USING INDEX sqlite_autoindex_account_open_requests_2 (project_id=? AND handle_digest=?)"
-          ]
-        },
-        {
-          "query_sha256": "98a260e5078abf8fb4a3ed127a611b66c2b6074702b98c93cb39b93d22c17809",
-          "sql": "SELECT o.handle_digest FROM host_run_bindings h JOIN orchestrations o ON o.project_id=h.project_id AND o.orchestration_id=h.orchestration_id WHERE h.project_id=? AND h.handle_digest=?",
-          "plan": [
-            "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
-            "SEARCH o USING INDEX sqlite_autoindex_orchestrations_1 (project_id=? AND orchestration_id=?)"
-          ]
-        },
-        {
-          "query_sha256": "4e705c3d42e6710dc533bcfb4541c00924858fc455ac1d574f33da65fcf5dd1a",
-          "sql": "SELECT record_id,content,content_digest,source FROM records WHERE project_id=? AND record_type='admission_decision' AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=? LIMIT 2",
-          "plan": [
-            "SEARCH records USING INDEX records_run (project_id=? AND <expr>=? AND record_type=?)"
-          ]
-        },
-        {
-          "query_sha256": "667bc8b28b44df34c04a62a05e9fe6b3e147ffc50272b217d955873fd30a2cbc",
-          "sql": "SELECT record_id,content,content_digest,source FROM records WHERE project_id=? AND record_type='event' AND source='host' AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=? AND json_extract(CAST(content AS TEXT),'$.event_code')='subagent_started' LIMIT 2",
-          "plan": [
-            "SEARCH records USING INDEX records_run (project_id=? AND <expr>=? AND record_type=?)"
-          ]
-        }
-      ]
-    },
-    {
-      "test": "test_U3_11_project_registration_ignores_other_orchestration_history",
-      "passed": true,
-      "seconds": 1.082,
-      "work": [
-        {
-          "small": 29,
-          "large": 29,
-          "slack": 100
-        }
-      ],
-      "production_budget_samples": [
-        {
-          "seconds": 1.837499439716339e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 1.0042102076113224e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 8.416012860834599e-06,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 6.083049811422825e-06,
-          "query_budget_passed": true
-        }
-      ],
-      "plans": [
-        {
-          "query_sha256": "4ffc39ecc33951175462e408d3b4021ebdc2a0fbb69d0418bd4590b68ea735fc",
-          "sql": "SELECT orchestration_handle,run_id,service_instance FROM project_registered_runs WHERE project_id=? AND run_handle=? AND attempt=?",
-          "plan": [
-            "SEARCH project_registered_runs USING INDEX sqlite_autoindex_project_registered_runs_1 (project_id=? AND run_handle=? AND attempt=?)"
-          ]
-        },
-        {
-          "query_sha256": "14d684d8b24cea05d19df15b63cfbef3d57843af17fefad76a68c6ecd62f5373",
-          "sql": "SELECT COUNT(*) FROM project_registered_runs WHERE project_id=? AND orchestration_handle=?",
-          "plan": [
-            "SEARCH project_registered_runs USING COVERING INDEX project_registered_runs_orchestration (project_id=? AND orchestration_handle=?)"
-          ]
-        }
-      ]
-    },
-    {
-      "test": "test_U3_12_completed_probe_history_keeps_owner_reads_bounded",
-      "passed": true,
-      "seconds": 2.229,
-      "work": [
-        {
-          "small": 208,
-          "large": 208,
-          "slack": 200
-        }
-      ],
-      "production_budget_samples": [
-        {
-          "seconds": 6.0041085816919804e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 0.00010008295066654682,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.0041981264948845e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.029099363833666e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.333304241299629e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 3.8041966035962105e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 3.533309791237116e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.0708109736442566e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 3.720808308571577e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 9.650003630667925e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 6.016704719513655e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 5.037500523030758e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.4291955418884754e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.516600165516138e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 4.0082959458231926e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 3.758305683732033e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 3.979192115366459e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 3.7125078961253166e-05,
-          "query_budget_passed": true
-        }
-      ],
-      "plans": [
-        {
-          "query_sha256": "8b34fbe3a8c8a0adcfb66d431474327ca6d0e07e9587f29c4d1278cbd50f5772",
-          "sql": "SELECT canonical_root,status FROM projects WHERE project_id=?",
-          "plan": [
-            "SEARCH projects USING INDEX sqlite_autoindex_projects_1 (project_id=?)"
-          ]
-        },
-        {
-          "query_sha256": "9486e8fd1eb47cfafd2c388aa010a8303985184ab89e13e04f815632606f6ac1",
-          "sql": "SELECT * FROM account_billing_probe_requests WHERE project_id=? AND request_key=?",
-          "plan": [
-            "SEARCH account_billing_probe_requests USING INDEX sqlite_autoindex_account_billing_probe_requests_1 (project_id=? AND request_key=?)"
-          ]
-        },
-        {
-          "query_sha256": "6b27d0f226b9cd83fe67bb5a90e83e1c44a56b6e3b4880493cfd0655146853f4",
-          "sql": "SELECT * FROM account_billing_probe_origins WHERE project_id=? AND request_key=?",
-          "plan": [
-            "SEARCH account_billing_probe_origins USING INDEX sqlite_autoindex_account_billing_probe_origins_1 (project_id=? AND request_key=?)"
-          ]
-        },
-        {
-          "query_sha256": "42df7f6aa5c6361cbffa2227dc3f051b8a74a350ba4f6d983cf85fa51939e282",
-          "sql": "SELECT COUNT(*) FROM (SELECT 1 FROM account_billing_probe_requests WHERE project_id=? AND state<>'committed' LIMIT ?)",
-          "plan": [
-            "CO-ROUTINE (subquery-1)",
-            "SEARCH account_billing_probe_requests USING INDEX billing_probes_in_progress (project_id=?)",
-            "SCAN (subquery-1)"
-          ]
-        },
-        {
-          "query_sha256": "9486e8fd1eb47cfafd2c388aa010a8303985184ab89e13e04f815632606f6ac1",
-          "sql": "SELECT * FROM account_billing_probe_requests WHERE project_id=? AND request_key=?",
-          "plan": [
-            "SEARCH account_billing_probe_requests USING INDEX sqlite_autoindex_account_billing_probe_requests_1 (project_id=? AND request_key=?)"
-          ]
-        },
-        {
-          "query_sha256": "6b27d0f226b9cd83fe67bb5a90e83e1c44a56b6e3b4880493cfd0655146853f4",
-          "sql": "SELECT * FROM account_billing_probe_origins WHERE project_id=? AND request_key=?",
-          "plan": [
-            "SEARCH account_billing_probe_origins USING INDEX sqlite_autoindex_account_billing_probe_origins_1 (project_id=? AND request_key=?)"
-          ]
-        }
-      ]
-    },
-    {
-      "test": "test_U3_13_claude_first_pass_and_latest_older_readings_skip_account_history",
-      "passed": true,
-      "seconds": 5.113,
-      "work": [
-        {
-          "small": 25,
-          "large": 23,
-          "slack": 8
-        }
-      ],
-      "production_budget_samples": [
-        {
-          "seconds": 0.00012587499804794788,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 6.84160040691495e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 0.0004485839745029807,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 7.825007196515799e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 0.00040600006468594074,
-          "query_budget_passed": true
-        },
-        {
-          "callbacks": 25,
-          "seconds": 0.003622374963015318
-        },
-        {
-          "seconds": 9.599991608411074e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 7.225002627819777e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 0.0005032500484958291,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 8.400005754083395e-05,
-          "query_budget_passed": true
-        },
-        {
-          "seconds": 0.0005520830163732171,
-          "query_budget_passed": true
-        },
-        {
-          "callbacks": 23,
-          "seconds": 0.0028089589904993773
-        }
-      ],
-      "plans": [
-        {
-          "query_sha256": "7e1c6ada5251fba959f365ee7d6e1dbdb17dc31b4608cc966bd0c2396a106649",
-          "sql": "SELECT CASE status WHEN 'active' THEN 1 ELSE 0 END,CASE WHEN typeof(created_at_ms)='integer' THEN created_at_ms END FROM projects WHERE project_id=?",
-          "plan": [
-            "SEARCH projects USING INDEX sqlite_autoindex_projects_1 (project_id=?)"
-          ]
-        },
-        {
-          "query_sha256": "2004918918698cb3bc4941a37f41f8743e1368e6256bb1bebfca47bec78bd4db",
-          "sql": "SELECT CASE WHEN typeof(sequence)='integer' THEN sequence END,typeof(signer_line),length(signer_line),CASE reason WHEN 'enrolled' THEN 'enrolled' WHEN 'replaced' THEN 'replaced' END,CASE WHEN typeof(recorded_at_ms)='integer' THEN recorded_at_ms END FROM owner_key_history ORDER BY sequence DESC LIMIT 1",
-          "plan": [
-            "SCAN owner_key_history"
-          ]
-        },
-        {
-          "query_sha256": "dc995639c92f7e3a1bcc7c02198767b29ce57f80135d181643e7207b7ee18c1d",
-          "sql": "SELECT r.rowid,typeof(r.project_id),length(CAST(r.project_id AS BLOB)),typeof(r.record_id),length(CAST(r.record_id AS BLOB)),typeof(r.record_type),length(CAST(r.record_type AS BLOB)),typeof(r.content),length(r.content),typeof(r.content_digest),length(CAST(r.content_digest AS BLOB)),typeof(r.source),length(CAST(r.source AS BLOB)),CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,CASE WHEN typeof(r.observed_at_ms)='integer' THEN r.observed_at_ms END,CASE WHEN typeof(r.ingested_at_ms)='integer' THEN r.ingested_at_ms END,typeof(a.signature),length(a.signature) FROM (WITH RECURSIVE pass(fp) AS (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 UNION ALL SELECT (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 AND account_fingerprint>pass.fp) FROM pass WHERE pass.fp IS NOT NULL), reading(t,fp) AS (SELECT k.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=k.t AND account_fingerprint IS NOT NULL) FROM (SELECT 'provider_billing' AS t UNION ALL SELECT 'provider_headroom') k UNION ALL SELECT reading.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=reading.t AND account_fingerprint>reading.fp) FROM reading WHERE reading.fp IS NOT NULL) SELECT rowid AS id FROM records INDEXED BY records_type_observed WHERE record_type='provider_identity' AND observed_at_ms>=:a-1800000 AND project_id=:p UNION SELECT record_rowid FROM temp.capture_candidates WHERE consumer=:provider AND project_id=:p UNION SELECT rowid FROM records INDEXED BY records_foreign_admissions WHERE project_id=:p AND record_type='admission_decision' AND source<>'lifecycle' UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('admission_decision','probe_admission') AND observed_at_ms>=:a-18000000 UNION SELECT (SELECT x.rowid FROM admission_evidence f JOIN records x ON x.project_id=f.project_id AND x.record_id=f.record_id WHERE f.claude_pass=1 AND f.account_fingerprint=pass.fp AND f.source='lifecycle' AND f.provider='claude' ORDER BY f.observed_at_ms,f.project_id,f.record_id LIMIT 1) FROM pass WHERE pass.fp IS NOT NULL UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('provider_billing','provider_headroom') AND observed_at_ms>=:a-86400000 UNION SELECT x.rowid FROM admission_evidence e JOIN records x ON x.project_id=e.project_id AND x.record_id=e.record_id WHERE e.live_until_ms>:a UNION SELECT x.rowid FROM reading CROSS JOIN admission_evidence g JOIN records x ON x.project_id=g.project_id AND x.record_id=g.record_id WHERE reading.fp IS NOT NULL AND g.provider='claude' AND g.source='provider' AND g.record_type=reading.t AND g.account_fingerprint=reading.fp AND g.observed_at_ms=(SELECT MAX(h.observed_at_ms) FROM admission_evidence h WHERE h.provider='claude' AND h.source='provider' AND h.record_type=reading.t AND h.account_fingerprint=reading.fp AND h.observed_at_ms<:a-86400000)) c CROSS JOIN records r ON r.rowid=c.id LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE ((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000) OR (r.project_id=:p AND r.record_type='billing_attestation') OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle') OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission') AND (r.observed_at_ms>=:a-18000000 OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.claude_pass=1 AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.claude_pass=1 AND f.source='lifecycle' AND f.provider='claude' AND f.account_fingerprint=e.account_fingerprint AND (f.observed_at_ms,f.project_id,f.record_id)<(e.observed_at_ms,e.project_id,e.record_id))))) OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom') AND (r.observed_at_ms>=:a-86400000 OR (r.record_type='provider_headroom' AND EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.live_until_ms>:a)) OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.provider='claude' AND e.account_fingerprint IS NOT NULL AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.provider='claude' AND f.source='provider' AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000))))) ORDER BY r.rowid LIMIT :limit",
-          "plan": [
-            "CO-ROUTINE c",
-            "MERGE (UNION)",
-            "LEFT",
-            "MERGE (UNION)",
-            "LEFT",
-            "MERGE (UNION)",
-            "LEFT",
-            "SEARCH records USING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
-            "USE TEMP B-TREE FOR ORDER BY",
-            "RIGHT",
-            "SEARCH temp.capture_candidates USING PRIMARY KEY (consumer=?)",
-            "RIGHT",
-            "MERGE (UNION)",
-            "LEFT",
-            "SEARCH records USING INDEX records_foreign_admissions (project_id=?)",
-            "RIGHT",
-            "SEARCH records USING COVERING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
-            "USE TEMP B-TREE FOR ORDER BY",
-            "RIGHT",
-            "MERGE (UNION)",
-            "LEFT",
-            "MERGE (UNION)",
-            "LEFT",
-            "CO-ROUTINE pass",
-            "SETUP",
-            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass",
-            "RECURSIVE STEP",
-            "SCAN pass",
-            "CORRELATED SCALAR SUBQUERY 2",
-            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass (account_fingerprint>?)",
-            "SCAN pass",
-            "CORRELATED SCALAR SUBQUERY 14",
-            "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=?)",
-            "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
-            "USE TEMP B-TREE FOR ORDER BY",
-            "RIGHT",
-            "SEARCH records USING COVERING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
-            "USE TEMP B-TREE FOR ORDER BY",
-            "RIGHT",
-            "MERGE (UNION)",
-            "LEFT",
-            "SEARCH e USING INDEX admission_evidence_live (live_until_ms>?)",
-            "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
-            "USE TEMP B-TREE FOR ORDER BY",
-            "RIGHT",
-            "CO-ROUTINE reading",
-            "SETUP",
-            "CO-ROUTINE k",
-            "COMPOUND QUERY",
-            "LEFT-MOST SUBQUERY",
-            "SCAN CONSTANT ROW",
-            "UNION ALL",
-            "SCAN CONSTANT ROW",
-            "SCAN k",
-            "CORRELATED SCALAR SUBQUERY 4",
-            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
-            "RECURSIVE STEP",
-            "SCAN reading",
-            "CORRELATED SCALAR SUBQUERY 8",
-            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
-            "SCAN reading",
-            "SEARCH g USING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms=?)",
-            "CORRELATED SCALAR SUBQUERY 18",
-            "SEARCH h USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms<?)",
-            "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
-            "USE TEMP B-TREE FOR ORDER BY",
-            "SCAN c",
-            "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
-            "CORRELATED SCALAR SUBQUERY 21",
-            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
-            "CORRELATED SCALAR SUBQUERY 20",
-            "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=? AND observed_at_ms<?)",
-            "CORRELATED SCALAR SUBQUERY 22",
-            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
-            "CORRELATED SCALAR SUBQUERY 24",
-            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
-            "CORRELATED SCALAR SUBQUERY 23",
-            "SEARCH f USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms>? AND observed_at_ms<?)",
-            "SEARCH a USING INDEX sqlite_autoindex_owner_attestations_1 (project_id=? AND subject_record_id=?) LEFT-JOIN",
-            "USE TEMP B-TREE FOR ORDER BY"
-          ]
-        },
-        {
-          "query_sha256": "f78d66d467fcd2e4cb7d28ffc036b5a6033c60a4f364b6eb163fb94035a41ab1",
-          "sql": "SELECT sequence,signer_line,reason,recorded_at_ms FROM owner_key_history ORDER BY sequence DESC LIMIT 1",
-          "plan": [
-            "SCAN owner_key_history"
-          ]
-        },
-        {
-          "query_sha256": "3848940c333f11a41f89a6764bfdcbb6da89a869f1022fed4968c4aa9d46d5c5",
-          "sql": "SELECT r.rowid,r.project_id,r.record_id,r.source_sequence,r.record_type,r.content,r.content_digest,r.source,r.observed_at_ms,r.ingested_at_ms,a.signature FROM (WITH RECURSIVE pass(fp) AS (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 UNION ALL SELECT (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 AND account_fingerprint>pass.fp) FROM pass WHERE pass.fp IS NOT NULL), reading(t,fp) AS (SELECT k.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=k.t AND account_fingerprint IS NOT NULL) FROM (SELECT 'provider_billing' AS t UNION ALL SELECT 'provider_headroom') k UNION ALL SELECT reading.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=reading.t AND account_fingerprint>reading.fp) FROM reading WHERE reading.fp IS NOT NULL) SELECT rowid AS id FROM records INDEXED BY records_type_observed WHERE record_type='provider_identity' AND observed_at_ms>=:a-1800000 AND project_id=:p UNION SELECT record_rowid FROM temp.capture_candidates WHERE consumer=:provider AND project_id=:p UNION SELECT rowid FROM records INDEXED BY records_foreign_admissions WHERE project_id=:p AND record_type='admission_decision' AND source<>'lifecycle' UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('admission_decision','probe_admission') AND observed_at_ms>=:a-18000000 UNION SELECT (SELECT x.rowid FROM admission_evidence f JOIN records x ON x.project_id=f.project_id AND x.record_id=f.record_id WHERE f.claude_pass=1 AND f.account_fingerprint=pass.fp AND f.source='lifecycle' AND f.provider='claude' ORDER BY f.observed_at_ms,f.project_id,f.record_id LIMIT 1) FROM pass WHERE pass.fp IS NOT NULL UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('provider_billing','provider_headroom') AND observed_at_ms>=:a-86400000 UNION SELECT x.rowid FROM admission_evidence e JOIN records x ON x.project_id=e.project_id AND x.record_id=e.record_id WHERE e.live_until_ms>:a UNION SELECT x.rowid FROM reading CROSS JOIN admission_evidence g JOIN records x ON x.project_id=g.project_id AND x.record_id=g.record_id WHERE reading.fp IS NOT NULL AND g.provider='claude' AND g.source='provider' AND g.record_type=reading.t AND g.account_fingerprint=reading.fp AND g.observed_at_ms=(SELECT MAX(h.observed_at_ms) FROM admission_evidence h WHERE h.provider='claude' AND h.source='provider' AND h.record_type=reading.t AND h.account_fingerprint=reading.fp AND h.observed_at_ms<:a-86400000)) c CROSS JOIN records r ON r.rowid=c.id LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE ((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000) OR (r.project_id=:p AND r.record_type='billing_attestation') OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle') OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission') AND (r.observed_at_ms>=:a-18000000 OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.claude_pass=1 AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.claude_pass=1 AND f.source='lifecycle' AND f.provider='claude' AND f.account_fingerprint=e.account_fingerprint AND (f.observed_at_ms,f.project_id,f.record_id)<(e.observed_at_ms,e.project_id,e.record_id))))) OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom') AND (r.observed_at_ms>=:a-86400000 OR (r.record_type='provider_headroom' AND EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.live_until_ms>:a)) OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.provider='claude' AND e.account_fingerprint IS NOT NULL AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.provider='claude' AND f.source='provider' AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000))))) ORDER BY r.rowid LIMIT :limit",
-          "plan": [
-            "CO-ROUTINE c",
-            "MERGE (UNION)",
-            "LEFT",
-            "MERGE (UNION)",
-            "LEFT",
-            "MERGE (UNION)",
-            "LEFT",
-            "SEARCH records USING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
-            "USE TEMP B-TREE FOR ORDER BY",
-            "RIGHT",
-            "SEARCH temp.capture_candidates USING PRIMARY KEY (consumer=?)",
-            "RIGHT",
-            "MERGE (UNION)",
-            "LEFT",
-            "SEARCH records USING INDEX records_foreign_admissions (project_id=?)",
-            "RIGHT",
-            "SEARCH records USING COVERING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
-            "USE TEMP B-TREE FOR ORDER BY",
-            "RIGHT",
-            "MERGE (UNION)",
-            "LEFT",
-            "MERGE (UNION)",
-            "LEFT",
-            "CO-ROUTINE pass",
-            "SETUP",
-            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass",
-            "RECURSIVE STEP",
-            "SCAN pass",
-            "CORRELATED SCALAR SUBQUERY 2",
-            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass (account_fingerprint>?)",
-            "SCAN pass",
-            "CORRELATED SCALAR SUBQUERY 14",
-            "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=?)",
-            "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
-            "USE TEMP B-TREE FOR ORDER BY",
-            "RIGHT",
-            "SEARCH records USING COVERING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
-            "USE TEMP B-TREE FOR ORDER BY",
-            "RIGHT",
-            "MERGE (UNION)",
-            "LEFT",
-            "SEARCH e USING INDEX admission_evidence_live (live_until_ms>?)",
-            "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
-            "USE TEMP B-TREE FOR ORDER BY",
-            "RIGHT",
-            "CO-ROUTINE reading",
-            "SETUP",
-            "CO-ROUTINE k",
-            "COMPOUND QUERY",
-            "LEFT-MOST SUBQUERY",
-            "SCAN CONSTANT ROW",
-            "UNION ALL",
-            "SCAN CONSTANT ROW",
-            "SCAN k",
-            "CORRELATED SCALAR SUBQUERY 4",
-            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
-            "RECURSIVE STEP",
-            "SCAN reading",
-            "CORRELATED SCALAR SUBQUERY 8",
-            "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
-            "SCAN reading",
-            "SEARCH g USING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms=?)",
-            "CORRELATED SCALAR SUBQUERY 18",
-            "SEARCH h USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms<?)",
-            "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
-            "USE TEMP B-TREE FOR ORDER BY",
-            "SCAN c",
-            "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
-            "CORRELATED SCALAR SUBQUERY 21",
-            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
-            "CORRELATED SCALAR SUBQUERY 20",
-            "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=? AND observed_at_ms<?)",
-            "CORRELATED SCALAR SUBQUERY 22",
-            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
-            "CORRELATED SCALAR SUBQUERY 24",
-            "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
-            "CORRELATED SCALAR SUBQUERY 23",
-            "SEARCH f USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms>? AND observed_at_ms<?)",
-            "SEARCH a USING INDEX sqlite_autoindex_owner_attestations_1 (project_id=? AND subject_record_id=?) LEFT-JOIN",
-            "USE TEMP B-TREE FOR ORDER BY"
           ]
         }
       ]
@@ -1970,9 +2002,17 @@
       ]
     },
     {
-      "sql": "SELECT r.rowid,typeof(r.project_id),length(CAST(r.project_id AS BLOB)),typeof(r.record_id),length(CAST(r.record_id AS BLOB)),typeof(r.record_type),length(CAST(r.record_type AS BLOB)),typeof(r.content),length(r.content),typeof(r.content_digest),length(CAST(r.content_digest AS BLOB)),typeof(r.source),length(CAST(r.source AS BLOB)),CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,CASE WHEN typeof(r.observed_at_ms)='integer' THEN r.observed_at_ms END,CASE WHEN typeof(r.ingested_at_ms)='integer' THEN r.ingested_at_ms END,typeof(a.signature),length(a.signature) FROM (WITH RECURSIVE pass(fp) AS (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 UNION ALL SELECT (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 AND account_fingerprint>pass.fp) FROM pass WHERE pass.fp IS NOT NULL), reading(t,fp) AS (SELECT k.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=k.t AND account_fingerprint IS NOT NULL) FROM (SELECT 'provider_billing' AS t UNION ALL SELECT 'provider_headroom') k UNION ALL SELECT reading.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=reading.t AND account_fingerprint>reading.fp) FROM reading WHERE reading.fp IS NOT NULL) SELECT rowid AS id FROM records INDEXED BY records_type_observed WHERE record_type='provider_identity' AND observed_at_ms>=:a-1800000 AND project_id=:p UNION SELECT record_rowid FROM temp.capture_candidates WHERE consumer=:provider AND project_id=:p UNION SELECT rowid FROM records INDEXED BY records_foreign_admissions WHERE project_id=:p AND record_type='admission_decision' AND source<>'lifecycle' UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('admission_decision','probe_admission') AND observed_at_ms>=:a-18000000 UNION SELECT (SELECT x.rowid FROM admission_evidence f JOIN records x ON x.project_id=f.project_id AND x.record_id=f.record_id WHERE f.claude_pass=1 AND f.account_fingerprint=pass.fp AND f.source='lifecycle' AND f.provider='claude' ORDER BY f.observed_at_ms,f.project_id,f.record_id LIMIT 1) FROM pass WHERE pass.fp IS NOT NULL UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('provider_billing','provider_headroom') AND observed_at_ms>=:a-86400000 UNION SELECT x.rowid FROM admission_evidence e JOIN records x ON x.project_id=e.project_id AND x.record_id=e.record_id WHERE e.live_until_ms>:a UNION SELECT x.rowid FROM reading CROSS JOIN admission_evidence g JOIN records x ON x.project_id=g.project_id AND x.record_id=g.record_id WHERE reading.fp IS NOT NULL AND g.provider='claude' AND g.source='provider' AND g.record_type=reading.t AND g.account_fingerprint=reading.fp AND g.observed_at_ms=(SELECT MAX(h.observed_at_ms) FROM admission_evidence h WHERE h.provider='claude' AND h.source='provider' AND h.record_type=reading.t AND h.account_fingerprint=reading.fp AND h.observed_at_ms<:a-86400000)) c CROSS JOIN records r ON r.rowid=c.id LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE ((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000) OR (r.project_id=:p AND r.record_type='billing_attestation') OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle') OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission') AND (r.observed_at_ms>=:a-18000000 OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.claude_pass=1 AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.claude_pass=1 AND f.source='lifecycle' AND f.provider='claude' AND f.account_fingerprint=e.account_fingerprint AND (f.observed_at_ms,f.project_id,f.record_id)<(e.observed_at_ms,e.project_id,e.record_id))))) OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom') AND (r.observed_at_ms>=:a-86400000 OR (r.record_type='provider_headroom' AND EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.live_until_ms>:a)) OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.provider='claude' AND e.account_fingerprint IS NOT NULL AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.provider='claude' AND f.source='provider' AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000))))) ORDER BY r.rowid LIMIT :limit",
+      "sql": "SELECT r.rowid,typeof(r.project_id),length(CAST(r.project_id AS BLOB)),typeof(r.record_id),length(CAST(r.record_id AS BLOB)),typeof(r.record_type),length(CAST(r.record_type AS BLOB)),typeof(r.content),length(r.content),typeof(r.content_digest),length(CAST(r.content_digest AS BLOB)),typeof(r.source),length(CAST(r.source AS BLOB)),CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,CASE WHEN typeof(r.observed_at_ms)='integer' THEN r.observed_at_ms END,CASE WHEN typeof(r.ingested_at_ms)='integer' THEN r.ingested_at_ms END,typeof(a.signature),length(a.signature) FROM (SELECT record_rowid FROM (SELECT record_rowid FROM temp.capture_candidates WHERE consumer=:provider AND project_id=:p ORDER BY record_rowid LIMIT :limit) UNION ALL SELECT record_rowid FROM (SELECT r.rowid AS record_rowid FROM (WITH RECURSIVE pass(fp) AS (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 UNION ALL SELECT (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 AND account_fingerprint>pass.fp) FROM pass WHERE pass.fp IS NOT NULL), older(t,fp) AS (SELECT k.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=k.t AND account_fingerprint IS NOT NULL) FROM (SELECT 'provider_billing' AS t UNION ALL SELECT 'provider_headroom') k UNION ALL SELECT older.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=older.t AND account_fingerprint>older.fp) FROM older WHERE older.fp IS NOT NULL) SELECT rowid AS id FROM records INDEXED BY records_type_observed WHERE record_type='provider_identity' AND observed_at_ms>=:a-1800000 AND project_id=:p UNION SELECT rowid FROM records INDEXED BY records_foreign_admissions WHERE project_id=:p AND record_type='admission_decision' AND source<>'lifecycle' UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('admission_decision','probe_admission') AND observed_at_ms>=:a-18000000 UNION SELECT (SELECT x.rowid FROM admission_evidence f JOIN records x ON x.project_id=f.project_id AND x.record_id=f.record_id WHERE f.claude_pass=1 AND f.account_fingerprint=pass.fp AND f.source='lifecycle' AND f.provider='claude' ORDER BY f.observed_at_ms,f.project_id,f.record_id LIMIT 1) FROM pass WHERE pass.fp IS NOT NULL UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('provider_billing','provider_headroom') AND observed_at_ms>=:a-86400000 UNION SELECT x.rowid FROM admission_evidence e JOIN records x ON x.project_id=e.project_id AND x.record_id=e.record_id WHERE e.live_until_ms>:a UNION SELECT x.rowid FROM older CROSS JOIN admission_evidence g JOIN records x ON x.project_id=g.project_id AND x.record_id=g.record_id WHERE older.fp IS NOT NULL AND g.provider='claude' AND g.source='provider' AND g.record_type=older.t AND g.account_fingerprint=older.fp AND g.observed_at_ms=(SELECT MAX(h.observed_at_ms) FROM admission_evidence h WHERE h.provider='claude' AND h.source='provider' AND h.record_type=older.t AND h.account_fingerprint=older.fp AND h.observed_at_ms<:a-86400000)) k CROSS JOIN records r ON r.rowid=k.id WHERE r.record_type IN ('provider_identity','admission_decision','probe_admission','provider_billing','provider_headroom') AND ((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000) OR (r.project_id=:p AND r.record_type='billing_attestation') OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle') OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission') AND (r.observed_at_ms>=:a-18000000 OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.claude_pass=1 AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.claude_pass=1 AND f.source='lifecycle' AND f.provider='claude' AND f.account_fingerprint=e.account_fingerprint AND (f.observed_at_ms,f.project_id,f.record_id)<(e.observed_at_ms,e.project_id,e.record_id))))) OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom') AND (r.observed_at_ms>=:a-86400000 OR (r.record_type='provider_headroom' AND EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.live_until_ms>:a)) OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.provider='claude' AND e.account_fingerprint IS NOT NULL AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.provider='claude' AND f.source='provider' AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000))))) ORDER BY r.rowid LIMIT :limit)) c CROSS JOIN records r LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE r.rowid=c.record_rowid ORDER BY c.record_rowid LIMIT :limit",
       "plan": [
         "CO-ROUTINE c",
+        "COMPOUND QUERY",
+        "LEFT-MOST SUBQUERY",
+        "CO-ROUTINE (subquery-1)",
+        "SEARCH temp.capture_candidates USING PRIMARY KEY (consumer=?)",
+        "SCAN (subquery-1)",
+        "UNION ALL",
+        "CO-ROUTINE (subquery-26)",
+        "CO-ROUTINE k",
         "MERGE (UNION)",
         "LEFT",
         "MERGE (UNION)",
@@ -1982,10 +2022,6 @@
         "SEARCH records USING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
         "USE TEMP B-TREE FOR ORDER BY",
         "RIGHT",
-        "SEARCH temp.capture_candidates USING PRIMARY KEY (consumer=?)",
-        "RIGHT",
-        "MERGE (UNION)",
-        "LEFT",
         "SEARCH records USING INDEX records_foreign_admissions (project_id=?)",
         "RIGHT",
         "SEARCH records USING COVERING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
@@ -2000,10 +2036,10 @@
         "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass",
         "RECURSIVE STEP",
         "SCAN pass",
-        "CORRELATED SCALAR SUBQUERY 2",
+        "CORRELATED SCALAR SUBQUERY 4",
         "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass (account_fingerprint>?)",
         "SCAN pass",
-        "CORRELATED SCALAR SUBQUERY 14",
+        "CORRELATED SCALAR SUBQUERY 15",
         "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=?)",
         "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
         "USE TEMP B-TREE FOR ORDER BY",
@@ -2017,7 +2053,7 @@
         "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
         "USE TEMP B-TREE FOR ORDER BY",
         "RIGHT",
-        "CO-ROUTINE reading",
+        "CO-ROUTINE older",
         "SETUP",
         "CO-ROUTINE k",
         "COMPOUND QUERY",
@@ -2026,30 +2062,34 @@
         "UNION ALL",
         "SCAN CONSTANT ROW",
         "SCAN k",
-        "CORRELATED SCALAR SUBQUERY 4",
+        "CORRELATED SCALAR SUBQUERY 6",
         "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
         "RECURSIVE STEP",
-        "SCAN reading",
-        "CORRELATED SCALAR SUBQUERY 8",
+        "SCAN older",
+        "CORRELATED SCALAR SUBQUERY 10",
         "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
-        "SCAN reading",
+        "SCAN older",
         "SEARCH g USING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms=?)",
-        "CORRELATED SCALAR SUBQUERY 18",
+        "CORRELATED SCALAR SUBQUERY 19",
         "SEARCH h USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms<?)",
         "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
         "USE TEMP B-TREE FOR ORDER BY",
-        "SCAN c",
+        "SCAN k",
         "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
-        "CORRELATED SCALAR SUBQUERY 21",
-        "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
-        "CORRELATED SCALAR SUBQUERY 20",
-        "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=? AND observed_at_ms<?)",
         "CORRELATED SCALAR SUBQUERY 22",
         "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
-        "CORRELATED SCALAR SUBQUERY 24",
-        "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+        "CORRELATED SCALAR SUBQUERY 21",
+        "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=? AND observed_at_ms<?)",
         "CORRELATED SCALAR SUBQUERY 23",
+        "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+        "CORRELATED SCALAR SUBQUERY 25",
+        "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+        "CORRELATED SCALAR SUBQUERY 24",
         "SEARCH f USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms>? AND observed_at_ms<?)",
+        "USE TEMP B-TREE FOR ORDER BY",
+        "SCAN (subquery-26)",
+        "SCAN c",
+        "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
         "SEARCH a USING INDEX sqlite_autoindex_owner_attestations_1 (project_id=? AND subject_record_id=?) LEFT-JOIN",
         "USE TEMP B-TREE FOR ORDER BY"
       ]
@@ -2061,9 +2101,17 @@
       ]
     },
     {
-      "sql": "SELECT r.rowid,r.project_id,r.record_id,r.source_sequence,r.record_type,r.content,r.content_digest,r.source,r.observed_at_ms,r.ingested_at_ms,a.signature FROM (WITH RECURSIVE pass(fp) AS (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 UNION ALL SELECT (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 AND account_fingerprint>pass.fp) FROM pass WHERE pass.fp IS NOT NULL), reading(t,fp) AS (SELECT k.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=k.t AND account_fingerprint IS NOT NULL) FROM (SELECT 'provider_billing' AS t UNION ALL SELECT 'provider_headroom') k UNION ALL SELECT reading.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=reading.t AND account_fingerprint>reading.fp) FROM reading WHERE reading.fp IS NOT NULL) SELECT rowid AS id FROM records INDEXED BY records_type_observed WHERE record_type='provider_identity' AND observed_at_ms>=:a-1800000 AND project_id=:p UNION SELECT record_rowid FROM temp.capture_candidates WHERE consumer=:provider AND project_id=:p UNION SELECT rowid FROM records INDEXED BY records_foreign_admissions WHERE project_id=:p AND record_type='admission_decision' AND source<>'lifecycle' UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('admission_decision','probe_admission') AND observed_at_ms>=:a-18000000 UNION SELECT (SELECT x.rowid FROM admission_evidence f JOIN records x ON x.project_id=f.project_id AND x.record_id=f.record_id WHERE f.claude_pass=1 AND f.account_fingerprint=pass.fp AND f.source='lifecycle' AND f.provider='claude' ORDER BY f.observed_at_ms,f.project_id,f.record_id LIMIT 1) FROM pass WHERE pass.fp IS NOT NULL UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('provider_billing','provider_headroom') AND observed_at_ms>=:a-86400000 UNION SELECT x.rowid FROM admission_evidence e JOIN records x ON x.project_id=e.project_id AND x.record_id=e.record_id WHERE e.live_until_ms>:a UNION SELECT x.rowid FROM reading CROSS JOIN admission_evidence g JOIN records x ON x.project_id=g.project_id AND x.record_id=g.record_id WHERE reading.fp IS NOT NULL AND g.provider='claude' AND g.source='provider' AND g.record_type=reading.t AND g.account_fingerprint=reading.fp AND g.observed_at_ms=(SELECT MAX(h.observed_at_ms) FROM admission_evidence h WHERE h.provider='claude' AND h.source='provider' AND h.record_type=reading.t AND h.account_fingerprint=reading.fp AND h.observed_at_ms<:a-86400000)) c CROSS JOIN records r ON r.rowid=c.id LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE ((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000) OR (r.project_id=:p AND r.record_type='billing_attestation') OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle') OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission') AND (r.observed_at_ms>=:a-18000000 OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.claude_pass=1 AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.claude_pass=1 AND f.source='lifecycle' AND f.provider='claude' AND f.account_fingerprint=e.account_fingerprint AND (f.observed_at_ms,f.project_id,f.record_id)<(e.observed_at_ms,e.project_id,e.record_id))))) OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom') AND (r.observed_at_ms>=:a-86400000 OR (r.record_type='provider_headroom' AND EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.live_until_ms>:a)) OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.provider='claude' AND e.account_fingerprint IS NOT NULL AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.provider='claude' AND f.source='provider' AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000))))) ORDER BY r.rowid LIMIT :limit",
+      "sql": "SELECT r.rowid,r.project_id,r.record_id,r.source_sequence,r.record_type,r.content,r.content_digest,r.source,r.observed_at_ms,r.ingested_at_ms,a.signature FROM (SELECT record_rowid FROM (SELECT record_rowid FROM temp.capture_candidates WHERE consumer=:provider AND project_id=:p ORDER BY record_rowid LIMIT :limit) UNION ALL SELECT record_rowid FROM (SELECT r.rowid AS record_rowid FROM (WITH RECURSIVE pass(fp) AS (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 UNION ALL SELECT (SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1 AND account_fingerprint>pass.fp) FROM pass WHERE pass.fp IS NOT NULL), older(t,fp) AS (SELECT k.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=k.t AND account_fingerprint IS NOT NULL) FROM (SELECT 'provider_billing' AS t UNION ALL SELECT 'provider_headroom') k UNION ALL SELECT older.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude' AND source='provider' AND record_type=older.t AND account_fingerprint>older.fp) FROM older WHERE older.fp IS NOT NULL) SELECT rowid AS id FROM records INDEXED BY records_type_observed WHERE record_type='provider_identity' AND observed_at_ms>=:a-1800000 AND project_id=:p UNION SELECT rowid FROM records INDEXED BY records_foreign_admissions WHERE project_id=:p AND record_type='admission_decision' AND source<>'lifecycle' UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('admission_decision','probe_admission') AND observed_at_ms>=:a-18000000 UNION SELECT (SELECT x.rowid FROM admission_evidence f JOIN records x ON x.project_id=f.project_id AND x.record_id=f.record_id WHERE f.claude_pass=1 AND f.account_fingerprint=pass.fp AND f.source='lifecycle' AND f.provider='claude' ORDER BY f.observed_at_ms,f.project_id,f.record_id LIMIT 1) FROM pass WHERE pass.fp IS NOT NULL UNION SELECT rowid FROM records INDEXED BY records_type_observed WHERE record_type IN ('provider_billing','provider_headroom') AND observed_at_ms>=:a-86400000 UNION SELECT x.rowid FROM admission_evidence e JOIN records x ON x.project_id=e.project_id AND x.record_id=e.record_id WHERE e.live_until_ms>:a UNION SELECT x.rowid FROM older CROSS JOIN admission_evidence g JOIN records x ON x.project_id=g.project_id AND x.record_id=g.record_id WHERE older.fp IS NOT NULL AND g.provider='claude' AND g.source='provider' AND g.record_type=older.t AND g.account_fingerprint=older.fp AND g.observed_at_ms=(SELECT MAX(h.observed_at_ms) FROM admission_evidence h WHERE h.provider='claude' AND h.source='provider' AND h.record_type=older.t AND h.account_fingerprint=older.fp AND h.observed_at_ms<:a-86400000)) k CROSS JOIN records r ON r.rowid=k.id WHERE r.record_type IN ('provider_identity','admission_decision','probe_admission','provider_billing','provider_headroom') AND ((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000) OR (r.project_id=:p AND r.record_type='billing_attestation') OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle') OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission') AND (r.observed_at_ms>=:a-18000000 OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.claude_pass=1 AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.claude_pass=1 AND f.source='lifecycle' AND f.provider='claude' AND f.account_fingerprint=e.account_fingerprint AND (f.observed_at_ms,f.project_id,f.record_id)<(e.observed_at_ms,e.project_id,e.record_id))))) OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom') AND (r.observed_at_ms>=:a-86400000 OR (r.record_type='provider_headroom' AND EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.live_until_ms>:a)) OR EXISTS(SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id AND e.provider='claude' AND e.account_fingerprint IS NOT NULL AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.provider='claude' AND f.source='provider' AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000))))) ORDER BY r.rowid LIMIT :limit)) c CROSS JOIN records r LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE r.rowid=c.record_rowid ORDER BY c.record_rowid LIMIT :limit",
       "plan": [
         "CO-ROUTINE c",
+        "COMPOUND QUERY",
+        "LEFT-MOST SUBQUERY",
+        "CO-ROUTINE (subquery-1)",
+        "SEARCH temp.capture_candidates USING PRIMARY KEY (consumer=?)",
+        "SCAN (subquery-1)",
+        "UNION ALL",
+        "CO-ROUTINE (subquery-26)",
+        "CO-ROUTINE k",
         "MERGE (UNION)",
         "LEFT",
         "MERGE (UNION)",
@@ -2073,10 +2121,6 @@
         "SEARCH records USING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
         "USE TEMP B-TREE FOR ORDER BY",
         "RIGHT",
-        "SEARCH temp.capture_candidates USING PRIMARY KEY (consumer=?)",
-        "RIGHT",
-        "MERGE (UNION)",
-        "LEFT",
         "SEARCH records USING INDEX records_foreign_admissions (project_id=?)",
         "RIGHT",
         "SEARCH records USING COVERING INDEX records_type_observed (record_type=? AND observed_at_ms>?)",
@@ -2091,10 +2135,10 @@
         "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass",
         "RECURSIVE STEP",
         "SCAN pass",
-        "CORRELATED SCALAR SUBQUERY 2",
+        "CORRELATED SCALAR SUBQUERY 4",
         "SEARCH admission_evidence USING COVERING INDEX admission_evidence_claude_pass (account_fingerprint>?)",
         "SCAN pass",
-        "CORRELATED SCALAR SUBQUERY 14",
+        "CORRELATED SCALAR SUBQUERY 15",
         "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=?)",
         "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
         "USE TEMP B-TREE FOR ORDER BY",
@@ -2108,7 +2152,7 @@
         "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
         "USE TEMP B-TREE FOR ORDER BY",
         "RIGHT",
-        "CO-ROUTINE reading",
+        "CO-ROUTINE older",
         "SETUP",
         "CO-ROUTINE k",
         "COMPOUND QUERY",
@@ -2117,30 +2161,34 @@
         "UNION ALL",
         "SCAN CONSTANT ROW",
         "SCAN k",
-        "CORRELATED SCALAR SUBQUERY 4",
+        "CORRELATED SCALAR SUBQUERY 6",
         "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
         "RECURSIVE STEP",
-        "SCAN reading",
-        "CORRELATED SCALAR SUBQUERY 8",
+        "SCAN older",
+        "CORRELATED SCALAR SUBQUERY 10",
         "SEARCH admission_evidence USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint>?)",
-        "SCAN reading",
+        "SCAN older",
         "SEARCH g USING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms=?)",
-        "CORRELATED SCALAR SUBQUERY 18",
+        "CORRELATED SCALAR SUBQUERY 19",
         "SEARCH h USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms<?)",
         "SEARCH x USING COVERING INDEX sqlite_autoindex_records_1 (project_id=? AND record_id=?)",
         "USE TEMP B-TREE FOR ORDER BY",
-        "SCAN c",
+        "SCAN k",
         "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
-        "CORRELATED SCALAR SUBQUERY 21",
-        "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
-        "CORRELATED SCALAR SUBQUERY 20",
-        "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=? AND observed_at_ms<?)",
         "CORRELATED SCALAR SUBQUERY 22",
         "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
-        "CORRELATED SCALAR SUBQUERY 24",
-        "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+        "CORRELATED SCALAR SUBQUERY 21",
+        "SEARCH f USING INDEX admission_evidence_claude_pass (account_fingerprint=? AND observed_at_ms<?)",
         "CORRELATED SCALAR SUBQUERY 23",
+        "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+        "CORRELATED SCALAR SUBQUERY 25",
+        "SEARCH e USING INDEX sqlite_autoindex_admission_evidence_1 (project_id=? AND record_id=?)",
+        "CORRELATED SCALAR SUBQUERY 24",
         "SEARCH f USING COVERING INDEX admission_evidence_account (provider=? AND source=? AND record_type=? AND account_fingerprint=? AND observed_at_ms>? AND observed_at_ms<?)",
+        "USE TEMP B-TREE FOR ORDER BY",
+        "SCAN (subquery-26)",
+        "SCAN c",
+        "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
         "SEARCH a USING INDEX sqlite_autoindex_owner_attestations_1 (project_id=? AND subject_record_id=?) LEFT-JOIN",
         "USE TEMP B-TREE FOR ORDER BY"
       ]
@@ -2167,6 +2215,5 @@
         "SEARCH a USING INDEX sqlite_autoindex_owner_attestations_1 (project_id=? AND subject_record_id=?) LEFT-JOIN"
       ]
     }
-  ],
-  "measurement_runs": "Original twelve families plus a focused Claude first-pass/latest-older 1k/100k measurement; same runtime implementation."
+  ]
 }

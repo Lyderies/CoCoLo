@@ -1,6 +1,6 @@
 # Unit 3.9 / U3 status
 
-Base `8b959668`, branch `feat/u3-sql-growth`, VERSION 0.8.63 plus accepted RS-B memory holds. Implementation and synthetic SQL-growth acceptance pass. Changes remain uncommitted as required in this sandbox. VERSION and the runtime digest catalogue are unchanged.
+Base `8b959668`, branch `feat/u3-sql-growth`, VERSION 0.8.63 plus accepted RS-B memory holds. Implementation and synthetic SQL-growth acceptance pass. First round committed as `ee27c775`; fix round below (merged 0.8.64 `30e0a8b7`). VERSION and the runtime digest catalogue are unchanged.
 
 ## Requirement → test → evidence
 
@@ -17,21 +17,21 @@ The following labels identify methods in `tests.test_read_growth.ReadGrowthTests
 | `test_U3_3_` digest/run lineage | 131 → 1,649 steps | 89 → 89 steps |
 | `test_U3_4_` recent account admissions | 311 → 5,137 steps | 83 → 83 steps |
 | `test_U3_5_` terminal identity conflicts | 1,844 → 36,044 steps | 60 → 60 steps |
-| `test_U3_6_` effective admission capture | 32 → 465 callbacks | 19 → 19 callbacks |
+| `test_U3_6_` effective admission capture | 32 → 465 callbacks | 21 → 21 callbacks (fix round; was 19) |
 | `test_U3_7_` attestations/signature capture | Already bounded by existing P9/AP work | 67 → 67 steps; 0 → 0 callbacks |
 | `test_U3_8_` registration cleanup receipts | 539 → 10,039 steps | 102 → 102 steps |
 | `test_U3_9_` candidate lineage | Large gate exposed 12,034 → 1,200,034 steps with the first candidate-index shape | 80 → 80 steps, hit and miss |
 | `test_U3_10_` original provenance with retained metadata | Regression guard for existing keyed/held-only reads; also exercises corrected run lookups | 1 → 0 callbacks |
 | `test_U3_11_` project registrations without leases, in prior orchestrations | Existing composite index retained | 29 → 29 steps |
 | `test_U3_12_` completed probe origins/requests | Existing keyed/partial indexes retained | 208 → 208 steps |
-| `test_U3_13_` Claude first pass and latest older readings for a fixed account | Additional guard for recursive account skips; anchor evidence remains present | 25 → 23 callbacks |
+| `test_U3_13_` Claude first pass and latest older readings for a fixed account | Additional guard for recursive account skips; anchor evidence remains present | 27 → 27 callbacks (fix round; was 25 → 23) |
 
 Additional checks:
 
 - `test_U3_additive_indexes_rebuild_on_reopen_without_changing_rows_or_version`: initially failed on missing indexes; now passes populated drop/reopen, exact records and unchanged `user_version`.
 - `ReadPlanTests.test_U3_6_every_budgeted_read_that_runs_uses_a_live_or_selective_index`: exposed the remaining broad original-open provenance predicates; passes with **44 distinct budgeted read plans**. Its lifecycle fixtures cover preflight, original open/run provenance, denial, probe/observation reservation, admission and signature capture. Terminal, registration, candidate and receipt plans are captured by the growth cases as well.
 - `ReadPlanTests.test_U3_guard_rejects_residual_scans_and_accepts_expression_seeks`: proves a coarse-index residual JSON scan fails even with `LIMIT 1`, while the expression seek passes. A plain indexed prefix count with an explicit cap is allowed because it cannot walk beyond that cap.
-- Standalone measurement: **13/13 read families pass**, 54.05 s total case time plus the small plan inventory. Largest observed production-budget read/action **3.63 ms**, largest actual scope **25 callbacks**, versus production limits of 1,000 ms and 100,000 callbacks. Callback granularity is 256 instructions; the work table uses exact VM steps for non-callback measurements. These are disposable synthetic, warm-store observations, not an installed-owner-ledger or cold-disk performance claim.
+- Standalone measurement: **13/13 read families pass**, 54.05 s total case time plus the small plan inventory. Largest observed production-budget read/action **1.60 ms** in the fix-round rerun (33.8 s wall; first round 3.63 ms), largest actual scope **27 callbacks**, versus production limits of 1,000 ms and 100,000 callbacks. Callback granularity is 256 instructions; the work table uses exact VM steps for non-callback measurements. These are disposable synthetic, warm-store observations, not an installed-owner-ledger or cold-disk performance claim.
 
 Reproduce the large measurement from the repository root with the prepared test interpreter as `$PY`:
 
@@ -39,6 +39,18 @@ Reproduce the large measurement from the repository root with the prepared test 
 $PY -B scripts/measure_u3_sql_growth.py --output docs/requirements/u3/measurement.json
 $PY -B scripts/parallel_tests.py --module codex:tests.test_read_growth --module codex:tests.test_read_plans
 ```
+
+## Fix round (after merging 0.8.64)
+
+- Merged `30e0a8b7` (0.8.64, version/0.4.0) with `--no-ff`: no conflicts; the four runner registries are valid JSON.
+- The primary's `--affected 8b959668` run found U3 breaking existing tests. Four were U3's (the two named, plus the two 0.3.3 C2 tests in the same module, which pass on untouched `30e0a8b7`). Decisions, each paired old -> new in [assertions.md](assertions.md):
+  - Verified denial settlement (`docs/service-api-development.md`, no registry ID): the legacy read now seeks the run identity (about 90 VM steps, under one 256-step callback), so history cannot exhaust any legal budget. The test still provokes a real exhaustion of the actual read by counting one callback per VM step for that read only (limits unchanged), checks the refusal is that read's `sql_read_work_limit`, rollback and `query_only`, then retries under the same smallest budget at normal granularity.
+  - 0.3.3 C2 (both tests): the claim now closes under the old 0.3.3 budget that used to refuse it (stronger C2 property).
+  - P9b-2: U3's first admission-union shape dropped P9b-2's per-branch `LIMIT` (every window row reached the final sort). SQL fixed: attestations keep their bounded `capture_candidates` branch; U3's indexed candidate seeks feed the second branch, scoped and bounded to the capture limit before the final sort and joins. The plan pin's index name changes from `records_type_project` to `records_type_observed`; no-records-scan and rows-before-sort assertions are unchanged. The `reading` CTE was renamed `older` so no plan line reads `SCAN r...`.
+- Named modules: `test_claim_denial_recovery` 18/18 (16.2 s), `test_p9b_attestation_followups` 15/15 (2.3 s).
+- `--affected 30e0a8b7` (jobs 8): no coverage map in this worktree, so it ran the full set: 482 units, 779 s, `metadata_errors: []`. Failed units: `test_runtime_release` (digest not bumped, expected) and eight units of `test_bridge`, `test_project_start`, `test_result_lifetime`, `test_run_holds`, `test_trial_run_driver_bugs`, every error being installed collector identity/integrity or `collector_code_stale` (the same unbumped digest). With the new digest recorded temporarily (then restored, not committed), those five modules plus `test_runtime_release` pass: 0 failed units, 71.8 s.
+- Standalone measurement rerun: 13/13 families and the 44-read plan inventory pass; `measurement.json` refreshed.
+- The primary still owns VERSION and the runtime digest refresh.
 
 ## Implementation and compatibility
 
