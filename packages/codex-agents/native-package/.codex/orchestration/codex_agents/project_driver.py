@@ -65,6 +65,7 @@ writer, and the service's authorizers read it back from the store; so a successo
 a result a stopped one left on disk, and this service may stop when idle. `run.recorded` is only a hint.
 """
 from concurrent.futures import ThreadPoolExecutor
+import contextlib
 from dataclasses import dataclass, field, replace
 import hashlib
 import json
@@ -417,6 +418,10 @@ class RunDriver:
             self._journal = LaunchJournal(Path(state.root) / 'projects' / scope.project_id / 'launches')
         except JournalError:
             raise HistoryError('history_service_unavailable') from None
+        # HM-2a: every preparation folder names this instance (whose lock it holds while it runs) as its owner.
+        # Without the marker a leftover folder is only reported, never removed, so a refusal here costs nothing.
+        with contextlib.suppress(PreparationError):
+            self._preparation.set_owner(Path(state.root), scope.project_id, self._journal.instance)
         from .memory_holds import DriverMemory
         self._memory = DriverMemory(self)
         self._memory_start = runtime.persistence.configure_memory(self._journal)

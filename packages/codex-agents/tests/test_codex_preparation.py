@@ -450,6 +450,26 @@ class CodexPreparationTests(unittest.TestCase):
         self.assertTrue(codex_preparation.remove_recorded_workspace(str(made)))
         self.assertFalse(made.exists())
 
+    @requirements('HM2A-1', why_not_scenario='Real preparation worker and folder; the marker is the HM-2a owner proof.')
+    def test_HM2A_1_a_preparation_folder_names_the_service_that_owns_it(self):
+        handle, prepared = self.prepare()
+        self.assertFalse((prepared.workspace/'cocolo-owner.json').exists())  # a lane told no owner writes none
+        self.discard(handle)
+        state_root, instance = self.fixture.state.root, 'f'*32
+        self.lane.set_owner(state_root, self.scope.project_id, instance)
+        with self.assertRaisesRegex(PreparationError, 'preparation_invalid_input'):
+            self.lane.set_owner(state_root, self.scope.project_id, 'not-an-instance')
+        handle, prepared = self.prepare()
+        marker = prepared.workspace/'cocolo-owner.json'
+        info = os.lstat(marker)
+        self.assertEqual((0o600, os.geteuid()), (info.st_mode & 0o777, info.st_uid))
+        self.assertEqual({'version': 1, 'kind': 'cocolo_preparation', 'state_root': os.path.realpath(state_root),
+                          'project_id': self.scope.project_id, 'instance': instance}, json.loads(marker.read_text()))
+        self.assertEqual(['control', 'export', 'tmp'], sorted(set(os.listdir(prepared.workspace)) - {marker.name}))
+        workspace = prepared.workspace
+        self.discard(handle)
+        self.assertFalse(workspace.exists())
+
     def test_a_failed_cleanup_is_asked_again_and_then_frees_its_slot(self):
         handle, prepared = self.prepare()
         with self.assertRaisesRegex(PreparationError, 'preparation_busy'):

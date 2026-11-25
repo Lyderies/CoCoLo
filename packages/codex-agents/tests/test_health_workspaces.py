@@ -11,10 +11,18 @@ Requirements (each maps to its tests in docs/requirements/s11-hm2a.md):
 - HM2A-8 Plain, closed, path-free owner wording.
 - HM2A-9 No ledger, history or preparation-state access by the module.
 
+Fix round (r1 review): a folder is removed only with positive proof that its owner is gone (an owner marker naming
+this state root and a launch-journal instance whose lock is free); removal goes through pinned directory
+descriptors; any truncation of the owner records removes nothing; work inside one folder is bounded and resumes; a
+rotating cursor reaches folders behind live ones; only FileNotFoundError proves a folder gone.
+
 The module is imported inside each test, so before the code exists every test fails by itself.
 """
 from __future__ import annotations
 
+import fcntl
+import inspect
+import itertools
 import json
 import os
 import re
@@ -33,7 +41,11 @@ from codex_agents import health_monitor as hm
 
 PROJECT = 'prj_' + 'a' * 32
 OTHER_PROJECT = 'prj_' + 'b' * 32
+# The project and launch-journal instance the fixture's folders name as their owner (a stopped one by default).
+OWNER_PROJECT = 'prj_' + 'c' * 32
+STOPPED_INSTANCE = 'd' * 32
 DAY_SECONDS = 86_400
+MARKER = 'cocolo-owner.json'
 
 
 def workspaces():
@@ -44,6 +56,45 @@ def workspaces():
 def context(now_ms=None, seconds=30.0):
     return hm.CheckContext(deadline=time.monotonic() + seconds,
                            now_ms=int(time.time() * 1000) if now_ms is None else now_ms, since_last_pass_ms=None)
+
+
+class CountedContext:
+    """A check context whose time share ends after `calls` looks at it (the check's own deadline checks)."""
+
+    def __init__(self, calls):
+        self.calls, self.now_ms, self.since_last_pass_ms = calls, int(time.time() * 1000), None
+        self.deadline = time.monotonic() + 30
+
+    def expired(self):
+        self.calls -= 1
+        return self.calls < 0
+
+
+def ordered_scandir(key):
+    """A scandir whose listings come back in `key` order (the real order is the file system's own)."""
+    real = os.scandir
+
+    class Listing:
+        def __init__(self, entries):
+            self.entries = entries
+
+        def __enter__(self):
+            return iter(self.entries)
+
+        def __exit__(self, *exc):
+            return False
+
+        def __iter__(self):
+            return iter(self.entries)
+
+        def close(self):
+            pass
+
+    def scandir(path='.'):
+        with real(path) as listing:
+            return Listing(sorted(listing, key=lambda entry: key(entry.name)))
+
+    return scandir
 
 
 class Case(unittest.TestCase):
@@ -65,8 +116,23 @@ class Case(unittest.TestCase):
         self.live: set | None = set()
         self.pending: set | None = set()
         self.removed: list = []
+        self.state = self.base / 'state'
 
-    def folder(self, name=None, *, age_days=2, contents=True) -> Path:
+    def owner_lock(self, instance=STOPPED_INSTANCE, project=OWNER_PROJECT) -> Path:
+        """The launch-journal instance lock a marker names (free: its service has stopped)."""
+        directory = self.state / 'projects' / project / 'launches'
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        lock = directory / (instance + '.lock')
+        if not lock.exists():
+            lock.touch(mode=0o600)
+        return lock
+
+    def marker(self, path, *, state_root=None, instance=STOPPED_INSTANCE, project=OWNER_PROJECT):
+        value = {'instance': instance, 'kind': 'cocolo_preparation', 'project_id': project,
+                 'state_root': os.path.realpath(self.state if state_root is None else state_root), 'version': 1}
+        (path / MARKER).write_text(json.dumps(value, sort_keys=True, separators=(',', ':')))
+
+    def folder(self, name=None, *, age_days=2, contents=True, marker=True) -> Path:
         path = self.container / (name or 'prepare-' + os.urandom(4).hex())
         path.mkdir(mode=0o700)
         if contents:
@@ -74,11 +140,16 @@ class Case(unittest.TestCase):
                 (path / child).mkdir(mode=0o700)
             (path / 'export' / 'file.txt').write_text('data')
         old = time.time() - age_days * DAY_SECONDS
+        if marker:
+            self.owner_lock()
+            self.marker(path)
+            os.utime(path / MARKER, (old, old))
         os.utime(path, (old, old))
         return path
 
     def check(self, **options):
-        defaults = {'container': self.container, 'live': lambda: self.live, 'pending': lambda: self.pending}
+        defaults = {'container': self.container, 'live': lambda: self.live, 'pending': lambda: self.pending,
+                    'state_root': self.state}
         return workspaces().WorkspaceCheck(**(defaults | options))
 
     def run_check(self, check=None, **context_options):
@@ -430,7 +501,7 @@ class RegistrationTests(Case):
         orphan = self.folder()
         monitor = hm.HealthMonitor.with_builtin_checks(sweep_interval_seconds=60.0)
         with mock.patch.object(hw.WorkspaceCheck, '_container_path', lambda check: self.container):
-            hw.register(monitor, self.base / 'state', pending=lambda: set())
+            hw.register(monitor, self.state, pending=lambda: set())
             monitor.run_pass()
         self.assertFalse(os.path.lexists(orphan))
         view = monitor.view(None)
@@ -438,6 +509,350 @@ class RegistrationTests(Case):
         self.assertEqual(['orphan_removed'], [item['reason_code'] for item in view['findings']])
         with self.assertRaises(ValueError):  # registered once
             hw.register(monitor, self.base / 'state', pending=lambda: set())
+
+
+class OwnerProofTests(Case):
+    """Fix round, review r1 HIGH 1: deleting a folder needs positive proof that its owner is gone."""
+
+    @requirements('HM2A-1')
+    def test_HM2A_1_a_folder_without_an_owner_marker_is_reported_and_never_removed(self):
+        unmarked = self.folder(marker=False)
+        found = self.run_check()
+        self.assertEqual(['owner_unknown'], self.reasons(found))
+        self.assertEqual(('reported', unmarked.name), (found[0].outcome, found[0].subject))
+        self.assertTrue((unmarked / 'export' / 'file.txt').is_file())
+
+    @requirements('HM2A-1')
+    def test_HM2A_1_a_marker_naming_another_state_root_is_reported_and_kept(self):
+        other = self.base / 'other-state'
+        other.mkdir(mode=0o700)
+        foreign = self.folder()
+        self.marker(foreign, state_root=other)  # another CoCoLo instance shares the per-user scratch container
+        old = time.time() - 2 * DAY_SECONDS
+        os.utime(foreign / MARKER, (old, old))
+        self.assertEqual(['owner_unknown'], self.reasons(self.run_check()))
+        self.assertTrue((foreign / 'export' / 'file.txt').is_file())
+
+    @requirements('HM2A-1')
+    def test_HM2A_1_a_marker_whose_instance_lock_is_missing_is_reported_and_kept(self):
+        unproven = self.folder()
+        self.marker(unproven, instance='e' * 32)  # no lock file: not proof that the instance stopped
+        old = time.time() - 2 * DAY_SECONDS
+        os.utime(unproven / MARKER, (old, old))
+        self.assertEqual(['owner_unknown'], self.reasons(self.run_check()))
+        self.assertTrue(unproven.is_dir())
+
+    @requirements('HM2A-1')
+    def test_HM2A_1_an_oversized_marker_is_not_owner_proof(self):
+        hw = workspaces()
+        padded = self.folder()
+        value = json.loads((padded / MARKER).read_text())
+        text = json.dumps(value) + ' ' * hw.MAX_MARKER_BYTES  # still valid JSON, but past the size a marker may have
+        (padded / MARKER).write_text(text)
+        old = time.time() - 2 * DAY_SECONDS
+        os.utime(padded / MARKER, (old, old))
+        self.assertEqual(['owner_unknown'], self.reasons(self.run_check()))
+        self.assertTrue(padded.is_dir())
+
+    @requirements('HM2A-1')
+    def test_HM2A_1_a_running_owner_keeps_its_folder_even_after_a_clock_jump(self):
+        live = self.folder()
+        descriptor = os.open(self.owner_lock(), os.O_RDWR)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)  # the owner's service is running
+            jumped = int(time.time() * 1000) + 30 * DAY_SECONDS * 1000
+            self.assertEqual([], self.run_check(now_ms=jumped))
+            self.assertTrue((live / 'export' / 'file.txt').is_file())
+        finally:
+            os.close(descriptor)
+        # Once that service is gone (its lock free), the same folder goes.
+        self.assertEqual(['orphan_removed'], self.reasons(self.run_check()))
+
+    @requirements('HM2A-1')
+    def test_HM2A_1_a_check_without_a_state_root_removes_nothing(self):
+        kept = self.folder()
+        self.assertEqual(['owner_unknown'], self.reasons(self.run_check(self.check(state_root=None))))
+        self.assertTrue(kept.is_dir())
+
+    @requirements('HM2A-1')
+    def test_HM2A_1_only_not_found_proves_a_folder_gone(self):
+        orphan = self.folder()
+
+        def lose_access(path):
+            os.chmod(self.container, 0o000)  # the folder is still there, it just cannot be looked at
+
+        self.addCleanup(os.chmod, self.container, 0o700)
+        found = self.run_check(self.check(remove=lose_access))
+        os.chmod(self.container, 0o700)
+        self.assertEqual(['orphan_removal_failed'], self.reasons(found))
+        self.assertTrue(orphan.is_dir())
+
+    @requirements('HM2A-1')
+    def test_HM2A_1_the_driver_names_its_journal_instance_as_its_preparations_owner(self):
+        from codex_agents import project_driver
+        source = inspect.getsource(project_driver.RunDriver.__init__)
+        journal = source.index('self._journal = LaunchJournal(')
+        named = source.index('self._preparation.set_owner(')
+        self.assertLess(journal, named)  # the instance exists (and its lock is held) before any folder is made
+        self.assertIn('self._journal.instance', source[named:named + 200])
+
+
+class PinnedRemovalTests(Case):
+    """Fix round, review r1 HIGH 2: removal goes through pinned, verified directory descriptors."""
+
+    def decoy(self, root, name):
+        """A folder shaped like a preparation folder, outside the container, with read-only parts."""
+        target = root / name
+        for child in ('export', 'control', 'tmp'):
+            (target / child).mkdir(mode=0o700, parents=True)
+        (target / 'export' / 'file.txt').write_text('precious')
+        for child in ('control', 'tmp'):
+            os.chmod(target / child, 0o500)
+        self.addCleanup(lambda: [os.chmod(target / c, 0o700) for c in ('control', 'tmp') if (target / c).is_dir()])
+        return target
+
+    def assertDecoyIntact(self, target):
+        self.assertEqual('precious', (target / 'export' / 'file.txt').read_text())
+        for child in ('control', 'tmp'):
+            self.assertEqual(0o500, os.lstat(target / child).st_mode & 0o777, child)
+
+    def swap_on_first_chmod(self, swap):
+        """Run `swap` once, at the remover's first change of a folder's mode (by path or by descriptor)."""
+        state = {'done': False}
+        real_chmod, real_fchmod = os.chmod, os.fchmod
+
+        def once():
+            if not state['done']:
+                state['done'] = True
+                swap()
+
+        def chmod(path, mode, *args, **options):
+            once()
+            return real_chmod(path, mode, *args, **options)
+
+        def fchmod(fd, mode):
+            once()
+            return real_fchmod(fd, mode)
+
+        return mock.patch.multiple(os, chmod=chmod, fchmod=fchmod), state
+
+    @requirements('HM2A-5')
+    def test_HM2A_5_a_container_swapped_for_a_link_mid_removal_never_reaches_the_link_target(self):
+        orphan = self.folder()
+        os.chmod(orphan / 'control', 0o500)  # read-only, so a remover must change its mode to empty it
+        decoys = self.base / 'decoys'
+        target = self.decoy(decoys, orphan.name)
+        moved = self.base / 'container-moved'
+        self.addCleanup(lambda: (moved / orphan.name / 'control').is_dir()
+                        and os.chmod(moved / orphan.name / 'control', 0o700))
+
+        def swap():
+            os.rename(self.container, moved)
+            os.symlink(decoys, self.container)
+
+        patch, state = self.swap_on_first_chmod(swap)
+        with patch:
+            found = self.run_check()
+        self.assertTrue(state['done'])
+        self.assertDecoyIntact(target)
+        self.assertFalse(os.path.lexists(moved / orphan.name))  # the real folder, where it now is, went
+        self.assertEqual(['orphan_removed'], self.reasons(found))
+
+    @requirements('HM2A-5')
+    def test_HM2A_5_a_subfolder_swapped_for_a_link_mid_removal_never_reaches_the_link_target(self):
+        orphan = self.folder()
+        decoys = self.base / 'decoys'
+        target = self.decoy(decoys, 'inner')
+        for child in ('a', 'b'):
+            (orphan / 'export' / child).mkdir(mode=0o700)
+        export = orphan / 'export'
+        state = {'done': False}
+        real_chmod, real_fchmod = os.chmod, os.fchmod
+        original = os.lstat(export)
+
+        def swap():
+            state['done'] = True
+            os.rename(export, orphan / 'export-away')
+            os.symlink(target / 'control', export)  # a read-only folder elsewhere
+
+        def chmod(path, mode, *args, **options):  # a remover that changes modes by path
+            if not state['done'] and str(path) == str(export):
+                swap()
+            return real_chmod(path, mode, *args, **options)
+
+        def fchmod(fd, mode):  # a remover that changes modes through descriptors
+            info = os.fstat(fd)
+            if not state['done'] and (info.st_dev, info.st_ino) == (original.st_dev, original.st_ino):
+                swap()
+            return real_fchmod(fd, mode)
+
+        os.chmod(export, 0o500)  # read-only, so a remover must change its mode to empty it
+        self.addCleanup(lambda: os.path.isdir(orphan / 'export-away') and os.chmod(orphan / 'export-away', 0o700))
+        with mock.patch.multiple(os, chmod=chmod, fchmod=fchmod):
+            self.run_check()
+        self.assertTrue(state['done'])
+        self.assertDecoyIntact(target)
+        for _ in range(3):  # what is left of the real folder goes at later passes
+            self.run_check()
+        self.assertDecoyIntact(target)
+        self.assertFalse(os.path.lexists(orphan))
+
+
+class FolderBoundTests(Case):
+    """Fix round, review r1 MED 4: work inside one folder is bounded by entries and time, and resumes."""
+
+    @requirements('HM2A-6')
+    def test_HM2A_6_removal_inside_one_folder_stops_at_its_entry_limit_and_resumes(self):
+        hw = workspaces()
+        orphan = self.folder()
+        for number in range(hw.MAX_REMOVAL_ENTRIES_PER_PASS + 10):
+            (orphan / 'export' / ('f%05d' % number)).touch()
+        check = self.check()
+        found = self.run_check(check)
+        self.assertEqual(['orphan_removal_continues'], self.reasons(found))
+        self.assertTrue((orphan / MARKER).is_file())  # the owner proof stays until the very end
+        self.assertEqual(['orphan_removed'], self.reasons(self.run_check(check)))
+        self.assertFalse(os.path.lexists(orphan))
+
+    @requirements('HM2A-6')
+    def test_HM2A_6_removal_inside_one_folder_stops_when_the_time_share_ends(self):
+        orphan = self.folder()
+        for number in range(50):
+            (orphan / 'export' / ('f%05d' % number)).touch()
+        found = workspaces().WorkspaceCheck(container=self.container, live=lambda: set(), pending=lambda: set(),
+                                            state_root=self.state).run(CountedContext(12))
+        self.assertEqual(['orphan_removal_continues'], self.reasons(found))
+        left = len(os.listdir(orphan / 'export'))
+        self.assertGreater(left, 30)  # it stopped at the deadline, not after the folder
+        time.sleep(0.05)
+        self.assertEqual(left, len(os.listdir(orphan / 'export')))  # and nothing goes on deleting after it returned
+        self.assertEqual(['orphan_removed'], self.reasons(self.run_check()))
+
+    @requirements('HM2A-6')
+    def test_HM2A_6_a_folder_deeper_than_the_remover_goes_is_reported_and_kept(self):
+        hw = workspaces()
+        orphan = self.folder()
+        deep = orphan / 'export'
+        for _ in range(hw.MAX_REMOVAL_DEPTH + 1):
+            deep = deep / 'd'
+        deep.mkdir(mode=0o700, parents=True)
+        found = self.run_check()
+        self.assertEqual(['orphan_removal_failed'], self.reasons(found))
+        self.assertTrue((orphan / MARKER).is_file())
+
+
+class TruncationTests(Case):
+    """Fix round, review r1 HIGH 3: any truncation of the owner records means nothing is removed that pass."""
+
+    @requirements('HM2A-7')
+    def test_HM2A_7_a_projects_folder_longer_than_the_reader_scans_is_incomplete(self):
+        hw = workspaces()
+        owned = self.folder()
+        from codex_agents.launch_journal import LaunchJournal
+        directory = self.state / 'projects' / PROJECT / 'launches'
+        directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        journal = LaunchJournal(directory)
+        self.addCleanup(journal.release)
+        journal.claimed('brg_' + '1' * 32, run_handle='hrn_' + 'a' * 48, attempt=1, host_client='codex-host-v1',
+                        lease={'project_id': PROJECT}, identity_digest='c' * 64, claim_request_id='claim-' + 'd' * 32,
+                        storage_evidence=b'{"evidence":1}', workspace=str(owned))
+        for number in range(hw.MAX_ENTRIES_SCANNED + 1):  # review probe 1: entries that are not projects
+            (self.state / 'projects' / ('x%05d' % number)).touch()
+        reader = hw.journal_live_workspaces(self.state)
+        with mock.patch.object(os, 'scandir', ordered_scandir(lambda name: (name.startswith('prj_'), name))):
+            self.assertIsNone(reader())
+            found = self.run_check(self.check(live=reader))
+        self.assertEqual(['records_unreadable'], self.reasons(found))
+        self.assertIn('incomplete', found[0].text)
+        self.assertTrue(owned.is_dir())
+
+    @requirements('HM2A-7')
+    def test_HM2A_7_repeated_paths_do_not_hide_a_live_tail(self):
+        hw = workspaces()
+        owned = self.folder()
+        # Review probe 2: the reader's first MAX_RECORD_PATHS + 1 items are one path repeated; the live folder follows.
+        tail = lambda: itertools.chain(itertools.repeat('/x/same', hw.MAX_RECORD_PATHS + 1), [str(owned)])
+        found = self.run_check(self.check(live=tail))
+        self.assertEqual([], found)
+        self.assertTrue(owned.is_dir())
+
+    @requirements('HM2A-7')
+    def test_HM2A_7_a_reader_handing_back_more_items_than_the_check_reads_is_incomplete(self):
+        hw = workspaces()
+        orphan = self.folder()
+        endless = lambda: itertools.repeat('/x/same', hw.MAX_RECORD_ITEMS + 1)
+        found = self.run_check(self.check(live=endless))
+        self.assertEqual(['records_unreadable'], self.reasons(found))
+        self.assertTrue(orphan.is_dir())
+        exactly = lambda: itertools.repeat('/x/same', hw.MAX_RECORD_ITEMS)
+        self.assertEqual(['orphan_removed'], self.reasons(self.run_check(self.check(live=exactly))))
+
+    @requirements('HM2A-7')
+    def test_HM2A_7_a_launches_folder_longer_than_the_reader_takes_is_incomplete(self):
+        hw = workspaces()
+        directory = self.state / 'projects' / PROJECT / 'launches'
+        directory.mkdir(mode=0o700, parents=True)
+        for number in range(hw.MAX_JOURNAL_NAMES):
+            (directory / ('%032x.lock' % number)).touch()  # names that are not entries count too
+        self.assertEqual(set(), hw.journal_live_workspaces(self.state)())
+        (directory / ('%032x.lock' % hw.MAX_JOURNAL_NAMES)).touch()
+        pulled = []
+        real = os.scandir
+
+        def counting(path='.'):
+            listing = real(path)
+            if str(path) != str(directory):
+                return listing
+
+            class Counted:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *exc):
+                    listing.close()
+
+                def __iter__(self):
+                    for entry in listing:
+                        pulled.append(entry.name)
+                        yield entry
+
+            return Counted()
+
+        with mock.patch.object(os, 'scandir', counting):
+            self.assertIsNone(hw.journal_live_workspaces(self.state)())
+        self.assertLessEqual(len(pulled), hw.MAX_JOURNAL_NAMES + 1)  # checked while iterating, not after
+
+
+class CursorTests(Case):
+    """Fix round, review r1 MED 5 and LOW 7: a rotating cursor reaches leftovers behind live or other entries."""
+
+    @requirements('HM2A-6')
+    def test_HM2A_6_leftovers_behind_live_folders_are_reached_by_later_passes(self):
+        hw = workspaces()
+        live = [self.folder('prepare-0%07x' % number, contents=False) for number in range(hw.MAX_FOLDERS_LISTED)]
+        self.live = {str(path) for path in live}
+        orphan = self.folder('prepare-ffffffff', contents=False)
+        check = self.check()
+        with mock.patch.object(os, 'scandir', ordered_scandir(lambda name: name)):
+            for _ in range(3):
+                self.run_check(check)
+        self.assertFalse(os.path.lexists(orphan))
+        self.assertTrue(all(path.is_dir() for path in live))
+
+    @requirements('HM2A-6')
+    def test_HM2A_6_more_entries_than_one_pass_scans_are_reached_by_later_passes(self):
+        hw = workspaces()
+        for number in range(hw.MAX_ENTRIES_SCANNED + 1):  # past the real 1,024 scan limit
+            (self.container / ('other-%05d' % number)).touch()
+        orphan = self.folder()
+        check = self.check()
+        with mock.patch.object(os, 'scandir', ordered_scandir(lambda name: (name.startswith('prepare-'), name))):
+            first = self.run_check(check)
+            self.assertTrue(orphan.is_dir())  # this pass read only the first MAX_ENTRIES_SCANNED entries
+            self.assertEqual(['too_many_folders'], self.reasons(first))
+            second = self.run_check(check)
+        self.assertFalse(os.path.lexists(orphan))
+        self.assertIn('orphan_removed', self.reasons(second))
 
 
 class OwnerThreadTests(unittest.TestCase):

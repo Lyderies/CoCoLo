@@ -3940,11 +3940,20 @@
  },
  "HM2A-1": {
   "checks": [
+   "codex:tests.test_codex_preparation.CodexPreparationTests.test_HM2A_1_a_preparation_folder_names_the_service_that_owns_it",
    "codex:tests.test_health_workspaces.OrphanTests.test_HM2A_1_a_removal_that_does_not_prove_the_folder_gone_is_reported_and_retried",
-   "codex:tests.test_health_workspaces.OrphanTests.test_HM2A_1_an_orphan_folder_is_removed_and_reported_fixed"
+   "codex:tests.test_health_workspaces.OrphanTests.test_HM2A_1_an_orphan_folder_is_removed_and_reported_fixed",
+   "codex:tests.test_health_workspaces.OwnerProofTests.test_HM2A_1_a_check_without_a_state_root_removes_nothing",
+   "codex:tests.test_health_workspaces.OwnerProofTests.test_HM2A_1_a_folder_without_an_owner_marker_is_reported_and_never_removed",
+   "codex:tests.test_health_workspaces.OwnerProofTests.test_HM2A_1_a_marker_naming_another_state_root_is_reported_and_kept",
+   "codex:tests.test_health_workspaces.OwnerProofTests.test_HM2A_1_a_marker_whose_instance_lock_is_missing_is_reported_and_kept",
+   "codex:tests.test_health_workspaces.OwnerProofTests.test_HM2A_1_a_running_owner_keeps_its_folder_even_after_a_clock_jump",
+   "codex:tests.test_health_workspaces.OwnerProofTests.test_HM2A_1_an_oversized_marker_is_not_owner_proof",
+   "codex:tests.test_health_workspaces.OwnerProofTests.test_HM2A_1_only_not_found_proves_a_folder_gone",
+   "codex:tests.test_health_workspaces.OwnerProofTests.test_HM2A_1_the_driver_names_its_journal_instance_as_its_preparations_owner"
   ],
   "source": "tests/requirements/s11.json#HM2A-1",
-  "statement": "A leftover prepare-* folder with no live owner and no pending record, old enough to be sure, is removed, proven by its observed absence, and reported fixed; a removal not proven is reported and retried."
+  "statement": "A leftover prepare-* folder is removed only with positive proof that its owner is gone: its owner marker (written when the folder was made) names this state root and a launch-journal instance whose lock is free, and no live or pending record names it; no marker, another state root, a missing lock or a held lock (even after a clock jump) is never a removal. Removal is proven only by FileNotFoundError and reported fixed; a removal not proven is reported and retried."
  },
  "HM2A-2": {
   "checks": [
@@ -3975,10 +3984,12 @@
   "checks": [
    "codex:tests.test_health_workspaces.PathSafetyTests.test_HM2A_5_a_container_that_is_a_link_is_reported_and_nothing_is_removed",
    "codex:tests.test_health_workspaces.PathSafetyTests.test_HM2A_5_names_outside_the_prepare_pattern_are_never_listed",
-   "codex:tests.test_health_workspaces.PathSafetyTests.test_HM2A_5_the_path_test_matches_remove_recorded_workspace_case_by_case"
+   "codex:tests.test_health_workspaces.PathSafetyTests.test_HM2A_5_the_path_test_matches_remove_recorded_workspace_case_by_case",
+   "codex:tests.test_health_workspaces.PinnedRemovalTests.test_HM2A_5_a_container_swapped_for_a_link_mid_removal_never_reaches_the_link_target",
+   "codex:tests.test_health_workspaces.PinnedRemovalTests.test_HM2A_5_a_subfolder_swapped_for_a_link_mid_removal_never_reaches_the_link_target"
   ],
   "source": "tests/requirements/s11.json#HM2A-5",
-  "statement": "Path safety equals remove_recorded_workspace: absolute, no .., prepare-* name, the real scratch container as parent, a real folder owned by this user; an unsafe container removes nothing."
+  "statement": "Path safety equals remove_recorded_workspace: absolute, no .., prepare-* name, the real scratch container as parent, a real folder owned by this user; an unsafe container removes nothing. Removal goes through pinned, fstat-verified directory descriptors, so swapping the container or a subfolder for a link mid-removal never reaches the link target."
  },
  "HM2A-6": {
   "checks": [
@@ -3987,20 +3998,29 @@
    "codex:tests.test_health_workspaces.BoundTests.test_HM2A_6_more_journal_entries_than_the_reader_takes_remove_nothing",
    "codex:tests.test_health_workspaces.BoundTests.test_HM2A_6_more_journal_projects_than_the_reader_takes_remove_nothing",
    "codex:tests.test_health_workspaces.BoundTests.test_HM2A_6_more_orphans_than_one_pass_removes_wait_and_all_go",
-   "codex:tests.test_health_workspaces.BoundTests.test_HM2A_6_removal_stops_when_the_time_share_ends"
+   "codex:tests.test_health_workspaces.BoundTests.test_HM2A_6_removal_stops_when_the_time_share_ends",
+   "codex:tests.test_health_workspaces.CursorTests.test_HM2A_6_leftovers_behind_live_folders_are_reached_by_later_passes",
+   "codex:tests.test_health_workspaces.CursorTests.test_HM2A_6_more_entries_than_one_pass_scans_are_reached_by_later_passes",
+   "codex:tests.test_health_workspaces.FolderBoundTests.test_HM2A_6_a_folder_deeper_than_the_remover_goes_is_reported_and_kept",
+   "codex:tests.test_health_workspaces.FolderBoundTests.test_HM2A_6_removal_inside_one_folder_stops_at_its_entry_limit_and_resumes",
+   "codex:tests.test_health_workspaces.FolderBoundTests.test_HM2A_6_removal_inside_one_folder_stops_when_the_time_share_ends"
   ],
   "source": "tests/requirements/s11.json#HM2A-6",
-  "statement": "Reads and work are bounded (folders read, removals per pass, time share, journal projects and entries, record paths); each limit is in lifetime_caps.json with a past-the-limit test."
+  "statement": "Reads and work are bounded (entries examined and folders listed per pass with a rotating cursor so nothing is starved, removals and removed entries per pass, removal depth, the time share checked before every removal step, journal projects, names and entries, record items and paths); a folder not finished keeps its marker and resumes at the next pass; each limit is in lifetime_caps.json with a past-the-limit test."
  },
  "HM2A-7": {
   "checks": [
    "codex:tests.test_health_workspaces.FailSafeTests.test_HM2A_7_a_check_without_its_readers_does_nothing",
    "codex:tests.test_health_workspaces.FailSafeTests.test_HM2A_7_a_reader_that_raises_is_reported_by_type_only",
    "codex:tests.test_health_workspaces.FailSafeTests.test_HM2A_7_unreadable_live_records_remove_nothing_and_are_reported",
-   "codex:tests.test_health_workspaces.FailSafeTests.test_HM2A_7_unreadable_pending_records_remove_nothing_and_are_reported"
+   "codex:tests.test_health_workspaces.FailSafeTests.test_HM2A_7_unreadable_pending_records_remove_nothing_and_are_reported",
+   "codex:tests.test_health_workspaces.TruncationTests.test_HM2A_7_a_launches_folder_longer_than_the_reader_takes_is_incomplete",
+   "codex:tests.test_health_workspaces.TruncationTests.test_HM2A_7_a_projects_folder_longer_than_the_reader_scans_is_incomplete",
+   "codex:tests.test_health_workspaces.TruncationTests.test_HM2A_7_a_reader_handing_back_more_items_than_the_check_reads_is_incomplete",
+   "codex:tests.test_health_workspaces.TruncationTests.test_HM2A_7_repeated_paths_do_not_hide_a_live_tail"
   ],
   "source": "tests/requirements/s11.json#HM2A-7",
-  "statement": "Records that cannot be read completely mean nothing is removed and one finding says so; a check without both readers does nothing."
+  "statement": "Records that cannot be read completely (an error or any truncation: listing, entry, item or distinct-path limits, counted while reading and after deduplication) mean nothing is removed and one finding says the records are incomplete; a check without both readers does nothing."
  },
  "HM2A-8": {
   "checks": [
