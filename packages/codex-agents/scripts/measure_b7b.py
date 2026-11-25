@@ -2,11 +2,16 @@
 """B7b measurements of actual store operations. No persistence at import time.
 
 Run through tests.test_b7b_budgets in the named test runner. Unimplemented
-scheduler/service measurements remain unmeasured, even when a store proxy is fast.
+scheduler measurements remain unmeasured. Service startup uses real listeners
+when Unix socket binding is permitted; store proxies never establish that budget.
 """
 import contextlib
 import json
 import statistics
+import socket
+import sqlite3
+import tempfile
+from pathlib import Path
 import time
 from unittest import mock
 
@@ -15,6 +20,89 @@ def elapsed(call):
     start = time.perf_counter_ns()
     value = call()
     return (time.perf_counter_ns() - start) / 1_000_000, value
+
+
+def median_elapsed(call):
+    """One unrecorded warm-up, then three actual operation timings."""
+    call()
+    samples = [elapsed(call)[0] for _ in range(3)]
+    return statistics.median(samples), samples
+
+
+def socket_unavailable_reason():
+    from tests.support import SHORT_TMP
+    with tempfile.TemporaryDirectory(dir=SHORT_TMP) as directory:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                listener.bind(str(Path(directory) / 'b.sock'))
+        except OSError as error:
+            return f'Unix socket bind unavailable: {type(error).__name__} (errno={error.errno}).'
+    return None
+
+
+@contextlib.contextmanager
+def service_startup_timer(test):
+    """Real service readiness: writer bootstrap, driver, listeners, published hint.
+
+    The same product host configuration is used for empty and populated stores.
+    The real RunDriver is constructed; no run or provider call is submitted.
+    """
+    from tests.support import SHORT_TMP, BUNDLE_ROOT
+    from tests.test_project_results import KEY
+    from tests.test_project_runtime import limits
+    from codex_agents.collector_paths import CollectorPaths
+    from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST
+    from codex_agents.orchestration_api import OrchestrationScope
+    from codex_agents.service_host import ProjectServiceHost, ServiceHostLimits
+    with tempfile.TemporaryDirectory(dir=SHORT_TMP) as directory:
+        root = Path(directory)
+        state, project = root / 's', root / 'p'
+        state.mkdir(mode=0o700)
+        project.mkdir(mode=0o700)
+        (state / 'digest.key').write_bytes(KEY)
+        (state / 'digest.key').chmod(0o600)
+        (state / 'projects').mkdir(mode=0o700)
+        (state / 'projects' / test.store.project_id).mkdir(mode=0o700)
+        paths = CollectorPaths(state)
+        scope = OrchestrationScope(test.store.project_id, 'primary', COLLECTOR_RUNTIME_DIGEST, 'supervisor', 1)
+        def sample():
+            # The host's writer opens/closes its own connection on its own thread.
+            # Close the setup writer before timing; reopen it only after shutdown.
+            test.store.close()
+            host = None
+            try:
+                ms, host = elapsed(lambda: ProjectServiceHost(paths, project, scope,
+                    test.fixture.open, limits(), ServiceHostLimits(4, 500_000_000, 16,
+                        30_000_000_000, 30_000, 64), bundle_root=BUNDLE_ROOT))
+                return ms
+            finally:
+                if host is not None:
+                    host.close()
+                    deadline = time.monotonic() + 6
+                    while not host.threads_stopped():
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError('measurement service threads did not stop')
+                        time.sleep(.002)
+                    host.settle_lost_runs_later()  # Release this idle driver's journal lock.
+                test.fixture.store = test.fixture.open()
+        yield sample
+
+
+def startup_samples(sample):
+    sample()  # Warm up a complete real startup, excluding shutdown from timing.
+    return [sample() for _ in range(3)]
+
+
+def record_startup(result, empty, populated, limit, unavailable):
+    result['service_startup_status'] = 'unmeasured'
+    if unavailable:
+        result['service_startup_unmeasured_reason'] = unavailable
+        return
+    overhead = statistics.median(populated) - statistics.median(empty)
+    result['numbers'].update(empty_service_startup_ms=empty,
+        populated_service_startup_ms=populated, service_start_overhead_ms=overhead,
+        service_start_overhead_limit_ms=limit)
+    result['service_startup_status'] = 'met' if overhead <= limit else 'failed'
 
 
 def work(db, call):
@@ -78,6 +166,9 @@ def recovery_work(count):
         db = test.store._connection
         db.execute("UPDATE project_holds SET lease_case='closing_denied' WHERE kind='lease'")
         b6.valid_neighbours(test.store, empty, count)
+        from codex_agents.recovery_report import RecoveryNotes, RECOVERY_REASONS
+        test.store._recovery_notes = RecoveryNotes()
+        test.store._recovery_notes.publish(dict.fromkeys(RECOVERY_REASONS, 0))
         statements = []
         db.set_trace_callback(statements.append)
         try:
@@ -102,6 +193,7 @@ def measure():
     from codex_agents.project_holds_report import _holds
     from codex_agents.history_contracts import HistoryError
     result = {}
+    unavailable = socket_unavailable_reason()
     with fixture() as test:
         costs = []
         # Measure the register calls actually made by reserve/arm/bind/commit. This
@@ -121,7 +213,11 @@ def measure():
             'unmeasured_reason': 'Memory hold lifecycle is untracked; full normal-run writer delta including release/commit is not measured.',
             'scope': 'Actual reserve/arm/bind/commit register calls; excludes release tail and transaction commit cost. Full normal-run writer delta is not established.'}
     with fixture() as test:
-        baseline = [elapsed(lambda: test.base.reopen(result_capacity=test.fixture.capacity))[0] for _ in range(3)]
+        _, baseline = median_elapsed(lambda: test.base.reopen(result_capacity=test.fixture.capacity))
+        empty_service = populated_service = None
+        if unavailable is None:
+            with service_startup_timer(test) as sample:
+                empty_service = startup_samples(sample)
         # Setup only: all 1,064 ordinary lease writes still run; avoid quadratic
         # repeated capacity verification while constructing this below-cap fixture.
         # Run the unmodified verifier once, and reopen/validate before measuring.
@@ -129,24 +225,44 @@ def measure():
             for number in range(1, 1065):
                 test.store.reserve_result_lease(leases.lease_binding(number), assignment())
         test.store._check_result_capacity()
-        populated = [elapsed(lambda: test.base.reopen(result_capacity=test.fixture.capacity))[0] for _ in range(3)]
+        _, populated = median_elapsed(lambda: test.base.reopen(result_capacity=test.fixture.capacity))
+        if unavailable is None:
+            with service_startup_timer(test) as sample:
+                populated_service = startup_samples(sample)
         overhead = statistics.median(populated) - statistics.median(baseline)
         result['B2'] = {'status': 'unmeasured', 'numbers': {'empty_open_ms': baseline, 'held_1064_open_ms': populated,
                          'store_overhead_ms': overhead, 'limit_ms': 100},
-            'unmeasured_reason': 'Only store open is measured; complete service startup requires socket privileges.',
-            'scope': 'Real store reopen with 1,064 held leases, including validators; whole service startup needs sockets and is unmeasured.'}
+            'scope': 'Real store reopen proxy; when binding works, complete ProjectServiceHost startup with writer bootstrap, driver, listeners and published hint at empty/1,064 held leases.'}
+        record_startup(result['B2'], empty_service, populated_service, 100, unavailable)
+        result['B2']['status'] = result['B2']['service_startup_status']
+        if unavailable:
+            result['B2']['unmeasured_reason'] = unavailable
         blocked = frozenset((leases.lease_binding(n).run_handle, 1) for n in range(1, 65))
-        batches, total, times = 0, 0, []
-        while total < 1000 and batches < 19:
-            ms, released = elapsed(lambda: test.store.release_earlier_unarmed_leases(blocked, limit=64))
-            batches += 1
-            total += released
-            times.append(ms)
-            if not released:
-                break
+        # Lease-only drain has no files: restore an identical SQLite snapshot
+        # outside timing so every trial includes real durable release commits.
+        db = test.store._connection
+        with contextlib.closing(sqlite3.connect(':memory:')) as snapshot:
+            db.backup(snapshot)
+            trials = []
+            for trial in range(4):
+                snapshot.backup(db)
+                batches, total, times = 0, 0, []
+                while total < 1000 and batches < 19:
+                    ms, released = elapsed(lambda: test.store.release_earlier_unarmed_leases(blocked, limit=64))
+                    batches += 1
+                    total += released
+                    times.append(ms)
+                    if not released:
+                        break
+                trials.append((total, batches, times))
+        if any((row[0], row[1]) != (total, batches) for row in trials):
+            raise RuntimeError('B3/B5 repeated drain changed released counts')
+        samples = list(map(list, zip(*(row[2] for row in trials[1:]))))
+        times = [statistics.median(values) for values in samples]
         result['B3'] = {'status': 'met' if max(times) < 50 else 'failed',
-            'numbers': {'batch_ms': times, 'maximum_ms': max(times), 'limit_ms': 50},
-            'scope': 'Real release_earlier_unarmed_leases(limit=64); individual durable source/register transactions included.'}
+            'numbers': {'batch_ms': times, 'batch_samples_ms': samples, 'warmup_runs': 1,
+                       'maximum_ms': max(times), 'limit_ms': 50},
+            'scope': 'Real release_earlier_unarmed_leases(limit=64), durable transactions included; maximum per-batch median of three identical drain passes after one warm-up pass.'}
         result['B5'] = {'status': 'met' if total == 1000 and batches <= 18 else 'failed',
             'numbers': {'eligible': 1000, 'blocked': 64, 'released': total, 'batches': batches, 'limit_batches': 18},
             'scope': 'Real unarmed-lease start pass; 1,000 eligible leases behind 64 live leases. Does not establish memory-kind drain.'}
@@ -184,15 +300,35 @@ def measure():
                 except HistoryError:
                     pass
             lookup_steps, _ = work(db, lookup)
-            lookup_ms, _ = elapsed(lookup)
-            test.now = 121000
-            retirement_steps, (retirement_ms, retired) = work(
-                db, lambda: elapsed(lambda: test.store.expire_results(limit=10)))
+            lookup_ms, lookup_samples = median_elapsed(lookup)
+            retirement_samples, retirement_counts, retirement_work = [], [], []
+            for trial in range(4):
+                if trial:
+                    test.now = 1000 + 120001 * trial
+                    from tests import test_record_context as rc
+                    for n in range(10 * trial + 1, 10 * trial + 11):
+                        test.store.reserve_result_lease(leases.lease_binding(n), assignment(),
+                            record_context=rc.simple_context(n))
+                        test.store.arm_result_lease(leases.lease_binding(n))
+                        test.base.bind(n, hard_deadline_at_ms=test.now + 1000)
+                        test.publish(n)
+                test.now = 121000 + 120001 * trial
+                steps, (ms, retired) = work(db, lambda: elapsed(lambda: test.store.expire_results(limit=10)))
+                retirement_counts.append(retired)
+                retirement_work.append(steps)
+                if trial:
+                    retirement_samples.append(ms)
+            if retirement_counts != [10] * 4:
+                raise RuntimeError('retirement trial did not retire ten real results')
+            retirement_steps = retirement_work[1]
+            retirement_ms = statistics.median(retirement_samples)
             plans = [tuple(row) for row in db.execute('EXPLAIN QUERY PLAN SELECT * FROM project_result_contexts '
                 "INDEXED BY project_result_contexts_live WHERE state NOT IN ('ended','expired')")]
             comparisons.append({'tombstones': count, 'holds_vm_steps': hold_steps, 'context_sweep_vm_steps': sweep_steps,
                 'reconcile_vm_steps': reconcile_steps, 'lookup_vm_steps': lookup_steps, 'lookup_ms': lookup_ms,
-                'retirement_ms': retirement_ms, 'retirement_vm_steps': retirement_steps,
+                'retirement_ms': retirement_ms, 'retirement_samples_ms': retirement_samples,
+                'lookup_samples_ms': lookup_samples, 'warmup_runs': 1,
+                'retirement_vm_steps': retirement_steps, 'retirement_vm_steps_samples': retirement_work[1:],
                 'retired': retired, 'live_index_plan': plans})
         comparisons[-1].update(recovery_work(count))
     equal = all(abs(comparisons[0][key] - comparisons[1][key]) <= 16 for key in
@@ -201,17 +337,25 @@ def measure():
     result['B4'] = {'status': 'met' if equal else 'failed', 'numbers': {'comparisons': comparisons},
         'scope': 'Actual hold report, context candidate sweep, reconciliation, absent outcome lookup and recovery_pending/has_holds at 0/100,000 custody/context and valid sealed released lease/reservation tombstones. VM work must differ by at most 16 instructions.'}
     with fixture() as test:
-        empty = elapsed(lambda: test.base.reopen(result_capacity=test.fixture.capacity))[0]
+        empty, _ = median_elapsed(lambda: test.base.reopen(result_capacity=test.fixture.capacity))
+        empty_service = populated_service = None
+        if unavailable is None:
+            with service_startup_timer(test) as sample:
+                empty_service = startup_samples(sample)
         from tests import test_record_context as rc
         for n in range(1, 65):
             test.store.reserve_result_lease(leases.lease_binding(n), assignment(), record_context=rc.simple_context(n))
-        live_open = elapsed(lambda: test.base.reopen(result_capacity=test.fixture.capacity))[0]
+        live_open, _ = median_elapsed(lambda: test.base.reopen(result_capacity=test.fixture.capacity))
+        if unavailable is None:
+            with service_startup_timer(test) as sample:
+                populated_service = startup_samples(sample)
     result['S3'] = {'status': 'met' if all(row['retirement_ms'] < 50 and row['lookup_ms'] < 5 for row in comparisons) else 'failed',
                    'service_startup_status': 'unmeasured', 'numbers': {'comparisons': comparisons,
                      'empty_store_open_ms': empty, 'live_64_store_open_ms': live_open,
                      'store_start_overhead_ms': live_open - empty, 'retirement_limit_ms': 50, 'lookup_limit_ms': 5,
                      'service_start_overhead_limit_ms': 200},
-        'scope': 'Real retirement of ten committed bodies/contexts (VM counting enabled, so time includes tracing overhead), absent outcome lookup and context reconciliation at 0/100,000 tombstones; store startup with 64 context files. Successful authenticated lookup is measured separately by measure_lookup; full service startup remains unmeasured.'}
+        'scope': 'Real retirement of ten committed bodies/contexts (VM counting enabled, so time includes tracing overhead), absent outcome lookup and context reconciliation at 0/100,000 tombstones; store startup with 64 context files. Median of three after one warm-up. Successful authenticated lookup is measured separately; full ProjectServiceHost startup is measured when sockets bind.'}
+    record_startup(result['S3'], empty_service, populated_service, 200, unavailable)
     return result
 
 
@@ -229,8 +373,8 @@ def measure_lookup():
             tombstones(db, test.store.project_id, count)
             call = lambda: test.store.stored_worker_context(test.digest, host_class=CODEX_HOST_CLIENT)
             steps, context = work(db, call)
-            times = [elapsed(call)[0] for _ in range(5)]
-            values.append({'tombstones': count, 'lookup_ms': max(times), 'lookup_samples_ms': times,
+            median, times = median_elapsed(call)
+            values.append({'tombstones': count, 'lookup_ms': median, 'lookup_samples_ms': times, 'warmup_runs': 1,
                            'lookup_vm_steps': steps, 'limit_ms': 5})
         finally:
             test.doCleanups()

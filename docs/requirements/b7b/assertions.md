@@ -1,3 +1,31 @@
+# Final targeted round: assertion replacements
+
+- Budget test: binding must raise PermissionError -> try/except OSError probe;
+  available sockets require real B2/S3 startup deltas <=100/200 ms and met statuses;
+  unavailable sockets require unmeasured status/reason and skip only that subtest.
+  B1/B6 remain unmeasured with reasons. Store proxies never establish startup limits.
+- B3 maximum cold batch, retirement single cold run, lookup single/max-of-five ->
+  maximum per-batch median-of-three (B3), median-of-three retirement/lookup after
+  one warm-up, with raw samples and warm-up count asserted. Limits stay <50/<5 ms;
+  all seven VM comparisons remain <=16 instructions (primary invariant), now
+  also checked for every corresponding retirement trial.
+- Identity test: AssertionError on colon -> ValueError on colon (survives -O);
+  valid constructor and real lease grammar rejection assertions retained.
+- Recovery report/terminal/restart/other-project: stale numeric counts -> five null
+  counts plus stale=true; CLI retains the exact stale notice. Fresh counts remain
+  numeric. Held-reservation test first requires stale nulls, then publishes a fresh
+  observation and still requires the real needs_settlement count of one.
+- Validator: unconditional null rejection -> allow null only with stale=true;
+  reject null on fresh, retain all negative/bool/string, closed-key and stale-type
+  assertions. Strict age boundary also checks numeric->null transition after expiry.
+
+- Added a startup lifecycle check with only listener binding stubbed: two real host
+  startups must construct the writer and RunDriver, preserve the held lease,
+  stop all threads, withdraw the hint and release locks. This is functional
+  sandbox coverage only and supplies no service timing evidence.
+
+The prior-round replacement history follows unchanged below (superseded above).
+
 # Assertion replacements
 
 ## READY-WITH-CORRECTIONS round (base 37ebd229)

@@ -1,43 +1,9 @@
 {
-  "correction_round_red": {
-    "base": "37ebd229",
-    "budget_tests": {
-      "failures": 1,
-      "reason": "B4 status failed now fails the test",
-      "seconds": 27.666,
-      "tests": 2
-    },
-    "comparisons": [
-      {
-        "has_holds_vm_steps": 252,
-        "holds_vm_steps": 1722,
-        "recovery_pending_vm_steps": 354,
-        "tombstones": 0
-      },
-      {
-        "has_holds_vm_steps": 1000250,
-        "holds_vm_steps": 9001722,
-        "recovery_pending_vm_steps": 3900352,
-        "tombstones": 100000
-      }
-    ],
-    "recovery_red": {
-      "errors": 1,
-      "failures": 3,
-      "reason": "Colon-free invariant missing; finally reset missing for instances/publish; stale notice absent",
-      "seconds": 0.091,
-      "tests": 13
-    },
-    "terminal_red": {
-      "reason": "KeyError: recovery_pending_notice"
-    },
-    "unchanged_behavior": "Runtime mismatch and simultaneous refusal/transport classification passed before production edits to those paths."
-  },
   "measurements": {
     "B1": {
       "numbers": {
         "calls": 5,
-        "partial_register_ms": 0.17508400000000002
+        "partial_register_ms": 0.195542
       },
       "scope": "Actual reserve/arm/bind/commit register calls; excludes release tail and transaction commit cost. Full normal-run writer delta is not established.",
       "status": "unmeasured",
@@ -46,46 +12,131 @@
     "B2": {
       "numbers": {
         "empty_open_ms": [
-          2.05525,
-          2.208917,
-          2.229875
+          2.51125,
+          2.294,
+          2.2855
         ],
         "held_1064_open_ms": [
-          5.584459,
-          3.733166,
-          3.929
+          4.33475,
+          4.225584,
+          4.152208
         ],
         "limit_ms": 100,
-        "store_overhead_ms": 1.7200829999999998
+        "store_overhead_ms": 1.9315839999999995
       },
-      "scope": "Real store reopen with 1,064 held leases, including validators; whole service startup needs sockets and is unmeasured.",
+      "scope": "Real store reopen proxy; when binding works, complete ProjectServiceHost startup with writer bootstrap, driver, listeners and published hint at empty/1,064 held leases.",
+      "service_startup_status": "unmeasured",
+      "service_startup_unmeasured_reason": "Unix socket bind unavailable: PermissionError (errno=1).",
       "status": "unmeasured",
-      "unmeasured_reason": "Only store open is measured; complete service startup requires socket privileges."
+      "unmeasured_reason": "Unix socket bind unavailable: PermissionError (errno=1)."
     },
     "B3": {
       "numbers": {
         "batch_ms": [
-          16.610625,
-          15.881041,
-          13.471583,
-          11.928334,
-          13.1875,
-          12.271834,
-          13.062167,
-          11.857375,
-          13.592875,
-          13.097291,
-          13.365833,
-          13.347584,
-          13.336833,
-          13.682334,
-          13.22875,
-          7.490792
+          16.765292,
+          13.335084,
+          13.735959,
+          13.363583,
+          13.750875,
+          13.689042,
+          13.826916,
+          12.661208,
+          14.114416,
+          12.736542,
+          13.700709,
+          13.250792,
+          13.752458,
+          12.937708,
+          13.516667,
+          8.533458
+        ],
+        "batch_samples_ms": [
+          [
+            15.655916,
+            16.765292,
+            16.965375
+          ],
+          [
+            12.431541,
+            13.335084,
+            13.843875
+          ],
+          [
+            13.602541,
+            13.735959,
+            14.406833
+          ],
+          [
+            12.819167,
+            13.363583,
+            13.776917
+          ],
+          [
+            13.228792,
+            14.285667,
+            13.750875
+          ],
+          [
+            12.868042,
+            14.199375,
+            13.689042
+          ],
+          [
+            12.8265,
+            14.058958,
+            13.826916
+          ],
+          [
+            12.124625,
+            12.661208,
+            14.213834
+          ],
+          [
+            13.121042,
+            14.114416,
+            16.77125
+          ],
+          [
+            12.452875,
+            12.7915,
+            12.736542
+          ],
+          [
+            14.071417,
+            13.700709,
+            13.58425
+          ],
+          [
+            12.292208,
+            13.480166,
+            13.250792
+          ],
+          [
+            13.203625,
+            13.752458,
+            14.69125
+          ],
+          [
+            12.638625,
+            12.937708,
+            13.633167
+          ],
+          [
+            13.516667,
+            13.191292,
+            15.03475
+          ],
+          [
+            8.533458,
+            7.707167,
+            8.641458
+          ]
         ],
         "limit_ms": 50,
-        "maximum_ms": 16.610625
+        "maximum_ms": 16.765292,
+        "warmup_runs": 1
       },
-      "scope": "Real release_earlier_unarmed_leases(limit=64); individual durable source/register transactions included.",
+      "scope": "Real release_earlier_unarmed_leases(limit=64), durable transactions included; maximum per-batch median of three identical drain passes after one warm-up pass.",
       "status": "met"
     },
     "B4": {
@@ -104,7 +155,12 @@
                 "SCAN project_result_contexts USING INDEX project_result_contexts_live"
               ]
             ],
-            "lookup_ms": 0.009166,
+            "lookup_ms": 0.002959,
+            "lookup_samples_ms": [
+              0.003708,
+              0.002959,
+              0.002708
+            ],
             "lookup_vm_steps": 15,
             "pending_settlement": 1,
             "reconcile_vm_steps": 157,
@@ -112,9 +168,20 @@
             "released_leases": 0,
             "released_reservations": 0,
             "retired": 10,
-            "retirement_ms": 45.985625,
-            "retirement_vm_steps": 10512,
-            "tombstones": 0
+            "retirement_ms": 6.869167,
+            "retirement_samples_ms": [
+              6.863417,
+              6.869167,
+              9.804834
+            ],
+            "retirement_vm_steps": 10716,
+            "retirement_vm_steps_samples": [
+              10716,
+              11027,
+              11347
+            ],
+            "tombstones": 0,
+            "warmup_runs": 1
           },
           {
             "context_sweep_vm_steps": 223,
@@ -129,7 +196,12 @@
                 "SCAN project_result_contexts USING INDEX project_result_contexts_live"
               ]
             ],
-            "lookup_ms": 0.004291,
+            "lookup_ms": 0.003042,
+            "lookup_samples_ms": [
+              0.003833,
+              0.003042,
+              0.002833
+            ],
             "lookup_vm_steps": 15,
             "pending_settlement": 1,
             "reconcile_vm_steps": 157,
@@ -137,9 +209,20 @@
             "released_leases": 100000,
             "released_reservations": 100000,
             "retired": 10,
-            "retirement_ms": 7.972916,
-            "retirement_vm_steps": 10512,
-            "tombstones": 100000
+            "retirement_ms": 7.217458,
+            "retirement_samples_ms": [
+              7.217458,
+              7.505625,
+              7.205334
+            ],
+            "retirement_vm_steps": 10716,
+            "retirement_vm_steps_samples": [
+              10716,
+              11027,
+              11347
+            ],
+            "tombstones": 100000,
+            "warmup_runs": 1
           }
         ]
       },
@@ -164,7 +247,7 @@
         "limit_batches": 4,
         "released": 1,
         "store_batches": 1,
-        "store_pass_ms": 0.384458
+        "store_pass_ms": 0.4645
       },
       "scope": "Real lease pass releases target behind 128 live rows plus 50 arrivals. Generic re-due/backoff register scheduler and memory holds do not exist; required recurring-arrival scenario is not established.",
       "status": "unmeasured",
@@ -186,7 +269,12 @@
                 "SCAN project_result_contexts USING INDEX project_result_contexts_live"
               ]
             ],
-            "lookup_ms": 0.009166,
+            "lookup_ms": 0.002959,
+            "lookup_samples_ms": [
+              0.003708,
+              0.002959,
+              0.002708
+            ],
             "lookup_vm_steps": 15,
             "pending_settlement": 1,
             "reconcile_vm_steps": 157,
@@ -194,9 +282,20 @@
             "released_leases": 0,
             "released_reservations": 0,
             "retired": 10,
-            "retirement_ms": 45.985625,
-            "retirement_vm_steps": 10512,
-            "tombstones": 0
+            "retirement_ms": 6.869167,
+            "retirement_samples_ms": [
+              6.863417,
+              6.869167,
+              9.804834
+            ],
+            "retirement_vm_steps": 10716,
+            "retirement_vm_steps_samples": [
+              10716,
+              11027,
+              11347
+            ],
+            "tombstones": 0,
+            "warmup_runs": 1
           },
           {
             "context_sweep_vm_steps": 223,
@@ -211,7 +310,12 @@
                 "SCAN project_result_contexts USING INDEX project_result_contexts_live"
               ]
             ],
-            "lookup_ms": 0.004291,
+            "lookup_ms": 0.003042,
+            "lookup_samples_ms": [
+              0.003833,
+              0.003042,
+              0.002833
+            ],
             "lookup_vm_steps": 15,
             "pending_settlement": 1,
             "reconcile_vm_steps": 157,
@@ -219,57 +323,199 @@
             "released_leases": 100000,
             "released_reservations": 100000,
             "retired": 10,
-            "retirement_ms": 7.972916,
-            "retirement_vm_steps": 10512,
-            "tombstones": 100000
+            "retirement_ms": 7.217458,
+            "retirement_samples_ms": [
+              7.217458,
+              7.505625,
+              7.205334
+            ],
+            "retirement_vm_steps": 10716,
+            "retirement_vm_steps_samples": [
+              10716,
+              11027,
+              11347
+            ],
+            "tombstones": 100000,
+            "warmup_runs": 1
           }
         ],
-        "empty_store_open_ms": 2.239584,
-        "live_64_store_open_ms": 3.895667,
+        "empty_store_open_ms": 2.17775,
+        "live_64_store_open_ms": 2.850375,
         "lookup_limit_ms": 5,
         "retirement_limit_ms": 50,
         "service_start_overhead_limit_ms": 200,
-        "store_start_overhead_ms": 1.6560830000000002
+        "store_start_overhead_ms": 0.672625
       },
-      "scope": "Real retirement of ten committed bodies/contexts (VM counting enabled, so time includes tracing overhead), absent outcome lookup and context reconciliation at 0/100,000 tombstones; store startup with 64 context files. Successful authenticated lookup is measured separately by measure_lookup; full service startup remains unmeasured.",
+      "scope": "Real retirement of ten committed bodies/contexts (VM counting enabled, so time includes tracing overhead), absent outcome lookup and context reconciliation at 0/100,000 tombstones; store startup with 64 context files. Median of three after one warm-up. Successful authenticated lookup is measured separately; full ProjectServiceHost startup is measured when sockets bind.",
       "service_startup_status": "unmeasured",
+      "service_startup_unmeasured_reason": "Unix socket bind unavailable: PermissionError (errno=1).",
       "status": "met"
     }
   },
+  "real_service_scope": "ProjectServiceHost constructor through published hint, including real ProjectRuntime writer bootstrap, RunDriver and three bound/listening Unix endpoints; close/wait/journal release and fixture reopen outside timing. No runs submitted, no external account/provider services used.",
+  "red": {
+    "failures": "Identity expected ValueError; stale reports/CLI expected five nulls; validator rejected stale nulls; budget tests lacked warmup_runs/samples.",
+    "metadata_errors": [],
+    "startup_lifecycle": "Added functional test failed with driver=None (1 test, 0.237 s), then passed with real RunDriver and journal-parent setup (1 test, 0.249 s). Listener binding alone stubbed; not timing evidence.",
+    "workers": [
+      {
+        "module": "tests.test_b7b_recovery",
+        "returncode": 1,
+        "seconds": 0.37830662506166846,
+        "summary": "failures=6, errors=1",
+        "tests": 13
+      },
+      {
+        "module": "tests.test_b7b_terminal",
+        "returncode": 1,
+        "seconds": 0.48288037499878556,
+        "summary": "failures=1, errors=3",
+        "tests": 4
+      },
+      {
+        "module": "tests.test_b7b_budgets#0",
+        "returncode": 1,
+        "seconds": 2.287696124985814,
+        "summary": "errors=1",
+        "tests": 1
+      },
+      {
+        "module": "tests.test_b7b_budgets#1",
+        "returncode": 1,
+        "seconds": 25.470116375014186,
+        "summary": "errors=1",
+        "tests": 1
+      }
+    ]
+  },
+  "scope": "Final targeted B7b fix, 2026-11-25; no VERSION or runtime digest catalogue changes; uncommitted sandbox worktree.",
   "successful_lookup": [
     {
       "limit_ms": 5,
-      "lookup_ms": 1.0705,
+      "lookup_ms": 0.619291,
       "lookup_samples_ms": [
-        0.909833,
-        0.773417,
-        1.0705,
-        0.818583,
-        0.713958
+        0.627708,
+        0.619291,
+        0.619083
       ],
       "lookup_vm_steps": 491,
-      "tombstones": 0
+      "tombstones": 0,
+      "warmup_runs": 1
     },
     {
       "limit_ms": 5,
-      "lookup_ms": 0.72175,
+      "lookup_ms": 0.654291,
       "lookup_samples_ms": [
-        0.72175,
-        0.674667,
-        0.667459,
-        0.648708,
-        0.640875
+        0.687084,
+        0.654291,
+        0.63525
       ],
       "lookup_vm_steps": 491,
-      "tombstones": 100000
+      "tombstones": 100000,
+      "warmup_runs": 1
     }
   ],
+  "timing_method": "One discarded warm-up, then median of three real operations; B3 uses the maximum corresponding batch median across three identical full drains. Retirement uses ten new committed bodies/contexts per run and advances trusted time. Warm-up outliers are not evidence. SQLite VM comparisons are the primary invariant.",
+  "unrun": [
+    "Real bound-socket B2/S3 startup delta assertions require primary unsandboxed run; reported unmeasured with bind error, never inferred from store proxies.",
+    "Three existing real-socket B7b terminal cases cannot bind (EPERM); isolated CLI subprocess passes. No PTY needed.",
+    "Full suite not run (named modules only). B1/B6 full memory lifecycle/scheduler measurements remain outside this fixed scope."
+  ],
   "verification": {
-    "elapsed_seconds": 28.4,
-    "failed_units": [],
-    "metadata_errors": [],
-    "tests": {
-      "codex": 2
+    "budgets": {
+      "metadata_errors": [],
+      "result": "PASS; exactly one real_service_startup subtest skipped for Unix bind EPERM; all store/timing/VM assertions executed.",
+      "seconds": 30.393197540892288,
+      "tests": 3,
+      "workers": [
+        {
+          "module": "tests.test_b7b_budgets#1",
+          "returncode": 0,
+          "seconds": 0.32433458301238716,
+          "summary": "",
+          "tests": 1
+        },
+        {
+          "module": "tests.test_b7b_budgets#0",
+          "returncode": 0,
+          "seconds": 30.38910762500018,
+          "summary": "skipped=1",
+          "tests": 2
+        }
+      ]
+    },
+    "optimized_identity": {
+      "command": "python -O -B -m unittest tests.test_b7b_recovery.RecoveryTests.test_attempt_identity_requires_colon_free_run_handle",
+      "result": "PASS",
+      "seconds": 0.007,
+      "tests": 1
+    },
+    "regression": {
+      "metadata_errors": [],
+      "result": "87 pass, three real-socket terminal setup errors (EPERM). Combined runner also had an intermediate budget clock-rollback error; fixed with advancing trusted time, superseded by final budget result.",
+      "workers": [
+        {
+          "module": "tests.test_reply_shape_compatibility",
+          "returncode": 0,
+          "seconds": 0.2746428749524057,
+          "summary": "",
+          "tests": 3
+        },
+        {
+          "module": "tests.test_b7b_recovery",
+          "returncode": 0,
+          "seconds": 0.5295569999143481,
+          "summary": "",
+          "tests": 13
+        },
+        {
+          "module": "tests.test_b7b_terminal",
+          "returncode": 1,
+          "seconds": 0.6446747090667486,
+          "summary": "errors=3",
+          "tests": 4
+        },
+        {
+          "module": "tests.test_holds_report",
+          "returncode": 0,
+          "seconds": 0.7046985001070425,
+          "summary": "",
+          "tests": 26
+        },
+        {
+          "module": "tests.test_lifetime_cap_guard",
+          "returncode": 0,
+          "seconds": 0.9612715829862282,
+          "summary": "",
+          "tests": 4
+        },
+        {
+          "module": "tests.test_project_holds_schema",
+          "returncode": 0,
+          "seconds": 1.1805631670868024,
+          "summary": "",
+          "tests": 40
+        }
+      ]
+    },
+    "runtime_release": {
+      "metadata_errors": [],
+      "result": "Two expected failures: runtime digest mismatch and pre-existing recovery_report.py omission from RUNTIME_FILES. One pass. Primary owns release catalogue update.",
+      "workers": [
+        {
+          "module": "tests.test_runtime_release",
+          "returncode": 1,
+          "seconds": 0.15680829191114753,
+          "summary": "failures=2",
+          "tests": 3
+        }
+      ]
+    },
+    "startup_cleanup_followup": {
+      "result": "PASS; asserts threads stopped, hint withdrawn and driver journal released before temporary-directory cleanup.",
+      "seconds": 0.208,
+      "test": "tests.test_b7b_budgets.BudgetMeasurements.test_service_startup_owns_real_writer_and_driver_and_cleans_up",
+      "tests": 1
     }
   }
 }

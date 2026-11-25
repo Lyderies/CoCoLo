@@ -93,4 +93,6 @@ def recovery_pending(history):
         "AND " + LEASE_ORCHESTRATION + "=o.orchestration_handle "
         "AND l.state IN ('reserved','claim_pending')))",
         (history.project_id,)).fetchone()[0]
+    if result['stale']:
+        result['reasons'] = dict.fromkeys(RECOVERY_REASONS)
     return result

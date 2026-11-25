@@ -25,7 +25,7 @@ class RecoveryTests(dr.LeaseBackedFixture):
         self.assertEqual(f'{lease.run_handle}:12', attempt_identity(lease.run_handle, 12))
         with self.assertRaises(HistoryError):
             replace(lease, run_handle=lease.run_handle + ':2')
-        with self.assertRaises(AssertionError):
+        with self.assertRaisesRegex(ValueError, 'colon-free'):
             attempt_identity(lease.run_handle + ':2', 12)
 
     @requirements('RS-B-B7-4', 'RS-B-B7-6', why_not_scenario=WHY)
@@ -36,7 +36,7 @@ class RecoveryTests(dr.LeaseBackedFixture):
         self.addCleanup(service.close)
         request = b7a.command()
         value = decode_history_response(service.handle(encode_history_request(request), b7a.TOKEN), request)
-        self.assertEqual({'reasons': dict.fromkeys(REASONS, 0), 'stale': True}, value['recovery_pending'])
+        self.assertEqual({'reasons': dict.fromkeys(REASONS), 'stale': True}, value['recovery_pending'])
         old = b7a.command(runtime='b' * 64)
         with mock.patch.object(project_holds_report, 'holds_report', side_effect=AssertionError('report served')), \
              mock.patch.object(service, '_authorizer', side_effect=AssertionError('authorization reached')):
@@ -71,6 +71,7 @@ class RecoveryTests(dr.LeaseBackedFixture):
             self.assertEqual(None if value is None else value['recovery_pending'], printed['recovery_pending'])
             if stale is True:
                 self.assertEqual('Recovery was not checked recently.', printed['recovery_pending_notice'])
+                self.assertEqual(dict.fromkeys(REASONS), printed['recovery_pending']['reasons'])
             else:
                 self.assertNotIn('recovery_pending_notice', printed)
 
@@ -126,8 +127,12 @@ class RecoveryTests(dr.LeaseBackedFixture):
     def test_held_reservation_reports_settlement_even_without_a_journal_observation(self):
         self.bound()
         value = b7a.report(self.store)['recovery_pending']
-        self.assertEqual(1, value['reasons']['needs_settlement'])
+        self.assertEqual(dict.fromkeys(REASONS), value['reasons'])
         self.assertTrue(value['stale'])
+        from codex_agents.recovery_report import RecoveryNotes
+        self.store._recovery_notes = RecoveryNotes()
+        self.store._recovery_notes.publish(dict.fromkeys(REASONS, 0))
+        self.assertEqual(1, b7a.report(self.store)['recovery_pending']['reasons']['needs_settlement'])
 
     @requirements('RS-B-B7-4', why_not_scenario=WHY)
     def test_empty_restart_and_strict_stale_boundary(self):
@@ -135,12 +140,14 @@ class RecoveryTests(dr.LeaseBackedFixture):
         now = [100.0]
         notes = RecoveryNotes(clock=lambda: now[0])
         self.store._recovery_notes = notes
-        empty = {'reasons': dict.fromkeys(REASONS, 0), 'stale': True}
+        empty = {'reasons': dict.fromkeys(REASONS), 'stale': True}
         self.assertEqual(empty, b7a.report(self.store)['recovery_pending'])
         notes.publish(dict.fromkeys(REASONS, 0))
         for age, expected in ((0, False), (2 * EXPIRY_SECONDS, False), (2 * EXPIRY_SECONDS + .001, True)):
             now[0] = 100 + age
-            self.assertEqual(expected, b7a.report(self.store)['recovery_pending']['stale'])
+            value = b7a.report(self.store)['recovery_pending']
+            self.assertEqual(expected, value['stale'])
+            self.assertEqual(dict.fromkeys(REASONS, None if expected else 0), value['reasons'])
         self.store._recovery_notes = RecoveryNotes()
         self.assertEqual(empty, b7a.report(self.store)['recovery_pending'])
 
@@ -228,6 +235,13 @@ class RecoveryTests(dr.LeaseBackedFixture):
         self.assertIn('recovery_pending', envelope['result'])
         base = envelope['result']
         self.assertEqual(base, decode_history_response(canonical_json(envelope), request))
+        # Stale counts are unknown; null must decode only in the stale branch.
+        stale = copy.deepcopy(base)
+        stale['recovery_pending'] = {'reasons': dict.fromkeys(REASONS), 'stale': True}
+        self.assertEqual(stale, decode_history_response(canonical_json({**envelope, 'result': stale}), request))
+        base = copy.deepcopy(base)
+        base['recovery_pending'] = {'reasons': dict.fromkeys(REASONS, 0), 'stale': False}
+        self.assertEqual(base, decode_history_response(canonical_json({**envelope, 'result': base}), request))
         variants = []
         for key in REASONS:
             for bad in (-1, True, None, 'PRIVATE'):
@@ -279,7 +293,7 @@ class RecoveryScopeTests(__import__('unittest').TestCase):
         directory.mkdir(mode=0o700)
         other = ProjectHistory(directory, b7a.PROJECT_B)
         self.addCleanup(other.close)
-        self.assertEqual({'reasons': counts, 'stale': True}, b7a.report(other)['recovery_pending'])
+        self.assertEqual({'reasons': dict.fromkeys(REASONS), 'stale': True}, b7a.report(other)['recovery_pending'])
         fixture.store.release_unsent_result_lease(fixture.lease_binding)
         self.assertEqual(0, b7a.report(fixture.store)['recovery_pending']['reasons']['has_holds'])
         for private in (handle, b7a.PROJECT_A, b7a.PROJECT_B, 'PRIVATE'):

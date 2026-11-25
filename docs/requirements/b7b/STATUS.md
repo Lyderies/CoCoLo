@@ -1,114 +1,88 @@
-# B7b correction-round status — 2026-11-25
+# B7b final targeted fix — 2026-11-25
 
-Base: `37ebd229df05321db70b022b67bf200e0d08e511`, worktree `cocolo-b7b`.
-Exactly the six READY-WITH-CORRECTIONS items were addressed. Changes remain
-uncommitted as requested for this sandbox. No other worktree or running service
-was touched. No schema/record/wire-shape change; `project_start.py`, VERSION and
-the runtime digest catalogue are unchanged.
+Implemented all four requested fixes in `~/Code/temp/cocolo-b7b`.
+Changes are uncommitted because this builder is sandboxed. VERSION, runtime
+catalogue and runtime file list are unchanged; the primary owns release updates.
+The accepted final requirements are in [../b7b.md](../b7b.md), assertion changes in
+[assertions.md](assertions.md), and raw samples/test summaries in
+[measurements.json](measurements.json). This section supersedes prior-round
+startup guards and cold timing evidence.
 
 ## Requirement → test → evidence
 
-Test names below are in `tests.test_b7b_recovery.RecoveryTests` unless qualified.
-Numbers and complete measurement scope are in [measurements.json](measurements.json)
-and the [requirement map](../b7b.md).
-
-| Review item / requirement | Test | Red → green evidence |
+| Item / requirement | Tests | Evidence |
 |---|---|---|
-| 1 / RS-B-B7-5 B4 | `tests.test_b7b_budgets.BudgetMeasurements.test_measured_budgets_report_numbers_without_relabelling_failures`; `test_attempt_identity_requires_colon_free_run_handle` | Before runtime edits the strengthened test failed on B4: holds 1,722/9,001,722, recovery 354/3,900,352, has_holds 252/1,000,250 VM steps at 0/100,000 tombstones. After PK equality/live-hold query changes it passes with equal work (numbers below). New identity test was red because `attempt_identity` accepted a colon; now green. `_RUN` is `hrn_[0-9a-f]{48}`, and the real lease validator also rejects a colon. |
-| 2 / RS-B-B7-5 B3/B4/B5; RS-D S3 | Both `BudgetMeasurements` tests | Red on real B4 numbers rather than passing a failed status; green with `met` and independent numeric limits. B3 <50 ms, B4 difference <=16 VM instructions per operation, B5 1,000 releases <=18 batches, retirement of ten <50 ms and successful authenticated lookup <5 ms. B1/B2/B6 stay unmeasured with explicit reasons; S3 startup is separately unmeasured. Missing memory tracking and unavailable socket binding are executable assertions, requiring new full measurements when those capabilities appear. |
-| 3 / RS-B-B7-4/-6 | `test_learning_status_notice_only_when_recovery_is_stale`; `tests.test_b7b_terminal.PlainTerminalOutputTests.test_plain_terminal_output_without_socket_privilege`; `test_history_only_service_is_stale_and_runtime_mismatch_never_serves_report` | CLI tests red with missing `recovery_pending_notice`, now green with the plain sentence “Recovery was not checked recently.” Fresh and unavailable states omit the stale notice. Real HistoryService with no RunDriver returns all-zero reasons plus stale=true. `ProjectServiceHost(bundle_root=None)` constructs ProjectRuntime but skips RunDriver (`service_host.py`), so history-only serving is possible. |
-| 4 / RS-B-B7-6 | `test_history_only_service_is_stale_and_runtime_mismatch_never_serves_report` | Existing gate already green: differing request/service runtime digests give history_not_authorized with result=null. Authorizer and report computation are bombed if reached. No artificial failing gate or production gate change was introduced. The new test’s mistaken first-draft absent-result assertion was corrected to the protocol-required null field; recorded in assertions.md. |
-| 5 / RS-B-B7-4 | `test_sweep_resets_account_capture_on_cleanup_and_publication_exceptions` | Red twice: capture remained set after `journal.instances` and `notes.publish` exceptions. Green with cleanup in finally. Sweep body unchanged except indentation. |
-| 6 / RS-B-B7-4 | `test_account_refusal_beside_unreachable_counts_only_transport_failure` | Already green before production edits: each simultaneous pair (not_authorized/unavailable, wrong_owner/unavailable) reports exactly one account_unreachable and one needs_settlement. Capture also resets on normal return. No classification change needed. |
+| 1 / RS-B-B7-5 B2; RS-D S3 | `BudgetMeasurements.test_measured_budgets_report_numbers_without_relabelling_failures`; `test_service_startup_owns_real_writer_and_driver_and_cleans_up` | Replaced the PermissionError requirement with an OSError bind probe. Available sockets run real `ProjectServiceHost` startup: writer bootstrap, RunDriver, three listeners and published hint; median populated-minus-empty <=100 ms at 1,064 held leases and <=200 ms at 64 live contexts. Each service_startup_status is met only when its measured limit passes; failures stay failed. Here both are unmeasured with `PermissionError (errno=1)`, and only the real_service_startup subtest skips after all store assertions. The added lifecycle test was red with driver=None, now green: two real startups with binding alone stubbed, preserved lease, stopped threads, withdrawn hints, released writer/journal locks. Its timings are excluded from evidence. |
+| 2 / RS-B-B7-5 B3/B4; RS-D S3 | Both original `BudgetMeasurements` tests | Red on missing warmup/sample evidence. Green with one warm-up plus three measured runs and independently asserted medians. B3 maximum per-batch median **16.765 ms <50**; ten-result retirement **6.869/7.217 ms <50**; authenticated lookup **0.619/0.654 ms <5**. All seven VM comparisons have zero delta; every corresponding retirement trial also has zero delta. No cold warm-up outlier is used as evidence. |
+| 3 / RS-B-B7-5 | `RecoveryTests.test_attempt_identity_requires_colon_free_run_handle` | Red: bare assert raised AssertionError. Green: explicit ValueError with colon-free message. Same named test passes under `python -O -B` (1 test, 0.007 s). Valid identity and lease-grammar rejection assertions retained. |
+| 4 / RS-B-B7-4/-6 | `test_history_only_service_is_stale_and_runtime_mismatch_never_serves_report`; `test_learning_status_notice_only_when_recovery_is_stale`; `test_empty_restart_and_strict_stale_boundary`; `test_held_reservation_reports_settlement_even_without_a_journal_observation`; `test_response_requires_closed_reasons_types_and_stale`; `RecoveryScopeTests`; `PlainTerminalOutputTests.test_plain_terminal_output_without_socket_privilege` | Red: stale numeric counts, stale null response rejected, CLI subprocess numeric output. Green: all five outward counts are null when stale, exact notice retained, fresh counts remain numeric; fresh nulls/bool/negative/string counts, missing/extra fields and non-bool stale rejected. Source settlement count remains one after a fresh observation. Runtime refusal/privacy/scope behavior retained. |
 
-## Current measurements
+## Measured numbers
 
-- B3 maximum **16.611 ms <50 ms**; B5 **1,000 releases / 16 batches <=18**.
-- B4 at 0/100,000: holds **994/994**, recovery **455/455**, has_holds
-  **335/335**, context candidates **223/223**, reconciliation **157/157**,
-  absent lookup **15/15**, retirement **10,512/10,512 VM instructions**.
-  All measured deltas are zero; allowance <=16.
-- S3 retirement of ten **45.986/7.973 ms <50 ms**;
-  authenticated lookup **1.071/0.722 ms <5 ms**, **491/491 VM steps**.
-- B1 partial register calls **0.175 ms** (five calls); B2 store-open
-  delta **+1.720 ms**; B6 partial lease pass **0.384 ms** (one batch);
-  S3 store-open delta **+1.656 ms**. These do not establish the
-  missing full lifecycle/scheduler/service-startup budgets.
+- B3 **16.765 ms** maximum corresponding-batch median; B5 **1,000 released / 16 batches <=18**.
+- At 0/100,000 tombstones: holds **994/994**, context sweep **223/223**,
+  reconciliation **157/157**, absent lookup **15/15**, recovery_pending **455/455**,
+  has_holds **335/335** SQLite VM steps. Released lease/reservation neighbours are
+  valid sealed source rows. Live context partial-index plan remains asserted.
+- Retirement measured trials: **[10716, 11027, 11347]** VM steps
+  at both history sizes; medians **6.869/7.217 ms**.
+  Ten newly committed results/contexts per run; trusted time advances between runs.
+- Successful authenticated lookup: **491/491** VM steps,
+  **0.619/0.654 ms** median of three after warm-up.
+- B2 store-only proxy delta **+1.932 ms**;
+  S3 store-only proxy delta **+0.673 ms**.
+  Real B2/S3 startup is **unmeasured** here because binding returns EPERM.
+  B1/B6 remain explicitly unmeasured for the existing memory/scheduler capability gaps.
 
-The source-tombstone fixture reuses B6's valid sealed lease/reservation rows:
-100,000 of each, with released hold rows, belonging to an open owner with no live
-execution hold. A second open owner has an armed closing-denied lease. Thus the
-empty owner's two EXISTS branches finish, and the pending lease join is exercised.
-The harness traces the actual has_holds SQL and counts its VM work separately.
-The custody/context fixture retains 100,000 released/expired rows. No production
-store or service is benchmarked. Timing limits are unchanged; 16 VM instructions
-is the explicit small-constant allowance, with observed deltas of zero.
+## Named verification and limitations
 
-## Verification
+- Final `scripts/parallel_tests.py --module codex:tests.test_b7b_budgets --keep`:
+  **3 tests, 30.4 s, PASS**, `metadata_errors: []`;
+  exactly one real service-startup subtest skipped. Store budgets, successful lookup
+  and the functional startup lifecycle check all executed.
+- Named regression modules: `tests.test_b7b_recovery` (13 pass),
+  `tests.test_holds_report` (26 pass), `tests.test_reply_shape_compatibility` (3 pass),
+  `tests.test_project_holds_schema` (40 pass), `tests.test_lifetime_cap_guard` (4 pass),
+  `tests.test_b7b_terminal` (isolated subprocess passes, three bind setup errors).
+  **87 pass / 3 socket errors**, `metadata_errors: []`; module execution times are
+  stored in measurements.json. The combined 92-test runner took 17.3 s and also
+  exposed an intermediate budget fixture clock-rollback error, corrected before
+  the passing final budget run. These socket errors are not claimed green.
+- Red named run: 19 tests, 25.5 s, `metadata_errors: []`; recovery 6 failures/1 error,
+  terminal 1 failure plus 3 socket errors, both budget tests error on missing
+  warmed-sample evidence. Functional startup test separately red→green as above.
+- Startup lifecycle follow-up: **1 test, 0.208 s, PASS**; stopped threads,
+  withdrawn hint and released journal asserted before temporary-directory cleanup.
+- `tests.test_runtime_release`: **3 tests, 0.005 s**; two expected failures
+  (runtime digest mismatch, pre-existing `recovery_report.py` omission from
+  RUNTIME_FILES), one pass. No release metadata was changed.
+- No persistent schema, record columns, reason codes or operations changed;
+  report keys are unchanged, with stale values now null. The affected response
+  enumeration/compatibility and project schema modules above pass. No broader
+  copier/backup/move/migration set is triggered by this value-only report fix.
+- Existing B7b modules are registered scenario/unit layers as before. The new
+  method uses existing RS-B-B7-5 and is linked in scripts/test-requirements.json;
+  no new module or requirement ID. No import-time I/O was introduced.
+- `git diff --check`: PASS. No full-suite run, install, live-service access,
+  commit or test run left in flight. No PTY required.
 
-Only the supplied venv, `-B`, and named modules/classes were used. No full run,
-`--affected`, schema migration, copier sweep or container scenario was run.
-No schema/record/wire shape changed, so the copier rule is not triggered.
-
-- Direct red: recovery module **13 tests, 0.091 s**, three failures (identity and
-  both finally subcases) and one missing-notice error. Plain subprocess red also
-  raised `KeyError: recovery_pending_notice`. Budget red: **2 tests, 27.666 s**,
-  one failure on B4 status and the raw work above.
-- Final focused direct confirmation: **94 tests, 2.283 s, PASS** —
-  `tests.test_b7b_recovery`, `tests.test_b7b_terminal.PlainTerminalOutputTests`,
-  `tests.test_holds_report`,
-  `tests.test_account_settlement_driver.ConfirmFixSweepTests`,
-  `tests.test_project_holds_schema`, `tests.test_reply_shape_compatibility`,
-  `tests.test_lifetime_cap_guard`.
-- Named metadata/regression runner: **122 tests, 6.3 s**, `metadata_errors: []`.
-  Same modules above, with full `test_b7b_terminal` and full
-  `test_account_settlement_driver`: **3 terminal bind errors (EPERM)** and
-  **25 driver service-start failures** (`collector endpoint could not be created`).
-  The other 94 tests pass. These are execution limitations, not green results.
-- Final budget runner: **2 tests, 28.4 s, PASS**, `metadata_errors: []`.
-- `tests.test_runtime_release`: **3 tests, 0.005 s**, two expected failures:
-  runtime digest mismatch and the pre-round `recovery_report.py` omission from
-  RUNTIME_FILES. Per instructions, VERSION/catalogue remain for the primary.
-- `git diff --check`: PASS. No test run remains in flight.
-
-All changed assertions and their replacements are listed in
-[assertions.md](assertions.md). Existing negative/type/privacy assertions remain.
-Existing B7b test modules were reused; new checks are registered under the same
-three requirement IDs. No new test module or requirement ID was introduced.
-
-## Remaining execution limits / primary handoff
-
-The plain isolated Python subprocess test passes; no PTY is needed. Real Unix
-socket exchange and complete project/account service startup remain blocked.
-With the supplied venv assigned to `PY`, the primary can rerun:
+The primary must execute real bound-socket startup/terminal checks unsandboxed:
 
 ```sh
 mkdir -p /private/tmp/b7b
-TMPDIR=/private/tmp/b7b "$PY" -B scripts/parallel_tests.py --module codex:tests.test_b7b_terminal --module codex:tests.test_holds_report_socket --module codex:tests.test_account_settlement_driver
+TMPDIR=/private/tmp/b7b "$PY" -B scripts/parallel_tests.py --module codex:tests.test_b7b_budgets --module codex:tests.test_b7b_terminal
 ```
 
-B1 full normal-run writer delta, B2 full service startup, B6 generic re-due/arrival
-scheduler and S3 full service startup remain unmeasured. Socket availability now
-fails the budget test loudly, requiring actual B2/S3 service measurements instead
-of leaving these entries silently unmeasured. Memory tracking becoming available
-similarly forces revisiting B1/B6. No primary decision is needed for these fixes.
-Prior-round result-persistence/migration failures were not rerun: this correction
-round does not edit those paths; their earlier evidence remains in base 37ebd229's
-STATUS.md. The runtime-release update remains a primary merge task.
+`PY` is the supplied test venv. When binding works, the budget test measures the
+real service path automatically and requires both startup limits/statuses; it
+never expects a binding failure or accepts a store proxy for those limits.
 
-## Files changed in this round
+## Files changed in this final round
 
-Runtime (under `packages/codex-agents/native-package/.codex/orchestration/`):
-`cli.py` (item 3), `codex_agents/project_holds_report.py` (item 1),
-`codex_agents/recovery_report.py` (item 1),
-`codex_agents/project_holds_schema.py` (item 1 invariant),
-`codex_agents/project_driver.py` (item 5 finally).
-
-Tests/tooling (under `packages/codex-agents/`):
-`scripts/measure_b7b.py` (items 1–2), `tests/test_b7b_budgets.py` (items 1–2),
-`tests/test_b7b_recovery.py` (items 1, 3–6),
-`tests/test_b7b_terminal.py` (item 3).
-
-Requirement/evidence files: `docs/requirements/b7b.md`,
-`docs/requirements/b7b/{STATUS.md,assertions.md,measurements.json}`,
-`tests/requirements/b7b.json`, `scripts/test-requirements.json`.
+- Runtime: `codex_agents/project_holds_schema.py`, `recovery_report.py`,
+  `holds_report_contracts.py` under the native orchestration bundle.
+- Harness/tests: `packages/codex-agents/scripts/measure_b7b.py`,
+  `tests/test_b7b_budgets.py`, `test_b7b_recovery.py`, `test_b7b_terminal.py`.
+- Requirements/evidence: `docs/requirements/b7b.md`,
+  `docs/requirements/b7b/{assertions.md,measurements.json,STATUS.md}`,
+  `tests/requirements/b7b.json`, `scripts/test-requirements.json`.

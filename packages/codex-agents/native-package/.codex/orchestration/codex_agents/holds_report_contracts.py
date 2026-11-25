@@ -76,5 +76,6 @@ def checked_holds_report(value):
     recovery = value['recovery_pending']
     require(_closed(recovery, {'reasons', 'stale'}) and type(recovery['stale']) is bool)
     require(_closed(recovery['reasons'], set(RECOVERY_REASONS)))
-    require(all(valid_integer(count, maximum=1 << 32) for count in recovery['reasons'].values()))
+    require(all(count is None if recovery['stale'] else valid_integer(count, maximum=1 << 32)
+                for count in recovery['reasons'].values()))
     return value
