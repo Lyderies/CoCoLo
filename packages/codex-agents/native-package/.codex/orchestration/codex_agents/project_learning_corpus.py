@@ -178,8 +178,8 @@ def next_chain_digest(previous, digest):
     return hashlib.sha256(b"learning-record-chain-v1\0" + bytes.fromhex(previous) + bytes.fromhex(digest)).hexdigest()
 
 
-def _owner(history, import_id):
-    history._require_owner()
+def _owner(history, import_id, *, read_only=False):
+    history._require_owner(read_only=read_only)
     if history._allow_schema_upgrade is not True:
         raise HistoryError("history_not_authorized")
     if not matches(import_id, _ID):
@@ -351,7 +351,7 @@ def finish_import(history, import_id, *, now_ms, before_commit):
 
 
 def import_records(history, import_id, *, after_source_sequence=0, limit=32):
-    _owner(history, import_id)
+    _owner(history, import_id, read_only=True)
     if not valid_integer(after_source_sequence) or not valid_integer(limit, minimum=1, maximum=MAX_CHUNK_ENTRIES):
         raise HistoryError("history_invalid_input")
     _row(history, import_id)
@@ -378,7 +378,7 @@ def import_records(history, import_id, *, after_source_sequence=0, limit=32):
 
 
 def import_attestations(history, import_id, *, after_subject_record_id="", limit=32):
-    _owner(history, import_id)
+    _owner(history, import_id, read_only=True)
     if (not (after_subject_record_id == "" or matches(after_subject_record_id, _ID))
             or not valid_integer(limit, minimum=1, maximum=MAX_CHUNK_ENTRIES)):
         raise HistoryError("history_invalid_input")

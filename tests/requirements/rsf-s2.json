@@ -13,7 +13,7 @@
   },
   {
    "id": "RSF-S2-3",
-   "statement": "**RSF-S2-3 \u2014 Every current write.** A central connection boundary checks the\ncaptured epoch and lifetime ownership inside every write transaction and again\nbefore commit. Cover account/project admissions, direct writes, autocommit,\ncursor/batch/script writes, explicit transactions, sweeps, backup registration,\ndeletion and VACUUM/journal maintenance. A paused stale writer must refuse with\nzero committed changes after takeover, even if it retains a connection.\nRollback and connection close must remain possible after revocation.",
+   "statement": "**RSF-S2-3 \u2014 Every current write.** A central connection boundary checks the\ncaptured epoch and lifetime ownership inside every write transaction and again\nbefore commit. Cover account/project admissions, direct writes, autocommit,\ncursor/batch/script writes, explicit transactions, sweeps, backup registration,\ndeletion and VACUUM/journal maintenance. Transactional writes by a paused stale\nwriter must refuse with zero committed changes after takeover, even if it\nretains a connection. VACUUM/journal-mode maintenance checks immediately before\nand after the operation while retaining the lifetime flock. SQLite cannot wrap\nthese operations in the epoch transaction: a revocation during maintenance can\nbe detected afterwards but cannot undo its already durable changes.\nRollback and connection close must remain possible after revocation.",
    "source": "tests/requirements/rsf-s2.json#RSF-S2-3"
   },
   {

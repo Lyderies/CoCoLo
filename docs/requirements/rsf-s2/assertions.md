@@ -1,5 +1,32 @@
 # Assertion changes for the required schema fence
 
+## Fixed-scope review restoration (2026-11-25)
+
+- `test_learning_outcome_pages.LearningOutcomePageTests.test_exact_bytes_and_sequence_pagination_without_owner_json_or_hash_work`:
+  index-or-exact-epoch SQL plus required epoch lookup → the original assertion
+  that **every** statement uses `records_learning_outcomes`. Pure reads retain
+  process/thread/closed-owner affinity and need no write fence or epoch query.
+  This supersedes the earlier widening documented below; no replacement epoch
+  assertion is needed on a read. Write/commit epoch checks remain covered by
+  the fence regressions and the 500-statement transaction budget test.
+- `test_rsf_s4_slots.LegacySlotEvidenceTests.test_unreadable_instance_lock_cannot_establish_positive_unsent`:
+  the existing fixture intentionally refuses only journal-instance locks.
+  Its requirement concerns inability to prove a legacy launch unsent from its
+  journal. Refusing every lock also revokes the ledger writer fence before that
+  journal check can run, which exercises a different refusal. The hold-count
+  assertion remains unchanged and the existing extra assertion proves the
+  journal fault was reached. No fixture/assertion change in this review round.
+- `test_rsf_s2_fence.FenceTests.test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership`:
+  immediate refusal of the next statement after a lock-only revocation → allow
+  that statement to remain pending, require refusal at COMMIT, require the
+  transaction to end and compare every affected row with its original value.
+  The requested two-probe budget performs no filesystem probe between BEGIN
+  and COMMIT; only epoch changes are detected per statement. The same lost-lock
+  fixture and both owners remain covered, with explicit zero-durable-change
+  proof. Restoring a full probe per statement makes this replacement red.
+- All other added review regressions are new assertions; no other existing
+  test assertion is removed or changed in this round.
+
 No behavioral refusal, custody or signature assertion is weakened. Schema-version pins advance because RSF-S2-4 must exclude real old executable reopens.
 
 - `test_learning_store.py:648`: `self.assertEqual(16, self.ledger._connection.execute('PRAGMA user_version').fetchone()[0])` → `self.assertEqual(17, self.ledger._connection.execute('PRAGMA user_version').fetchone()[0])`. Required ledger 17 / project 22 version fence.

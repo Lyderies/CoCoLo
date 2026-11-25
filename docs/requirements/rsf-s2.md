@@ -26,8 +26,12 @@ records still upgrade through the existing authorization and backup gates.
 captured epoch and lifetime ownership inside every write transaction and again
 before commit. Cover account/project admissions, direct writes, autocommit,
 cursor/batch/script writes, explicit transactions, sweeps, backup registration,
-deletion and VACUUM/journal maintenance. A paused stale writer must refuse with
-zero committed changes after takeover, even if it retains a connection.
+deletion and VACUUM/journal maintenance. Transactional writes by a paused stale
+writer must refuse with zero committed changes after takeover, even if it
+retains a connection. VACUUM/journal-mode maintenance checks immediately before
+and after the operation while retaining the lifetime flock. SQLite cannot wrap
+these operations in the epoch transaction: a revocation during maintenance can
+be detected afterwards but cannot undo its already durable changes.
 Rollback and connection close must remain possible after revocation.
 
 **RSF-S2-4 — Exclude old executable reopen.** Advance ledger schema 16→17
@@ -73,3 +77,34 @@ RSF-S2-3/6: read-only hold reports check process/thread ownership without openin
 the lock or any other private file, and write nothing. Record the schema-version
 comparison caught by the lifetime-cap guard with its end and named regression
 test. No VERSION or runtime digest catalogue change belongs to this round.
+
+## Fixed-scope review corrections (2026-11-25)
+
+RSF-S2-6: classify `runtime_takeover` with exact-column global account metadata,
+never project-keyed local tables. Backups, source images, restores and moves
+must preserve project records without exporting or partitioning this singleton.
+
+RSF-S2-3: a failed fence check at RELEASE/COMMIT rolls back; a SQLite error from
+the operation itself retains SQLite's transaction state, including earlier
+writes in an enclosing transaction. Maintenance must pass a fresh fence check
+after the short epoch transaction ends and before its operation starts, and
+check again afterwards subject to the durability limit above.
+
+RSF-S2-3/6: pure-read `_operation` methods check only process/thread/closed-owner
+affinity, with no lock probe or epoch query. Outcome-page SQL must use the
+outcomes index for every statement. Reads that persist a clock floor or retire
+records remain write operations.
+
+RSF-S2-3: a write transaction performs full lifetime-lock probes at its opening
+and before commit, with cheap epoch comparisons per intervening write statement.
+A 500-statement transaction must use at most two full probes, including nested
+savepoints and normal owner transaction helpers. Revocation at commit still
+rolls back all pending writes. A lock-only revocation with an unchanged epoch
+is detected at the commit boundary; intervening statements may remain pending
+but must never become durable.
+
+RSF-S2-3: `FencedConnection.executescript` and its cursor counterpart execute
+statements in the current owner transaction without SQLite's usual implicit
+COMMIT. An error leaves prior script statements pending in that transaction;
+the caller can roll them all back. Explicit transaction control in a script
+retains its ordinary fenced semantics.

@@ -179,12 +179,21 @@ class FenceTests(unittest.TestCase):
         ):
             other = os.open(path, os.O_RDWR)
             try:
+                before = [tuple(row) for row in owner._connection.execute(
+                    'SELECT * FROM ' + ('projects' if owner is ledger else 'history_identity'))]
                 owner._connection.execute('BEGIN IMMEDIATE')
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
                 fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                # No epoch changed yet: proof of somebody's lock is not proof of ours.
-                with self.subTest(owner=type(owner).__name__), self.assertRaises((LedgerError, HistoryError)):
+                # Epoch-only checks permit pending work; the full COMMIT probe
+                # must distinguish our lifetime lock from another holder's.
+                with self.subTest(owner=type(owner).__name__):
                     owner._connection.execute(sql)
+                    self.assertTrue(owner._connection.in_transaction)
+                    with self.assertRaises((LedgerError, HistoryError)):
+                        owner._connection.commit()
+                    self.assertFalse(owner._connection.in_transaction)
+                    self.assertEqual(before, [tuple(row) for row in owner._connection.execute(
+                        'SELECT * FROM ' + ('projects' if owner is ledger else 'history_identity'))])
             finally:
                 owner._connection.rollback()
                 os.close(other)

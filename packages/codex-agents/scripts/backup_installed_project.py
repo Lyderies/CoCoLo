@@ -181,7 +181,6 @@ LOCAL_PROJECT_COLUMNS = frozenset({"launch_copy", "launch_digest"})
 # 0.8.60 fix round (decision 247): the machine-local tables, by exact columns (the product's own
 # learning_store.LOCAL_TABLE_COLUMNS), and the other tables a ledger legitimately holds outside the backup.
 LOCAL_TABLE_COLUMNS = {
-    "runtime_takeover": ("singleton", "epoch", "old_digest", "new_digest"),
     "project_wake": ("project_id", "allocated_epoch", "epoch", "seq", "state", "next_due_at_ms", "body_digest",
                      "due_at_ms", "refused", "updated_at_ms"),
     "project_wake_instances": ("project_id", "instance", "epoch"),
@@ -192,6 +191,7 @@ LOCAL_TABLE_COLUMNS = {
 # Decision 249: those other tables by exact columns too (the runtime derives them from its own CREATE statements as
 # learning_store.OTHER_TABLE_COLUMNS; a test pins this copy equal to it).
 OTHER_TABLE_COLUMNS = {
+    "runtime_takeover": ("singleton", "epoch", "old_digest", "new_digest"),
     "additive_migrations": ("feature_key",),
     "owner_key_history": ("sequence", "signer_line", "reason", "recorded_at_ms"),
     "admission_evidence": ("project_id", "record_id", "record_type", "source", "observed_at_ms", "provider",

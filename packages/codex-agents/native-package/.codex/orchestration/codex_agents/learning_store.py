@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .store_fence import StoreFence, EPOCH_COLUMNS, FENCE_MESSAGE
+from .store_fence import StoreFence, EPOCH_SCHEMA, FENCE_MESSAGE
 
 import contextlib
 import base64
@@ -207,7 +207,6 @@ LOCAL_PROJECT_COLUMNS = frozenset({"launch_copy", "launch_digest"})
 # move never carry them (they hold this machine's wake, epoch and starter state, and a path-bearing launch record);
 # a check that refuses unknown tables accepts exactly these, and only with exactly these columns.
 LOCAL_TABLE_COLUMNS = {
-    "runtime_takeover": EPOCH_COLUMNS,
     "project_wake": ("project_id", "allocated_epoch", "epoch", "seq", "state", "next_due_at_ms", "body_digest",
                      "due_at_ms", "refused", "updated_at_ms"),
     "project_wake_instances": ("project_id", "instance", "epoch"),
@@ -233,10 +232,10 @@ _ADDITIVE_MIGRATIONS_SCHEMA = (
 def _other_table_columns() -> dict[str, tuple[str, ...]]:
     reference = sqlite3.connect(":memory:")
     try:
-        for statement in (_OWNER_KEY_HISTORY_SCHEMA, _ADDITIVE_MIGRATIONS_SCHEMA, ADMISSION_EVIDENCE_SCHEMA):
+        for statement in (_OWNER_KEY_HISTORY_SCHEMA, _ADDITIVE_MIGRATIONS_SCHEMA, ADMISSION_EVIDENCE_SCHEMA, EPOCH_SCHEMA):
             reference.execute(statement)
         return {table: tuple(row[1] for row in reference.execute(f"PRAGMA table_xinfo({table})"))
-                for table in ("additive_migrations", "owner_key_history", "admission_evidence")}
+                for table in ("additive_migrations", "owner_key_history", "admission_evidence", "runtime_takeover")}
     finally:
         reference.close()
 

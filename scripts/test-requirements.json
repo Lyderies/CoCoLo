@@ -2132,7 +2132,7 @@
  },
  "RSF-S2-3": {
   "source": "tests/requirements/rsf-s2.json#RSF-S2-3",
-  "statement": "**RSF-S2-3 \u2014 Every current write.** A central connection boundary checks the\ncaptured epoch and lifetime ownership inside every write transaction and again\nbefore commit. Cover account/project admissions, direct writes, autocommit,\ncursor/batch/script writes, explicit transactions, sweeps, backup registration,\ndeletion and VACUUM/journal maintenance. A paused stale writer must refuse with\nzero committed changes after takeover, even if it retains a connection.\nRollback and connection close must remain possible after revocation.",
+  "statement": "**RSF-S2-3 \u2014 Every current write.** A central connection boundary checks the\ncaptured epoch and lifetime ownership inside every write transaction and again\nbefore commit. Cover account/project admissions, direct writes, autocommit,\ncursor/batch/script writes, explicit transactions, sweeps, backup registration,\ndeletion and VACUUM/journal maintenance. Transactional writes by a paused stale\nwriter must refuse with zero committed changes after takeover, even if it\nretains a connection. VACUUM/journal-mode maintenance checks immediately before\nand after the operation while retaining the lifetime flock. SQLite cannot wrap\nthese operations in the epoch transaction: a revocation during maintenance can\nbe detected afterwards but cannot undo its already durable changes.\nRollback and connection close must remain possible after revocation.",
   "checks": [
    "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_commit_rechecks_epoch_and_rolls_back",
@@ -2141,7 +2141,16 @@
    "codex:tests.test_rsf_s2_fence.FenceTests.test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_nested_named_savepoints_preserve_rollback_to_and_outer_transaction",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_savepoint_release_rechecks_epoch_and_refused_owners_can_rollback_to",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_cleanup_checks_live_custody_before_historical_material"
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_cleanup_checks_live_custody_before_historical_material",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_500_statement_transaction_uses_two_full_probes_and_checks_epoch_between",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_executescript_does_not_implicitly_commit_owner_transaction",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_maintenance_rechecks_after_epoch_transaction_before_durable_operation",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_maintenance_still_checks_after_operation",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_history_reads_skip_fence_probe_and_epoch_queries",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_sqlite_commit_error_preserves_deferred_foreign_key_transaction",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_sqlite_release_error_preserves_outer_transaction_and_earlier_writes",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_script_commit_and_outermost_release_probe_lock_before_commit",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_learning_reads_skip_nested_helper_fences"
   ]
  },
  "RSF-S2-4": {
@@ -2172,7 +2181,10 @@
    "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_is_inside_the_schema_step_before_each_legacy_adoption_and_rolls_back_with_it",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_explicit_upgrade_does_not_request_project_backups",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_record_changing_schema15_still_requires_explicit_upgrade"
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_record_changing_schema15_still_requires_explicit_upgrade",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_epoch_is_exact_global_metadata_not_project_partitioned_local_data",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_history_reads_skip_fence_probe_and_epoch_queries",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_learning_reads_skip_nested_helper_fences"
   ]
  },
  "RT-RX-1": {

@@ -496,7 +496,7 @@ class ProjectHistory:
         if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
             raise HistoryError("history_wrong_owner")
         if not read_only:
-            self._fence.check(self._connection)
+            self._fence.check(self._connection, full=not self._connection.in_transaction)
 
     def _orchestration_owner(self):
         # Lazy import keeps the protocol/client free of persistence imports.
@@ -990,7 +990,7 @@ class ProjectHistory:
         with self._transaction():
             return self._append_locked(checked, content, source, ingested_at_ms)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def record(self, record_id: str) -> HistoryEntry:
         if not matches(record_id, _ID):
             raise HistoryError("history_invalid_input")
@@ -1516,7 +1516,7 @@ class ProjectHistory:
             raise HistoryError("history_result_expired")
         return encode_storage_evidence(self._result_key, value)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def attest_bound_result_lease(self, binding: ResultLeaseBinding) -> bytes:
         """Historical bound metadata only; it asserts no current launch readiness.
 
@@ -1534,7 +1534,7 @@ class ProjectHistory:
             raise HistoryError("history_invalid_input")
         return raw
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def attest_pending_result_lease(self, binding: ResultLeaseBinding) -> bytes:
         """Historical armed metadata for reconciliation; no fresh timing grant."""
         binding = self._lease_binding(binding)
@@ -1542,7 +1542,7 @@ class ProjectHistory:
             raise HistoryError('history_result_unavailable')
         return encode_storage_evidence(self._result_key, self._lease_row(binding))
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def pending_claim_leases(self, *, after: int = 0) -> tuple[list[ResultLeaseBinding], int]:
         """One page of leases armed for a claim and never bound or settled, each checked (0.3.3, C3).
 
@@ -1786,12 +1786,12 @@ class ProjectHistory:
         from .project_learning_corpus import finish_import
         return finish_import(self, import_id, now_ms=now_ms, before_commit=before_commit)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def learning_import_records(self, import_id, *, after_source_sequence=0, limit=32):
         from .project_learning_corpus import import_records
         return import_records(self, import_id, after_source_sequence=after_source_sequence, limit=limit)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def learning_import_attestations(self, import_id, *, after_subject_record_id="", limit=32):
         from .project_learning_corpus import import_attestations
         return import_attestations(self, import_id, after_subject_record_id=after_subject_record_id, limit=limit)
@@ -1821,7 +1821,7 @@ class ProjectHistory:
         from .project_learning_qa import import_qa_rows
         return import_qa_rows(self, import_id, after_qa_id=after_qa_id, limit=limit)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def learning_outcome_revision(self):
         """Revision of immutable local outcomes only, never a complete corpus.
 
@@ -1842,7 +1842,7 @@ class ProjectHistory:
             raise HistoryError('history_incompatible')
         return row[0]
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def learning_outcome_page(self, expected_revision, *, after_sequence=0, limit=32):
         """Bounded raw (sequence, ID, digest, bytes) tuples for a fixed worker.
 
@@ -1886,17 +1886,17 @@ class ProjectHistory:
             raise HistoryError('history_conflict')
         return tuple(result)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def learning_key_domain_digest(self):
         from .project_learning_identity import key_domain_digest
         return key_domain_digest(self)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def prepare_learning_case_records(self, references, *, expected_domain_digest):
         from .project_learning_identity import prepare_cases
         return prepare_cases(self, references, expected_domain_digest=expected_domain_digest)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def prepare_learning_candidate_record(self, spec, references, *, expected_domain_digest):
         from .project_learning_identity import prepare_candidate
         return prepare_candidate(self, spec, references, expected_domain_digest=expected_domain_digest)
@@ -1986,7 +1986,7 @@ class ProjectHistory:
                      self.project_id, identity))
             return dict(self._open_binding(identity))
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def open_withdrawals(self, *, now_ms=None, limit=10):
         """The withdrawals due now (`next_check_ms` <= now), the earliest due first, then by identity."""
         return [dict(row) for row in self._connection.execute("SELECT * FROM project_holds WHERE project_id=? "
@@ -2752,7 +2752,7 @@ class ProjectHistory:
                 continue  # refused or failing: it stays as it is, charged, for retirement or the next pass
         return committed
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def committed_delivery(self, binding: AttemptBinding) -> TerminalDelivery:
         """D4: the stored delivery of a committed claim (a live lane adopts it after a replay committed its claim)."""
         binding = self._result_binding(binding)
@@ -3214,7 +3214,7 @@ class ProjectHistory:
             raise HistoryError("history_invalid_input")
         return project_result_contexts.repairs(self, limit, cursor)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def runtime_close_status(self) -> dict:
         """RS-D-2 N1/N2: count update-ended unrecorded orchestrations, without result content.
 
@@ -3732,14 +3732,14 @@ class ProjectHistory:
         return result
 
     # D1 (RS-D-2, RS-D-10): every reader of a run's record context reads it here, from the store.
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def stored_result_context(self, binding: AttemptBinding, *, host_class: str, recorded: bool = False):
         """This claimed attempt's stored inputs, for its own host class, checked against the consumed grant."""
         if self._result_key is None:
             raise HistoryError("history_result_unavailable")
         return project_result_contexts.stored_result_context(self, binding, host_class=host_class, recorded=recorded)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def stored_worker_context(self, outcome_digest: str, *, host_class: str, orchestration_handle: str | None = None):
         """A recorded run's stored inputs, by its outcome digest, for its own host class."""
         if self._result_key is None:
@@ -3747,7 +3747,7 @@ class ProjectHistory:
         return project_result_contexts.stored_worker_context(self, outcome_digest, host_class=host_class,
                                                              orchestration_handle=orchestration_handle)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def stored_attempt_context(self, run_handle: str, attempt: int, *, host_class: str, inputs_digest: str):
         """A published attempt's stored inputs, by run handle, attempt and open inputs digest."""
         if self._result_key is None:
@@ -3757,7 +3757,7 @@ class ProjectHistory:
         return project_result_contexts.stored_attempt_context(self, run_handle, attempt, host_class=host_class,
                                                               inputs_digest=inputs_digest)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def committed_result_reference(self, binding: AttemptBinding) -> dict:
         """The published terminal of this committed attempt: its binding, record and result digests."""
         if self._result_key is None:
@@ -3804,7 +3804,7 @@ class ProjectHistory:
             "record_id", "source", "source_sequence", "observed_at_ms", "ingested_at_ms", "content_digest", "late",
         )}
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def attest_terminal_delivery(self, binding: AttemptBinding) -> bytes:
         """Export the actual consumed attempt's durable safe outbox metadata.
 
@@ -3877,7 +3877,7 @@ class ProjectHistory:
         from .project_cleanup import issue_cleanup
         return issue_cleanup(self, self._lease_binding(binding), registry=registry, custody=custody)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def cleanup_evidence(self, binding):
         from .project_cleanup import read_cleanup
         return read_cleanup(self, self._lease_binding(binding))
@@ -3887,12 +3887,12 @@ class ProjectHistory:
         from .project_release_ack import record_account_release
         return record_account_release(self, self._lease_binding(binding), raw, registry=registry, custody=custody)
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def account_release_receipt(self, binding):
         from .project_release_ack import read_account_release
         return read_account_release(self, self._lease_binding(binding))
 
-    @_operation
+    @functools.partial(_operation, read_only=True)
     def pending_terminals(self, *, after_sequence: int = 0, limit: int = 10) -> tuple[TerminalDelivery, ...]:
         if not valid_integer(after_sequence) or not valid_integer(limit, minimum=1, maximum=100):
             raise HistoryError("history_invalid_input")

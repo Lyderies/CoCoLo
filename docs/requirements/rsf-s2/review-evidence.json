@@ -1,0 +1,538 @@
+{
+  "base": "cd78dcb3",
+  "runs": [
+    {
+      "label": "initial-red",
+      "elapsed_seconds": 0.8,
+      "units": 2,
+      "tests": {
+        "codex": 20
+      },
+      "metadata_errors": [],
+      "failed_units": [
+        "codex:tests.test_learning_outcome_pages",
+        "codex:tests.test_rsf_s2_regressions"
+      ],
+      "budget_failures": [],
+      "partial": false,
+      "modules": [
+        {
+          "unit": "tests.test_learning_outcome_pages",
+          "tests": 6,
+          "seconds": 0.4839282500324771,
+          "returncode": 1
+        },
+        {
+          "unit": "tests.test_rsf_s2_regressions",
+          "tests": 14,
+          "seconds": 0.7641330000478774,
+          "returncode": 1
+        }
+      ],
+      "fence_review_outcomes": {
+        "codex:tests.test_learning_outcome_pages.LearningOutcomePageTests.test_exact_bytes_and_sequence_pagination_without_owner_json_or_hash_work": "failed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_500_statement_transaction_uses_two_full_probes_and_checks_epoch_between": "failed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_cleanup_checks_live_custody_before_historical_material": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_epoch_is_exact_global_metadata_not_project_partitioned_local_data": "failed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_executescript_does_not_implicitly_commit_owner_transaction": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_maintenance_rechecks_after_epoch_transaction_before_durable_operation": "failed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_maintenance_still_checks_after_operation": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_nested_named_savepoints_preserve_rollback_to_and_outer_transaction": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_history_reads_skip_fence_probe_and_epoch_queries": "failed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_record_changing_schema15_still_requires_explicit_upgrade": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_savepoint_release_rechecks_epoch_and_refused_owners_can_rollback_to": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_explicit_upgrade_does_not_request_project_backups": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_sqlite_commit_error_preserves_deferred_foreign_key_transaction": "failed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_sqlite_release_error_preserves_outer_transaction_and_earlier_writes": "failed"
+      }
+    },
+    {
+      "label": "script-commit-red",
+      "elapsed_seconds": 0.9,
+      "units": 1,
+      "tests": {
+        "codex": 15
+      },
+      "metadata_errors": [],
+      "failed_units": [
+        "codex:tests.test_rsf_s2_regressions"
+      ],
+      "budget_failures": [],
+      "partial": false,
+      "modules": [
+        {
+          "unit": "tests.test_rsf_s2_regressions",
+          "tests": 15,
+          "seconds": 0.866402291925624,
+          "returncode": 1
+        }
+      ]
+    },
+    {
+      "label": "nested-read-red",
+      "elapsed_seconds": 0.8,
+      "units": 1,
+      "tests": {
+        "codex": 16
+      },
+      "metadata_errors": [],
+      "failed_units": [
+        "codex:tests.test_rsf_s2_regressions"
+      ],
+      "budget_failures": [],
+      "partial": false,
+      "modules": [
+        {
+          "unit": "tests.test_rsf_s2_regressions",
+          "tests": 16,
+          "seconds": 0.7518462920561433,
+          "returncode": 1
+        }
+      ]
+    },
+    {
+      "label": "commit-assertion-mutation-red",
+      "elapsed_seconds": 2.5,
+      "units": 1,
+      "tests": {
+        "codex": 12
+      },
+      "metadata_errors": [],
+      "failed_units": [
+        "codex:tests.test_rsf_s2_fence"
+      ],
+      "budget_failures": [],
+      "partial": false,
+      "modules": [
+        {
+          "unit": "tests.test_rsf_s2_fence",
+          "tests": 12,
+          "seconds": 2.4926876249955967,
+          "returncode": 1
+        }
+      ]
+    },
+    {
+      "label": "journal-parentheses-red",
+      "elapsed_seconds": 0.7,
+      "units": 1,
+      "tests": {
+        "codex": 16
+      },
+      "metadata_errors": [],
+      "failed_units": [
+        "codex:tests.test_rsf_s2_regressions"
+      ],
+      "budget_failures": [],
+      "partial": false,
+      "modules": [
+        {
+          "unit": "tests.test_rsf_s2_regressions",
+          "tests": 16,
+          "seconds": 0.735625582979992,
+          "returncode": 1
+        }
+      ]
+    },
+    {
+      "label": "transactional-pragma-budget-red",
+      "elapsed_seconds": 0.7,
+      "units": 1,
+      "tests": {
+        "codex": 16
+      },
+      "metadata_errors": [],
+      "failed_units": [
+        "codex:tests.test_rsf_s2_regressions"
+      ],
+      "budget_failures": [],
+      "partial": false,
+      "modules": [
+        {
+          "unit": "tests.test_rsf_s2_regressions",
+          "tests": 16,
+          "seconds": 0.6687492919154465,
+          "returncode": 1
+        }
+      ]
+    },
+    {
+      "label": "mixed-intermediate",
+      "elapsed_seconds": 10.7,
+      "units": 16,
+      "tests": {
+        "codex": 340
+      },
+      "metadata_errors": [],
+      "failed_units": [
+        "codex:tests.test_rsf_s2_fence",
+        "codex:tests.test_rsf_s4_slots",
+        "codex:tests.test_result_read_api"
+      ],
+      "budget_failures": [],
+      "partial": false,
+      "modules": [
+        {
+          "unit": "tests.test_rsf_s2_fence",
+          "tests": 12,
+          "seconds": 2.7772505830507725,
+          "returncode": 1
+        },
+        {
+          "unit": "tests.test_holds_report",
+          "tests": 26,
+          "seconds": 0.9224447089945897,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_rsf_s4_slots",
+          "tests": 33,
+          "seconds": 4.625031540985219,
+          "returncode": 1
+        },
+        {
+          "unit": "tests.test_rsf_s2_regressions",
+          "tests": 16,
+          "seconds": 0.9781880830414593,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_project_learning_identity",
+          "tests": 12,
+          "seconds": 2.0002114579547197,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_result_leases",
+          "tests": 23,
+          "seconds": 2.106822791043669,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_result_read_api",
+          "tests": 31,
+          "seconds": 1.1180449579842389,
+          "returncode": 1
+        },
+        {
+          "unit": "tests.test_project_learning_corpus",
+          "tests": 17,
+          "seconds": 1.00637945800554,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_project_result_usage",
+          "tests": 12,
+          "seconds": 8.133364167064428,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_learning_outcome_pages",
+          "tests": 6,
+          "seconds": 0.6122084159869701,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_project_history",
+          "tests": 35,
+          "seconds": 1.05389712494798,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_project_release_ack",
+          "tests": 2,
+          "seconds": 0.5721972500905395,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_project_results",
+          "tests": 46,
+          "seconds": 1.6875065000494942,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_project_cleanup",
+          "tests": 8,
+          "seconds": 0.5721042919903994,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_sql_read_budget",
+          "tests": 34,
+          "seconds": 0.1752612079726532,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_record_context",
+          "tests": 27,
+          "seconds": 10.653986749937758,
+          "returncode": 0
+        }
+      ]
+    },
+    {
+      "label": "final-core",
+      "elapsed_seconds": 10.6,
+      "units": 14,
+      "tests": {
+        "codex": 276
+      },
+      "metadata_errors": [],
+      "failed_units": [],
+      "budget_failures": [],
+      "partial": false,
+      "modules": [
+        {
+          "unit": "tests.test_holds_report",
+          "tests": 26,
+          "seconds": 0.9899080839240924,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_rsf_s2_regressions",
+          "tests": 16,
+          "seconds": 0.9426405419362709,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_rsf_s2_fence",
+          "tests": 12,
+          "seconds": 2.8784528749529272,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_project_learning_identity",
+          "tests": 12,
+          "seconds": 1.8639713330194354,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_project_learning_corpus",
+          "tests": 17,
+          "seconds": 1.205973666976206,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_result_leases",
+          "tests": 23,
+          "seconds": 2.196385332965292,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_project_history",
+          "tests": 35,
+          "seconds": 1.043848333065398,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_project_results",
+          "tests": 46,
+          "seconds": 1.6606583329848945,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_learning_outcome_pages",
+          "tests": 6,
+          "seconds": 0.6118593340506777,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_project_release_ack",
+          "tests": 2,
+          "seconds": 0.48062691697850823,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_project_cleanup",
+          "tests": 8,
+          "seconds": 0.5454055829904974,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_sql_read_budget",
+          "tests": 34,
+          "seconds": 0.17667329194955528,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_project_result_usage",
+          "tests": 12,
+          "seconds": 8.150672333082184,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_record_context",
+          "tests": 27,
+          "seconds": 10.552698167040944,
+          "returncode": 0
+        }
+      ],
+      "fence_review_outcomes": {
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_500_statement_transaction_uses_two_full_probes_and_checks_epoch_between": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_cleanup_checks_live_custody_before_historical_material": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_epoch_is_exact_global_metadata_not_project_partitioned_local_data": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_executescript_does_not_implicitly_commit_owner_transaction": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_maintenance_rechecks_after_epoch_transaction_before_durable_operation": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_maintenance_still_checks_after_operation": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_nested_named_savepoints_preserve_rollback_to_and_outer_transaction": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_history_reads_skip_fence_probe_and_epoch_queries": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_learning_reads_skip_nested_helper_fences": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_record_changing_schema15_still_requires_explicit_upgrade": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_savepoint_release_rechecks_epoch_and_refused_owners_can_rollback_to": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_explicit_upgrade_does_not_request_project_backups": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_script_commit_and_outermost_release_probe_lock_before_commit": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_sqlite_commit_error_preserves_deferred_foreign_key_transaction": "passed",
+        "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_sqlite_release_error_preserves_outer_transaction_and_earlier_writes": "passed",
+        "codex:tests.test_rsf_s2_fence.FenceTests.test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership": "passed",
+        "codex:tests.test_rsf_s2_fence.FenceTests.test_commit_rechecks_epoch_and_rolls_back": "passed",
+        "codex:tests.test_rsf_s2_fence.FenceTests.test_current_format_missing_epoch_refuses_without_recreating_it": "passed",
+        "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_advances_and_signed_records_are_unchanged": "passed",
+        "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance": "passed",
+        "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_is_inside_the_schema_step_before_each_legacy_adoption_and_rolls_back_with_it": "passed",
+        "codex:tests.test_rsf_s2_fence.FenceTests.test_lost_or_replaced_lifetime_lock_refuses_admissions": "passed",
+        "codex:tests.test_rsf_s2_fence.FenceTests.test_paused_ledger_writer_cannot_resume_after_successor": "passed",
+        "codex:tests.test_rsf_s2_fence.FenceTests.test_paused_project_process_cannot_resume_after_takeover": "passed",
+        "codex:tests.test_rsf_s2_fence.FenceTests.test_unsafe_hard_link_lock_is_refused_before_writing_an_owner_stamp": "passed",
+        "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_old_offline_cli_cannot_reopen_migrated_ledger": "passed",
+        "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_real_0855_owners_block_migration_then_cannot_reopen": "passed",
+        "codex:tests.test_learning_outcome_pages.LearningOutcomePageTests.test_exact_bytes_and_sequence_pagination_without_owner_json_or_hash_work": "passed"
+      }
+    },
+    {
+      "label": "final-copiers",
+      "elapsed_seconds": 30.4,
+      "units": 20,
+      "tests": {
+        "codex": 236
+      },
+      "metadata_errors": [],
+      "failed_units": [],
+      "budget_failures": [],
+      "partial": false,
+      "modules": [
+        {
+          "unit": "tests.test_large_project_backups#1",
+          "tests": 4,
+          "seconds": 9.278757125022821,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_owner_backup_streamed#1",
+          "tests": 20,
+          "seconds": 20.532921458943747,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_owner_backup_streamed#0",
+          "tests": 20,
+          "seconds": 11.827682208968326,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_reply_shape_compatibility",
+          "tests": 3,
+          "seconds": 0.17405754199717194,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_large_project_backups#0",
+          "tests": 4,
+          "seconds": 23.758584124967456,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_backup_reply_private",
+          "tests": 11,
+          "seconds": 4.910650040954351,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_learning_source_transfer",
+          "tests": 13,
+          "seconds": 5.82575475005433,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_learning_source_image_legacy",
+          "tests": 7,
+          "seconds": 3.0707428329624236,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_account_observation_backup",
+          "tests": 2,
+          "seconds": 0.6674897080520168,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_account_observation_schema",
+          "tests": 7,
+          "seconds": 2.0569501670543104,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_backup_installed_project",
+          "tests": 2,
+          "seconds": 0.9740855840500444,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_history_service_upgrade",
+          "tests": 30,
+          "seconds": 0.7866410409333184,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_learning_source_image",
+          "tests": 33,
+          "seconds": 2.9619598749559373,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_project_holds_schema",
+          "tests": 40,
+          "seconds": 1.5017094999784604,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_legacy_history_compatibility",
+          "tests": 5,
+          "seconds": 0.4270067500183359,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_account_open_schema",
+          "tests": 10,
+          "seconds": 0.7207354169804603,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_learning_qa_upgrade",
+          "tests": 3,
+          "seconds": 0.3861073750304058,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_account_cleanup_schema",
+          "tests": 3,
+          "seconds": 0.5019532910082489,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_refusal_steps",
+          "tests": 14,
+          "seconds": 0.4421630830038339,
+          "returncode": 0
+        },
+        {
+          "unit": "tests.test_learning_chunk_upgrade",
+          "tests": 5,
+          "seconds": 0.2834899160079658,
+          "returncode": 0
+        }
+      ]
+    }
+  ]
+}

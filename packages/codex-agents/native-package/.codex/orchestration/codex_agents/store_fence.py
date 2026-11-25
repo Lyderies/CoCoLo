@@ -85,11 +85,12 @@ class StoreFence:
             if probe is not None:
                 os.close(probe)
 
-    def check(self, connection):
+    def check(self, connection, *, full=True):
         connection = self.connection
         if connection is None:
             raise self.refusal()
-        self.lock()
+        if full:
+            self.lock()
         if self.epoch is not None:
             try:
                 row = sqlite3.Connection.execute(connection,
@@ -105,11 +106,11 @@ class StoreFence:
         connection = self.connection
         if connection is None:
             raise self.refusal()
-        self.lock()
         if not connection.in_transaction:
             raise self.refusal()
+        # BEGIN already performed the full lifetime-lock probe.
         if self.epoch is not None:
-            self.check(connection)
+            self.check(connection, full=False)
             return
         exists = sqlite3.Connection.execute(connection,
             "SELECT 1 FROM sqlite_master WHERE name='runtime_takeover'").fetchone()
@@ -151,23 +152,45 @@ class FencedCursor(sqlite3.Cursor):
 class FencedConnection(sqlite3.Connection):
     def __init__(self, *args, **kwargs):
         self._write_fence = None
+        self._savepoints = []
+        self._savepoint_transaction = False
         super().__init__(*args, **kwargs)
 
-    def _check_fence(self):
+    def _check_fence(self, *, full=True):
         if self._write_fence is not None:
-            self._write_fence.check(self)
+            self._write_fence.check(self, full=full)
+
+    @staticmethod
+    def _savepoint_name(sql):
+        # Fixed owner SQL, including SQLite's quoted identifier spellings.
+        tokens = re.findall(r'''"(?:[^"]|"")*"|'(?:[^']|'')*'|`(?:[^`]|``)*`|\[[^\]]*\]|[^\s;]+''', sql)
+        name = tokens[-1] if tokens else ''
+        if name[:1] in {'"', "'", '`', '['}:
+            quote = name[0]
+            name = name[1:-1].replace(quote * 2, quote)
+        return name.translate(str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'))
 
     def _fenced(self, sql, operation):
         if self._write_fence is None:
             return operation()
+        if not self.in_transaction:
+            self._savepoints.clear()
+            self._savepoint_transaction = False
         # All SQL is fixed owner code. Strip comments so a leading comment cannot
         # accidentally turn a write/control statement into a read classification.
         clean = re.sub(r'/\*.*?\*/|--[^\n]*(?:\n|$)', ' ', sql, flags=re.S).strip()
-        word = clean.split(None, 1)[0].upper() if clean else ''
+        word = clean.split(None, 1)[0].rstrip(';').upper() if clean else ''
         if word in {'ROLLBACK', 'ABORT'}:
-            return operation()
+            result = operation()
+            if self.in_transaction:  # ROLLBACK TO keeps the named savepoint.
+                name = self._savepoint_name(clean)
+                if name in self._savepoints:
+                    index = len(self._savepoints) - 1 - self._savepoints[::-1].index(name)
+                    del self._savepoints[index + 1:]
+            return result
         database_pragma = word == 'PRAGMA' and (any(name in clean.lower() for name in
-            ('wal_checkpoint', 'optimize', 'incremental_vacuum')) or ('=' in clean and any(
+            ('wal_checkpoint', 'optimize', 'incremental_vacuum'))
+            or ('journal_mode' in clean.lower() and ('=' in clean or '(' in clean)) or ('=' in clean and any(
             name in clean.lower() for name in ('user_version', 'application_id', 'schema_version',
                                               'journal_mode', 'writable_schema'))))
         if word in {'SELECT', 'EXPLAIN'} or (word == 'PRAGMA' and not database_pragma):
@@ -175,35 +198,55 @@ class FencedConnection(sqlite3.Connection):
         if word in {'BEGIN', 'SAVEPOINT'}:
             # SAVEPOINT starts its own transaction when necessary. Preserve its
             # name and nesting; an automatic BEGIN/commit here would destroy it.
+            automatic = not self.in_transaction
             result = operation()
             try:
-                self._check_fence()
+                self._check_fence(full=automatic)
             except BaseException:
                 sqlite3.Connection.rollback(self)
                 raise
+            if word == 'SAVEPOINT':
+                if automatic:
+                    self._savepoint_transaction = True
+                self._savepoints.append(self._savepoint_name(clean))
             return result
         if word in {'COMMIT', 'END', 'RELEASE'}:
             # RELEASE may commit the outermost savepoint. Check before that
             # operation, and let SQLite retain any enclosing transaction.
+            index = None
+            if word == 'RELEASE':
+                name = self._savepoint_name(clean)
+                if name in self._savepoints:
+                    index = len(self._savepoints) - 1 - self._savepoints[::-1].index(name)
+            commits = word != 'RELEASE' or (self._savepoint_transaction and index == 0)
             try:
-                self._check_fence()
-                return operation()
+                self._check_fence(full=commits)
             except BaseException:
                 sqlite3.Connection.rollback(self)
                 raise
+            # SQLite errors retain SQLite's own transaction state.
+            result = operation()
+            if index is not None:
+                del self._savepoints[index:]
+            return result
         maintenance = word in {'VACUUM', 'PRAGMA'}
         automatic = not self.in_transaction
         if automatic:
             sqlite3.Connection.execute(self, 'BEGIN IMMEDIATE')
         try:
-            self._check_fence()
+            self._check_fence(full=automatic)
             if maintenance and automatic:
                 # SQLite forbids VACUUM/journal changes in a transaction. The
                 # epoch read is serialized first; the lifetime flock remains held
                 # across the operation and is checked again on return.
                 sqlite3.Connection.commit(self)
+                # A fresh check immediately before the nontransactional change.
+                self._check_fence()
             result = operation()
-            self._check_fence()
+            if automatic:
+                # Maintenance may already be durable here; refusal detects a
+                # concurrent revocation but cannot undo VACUUM/journal changes.
+                self._check_fence()
             if automatic and self.in_transaction:
                 sqlite3.Connection.commit(self)
             return result

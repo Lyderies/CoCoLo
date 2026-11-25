@@ -217,7 +217,7 @@ def _schema(connection, store):
     found = {row[0] for row in names}
     local = found & set(store.LOCAL_TABLE_COLUMNS)
     if found - local != {*_KEYS, "projects", "additive_migrations",
-                         "owner_key_history", "sqlite_sequence", "admission_evidence"}:
+                         "owner_key_history", "sqlite_sequence", "admission_evidence", "runtime_takeover"}:
         raise HistoryError("history_incompatible")
     exact = {**store.LOCAL_TABLE_COLUMNS, **store.OTHER_TABLE_COLUMNS}  # decision 249: the extra tables too
     for table in sorted(found & set(exact)):

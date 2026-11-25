@@ -10,7 +10,7 @@ from unittest import mock
 
 import tests.support  # noqa: F401
 from test_framework import requirements
-from codex_agents import learning_store, project_cleanup, project_history
+from codex_agents import learning_store, project_cleanup, project_history, store_fence
 from codex_agents.history_contracts import HistoryError
 from codex_agents.owned_execution import ExecutionCleanup, OwnedExecutionRegistry
 from tests.learning_support import event_record
@@ -149,3 +149,216 @@ class FenceRegressionTests(unittest.TestCase):
                 project_cleanup.issue_cleanup(mock.MagicMock(), mock.sentinel.binding,
                                               registry=registry, custody=ExecutionCleanup(registry))
         material.assert_not_called()
+
+    @requirements('RSF-S2-6')
+    def test_epoch_is_exact_global_metadata_not_project_partitioned_local_data(self):
+        self.assertNotIn('runtime_takeover', learning_store.LOCAL_TABLE_COLUMNS)
+        self.assertEqual(store_fence.EPOCH_COLUMNS, learning_store.OTHER_TABLE_COLUMNS['runtime_takeover'])
+
+    @requirements('RSF-S2-3')
+    def test_sqlite_release_error_preserves_outer_transaction_and_earlier_writes(self):
+        for owner in self.owners():
+            db = owner._connection
+            db.execute('CREATE TEMP TABLE release_values(value)')
+            for execute in (db.execute, db.cursor().execute):
+                with self.subTest(owner=type(owner).__name__, execute=execute):
+                    db.execute('BEGIN IMMEDIATE')
+                    db.execute('INSERT INTO release_values VALUES(1)')
+                    db.execute('SAVEPOINT retained')
+                    with self.assertRaisesRegex(sqlite3.OperationalError, 'no such savepoint'):
+                        execute('RELEASE missing_savepoint')
+                    self.assertTrue(db.in_transaction)
+                    self.assertEqual([1], [r[0] for r in db.execute('SELECT * FROM release_values')])
+                    db.execute('ROLLBACK TO retained')
+                    db.rollback()
+                    self.assertEqual([], list(db.execute('SELECT * FROM release_values')))
+
+    @requirements('RSF-S2-3')
+    def test_sqlite_commit_error_preserves_deferred_foreign_key_transaction(self):
+        for owner in self.owners():
+            db = owner._connection
+            db.execute('CREATE TEMP TABLE fence_parent(id PRIMARY KEY)')
+            db.execute('CREATE TEMP TABLE fence_child(id REFERENCES fence_parent(id) DEFERRABLE INITIALLY DEFERRED)')
+            for commit in (db.commit, lambda: db.execute('COMMIT')):
+                with self.subTest(owner=type(owner).__name__, commit=commit):
+                    db.execute('BEGIN IMMEDIATE')
+                    db.execute('INSERT INTO fence_parent VALUES(1)')
+                    db.execute('INSERT INTO fence_child VALUES(2)')
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        commit()
+                    self.assertTrue(db.in_transaction)
+                    self.assertEqual([1], [r[0] for r in db.execute('SELECT * FROM fence_parent')])
+                    db.rollback()
+                    self.assertEqual([], list(db.execute('SELECT * FROM fence_parent')))
+
+    @requirements('RSF-S2-3')
+    def test_maintenance_rechecks_after_epoch_transaction_before_durable_operation(self):
+        for owner in self.owners():
+            db = owner._connection
+            epoch = owner._fence.epoch
+            for sql in ('VACUUM', 'PRAGMA journal_mode=DELETE', 'PRAGMA journal_mode(DELETE)'):
+                with self.subTest(owner=type(owner).__name__, sql=sql):
+                    statements, revoked = [], False
+                    def trace(statement):
+                        nonlocal revoked
+                        statements.append(statement)
+                        if statement == 'COMMIT' and not revoked:
+                            revoked = True
+                            sqlite3.Connection.execute(db, 'UPDATE runtime_takeover SET epoch=epoch+1')
+                    db.set_trace_callback(trace)
+                    try:
+                        with self.assertRaises((learning_store.LedgerError, HistoryError)):
+                            db.execute(sql)
+                        self.assertTrue(revoked)
+                        self.assertNotIn(sql, statements)
+                        self.assertFalse(db.in_transaction)
+                    finally:
+                        db.set_trace_callback(None)
+                        sqlite3.Connection.execute(db, 'UPDATE runtime_takeover SET epoch=?', (epoch,))
+
+    @requirements('RSF-S2-3')
+    def test_maintenance_still_checks_after_operation(self):
+        for owner in self.owners():
+            db = owner._connection
+            statements = []
+            def trace(statement):
+                statements.append(statement)
+                if statement == 'PRAGMA journal_mode=DELETE':
+                    sqlite3.Connection.execute(db, 'UPDATE runtime_takeover SET epoch=epoch+1')
+            db.set_trace_callback(trace)
+            try:
+                with self.assertRaises((learning_store.LedgerError, HistoryError)):
+                    db.execute('PRAGMA journal_mode=DELETE')
+                self.assertIn('PRAGMA journal_mode=DELETE', statements)
+                self.assertFalse(db.in_transaction)
+            finally:
+                db.set_trace_callback(None)
+
+    @requirements('RSF-S2-3', 'RSF-S2-6')
+    def test_pure_history_reads_skip_fence_probe_and_epoch_queries(self):
+        _, history = self.owners()
+        statements = []
+        history._connection.set_trace_callback(statements.append)
+        with mock.patch.object(history._fence, 'check', side_effect=AssertionError('read checked fence')), \
+                mock.patch.object(history._fence, 'lock', side_effect=AssertionError('read probed lock')):
+            self.assertEqual(0, history.learning_outcome_revision())
+            self.assertEqual((), history.learning_outcome_page(0))
+            self.assertEqual((), history.pending_terminals())
+            self.assertEqual([], history.open_withdrawals())
+            self.assertEqual({'ended_by_update_unrecorded': 0}, history.runtime_close_status())
+            with self.assertRaisesRegex(HistoryError, '^history_not_found$'):
+                history.record('event:missing')
+        self.assertFalse(any('runtime_takeover' in sql for sql in statements))
+
+    @requirements('RSF-S2-3', 'RSF-S2-6')
+    def test_pure_learning_reads_skip_nested_helper_fences(self):
+        from tests.test_project_learning_identity import ProjectLearningIdentityTests
+        from tests.test_project_learning_corpus import ProjectLearningCorpusTests
+        identity = ProjectLearningIdentityTests()
+        identity.setUp()
+        self.addCleanup(identity.doCleanups)
+        expected = identity.prepare()
+        corpus = ProjectLearningCorpusTests()
+        corpus.setUp()
+        self.addCleanup(corpus.doCleanups)
+        corpus.begin()
+        corpus.chunk()
+        for case, reads in ((identity, (
+                (identity.domain, identity.store.learning_key_domain_digest), (expected, identity.prepare))),
+                (corpus, ((tuple(corpus.records), lambda: corpus.store.learning_import_records('import-1')),
+                          (tuple(corpus.attestations), lambda: corpus.store.learning_import_attestations('import-1'))))):
+            statements = []
+            case.store._connection.set_trace_callback(statements.append)
+            with mock.patch.object(case.store._fence, 'check', side_effect=AssertionError('read checked fence')):
+                for expected, read in reads:
+                    self.assertEqual(expected, read())
+            self.assertFalse(any('runtime_takeover' in sql for sql in statements))
+
+    @requirements('RSF-S2-3')
+    def test_500_statement_transaction_uses_two_full_probes_and_checks_epoch_between(self):
+        for owner in self.owners():
+            db = owner._connection
+            db.execute('CREATE TEMP TABLE probe_values(value)')
+            version = db.execute('PRAGMA user_version').fetchone()[0]
+            unit = owner._write_unit if isinstance(owner, learning_store.LearningLedger) else owner._transaction
+            for transaction in (False, True):
+                with self.subTest(owner=type(owner).__name__, owner_unit=transaction):
+                    statements = []
+                    db.set_trace_callback(statements.append)
+                    with mock.patch.object(owner._fence, 'lock', wraps=owner._fence.lock) as probes, \
+                            mock.patch.object(store_fence.os, 'open', wraps=os.open) as opens:
+                        if transaction:
+                            with unit():
+                                for index in range(500):
+                                    if index % 100 == 0:
+                                        db.execute('PRAGMA user_version=' + str(version))
+                                    db.execute('INSERT INTO probe_values VALUES(?)', (index,))
+                        else:
+                            db.execute('BEGIN IMMEDIATE')
+                            for index in range(500):
+                                if index % 100 == 0:
+                                    db.execute('PRAGMA user_version=' + str(version))
+                                if index == 250:
+                                    db.execute('SAVEPOINT middle')
+                                db.execute('INSERT INTO probe_values VALUES(?)', (index,))
+                            db.execute('RELEASE middle')
+                            db.commit()
+                    db.set_trace_callback(None)
+                    self.assertEqual(2, probes.call_count)
+                    self.assertLessEqual(opens.call_count, 2)
+                    self.assertGreaterEqual(sum(sql.startswith('SELECT epoch,new_digest') for sql in statements), 502)
+            db.execute('BEGIN IMMEDIATE')
+            db.execute('INSERT INTO probe_values VALUES(9999)')
+            sqlite3.Connection.execute(db, 'UPDATE runtime_takeover SET epoch=epoch+1')
+            with self.assertRaises((learning_store.LedgerError, HistoryError)):
+                db.execute('INSERT INTO probe_values VALUES(10000)')
+            db.rollback()
+            self.assertEqual(1000, db.execute('SELECT COUNT(*) FROM probe_values').fetchone()[0])
+
+    @requirements('RSF-S2-3')
+    def test_executescript_does_not_implicitly_commit_owner_transaction(self):
+        for owner in self.owners():
+            db = owner._connection
+            db.execute('CREATE TEMP TABLE script_values(value)')
+            for script in (db.executescript, db.cursor().executescript):
+                with self.subTest(owner=type(owner).__name__, script=script):
+                    db.execute('BEGIN IMMEDIATE')
+                    db.execute('INSERT INTO script_values VALUES(1)')
+                    script("INSERT INTO script_values VALUES('semi;colon'); INSERT INTO script_values VALUES(2);")
+                    self.assertTrue(db.in_transaction)
+                    self.assertEqual([1, 'semi;colon', 2], [r[0] for r in db.execute('SELECT * FROM script_values')])
+                    with self.assertRaises(sqlite3.OperationalError):
+                        script('INSERT INTO script_values VALUES(3); INVALID SQL;')
+                    self.assertTrue(db.in_transaction)
+                    self.assertEqual(4, db.execute('SELECT COUNT(*) FROM script_values').fetchone()[0])
+                    db.rollback()
+                    self.assertEqual([], list(db.execute('SELECT * FROM script_values')))
+
+    @requirements('RSF-S2-3')
+    def test_script_commit_and_outermost_release_probe_lock_before_commit(self):
+        for owner in self.owners():
+            db = owner._connection
+            db.execute('CREATE TEMP TABLE commit_values(value)')
+            descriptor = owner._fence.descriptor
+            for script in (False, True):
+                with self.subTest(owner=type(owner).__name__, script=script):
+                    try:
+                        if script:
+                            db.execute('BEGIN IMMEDIATE')
+                        else:
+                            db.execute('SAVEPOINT "outer;unit"')
+                            db.execute('SAVEPOINT "OUTER;UNIT"')
+                            db.execute('RELEASE "OUTER;UNIT"')
+                        db.execute('INSERT INTO commit_values VALUES(1)')
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                        with self.assertRaises((learning_store.LedgerError, HistoryError)):
+                            if script:
+                                db.executescript('COMMIT;')
+                            else:
+                                db.execute('RELEASE "outer;unit";')
+                        self.assertFalse(db.in_transaction)
+                        self.assertEqual([], list(db.execute('SELECT * FROM commit_values')))
+                    finally:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        db.rollback()
+                        db.execute('DELETE FROM commit_values')
