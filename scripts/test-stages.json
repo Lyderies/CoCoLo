@@ -36,6 +36,7 @@
  "codex:tests.test_account_restart": "unit",
  "codex:tests.test_account_settlement": "integration",
  "codex:tests.test_account_settlement_driver": "integration",
+ "codex:tests.test_account_settlement_recovery": "integration",
  "codex:tests.test_account_settlement_wire": "unit",
  "codex:tests.test_account_slot_health": "integration",
  "codex:tests.test_account_store_recovery": "integration",

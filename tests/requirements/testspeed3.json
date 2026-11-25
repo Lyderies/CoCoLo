@@ -1,0 +1,25 @@
+{
+ "authority": "docs/requirements/testspeed3.md",
+ "requirements": [
+  {
+   "id": "TESTSPEED3-1",
+   "statement": "`codex:tests.test_account_settlement_driver` and the module split out of it, `codex:tests.test_account_settlement_recovery`, each total at most 45 s, measured as the sum of the module's fragments' seconds (what the budget check counts), with full-run parallelism (`--jobs 16` beside `codex:tests.test_project_driver` and `root:test_install`).",
+   "source": "tests/requirements/testspeed3.json#TESTSPEED3-1"
+  },
+  {
+   "id": "TESTSPEED3-2",
+   "statement": "no assertion is removed or weakened. Every changed assertion, renamed test, moved test or changed fixture behaviour is paired old -> new in [`testspeed3/assertions.md`](testspeed3/assertions.md).",
+   "source": "tests/requirements/testspeed3.json#TESTSPEED3-2"
+  },
+  {
+   "id": "TESTSPEED3-3",
+   "statement": "the separate dispatch processes of one settlement test class share one bytecode cache outside the source tree (`dispatch_pycache`, opt-in), so only the first compiles the runtime; the dispatch arguments are unchanged.",
+   "source": "tests/requirements/testspeed3.json#TESTSPEED3-3"
+  },
+  {
+   "id": "TESTSPEED3-4",
+   "statement": "the review-round class `ReviewRoundOneDriverTests` runs from its own module, `test_account_settlement_recovery`, on the same harness (imported, not copied); every one of its tests runs exactly once, in one module or the other, and is registered in the layer, stage and requirement tables.",
+   "source": "tests/requirements/testspeed3.json#TESTSPEED3-4"
+  }
+ ]
+}

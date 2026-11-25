@@ -109,6 +109,8 @@ class DriverHarness(ServiceHarness, CliTestCase):
             self.fail(f'{len(launched())} of {count} children launched within {seconds} s; dispatches: '
                       f'{report}; driver stops: {self.stopped_runs[-6:]}')
 
+    dispatch_pycache = None
+
     def separate_dispatch(self, context, route_path, run_handle, project=None):
         """A second primary process waits on dispatch while this one inspects the run."""
         env = {k: v for k, v in os.environ.items() if not any(m in k.upper() for m in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
@@ -118,7 +120,11 @@ class DriverHarness(ServiceHarness, CliTestCase):
             env.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='claude-primary')
         else:
             env['CODEX_THREAD_ID'] = 'driver-primary'
-        process = subprocess.Popen([sys.executable, '-I', '-B', '-S', str(ORCHESTRATION_ROOT / 'cli.py'), 'dispatch',
+        # TESTSPEED3-3: a class that sets `dispatch_pycache` (a directory) lets its separate dispatches share one bytecode
+        # cache outside the source tree, so only the first compiles the runtime; the arguments after the interpreter
+        # flags are the same.
+        flags = ['-I', '-B', '-S'] if self.dispatch_pycache is None else ['-I', '-S', '-X', 'pycache_prefix=' + self.dispatch_pycache]
+        process = subprocess.Popen([sys.executable, *flags, str(ORCHESTRATION_ROOT / 'cli.py'), 'dispatch',
             '--state-root', str(self.state.root), '--project-root', str(project or self.project), *context,
             '--route', route_path, '--run-handle', run_handle], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         self.addCleanup(lambda: process.poll() is None and process.kill())
