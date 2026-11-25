@@ -1848,7 +1848,11 @@
    "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M5_graceful_stop_retires_rows_before_unlock",
    "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M6_denied_closed_run_retires_without_another_client",
    "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M7_faulted_writer_sends_one_memory_withdrawal",
-   "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M7_refused_registration_drops_entry_and_keeps_withdrawal_outbox"
+   "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M7_refused_registration_drops_entry_and_keeps_withdrawal_outbox",
+   "codex:tests.test_project_driver.RefusedRegistrationViewTests.test_R6_16_a_a_prepare_after_the_failed_run_left_memory_still_answers_run_failed",
+   "codex:tests.test_project_driver.StartupRecoverOpenTests.test_R6_16_a_during_the_start_up_recovery_dispatch_still_answers_run_failed",
+   "codex:tests.test_project_driver.StartupRecoverOpenTests.test_a_failed_start_up_recovery_refuses_the_waiting_register_as_an_unavailable_service",
+   "codex:tests.test_project_driver.StartupRecoverOpenTests.test_an_open_during_the_start_up_recovery_is_registered_and_dispatches"
   ],
   "source": "tests/requirements/rsb-memory-holds.json#RS-B-4",
   "statement": "Instance-bound driver and preparation rows commit before their effects, retire only after memory retirement, and recover only from positive stopped-instance evidence; preserve withdrawal and handoff custody (M1-M8, I1, L4, L6, L7)."

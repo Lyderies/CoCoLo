@@ -2,12 +2,58 @@
 
 Implemented on `feat/rsb-memory-holds`, base `230c2fc0` (0.8.62), plus accepted RS-F
 S6 at `1aabb8e5`. Implementation and registration repair are committed through
-`f69ff690`; the decision-286 review fixes below remain uncommitted as requested.
+`f69ff690`; the decision-286 review fixes below are committed at `8a72aacf` and
+merged onto 0.8.63 (`38a96538`) at `37f2c668`. The final fix (next section) is
+committed on top.
 VERSION and the runtime digest catalogue are unchanged.
 No schema step, installation, merge, push or live-service changes. No test run
 remains in flight. The requirement map preceded tests and implementation.
 
-## Review fix round (decision 286; current evidence)
+## Final fix (review 040-memholds-r2c; current evidence)
+
+Scope: the R6_16 race this unit introduced. Two introduced paths gave a dispatch
+`dispatch_unavailable` instead of the required answer; both are fixed server-side in
+`project_driver.py`. Client retry semantics are unchanged.
+
+1. **Start-up register wait (M9).** The driver queues the start-up memory `recover`
+   and refused `run.register` with `history_service_unavailable` until it was done;
+   the CLI open does not retry, so the run was never registered. Now a register that
+   arrives while that recovery is queued is parked (at most MAX_INTAKE) and answered
+   on the owner step once it is done (registered as any other), or failed (the
+   existing gate refuses `history_service_unavailable`, the pre-unit answer for an
+   unavailable service, and asks for the recovery again). One still waiting after
+   WAIT_SECONDS (the driver's existing bound on a waiting request, inside the CLI's
+   10 s register timeout) is refused the same way. Parked connections close with the driver.
+2. **Late failure view (M10, W5 with M7).** Found by the gate after fix 1: the unit
+   releases closed and `refused_before_claim` runs from memory at once (M7), so a
+   prepare arriving after that read `history_orchestration_unavailable`. W5 requires a
+   late prepare to read the failure for FAILED_VIEW_SECONDS. Such a release now leaves a
+   bounded (MAX_RETIRED_RUNS) failure view keyed by run, checked against host class and
+   inputs digest; M7's immediate removal and `run_closed` describe are unchanged.
+
+| Requirement | Test | Red on unfixed driver → green |
+|---|---|---|
+| M9 | `StartupRecoverOpenTests.test_an_open_during_the_start_up_recovery_is_registered_and_dispatches` | RED `('admitted', True) != ('admitted', False)` (register refused) → GREEN, dispatch outcome `result` |
+| M9 / R6-16 | `StartupRecoverOpenTests.test_R6_16_a_during_the_start_up_recovery_dispatch_still_answers_run_failed` | RED `'run_failed' != 'dispatch_unavailable'` (the reviewed flake, deterministic) → GREEN |
+| M9 failure path | `StartupRecoverOpenTests.test_a_failed_start_up_recovery_refuses_the_waiting_register_as_an_unavailable_service` | Compatibility check, green before and after (no red claimed) |
+| M10 / W5 / R6-16 | `RefusedRegistrationViewTests.test_R6_16_a_a_prepare_after_the_failed_run_left_memory_still_answers_run_failed` | RED `'run_failed' != 'dispatch_unavailable'` → GREEN |
+
+The tests are event-coordinated, with no sleeps: the start-up recovery is put on the
+writer only after the driver has taken the open's register (holding the writer itself
+would also hold the orchestration open the test needs first), and the late dispatch
+is sent only after the driver has dropped the failed run. Red runs used the unfixed
+driver (`37f2c668`) with the new tests. The first gate after fix 1 failed in both
+`test_R6_16_a` variants with the M10 path, which led to fix 2.
+No existing assertion changed (assertions.md unchanged). The four checks are registered under RS-B-4.
+
+Gate (unsandboxed, `--jobs 8`, 17 named modules, 28 units): **522 tests, 122 s wall,
+`failed_units: []`, `metadata_errors: []`, `budget_failures: []`,
+`requirement_failures: []`**. `tests.test_project_driver` reports its existing
+over-budget debt (scenario budget 60 s), not a budget failure. Race check:
+`codex:tests.test_project_driver` twice with `--jobs 12`: 109 tests each, 57 s and
+58 s wall, `failed_units: []`, `metadata_errors: []`.
+
+## Review fix round (decision 286)
 
 This round changes only MED-1 and LOW-1 through LOW-4. Requirement text and
 matching tests preceded the runtime changes. All checks use existing requirement

@@ -1,8 +1,10 @@
 # RS-B memory holds (B2; decision 129.1 A)
 
 Base: `230c2fc0` (0.8.62), plus accepted RS-F S6 at `1aabb8e5`. Implementation and
-registration repair are committed through `f69ff690`; this review round remains
-uncommitted. VERSION and the runtime catalogue stay unchanged.
+registration repair are committed through `f69ff690`; the decision-286 fix round is
+committed at `8a72aacf` and merged onto 0.8.63 (`38a96538`) at `37f2c668`; the final
+fix (review 040-memholds-r2c) follows on the same branch. VERSION and the runtime
+catalogue stay unchanged.
 Authority: supervisor-slices B2 and RS-B draft 2 §6, draft 3 §3/§5/§7,
 draft 4 §4. Existing B3 withdrawal, B6 close and S2/S3 fencing remain authoritative.
 
@@ -27,6 +29,8 @@ or hold is written. No sibling launch directory may be inferred.
 | M5 | Repeated recovery is idempotent; graceful stop retires own memory before releasing lock | `test_M5_recovery_once_and_graceful_stop`; `tests.test_memory_holds_lane.MemoryLaneTests.test_M5_graceful_stop_retires_rows_before_unlock` |
 | M6 | Closed and idle registered entries retire without client abandonment; describe says run_closed | `test_M6_autonomous_retirement`; `tests.test_memory_holds_lane.MemoryLaneTests.test_M6_denied_closed_run_retires_without_another_client` |
 | M7 | Refused registration removes entry while preserving independent withdrawal duty; faulted writer sends once | `test_M7_registration_refusal_preserves_duty`; real-lane refusal and faulted-writer tests in `tests.test_memory_holds_lane`; existing B3 wire/store regressions |
+| M9 | Start-up: a run.register that arrives while the start-up memory recovery is still queued waits for it (bounded by the driver's WAIT_SECONDS, inside the CLI's 10 s register timeout) and then registers; if that recovery failed it is refused `history_service_unavailable`, as an unavailable service answered before this unit. Its dispatch answers as without the delay | `tests.test_project_driver.StartupRecoverOpenTests` (three tests) |
+| M10 | W5 kept with M7: a failed run that memory releases at once (closed, or `refused_before_claim`) still answers a late run.prepare of its host class and inputs with its failure (e.g. `run_failed`) until FAILED_VIEW_SECONDS after its failure, never `dispatch_unavailable` | `tests.test_project_driver.RefusedRegistrationViewTests.test_R6_16_a_a_prepare_after_the_failed_run_left_memory_still_answers_run_failed`; existing `test_R6_16_a_prepare_waiting_on_a_closed_writer_is_refused` |
 | M8 | Submit raises after intent: submit_refused compensation, entry retained, no slot consumed | `test_M8_submit_refused_compensates` |
 | I1 | 1,000 interleaved owner/writer observations across three identities; legal transition states, equality at quiescence | `test_I1_interleaved_observations`, `test_I1_take_and_release_reply_interleavings` |
 | L4 | Ten refused fences: all four never-launch predicates, each violated independently; lease remains armed | `test_L4_never_launch_predicates` |
