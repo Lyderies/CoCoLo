@@ -165,7 +165,7 @@ class HealthMonitor:
 
     @classmethod
     def with_builtin_checks(cls, *, sweep_interval_seconds: float, **limits) -> HealthMonitor:
-        return cls((SelfCheck(sweep_interval_seconds), *limits.pop('checks', ())), **limits)
+        return cls((SelfCheck(sweep_interval_seconds),), **limits)
 
     def register(self, check: Check) -> None:
         name = getattr(check, "name", None)

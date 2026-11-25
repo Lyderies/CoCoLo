@@ -312,6 +312,9 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
         wake.close()
         project_holds_schema.install_wake_guard(project_id, None)
         return {'ready': False, 'reason_code': error.reason_code}
+    from .health_holds import clear_service_finding, save_service_finding, stop_faulted_service
+    def report_service(finding):
+        save_service_finding(directory, finding)
     stopping, checked, faulted, settled = [], [0.0], [], False
     if stopped is None:
         for signum in (signal.SIGTERM, signal.SIGINT):
@@ -327,8 +330,6 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
             # marked its jobs `unknown` with the fault, so that step ends the runs waiting on it
             # (run_unavailable, O10 D12) and their status shows the fault before the service goes.
             if faulted:
-                from .health_holds import stop_faulted_service
-                stop_faulted_service(host, project_id)
                 return True
             faulted.append(True)
             return False
@@ -346,10 +347,17 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
                     or (host.replacing() and host.client_idle_ns() >= idle_stop_ns))
         return False
 
+    reported_fault = False
     try:
+        if not host.faulted():
+            clear_service_finding(directory)
         host.serve(finished)
     finally:
-        host.close()
+        if host.faulted():
+            reported_fault = True
+            stop_faulted_service(host, project_id, report=report_service)
+        else:
+            host.close()
         end = time.monotonic() + 10
         while not host.threads_stopped() and time.monotonic() < end:
             time.sleep(0.01)
@@ -357,6 +365,8 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
             # Decision 179: a stop signal ends the serve loop before its own fault check; the writer fault is
             # checked once more here, so it is never settled or published as a normal stop.
             faulted.append(True)
+        if host.faulted() and not reported_fault:
+            stop_faulted_service(host, project_id, report=report_service)
         if faulted:
             # Nothing is settled or released by a service whose writer faulted: what its store
             # committed is not known here. The next host settles its runs and reconciles the store.

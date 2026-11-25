@@ -937,7 +937,6 @@ class WakeFinalFixTests(StoreBase):
         client.return_value.project.return_value = self.fixture.project_a_id
         with mock.patch.object(project_service, 'CollectorClient', client), \
                 mock.patch.object(project_service, 'ProjectServiceHost', Host), \
-                mock.patch.object(project_service, '_owned_directory'), \
                 mock.patch.object(project_wake, 'WakePublisher', Wake), \
                 mock.patch.object(project_service.CollectorPaths, 'digest_key', lambda self: b'k' * 32):
             report = project_service.serve_project(self.fixture.state_root, self.fixture.project_a,

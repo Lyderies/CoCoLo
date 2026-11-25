@@ -9,12 +9,12 @@
   {
    "id": "S8-HM3-2",
    "source": "tests/requirements/s8-hm3.json#S8-HM3-2",
-   "statement": "Report project holds more than one sweep interval behind their deadline and eligible check, using the persisted clock floor without advancing it."
+   "statement": "Report account and project holds more than one sweep late on every pass, using the saved project clock floor without advancing it."
   },
   {
    "id": "S8-HM3-3",
    "source": "tests/requirements/s8-hm3.json#S8-HM3-3",
-   "statement": "Report a faulted writer service before stopping it through D13; preserve successor settlement and report stop failures."
+   "statement": "Persist a faulted writer service finding before D13 stop, including stop-signal-first shutdown; expose it in health status, preserve successor settlement and report failed stops."
   },
   {
    "id": "S8-HM3-4",
@@ -24,12 +24,12 @@
   {
    "id": "S8-HM3-5",
    "source": "tests/requirements/s8-hm3.json#S8-HM3-5",
-   "statement": "Bound read-only source reads using keyset pages, existing indexes and deadlines; continue past page limits without a lifetime refusal."
+   "statement": "Bound indexed source reads by pages and deadlines; execute every ledger statement through the sole owner and keep project history readers read-only."
   },
   {
    "id": "S8-HM3-6",
    "source": "tests/requirements/s8-hm3.json#S8-HM3-6",
-   "statement": "Use project-scoped findings with fixed plain owner wording and no private content; register the holds check in the monitor."
+   "statement": "Use scoped fixed plain findings; preserve builtin registration API and defer collector registration to the primary after S5."
   }
  ]
 }

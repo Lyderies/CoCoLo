@@ -1,34 +1,117 @@
 {
   "base": "ce81bd96",
+  "reviewed_head": "2a46a0f4",
   "branch": "feat/s8-hm3",
+  "round": "Fix round",
   "requirements": {
     "S8-HM3-1": "passed",
     "S8-HM3-2": "passed",
-    "S8-HM3-3": "passed",
+    "S8-HM3-3": "unit passed; real service wiring blocked by sockets",
     "S8-HM3-4": "passed",
     "S8-HM3-5": "passed",
-    "S8-HM3-6": "passed"
+    "S8-HM3-6": "passed; primary collector registration deferred"
   },
-  "metadata_errors": [],
-  "budget_failures": [],
-  "named_modules_seconds": {
-    "codex:tests.test_health_containers": 1.1180481250630692,
-    "codex:tests.test_health_holds": 1.1724450000328943,
-    "codex:tests.test_lifetime_cap_guard": 0.7755539580248296
+  "red_before_fix": {
+    "MED-1": "Project overdue absent on passes 0, 2, 4; account overdue absent after live-window rotation.",
+    "MED-2": "Missing durable status API; unreadable history hid persisted fault; report I/O error prevented close.",
+    "MED-3": "Primary-owned file byte equality failed.",
+    "LOW-1": "The check attempted an independent ledger open_reader on the check thread.",
+    "LOW-2": "Account overdue absent with wall 1000 and saved project floor 100000.",
+    "LOW-3": "Unrelated lifetime cap prefix byte comparison failed.",
+    "LOW-4": "Project identity appeared literally in validator SQL."
+  },
+  "focused": {
+    "elapsed_seconds": 1.6,
+    "discovery_seconds": 2.8141565839760005,
+    "preflight_seconds": 8.242055374081247,
+    "metadata_errors": [],
+    "budget_failures": [],
+    "failed_units": [],
+    "tests": {
+      "codex": 56
+    },
+    "slowest_units": [
+      [
+        "codex:tests.test_health_holds",
+        1.6
+      ],
+      [
+        "codex:tests.test_health_containers",
+        1.0
+      ],
+      [
+        "codex:tests.test_lifetime_cap_guard",
+        1.0
+      ]
+    ]
   },
   "test_counts": {
-    "tests.test_health_holds": 23,
+    "tests.test_health_holds": 33,
     "tests.test_lifetime_cap_guard": 4,
     "tests.test_health_containers": 19
   },
   "expected_skips": {
     "tests.test_health_containers": 1
   },
-  "expected_failures": {
-    "tests.test_runtime_release": "Only the current-version digest pin fails; VERSION and runtime-releases.json are intentionally unchanged."
+  "wider_named_run": {
+    "elapsed_seconds": 47.2,
+    "tests": {
+      "codex": 119
+    },
+    "metadata_errors": [],
+    "results": {
+      "tests.test_health_monitor": {
+        "passed": 22,
+        "socket_errors": 7
+      },
+      "tests.test_project_service_startup": {
+        "passed": 0,
+        "socket_errors": 14
+      },
+      "tests.test_project_service": {
+        "passed": 10,
+        "subprocess_socket_start_failure": 1
+      },
+      "tests.test_e2a_wake_wire": {
+        "passed": 18,
+        "socket_or_cli_start_failures": 12,
+        "fixture_directory_error_fixed": 1
+      },
+      "tests.test_ledger_owner_wiring": {
+        "passed": 26,
+        "socket_or_host_probe_errors": 3,
+        "unresolved_deferred_claim_timeout_tests": 2,
+        "additional_timeout_cleanup_failures": 2
+      },
+      "tests.test_runtime_release": {
+        "passed": 2,
+        "expected_digest_pin_failure": 1
+      }
+    }
   },
-  "sandbox_blocked": {
-    "tests.test_health_monitor": 7,
-    "tests.test_project_service_startup": 13
-  }
+  "wire_recheck_after_fixture_fix": {
+    "elapsed_seconds": 36.4,
+    "metadata_errors": [],
+    "results": {
+      "tests.test_e2a_wake_wire": {
+        "passed": 19,
+        "socket_or_cli_start_failures": 12,
+        "decision_179_compatibility_test": "passed"
+      },
+      "tests.test_project_service_startup": {
+        "passed": 0,
+        "socket_errors": 14
+      }
+    }
+  },
+  "primary_rerun_modules": [
+    "tests.test_project_service_startup",
+    "tests.test_project_service",
+    "tests.test_health_monitor",
+    "tests.test_e2a_wake_wire",
+    "tests.test_ledger_owner_wiring"
+  ],
+  "release_files_changed": false,
+  "committed": false,
+  "background_tests_running": false
 }

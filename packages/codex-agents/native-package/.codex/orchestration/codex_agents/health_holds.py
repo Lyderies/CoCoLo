@@ -14,6 +14,9 @@ from __future__ import annotations
 from contextlib import closing
 from dataclasses import replace
 import logging
+import os
+import secrets
+import stat
 from pathlib import Path
 import re
 import sqlite3
@@ -111,6 +114,11 @@ class ValidatorPages:
         self.cursors[sql] = (last, total, epoch)
         # The validators use one top-level WHERE, then optionally LIMIT 1. Their
         # subqueries follow that WHERE. Preserve parentheses around OR predicates.
+        # Number predicate parameters explicitly, so the project bind may be
+        # inserted before them without changing their original order.
+        positions = iter(range(len(rows) + 1, len(rows) + len(parameters) + 1))
+        sql = re.sub(r'\?', lambda _: '?' + str(next(positions)), sql)
+        root = _ROOT.search(sql)
         bounded = sql[:root.start()] + f'FROM {table}' + (f' {alias}' if alias != table else '') + sql[root.end():]
         start = bounded.find(' WHERE ', root.start())
         if start < 0:
@@ -118,21 +126,15 @@ class ValidatorPages:
             start = bounded.index(' WHERE ', root.start())
         suffix = ' LIMIT 1' if bounded.endswith(' LIMIT 1') else ''
         end = len(bounded) - len(suffix) if suffix else len(bounded)
-        selection = ','.join('?' for _ in rows) or 'NULL'
-        project_filter = ''
-        if self.project_id:
-            project = self.project_id.replace("'", "''")
-            project_filter = f" AND {alias}.project_id='{project}'"
+        selection = ','.join('?' + str(i + 1) for i in range(len(rows))) or 'NULL'
+        project_bind = '?' + str(len(rows) + len(parameters) + 1)
+        project_filter = f' AND {alias}.project_id={project_bind}' if self.project_id else ''
         bounded = (bounded[:start] + f' WHERE {alias}.rowid IN ({selection}){project_filter} AND ('
                    + bounded[start + 7:end] + ')' + suffix)
         if self.project_id:
-            # The project's identity is already known to this check. The original
-            # scalar singleton read becomes a primary-key lookup rather than a scan.
-            project = self.project_id.replace("'", "''")
             bounded = bounded.replace('SELECT project_id FROM history_identity',
-                                      "SELECT project_id FROM history_identity WHERE project_id='" + project + "'")
-        # Bind the window before the predicate's own parameters.
-        args = (*[row[0] for row in rows], *parameters)
+                                      'SELECT project_id FROM history_identity WHERE project_id=' + project_bind)
+        args = (*[row[0] for row in rows], *parameters, *((self.project_id,) if self.project_id else ()))
         self.plans.append(self.connection.execute('EXPLAIN QUERY PLAN ' + bounded, args).fetchall())
         result = self.connection.execute(bounded, args)
         if 'SUM(context_size)' in sql:
@@ -219,10 +221,12 @@ class HoldsCheck(Check):
         floor = connection.execute('SELECT last_observed_at_ms FROM result_identity WHERE project_id=?',
                                    (project_id,)).fetchone()
         now = max(context.now_ms, floor[0] or 0) if floor else context.now_ms
-        overdue = pages.execute(
+        overdue = connection.execute(
             "SELECT 1 FROM project_holds h INDEXED BY project_holds_due WHERE h.state<>'released' "
-            'AND h.due_at_ms IS NOT NULL AND h.due_at_ms<? AND h.next_check_ms<? LIMIT 1',
-            (now - self.interval_ms, now - self.interval_ms)).fetchone()
+            "AND h.state IN ('held','releasing') AND h.project_id=? "
+            'AND h.due_at_ms IS NOT NULL AND h.due_at_ms<? AND h.next_check_ms<? '
+            'ORDER BY h.state,h.next_check_ms LIMIT 1',
+            (project_id, now - self.interval_ms, now - self.interval_ms)).fetchone()
         if overdue:
             findings.append(_finding(project_id, 'hold_overdue',
                                      'A held resource is more than one sweep late for its next check; the supervisor must act.'))
@@ -262,17 +266,17 @@ class HoldsCheck(Check):
                     latched.clear()
                     clean.clear()
             findings.extend(latched.values())
-            if self._account_overdue(pages, context):
+            if self._account_overdue(connection, context, project):
                 findings.append(_finding(project, 'hold_overdue',
                                          'A held resource is more than one sweep late for its next check; the supervisor must act.'))
         if project_id is None:
             self._project_after = projects[-1][0] if projects else ''
         return findings
 
-    def _account_overdue(self, pages, context):
+    def _account_overdue(self, connection, context, project_id):
         from .active_run_capacity import crashed_claim
         from .legacy_slots import deadline_sql, register_legacy_functions
-        register_legacy_functions(pages)
+        register_legacy_functions(connection)
         cutoff = context.now_ms - self.interval_ms
         crashed, parameters = crashed_claim('a', cutoff, time.monotonic_ns())
         crashed = crashed.replace(deadline_sql('a'), _legacy_deadline())
@@ -280,7 +284,7 @@ class HoldsCheck(Check):
         # reboot comparison itself still uses the current monotonic reference.
         parameters = (parameters[0], parameters[1] - self.interval_ms * 1_000_000, *parameters[2:])
         prefix = ("SELECT 1 FROM run_holds r INDEXED BY run_holds_due WHERE r.state<>'released' "
-                  "AND r.state='held' AND r.next_check_ms<? AND (")
+                  "AND r.state='held' AND r.project_id=? AND r.next_check_ms<? AND (")
         sql = prefix + (
             "(r.kind='binding' AND EXISTS(SELECT 1 FROM host_run_bindings h WHERE h.project_id=r.project_id "
             "AND h.handle_digest=r.identity AND h.binding_state='pending' AND h.expires_at_ms<?)) "
@@ -288,46 +292,75 @@ class HoldsCheck(Check):
             "WHERE p.project_id=r.project_id AND p.request_key=r.identity AND p.state='reserved' "
             "AND p.deadline_at_ms<?)) OR (r.kind='run_slot' AND EXISTS(SELECT 1 FROM active_run_capacity a "
             "WHERE a.project_id=r.project_id AND a.handle_digest=r.identity AND a.released_at_ms IS NULL AND "
-            + crashed + '))) LIMIT 1')
-        return pages.execute(sql, (cutoff, cutoff, cutoff, *parameters)).fetchone() is not None
+            + crashed + '))) ORDER BY r.next_check_ms LIMIT 1')
+        return connection.execute(sql, (project_id, cutoff, cutoff, cutoff, *parameters)).fetchone() is not None
+
+    def _owner_read(self, context, operation):
+        """One bounded owner request; no connection or cursor crosses the handoff."""
+        from . import ledger_waits
+        from .sql_read_budget import SQLReadError
+        owner = vars(self.state).get('_ledger_owner')
+        if owner is None:
+            raise SQLReadError('sql_read_unavailable')
+        def read():
+            connection = owner.ledger._connection
+            connection.set_progress_handler(lambda: int(context.expired()), SQL_PROGRESS_OPS)
+            try:
+                connection.execute('BEGIN')
+                return operation(connection)
+            finally:
+                connection.rollback()
+                connection.set_progress_handler(None, 0)
+        deadline = min(context.deadline, time.monotonic() + ledger_waits.LEDGER_REQUEST_WAIT_MS / 1000)
+        with ledger_waits.request_until(int(deadline * 1_000_000_000)):
+            return owner.call(read, caller='health_holds', contain_errors=True)
 
     def run(self, context):
+        from .sql_read_budget import SQLReadError
         if self.state is None or context.expired():
             return []
         project_id = None
+        service = []
         try:
-            with closing(open_reader(self.state.database)) as account:
-                account.set_progress_handler(lambda: int(context.expired()), SQL_PROGRESS_OPS)
-                projects = account.execute('SELECT project_id FROM projects WHERE project_id>? '
-                                           'ORDER BY project_id LIMIT ?',
-                                           (self._project_after, READ_PAGE_ROWS)).fetchall()
-                self._observed.pop(None, None)
-                if not projects:
-                    self._project_after = ''
-                    # Retained state ends when its project leaves the registry.
-                    self._cursors = {key: value for key, value in self._cursors.items() if key[1] in self._seen}
-                    for cache in (self._observed, self._latched, self._clean_pages,
-                                  self._account_latched, self._account_clean):
-                        for deleted in set(cache) - self._seen:
-                            del cache[deleted]
-                    self._seen.clear()
-                    projects = account.execute('SELECT project_id FROM projects WHERE project_id>? '
-                                               'ORDER BY project_id LIMIT ?', ('', READ_PAGE_ROWS)).fetchall()
-                for row in projects:
-                    if context.expired():
-                        break
-                    project_id = row[0]
-                    self._project_after = project_id
-                    self._seen.add(project_id)
-                    findings = self.check_account(account, context, project_id)
-                    database = self.state.root / 'projects' / project_id / 'history.sqlite3'
-                    if database.exists() and not context.expired():
-                        with closing(open_reader(database)) as project:
-                            findings.extend(self.check_project(project, project_id, context, self.state.digest_key()))
-                    self._observed[project_id] = (self._monotonic(), findings)
-        except (OSError, sqlite3.Error, TimeoutError):
+            def projects_page(account):
+                return [row[0] for row in account.execute(
+                    'SELECT project_id FROM projects WHERE project_id>? ORDER BY project_id LIMIT ?',
+                    (self._project_after, READ_PAGE_ROWS)).fetchall()]
+            projects = self._owner_read(context, projects_page)
+            self._observed.pop(None, None)
+            if not projects:
+                self._project_after = ''
+                self._cursors = {key: value for key, value in self._cursors.items() if key[1] in self._seen}
+                for cache in (self._observed, self._latched, self._clean_pages,
+                              self._account_latched, self._account_clean):
+                    for deleted in set(cache) - self._seen:
+                        del cache[deleted]
+                self._seen.clear()
+                projects = self._owner_read(context, projects_page)
+            for project_id in projects:
+                if context.expired():
+                    break
+                self._project_after = project_id
+                self._seen.add(project_id)
+                directory = self.state.root / 'projects' / project_id
+                database = directory / 'history.sqlite3'
+                effective = context
+                service = []
+                service = service_findings(directory, project_id)
+                findings = list(service)
+                if database.exists() and not context.expired():
+                    with closing(open_reader(database)) as project:
+                        project.set_progress_handler(lambda: int(context.expired()), SQL_PROGRESS_OPS)
+                        floor = project.execute('SELECT last_observed_at_ms FROM result_identity WHERE project_id=?',
+                                                (project_id,)).fetchone()
+                        if floor:
+                            effective = replace(context, now_ms=max(context.now_ms, floor[0] or 0))
+                        findings.extend(self.check_project(project, project_id, effective, self.state.digest_key()))
+                findings.extend(self._owner_read(effective, lambda account, ctx=effective, pid=project_id: self.check_account(account, ctx, pid)))
+                self._observed[project_id] = (self._monotonic(), findings)
+        except (OSError, sqlite3.Error, TimeoutError, SQLReadError):
             if not context.expired():
-                self._observed[project_id] = (self._monotonic(), [_finding(
+                self._observed[project_id] = (self._monotonic(), [*service, _finding(
                     project_id, 'holds_unreadable', 'The held resources could not be checked; the check will try again.')])
         return self._findings()
 
@@ -342,6 +375,52 @@ class HoldsCheck(Check):
         return findings
 
 
+SERVICE_STATUS = 'service-writer-status'
+_SERVICE_TEXT = {
+    'service_writer_fault': 'The project service can no longer save results; it is stopping so a new service can recover.',
+    'service_stop_failed': 'The project service could not stop after it stopped saving results; its resources remain held.',
+}
+
+
+def save_service_finding(directory, finding):
+    """Atomically retain only a fixed reason; never exception text or private data."""
+    target = Path(directory) / SERVICE_STATUS
+    temporary = target.with_name('.' + SERVICE_STATUS + '-' + secrets.token_hex(8))
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, 'wb') as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(finding.reason_code.encode('ascii'))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def clear_service_finding(directory):
+    """Only the successfully started successor acknowledges the old fault."""
+    (Path(directory) / SERVICE_STATUS).unlink(missing_ok=True)
+
+
+def service_findings(directory, project_id):
+    try:
+        descriptor = os.open(Path(directory) / SERVICE_STATUS, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return []
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600:
+            raise OSError('service status unavailable')
+        reason = os.read(descriptor, 64).decode('ascii')
+    finally:
+        os.close(descriptor)
+    if reason not in _SERVICE_TEXT:
+        raise OSError('service status unavailable')
+    return [_finding(project_id, 'service_writer_fault', _SERVICE_TEXT['service_writer_fault'], 'service'),
+            *([_finding(project_id, reason, _SERVICE_TEXT[reason], 'service')] if reason == 'service_stop_failed' else [])]
+
+
 def stop_faulted_service(host, project_id, *, report=None):
     """D13's one permitted action: report the fault, then close; never settle here."""
     if not host.faulted():
@@ -350,12 +429,15 @@ def stop_faulted_service(host, project_id, *, report=None):
     finding = _finding(project_id, 'service_writer_fault',
                        'The project service can no longer save results; it is stopping so a new service can recover.',
                        'service')
-    report(finding)
     try:
-        host.close()
-    except Exception:
-        finding = _finding(project_id, 'service_stop_failed',
-                           'The project service could not stop after it stopped saving results; its resources remain held.',
-                           'service')
         report(finding)
+    finally:
+        # Reporting I/O must never prevent D13's close attempt.
+        try:
+            host.close()
+        except Exception:
+            finding = _finding(project_id, 'service_stop_failed',
+                               'The project service could not stop after it stopped saving results; its resources remain held.',
+                               'service')
+            report(finding)
     return finding

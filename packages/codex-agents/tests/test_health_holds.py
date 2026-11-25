@@ -2,6 +2,8 @@
 from contextlib import closing
 import sqlite3
 import time
+import threading
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -70,6 +72,157 @@ class HoldsTests(unittest.TestCase):
             self.assertEqual(expected, 'hold_overdue' in [f.reason_code for f in found])
         self.assertEqual('held', fixture.ledger._connection.execute(
             "SELECT state FROM run_holds WHERE identity=?", ('a' * 64,)).fetchone()[0])
+
+    def account_fixture(self):
+        from tests.test_learning_store import LearningStoreTests
+        from codex_agents.ledger_owner import LedgerOwner
+        fixture = LearningStoreTests(methodName='runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        owner = LedgerOwner(ledger=fixture.ledger)
+        return fixture, owner
+
+    def due_binding(self, fixture, identity, *, due=1000, project=None):
+        fixture.ledger._connection.execute(
+            'INSERT INTO host_run_bindings(project_id,handle_digest,run_id,assignment_digest,task_digest,'
+            'route_digest,configuration_digest,client_version,created_at_ms,expires_at_ms,binding_state) '
+            "VALUES(?,?,?,?,?,?,?,?,0,?,'pending')",
+            (project or fixture.project_a_id, identity, 'run-' + identity, 'b' * 64, 'c' * 64, 'd' * 64, 'e' * 64, 'fixture', due))
+
+    def test_project_overdue_stays_present_past_live_page(self):
+        self.base.reserve()
+        self.store._connection.execute("UPDATE project_holds SET due_at_ms=1000,next_check_ms=1000 WHERE kind='lease'")
+        for number in range(holds.READ_PAGE_ROWS + 5):
+            self.orphan(f'other-{number}')
+        for turn in range(5):
+            with self.subTest(turn=turn):
+                self.assertIn('hold_overdue', [f.reason_code for f in self.findings(61_001)])
+
+    def test_account_overdue_stays_present_and_project_scoped_past_live_page(self):
+        fixture, owner = self.account_fixture()
+        self.due_binding(fixture, 'a' * 64)
+        for number in range(holds.READ_PAGE_ROWS + 5):
+            self.due_binding(fixture, f'{number + 1:064x}', due=900_000, project=fixture.project_b_id)
+        for turn in range(5):
+            found = self.check.check_account(owner.ledger._connection, self.context(61_001))
+            self.assertEqual([fixture.project_a_id], [f.project_id for f in found if f.reason_code == 'hold_overdue'], turn)
+
+    def test_account_overdue_uses_saved_project_clock_floor_without_advancing(self):
+        fixture, owner = self.account_fixture()
+        self.due_binding(fixture, 'a' * 64)
+        directory = fixture.state.root / 'projects' / fixture.project_a_id
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        directory.parent.chmod(0o700)
+        directory.chmod(0o700)
+        # A real project history at its registered identity, with a persisted clock ahead of wall time.
+        from codex_agents.project_history import ProjectHistory
+        with closing(ProjectHistory(directory, fixture.project_a_id, result_key=fixture.state.digest_key(),
+                                    result_capacity=self.store._result_capacity)) as project:
+            project._connection.execute('UPDATE result_identity SET last_observed_at_ms=100000')
+        check = holds.HoldsCheck(fixture.state, sweep_interval_seconds=60)
+        found = check.run(self.context(1000))
+        self.assertIn('hold_overdue', [f.reason_code for f in found if f.project_id == fixture.project_a_id])
+        with closing(holds.open_reader(directory / 'history.sqlite3')) as project:
+            self.assertEqual(100000, project.execute('SELECT last_observed_at_ms FROM result_identity').fetchone()[0])
+
+    def test_runtime_account_sql_runs_only_on_owner_without_opening_reader(self):
+        from tests.test_ledger_owner_wiring import LedgerOwnerWiringTests
+        fixture = LedgerOwnerWiringTests(methodName='runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.start_owner()
+        check = holds.HoldsCheck(fixture.state, sweep_interval_seconds=60)
+        fixture.sql.clear()
+        original = holds.open_reader
+        def project_reader(path):
+            self.assertNotEqual(fixture.state.database, Path(path), 'check opened an independent ledger reader')
+            return original(path)
+        with mock.patch.object(holds, 'open_reader', side_effect=project_reader):
+            self.assertEqual([], check.run(self.context()))
+        self.assertTrue(fixture.sql)
+        self.assertTrue(all(thread is fixture.thread for thread, sql in fixture.sql))
+        self.assertFalse(fixture.owner.ledger._connection.in_transaction)
+        self.assertEqual({}, fixture.owner.queue.snapshot()['refusals'])
+
+    def test_durable_service_status_reaches_monitor_and_clears_on_recovery(self):
+        fixture, owner = self.account_fixture()
+        directory = fixture.state.root / 'projects' / fixture.project_a_id
+        directory.mkdir(parents=True, mode=0o700)
+        # The service writes only a fixed status code; a fresh check must pick it up.
+        for reason in ('service_writer_fault', 'service_stop_failed'):
+            finding = holds._finding(fixture.project_a_id, reason, holds._SERVICE_TEXT[reason], 'service')
+            holds.save_service_finding(directory, finding)
+            check = holds.HoldsCheck(fixture.state, sweep_interval_seconds=60)
+            monitor = HealthMonitor((check,))
+            worker = threading.Thread(target=monitor.run_pass)
+            worker.start()
+            end = time.monotonic() + 5
+            while worker.is_alive() and time.monotonic() < end:
+                owner.pump()
+                worker.join(.01)
+            self.assertFalse(worker.is_alive())
+            view = monitor.view(fixture.project_a_id)
+            self.assertIn(reason, [f['reason_code'] for f in view['findings']])
+            self.assertIn('finding(s) to look at', view['summary'])
+            self.assertEqual([], monitor.view(fixture.project_b_id)['findings'])
+        holds.clear_service_finding(directory)
+        self.assertEqual([], check.run(self.context()))
+
+    def test_durable_service_fault_survives_unreadable_history(self):
+        fixture, owner = self.account_fixture()
+        directory = fixture.state.root / 'projects' / fixture.project_a_id
+        directory.mkdir(parents=True, mode=0o700)
+        holds.save_service_finding(directory, holds._finding(
+            fixture.project_a_id, 'service_writer_fault', 'The service writer stopped.', 'service'))
+        (directory / 'history.sqlite3').write_bytes(b'not a database')
+        found = holds.HoldsCheck(fixture.state, sweep_interval_seconds=60).run(self.context())
+        self.assertIn('service_writer_fault', [f.reason_code for f in found])
+        self.assertIn('holds_unreadable', [f.reason_code for f in found])
+
+    def test_report_io_failure_still_attempts_service_close(self):
+        host = mock.Mock()
+        host.faulted.return_value = True
+        def unavailable(finding):
+            raise OSError('PRIVATE-PATH')
+        with self.assertRaises(OSError):
+            holds.stop_faulted_service(host, PROJECT_A, report=unavailable)
+        host.close.assert_called_once_with()
+
+    def test_project_id_is_bound_in_validator_queries(self):
+        self.base.reserve()
+        class Recording:
+            def __init__(inner, connection):
+                inner.connection = connection
+                inner.calls = []
+            def __getattr__(inner, name):
+                return getattr(inner.connection, name)
+            def execute(inner, sql, parameters=()):
+                inner.calls.append((sql, parameters))
+                return inner.connection.execute(sql, parameters)
+        with closing(holds.open_reader(self.path)) as connection:
+            recording = Recording(connection)
+            holds.validate_project(holds.ValidatorPages(recording, {}, self.context(), PROJECT_A), leases.fixtures.KEY)
+            self.assertTrue(recording.calls)
+            self.assertFalse(any(PROJECT_A in sql for sql, args in recording.calls))
+            self.assertTrue(any(PROJECT_A in args for sql, args in recording.calls))
+
+    def test_registration_does_not_edit_primary_owned_files_or_builtin_api(self):
+        import subprocess
+        from tests.support import ORCHESTRATION_ROOT
+        repository = Path(__file__).resolve().parents[3]
+        for name in ('learning_store.py', 'health_monitor.py'):
+            path = ORCHESTRATION_ROOT / 'codex_agents' / name
+            original = subprocess.check_output(['git', 'show', 'ce81bd96:' + str(path.relative_to(repository))], cwd=repository)
+            self.assertEqual(original, path.read_bytes(), name)
+
+    def test_unrelated_lifetime_caps_bytes_are_preserved(self):
+        import subprocess
+        repository = Path(__file__).resolve().parents[3]
+        path = Path(__file__).with_name('lifetime_caps.json')
+        original = subprocess.check_output(['git', 'show', 'ce81bd96:' + str(path.relative_to(repository))], cwd=repository)
+        # S8 adds entries only at the end of the existing cap map.
+        prefix = original[:original.rfind(b'\n  }')]
+        self.assertTrue(path.read_bytes().startswith(prefix))
 
     def test_missing_hold_is_reported(self):
         self.base.reserve()
@@ -171,6 +324,8 @@ class HoldsTests(unittest.TestCase):
             with closing(holds.open_reader(fixture.state.database)) as reader:
                 found.extend(self.check.check_account(reader, self.context()))
         self.assertTrue(any(f.project_id == target and f.reason_code == 'hold_source_mismatch' for f in found))
+        from codex_agents.ledger_owner import LedgerOwner
+        LedgerOwner(ledger=fixture.ledger)
         runtime = holds.HoldsCheck(fixture.state, sweep_interval_seconds=60)
         runtime_findings = []
         for _ in range(3):
@@ -183,6 +338,8 @@ class HoldsTests(unittest.TestCase):
         fixture = LearningStoreTests(methodName='runTest')
         fixture.setUp()
         self.addCleanup(fixture.tearDown)
+        from codex_agents.ledger_owner import LedgerOwner
+        LedgerOwner(ledger=fixture.ledger)
         check = holds.HoldsCheck(fixture.state, sweep_interval_seconds=60)
         clock = [100.0]
         check._monotonic = lambda: clock[0]
@@ -274,7 +431,8 @@ class HoldsTests(unittest.TestCase):
         self.assertTrue(all(f.outcome == 'reported' for f in found))
 
     def test_registration(self):
-        monitor = HealthMonitor.with_builtin_checks(sweep_interval_seconds=60, checks=(self.check,))
+        monitor = HealthMonitor.with_builtin_checks(sweep_interval_seconds=60)
+        monitor.register(self.check)
         self.assertIn('holds', [c.name for c in monitor._checks])
 
     def test_faulted_service_reported_then_stopped(self):
@@ -329,6 +487,22 @@ HoldsTests.test_context_byte_budget_does_not_combine_changed_snapshots.__require
 HoldsTests.test_account_due_binding_is_reported_without_release.__requirements__ = ('S8-HM3-2',)
 HoldsTests.test_past_legacy_evidence_limit.__requirements__ = ('S8-HM3-5',)
 HoldsTests.__why_not_scenario__ = 'Scenario: real temporary stores and the account fixture owner-key helper; no live services or provider calls.'
+
+for _name, _ids in {
+    'test_project_overdue_stays_present_past_live_page': ('S8-HM3-2',),
+    'test_account_overdue_stays_present_and_project_scoped_past_live_page': ('S8-HM3-2',),
+    'test_account_overdue_uses_saved_project_clock_floor_without_advancing': ('S8-HM3-2',),
+    'test_runtime_account_sql_runs_only_on_owner_without_opening_reader': ('S8-HM3-5',),
+    'test_project_id_is_bound_in_validator_queries': ('S8-HM3-5',),
+    'test_registration_does_not_edit_primary_owned_files_or_builtin_api': ('S8-HM3-6',),
+    'test_unrelated_lifetime_caps_bytes_are_preserved': ('S8-HM3-5',),
+}.items():
+    getattr(HoldsTests, _name).__requirements__ = _ids
+
+HoldsTests.test_durable_service_status_reaches_monitor_and_clears_on_recovery.__requirements__ = ('S8-HM3-3',)
+
+HoldsTests.test_durable_service_fault_survives_unreadable_history.__requirements__ = ('S8-HM3-3',)
+HoldsTests.test_report_io_failure_still_attempts_service_close.__requirements__ = ('S8-HM3-3',)
 
 if __name__ == '__main__':
     unittest.main()
