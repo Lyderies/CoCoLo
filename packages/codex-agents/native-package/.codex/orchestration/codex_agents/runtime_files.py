@@ -184,6 +184,7 @@ RUNTIME_FILES = (
     "codex_agents/provider_restrictions.py",
     "codex_agents/providers.py",
     "codex_agents/rate_limit_contracts.py",
+    "codex_agents/recovery_report.py",
     "codex_agents/refusal_steps.py",
     "codex_agents/release_contracts.py",
     "codex_agents/reply_shapes.py",
