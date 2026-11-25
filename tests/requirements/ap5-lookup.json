@@ -1,0 +1,20 @@
+{
+ "authority": "docs/requirements/ap5-lookup.md",
+ "requirements": [
+  {
+   "id": "AP3",
+   "statement": "No schema version change and no owner step: an older same-schema release still opens, reads and appends to an indexed account-ledger copy.",
+   "source": "tests/requirements/ap5-lookup.json#AP3"
+  },
+  {
+   "id": "AP5-2",
+   "statement": "The candidate evidence-link check looks up linked records by identity using an additive index, with flat SQLite VM work for fixed links as unrelated records grow.",
+   "source": "tests/requirements/ap5-lookup.json#AP5-2"
+  },
+  {
+   "id": "AP5-3",
+   "statement": "Preserve candidate evidence results, linked-evidence and history order, and admission checks exactly as before the indexed replacement.",
+   "source": "tests/requirements/ap5-lookup.json#AP5-3"
+  }
+ ]
+}

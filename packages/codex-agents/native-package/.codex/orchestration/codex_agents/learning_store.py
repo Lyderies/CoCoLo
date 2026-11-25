@@ -2333,6 +2333,11 @@ class LearningLedger:
             self._connection.execute(
                 "CREATE INDEX IF NOT EXISTS records_type_project ON records(record_type, project_id)"
             )
+            # AP5-2: evidence names content identities, so seek just those within the project.
+            # Additive and non-unique: existing ledgers and older same-schema readers stay valid.
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS records_project_digest ON records(project_id, content_digest)"
+            )
             # O0b B0-1 (narrowed): the open-time cap reads only live pending bindings, so expired ones
             # piling up never slow it (additive, as above).
             self._connection.execute(
@@ -10240,10 +10245,12 @@ class LearningLedger:
         self, project_id: str, checked: dict[str, Any]
     ) -> None:
         if checked["record_type"] == "candidate":
+            linked = checked["evidence_digests"]
+            placeholders = ",".join("?" for _ in linked)
             evidence_rows = self._connection.execute(
-                "SELECT record_type,content,content_digest FROM records "
-                "WHERE project_id=?",
-                (project_id,),
+                "SELECT record_type,content,content_digest FROM records INDEXED BY records_project_digest "
+                f"WHERE project_id=? AND content_digest IN ({placeholders})",
+                (project_id, *linked),
             ).fetchall()
             evidence = {
                 str(row["content_digest"]): (
@@ -10954,11 +10961,14 @@ class LearningLedger:
         self, project_id: str, candidate: dict[str, Any]
     ) -> bool:
         invalidated = self._owner_invalidated_run_ids_locked(project_id)
+        linked = candidate["evidence_digests"]
+        placeholders = ",".join("?" for _ in linked)
+        # Pin the identity seek: the type index otherwise lets SQLite scan all project outcomes.
         with self._held():
             rows = self._connection.execute(
-                "SELECT content,content_digest FROM records WHERE project_id=? "
-                "AND record_type='outcome'",
-                (project_id,),
+                "SELECT content,content_digest FROM records INDEXED BY records_project_digest WHERE project_id=? "
+                f"AND content_digest IN ({placeholders}) AND record_type='outcome'",
+                (project_id, *linked),
             ).fetchall()
         invalidated_outcomes = {
             str(row["content_digest"])
