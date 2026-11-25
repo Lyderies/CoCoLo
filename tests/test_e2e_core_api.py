@@ -31,9 +31,9 @@ CORE_SOURCE = (ROOT / "packages" / "codex-agents" / "native-package" / ".codex" 
                / "core_api.py").read_text()
 API_OWNS = {"API-2", "API-4", "API-5", "API-6", "API-24", "API-25"}
 RECORDS_OWN = {"API-7", "API-8", "API-9", "API-10", "API-11", "API-12", "API-13", "API-14", "API-15",
-               "API-17", "API-18", "API-19", "API-20", "API-21", "API-22", "API-23", "TERM-13"}
+               "API-18", "API-19", "API-20", "API-21", "API-22", "API-23", "TERM-13"}
 # Unchecked on purpose, each `deferred` with its reason in tests/e2e/requirements.json (decision 259).
-DEFERRED = {"API-1", "API-3", "API-16", "API-26", "API-27", "TERM-5", "TERM-6", "TERM-7", "TERM-17"}
+DEFERRED = {"API-1", "API-3", "API-16", "API-17", "API-26", "API-27", "TERM-5", "TERM-6", "TERM-7", "TERM-17"}
 
 
 def declared(path: Path) -> set:
@@ -231,7 +231,8 @@ class DeclaredTests(unittest.TestCase):
     def test_the_fault_comparators_demand_a_green_baseline_and_a_real_green_to_red_change(self):
         for module, name, ids in ((api, "core_api_broken", api.A_IDS), (records, "core_records_broken", records.B_IDS),
                                   (records, "core_records_reads_broken", records.B_IDS),
-                                  (api, "core_api_mutation_seq_broken", api.A_IDS)):
+                                  (api, "core_api_mutation_seq_broken", api.A_IDS),
+                                  (api, "core_api_newmutation_seq_broken", api.A_IDS)):
             targets = module.FAULT_TARGETS[name]
             spare = next((i for i in ids if i not in targets), None)  # None: every ID is a target of this fault
             with self.subTest(name):

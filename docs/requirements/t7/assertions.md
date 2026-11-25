@@ -191,3 +191,10 @@ requirement/guard test, with the reason. Guard-test names and old text are those
 | faults | core_api_broken, core_records_broken only; no red proof for API-9/10/11/15 and none for API-18's revocation or API-6's changes | added core_api_mutation_seq_broken (API-6), core_records_revocation_broken (API-18), core_records_reads_broken (API-9, 10, 11, 15) | review LOW. More red proof, no check weakened. |
 | teardown (CoreWorld.__exit__, Core.stop) | one core's failing stop skipped the cores after it and the World's own cleanup | each stop isolated; the World's cleanup always runs; a failure is raised after all of it (HarnessError) | review LOW. |
 New guard tests in tests/test_e2e_core_api.py: `test_the_scope_check_needs_a_real_success_from_every_allowed_method` (a ScopeStub that forbids correctly but answers allowed methods `unavailable` or not at all must fail API-19), `test_the_matrix_covers_changes_diff_and_events_subscribe...`, `test_an_exception_that_is_not_an_assertion_is_not_a_red_check`, `TeardownTests`.
+
+## Confirming round (review t7s6-r2c)
+| Where | Old | New | Reason |
+|---|---|---|---|
+| API-17 (check removed) | api17_pushes_are_labelled_capped_quoted_untrusted_and_never_a_decision (green through a manual `deliver_at_safe_point` call in a helper process) | no check; `checks: []`, `deferred: true`, reason "needs runner (A5/A6): no production safe-point delivery" | decision 259. The label, size and rate limits stay covered by packages/codex-agents/tests/test_core_api_talk_control.py (`test_api17_*`) and test_core_api_round5.py. Its fault patch (PUSH_PER_WINDOW) and target are removed with it. |
+| tests/test_e2e_core_api.py `RECORDS_OWN`, `DEFERRED` | RECORDS_OWN had API-17; DEFERRED had nine IDs | API-17 moved to DEFERRED (ten IDs) | same. |
+| API-6 changes (added, none weakened) | eight changes | adds query.reply, decision.answer, control.handoff, control.stop: seq_at equals the events file's last seq on each success, and the in-process adapter and CoreClient give identical answers on two copies of the same records | review r2c point 1. Fault core_api_newmutation_seq_broken proves them. |

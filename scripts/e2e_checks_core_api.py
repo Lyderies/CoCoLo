@@ -80,8 +80,14 @@ FAULTS["core_api_mutation_seq_broken"] = [
     {"module": "codex_agents.core_api",
      "old": "            result[\"seq_at\"] = self._seq\n            return result\n",
      "new": "            if not mutation:\n                result[\"seq_at\"] = self._seq\n            return result\n"}]
+# A third: seq_at is dropped only from the answers of the four changes added to API-6 in the confirming round (the
+# reply, the decision, the handoff and the stop), so API-6 is red on those assertions and on no other.
+FAULTS["core_api_newmutation_seq_broken"] = [
+    {"module": "codex_agents.core_api",
+     "old": "            result[\"seq_at\"] = self._seq\n            return result\n",
+     "new": "            if method not in (\"query.reply\", \"decision.answer\", \"control.handoff\", \"control.stop\"):\n                result[\"seq_at\"] = self._seq\n            return result\n"}]
 FAULT_TARGETS = {"core_api_broken": ("API-2", "API-4", "API-5", "API-6", "API-24", "API-25"),
-                 "core_api_mutation_seq_broken": ("API-6",)}
+                 "core_api_mutation_seq_broken": ("API-6",), "core_api_newmutation_seq_broken": ("API-6",)}
 FAULT_ALSO_RED: dict[str, tuple] = {name: () for name in FAULT_TARGETS}
 
 
@@ -710,7 +716,14 @@ CHANGES = [("context.push", {"kind": "note", "text": "six"}),
            ("unit.verdict", {"id": "U-0001", "verdict": "pass"}),
            ("control.pause", {}), ("control.resume", {}), ("unit.cancel", {"id": "U-0001"}),
            ("routing.set", {"profile": "p", "providers": ["a"], "rows": []}),
-           ("unit.message", {"id": "U-0001", "text": "hello"})]
+           ("unit.message", {"id": "U-0001", "text": "hello"}),
+           # the query asked above is Q-0001 (a fresh inbox); the decision is written to the records before the core starts
+           ("query.reply", {"query_id": "Q-0001", "text": "Yes."}),
+           ("decision.answer", {"id": "D-0001", "choice": "yes"}),
+           ("control.handoff", {}), ("control.stop", {})]
+# Two decisions: the parity step answers D-0001 on the core under test, so the wire step answers D-0002.
+DECISION_ROWS = [{"id": f"D-000{n}", "text": "Merge now?", "why": "CI is green", "options": ["yes", "no"], "ts": 1_000_050 + n}
+                 for n in (1, 2)]
 
 
 def change(wire: Wire, method: str, params: dict) -> tuple[dict | None, dict]:
@@ -726,7 +739,9 @@ def change(wire: Wire, method: str, params: dict) -> tuple[dict | None, dict]:
 def changes_say_seq_at_and_agree_across_adapters(phase: Phase, world) -> None:
     """API-6, the changes: every successful change (and its confirm step) says which event it was current to, the
     value is the events file's last seq, and the two adapters give the same answer to the same change."""
-    core = Core(world, "mut6").start()
+    core = Core(world, "mut6")
+    (core.records / "decisions.jsonl").write_text("".join(json.dumps(row) + "\n" for row in DECISION_ROWS))
+    core.start()
     owner = core.mint("owner", "e2e-owner6")
     copy = core.folder / "copy"
     shutil.copytree(core.records, copy)  # the same records twice, before any change
@@ -738,12 +753,21 @@ def changes_say_seq_at_and_agree_across_adapters(phase: Phase, world) -> None:
         phase.expect("seq_at" in remote["result"], "a change's answer through the product's own client names seq_at: " + method)
     wire = core.wire(owner)
     advanced = 0
+    asked = None
     for method, params in CHANGES:
+        # The parity step above already made each change once on this core: a reply and a decision are answered once,
+        # so the wire step replies to the question it asks now and answers the second decision.
+        if method == "query.reply":
+            params = {**params, "query_id": asked}
+        elif method == "decision.answer":
+            params = {**params, "id": "D-0002"}
         before = last_seq(core.records)
         first, reply = change(wire, method, params)
         if first is not None:
             phase.expect(first.get("seq_at") == before, "the confirm step names the current seq_at: " + method)
         phase.expect("result" in reply, "the change succeeded over the wire: " + method)
+        if method == "query.ask":
+            asked = reply["result"].get("query_id")
         now = last_seq(core.records)
         phase.expect(reply["result"].get("seq_at") == now, "a successful change carries seq_at, the events file's last seq: " + method)
         advanced += 1 if now > before else 0

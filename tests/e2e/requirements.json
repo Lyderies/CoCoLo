@@ -602,9 +602,9 @@
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Talk is labelled and capped. Check: context.push is labelled by source, capped (2 KB, 10 per minute), delivered as quoted untrusted data, and never counted as an owner decision.",
-   "checks": [
-    "api17_pushes_are_labelled_capped_quoted_untrusted_and_never_a_decision"
-   ]
+   "checks": [],
+   "deferred": true,
+   "reason": "needs runner (A5/A6): no production safe-point delivery. Delivery of a push as quoted untrusted data cannot be shown on the real path in 0.8.60 (decision 259); the label, size and rate limits are covered by packages/codex-agents/tests/test_core_api_*.py."
   },
   {
    "id": "API-18",
