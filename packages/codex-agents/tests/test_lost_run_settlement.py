@@ -57,19 +57,21 @@ class LostRunHarness(DriverHarness):
         """Claims the account's limits count now (or `later_ms` from now, on both clocks)."""
         crashed, parameters = crashed_claim('a', self.ledger._clock_ms() + later_ms,
                                             time.monotonic_ns() + later_ms * 1_000_000)
-        return self.ledger._connection.execute(
-            'SELECT COUNT(*) FROM active_run_capacity a WHERE a.released_at_ms IS NULL AND NOT ' + crashed,
-            parameters).fetchone()[0]
+        with self.ledger._lock:  # TESTSPEED2-2: never read between the statements of an open account write
+            return self.ledger._connection.execute(
+                'SELECT COUNT(*) FROM active_run_capacity a WHERE a.released_at_ms IS NULL AND NOT ' + crashed,
+                parameters).fetchone()[0]
 
     def claimed_bindings(self):
         """(binding state, abandoned reason, released) of every claimed run, oldest first.
 
         Corrected for O0b RS-A-2 (requirement): a lost settlement now releases the slot itself, as `lost`,
         written once, so a settled lost run reads (abandoned, service_lost, 1); before, it stayed unreleased."""
-        return [tuple(row) for row in self.ledger._connection.execute(
-            'SELECT h.binding_state,h.abandoned_reason,a.released_at_ms IS NOT NULL FROM active_run_capacity a '
-            'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest '
-            'ORDER BY a.claimed_at_ms')]
+        with self.ledger._lock:  # TESTSPEED2-2: see counted()
+            return [tuple(row) for row in self.ledger._connection.execute(
+                'SELECT h.binding_state,h.abandoned_reason,a.released_at_ms IS NOT NULL FROM active_run_capacity a '
+                'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest '
+                'ORDER BY a.claimed_at_ms')]
 
     def launches(self):
         return [i for i in self.invocations('codex') if 'exec' in i['argv']]
@@ -227,6 +229,26 @@ class LostRunAfterCrashTests(LostRunHarness):
         except PermissionError:
             return True  # The group number now belongs to another user's processes: ours is gone.
         return False
+
+
+class LedgerReadHelperTests(LostRunHarness):
+    """TESTSPEED2-2: the helpers read the account's tables through the collector thread's own connection, which
+    that thread's writes (`BEGIN IMMEDIATE` ... `COMMIT`) also use. A read between two statements of one such write
+    sees the half-written state (a run's binding already `abandoned/service_lost`, its slot not yet released),
+    so under load a poll saw `counted() == 0` with the slot still unreleased. Reads wait for the write instead."""
+
+    def test_the_ledger_read_helpers_wait_for_a_write_the_collector_has_open(self):
+        for name, read in (('counted', self.counted), ('claimed_bindings', self.claimed_bindings)):
+            with self.subTest(name):
+                seen = []
+                reader = threading.Thread(target=lambda: seen.append(read()), daemon=True)
+                with self.ledger._lock:  # what the account's write holds from its first to its last statement
+                    reader.start()
+                    reader.join(1)
+                    self.assertTrue(reader.is_alive(), 'the read did not wait for the open write: ' + repr(seen))
+                reader.join(30)
+                self.assertFalse(reader.is_alive())
+                self.assertEqual(1, len(seen))
 
 
 class LostRunAfterStopTests(LostRunHarness):
