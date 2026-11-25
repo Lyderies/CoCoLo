@@ -39,27 +39,57 @@ class JudgeTests(unittest.TestCase):
         self.assertIn("small_project_waited_for_half", load.served_among(late_start, SMALL, BIG, 2, 6))
         self.assertEqual(["events_missing"], load.served_among([SMALL, BIG], SMALL, BIG, 2, 6))
 
-    def test_health_is_judged_on_answers_and_time(self):
-        good = {"plain": {"answered": 30, "refused": 0, "max_ms": 80.0}, "project": {"answered": 28, "refused": 2, "max_ms": 300.0}}
+    def test_health_is_judged_on_answers_refusals_and_time(self):
+        good = {"plain": {"answered": 30, "refused": 0, "max_ms": 80.0}, "project": {"answered": 28, "refused": 0, "max_ms": 300.0}}
         self.assertEqual([], load.health_verdict(good, 2000))
         slow = {**good, "project": {"answered": 30, "refused": 0, "max_ms": 2600.0}}
         self.assertEqual(["project_health_slow"], load.health_verdict(slow, 2000))
         refused = {**good, "plain": {"answered": 29, "refused": 1, "max_ms": 80.0}}
         self.assertEqual(["plain_health_refused"], load.health_verdict(refused, 2000))
-        self.assertIn("plain_health_barely_asked", load.health_verdict({**good, "plain": {"answered": 0, "refused": 0, "max_ms": 0}}, 2000))
-        self.assertIn("project_health_barely_asked", load.health_verdict({"plain": good["plain"]}, 2000))  # a prober that never reported
+        # A project health refused (a quick `response_invalid`, say) is not an expected answer, however few or many.
+        invalid = {**good, "project": {"answered": 28, "refused": 2, "codes": ["response_invalid"] * 2, "max_ms": 5.0}}
+        self.assertEqual(["project_health_refused"], load.health_verdict(invalid, 2000))
+        only_errors = {**good, "project": {"answered": 0, "refused": 40, "codes": ["response_invalid"] * 40, "max_ms": 5.0}}
+        self.assertEqual(["project_health_barely_answered", "project_health_refused"], load.health_verdict(only_errors, 2000))
+        # Successful replies are required: a prober that was refused or never asked has none, and a count that is not
+        # a count is no answer. (`ok: true` with `ledger_busy: true` is a returned reply, counted as answered.)
+        self.assertEqual(["plain_health_barely_answered"],
+                         load.health_verdict({**good, "plain": {"answered": 2, "refused": 0, "max_ms": 80.0}}, 2000))
+        self.assertIn("plain_health_barely_answered", load.health_verdict({**good, "plain": {"answered": 0, "refused": 0, "max_ms": 0}}, 2000))
+        self.assertIn("project_health_barely_answered", load.health_verdict({"plain": good["plain"]}, 2000))  # a prober that never reported
+        self.assertIn("plain_health_barely_answered", load.health_verdict({**good, "plain": {"answered": True, "refused": 0, "max_ms": 1}}, 2000))
 
-    def test_account_calls_are_judged_on_answers_and_on_what_was_recorded(self):
-        def reply(request_id, at=1, **changes):
-            return {"code": 0, "request_id": request_id, "provider": "codex", "ready": True, "observed_at_ms": at, **changes}
-        good = [reply("a", 1), reply("a", 1), reply("b", 2), reply("b", 2)]
-        self.assertEqual([], load.account_verdict(good, 2, 2))
-        self.assertEqual(["account_request_lost"], load.account_verdict(good, 2, 1))
-        self.assertEqual(["account_request_duplicated"], load.account_verdict(good, 2, 3))
-        self.assertEqual(["account_call_not_answered"], load.account_verdict([*good, reply("c", code=1)], 2, 2))
-        self.assertEqual(["account_call_not_answered"], load.account_verdict([*good, reply("c", ready=None)], 2, 2))
+    def test_account_calls_are_judged_on_answers_and_on_what_is_recorded_for_whom(self):
+        projects = {"big": "prj_big", "small": "prj_small"}
+
+        def reply(project, request_id, at=1, **changes):
+            return {"code": 0, "project": project, "request_id": request_id, "provider": "codex", "ready": True,
+                    "observed_at_ms": at, **changes}
+
+        def row(project, at, state="committed"):
+            return (projects[project], at, state)
+        good = [reply("big", "a", 1), reply("big", "a", 1), reply("small", "b", 2), reply("small", "b", 2)]
+        recorded = [row("big", 1), row("small", 2)]
+        self.assertEqual([], load.account_verdict(good, recorded, projects))
+        self.assertEqual(["account_request_lost"], load.account_verdict(good, recorded[:1], projects))
+        self.assertEqual(["account_request_duplicated"], load.account_verdict(good, [*recorded, row("big", 1)], projects))
+        self.assertEqual(["account_call_not_answered"], load.account_verdict([*good, reply("big", "c", code=1)], recorded, projects)[:1])
+        self.assertEqual(["account_call_not_answered"], load.account_verdict([*good, reply("small", "c", 3, ready=None)], [*recorded, row("small", 3)], projects))
         self.assertEqual(["account_request_answered_twice_differently"],
-                         load.account_verdict([reply("a", 1), reply("a", 9), reply("b", 2), reply("b", 2)], 2, 2))
+                         load.account_verdict([reply("big", "a", 1), reply("big", "a", 9), reply("small", "b", 2), reply("small", "b", 2)],
+                                              [row("big", 1), row("small", 2)], projects)[:1])
+        # The right number of rows, attributed to the wrong project or carrying another observation time, is wrong.
+        self.assertEqual(["account_record_misattributed"], load.account_verdict(good, [row("small", 1), row("big", 2)], projects))
+        self.assertEqual(["account_record_misattributed"], load.account_verdict(good, [row("big", 1), row("big", 2)], projects))
+        self.assertEqual(["account_record_misattributed"], load.account_verdict(good, [row("big", 1), row("small", 7)], projects))
+        # A pending row is not a committed record.
+        self.assertEqual(["account_record_not_committed"], load.account_verdict(good, [row("big", 1), row("small", 2, "pending")], projects))
+        # A missing observation time (in an answer or in a row) is refused, not matched as nothing.
+        self.assertIn("observation_timestamp_missing", load.account_verdict(
+            [reply("big", "a", None), reply("big", "a", None), reply("small", "b", 2), reply("small", "b", 2)], recorded, projects))
+        self.assertIn("observation_timestamp_missing", load.account_verdict(good, [row("big", 1), (projects["small"], None, "committed")], projects))
+        self.assertIn("observation_timestamp_missing", load.account_verdict(
+            [reply("big", "a", True), reply("big", "a", True), reply("small", "b", 2), reply("small", "b", 2)], recorded, projects))
 
 
 class StrictnessTests(unittest.TestCase):

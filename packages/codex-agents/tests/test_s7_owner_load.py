@@ -19,6 +19,7 @@ import json
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -36,12 +37,29 @@ from codex_agents.ledger_owner import LedgerOwner
 from codex_agents.learning_adapters import normalize_hook
 from codex_agents.learning_contracts import canonical_json
 from codex_agents.learning_store import CollectorServer, LearningState, authorize_collector_runtime
-from codex_agents.ledger_owner_queue import DEFAULT_LEDGER_QUEUE_LIMITS
+from codex_agents.ledger_owner_queue import DEFAULT_LEDGER_QUEUE_LIMITS, LedgerOwnerQueue
 
 CLIENT_VERSION = 'codex-hooks-v1'
 RUNTIME = COLLECTOR_RUNTIME_DIGEST
 TOKEN = object()  # the fixture-only server context an account request is authorized against
 PER_PROJECT = DEFAULT_LEDGER_QUEUE_LIMITS.per_project
+
+
+class RequestClock:
+    """The owner queue's clock (its injectable `clock_ns`): the monotonic clock until `freeze()`, then one fixed reading.
+
+    A deliberately held owner phase freezes it, so no queued request's deadline can pass however long the scheduler
+    pauses a thread: the held phases coordinate on events and on the queue's own admission, never on a time budget."""
+
+    def __init__(self):
+        self.frozen = None
+
+    def freeze(self):
+        self.frozen = time.monotonic_ns()
+
+    def __call__(self):
+        frozen = self.frozen
+        return time.monotonic_ns() if frozen is None else frozen
 
 
 def _sorted_counts_by(values, keys):
@@ -67,6 +85,7 @@ class OwnerLoadTests(unittest.TestCase):
         self.returned, self.returned_count = threading.Condition(), 0
         self.sql_threads = set()
         self.account_tasks = collections.deque()
+        self.clock = RequestClock()
         self.start_owner()
         patch = mock.patch.object(collector_client, 'exchange_frame', side_effect=self.exchange)
         patch.start()
@@ -89,7 +108,15 @@ class OwnerLoadTests(unittest.TestCase):
             try:
                 owner = LedgerOwner(self.state)
                 self.owner = owner
-                original_offer = owner.queue.offer
+                owner.queue = queue = LedgerOwnerQueue(clock_ns=self.clock)  # the queue's own injectable clock
+                original_wait = queue.wait
+
+                def wait(handle):
+                    if self.clock.frozen is not None:  # held: the caller's wait is for the owner's answer, not a budget
+                        handle.handled.wait(60)  # an event; the bound only ends a hang
+                    return original_wait(handle)
+                queue.wait = wait
+                original_offer = queue.offer
 
                 def spy(*args, **kwargs):
                     handle = original_offer(*args, **kwargs)  # a refusal raises here and is counted by the queue
@@ -209,7 +236,10 @@ class OwnerLoadTests(unittest.TestCase):
             self.assertTrue(self.returned.wait_for(lambda: self.returned_count >= count, 30), 'callers answered')
 
     def pause_owner(self, project):
-        """Hold the owner inside one request of `project` until the returned event is set (an event, not a delay)."""
+        """Hold the owner inside one request of `project` until the returned event is set (an event, not a delay).
+
+        The request clock is frozen first: while the owner is held on purpose, no queued request can expire."""
+        self.clock.freeze()
         entered, release = threading.Event(), threading.Event()
         self.addCleanup(release.set)
         self.owner.offer(lambda: (entered.set(), release.wait(60)), project_id=project, caller='load_pause')
@@ -365,11 +395,13 @@ class OwnerLoadTests(unittest.TestCase):
         self.all_handled()
         order = [owner for owner, _, _ in self.event_rows()]
         self.assertEqual({project_a: a_count, project_b: b_count}, _sorted_counts_by(order, self.projects))
-        # One turn per active project per round: B's three events are written among A's first ones; a first-in
-        # first-out queue would write them after all of A's backlog (positions a_count to the end).
-        positions = [index for index, owner in enumerate(order) if owner == project_b]
-        self.assertLess(positions[-1], 2 * b_count, order)
-        self.assertLess(positions[0], 2, order)
+        # One turn per active project per round: while both have queued work the turns alternate, so B's three
+        # events and A's next three are interleaved (A B A B A B), and only then A's remaining backlog follows. A
+        # first-in first-out queue writes B after all of A's backlog; a queue that serves a project twice in a row
+        # (A B B B A A A A) is not fair either.
+        both = 2 * b_count
+        self.assertEqual([project_a, project_b] * b_count, order[:both], order)
+        self.assertEqual([project_a] * (a_count - b_count), order[both:], order)
 
     # --- E2: health that stays responsive
 

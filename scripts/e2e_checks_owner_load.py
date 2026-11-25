@@ -20,6 +20,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -129,36 +130,64 @@ def served_among(order: list, small, large, small_count: int, large_count: int) 
     return broken
 
 
+MINIMUM_HEALTH_ANSWERS = 3
+
+
+def _count(value) -> bool:
+    return type(value) is int and value >= 0
+
+
 def health_verdict(seen: dict, limit_ms: float) -> list[str]:
-    """The prober's own counts: health answered every time within the limit; the plain health never refused."""
+    """The prober's own counts, for the plain and the project's health: answered at least `MINIMUM_HEALTH_ANSWERS` times
+    (a reply that is `ok` with `ledger_busy` is an answer), never refused for any reason (a `response_invalid` or a
+    transport refusal is not an expected answer under load), and none slower than the limit."""
     broken = []
     for name in ("plain", "project"):
         got = seen.get(name) or {}
-        if not isinstance(got.get("answered"), int) or got["answered"] + got.get("refused", 0) < 3:
-            broken.append(f"{name}_health_barely_asked")
+        if not _count(got.get("answered")) or got["answered"] < MINIMUM_HEALTH_ANSWERS:
+            broken.append(f"{name}_health_barely_answered")
+        if not _count(got.get("refused")) or got["refused"] or got.get("codes"):
+            broken.append(f"{name}_health_refused")
         if not isinstance(got.get("max_ms"), (int, float)) or got["max_ms"] > limit_ms:
             broken.append(f"{name}_health_slow")
-    if (seen.get("plain") or {}).get("refused"):
-        broken.append("plain_health_refused")
     return broken
 
 
-def account_verdict(replies: list, unique: int, recorded: int) -> list[str]:
-    """The account calls: every call answered ok for its provider; repeating a request id returned the same observation
-    and recorded nothing more: `recorded` new rows equal the `unique` ids."""
+def _stamp(value) -> bool:
+    return _count(value)
+
+
+def account_verdict(replies: list, rows: list, projects: dict) -> list[str]:
+    """The account calls. `replies`: what each call answered, with the project name it was made for and its request id;
+    `rows`: (project id, observed_at_ms, state) of every observation request the ledger recorded during the load;
+    `projects`: project name -> ledger project id. Every call is answered ok for its provider with an observation time;
+    one (project, request id) always answers the same observation; the ledger holds exactly one committed row for each
+    expected (project, request id), attributed to its project and carrying the observation time its callers were told."""
     broken = []
     if any(not isinstance(r, dict) or r.get("code") != 0 or r.get("provider") != "codex" or r.get("ready") is not True
            for r in replies):
         broken.append("account_call_not_answered")
-    by_id: dict = {}
+    by_identity: dict = {}
     for r in replies:
-        by_id.setdefault(r.get("request_id"), set()).add(r.get("observed_at_ms"))
-    if any(len(stamps) != 1 for stamps in by_id.values()):
+        if isinstance(r, dict):
+            by_identity.setdefault((r.get("project"), r.get("request_id")), set()).add(r.get("observed_at_ms"))
+    if any(not _stamp(stamp) for stamps in by_identity.values() for stamp in stamps) \
+            or any(not _stamp(row[1]) for row in rows):
+        broken.append("observation_timestamp_missing")
+    if any(len(stamps) != 1 for stamps in by_identity.values()):
         broken.append("account_request_answered_twice_differently")
-    if recorded < unique:
+    if any(row[2] != "committed" for row in rows):
+        broken.append("account_record_not_committed")
+    if len(rows) < len(by_identity):
         broken.append("account_request_lost")
-    if recorded > unique:
+    elif len(rows) > len(by_identity):
         broken.append("account_request_duplicated")
+    else:
+        expected = Counter((projects.get(name), min(stamps)) for (name, _), stamps in by_identity.items()
+                           if all(_stamp(value) for value in stamps))
+        recorded = Counter((row[0], row[1]) for row in rows)
+        if expected != recorded:
+            broken.append("account_record_misattributed")
     return broken
 
 
@@ -190,10 +219,12 @@ def project_id(view) -> str | None:
     return row[0] if row else None
 
 
-def observation_requests(world) -> int:
+def observation_requests(world) -> list[tuple]:
+    """(project id, request key, observed_at_ms, state) of every recorded observation request."""
     connection = ledger(world)
     try:
-        return connection.execute("select count(*) from account_observation_requests").fetchone()[0]
+        return [tuple(row) for row in connection.execute(
+            "select project_id, request_key, observed_at_ms, state from account_observation_requests")]
     finally:
         connection.close()
 
@@ -302,6 +333,7 @@ def drive_load(scene) -> None:
                     "provider-observe", "--provider", "codex", "--request-id", request_id)
                 with lock:
                     scene.replies.append({"code": code, "request_id": request_id,
+                                          "project": "small" if worker % 2 else "big",
                                           "provider": (reply or {}).get("provider"), "ready": (reply or {}).get("ready"),
                                           "observed_at_ms": (reply or {}).get("observed_at_ms")})
 
@@ -319,7 +351,9 @@ def drive_load(scene) -> None:
     scene.probe = end_probe(big, probe, stop)
     rows = event_rows(world)
     scene.rows = rows[scene.rows_before:]
-    scene.observations_after = observation_requests(world)
+    before = {(project, key) for project, key, _stamp_ms, _state in scene.observations_before}
+    scene.observation_rows = [(project, stamp, state) for project, key, stamp, state in observation_requests(world)
+                              if (project, key) not in before]
     scene.accepted_after = {"big": accepted_events(big), "small": accepted_events(small)}
     scene.collectors_after = _collectors(world)
     code, status, _ = big.cli("learning-status")
@@ -358,8 +392,9 @@ def l16_1_hooks_and_account_calls_at_once_lose_and_duplicate_nothing(phase: Phas
     phase.expect(len(s.rows) == sum(sent.values()), "no event was written for any other project")
     unique = ACCOUNT_WORKERS * ACCOUNT_IDS
     phase.expect(len(s.replies) == unique * ACCOUNT_REPEATS, "every account call came back")
-    problems = account_verdict(s.replies, unique, s.observations_after - s.observations_before)
-    phase.expect(problems == [], "every account request was answered once and recorded once")
+    problems = account_verdict(s.replies, s.observation_rows, s.projects)
+    phase.expect(problems == [],
+                 "every account request was answered once and recorded once, committed, for its own project")
     refusals = (s.status.get("ledger_waits") or {}) if s.status else None
     phase.expect(refusals == {}, "the owner queue refused nothing inside its limits")
     phase.reason("hooks_and_account_calls_written_once")

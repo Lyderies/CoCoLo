@@ -3974,9 +3974,10 @@
   ]
  },
  "S1-U9": {
-  "statement": "A newly started collector answers its first health request, plain and for a registered project, within 1 s of its socket and its account endpoint existing.",
+  "statement": "A newly started collector answers its first health request, plain and for a registered project, and its account endpoint answers its first request (`account.project`), each within 1 s of the collector socket and the account endpoint existing.",
   "source": "tests/requirements/s7.json#S1-U9",
   "checks": [
+   "codex:tests.test_collector_first_response.CollectorFirstResponseTests.test_S1_U9_first_account_answer_comes_within_one_second_of_the_sockets_being_up",
    "codex:tests.test_collector_first_response.CollectorFirstResponseTests.test_S1_U9_first_answer_comes_within_one_second_of_the_sockets_being_up",
    "codex:tests.test_collector_first_response.CollectorFirstResponseTests.test_S1_U9_first_project_answer_comes_within_one_second_of_the_sockets_being_up"
   ]

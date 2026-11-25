@@ -2,7 +2,7 @@
 
 Base `ce81bd96` (0.8.67), branch `feat/s7-e2e3`. VERSION and the runtime digest catalogue unchanged. **No product file
 changed**: every new test was green on the base. Requirement map: `docs/requirements/s7.md`. No existing assertion was
-changed or removed (assertions.md: none).
+changed or removed in the base; the fix round's changes to S7's own tests are listed in assertions.md.
 
 ## New files
 
@@ -48,3 +48,40 @@ guards starvation only; the fairness proof is the in-process test (see s7.md).
 
 Nothing for the primary to decide. The primary runs `--affected ce81bd96` before merge (the new e2e flow is only in the
 lifecycle job, not in the unit stage).
+
+## Fix round (review 040-s7-r1, NOT-READY, 5 MED; tests only, no product file changed)
+
+Each fix was shown red by a temporary mutation (product mutations reverted, `git status` clean of product files).
+
+1. Fair turns (`test_s7_owner_load.py`, fairness test): the order must alternate `A B A B A B` while both projects have
+   queued work, then only A's remaining backlog (`order[:6]` and `order[6:]` compared exactly). Mutation: the queue keeps
+   serving a project at the head while it has two or fewer items left (`service_queue.py`, order `A B B B A A A A`): the
+   old assertions stayed green, the new one is red.
+2. First account response (`test_collector_first_response.py`): new `test_S1_U9_first_account_answer_comes_within_one_second_of_the_sockets_being_up`
+   sends `account.project` over the real account endpoint (owner enrolment, fresh proof per attempt) and stops the clock
+   at the decoded answer; bound 1 s. Mutation: a 1.5 s sleep at the start of `AccountService._handle`: the new test is
+   red (1.518 s), both health tests stay green. Requirement text, registry and `s7.md` mention the account endpoint.
+3. Held phases (`test_s7_owner_load.py`): the owner queue is built with its injectable clock (`RequestClock`, frozen by
+   `pause_owner`), and while frozen a caller's wait for its answer is an event wait on `handled` (the real
+   `Event.wait(remaining)` inside `LedgerOwnerQueue.wait` is otherwise a real 800 ms bound). Mutation: a 1.5 s sleep in
+   `wait_admitted` while the owner is held: the old file went red (health test: queued ingests expired), the new file is green.
+4. Health judge (`e2e_checks_owner_load.py`): at least 3 answered replies each for plain and project health (a reply with
+   `ok` and `ledger_busy` is an answer), no refusal of any kind for either (`response_invalid` and the like). Mutation
+   (judge inputs): 40 quick `response_invalid` and 0 answers, and 28 answered + 2 `response_invalid`: the old judge returned `[]`,
+   the new returns `project_health_barely_answered` and `project_health_refused`.
+5. Account persistence: the ledger rows recorded during the load (project id, observed_at_ms, state; new rows by request key
+   against a before snapshot) must equal the expected (project, request id) observations the callers were told, once each, all
+   `committed`; missing or non-integer observation times are refused (`observation_timestamp_missing`). The ledger stores
+   the request id as a keyed digest, so identity is matched by (project, observation time) per expected (project, request
+   id). Mutation (judge inputs): six right-count rows attributed to the wrong project, and a missing timestamp: old `[]`, new
+   `account_record_misattributed` / `observation_timestamp_missing` (pending rows: `account_record_not_committed`).
+
+Limit: items 4 and 5 are proven by judge inputs (the runner's `ingest_lost` and `health_stalls` faults still drive L16.1
+and L16.3 red); no new lifecycle fault was added.
+
+Runs (unsandboxed, short TMPDIR): `scripts/parallel_tests.py --jobs 4` for `test_s7_owner_load`,
+`test_collector_first_response`, `test_e2e_owner_load`, `test_e2e_requirements`: 21 tests, `failed_units: []`,
+`metadata_errors: []`, `budget_failures: []`. `scripts/e2e_lifecycle.py --execute <the three l16 checks>`: all pass, 66 s;
+with `--fault ingest_lost` L16.1 and L16.2 are red, with `--fault health_stalls` L16.1-L16.3 are red, as before. (A
+`--flows L16` run is not the right command: it also runs the every-flow checks and took over 15 min under machine load.)
+Changed assertions: see `assertions.md`.

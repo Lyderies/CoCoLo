@@ -2,7 +2,7 @@
 
 The real collector host is started the way the product starts it (`learning-serve`, detached, fixed environment).
 The clock starts when the collector's socket and the account service's endpoint both exist, and stops when the
-first answer arrives; the process start and the ledger open are not in it (the collector's own phase timings,
+first answer arrives (the plain health, the project's health, and the account endpoint's own `account.project`); the process start and the ledger open are not in it (the collector's own phase timings,
 `collector_startup_ms`, report those). ANALYSIS-0.4.0-e0b-v2 measured 9 to 12 ms for the plain answer on a
 large ledger with a warm file cache; the 1 s bound is the requirement (S1-U9), which leaves two orders of
 magnitude for a loaded machine. The wait for each socket is a wait for the file, bounded, never a fixed sleep.
@@ -10,6 +10,7 @@ magnitude for a loaded machine. The wait for each socket is a wait for the file,
 from tests.support import ORCHESTRATION_ROOT, SHORT_TMP  # noqa: F401  (bootstraps the import path)
 import os
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -19,12 +20,16 @@ from pathlib import Path
 
 from test_framework import requirements
 from tests.learning_support import generate_test_owner_key
-from codex_agents.collector_client import CollectorClient
+from codex_agents.account_api import (
+    ACCOUNT_PROTOCOL_VERSION, AccountRequest, decode_account_response, encode_account_request)
+from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient
 from codex_agents.collector_contracts import CollectorError
 from codex_agents.collector_paths import CollectorPaths
 from codex_agents.host_paths import PYTHON_ISOLATION_FLAGS
+from codex_agents.hosts import OWNER_CLIENT
 from codex_agents.learning_store import LearningLedger, LearningState, authorize_collector_runtime
-from codex_agents.service_enrollment import account_endpoint_path
+from codex_agents.service_enrollment import (
+    EnrollmentError, account_endpoint_path, enrollment_preamble, proof_directory, read_capability)
 
 FIRST_RESPONSE_SECONDS = 1.0  # S1-U9
 SOCKETS_UP_SECONDS = 30  # a bound on the wait for the sockets (process start included), not part of the budget
@@ -47,7 +52,7 @@ class CollectorFirstResponseTests(unittest.TestCase):
         (self.root / '.git').mkdir(parents=True)
         ledger = LearningLedger(self.state)
         try:
-            ledger.register_project(self.root)
+            self.project_id = ledger.register_project(self.root)
         finally:
             ledger.close()  # The collector process owns the ledger from here.
         self.paths = CollectorPaths(self.state.root)
@@ -91,6 +96,46 @@ class CollectorFirstResponseTests(unittest.TestCase):
                 if error.code == 'ledger_busy' or time.monotonic() >= end:
                     raise
                 time.sleep(0.001)
+
+    def first_account_answer(self):
+        """The first answer of the account endpoint (`account.project`, the owner terminal's read, as the CLI sends it).
+
+        The enrolment key is published and the listener accepts only once the account services are fully up, so a
+        request that finds either missing is made again, whole, with a fresh single-use proof; the answer, decoded."""
+        end = time.monotonic() + 10
+        while True:
+            request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.project', 'first-response', self.project_id,
+                                     COLLECTOR_RUNTIME_DIGEST, {})
+            frame = encode_account_request(request)
+            try:
+                key = read_capability(self.paths, None, 'account')
+                line = enrollment_preamble(key, 'account', OWNER_CLIENT, 1, frame, proof_directory(self.account),
+                                           subject=str(self.root))
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                    client.settimeout(5)
+                    client.connect(str(self.account))
+                    client.sendall(line + b'\n' + frame + b'\n')
+                    received = bytearray()
+                    while b'\n' not in received:
+                        chunk = client.recv(65_536)
+                        if not chunk:
+                            break
+                        received.extend(chunk)
+                if received:
+                    return decode_account_response(bytes(received).split(b'\n', 1)[0], request)
+            except (EnrollmentError, OSError):
+                pass
+            self.assertLess(time.monotonic(), end, 'the account endpoint never answered')
+            time.sleep(0.001)
+
+    @requirements('S1-U9')
+    def test_S1_U9_first_account_answer_comes_within_one_second_of_the_sockets_being_up(self):
+        process = self.start_collector()
+        up = self.wait_for_sockets(process)
+        answer = self.first_account_answer()
+        elapsed = time.monotonic() - up
+        self.assertEqual(self.project_id, answer['project_id'])
+        self.assertLess(elapsed, FIRST_RESPONSE_SECONDS, f'first account answer took {elapsed:.3f} s')
 
     @requirements('S1-U9')
     def test_S1_U9_first_answer_comes_within_one_second_of_the_sockets_being_up(self):
