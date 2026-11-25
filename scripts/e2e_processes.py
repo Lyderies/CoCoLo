@@ -12,7 +12,6 @@ import fcntl
 import json
 import os
 from pathlib import Path
-import secrets
 import shutil
 import signal
 import subprocess
@@ -22,6 +21,7 @@ import time
 MANIFEST = '.e2e-owner.json'
 PROCESSES = '.e2e-processes'
 _CLIENT_PATHS = {}
+_LIBPROC = []
 
 
 def identity(pid):
@@ -29,13 +29,17 @@ def identity(pid):
     if type(pid) is not int or pid <= 1:
         return None
     if sys.platform == 'darwin':
-        lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+        if not _LIBPROC:  # one dlopen per process, not per call
+            _LIBPROC.append(ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True))
+        lib = _LIBPROC[0]
         info = ctypes.create_string_buffer(136)  # struct proc_bsdinfo, PROC_PIDTBSDINFO
         ctypes.set_errno(0)
         size = lib.proc_pidinfo(pid, 3, 0, info, len(info))
         if size != len(info):
             error = ctypes.get_errno()
-            if error in (0, errno.ESRCH, errno.ENOENT):
+            # EPERM/EACCES: a setuid or privileged image (/bin/ps) cannot be inspected, and this user cannot
+            # signal it either, so it is never ours to stop. It must not make its caller's spawn fail.
+            if error in (0, errno.ESRCH, errno.ENOENT, errno.EPERM, errno.EACCES):
                 return None
             raise OSError(error, 'cannot verify e2e process identity')
         if int.from_bytes(info.raw[4:8], sys.byteorder) == 5:  # SZOMB
@@ -62,7 +66,7 @@ def read_json(path):
 
 
 def write_json(path, value):
-    temporary = path.with_name(path.name + '.' + secrets.token_hex(6))
+    temporary = path.with_name(path.name + '.' + os.urandom(6).hex())
     with temporary.open('x') as stream:
         os.chmod(temporary, 0o600)
         json.dump(value, stream)
@@ -71,8 +75,19 @@ def write_json(path, value):
 
 @contextlib.contextmanager
 def locked(base, name='.e2e-register.lock', *, shared=False):
+    # A shared lock only needs a read-only descriptor (flock does not require write access), so a confined
+    # product helper (macOS sandbox profile that denies every file write) can still take it. initialize()
+    # creates the file; only the exclusive owner (World close) opens for append.
+    if shared:
+        descriptor = os.open(base / name, os.O_RDONLY)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_SH)
+            yield
+        finally:
+            os.close(descriptor)
+        return
     with (base / name).open('a') as stream:
-        fcntl.flock(stream, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+        fcntl.flock(stream, fcntl.LOCK_EX)
         yield
 
 
@@ -82,7 +97,7 @@ def initialize(base, *, registry=None):
     with locked(base):
         record = read_json(base / MANIFEST)
         if record is None:
-            record = {'base': str(base), 'marker': secrets.token_hex(24),
+            record = {'base': str(base), 'marker': os.urandom(24).hex(),
                       'owner_pid': os.getpid(), 'owner_start': identity(os.getpid())}
             write_json(base / MANIFEST, record)
     registry = registry or os.environ.get('COCOLO_E2E_REGISTRY')
@@ -116,7 +131,14 @@ def register(base, pid):
 def install_tracking(base):
     """Called before any product code, including in every detached Python host."""
     base = Path(base).resolve()
-    register(base, os.getpid())
+    try:
+        register(base, os.getpid())
+    except PermissionError:
+        # A confined product helper (the signature worker runs under a macOS sandbox profile that denies every
+        # file write) cannot write its own record. Its spawning parent records it (OwnedPopen below), so it is
+        # still owned; a helper nobody recorded cannot exist, because every spawn in a World goes through
+        # the tracked Popen.
+        pass
     original = subprocess.Popen
     # A subclass preserves Popen's class interface used by some clients.
     class OwnedPopen(original):

@@ -66,3 +66,38 @@ Re-run only the named modules with the supplied test venv Python (`PY`):
   --module root:test_e2e_requirements \
   --module root:test_test_framework_guards
 ```
+
+## Timing round (2026-11-25): tracking made L1 3x slower and broke the lifecycle scenes
+
+Symptom: `scripts/e2e_lifecycle.py --flows L1` took 305 s on the base and over 14 minutes here, and the
+G2/G3/G4 life scenes failed (`g1_bare_account_unavailable`, step `open`), with the billing probe
+(`provider-observe --billing-probe`) waiting its whole 60 s deadline and `open` another 11 s.
+
+Measured (single scene `g2_codex_primary_worker_answers_match_oracle_in_history`, same machine):
+base 41.0 s pass; branch before the fix 98.4 s FAIL. Per-process cost was NOT the cause (boot +45 ms per
+hosted start, World build 0.87 s both, setup 19.4 s vs 19.1 s both, close 0.5 s). Bisecting the boot
+registration step (flag files, one mode per run): any file write in every hosted boot reproduced the failure
+(`os.open(O_WRONLY)` fails, `O_RDONLY|O_CREAT`, `stat`, a 20 ms sleep, and a unix-socket send all pass).
+The product's signature helper runs under a macOS sandbox profile that denies every file write; our boot
+registration (record write, lock opened for append) raised there, the helper died, the signature lane
+reported `signature_execution_unconfirmed`, and billing probes and host opens stalled behind it.
+A second defect: `identity()` raised `PermissionError` for `/bin/ps` (privileged image, `proc_pidinfo`
+EPERM), so every tracked `ps` spawn in a hosted process failed.
+
+Fix (harness only, `scripts/e2e_processes.py`): `locked(shared=True)` opens the lock read-only (flock needs no
+write access); `install_tracking` tolerates a `PermissionError` on the process's own record (a confined
+helper is recorded by its spawning parent's tracked Popen); `identity()` returns None for EPERM/EACCES (a
+privileged image can neither be inspected nor signalled by this user, so it is never ours to stop); the
+macOS libproc handle is loaded once per process and `secrets` is no longer imported (less work per hosted
+boot). Guarantees unchanged: records still carry pid, kernel start time and marker; reaping never uses a
+name; a missing helper or a closing World still fails closed (only the sandbox write denial is tolerated).
+
+Residual: a confined helper that is itself never spawned through the tracked Popen is not recorded; the
+signature helper exits on stdin EOF and its parent (the collector) is recorded and stopped.
+
+Evidence: new test `test_tracking_does_not_break_privileged_binaries_or_confined_helpers` (E2ELEAK-2), red
+on the previous harness (both sub-cases fail: `PermissionError` for the privileged binary and for the
+read-only records/lock), green now. Side by side `--flows L1` on the base and this branch, started together:
+base 308.1 s, branch 314.9 s (+2.2 %); identical results (the two L1.2 checks fail the same way on both and
+are unrelated). Named cleanup modules: 274 tests green, `metadata_errors: []`, no budget failures. No
+e2e process or world of this run was left behind.

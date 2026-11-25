@@ -475,6 +475,32 @@ class WorldCleanupTests(unittest.TestCase):
                                   env={**os.environ, 'PYTHONPATH': str(ROOT / 'scripts')}, capture_output=True, text=True)
             self.assertEqual(0, done.returncode, done.stderr)
 
+    @requirements('E2ELEAK-2')
+    def test_tracking_does_not_break_privileged_binaries_or_confined_helpers(self):
+        # Product code must behave the same under tracking: /bin/ps is a privileged image whose identity cannot be
+        # read (EPERM), and the product's confined signature helper runs under a macOS profile that denies every
+        # file write, so its boot cannot write a record or open the lock for append (both made billing probes wait
+        # their whole deadline and lifecycle scenes fail, E2ELEAK timing round).
+        source = ("import e2e_processes as owned,subprocess,sys,os\nfrom pathlib import Path\n"
+                  "base=Path(sys.argv[1]); owned.initialize(base); owned.install_tracking(base)\n"
+                  "done=subprocess.run(['/bin/ps','-p','1'],stdout=subprocess.DEVNULL)\n"
+                  "assert done.returncode==0, done\n"
+                  "print('ps ok')\n")
+        confined = ("import e2e_processes as owned,sys,os\nfrom pathlib import Path\n"
+                    "base=Path(sys.argv[1]); owned.initialize(base)\n"
+                    "os.chmod(base/owned.PROCESSES,0o500); os.chmod(base/'.e2e-register.lock',0o400)\n"
+                    "try:\n"
+                    "    owned.install_tracking(base)\n"
+                    "finally:\n"
+                    "    os.chmod(base/owned.PROCESSES,0o700)\n"
+                    "print('confined ok')\n")
+        for name, code, expect in (('ps', source, 'ps ok'), ('confined', confined, 'confined ok')):
+            with self.subTest(name), tempfile.TemporaryDirectory() as folder:
+                done = subprocess.run([sys.executable, '-B', '-c', code, folder],
+                                      env={**os.environ, 'PYTHONPATH': str(ROOT / 'scripts')}, capture_output=True, text=True)
+                self.assertEqual(0, done.returncode, done.stderr)
+                self.assertIn(expect, done.stdout)
+
     @requirements('E2ELEAK-3')
     def test_drained_client_discovery_is_cached_and_skipped_without_socket(self):
         from unittest import mock

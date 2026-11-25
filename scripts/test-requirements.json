@@ -478,6 +478,7 @@
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_reaper_and_world_close_refuse_directory_outside_expected_cache",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_reaper_uses_world_marker_and_start_time_across_sessions",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_spawn_racing_close_is_recorded_and_swept_or_refused",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_tracking_does_not_break_privileged_binaries_or_confined_helpers",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_verified_exiting_child_is_not_gone_until_waitpid_releases_it"
   ],
   "source": "tests/requirements/e2eleak.json#E2ELEAK-2",
