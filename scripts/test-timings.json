@@ -2209,6 +2209,8 @@
  "codex:tests.test_publication_retry": 7.37,
  "codex:tests.test_qa_tree_scan": 0.11,
  "codex:tests.test_rate_limit_contracts": 0.06,
+ "codex:tests.test_read_growth": 16.4,
+ "codex:tests.test_read_plans": 7.3,
  "codex:tests.test_record_context": 11.43,
  "codex:tests.test_recovery_line": 5.0,
  "codex:tests.test_refusal_steps": 0.21,

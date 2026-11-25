@@ -98,19 +98,47 @@ _ADMISSION_INPUT_SCOPE = (
     " AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint"
     " AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000)))))"
 )
+# U3: seek each rule's candidates before applying the unchanged scope. The
+# recursive MIN seeks visit each account once, skipping its historical rows.
+# P9's projected attestation membership remains the source for attestations.
+_ADMISSION_CANDIDATES = (
+    "WITH RECURSIVE pass(fp) AS ("
+    "SELECT MIN(account_fingerprint) FROM admission_evidence WHERE claude_pass=1"
+    " UNION ALL SELECT (SELECT MIN(account_fingerprint) FROM admission_evidence"
+    " WHERE claude_pass=1 AND account_fingerprint>pass.fp) FROM pass WHERE pass.fp IS NOT NULL),"
+    " reading(t,fp) AS ("
+    "SELECT k.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude'"
+    " AND source='provider' AND record_type=k.t AND account_fingerprint IS NOT NULL)"
+    " FROM (SELECT 'provider_billing' AS t UNION ALL SELECT 'provider_headroom') k"
+    " UNION ALL SELECT reading.t,(SELECT MIN(account_fingerprint) FROM admission_evidence WHERE provider='claude'"
+    " AND source='provider' AND record_type=reading.t AND account_fingerprint>reading.fp)"
+    " FROM reading WHERE reading.fp IS NOT NULL)"
+    " SELECT rowid AS id FROM records INDEXED BY records_type_observed WHERE record_type='provider_identity'"
+    " AND observed_at_ms>=:a-1800000 AND project_id=:p"
+    " UNION SELECT record_rowid FROM temp.capture_candidates WHERE consumer=:provider AND project_id=:p"
+    " UNION SELECT rowid FROM records INDEXED BY records_foreign_admissions WHERE project_id=:p"
+    " AND record_type='admission_decision' AND source<>'lifecycle'"
+    " UNION SELECT rowid FROM records INDEXED BY records_type_observed"
+    " WHERE record_type IN ('admission_decision','probe_admission') AND observed_at_ms>=:a-18000000"
+    " UNION SELECT (SELECT x.rowid FROM admission_evidence f JOIN records x"
+    " ON x.project_id=f.project_id AND x.record_id=f.record_id WHERE f.claude_pass=1"
+    " AND f.account_fingerprint=pass.fp AND f.source='lifecycle' AND f.provider='claude'"
+    " ORDER BY f.observed_at_ms,f.project_id,f.record_id LIMIT 1) FROM pass WHERE pass.fp IS NOT NULL"
+    " UNION SELECT rowid FROM records INDEXED BY records_type_observed"
+    " WHERE record_type IN ('provider_billing','provider_headroom') AND observed_at_ms>=:a-86400000"
+    " UNION SELECT x.rowid FROM admission_evidence e JOIN records x"
+    " ON x.project_id=e.project_id AND x.record_id=e.record_id WHERE e.live_until_ms>:a"
+    " UNION SELECT x.rowid FROM reading CROSS JOIN admission_evidence g JOIN records x"
+    " ON x.project_id=g.project_id AND x.record_id=g.record_id WHERE reading.fp IS NOT NULL"
+    " AND g.provider='claude' AND g.source='provider' AND g.record_type=reading.t"
+    " AND g.account_fingerprint=reading.fp AND g.observed_at_ms=(SELECT MAX(h.observed_at_ms)"
+    " FROM admission_evidence h WHERE h.provider='claude' AND h.source='provider'"
+    " AND h.record_type=reading.t AND h.account_fingerprint=reading.fp AND h.observed_at_ms<:a-86400000)"
+)
 _ADMISSION_INPUT_JOIN = (
-    # Attestations start from bounded projected membership. Other admission
-    # evidence comes from the record-type index and retains its original scope;
-    # unrelated record families never enter either branch. Each branch's first
-    # :limit rows contain every possible row in the global first :limit. Bound
-    # both branches before the final sort and record/signature joins.
-    " FROM (SELECT record_rowid FROM (SELECT record_rowid FROM temp.capture_candidates "
-    "WHERE consumer=:provider AND project_id=:p ORDER BY record_rowid LIMIT :limit) "
-    "UNION ALL SELECT record_rowid FROM (SELECT r.rowid AS record_rowid FROM records r WHERE r.record_type IN "
-    "('provider_identity','admission_decision','probe_admission','provider_billing','provider_headroom') "
-    "AND " + _ADMISSION_INPUT_SCOPE + " ORDER BY r.rowid LIMIT :limit)) c CROSS JOIN records r LEFT JOIN owner_attestations a "
-    "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
-    "WHERE r.rowid=c.record_rowid ORDER BY c.record_rowid LIMIT :limit"
+    " FROM (" + _ADMISSION_CANDIDATES + ") c CROSS JOIN records r ON r.rowid=c.id "
+    "LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
+    "WHERE " + _ADMISSION_INPUT_SCOPE + " ORDER BY r.rowid LIMIT :limit"
 )
 
 

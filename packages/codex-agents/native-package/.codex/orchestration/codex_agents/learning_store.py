@@ -2340,6 +2340,33 @@ class LearningLedger:
             self._connection.execute(
                 "CREATE INDEX IF NOT EXISTS records_project_digest ON records(project_id, content_digest)"
             )
+            # U3: independent keys for a run, an account-wide time window,
+            # foreign decisions, and still-live cleanup receipts. Existing AP/AP5
+            # type, observed-time and project/digest indexes remain in use.
+            # Additive on every open, after migration; no schema-version change.
+            # Guard JSON so corrupt retained rows remain readable/refusable by
+            # their existing validation paths rather than preventing index build.
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS records_run ON records(project_id, "
+                "CASE WHEN json_valid(CAST(content AS TEXT)) THEN "
+                "json_extract(CAST(content AS TEXT),'$.run_id') END, record_type)"
+            )
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS records_candidate ON records(project_id, "
+                "CASE WHEN json_valid(CAST(content AS TEXT)) THEN "
+                "json_extract(CAST(content AS TEXT),'$.candidate_digest') END, record_type) WHERE record_type='candidate'"
+            )
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS records_type_observed ON records(record_type, observed_at_ms)"
+            )
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS records_foreign_admissions ON records(project_id) "
+                "WHERE record_type='admission_decision' AND source<>'lifecycle'"
+            )
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS account_cleanup_receipts_unreleased "
+                "ON account_cleanup_receipts(project_id) WHERE released_at_ms IS NULL"
+            )
             # O0b B0-1 (narrowed): the open-time cap reads only live pending bindings, so expired ones
             # piling up never slow it (additive, as above).
             self._connection.execute(
@@ -5252,7 +5279,7 @@ class LearningLedger:
                 self._connection.execute(
                     "SELECT 1 FROM records WHERE project_id=? "
                     "AND record_type='dispatch_intent' AND source='lifecycle' "
-                    "AND json_extract(CAST(content AS TEXT),'$.run_id')=? "
+                    "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=? "
                     "AND json_extract(CAST(content AS TEXT),'$.bridge_run_id')=?",
                     (project_id, str(row["run_id"]), agent_id),
                 ).fetchone() is None
@@ -6478,13 +6505,13 @@ class LearningLedger:
             run_id = self._open_run_for_provider_locked(project_id, run_handle, provider)
             if self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? AND record_type='dispatch_intent' "
-                "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
+                "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",
                 (project_id, run_id),
             ).fetchone() is None:
                 raise LedgerError("only a dispatched run records its usage")
             if self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? AND record_type='provider_usage' "
-                "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
+                "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",
                 (project_id, run_id),
             ).fetchone() is not None:
                 raise LedgerError("host run already recorded its usage")
@@ -6912,7 +6939,7 @@ class LearningLedger:
                 for row in self._connection.execute(
                     "SELECT content FROM records WHERE project_id=? AND source='provider' "
                     "AND record_type IN ('provider_headroom','provider_billing') "
-                    "AND json_extract(CAST(content AS TEXT),'$.run_id')=? "
+                    "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=? "
                     "AND json_extract(CAST(content AS TEXT),'$.phase')='during' "
                     "ORDER BY source_sequence",
                     (project_id, run_id),
@@ -7422,7 +7449,7 @@ class LearningLedger:
         rows = self._connection.execute(
             "SELECT content,source FROM records WHERE project_id=? "
             "AND record_type='admission_decision' "
-            "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
+            "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",
             (project_id, run_id),
         ).fetchall()
         if len(rows) != 1 or rows[0]["source"] != "lifecycle":
@@ -7774,7 +7801,7 @@ class LearningLedger:
             def legacy_intent():
                 return self._connection.execute(
                     "SELECT 1 FROM records WHERE project_id=? AND record_type IN ('dispatch_intent','dispatch_result') "
-                    "AND json_extract(CAST(content AS TEXT),'$.run_id')=? LIMIT 1", (project_id, expected.run_id)).fetchone()
+                    "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=? LIMIT 1", (project_id, expected.run_id)).fetchone()
             limited = False
             try:
                 legacy = self._connection.transaction_read_call(SQLReadLimits(*DENIAL_LEGACY_READ_LIMITS), legacy_intent)
@@ -8706,7 +8733,7 @@ class LearningLedger:
                 raise LedgerError("host run was already dispatched")
             if self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? AND record_type='dispatch_intent' "
-                "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
+                "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",
                 (project_id, run_id),
             ).fetchone() is not None:
                 raise LedgerError("host run was already dispatched")
@@ -8793,7 +8820,7 @@ class LearningLedger:
             intents = self._connection.execute(
                 "SELECT content FROM records WHERE project_id=? "
                 "AND record_type='dispatch_intent' AND source='lifecycle' "
-                "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
+                "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",
                 (project_id, run_id),
             ).fetchall()
             if len(intents) != 1:
@@ -8805,7 +8832,7 @@ class LearningLedger:
                 raise LedgerError("client observations require a Claude dispatch")
             if self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? AND record_type='dispatch_result' "
-                "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
+                "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",
                 (project_id, run_id),
             ).fetchone() is not None:
                 raise LedgerError("the dispatched child's result is already recorded")
@@ -9099,7 +9126,7 @@ class LearningLedger:
             if client_version == BRIDGE_CLIENT_VERSION and self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? "
                 "AND record_type='dispatch_intent' AND source='lifecycle' "
-                "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
+                "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",
                 (project_id, checked_observation["run_id"]),
             ).fetchone() is None:
                 # A bridged run's result can only come from its dispatched child.
@@ -9110,7 +9137,7 @@ class LearningLedger:
                 dispatched = self._connection.execute(
                     "SELECT content FROM records WHERE project_id=? "
                     "AND record_type='dispatch_result' AND source='lifecycle' "
-                    "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
+                    "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",
                     (project_id, checked_observation["run_id"]),
                 ).fetchall()
                 if len(dispatched) != 1:
@@ -9451,7 +9478,7 @@ class LearningLedger:
 
         rows = self._connection.execute(
             "SELECT content FROM records WHERE project_id=? AND record_type='provider_usage' "
-            "AND source='provider' AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
+            "AND source='provider' AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",
             (project_id, run_id),
         ).fetchall()
         if len(rows) != 1:
@@ -9536,7 +9563,7 @@ class LearningLedger:
         bindings = self._connection.execute(
             "SELECT content FROM records WHERE project_id=? "
             "AND record_type='verification_binding' AND source='lifecycle' "
-            "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
+            "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",
             (project_id, verifier_host_outcome["run_id"]),
         ).fetchall()
         if len(bindings) != 1:
@@ -11169,14 +11196,11 @@ class LearningLedger:
                 return []
             rows = self._connection.execute(
                 "SELECT record_id,content FROM records WHERE project_id=? "
-                "AND record_type='candidate'",
-                (project_id,),
+                "AND record_type='candidate' AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN "
+                "json_extract(CAST(content AS TEXT),'$.candidate_digest') END=?",
+                (project_id, digest),
             ).fetchall()
-            return [
-                str(row["record_id"])
-                for row in rows
-                if json.loads(bytes(row["content"]))["candidate_digest"] == digest
-            ]
+            return [str(row["record_id"]) for row in rows]
 
         def link(source_ids: Iterator[str] | list[str] | set[str], relation: str) -> None:
             for source in set(source_ids):
@@ -11191,8 +11215,9 @@ class LearningLedger:
         if kind == "outcome":
             rows = self._connection.execute(
                 "SELECT record_id,content FROM records WHERE project_id=? "
-                "AND record_type='event' AND source='host'",
-                (project_id,),
+                "AND record_type='event' AND source='host' "
+                "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",
+                (project_id, record["run_id"]),
             ).fetchall()
             link(
                 [
@@ -11210,8 +11235,8 @@ class LearningLedger:
         elif kind == "feedback":
             rows = self._connection.execute(
                 "SELECT record_id,content FROM records WHERE project_id=? "
-                "AND record_type='outcome'",
-                (project_id,),
+                "AND record_type='outcome' AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?",
+                (project_id, record["run_id"]),
             ).fetchall()
             link(
                 [

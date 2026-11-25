@@ -82,7 +82,7 @@ def _snapshot(ledger, request, lease):
             records[kind] = value
             continue
         sql = ('SELECT record_id,content,content_digest,source FROM records WHERE project_id=? AND record_type=? '
-               "AND json_extract(CAST(content AS TEXT),'$.run_id')=?")
+               "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=?")
         parameters = (expected.project_id, kind, expected.run_id)
         if code is not None:
             sql += " AND source='host' AND json_extract(CAST(content AS TEXT),'$.event_code')=?"

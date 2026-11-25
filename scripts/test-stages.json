@@ -268,6 +268,8 @@
  "codex:tests.test_qa_security_diagnostics": "integration",
  "codex:tests.test_qa_tree_scan": "unit",
  "codex:tests.test_rate_limit_contracts": "unit",
+ "codex:tests.test_read_growth": "integration",
+ "codex:tests.test_read_plans": "integration",
  "codex:tests.test_record_context": "integration",
  "codex:tests.test_recovery_line": "integration",
  "codex:tests.test_refusal_steps": "unit",
