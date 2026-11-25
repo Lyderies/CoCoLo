@@ -792,10 +792,15 @@
   "source": "PLAN-0.4.0.md T7",
   "statement": "A second project updated after the first works (no other project stops working)."
  },
- "L12.6": {
+ "L12.6a": {
   "checks": [],
   "source": "PLAN-0.4.0.md T7",
-  "statement": "History built on an earlier release with more than 512 admission records, runs left by 0.2.x and a project over 128 MiB still opens, dispatches and upgrades (the four live-test bugs: unbounded admission history, a masked busy probe, 0.2.x leftovers blocking updates, a protected copy without role files)."
+  "statement": "History built on an earlier release with more than 512 admission records and a ledger over 128 MiB still opens, dispatches and upgrades (unbounded admission history)."
+ },
+ "L12.6b": {
+  "checks": [],
+  "source": "PLAN-0.4.0.md T7",
+  "statement": "On that same long-history project, opening, dispatching and upgrading work with runs left by 0.2.x (including leftovers blocking updates) and a protected copy without role files; a busy billing probe reports its busy reason without masking it."
  },
  "L12.7": {
   "checks": [],

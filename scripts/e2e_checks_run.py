@@ -83,7 +83,6 @@ def lifecycle_scene(primary: str, verifier_verdict: str = "pass"):
     world = e2e_support.World().__enter__()
     scene = SimpleNamespace(world=world, primary=primary, steps={}, files={}, digests={}, failed=None)
     _SCENES[name] = scene
-    host = (lambda *a, **k: world.host_cli("claude", *a, **k)) if primary == "claude" else world.codex_host_cli
     trusted_interpreter_checks(world)
     scene.setup = world.setup(world.answers(providers={
         "codex": "on", "claude": "on", "claude_models": CLAUDE_MODEL, "bridge": "off"}))
@@ -91,6 +90,17 @@ def lifecycle_scene(primary: str, verifier_verdict: str = "pass"):
     world.cli("provider-observe", "--provider", "codex")
     world.cli("provider-observe", "--provider", "claude")
     world.host_cli("claude", *PROBE)  # the billing probe the Claude admission rests on (as L3, L4)
+    return drive_lifecycle(scene, primary, verifier_verdict)
+
+
+def drive_lifecycle(scene, primary: str, verifier_verdict: str = "pass", *, earlier_release: bool = False):
+    """The run lifecycle of `lifecycle_scene` on a World that is already set up (T7 S4 runs it on a project updated
+    from an earlier release, and on the earlier release itself): `scene` holds `world`, `steps`, `files`, `digests`
+    and `failed`; `earlier_release` leaves out the status read (an earlier release's learning-status prints the owner key's
+    fingerprint, which a saved output may not carry) and the operational checks and QA (an earlier release's QA record
+    step refuses here, `history_execution_not_ready`, its own behaviour and not part of the history to build)."""
+    world = scene.world
+    host = (lambda *a, **k: world.host_cli("claude", *a, **k)) if primary == "claude" else world.codex_host_cli
 
     def save(file_name: str, data) -> str:
         path = world.base / file_name
@@ -107,7 +117,8 @@ def lifecycle_scene(primary: str, verifier_verdict: str = "pass"):
             scene.failed = scene.failed or label
         return reply
 
-    step("status", "learning-status")
+    if not earlier_release:
+        step("status", "learning-status")
     step("validate")
     scene.orchestration = step("open_orchestration", "learning-open-orchestration") or {}
     handle = scene.orchestration.get("orchestration_handle", "")
@@ -165,7 +176,7 @@ def lifecycle_scene(primary: str, verifier_verdict: str = "pass"):
                     "verification_for_provider": scene.steps["route"][1].get("provider"),
                     "verification_for_outcome": worker},
               "Check the recorded answer against the source", [worker], True)
-    if scene.digests.get("v"):
+    if not earlier_release and scene.digests.get("v"):
         pair = ["--host-outcome-digest", worker, "--verifier-host-outcome-digest", scene.digests["v"]]
         checks = step("checks", "learning-run-operational-checks", *pair)
         if checks is not None:
