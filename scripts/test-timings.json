@@ -660,7 +660,7 @@
  "codex:tests.test_bridge_liveness.BridgeLivenessTests.test_stop_before_worker_start_never_launches_or_fabricates_cleanup": 0.01,
  "codex:tests.test_bridge_liveness.BridgeLivenessTests.test_stop_signal_interrupt_cannot_skip_factory_or_handoff_abort_cleanup": 0.01,
  "codex:tests.test_candidate_evidence_lookup": 5.0,
- "codex:tests.test_candidate_index_build": 56.5,
+ "codex:tests.test_candidate_index_build": 0.4,
  "codex:tests.test_capacity_status_api": 10.19,
  "codex:tests.test_capacity_status_api.CapacityStatusApiTests.test_actual_receipt_survives_restart_and_wall_rollback_without_new_execution": 0.85,
  "codex:tests.test_capacity_status_api.CapacityStatusApiTests.test_client_import_chain_and_unavailable_read_cannot_open_sqlite": 0.17,

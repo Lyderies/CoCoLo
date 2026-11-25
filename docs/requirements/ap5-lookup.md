@@ -24,7 +24,11 @@ The focused lookup and compatibility checks live in
   a disposable synthetic ledger of roughly 300 MiB and at least 200,000 records,
   populated through public `append`, without accessing an owner ledger. Record
   database size and index size growth; explicitly report a build over about 1 s.
-  The separate named module `tests.test_candidate_index_build` owns this measurement.
+  The opt-in script `scripts/measure_candidate_index.py` owns this measurement;
+  it must not run in test discovery. The registered module
+  `tests.test_candidate_index_build` must stay well under 5 seconds and prove
+  first-open index creation and indexed seeks in both actual candidate queries.
+  Existing drop/reopen and missing-index checks remain in the suite.
 - MED-2 (AP3/AP5-3): drop the digest index and reopen through `LearningLedger`;
   both candidate lookups must retain their answers, including owner invalidation.
   On an already-open connection without the index, both lookups must raise a
@@ -41,7 +45,8 @@ The focused lookup and compatibility checks live in
 | AP5-3 | `test_AP5_3_public_admission_duplicates_and_history_order_match` | Baseline and replacement accept an actual verified 40-outcome cohort identically, return identical duplicate answers, and expose identical mixed record history and source sequence order in paired projects. |
 | AP3 | `test_AP3_digest_index_is_additive_on_first_open` | Red before implementation; green after. Drop only the new index, reopen, compare every other schema object and `user_version`. |
 | AP3 | `test_AP3_indexed_copy_opens_reads_and_appends_with_real_previous_release` | Red for absent index; green with real recorded 0.8.61 source (`782a7eed`). Isolated subprocess reads all retained records/order/late values, validates candidate evidence, appends, checks integrity and reopens; current code then reads the same copy correctly. |
-| AP3 | `CandidateIndexBuildTests.test_AP3_large_synthetic_first_open_index_cost` | Fix round MED-1: 230,000 public appends; 286.461 MiB compacted pre-index ledger. First open 0.205403 s, index build 0.198591 s, reopen 0.005369 s; index adds 24.984 MiB. |
+| AP3 | `test_AP3_first_open_builds_index_used_by_candidate_lookups` | Final targeted fix: first-open index and exact columns; actual validator and invalidation queries both use project/digest index seeks. Module 0.4 s. |
+| AP3 | `scripts/measure_candidate_index.py` (manual measurement) | Fix round MED-1: 230,000 public appends; 286.461 MiB compacted pre-index ledger. First open 0.205403 s, index build 0.198591 s, reopen 0.005369 s; index adds 24.984 MiB. |
 | AP3, AP5-3 | `test_AP3_reopen_recreates_digest_index_and_preserves_lookup_answers` | Fix round MED-2: drop, normal reopen, both queries preserve accepted and owner-invalidated answers against the former validator. |
 | AP5-3 | `test_AP5_3_missing_digest_index_gives_plain_ledger_error` | Fix round MED-2: both queries red with raw SQLite errors → green with exact plain ledger error/reopen guidance. |
 | AP3 | `test_AP3_missing_previous_source_has_actionable_failure` | Fix round LOW: missing source, timeout and missing Git red with raw exceptions → green with explicit failure naming release and source commit; never skipped. |

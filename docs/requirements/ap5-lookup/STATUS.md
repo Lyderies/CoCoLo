@@ -4,7 +4,70 @@ Base `230c2fc0` (VERSION 0.8.62), branch `feat/ap5-evidence-lookup`.
 Implementation and requested requirement checks complete; changes left uncommitted
 in the named worktree because this session cannot write Git metadata.
 
-## Requirement evidence
+## Final targeted fix: routine-suite cost — PASS
+
+Base remains `230c2fc0` (VERSION 0.8.62), branch `feat/ap5-evidence-lookup`.
+Only measurement/test/docs/metadata changed in this final round; runtime code,
+VERSION and the runtime digest catalogue are untouched. No commit was attempted
+in the sandbox. Earlier run details below are historical, including the large
+measurement module's former timing and registration.
+
+- **AP3 / MED-1:** moved the large measurement to
+  `scripts/measure_candidate_index.py`, outside test discovery. Run manually from
+  the repository root with the prepared test interpreter as `$PY`:
+  `$PY -B scripts/measure_candidate_index.py`.
+  It creates and cleans a disposable ledger through the existing fixture,
+  retaining every former measurement assertion and printing first-open,
+  index-build and reopen seconds, population time and database/index sizes.
+- **Recorded measurement evidence (prior fix-round run, not rerun):** 230,000
+  public appends; compacted pre-index ledger **286.461 MiB**; first open
+  **0.205403 s**, actual index build **0.198591 s**, reopen **0.005369 s**.
+  Index growth **24.984 MiB**. The full measurement table and conditions remain
+  below. AST comparison against the original method confirms that the extracted
+  measurement body, including all assertions, is unchanged; script syntax passes.
+  Repeating the expensive population was unnecessary under least-test-running.
+- **AP3:** `CandidateIndexBuildTests.test_AP3_first_open_builds_index_used_by_candidate_lookups`
+  replaces the large test in the same registered module. It checks index presence
+  on the fixture's first open and exact columns, validates a small mixed candidate,
+  then explains both actual executed identity queries (validator and invalidation).
+  Both must SEARCH the project/digest index by both keys, without a records scan.
+  Controlled red: suppressing only first-open digest-index DDL makes the index
+  assertion fail (1 test, 0.057 s); unchanged runtime code gives green.
+  The original cost defect is also evidenced by the earlier 63.6 s budget failure.
+- **AP5-2 / AP5-3:** unchanged fixed-link VM-growth, mixed-answer, public-admission,
+  populated drop/reopen and missing-index tests pass. Real previous-release and
+  missing-source diagnostics remain covered and pass.
+- **Metadata:** retained module names and scenario/integration registrations in
+  `test-layers.json` / `test-stages.json`; replaced the AP3 check name in
+  `test-requirements.json`, retaining its reciprocal `tests/requirements/ap5-lookup.json#AP3`
+  source; updated the small module's timing to **0.4 s**. No obsolete large test
+  check remains registered, and the script has no test-module registration.
+
+Named validation command (repository root):
+
+```sh
+$PY -B scripts/parallel_tests.py --module codex:tests.test_candidate_index_build --module codex:tests.test_candidate_evidence_lookup
+```
+
+**9/9 pass**, 2.3 s runner worker wall time (2.74 s worker sum), 7.04 s
+preflight. Index module **0.4 s**, evidence module **2.3 s**;
+**`metadata_errors: []`, `budget_failures: []`, `over_budget: []`,
+`requirement_failures: []`**. Unmeasured budget-debt warnings belong to unrelated
+modules; no full run was performed. No requested check needs sockets or PTY.
+No copier/backup rerun was needed because runtime/schema/record shapes did not
+change. The prior runtime digest failure and socket limits below remain
+historical handoff items, not checks rerun in this round.
+
+Assertion replacements are enumerated in [assertions.md](assertions.md): all
+large scale/durability/DDL/growth checks move unchanged to the manual script;
+small first-open/actual-query-plan assertions replace them in routine discovery.
+
+Final-round changed files: `scripts/measure_candidate_index.py`,
+`packages/codex-agents/tests/test_candidate_index_build.py`,
+`scripts/test-requirements.json`, `scripts/test-timings.json`,
+`docs/requirements/ap5-lookup.md`, this STATUS, and `assertions.md`.
+
+## Requirement evidence (earlier implementation)
 
 The complete requirement → test → evidence map is in [ap5-lookup.md](../ap5-lookup.md).
 
@@ -104,7 +167,8 @@ uncommitted in this worktree as instructed for the sandbox.
 
 ### MED-1 / AP3: large synthetic first-open cost — PASS
 
-`CandidateIndexBuildTests.test_AP3_large_synthetic_first_open_index_cost` builds
+The former `CandidateIndexBuildTests.test_AP3_large_synthetic_first_open_index_cost`
+(now extracted into `scripts/measure_candidate_index.py`) builds
 a new disposable account ledger using **230,000 public `LearningLedger.append`
 calls**, one project, unique event IDs/content digests, and normal optional
 configuration/tool/item digest fields. Every append reports stored and the exact

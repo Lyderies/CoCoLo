@@ -1,6 +1,7 @@
 # Assertion accounting
 
-No pre-existing test method or assertion was changed, removed or renamed.
+Before the final targeted fix below, no pre-existing test method or assertion
+was changed, removed or renamed.
 The existing `test_AP5_2_the_grant_check_reads_only_the_five_types_it_uses`
 remains intact as grant coverage; the new candidate evidence test closes AP5-2's
 separate gap. All slice assertions are additions in
@@ -33,3 +34,27 @@ characterization. No failing assertion was weakened to obtain green.
   the final fixture fills the three normal optional digest fields to reach the
   same byte scale with fewer public appends. All scale and correctness assertions
   are unchanged; no production behavior was adjusted for the measurement.
+
+## Final targeted fix: measurement outside the suite
+
+AP3/MED-1 assertion replacements (required to remove the large fixture from every
+full run; production code is unchanged):
+
+- Every public append is stored with the exact next sequence; population reaches
+  200,000–400,000 rows and the byte target; stored count equals append count;
+  compacted pre-index size is 250–400 MiB → identical checks in the manual
+  `scripts/measure_candidate_index.py` measurement. Suite replacement uses a
+  small mixed durable fixture and validates its actual candidate lookup.
+- Two timed DDL executions, positive first DDL duration and checkpointed file
+  growth, final index existence and retained total row count → identical checks
+  in the manual script. The small suite test separately checks the index exists
+  on the fixture's first open, its exact project/digest columns, accepted lookup,
+  and EXPLAIN QUERY PLAN identity seeks for both executed candidate queries.
+- Large-fixture timing output → manual script JSON with first-open, index-build,
+  reopen, population and existing-index DDL seconds and database/index sizes.
+  Measurements remain observations, not wall-clock assertions.
+
+`test_AP3_large_synthetic_first_open_index_cost` is replaced in its existing
+registered module by `test_AP3_first_open_builds_index_used_by_candidate_lookups`.
+The existing additive-schema, populated drop/reopen, missing-index diagnostic,
+VM growth and previous-release assertions are unchanged.
