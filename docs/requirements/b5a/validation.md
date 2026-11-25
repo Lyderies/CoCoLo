@@ -112,7 +112,7 @@ with process-table access, Unix sockets and disposable git fixtures permitted:
 python3 -B -m unittest tests.test_crashed_process_evidence
 python3 -B -m unittest tests.test_crashed_settlement_socket
 python3 -B -m unittest tests.test_account_settlement_driver.StepBoundaryTests
-python3 -B -m unittest tests.test_account_settlement_driver.ReviewRoundOneDriverTests.test_r1_M1_a_slot_released_as_crashed_has_no_released_unacknowledged_closure
+python3 -B -m unittest tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_M1_a_slot_released_as_crashed_has_no_released_unacknowledged_closure
 python3 -B -m unittest tests.test_rsf_s1_ingress_socket
 python3 -B -m unittest tests.test_holds_report_socket
 ```

@@ -998,8 +998,8 @@
  },
  "L14.1": {
   "checks": [
-   "codex:tests.test_account_settlement_driver.StatusAgreementTests.test_L14_1_a_settled_lost_run_reads_abandoned_in_the_report_as_in_learning_status",
-   "codex:tests.test_account_settlement_driver.StatusAgreementTests.test_L14_1_learning_status_counts_the_projects_orchestrations_by_state"
+   "codex:tests.test_account_settlement_lifecycle.StatusAgreementTests.test_L14_1_a_settled_lost_run_reads_abandoned_in_the_report_as_in_learning_status",
+   "codex:tests.test_account_settlement_lifecycle.StatusAgreementTests.test_L14_1_learning_status_counts_the_projects_orchestrations_by_state"
   ],
   "source": "PLAN-0.4.0.md T7",
   "statement": "learning-status, learning-run-status, earlier_version_runs and learning-orchestration-report give the right values at each phase, and none is private."
@@ -2058,9 +2058,9 @@
    "codex:tests.test_account_settlement.ValidatorTests.test_B4_7_a_lease_only_settlement_needs_its_lease_released_lost_unbound",
    "codex:tests.test_account_settlement.ValidatorTests.test_B4_7_a_settlement_row_whose_hold_has_another_kind_is_refused",
    "codex:tests.test_account_settlement.ValidatorTests.test_B4_7_releasing_without_a_settlement_row_and_a_matching_one_are_accepted",
-   "codex:tests.test_account_settlement_driver.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
+   "codex:tests.test_account_settlement_lifecycle.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
    "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_L14_1_an_old_settled_entry_is_released_in_run_status_only_once_its_recovery_is_done",
-   "codex:tests.test_account_settlement_driver.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
+   "codex:tests.test_account_settlement_lifecycle.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
    "codex:tests.test_account_settlement_driver.SettlementThroughTheDriverTests.test_A1_a_run_lost_after_its_claim_is_settled_in_the_project_store",
    "codex:tests.test_account_settlement_driver.SettlementThroughTheDriverTests.test_A2_a_claim_admitted_but_never_bound_releases_its_lease_lost_unbound",
    "codex:tests.test_account_settlement_driver.SettlementThroughTheDriverTests.test_A3_the_orchestration_of_a_settled_run_closes_and_the_run_reads_lost",
@@ -2093,18 +2093,18 @@
    "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_one_entry_failing_never_aborts_the_sweep_for_later_entries",
    "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_prune_removes_only_entries_recovery_inspected_in_the_same_pass",
    "codex:tests.test_account_settlement_driver.ConfirmFixSweepTests.test_c_settled_checked_drops_pruned_keys_and_is_capped",
-   "codex:tests.test_account_settlement_driver.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it",
-   "codex:tests.test_account_settlement_driver.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace",
-   "codex:tests.test_account_settlement_driver.ReviewRoundOneDriverTests.test_c_H3_an_intent_whose_claimed_entry_exists_is_taken_over_by_that_entry",
-   "codex:tests.test_account_settlement_driver.ReviewRoundOneDriverTests.test_r1_H1_a_recorded_settlement_finishes_its_journal_from_the_local_receipt_without_the_account",
-   "codex:tests.test_account_settlement_driver.ReviewRoundOneDriverTests.test_r1_H1_a_settlement_the_account_purged_before_the_project_recorded_it_still_finishes",
-   "codex:tests.test_account_settlement_driver.ReviewRoundOneDriverTests.test_r1_H3_a_claim_admitted_before_its_first_journal_write_is_settled_from_the_store",
-   "codex:tests.test_account_settlement_driver.ReviewRoundOneDriverTests.test_r1_H3_an_intent_whose_claim_never_reached_the_account_is_released_and_nothing_is_counted",
-   "codex:tests.test_account_settlement_driver.ReviewRoundOneDriverTests.test_r1_H3_an_old_settled_journal_with_an_outstanding_project_hold_is_recovered",
-   "codex:tests.test_account_settlement_driver.ReviewRoundOneDriverTests.test_r1_M1_a_slot_released_as_crashed_has_no_released_unacknowledged_closure",
-   "codex:tests.test_account_settlement_driver.ReviewRoundOneDriverTests.test_r1_M2_a_workspace_that_could_not_be_removed_keeps_the_journal_unsettled",
-   "codex:tests.test_account_settlement_driver.ReviewRoundOneDriverTests.test_r1_M2_the_container_recovery_writes_no_journal_while_the_workspace_remains",
-   "codex:tests.test_account_settlement_driver.ReviewRoundOneDriverTests.test_r1_M2_the_live_container_path_settles_its_journal_only_after_the_workspace_is_gone"
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_an_intent_whose_claimed_entry_exists_is_taken_over_by_that_entry",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_H1_a_recorded_settlement_finishes_its_journal_from_the_local_receipt_without_the_account",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_H1_a_settlement_the_account_purged_before_the_project_recorded_it_still_finishes",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_H3_a_claim_admitted_before_its_first_journal_write_is_settled_from_the_store",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_H3_an_intent_whose_claim_never_reached_the_account_is_released_and_nothing_is_counted",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_H3_an_old_settled_journal_with_an_outstanding_project_hold_is_recovered",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_M1_a_slot_released_as_crashed_has_no_released_unacknowledged_closure",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_M2_a_workspace_that_could_not_be_removed_keeps_the_journal_unsettled",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_M2_the_container_recovery_writes_no_journal_while_the_workspace_remains",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_r1_M2_the_live_container_path_settles_its_journal_only_after_the_workspace_is_gone"
   ],
   "source": "REQUIREMENTS-account-settlement.md#RS-B-B4",
   "statement": "**RS-B-B4 \u2014 Lost-run settlement reaches the project store.**\nA run whose service was lost after its claim was admitted is settled at the account (`account.settle_lost_run`, reply\nshape unchanged) and its settlement then reaches the project store as a closure the project writer verifies with its own\nresult key: a NEW account operation, `account.lost_run_closure`, answers a settled (`lost`) or released\n(`released_unacknowledged`) run with a closure bound to the project, run handle, attempt, lease digest, assignment digest,\nbridge run id (the claim id), release kind, the account's release time and the outbox request's digest (RS-B-B4-1).\nBefore any account call the attempt's register row (its reservation hold, or its lease hold when the claim was never bound)\nis `releasing` with the request id and request digest; after any crash the identical request is re-sent until the closure\nis stored, and a closure naming another request digest is refused with nothing written; account calls stay one at a time\non the driver's helper thread (RS-B-B4-2). `record_account_settlement(lease_binding, closure)` verifies the closure and, in\none writer transaction, inserts the settlement row, expires a `claim_pending` lease and releases its hold `lost_unbound`,\nmoves a `reserved` reservation to `retiring` (a committed body is left to retention), releases the reservation hold with\nthe closure's kind and receipt, and releases unfinished custody `lost_with_reservation`; it writes nothing to the terminal\noutbox, execution consumptions, cleanup receipts or admission records, and its two register writes are the ones D2/D4\nplanted (RS-B-B4-3). At every driver caller the order is: account reply, settlement committed, workspace removed, journal\n`settled`; a stop between steps leaves the journal entry unsettled and the next sweep replays the identical request\n(RS-B-B4-4). A reservation with a verified settlement row is finished for `_unfinished` (checked before the consumption\ncheck) and released for the purge (`_attempt_released`); no reader counts it as a successful run (RS-B-B4-5). An\nidentical retry after settlement returns the stored receipt, also from the register tombstone after the purge; another\nproject, lease digest, claim id or attempt is refused with every table unchanged; a purged identity can never be taken\nagain (RS-B-B4-6). The register validator refuses a settlement row whose hold is not released with the same kind, and a\nheld reservation with a settlement row; `releasing` without one is legal (RS-B-B4-7). With every bound set to 2, three\nruns lost after their claim are settled, their orchestrations close, their rows purge, and a fourth run dispatches,\nrecords and closes (RS-B-B4-8). RC-3 runs un-skipped (RS-B-B4-9).\nPrerequisite (\u00a79): the account's digest key and the project writer's result key are the same file\n(`<state root>/digest.key`) in every install path, and a run can only be claimed after the account verified the\nproject's sealed lease with its key, so every closure is verifiable at the project.\nSource: ANALYSIS-0.4.0-rsb-b4-b7.md \u00a70, \u00a72, \u00a79; DESIGN-0.4.0-RS-B.md draft 2 \u00a74, draft 3 \u00a76, \u00a714; DESIGN-0.4.0-RS-BD-shared.md SH-3, SH-5, SH-7; docs/requirements/b4s.md."
@@ -3046,6 +3046,55 @@
   ],
   "source": "tests/requirements/testspeed2.json#TESTSPEED2-3",
   "statement": "no assertion is removed or weakened. Every changed assertion, renamed test or changed fixture behaviour is paired old -> new in [`testspeed2/assertions.md`](testspeed2/assertions.md)."
+ },
+ "TESTSPEED3-1": {
+  "checks": [
+   "codex:tests.test_account_settlement_lifecycle.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
+   "codex:tests.test_account_settlement_lifecycle.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace"
+  ],
+  "source": "tests/requirements/testspeed3.json#TESTSPEED3-1",
+  "statement": "`codex:tests.test_account_settlement_driver` and the two modules split out of it, `codex:tests.test_account_settlement_recovery` and `codex:tests.test_account_settlement_lifecycle`, each total at most 45 s, measured as the sum of the module's fragments' seconds (what the budget check counts), with full-run parallelism (`--jobs 16` beside `codex:tests.test_project_driver` and `root:test_install`)."
+ },
+ "TESTSPEED3-2": {
+  "checks": [
+   "codex:tests.test_account_settlement_lifecycle.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
+   "codex:tests.test_account_settlement_lifecycle.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace"
+  ],
+  "source": "tests/requirements/testspeed3.json#TESTSPEED3-2",
+  "statement": "no assertion is removed or weakened. Every changed assertion, renamed test, moved test or changed fixture behaviour is paired old -> new in [`testspeed3/assertions.md`](testspeed3/assertions.md)."
+ },
+ "TESTSPEED3-3": {
+  "checks": [
+   "codex:tests.test_account_settlement_lifecycle.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
+   "codex:tests.test_account_settlement_lifecycle.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace"
+  ],
+  "source": "tests/requirements/testspeed3.json#TESTSPEED3-3",
+  "statement": "the separate dispatch processes of one settlement test class share one bytecode cache outside the source tree (`dispatch_pycache`, opt-in), so only the first compiles the runtime; the dispatch arguments are unchanged."
+ },
+ "TESTSPEED3-4": {
+  "checks": [
+   "codex:tests.test_account_settlement_lifecycle.ClosureAuthorityTests.test_B4_1_only_the_runs_own_project_role_gets_its_closure_once_settled",
+   "codex:tests.test_account_settlement_lifecycle.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace"
+  ],
+  "source": "tests/requirements/testspeed3.json#TESTSPEED3-4",
+  "statement": "the review-round class `ReviewRoundOneDriverTests` runs from `test_account_settlement_recovery`, and `ClosureAuthorityTests`, `StatusAgreementTests` and `LostLifecycleLimitTests` from `test_account_settlement_lifecycle`, on the same harness (imported, not copied); every test runs exactly once, in one module or another, and is registered in the layer, stage and requirement tables."
+ },
+ "TESTSPEED3-5": {
+  "checks": [
+   "codex:tests.test_account_settlement_lifecycle.LostLifecycleLimitTests.test_B4_8_three_lost_lifecycles_settle_close_and_purge_and_a_fourth_completes",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_an_admitted_intent_was_settled_at_the_account_still_settles_it",
+   "codex:tests.test_account_settlement_recovery.ReviewRoundOneDriverTests.test_c_H3_a_second_stop_after_the_lease_was_fenced_still_settles_the_intent_and_its_workspace"
+  ],
+  "source": "tests/requirements/testspeed3.json#TESTSPEED3-5",
+  "statement": "the settlement tests wait for a successor host's sweep in tenths of a second: their harness runs the project driver's sweep every 0.1 s instead of every second; no deadline, retry or fence rule of the product changes, and no test asserts the one-second cadence."
  },
  "TF-1": {
   "checks": [
