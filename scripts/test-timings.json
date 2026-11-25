@@ -2399,7 +2399,7 @@
  "codex:tests.test_run_provenance.RunProvenanceTests.test_sql_budget_exhaustion_refuses_and_restores_original_connection_policy": 0.67,
  "codex:tests.test_run_provenance.RunProvenanceTests.test_valid_mac_for_wrong_provider_family_or_registered_claim_cannot_consume": 0.73,
  "codex:tests.test_runtime_release": 0.12,
- "codex:tests.test_s13_budgets": 3.0,
+ "codex:tests.test_s13_budgets": 7.0,
  "codex:tests.test_runtime_release.RuntimeReleaseTests.test_the_runtime_file_set_is_exactly_the_package_orchestration_files": 0.01,
  "codex:tests.test_service_harness": 0.48,
  "codex:tests.test_service_host": 6.52,
