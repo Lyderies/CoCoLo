@@ -20,6 +20,7 @@ from .billing_probe_worker import BillingProbeWorkers, ProbeWorkerError
 from .owned_execution import ExecutionCustodyError
 from .history_contracts import _DIGEST, _ID, _PROJECT, matches
 from .provider_observation_contracts import OBSERVATION_REASONS, ObservationInput
+from .sql_read_budget import SQLReadError
 from .signature_job_intake import SignatureJobError
 
 
@@ -29,6 +30,7 @@ RETRIED_OBSERVATION_REASONS = frozenset({'observation_unavailable', 'account_una
 # Decision 47 (H1): a ready yes whose inputs changed before it was taken is judged again; if they keep changing,
 # after this many new judgments it is refused by name (probe_replay_stale) and the client asks again.
 MAX_REJUDGMENTS = 2
+MAX_RECORD_FAILURES = 3
 
 @dataclass(frozen=True)
 class BillingJobLimits:
@@ -70,6 +72,7 @@ class _Job:
     timed_out: bool = False  # O0b RS-A round 3: cancelled by its own deadline, not by a caller or the close
     ended: bool = False  # O0c M10: unknown, and its admitted row settled (or none was admitted) once its child ended
     settle_after_ns: int = 0  # O0c review H1: a failed settlement is tried again from then
+    record_failures: int = 0  # N3: non-transient failures; busy SQL does not spend this budget
     judgment: object = None  # decision 47 (H1, M1): what the owner's judgment (or the commit) answered, checked at delivery
     rejudged: int = 0  # decision 47 (H1): new judgments started because a ready yes's inputs had changed
     ident: str = ''  # the request id of this generation's identity observation
@@ -372,7 +375,8 @@ class AccountBillingJobs:
         """O0c M10: an unknown job's admitted row is settled once no model it launched can still run, so
         it stops holding probe capacity and the self-restart. Review M5: a probe that ran and returned
         valid records has them committed, as its normal completion would; otherwise the row becomes a
-        denial naming the failed step. Review H1: any error (a busy ledger) is retried a second later;
+        denial naming the failed step. Busy SQL is retried a second later without consuming the
+        three-attempt record failure budget. Once that budget is spent, only denial is retried;
         the job is done only once its row is settled or no longer admitted."""
         if job.ended or job.settled or job.reservation is None or time.monotonic_ns() < job.settle_after_ns:
             return
@@ -383,7 +387,8 @@ class AccountBillingJobs:
             if row is None or row['state'] != 'admitted':
                 job.ended = True  # nothing admitted to settle
                 return
-            if job.preparation is not None and self._executions.returned(job.preparation):
+            if (job.record_failures < MAX_RECORD_FAILURES and job.preparation is not None
+                    and self._executions.returned(job.preparation)):
                 try:
                     self._executions.complete_ended(job.preparation)
                     job.ended = True
@@ -392,6 +397,15 @@ class AccountBillingJobs:
                     # Its packet does not validate, or its execution has no cleanup to retain (it never
                     # started a child): settled as a denial below. A busy ledger is retried instead.
                     pass
+                except Exception as error:
+                    if isinstance(error, SQLReadError) and error.reason_code in {
+                            'sql_read_busy', 'sql_read_deadline', 'sql_read_unavailable'}:
+                        raise  # Transient reads never exhaust the record budget.
+                    job.record_failures += 1
+                    if job.record_failures < MAX_RECORD_FAILURES:
+                        raise
+                    lane_health.safely(lambda error=error: self.health.note_failure(
+                        self._note, 'probe_records_unkept', error))
             reason = job.reason if job.reason in PROBE_STEP_REASONS else 'probe_worker_failed'
             self._owner.settle_ended(job.reservation, reason)
             job.ended = True

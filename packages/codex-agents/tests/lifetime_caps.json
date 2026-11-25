@@ -2080,6 +2080,11 @@
    "checks": 4,
    "ends": "U1: registration attempt rows, open report rows, mixed distinct report runs and journal events belong to one orchestration. At each safe-point continuation the product atomically closes it and opens a successor before admitting more work; the old report and replay remain available during existing retention.",
    "test": "test_events_replay_and_reserved_close_roll_repeatedly_past_limit"
+  },
+  "account_billing_jobs.py::_settle_ended": {
+   "checks": 2,
+   "ends": "S12 N3: three non-transient record failures per unknown job, then denial; busy SQL never consumes the budget. Failed denial retries without repeating exhausted record attempts. Settled jobs never retry. The counter ends with the job at account replacement.",
+   "test": "test_record_retry_limit_denies_once_and_later_passes_do_not_retry_records"
   }
  }
 }

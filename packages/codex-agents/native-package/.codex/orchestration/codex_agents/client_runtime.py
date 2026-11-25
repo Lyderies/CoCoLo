@@ -803,8 +803,21 @@ def _restart_attention(decision, this_project=None):
         return [f"the account is stuck{cause} and waits to restart itself until it can prove the processes "
                 f"it started have ended: {'; '.join(parts + named)}; once nothing is listed, restart the "
                 "collector (./setup.sh repairs it)"]
+    processes = held.get('processes')
+    if type(processes) is list and processes:
+        named = _waiting_processes(processes, [])
+        return [f"the account is stuck{cause} and waits to restart itself: {'; '.join(parts + named)}; "
+                "it checks again every minute and settles the probe once nothing is listed; "
+                "if one stays listed, it is a leftover model process you can stop "
+                + _probe_stop_hint(processes)]
     what = ', '.join(parts) or 'work still running'
     return [f"the account is stuck{cause} but is not restarting itself while something runs: {what}"]
+
+
+def _probe_stop_hint(processes):
+    pids = [item.get('pid') for item in processes if type(item) is dict and item.get('lane') == 'probe_worker'
+            and account_integer(item.get('pid')) and item['pid'] > 1]
+    return f"(kill {pids[0]})" if pids else "after checking its identity"
 
 
 _PROCESS_NAMES = {'signature': 'signature helper process', 'probe_worker': 'probe model process',

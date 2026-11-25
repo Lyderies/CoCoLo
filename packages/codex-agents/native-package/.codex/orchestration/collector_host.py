@@ -139,7 +139,8 @@ def main(argv: list[str] | None = None) -> int:
                 # O0c M8-M10: and only once every child the account's lanes started is proven gone.
                 decision = account_restart.check(account.health_notes, owner.client.machine_idle, last,
                                                  now_ms=now_ms, mono_ns=mono_ns,
-                                                 read_children=account.unended_children)
+                                                 read_children=account.unended_children,
+                                                 read_held=getattr(account, 'held_processes', None))
                 if decision["action"] == "restart" and not account_restart.record_restart(
                         state.root, lane=decision["lane"], cause=decision["cause"], now_ms=now_ms, mono_ns=mono_ns):
                     decision = {**decision, "action": "suppressed", "reason": "unrecorded"}  # C4/D6

@@ -23,6 +23,7 @@ from pathlib import Path
 from unittest import mock
 
 import tests.support  # noqa: F401
+from test_framework import requirements
 from tests import test_account_claim_jobs as claim_tests
 from tests import test_bridge as bridge_fixtures
 from tests.learning_support import trusted_tools
@@ -138,6 +139,7 @@ class Unproven:
 
 @unittest.skipUnless(SIGNATURE_WORKER, 'needs the macOS sandbox-exec policy or Linux')
 class SignatureLaneRestartTests(unittest.TestCase):
+    __why_not_scenario__ = "Real lane jobs and owned children, with adverse cleanup injected at the proof boundary."
     """M8 with real signature workers and claims (the claims harness of test_account_claim_jobs)."""
 
     def setUp(self):
@@ -273,6 +275,23 @@ class SignatureLaneRestartTests(unittest.TestCase):
         context.process = object()  # a root this execution started and never confirmed
         self.assertFalse(execution.children_ended(context))
 
+    @requirements('H1c-3')
+    def test_N4_a_retained_root_ended_by_the_proof_has_its_pipes_closed(self):
+        # Review N4: a root the execution left unreaped with its pipes open is ended by the proof, and
+        # once proven its pipes are closed, so dropping the Popen leaves no open file behind.
+        import sys as system
+        context = execution._Context(None, None, 1, threading.Event(), 1, 1)
+        process = subprocess.Popen(['/bin/sleep', '60'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   start_new_session=True)
+        self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait(timeout=5)))
+        context.process, context.no_fork_from_exec = process, system.platform == 'darwin'
+        end = time.monotonic() + 10
+        while execution.unproven_children(context):
+            self.assertLess(time.monotonic(), end)
+            time.sleep(.02)
+        self.assertIsNotNone(process.returncode)
+        self.assertTrue(process.stdin.closed and process.stdout.closed)
+
     def test_M8_an_ordinary_execution_in_flight_is_not_proven_gone(self):
         c = self.claims
         gate, started, patcher = c.gate_first_project()
@@ -313,9 +332,12 @@ class SignatureLaneRestartTests(unittest.TestCase):
             self.drive_until(c.jobs, lambda: c.jobs._pool.health.view()['kept'] >= 1)
         c.jobs.drive()
         slot = next(s for s in c.jobs._pool._slots if s.retained is not None)
-        self.assertIsNotNone(slot.retained.process.returncode)  # reaped, never guarded
+        process = slot.retained.process
+        self.assertIsNotNone(process.returncode)  # reaped, never guarded
         self.assertFalse(slot.retained.guarded)
         self.assertEqual([], account_host.unended_children(c.jobs._pool, None))
+        # Review N4: once proven, its pipes are closed (no ResourceWarning for a dropped Popen).
+        self.assertTrue(all(stream is None or stream.closed for stream in (process.stdin, process.stdout)))
         self.restart_and_claim()
 
     def test_M1_a_helper_whose_birth_check_failed_is_ended_and_proven_gone(self):
@@ -366,6 +388,7 @@ class SignatureLaneRestartTests(unittest.TestCase):
 
 @unittest.skipUnless(SIGNATURE_WORKER, 'original fixed macOS signature worker guard')
 class BillingLaneRestartTests(unittest.TestCase):
+    __why_not_scenario__ = "Real lane jobs and owned children, with adverse cleanup injected at the proof boundary."
     """M9 and M10 with the real billing phases and a fake Claude (the test_account_billing_jobs fixture)."""
 
     def setUp(self):
@@ -646,18 +669,25 @@ class BillingLaneRestartTests(unittest.TestCase):
         except AccountError as refused:
             return refused.reason_code
 
-    def test_M10_a_probe_whose_child_may_still_run_is_never_settled_and_holds_the_restart(self):
+    def unconfirmed_tree(self, *, recheck_too):
+        """The probe's tree is not confirmed empty when its run ends (the real cleanup still ran). With
+        `recheck_too`, every later look finds it not ended either (review N2's re-check refused too)."""
         from codex_agents.process_tree import ProcessTree
         real = ProcessTree.cleanup_after_owned_wait
 
         def unconfirmed(tree, process):
             real(tree, process)
-            return False  # the child's tree was not confirmed empty
+            return False
 
         def make_unknown(stack):
             stack.enter_context(mock.patch.object(ProcessTree, 'cleanup_after_owned_wait', autospec=True,
                                                   side_effect=unconfirmed))
-        self.unknown_probe(make_unknown)
+        if recheck_too:
+            self.enterContext(mock.patch.object(ProcessTree, 'ended_after_reap', autospec=True, return_value=False))
+        return make_unknown
+
+    def test_M10_a_probe_whose_child_may_still_run_is_never_settled_and_holds_the_restart(self):
+        self.unknown_probe(self.unconfirmed_tree(recheck_too=True))
         for _ in range(50):
             self.services['service'].drive_claims()
         self.assertEqual(1, self.admitted())
@@ -666,6 +696,87 @@ class BillingLaneRestartTests(unittest.TestCase):
         decision = account_restart.check(lambda: self.lane_notes(), self.ledger.machine_idle, None, now_ms=NOW,
                                          read_children=lambda: ['probe_worker'])
         self.assertEqual('wait', decision['action'])
+
+    @requirements('M10', 'H1c-1')
+    def test_N2_a_probe_tree_not_confirmed_at_its_end_is_checked_again_settled_and_the_restart_comes(self):
+        # Review N2: one snapshot said the tree was not empty when the run ended; looking again (its group
+        # and session empty and no process carrying its run tag) proves it, so the row is settled.
+        self.unknown_probe(self.unconfirmed_tree(recheck_too=False))
+        self.drive_until(lambda: self.admitted() == 0)
+        self.assertEqual([], account_host.unended_children(self.services['claims']._pool, self.services['workers']))
+        self.assert_restarts('billing')
+
+    @requirements('M10', 'H1c-1')
+    def test_N2_a_wait_on_an_admitted_probe_names_its_process_and_the_next_step(self):
+        self.unknown_probe(self.unconfirmed_tree(recheck_too=True))
+        for _ in range(20):
+            self.services['service'].drive_claims()
+        decision = account_restart.check(
+            lambda: self.lane_notes(), self.ledger.machine_idle, None, now_ms=NOW, read_children=lambda: [],
+            read_held=lambda: account_host.held_processes(self.services['workers']))
+        self.assertEqual('wait', decision['action'])
+        self.assertEqual([self.fixture.project_id], decision['held']['probes'])
+        (item,) = decision['held']['processes']
+        self.assertEqual(('probe_worker', 'tree_not_confirmed'), (item['lane'], item['why']))
+        text = ' '.join(client_runtime._restart_attention(decision))
+        self.assertIn(f"probe model process {item['pid']} was not confirmed ended with every process it started "
+                      f"(check: pgrep -g {item['pid']})", text)
+        self.assertIn('it checks again every minute and settles the probe once nothing is listed', text)
+
+    @requirements('M10', 'H1c-1')
+    def test_N2_status_names_a_held_probe_process(self):
+        decision = {'action': 'wait', 'lane': 'probe_worker', 'cause': 'probe_worker_failed',
+                    'held': {'run_slots': [], 'probes': ['prj_' + '1' * 32], 'lanes': {},
+                             'processes': [{'lane': 'probe_worker', 'pid': 4242, 'why': 'not_reaped'}]}}
+        text = ' '.join(client_runtime._restart_attention(decision))
+        self.assertIn('probes in project(s) prj_' + '1' * 32, text)
+        self.assertIn('probe model process 4242 has not exited (check: ps -p 4242)', text)
+        self.assertIn('it checks again every minute and settles the probe once nothing is listed; '
+                      'if one stays listed, it is a leftover model process you can stop (kill 4242)', text)
+
+    @requirements('S12-N3')
+    def test_N3_records_that_cannot_be_committed_fall_back_to_a_denial_after_a_few_tries(self):
+        # Review N3: an error that is not a busy ledger (here a contract refusal) is retried a few times,
+        # then the probe is settled as a denial and the failure noted.
+        from codex_agents.contracts import ContractError
+        calls = []
+
+        def refused(handle):
+            calls.append(1)
+            raise ContractError('learning record is oversized')
+        with mock.patch.object(self.services['billing']._executions, 'complete_ended', side_effect=refused):
+            self.unknown_probe(self.fail_workspace_removal_after_the_probe_ran)
+            self.drive_until(lambda: self.admitted() == 0)
+        self.assertEqual(3, len(calls))
+        row = self.ledger._connection.execute("SELECT state, references_json FROM account_billing_probe_requests").fetchone()
+        self.assertEqual(('committed', 'denied'), (row[0], __import__('json').loads(row[1])['probe']))
+        self.assertEqual('probe_records_unkept', self.services['billing'].health.view()['last_failure']['cause'])
+
+
+class ObservationGroupTests(unittest.TestCase):
+    __why_not_scenario__ = "Real lane jobs and owned children, with adverse cleanup injected at the proof boundary."
+    @requirements('S12-N1')
+    def test_N1_a_child_the_probe_reaped_itself_never_has_its_group_killed(self):
+        # Review N1: only a reap done by that same call may be followed by a group kill; a child reaped
+        # earlier (its pid, here standing for a reused one, may lead an unrelated group) is only checked.
+        import signal
+        from codex_agents import account_observation_jobs
+        slot = account_observation_jobs._Slot()
+        first = subprocess.Popen(['/usr/bin/true'], start_new_session=True)
+        first.wait(timeout=5)
+        unrelated = subprocess.Popen(['/bin/sleep', '60'], start_new_session=True)
+        self.addCleanup(lambda: unrelated.poll() is None and (unrelated.kill(), unrelated.wait(timeout=5)))
+        first.pid = unrelated.pid
+        slot.children.append(first)
+        account_observation_jobs._end_this_probe(slot, 0)
+        time.sleep(.2)
+        self.assertIsNone(unrelated.poll())  # untouched
+        self.assertEqual([first], slot.children)  # still listed: its group is not empty
+        self.assertEqual([{'pid': unrelated.pid, 'why': 'group_not_empty'}],
+                         account_observation_jobs._end_children(slot, [first], wait_s=0, right_after=False))
+        unrelated.kill()
+        unrelated.wait(timeout=5)
+        self.assertEqual(signal.SIGKILL, -unrelated.returncode)
 
 
 class ObservationLaneRestartTests(unittest.TestCase):

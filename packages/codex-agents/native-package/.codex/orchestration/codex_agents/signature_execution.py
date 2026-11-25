@@ -188,10 +188,15 @@ def unproven_children(context):
         process = context.process
         if process is not None:
             if not context.reaped and process.returncode is None:
-                with contextlib.suppress(OSError):
-                    os.killpg(process.pid, signal.SIGKILL)
-                with contextlib.suppress(OSError):
-                    process.kill()
+                record = process_record(process.pid)
+                if (record is None or record[0] != os.getpid()
+                        or (context.tree is not None and context.tree.root_birth != record[2])):
+                    return [{'pid': process.pid, 'why': 'unchecked'}]
+                if not record[3]:
+                    with contextlib.suppress(OSError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                    with contextlib.suppress(OSError):
+                        process.kill()
                 try:
                     process.wait(timeout=0)
                 except subprocess.TimeoutExpired:
@@ -209,6 +214,7 @@ def unproven_children(context):
                     return [{'pid': pid, 'why': 'unchecked'}]
                 if members:
                     return [{'pid': pid, 'why': 'session_not_empty'}]
+            _close_streams(process)
             context.roots_reaped += 1
             context.process = context.tree = None
             context.guarded = context.reaped = False
