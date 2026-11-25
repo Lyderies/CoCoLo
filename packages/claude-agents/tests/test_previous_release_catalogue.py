@@ -85,7 +85,7 @@ class CatalogueTests(unittest.TestCase):
         self.assertEqual(frozenset({RELEASED_0_8_40, RELEASED_0_8_41}), packaging.PINNED_RELEASE_DIGESTS)
 
     def test_the_shipped_catalogue_is_accepted(self) -> None:
-        self.assertEqual(26, len(released_bundles(self.source)))  # 0.8.40, 0.8.41, 0.8.42, 0.8.43, 0.8.44, 0.8.45, 0.8.46, 0.8.47, 0.8.48, 0.8.49, 0.8.50, 0.8.51, 0.8.52, 0.8.53, 0.8.54, 0.8.55, 0.8.56, 0.8.57, 0.8.58, 0.8.59, 0.8.60, 0.8.61, 0.8.62, 0.8.63, 0.8.64, 0.8.65 (last twenty-five: same bundle)
+        self.assertEqual(27, len(released_bundles(self.source)))  # 0.8.40, 0.8.41, 0.8.42, 0.8.43, 0.8.44, 0.8.45, 0.8.46, 0.8.47, 0.8.48, 0.8.49, 0.8.50, 0.8.51, 0.8.52, 0.8.53, 0.8.54, 0.8.55, 0.8.56, 0.8.57, 0.8.58, 0.8.59, 0.8.60, 0.8.61, 0.8.62, 0.8.63, 0.8.64, 0.8.65, 0.8.66 (last twenty-six: same bundle)
 
     def padded(self, size: int) -> None:
         body = json.dumps({"releases": self.records()}).encode()
@@ -93,7 +93,7 @@ class CatalogueTests(unittest.TestCase):
 
     def test_cl1_a_catalogue_up_to_2_mib_is_accepted(self) -> None:
         self.padded(2_097_152)
-        self.assertEqual(26, len(released_bundles(self.source)))
+        self.assertEqual(27, len(released_bundles(self.source)))
 
     def test_cl1_a_catalogue_over_2_mib_is_refused(self) -> None:
         self.padded(2_097_152 + 1)
