@@ -144,14 +144,32 @@ def ledger_path(world) -> Path:
     return world.home / ".local" / "state" / "codex-agents" / "learning.sqlite3"
 
 
+def row_keys(connection, table: str) -> frozenset:
+    """The identity of each row of a table, never its content: the declared primary key, or a digest of the whole
+    row where the table declares none."""
+    pk = [row[1] for row in sorted(connection.execute(f'pragma table_info("{table}")'), key=lambda r: r[5]) if row[5]]
+    if pk:
+        query = "select " + ",".join(f'"{name}"' for name in pk) + f' from "{table}"'
+        return frozenset(hashlib.sha256(repr(row).encode()).hexdigest() for row in connection.execute(query))
+    return frozenset(hashlib.sha256(repr(row).encode()).hexdigest() for row in connection.execute(f'select * from "{table}"'))
+
+
 def counts_by_kind(world) -> dict:
-    """Counts by kind, never content: the account ledger's rows by table and its records by record type."""
+    """Counts by kind and the identity of every row, never content: the account ledger's rows by table (`tables`, and
+    `keys` by table) and its records by record type (`types`, and `record_keys` by type, the record ids)."""
     connection = sqlite3.connect(f"file:{ledger_path(world)}?mode=ro", uri=True)
     try:
-        types = dict(connection.execute("select record_type, count(*) from records group by record_type"))
+        tables = [row[0] for row in connection.execute(
+            "select name from sqlite_master where type = 'table' and name not like 'sqlite_%' order by name")]
+        keys = {name: row_keys(connection, name) for name in tables if name != "records"}
+        record_keys: dict = {}
+        for kind, record_id in connection.execute("select record_type, record_id from records"):
+            record_keys.setdefault(kind, set()).add(record_id)
+        counts = {name: connection.execute(f'select count(*) from "{name}"').fetchone()[0] for name in tables}
     finally:
         connection.close()
-    return {"tables": world.ledger_counts(), "types": types}
+    return {"tables": counts, "types": {kind: len(ids) for kind, ids in record_keys.items()},
+            "keys": keys, "record_keys": {kind: frozenset(ids) for kind, ids in record_keys.items()}}
 
 
 def status(world, *, earlier_release: bool = False) -> dict:
@@ -193,6 +211,46 @@ def update_from(world, scene) -> None:
     scene.after_status = status(world)
 
 
+def recent_admission(world) -> int:
+    """Admission records (headroom and billing readings) observed in the last day, as the admission read counts them."""
+    connection = sqlite3.connect(f"file:{ledger_path(world)}?mode=ro", uri=True)
+    try:
+        marks = ",".join("?" for _ in ADMISSION_KINDS)
+        return connection.execute(f"select count(*) from records where record_type in ({marks}) and observed_at_ms > ?",
+                                  (*ADMISSION_KINDS, int(time.time() * 1000) - 86_400_000)).fetchone()[0]
+    finally:
+        connection.close()
+
+
+def collector_processes(world) -> list[str]:
+    """pid and age of each collector host of this world (never a path)."""
+    listing = subprocess.run(["/bin/ps", "-axo", "pid=,etime=,command="], capture_output=True, text=True,
+                             env=e2e_support.child_environment(os.environ)).stdout
+    return [" ".join(line.split()[:2]) for line in listing.splitlines()
+            if str(world.base) in line and "collector_host.py" in line]
+
+
+def probe_diagnosis(world, scene) -> dict:
+    """What was true when the first probe was refused, and what changed until it was not: the collector's own status,
+    its processes (pid, age) and a further probe, every 3 seconds for at most 60 s. Reasons and numbers only. This
+    only RECORDS (the first attempt already failed the check); it never makes anything green."""
+    started = time.monotonic()
+    trail = []
+    while True:
+        reply = status(world)
+        trail.append({"s": round(time.monotonic() - started), "ready": reply.get("ready"),
+                      "stale": reply.get("collector_code_stale"), "version": reply.get("collector_runtime_version"),
+                      "processes": collector_processes(world)})
+        if scene.probe_refused is None or time.monotonic() - started > 60:  # a refusal other than stale: one snapshot
+            break
+        code, _reply, text = world.host_cli("claude", *PROBE, refuses="collector_code_stale")
+        trail[-1]["probe"] = code if code == 0 else ("stale" if "collector_code_stale" in text else code)
+        if code == 0:
+            break
+        time.sleep(3)
+    return {"head_version": HEAD_VERSION, "trail": trail}
+
+
 def build_scene(tag: str, name: str, *, grow=None, chain=None):
     """One world: the earlier release `tag` with its history, then the update to this build, then the L5 run again."""
     if name in _SCENES:
@@ -212,45 +270,79 @@ def build_scene(tag: str, name: str, *, grow=None, chain=None):
     world.claude_frames(e2e_support.claude_probe_frames())
     world.cli("provider-observe", "--provider", "codex")
     world.cli("provider-observe", "--provider", "claude")
-    scene.probe_tries = 0
-    while True:  # right after an update on a long history the probe was once refused `collector_code_stale`: bounded retry
-        scene.probe_tries += 1
-        code, scene.probe, text = world.host_cli("claude", *PROBE, refuses="collector_code_stale" if scene.probe_tries < 18 else False)
-        if code == 0 or "collector_code_stale" not in text or scene.probe_tries >= 18:
-            break
-        time.sleep(5)
+    # The billing probe right after the update is judged on its FIRST attempt: setup said ready, so an owner's next
+    # command must work. No retry: a refusal (`collector_code_stale` was seen) is recorded with what was true at that
+    # moment and turns the checks that read `scene.probe` red.
+    code, scene.probe, text = world.host_cli("claude", *PROBE)
+    scene.probe_code = code
+    scene.probe_refused = "collector_code_stale" if "collector_code_stale" in text else None
+    scene.probe_diagnosis = probe_diagnosis(world, scene) if code != 0 else None
+    if scene.probe_diagnosis is not None:  # reasons and numbers only: the run's own record of what the refusal was
+        print("first_probe_refused", scene.probe_refused, json.dumps(scene.probe_diagnosis), file=sys.stderr)
     drive_lifecycle(scene, "claude")
+    for step, output in zip(world.steps, world.outputs):  # what refused, as reason codes only (the run's own record)
+        if step.get("code") not in (0, None) and not step.get("refuses"):
+            codes = sorted(set(re.findall(r'"(?:reason_code|code)": ?"([a-z_0-9]+)"', output)))
+            print("step_refused", step.get("step"), step.get("code"), codes, repr(output[:700]), file=sys.stderr)
+    scene.final = counts_by_kind(world)  # after the project opened and dispatched on the updated build
+    scene.final_recent_admission = recent_admission(world)
     return scene
 
 
 # The judges ------------------------------------------------------------------------------------------------------
 
 # What a setup run adds to the account ledger by itself: the observations and admission evidence of its own two provider
-# checks (decision on L1.2's OWN_CHECK_TABLES: a second setup may add exactly these) and one stored file. Every other
-# table of the earlier release's ledger must come through an update with the same number of rows.
-SETUP_GROWTH_TABLES = ("account_observation_origins", "account_observation_requests", "admission_evidence", "records",
-                       "stored_files")
-SETUP_GROWTH_LIMIT = 4  # rows a table may gain: two provider checks, each one observation and one piece of evidence
-# Record kinds the setup's own provider checks make; every other kind must keep exactly its count.
-SETUP_GROWTH_KINDS = ("provider_identity", "provider_billing", "provider_headroom")
+# checks (decision on L1.2's OWN_CHECK_TABLES: a second setup may add exactly these) and one stored file. The additions
+# are IDENTIFIED, not allowed for in a count: a row (a record id, a primary key) the earlier ledger held must still be
+# there after the update, and a row that is new must be of a kind the setup's own checks make. So two old provider
+# identities deleted while the setup adds two new ones is a loss, not "the same number".
+# Exactly what the update's setup adds, as measured on a real update from each of the four releases (S4 runs): the two
+# provider checks make two observations (an origin and a request each), two provider identities, one billing and one
+# headroom reading, and the setup stores one file. A table the earlier release did not have yet (a migration made it:
+# run_holds, project_wake, admission_evidence for v0.3.1) is not the earlier release's and is not counted.
+SETUP_ADDS_TABLES = {"account_observation_origins": 2, "account_observation_requests": 2, "admission_evidence": 2,
+                     "stored_files": 1}
+SETUP_ADDS_KINDS = {"provider_identity": 2, "provider_billing": 1, "provider_headroom": 1}
+
+
+def setup_additions(before: dict, after: dict) -> dict:
+    """The rows the update's setup added, by table (`tables`) and by record kind (`types`): the rows of `after` that
+    `before` did not hold. The rows `before` held that `after` does not are `lost`, by the same two keys."""
+    added = {"tables": {}, "types": {}}
+    lost = {"tables": {}, "types": {}}
+    for table in set(before["keys"]) | set(after["keys"]):
+        gained = len(after["keys"].get(table, frozenset()) - before["keys"].get(table, frozenset()))
+        missing = len(before["keys"].get(table, frozenset()) - after["keys"].get(table, frozenset()))
+        added["tables"][table], lost["tables"][table] = gained, missing
+    for kind in set(before["record_keys"]) | set(after["record_keys"]):
+        gained = len(after["record_keys"].get(kind, frozenset()) - before["record_keys"].get(kind, frozenset()))
+        missing = len(before["record_keys"].get(kind, frozenset()) - after["record_keys"].get(kind, frozenset()))
+        added["types"][kind], lost["types"][kind] = gained, missing
+    added["tables"]["records"], lost["tables"]["records"] = sum(added["types"].values()), sum(lost["types"].values())
+    return {"added": added, "lost": lost}
 
 
 def history_kept(phase: Phase, scene) -> None:
-    """G7: the counts by kind before the update and after it. Nothing is read from a record, only counted."""
+    """G7: the earlier ledger's rows before the update and after it, by table and by record kind. Nothing is read from
+    a record, only identified (record id, primary key) and counted."""
     before, after = scene.before, scene.after
     phase.expect(sum(before["tables"].values()) > 0 and before["types"], "the earlier release's ledger held history")
-    for table, count in before["tables"].items():
-        if table in SETUP_GROWTH_TABLES:
-            phase.expect(count <= after["tables"].get(table, -1) <= count + SETUP_GROWTH_LIMIT,
-                         "a table the setup's own checks add to kept every row and gained only those")
-        else:
-            phase.expect(after["tables"].get(table) == count, "a table of the earlier release kept exactly its rows")
-    for kind, count in before["types"].items():
-        if kind in SETUP_GROWTH_KINDS:
-            phase.expect(count <= after["types"].get(kind, -1) <= count + SETUP_GROWTH_LIMIT,
-                         "a record kind the setup's checks add to kept every record")
-        else:
-            phase.expect(after["types"].get(kind) == count, "a record kind kept exactly its count")
+    changed = setup_additions(before, after)
+    added, lost = changed["added"], changed["lost"]
+    scene.setup_added = {"tables": {k: v for k, v in added["tables"].items() if v},
+                         "types": {k: v for k, v in added["types"].items() if v}}  # identified, kept for the report
+    if getattr(scene, "world", None) is not None:
+        print("setup_added", json.dumps(scene.setup_added, sort_keys=True), file=sys.stderr)
+    phase.expect(not any(lost["tables"].values()), "no table of the earlier release lost a row")
+    phase.expect(not any(lost["types"].values()), "no record kind of the earlier release lost a record")
+    for table, gained in added["tables"].items():
+        if table in before["tables"] and table != "records":  # (a table a migration made new is not the earlier release's)
+            phase.expect(gained == SETUP_ADDS_TABLES.get(table, 0), "a table gained exactly the rows the setup's own checks add")
+    for kind, gained in added["types"].items():
+        phase.expect(gained == SETUP_ADDS_KINDS.get(kind, 0), "a record kind gained exactly the records the setup's own checks make")
+    for table, count in before["tables"].items():  # the counts agree with the identities
+        phase.expect(after["tables"].get(table, -1) == count + added["tables"][table] - lost["tables"][table],
+                     "a table's count is its earlier rows plus the setup's additions")
 
 
 def summary(text: str) -> dict:
@@ -346,8 +438,18 @@ FAULTS["update_loses_history"] = [
             "        try:\n            install_run_holds_schema(self._connection)\n"},
 ]
 
+# An update that loses the ADMISSION history (L12.6a): the same migration also deletes the admission records (headroom and
+# billing readings). The update, the run and the probe still work, since the setup's own provider checks write new
+# readings; only the preserved records (G7, L12.6a) say the earlier history is gone.
+FAULTS["admission_history_dropped"] = [
+    {"module": "codex_agents.learning_store",
+     "old": "        from .active_run_capacity import LOST_RUN_REASON\n\n        try:\n            install_run_holds_schema(self._connection)\n",
+     "new": "        from .active_run_capacity import LOST_RUN_REASON\n\n        self._connection.execute(\"DELETE FROM records WHERE record_type IN ('provider_headroom','provider_billing')\")\n"
+            "        try:\n            install_run_holds_schema(self._connection)\n"},
+]
 
-# L12.6: history built on an earlier release that is long (the 0.2.x leftover clause is unchecked: see S4-STATUS.md) --------------------------------
+
+# L12.6: history built on an earlier release that is long (L12.6b is deferred: see S4-STATUS.md) --------------------------------
 
 BULK_RECORD_COPIES = 300     # copies of each admission record kind: over 512 together, all observed in the last day
 BULK_EVENTS = 200_000        # copies of one real hook event: the project's records pass 128 MiB
@@ -436,10 +538,32 @@ def backups_over(world, size: int) -> int:
     return sum(1 for path in found if "backup" in str(path) and path.stat().st_size > size)
 
 
-@check("L12.6", group="upd_big")
-def l12_6_over_512_admission_records_and_128_mib_still_open_dispatch_and_upgrade(phase: Phase) -> None:
-    """The long-history clauses of L12.6 (unbounded admission history, a project over 128 MiB). The clauses about runs
-    0.2.x left, a masked busy probe and the protected copy are NOT proven here: see docs/requirements/t7/S4-STATUS.md."""
+def admission_preserved(phase: Phase, scene) -> None:
+    """L12.6a, the admission history itself and the first probe: every admission record the earlier release held is
+    still there (by record id) after the update and after the project opened and dispatched, more than 512 are in the
+    admission window then, and the billing probe right after the update worked on its first attempt."""
+    before = scene.before
+    # The admission records themselves: every one the earlier release held is still there (by record id) after the
+    # update, and the more than 512 observed in the last day are still there after the project opened and dispatched.
+    for kind in ADMISSION_KINDS:
+        phase.expect(before["record_keys"].get(kind, frozenset()) <= scene.after["record_keys"].get(kind, frozenset()),
+                     "the update kept every admission record of the earlier release")
+        phase.expect(before["record_keys"].get(kind, frozenset()) <= scene.final["record_keys"].get(kind, frozenset()),
+                     "every admission record is still there after the project opened and dispatched")
+    phase.expect(scene.final_recent_admission > 512, "more than 512 admission records were in the admission window when the project opened and dispatched")
+    phase.expect(scene.probe_code == 0 and (scene.probe or {}).get("ready") is True
+                 and (scene.probe or {}).get("probe") in ("launched", "reused"),
+                 "the billing probe right after the update, on its first attempt, ran on the long history")
+
+
+@check("L12.6a", group="upd_big")
+def l12_6a_over_512_admission_records_and_128_mib_still_open_dispatch_and_upgrade(phase: Phase) -> None:
+    """L12.6a: unbounded admission history and a ledger over 128 MiB. The history is a SYNTHETIC VOLUME fixture: its
+    admission and event rows are copies of the release's own records (one real hook event, its own latest headroom and
+    billing readings), so it proves the thresholds (rows over 512, bytes over 128 MiB) and not the diversity of a
+    long real history, nor the growth of tables that relate to historical runs (200,000 events keep one template's
+    relationships): an upgrade cost proportional to historical runs or links is not shown (docs/requirements/t7/S4-STATUS.md).
+    L12.6b (0.2.x leftovers, a masked busy probe, the protected copy) is a separate, unchecked requirement."""
     scene = big_scene()
     world = scene.world
     before = scene.before
@@ -458,10 +582,8 @@ def l12_6_over_512_admission_records_and_128_mib_still_open_dispatch_and_upgrade
                  "the collector runs this build and is ready")
     phase.expect(scene.after["types"].get("event") == before["types"].get("event"),
                  "the update kept every event record of the long project")
+    admission_preserved(phase, scene)
     phase.expect(backups_over(world, BULK_BYTES) >= 1, "the update backed up the project's records, over 128 MiB")
-    phase.reason("probe_after_wait" if scene.probe_tries > 1 else "probe_at_once")
-    phase.expect((scene.probe or {}).get("ready") is True and (scene.probe or {}).get("probe") in ("launched", "reused"),
-                 "the billing probe ran on the long history (not unavailable, not busy)")
     lifecycle_preflights(phase, scene)
     lifecycle_worker_recorded(phase, scene)
     lifecycle_verified_and_closed(phase, scene)
