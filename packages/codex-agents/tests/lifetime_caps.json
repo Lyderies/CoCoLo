@@ -2018,6 +2018,21 @@
    "checks": 1,
    "ends": "the held run.register intake (RS-B-4 final fix) is bounded by MAX_INTAKE, the same bound as the driver's connection intake: held registers leave when the start-up memory recovery is done or failed, or at WAIT_SECONDS, and a register past the bound gets the plain bounded refusal (history_service_unavailable) at once",
    "test": "test_RS_B_4_registers_past_the_intake_bound_during_start_up_get_the_plain_refusal_and_the_held_ones_register"
+  },
+  "ledger_owner_queue.py::__post_init__": {
+   "checks": 5,
+   "ends": "construction-time validation of the queue's own limits (requests, projects, per-project, their product, the wait bound); nothing is counted, an out-of-range limit is refused at construction",
+   "test": "test_limits_and_handle_owner_validation"
+  },
+  "ledger_owner_queue.py::offer": {
+   "checks": 2,
+   "ends": "queued and running requests count until whole completion and acknowledgement, then leave; a full queue or project refuses the new offer as named, counted overflow (busy)",
+   "test": "test_overflow_is_named_counted_and_snapshot_is_detached"
+  },
+  "ledger_owner_queue.py::_count": {
+   "checks": 1,
+   "ends": "refusal counts keep at most MAX_REFUSAL_CALLERS caller buckets; further callers fold into 'other' with totals kept, so the map never grows",
+   "test": "test_refusal_caller_buckets_are_bounded_and_preserve_totals"
   }
  }
 }
