@@ -1,0 +1,55 @@
+# Run from the repository root. Set PY to the builder-approved test venv.
+# Named modules only; no full run. Evidence labels match evidence.json.
+
+# Review correction round (rsfs3-r1-red/green): same named command was red
+# before the production fixes and green after them.
+"$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_rsf_s3_resumable
+
+# rsfs3-r1-regressions: expected current-runtime pin failure; all other checks pass.
+"$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_rsf_s2_fence --module codex:tests.test_rsf_s2_regressions --module codex:tests.test_project_holds_schema --module codex:tests.test_run_holds --module codex:tests.test_refusal_steps --module codex:tests.test_lifetime_cap_guard --module codex:tests.test_runtime_release
+
+# rsfs3-r1-copiers: backup, restore and source-image regression checks.
+"$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_learning_source_image --module codex:tests.test_learning_source_image_legacy --module codex:tests.test_learning_source_transfer --module codex:tests.test_history_service_upgrade --module codex:tests.test_backup_installed_project --module codex:tests.test_backup_reply_private --module codex:tests.test_owner_backup_streamed
+
+# Earlier implementation-round evidence follows.
+
+# rsfs3-complete
+"$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_lifetime_cap_guard --module codex:tests.test_rsf_s2_fence --module codex:tests.test_rsf_s3_resumable --module codex:tests.test_run_holds
+
+# rsfs3-final-source
+"$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_learning_source_image --module codex:tests.test_learning_source_image_legacy --module codex:tests.test_learning_source_transfer --module codex:tests.test_project_holds_schema --module codex:tests.test_runtime_release
+
+# rsfs3-copiers
+"$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_account_cleanup_schema --module codex:tests.test_account_observation_backup --module codex:tests.test_account_observation_schema --module codex:tests.test_account_open_schema --module codex:tests.test_backup_installed_project --module codex:tests.test_backup_reply_private --module codex:tests.test_history_service_upgrade --module codex:tests.test_large_project_backups --module codex:tests.test_learning_chunk_upgrade --module codex:tests.test_learning_qa_upgrade --module codex:tests.test_learning_source_image --module codex:tests.test_learning_source_image_legacy --module codex:tests.test_learning_source_transfer --module codex:tests.test_legacy_history_compatibility --module codex:tests.test_owner_backup_streamed --module codex:tests.test_refusal_steps --module codex:tests.test_reply_shape_compatibility
+
+# rsfs3-final-regressions
+"$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_learning_source_image --module codex:tests.test_learning_source_image_legacy --module codex:tests.test_learning_source_transfer --module codex:tests.test_project_holds_schema --module codex:tests.test_rsf_s2_regressions --module codex:tests.test_run_holds
+
+# rsfs3-last-acceptance
+"$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_account_claim_operation --module codex:tests.test_account_cleanup_release --module codex:tests.test_account_launch_claims --module codex:tests.test_active_run_capacity --module codex:tests.test_rsf_s3_resumable --module codex:tests.test_runtime_release
+
+# rsfs3-copy-extra
+"$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_account_ingress --module codex:tests.test_account_settlement_wire --module codex:tests.test_account_store_recovery --module codex:tests.test_contracts --module codex:tests.test_learning_chunk_membership --module codex:tests.test_learning_outcome_pages --module codex:tests.test_learning_retention --module codex:tests.test_merge_library_adversarial --module codex:tests.test_merge_library_contract --module codex:tests.test_merge_library_recovery --module codex:tests.test_merge_library_states --module codex:tests.test_project_learning_corpus --module codex:tests.test_project_store_removal --module codex:tests.test_rsa_step3 --module codex:tests.test_sql_read_budget --module codex:tests.test_state_location
+
+# rsfs3-enumerators
+"$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_account_claim_operation --module codex:tests.test_account_cleanup_release --module codex:tests.test_account_launch_claims --module codex:tests.test_active_run_capacity --module codex:tests.test_append_lookup --module codex:tests.test_b2_service_outcome --module codex:tests.test_b2_service_outcome_round2 --module codex:tests.test_b6_unattended_close --module codex:tests.test_binding_lookup --module codex:tests.test_project_orchestration --module codex:tests.test_project_release_ack --module codex:tests.test_project_results --module codex:tests.test_release_batch_queries --module codex:tests.test_result_leases --module codex:tests.test_type_lookups
+
+# OWNER SHELL REQUIRED: working Unix sockets and native process inspection.
+# These service-dependent checks failed or timed out in the sandbox.
+mkdir -p /tmp/rsfs3-owner
+chmod 700 /tmp/rsfs3-owner
+
+TMPDIR=/tmp/rsfs3-owner COCOLO_WORKER_TIMEOUT=180 "$PY" -B scripts/parallel_tests.py --jobs 4 --module codex:tests.test_learning_store --module codex:tests.test_learning_migration --module codex:tests.test_state_location --module codex:tests.test_account_ingress
+
+TMPDIR=/tmp/rsfs3-owner COCOLO_WORKER_TIMEOUT=180 "$PY" -B scripts/parallel_tests.py --jobs 4 --module codex:tests.test_account_billing_admission --module codex:tests.test_billing_gate --module codex:tests.test_open_request_lifetime --module codex:tests.test_cleanup_receipt_lifetime
+
+TMPDIR=/tmp/rsfs3-owner COCOLO_WORKER_TIMEOUT=180 "$PY" -B scripts/parallel_tests.py --jobs 4 --module codex:tests.test_event_retention --module codex:tests.test_e2a_launch_record --module codex:tests.test_health_contention --module codex:tests.test_learning_cli
+
+TMPDIR=/tmp/rsfs3-owner COCOLO_WORKER_TIMEOUT=180 "$PY" -B scripts/parallel_tests.py --jobs 4 --module codex:tests.test_open_withdrawal --module codex:tests.test_owned_execution --module codex:tests.test_project_start --module codex:tests.test_project_driver
+
+# Not run here: installed operational preflight / takeover / live reply matrix.
+TMPDIR=/tmp/rsfs3-owner COCOLO_WORKER_TIMEOUT=180 "$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_installer --module codex:tests.test_upgrade_handover
+TMPDIR=/tmp/rsfs3-owner COCOLO_WORKER_TIMEOUT=240 "$PY" -B scripts/parallel_tests.py --profile soak --module codex:tests.test_reply_shape_live
+
+# Expected current-runtime digest pin failure until primary merge bookkeeping:
+"$PY" -B scripts/parallel_tests.py --module codex:tests.test_runtime_release

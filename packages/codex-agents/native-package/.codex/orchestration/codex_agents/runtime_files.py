@@ -106,6 +106,7 @@ RUNTIME_FILES = (
     "codex_agents/history_api.py",
     "codex_agents/history_contracts.py",
     "codex_agents/history_service.py",
+    "codex_agents/hold_migration.py",
     "codex_agents/holds_report_contracts.py",
     "codex_agents/hook_config.py",
     "codex_agents/host_commands.py",

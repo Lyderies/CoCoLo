@@ -2359,6 +2359,7 @@
  "codex:tests.test_routing_risk": 0.95,
  "codex:tests.test_rsf_s2_fence": 5.0,
  "codex:tests.test_rsf_s2_regressions": 2.0,
+ "codex:tests.test_rsf_s3_resumable": 15.0,
  "codex:tests.test_run_driver_retries": 0.16,
  "codex:tests.test_run_holds": 46.88,
  "codex:tests.test_run_network": 33.83,

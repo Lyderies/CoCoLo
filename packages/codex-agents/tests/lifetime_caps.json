@@ -1998,6 +1998,16 @@
    "checks": 1,
    "ends": "Schema-version comparison, not a lifetime count: the legacy flag lasts one owner connection. Step 16\u219217 replaces the singleton machine-local epoch, preserves project records, and creates no accumulating quota.",
    "test": "test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent"
+  },
+  "hold_migration.py::__init__": {
+   "checks": 2,
+   "ends": "Temporary migration batching only; a batch of at most 64 source rows advances the durable cursor and ends at commit; progress is removed on validated publication.",
+   "test": "test_account_killed_before_and_after_each_class_commit_reopens_twice_identically"
+  },
+  "hold_migration.py::batches": {
+   "checks": 2,
+   "ends": "Temporary migration batching only; a batch of at most 64 source rows advances the durable cursor and ends at commit; progress is removed on validated publication.",
+   "test": "test_account_killed_before_and_after_each_class_commit_reopens_twice_identically"
   }
  }
 }

@@ -297,6 +297,7 @@
  "codex:tests.test_rsf_s1_ingress_socket": "scenario",
  "codex:tests.test_rsf_s2_fence": "scenario",
  "codex:tests.test_rsf_s2_regressions": "unit",
+ "codex:tests.test_rsf_s3_resumable": "scenario",
  "codex:tests.test_rsf_s4_slots": "scenario",
  "codex:tests.test_rsf_s4_transport": "scenario",
  "codex:tests.test_rsf_s5_probe": "scenario",

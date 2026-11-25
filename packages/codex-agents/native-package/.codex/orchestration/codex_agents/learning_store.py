@@ -2403,7 +2403,10 @@ class LearningLedger:
         try:
             connection.row_factory = sqlite3.Row
             # O0b RS-A (F5): the register's triggers record releases at the ledger's own clock.
-            connection.create_function("ledger_now_ms", 0, lambda: self._clock_ms())
+            def ledger_now_ms():
+                migration = getattr(connection, '_hold_migration', None)
+                return self._clock_ms() if migration is None else migration.now_ms
+            connection.create_function("ledger_now_ms", 0, ledger_now_ms)
             from .legacy_slots import register_legacy_functions
             register_legacy_functions(connection)
             version = connection.execute('PRAGMA user_version').fetchone()[0]
@@ -3199,19 +3202,41 @@ class LearningLedger:
         whose binding was settled service_lost is released `lost` whatever the clocks say; then the sweep's
         own releases (crashed slots, reserved probes past their deadline, expired bindings) until none is due."""
         from .active_run_capacity import LOST_RUN_REASON
+        from .hold_migration import HoldMigration
+
+        # Complete fixed DDL before the first durable checkpoint. The schema
+        # version then excludes old writers, while progress gates publication.
+        self._initialize_probe_ids_locked()
+        migration = HoldMigration(self._connection, 'account',
+            (('run_slot', 'active_run_capacity'), ('binding', 'host_run_bindings'),
+             ('probe', 'account_billing_probe_requests')), self._clock_ms(), LEDGER_SCHEMA_VERSION,
+            lambda: LedgerError('run hold migration is unavailable or incompatible'),
+            clock_reference_ns=self._capacity_clock_reference(), before_commit=self.state.harden_database_files)
+        self._connection._hold_migration = migration
 
         try:
-            install_run_holds_schema(self._connection)
-        except ValueError:
-            raise LedgerError('run hold migration is unavailable or incompatible') from None
-        now, monotonic = self._clock_ms(), self._capacity_clock_reference()
-        for row in self._connection.execute(
-                "SELECT a.project_id,a.handle_digest FROM active_run_capacity a JOIN host_run_bindings h "
-                "ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest WHERE a.released_at_ms IS NULL "
-                "AND h.binding_state='abandoned' AND h.abandoned_reason=?", (LOST_RUN_REASON,)).fetchall():
-            self._release_slot_locked(row["project_id"], row["handle_digest"], "lost", now, monotonic)
-        while self._release_due_locked(now, monotonic, 1024) == 1024:
-            pass
+            try:
+                install_run_holds_schema(self._connection)
+            except ValueError:
+                raise LedgerError('run hold migration is unavailable or incompatible') from None
+            now, monotonic = migration.now_ms, migration.clock_reference_ns
+            for row in self._connection.execute(
+                    "SELECT a.project_id,a.handle_digest FROM active_run_capacity a JOIN host_run_bindings h "
+                    "ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest WHERE a.released_at_ms IS NULL "
+                    "AND h.binding_state='abandoned' AND h.abandoned_reason=?", (LOST_RUN_REASON,)).fetchall():
+                self._release_slot_locked(row["project_id"], row["handle_digest"], "lost", now, monotonic)
+            while self._release_due_locked(now, monotonic, 1024) == 1024:
+                pass
+            self._assert_launch_schema_locked(LEDGER_SCHEMA_VERSION)
+            if not (check_run_holds_consistency(self._connection)
+                    and check_cleanup_coverage(self._connection)
+                    and check_observation_coverage(self._connection)
+                    and check_billing_probe_coverage(self._connection)
+                    and check_admission_evidence_coverage(self._connection)):
+                raise LedgerError('run hold migration validation is unavailable or incompatible')
+            migration.finish()
+        finally:
+            self._connection._hold_migration = None
 
     def _migrate_six_or_seven_to_current(self, version: int) -> None:
         self._connection.execute("BEGIN IMMEDIATE")
@@ -3357,7 +3382,18 @@ class LearningLedger:
             self._connection.execute("ALTER TABLE records ADD COLUMN probe_id TEXT")
 
     def _migrate(self) -> None:
+        from .hold_migration import pending, PENDING_MESSAGE
+
         current = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
+        if pending(self._connection):
+            if current != LEDGER_SCHEMA_VERSION or not self._allow_schema_upgrade:
+                raise LedgerError(PENDING_MESSAGE)
+            self._assert_launch_schema_locked(current)
+            with self._account_transaction():
+                self._initialize_run_holds_locked()
+            # Reuse all the ordinary current-store coverage checks as well.
+            self._migrate()
+            return
         if current == 0 and (
             self.state._marker_exists(self.state.initialized)
             or not self.state._marker_exists(self.state.initializing)

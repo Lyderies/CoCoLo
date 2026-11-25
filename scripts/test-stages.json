@@ -297,6 +297,7 @@
  "codex:tests.test_rsf_s1_ingress_socket": "integration",
  "codex:tests.test_rsf_s2_fence": "integration",
  "codex:tests.test_rsf_s2_regressions": "unit",
+ "codex:tests.test_rsf_s3_resumable": "integration",
  "codex:tests.test_rsf_s4_slots": "integration",
  "codex:tests.test_rsf_s4_transport": "integration",
  "codex:tests.test_rsf_s5_probe": "integration",
