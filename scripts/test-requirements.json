@@ -3063,6 +3063,39 @@
   "source": "tests/requirements/route-exhausted.json#RT-RX-LIVE-ROOT-3",
   "statement": "### RT-RX-LIVE-ROOT-3 \u2014 The installed trust pin on the state root is unchanged\n\nAn installed CLI still refuses a non-default `--state-root` for its primary-host commands (`OwnRootRefused`), before any route or service work; the RT-RX-LIVE-ROOT-1 fix resolves only the default and gives a caller no way to move the state root.\n\n**Acceptance:** On the installed layout, `learning-route --state-root <another folder>` exits 2 with the fixed refusal `--state-root is refused: an installed CLI uses only the default learning state`, and nothing is written in that folder.\n\n**Keeps/changes:** Keeps `_require_own_roots` (`cli.py`) as it is, including `args.state_root = None` for the accepted default, which LearningState/CollectorPaths and the legacy-state move read as the default."
  },
+ "S13C-1": {
+  "checks": [
+   "codex:tests.test_host_slots.HostSlotLifecycleTests.test_M1_M3_M4_four_runs_end_on_their_failure_exits_then_a_fifth_dispatches_without_a_restart",
+   "codex:tests.test_lost_run_settlement.LostRunAfterCrashTests.test_a_crashed_hosts_child_that_still_runs_keeps_its_capacity_until_it_ends",
+   "codex:tests.test_lost_run_settlement.LostRunAfterCrashTests.test_a_crashed_hosts_finished_child_is_settled_by_the_next_host_within_seconds",
+   "codex:tests.test_lost_run_settlement.LostRunAfterCrashTests.test_missing_or_unreadable_launch_evidence_falls_back_to_the_timed_rule",
+   "codex:tests.test_project_driver.ClaudePrimaryDriverTests.test_a_running_child_reports_live_status_and_stops_on_cancellation",
+   "codex:tests.test_project_driver.ProjectDriverTests.test_a_running_child_reports_live_status_and_stops_on_cancellation",
+   "codex:tests.test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client"
+  ],
+  "source": "tests/requirements/s13c.json#S13C-1",
+  "statement": "`codex:tests.test_project_driver`, `codex:tests.test_project_start`, `codex:tests.test_host_slots` and `codex:tests.test_lost_run_settlement` each total at most 80% of their budget-debt ceiling (or layer budget), measured as the sum of the module's fragments' seconds, with full-run parallelism (`--jobs 16` beside `root:test_install` and `root:test_setup_wizard_direct`)."
+ },
+ "S13C-2": {
+  "checks": [
+   "codex:tests.test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client"
+  ],
+  "source": "tests/requirements/s13c.json#S13C-2",
+  "statement": "`codex:tests.test_project_start::StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client` is restored to the base (`ce81bd96`) text: its \"serving within one interval\" assertions are not loosened. Under load it is a known flake whose cause (project-host start cost) is plan step S13e; it stays until S13e lands."
+ },
+ "S13C-3": {
+  "checks": [
+   "codex:tests.test_host_slots.HostSlotLifecycleTests.test_M1_M3_M4_four_runs_end_on_their_failure_exits_then_a_fifth_dispatches_without_a_restart",
+   "codex:tests.test_lost_run_settlement.LostRunAfterCrashTests.test_a_crashed_hosts_child_that_still_runs_keeps_its_capacity_until_it_ends",
+   "codex:tests.test_lost_run_settlement.LostRunAfterCrashTests.test_a_crashed_hosts_finished_child_is_settled_by_the_next_host_within_seconds",
+   "codex:tests.test_lost_run_settlement.LostRunAfterCrashTests.test_missing_or_unreadable_launch_evidence_falls_back_to_the_timed_rule",
+   "codex:tests.test_project_driver.ClaudePrimaryDriverTests.test_a_running_child_reports_live_status_and_stops_on_cancellation",
+   "codex:tests.test_project_driver.ProjectDriverTests.test_a_running_child_reports_live_status_and_stops_on_cancellation",
+   "codex:tests.test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client"
+  ],
+  "source": "tests/requirements/s13c.json#S13C-3",
+  "statement": "no assertion is removed or weakened. Every changed assertion, renamed test or changed fixture behaviour is paired old -> new in [`s13c/assertions.md`](s13c/assertions.md)."
+ },
  "TERM-13": {
   "checks": [],
   "source": "PLAN-0.4.0-terminal.md section 4",

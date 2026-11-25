@@ -1,0 +1,20 @@
+{
+ "authority": "docs/requirements/s13c.md",
+ "requirements": [
+  {
+   "id": "S13C-1",
+   "statement": "`codex:tests.test_project_driver`, `codex:tests.test_project_start`, `codex:tests.test_host_slots` and `codex:tests.test_lost_run_settlement` each total at most 80% of their budget-debt ceiling (or layer budget), measured as the sum of the module's fragments' seconds, with full-run parallelism (`--jobs 16` beside `root:test_install` and `root:test_setup_wizard_direct`).",
+   "source": "tests/requirements/s13c.json#S13C-1"
+  },
+  {
+   "id": "S13C-2",
+   "statement": "`codex:tests.test_project_start::StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client` is restored to the base (`ce81bd96`) text: its \"serving within one interval\" assertions are not loosened. Under load it is a known flake whose cause (project-host start cost) is plan step S13e; it stays until S13e lands.",
+   "source": "tests/requirements/s13c.json#S13C-2"
+  },
+  {
+   "id": "S13C-3",
+   "statement": "no assertion is removed or weakened. Every changed assertion, renamed test or changed fixture behaviour is paired old -> new in [`s13c/assertions.md`](s13c/assertions.md).",
+   "source": "tests/requirements/s13c.json#S13C-3"
+  }
+ ]
+}

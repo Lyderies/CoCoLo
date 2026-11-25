@@ -150,6 +150,22 @@ def wait_for(test, predicate, seconds=20.0, message='condition never held'):
 class StarterBase(unittest.TestCase):
     CONSTANTS = {'STARTER_CHECK_SECONDS': 0.2, 'START_RECHECK_SECONDS': 1.0}
     STORE = {}
+    pycache = None  # the class's shared bytecode cache for its test-only interpreters (S13C-1)
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.pycache = tempfile.mkdtemp(prefix='start-pyc-', dir=SHORT_TMP)
+        cls.addClassCleanup(shutil.rmtree, cls.pycache, ignore_errors=True)
+        # S13C-1: the runtime is compiled into the class cache before any test's clock starts, so the
+        # first collector of the class does not compile inside a measured window.
+        subprocess.run([sys.executable, '-I', '-X', 'pycache_prefix=' + cls.pycache, '-m', 'compileall', '-q',
+                        str(ORCHESTRATION_ROOT)], stdout=subprocess.DEVNULL, check=True)
+
+    @classmethod
+    def python_flags(cls, *flags):
+        """`flags` (isolation) and the class's shared bytecode cache instead of `-B`."""
+        return [*flags, '-X', 'pycache_prefix=' + cls.pycache]
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(dir=SHORT_TMP)
@@ -217,7 +233,7 @@ class StarterBase(unittest.TestCase):
         errors = open(self.base / 'collector.err', 'ab')
         self.addCleanup(errors.close)
         self.collector = subprocess.Popen(
-            [sys.executable, '-I', '-B', '-c', LAUNCHER, str(orchestration), str(self.home), str(self.state.root),
+            [sys.executable, *self.python_flags('-I'), '-c', LAUNCHER, str(orchestration), str(self.home), str(self.state.root),
              json.dumps(options)], env={'PATH': os.defpath, 'TMPDIR': SHORT_TMP, **(env or {})},
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errors, start_new_session=True)
         end = time.monotonic() + 30
@@ -330,7 +346,7 @@ class StarterBase(unittest.TestCase):
         for variable in ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'):
             env.pop(variable, None)
         env.update(CODEX_THREAD_ID='e2c-primary', TMPDIR=SHORT_TMP)
-        done = subprocess.run([sys.executable, '-I', '-B', '-S', str(ORCHESTRATION_ROOT / 'cli.py'), command,
+        done = subprocess.run([sys.executable, *self.python_flags('-I', '-S'), str(ORCHESTRATION_ROOT / 'cli.py'), command,
                                '--state-root', str(self.state.root), '--project-root', str(self.root(name))],
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=90, check=False)
         return done.returncode, json.loads(done.stdout or b'{}')
@@ -405,7 +421,7 @@ def overlaps(events):
 
 
 class StartTests(StarterBase):
-    @requirements('E2c-1', why_not_scenario=SCENARIO)
+    @requirements('E2c-1', 'S13C-1', 'S13C-2', 'S13C-3', why_not_scenario=SCENARIO)
     def test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client(self):
         self.add('never')  # never ran: unknown, so due at collector start
         self.add('stopped')
@@ -699,7 +715,7 @@ class StrandedTests(StarterBase):
         constants = {'START_BACKOFF_FIRST_SECONDS': 300.0, 'START_PROBATION_SECONDS': 1.0}
         self.launch(constants=constants)
         root, project_id, copy = self.projects['killed']
-        done = subprocess.run([sys.executable, '-I', '-B', '-c', KILLER, str(ORCHESTRATION_ROOT), str(self.state.root),
+        done = subprocess.run([sys.executable, *self.python_flags('-I'), '-c', KILLER, str(ORCHESTRATION_ROOT), str(self.state.root),
                                str(root), project_id, 'after_commit'], capture_output=True, text=True, timeout=60,
                               env={'PATH': os.defpath, 'TMPDIR': SHORT_TMP})
         self.assertEqual(-signal.SIGKILL, done.returncode, done.stderr)

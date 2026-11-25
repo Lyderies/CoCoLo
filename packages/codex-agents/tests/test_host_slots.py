@@ -108,6 +108,7 @@ class HostSlotHarness(DriverHarness):
 
 
 class HostSlotLifecycleTests(HostSlotHarness):
+    @requirements('S13C-1', 'S13C-3', why_not_scenario='Test-speed requirement: these are existing tests whose seconds, interpreters or waits were changed; the requirement is how fast and how reliably they run, not a new outcome (S13C).')
     def test_M1_M3_M4_four_runs_end_on_their_failure_exits_then_a_fifth_dispatches_without_a_restart(self):
         """B0-6 invariant, host slots: with 3 slots, four runs end on these paths (cancel before spawn,
         spawn failure, admitted then failed, orphan preparation), then a fifth dispatches with no restart.
@@ -501,6 +502,14 @@ class HostReplacementTests(HostSlotHarness):
     def host_thread(self):
         return [t for t in self.threads if t.name.startswith('test-project-host-')][-1]
 
+    def until_idle(self, host, thread):
+        """S13C-1: let `host` reach its idle boundary by moving its clock `IDLE_SECONDS` plus a second ahead (the
+        PREPCLEAN technique, `host._clock_ns`), then wait for its production loop (it checks each second) to stop it,
+        instead of sitting through the idle seconds. The stop rule itself, `idle_ns() >= idle_stop_ns`, is the product's."""
+        original = host._clock_ns
+        host._clock_ns = lambda: original() + (self.IDLE_SECONDS + 1) * 1_000_000_000
+        thread.join(self.IDLE_SECONDS + 30)
+
     def test_M3_an_admitted_then_failed_run_is_settled_when_its_host_is_replaced_once_idle(self):
         self.succeed()
         self.admitted_then_failed(self.open_run())
@@ -509,7 +518,7 @@ class HostReplacementTests(HostSlotHarness):
         thread = self.host_thread()
         # No command: once idle the host stops by itself, settling its own run on the kernel's evidence
         # (it never spawned), so the account no longer counts it.
-        thread.join(self.IDLE_SECONDS + 30)
+        self.until_idle(stuck, thread)
         self.assertFalse(thread.is_alive(), 'the host holding a stuck slot was never replaced')
         self.wait_for(lambda: self.account_slots() == 0, seconds=30)
         # The next command starts a fresh host by the production path, and a run completes there.
@@ -538,7 +547,7 @@ class HostReplacementTests(HostSlotHarness):
         self.assertIn('replaced', service['summary'])
         self.assertTrue(thread.is_alive())
         # Once idle the host is replaced; its stopping settles the run on the kernel's evidence.
-        thread.join(self.IDLE_SECONDS + 30)
+        self.until_idle(stuck, thread)
         self.assertFalse(thread.is_alive(), 'the host holding an unconfirmed cleanup was never replaced')
         self.wait_for(lambda: self.account_slots() == 0, seconds=30)
         nxt = self.open_run()
@@ -556,7 +565,7 @@ class HostReplacementTests(HostSlotHarness):
         self.succeed()
         self.admitted_then_failed(self.open_run())  # a slot nothing here can free
         stuck, thread = self.hosts[-1], self.host_thread()
-        thread.join(self.IDLE_SECONDS + 30)
+        self.until_idle(stuck, thread)
         self.assertFalse(thread.is_alive(), 'the host holding a stuck slot was never replaced')
         verifier = HostVerificationTests.bound_verifier(self, orchestration, 'verify-on-replacement', worker)
         self.assertIsNot(stuck, self.hosts[-1])
