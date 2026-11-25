@@ -34,7 +34,6 @@ from .learning_store import (
 )
 from .owner_key_contracts import owner_public_key_from_line
 from . import ledger_waits, lane_health
-from .attestation_capture import candidate_sql, provider_sql
 from .sql_read_budget import SQLReadError, SQLReadLimits
 from .signature_inputs import (
     SignatureCaptureError, SignatureCaptureLimits, SignatureInputSnapshot, signature_input_size,
@@ -82,8 +81,7 @@ WITHDRAW_LEDGER_REASONS = {
 _ADMISSION_EVIDENCE = "SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id"
 _ADMISSION_INPUT_SCOPE = (
     "((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000)"
-    " OR (r.project_id=:p AND r.record_type='billing_attestation' AND "
-    + provider_sql() + " AND " + candidate_sql() + ")"
+    " OR (r.project_id=:p AND r.record_type='billing_attestation')"
     " OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle')"
     " OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission')"
     " AND (r.observed_at_ms>=:a-18000000 OR EXISTS(" + _ADMISSION_EVIDENCE + " AND e.claude_pass=1"
@@ -101,9 +99,10 @@ _ADMISSION_INPUT_SCOPE = (
     " AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000)))))"
 )
 _ADMISSION_INPUT_JOIN = (
-    " FROM records r LEFT JOIN owner_attestations a "
-    "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE "
-    + _ADMISSION_INPUT_SCOPE + " ORDER BY r.rowid LIMIT :limit"
+    " FROM temp.capture_candidates c CROSS JOIN records r LEFT JOIN owner_attestations a "
+    "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
+    "WHERE c.consumer=:provider AND r.rowid=c.record_rowid AND "
+    + _ADMISSION_INPUT_SCOPE + " ORDER BY c.record_rowid LIMIT :limit"
 )
 
 
@@ -643,7 +642,7 @@ class AccountOwnerViews:
             raise SignatureCaptureError("signature_capture_limit")
         # Only type/length/integer metadata is returned. In particular,
         # no JSON expression or content/signature value is selected.
-        # LIMIT bounds returned metadata, not the underlying scan work.
+        # Indexed candidate membership bounds work before ORDER BY/LIMIT.
         headers = self._ledger._connection.execute(
             "SELECT typeof(r.record_id),length(CAST(r.record_id AS BLOB)),"
             "typeof(r.content),length(r.content),"
@@ -651,11 +650,11 @@ class AccountOwnerViews:
             "typeof(r.source),length(CAST(r.source AS BLOB)),"
             "CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,"
             "typeof(a.signature),length(a.signature) "
-            "FROM records r LEFT JOIN owner_attestations a "
+            "FROM temp.capture_candidates c CROSS JOIN records r LEFT JOIN owner_attestations a "
             "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
-            "WHERE r.project_id=? AND r.record_type='billing_attestation' AND "
-            + provider_sql(parameter="?") + " AND " + candidate_sql() + " ORDER BY r.source_sequence LIMIT ?",
-            (project_id, provider, limits.max_rows + 1),
+            "WHERE c.consumer=? AND c.project_id=? AND c.record_type='billing_attestation' "
+            "AND r.rowid=c.record_rowid ORDER BY c.source_sequence LIMIT ?",
+            (provider, project_id, limits.max_rows + 1),
         ).fetchall()
         if len(headers) > limits.max_rows:
             raise SignatureCaptureError("signature_capture_limit")

@@ -1,6 +1,6 @@
 # Assertion changes
 
-No pre-existing assertion is changed or removed.
+R1 changes are listed below. Earlier round corrections are retained for audit.
 
 New scenario assertion correction during development:
 `record == repository_record` -> equality of every non-underscore field on both
@@ -39,3 +39,47 @@ clock/wait in place of twelve direct `_sweep_cycle()` calls. All removal and
 retention assertions remain; an added elapsed-clock assertion proves the
 collector schedules twelve full maintenance intervals. Unrelated health
 reporting is substituted, and no socket listener is required for this proof.
+
+R1 MED2 replacement: the transient-failure test's verifier `return_value=False`
+and empty capture -> `TimeoutExpired` and the original row remains charged.
+Its recovered-verifier retry assertions are retained. A definitive invalid
+verdict is now cached for exact inputs/generation as explicitly required by
+the R1 scope; separate new assertions require 100 invalid calls outside both
+lock and transaction, and no more calls on subsequent passes.
+
+New scale-fixture correction: three owner_attestations values -> four, including
+attested_at_ms=0, matching the existing schema. No acceptance assertion changed.
+
+New scale-fixture setup: 102 maintenance calls of batch 100 -> one setup call
+of batch 10001. This avoids repeatedly exercising the separate known due-query
+scan defect while preparing the capture comparison; LOW1 has its own bounded
+batch-10 cursor test. Both scale measurements warm each statement once before
+counting VM steps, excluding one-time prepare/reprepare work equally. All
+selection, retained-count and 100-step-difference assertions are unchanged.
+
+New scale test strengthened: two traced signature SELECTs plus one rowid-only
+admission SELECT -> four traced production SELECTs (signature headers/body and
+admission headers/body), plus matching selected record IDs at both public
+capture boundaries. The query-count assertion changes 2 -> 4 to enforce this.
+The retained-history and VM-difference assertions stay unchanged.
+
+R1 MED1 budget-fixture replacements (pre-existing tests):
+- test_unrelated_history_scan_exhausts_work_before_body_copy_then_recovers:
+  5,000 unrelated event rows with default row limit -> 201 unchecked attestation
+  candidates with row limit 201. The work-limit reason, no body-copy call,
+  recovered exact rows, no writes and restored busy_timeout assertions remain.
+- test_capture_deadline_refuses_during_scan_and_restores_the_owner: same fixture
+  replacement; deadline refusal, no body copy, observed progress callbacks,
+  cleared scope, usable connection and exact recovery assertions remain.
+Reason: P9-4 now requires indexed capture, so unrelated event rows are no
+longer a contractual source of scan work. Unchecked candidates remain charged,
+and still exercise both budget mechanisms before copying. No assertion is
+removed or relaxed. The first test's historical name is retained.
+
+MED2 timeout injection strengthened: mock the real verifier's subprocess.run
+with TimeoutExpired, rather than mocking verify_owner_record to raise. The
+row-stays-charged and successful later-retry assertions are unchanged. This
+exposed the lower-level False conversion; R1 adds an opt-in propagation mode
+used only by the sweep. Ordinary verifier callers keep their existing behavior.
+Additional assertions cover generation/type changes during verification, direct
+signature deletion, and eventual deletion beyond a cited cursor prefix.

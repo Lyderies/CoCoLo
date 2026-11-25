@@ -1,0 +1,22 @@
+test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted (tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted)
+Review rev040o0ccapsr1 M2: a record that links to the older attestation, a link from it, a consumed ... ok
+test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims (tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims)
+O0c P9 (owner 2026-11-21: delete superseded ones, keep the latest per account and provider): with ... ok
+test_P9_capture_vm_work_is_independent_of_cited_superseded_history (tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_capture_vm_work_is_independent_of_cited_superseded_history) ... VM comparison: ([56, 37, 105, 66], [56, 37, 105, 66])
+VM comparison: ([56, 37, 105, 66], [56, 37, 105, 66])
+VM comparison: ([56, 37, 105, 66], [56, 37, 105, 66])
+VM comparison: ([56, 37, 105, 66], [56, 37, 105, 66])
+ok
+test_P9_due_cursor_advances_past_cited_rows_with_bounded_work (tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_due_cursor_advances_past_cited_rows_with_bounded_work) ... Due cursor: [11, 21, 31]
+ok
+test_P9_failed_verification_is_retried_on_later_bounded_passes (tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes) ... ok
+test_P9_invalid_verdicts_are_cached_and_verification_holds_no_lock (tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_invalid_verdicts_are_cached_and_verification_holds_no_lock) ... ok
+test_P9_projection_invalidates_mutations_and_rebuilds_after_restart (tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart) ... ok
+test_P9_verifier_race_and_exceptions_leave_inputs_unchecked (tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_verifier_race_and_exceptions_leave_inputs_unchecked) ... ok
+test_capture_deadline_refuses_during_scan_and_restores_the_owner (tests.test_signature_inputs.SignatureInputOwnerTests.test_capture_deadline_refuses_during_scan_and_restores_the_owner) ... ok
+test_unrelated_history_scan_exhausts_work_before_body_copy_then_recovers (tests.test_signature_inputs.SignatureInputOwnerTests.test_unrelated_history_scan_exhausts_work_before_body_copy_then_recovers) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 15.732s
+
+OK

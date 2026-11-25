@@ -1,91 +1,98 @@
-# P9 status — implemented; deferred OS execution still needs owner validation
+# P9 R1 fixed-scope corrections
 
-Worktree: `cocolo-p9`, branch `fix/o0c-p9-attest`. No commit (sandboxed), push,
-install, service change, VERSION bump or release digest catalogue edit. The new
-helper is included in `runtime_files.py` so protected runtime copies include it.
+Base: `5579560c`, worktree `cocolo-p9`. MED1, MED2 and LOW1 are implemented.
+No commit (sandboxed), install, push, service change, VERSION bump or runtime
+release-catalogue change. No full suite was started. The owner review records
+MED3 as already resolved by its unsandboxed signature-module run.
 
-Requirements were recorded in [../p9.md](../p9.md) before the public regression
-and runtime edits. Durable runner summaries and per-test outcomes are in
-[evidence.json](evidence.json). All completed named runs have
-`metadata_errors: []`. No full suite was started; no test batch remains running.
+Requirements were updated before the regression tests and implementation.
+Original-code red results are preserved in [r1-red.log](r1-red.log); two further
+exact-input/subprocess regressions have their own red logs. Durable named-run
+summaries, per-worker failures, requirement outcomes and metadata results are
+in [evidence.json](evidence.json), under `r1_fix_round`.
 
-| Requirement | Named check in `tests.test_signature_inputs` | Evidence |
+| Item / requirement | Test in `tests.test_signature_inputs.SignatureInputOwnerTests` | Evidence |
 | --- | --- | --- |
-| P9-1 | `RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history` | Initial red: post-collector capture raised `signature_capture_limit` with limit two (37 tests, 4.53 s). Final public reference claim passes with real SSH verification and usable Codex credits; only the latest tied valid attestation waives them. The capture limit is enforced at reference preparation, and shared admission candidates are compared exactly. |
-| P9-1 | `RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates` | Capture, retention and quota checks pass, then real helper execution/cleanup times out. `/usr/bin/sandbox-exec` independently fails with `sandbox_apply: Operation not permitted` (exit 71). Required deferred proof remains **unproved here**, not green or skipped. |
-| P9-2 | `test_public_claim_with_two_attestation_limit_keeps_cited_tied_history` | Pass. Real collector `_sweep_loop`, deterministic clock/wait, twelve scheduled intervals, batch two: three uncited obsolete rows removed, no pass removes over two, cited records/signatures/links remain readable, latest valid survives invalid newer signature. No manual direct ledger sweep drives this scenario. Existing four-reference-family retention test also passes unchanged. |
-| P9-3 | `SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart` | Red on record-type mutation; green after exact type and owner-generation binding. Content, digest, source, sequence, observation time, both signatures and new owner generation invalidate results. Restart starts with no derived results; bounded maintenance rebuilds. Capture performs no verification or writes. |
-| P9-3 | `SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes` | Red with empty rows after the verifier recovered; green after negative results were retried. |
-| P9-4 | Public reference scenario plus existing row/byte/precopy tests | Pass. Two remaining account candidates fit exactly; row limit one and one byte below exact retained size refuse before body copy. Unknown/changed rows remain conservatively charged. All pre-existing assertions are unchanged. |
+| MED1 / P9-4 | `test_P9_capture_vm_work_is_independent_of_cited_superseded_history` | Original code refuses the 10,000-row capture with `signature_capture_work_limit`. Green: the two public claim-input capture boundaries select the same real latest attestation, retain all 10,001 records, and replay all four production SELECTs with progress interval 1. Zero/10,000 cited superseded rows give exactly **[56, 37, 105, 66] / [56, 37, 105, 66]** VM steps for signature headers/body and admission headers/body. The allowed difference is 100 per query. |
+| MED2 / P9-3 | `test_P9_invalid_verdicts_are_cached_and_verification_holds_no_lock` | Red: 100 `(True, True)` lock/transaction observations. Green: 100 `(False, False)`, then three additional bounded calls including a full wrapped pass leave the call count at 100. Invalid rows remain excluded. |
+| MED2 / P9-3 | `test_P9_failed_verification_is_retried_on_later_bounded_passes`, `test_P9_verifier_race_and_exceptions_leave_inputs_unchecked` | Red: TimeoutExpired/RuntimeError escape; actual subprocess timeout was separately converted to a cached False ([r1-timeout-red.log](r1-timeout-red.log)). Green: subprocess timeout, RuntimeError and OSError leave rows charged; real recovered verification succeeds. Signature, generation and record-type changes during verification publish no stale verdict. |
+| MED1 + MED2 / P9-3 | `test_P9_projection_invalidates_mutations_and_rebuilds_after_restart` | Green: all original exact-field, owner-generation and restart assertions remain. Additional direct signature-deletion assertion went red ([r1-invalidation-red.log](r1-invalidation-red.log)), then green. Unknown/changed inputs become charged atomically. |
+| LOW1 / P9-2 | `test_P9_due_cursor_advances_past_cited_rows_with_bounded_work` | Red: cursor `[0, 0, 0]`. Green: `[11, 21, 31]`, each batch-10 pass under 20,000 VM steps; a later uncited row beyond the cited prefix is eventually deleted while the latest survives. |
+| P9-1, P9-2, P9-4 | Existing public reference claim, retention and hard quota tests | Green: real synchronous public claim, latest verified applicable evidence, cited history/signatures, all four reference families, unchecked foreign-provider charging, byte/row refusal before copying, and exact recapture assertions remain. Deferred OS helper execution still requires the owner's permissive host. |
 
-## Implementation and limits
+The ten targeted regressions and budget checks pass; measured output is in
+[r1-targeted.log](r1-targeted.log). Assertion and fixture replacements are
+fully enumerated in [assertions.md](assertions.md). Every assertion replacement is documented; no accepted safety or quota
+guarantee was relaxed. In particular, the pre-existing work/deadline tests now use
+unchecked attestation candidates instead of requiring an unrelated event scan.
 
-`attestation_capture.py` owns a connection-local SQLite TEMP projection. Each
-result binds exact record content/metadata, signature and full recorded owner
-generation. Only verified later rows of the same project/provider/account allow
-supersession; cited rows stay in durable history. Shared predicates feed
-signature headers/bodies and admission headers/bodies, so exact recapture sees
-the same candidates. Selected signatures still go through ordinary verification.
+## Implementation
 
-The sweep examines at most a page and deletes at most a page per cycle. Its
-cursor advances past cited and invalid rows, wraps, and retries failed
-verification. The existing default is 100 rows per 60-second full collector
-interval. After restart or edits, captures can refuse until maintenance examines
-the necessary history. TEMP results are never imported/backed up and vanish at
-connection close; persistent ledger schema and record shapes are unchanged.
+`attestation_capture.py` maintains TEMP exact checks with indexed current and
+superseded flags, plus indexed candidate membership for each public provider.
+Unchecked rows have membership for both providers. Capture headers and bodies,
+and admission headers and bodies, start from that index; they never traverse
+retained superseded attestations. TEMP writer triggers preserve exact-input
+invalidation and dependencies when a checked row/signature/generation changes.
+A reverted edit can reuse its exact cached check. These mutation paths can
+refresh the derived projection; capture itself does no writes or cryptography.
+The projection is connection-local, absent from backups, and rebuilt after restart.
+Persistent ledger schema, record shapes and public operations are unchanged.
 
-`learning_store.py` changes are local: initialize the TEMP projection, delegate
-the existing sweep, and share the candidate predicate in the attestation read.
-No store-owner fencing code was changed. The lifetime guard's old sweep entry
-moved to the helper with all three per-pass SQL bounds and the public scenario.
+The sweep snapshots at most `batch` rows under `_held`, verifies and parses
+outside both lock and transaction, then rechecks generation, signer and every
+stored input before publishing. Both definitive valid and invalid results are
+cached. `OwnerGrantAuthority` has an opt-in infrastructure-exception propagation
+mode used only by this sweep, so its existing callers retain their behavior.
+The deletion cursor uses the indexed flags to read at most `batch` candidates
+before testing citations, and advances even when every candidate is cited.
 
 ## Named-module validation
 
-- Final signature run: **39/40 pass**, 29.00 s, metadata errors empty. Only the
-  real deferred-helper scenario fails for the OS restriction above. P9-2,
-  P9-3 and P9-4 are passing in the runner; P9-1 remains failed because its
-  required deferred check cannot finish here.
-- Core batch: 129 tests, 29.79 s. `test_admission_inputs`,
-  `test_signature_job_intake` and `test_learning_retention` pass. The new
-  lifetime-bound registration initially failed red; its later rerun passes.
-  `test_event_retention` has one socket-bind error (`Operation not permitted`).
-- Compatibility batch: **95/95 pass**, 29.28 s: `test_lifetime_cap_guard`,
-  `test_large_project_backups` (both shards), `test_backup_reply_private`,
-  `test_account_observation_schema`, `test_account_cleanup_schema`,
-  `test_account_open_schema`, `test_project_holds_schema`,
-  `test_legacy_capacity_upgrade`.
-- Copier/backup/move batch: 170 tests, 45.14 s. `test_owner_backup_streamed`
-  (both shards), `test_backup_installed_project`,
-  `test_account_observation_backup`, `test_learning_source_image`,
-  `test_learning_source_image_legacy`, `test_learning_source_transfer`,
-  `test_reply_shape_compatibility` and `test_refusal_steps` pass.
-  `test_state_location` has collector-start/socket failures;
-  `test_collector_read_scope` has denied socket binds and consequent waits;
-  two CLI checks in `test_learning_migration` fail with
-  `project learning has moved to its project store`. No baseline run establishes
-  those migration failures as pre-existing; they remain an owner follow-up.
-- `test_runtime_release`: file-set and nonempty-runtime checks pass; only the
-  release digest assertion fails, as expected under the instruction to leave
-  VERSION and the release digest catalogue unchanged.
-- An earlier `test_account_claim_jobs` / `test_admission_history_growth` batch
-  was interrupted with Ctrl-C after repeated sandbox worker failures. It is not
-  a completed acceptance run. A compatibility preflight containing
-  `test_reply_shape_live` refused because that module requires `--profile soak`;
-  no tests ran in that invocation. That soak module remains unrun.
-- `git diff --check` passes. No new test module was introduced; the existing
-  signature module remains scenario/integration. P9-1 through P9-4 have reciprocal
-  requirement metadata. Assertion development corrections are fully recorded in
-  [assertions.md](assertions.md); no pre-existing assertion was changed.
+All completed runners have `metadata_errors: []`; no new module or requirement
+ID was added. The existing signature module remains scenario/integration.
+The evidence file retains the initial runner failures as well as later results.
 
-## Remaining owner commands
+- Compatibility batch: **205/205 pass**, 24.37 s. Modules: large project backups,
+  backup reply privacy, account observation/cleanup/open schemas, project holds
+  schema, legacy capacity upgrade, streamed owner backup, installed project
+  backup, account observation backup, both learning-source images, source
+  transfer, reply shape compatibility and refusal steps.
+- Copier/move/enumeration batch: **357 pass, 8 fail, 9 error, 3 skipped**, 136.40 s.
+  All four merge-library modules and both learning chunk/QA upgrades pass.
+  Learning-store failures are denied collector socket binds. State-location
+  checks cannot start the collector. Collector-read-scope has denied binds and
+  two helper/lock wait failures. Learning migration has two CLI failures
+  (`orchestration_client_unavailable` and `project learning has moved to its
+  project store`); the latter is **not established as environmental or baseline**
+  and remains an owner follow-up. Runtime release has only its expected digest
+  mismatch; file-set and nonempty-runtime assertions pass.
+- Core final batch before the subprocess-boundary strengthening: **124 pass,
+  7 error, 1 failed**, 40.15 s. Admission inputs (26), signature job intake (19),
+  learning retention (15), lifetime cap guard (4), and 43/44 signature tests
+  pass. The one signature failure is the existing deferred helper timeout;
+  seven launch-record errors are explicit denied collector socket binds.
+- Last verifier/project-start batch, with short `TMPDIR=/private/tmp/p9-r1`:
+  **119 pass, 31 fail, 10 error**, 44.83 s; metadata errors empty. All five owner
+  key contract checks pass. Learning engine is 63/70: the seven failures/errors
+  are operational QA sandbox execution/preflight. Signature inputs are **43/44**;
+  all R1 checks pass, and only the same deferred-helper test times out (including
+  cleanup). Project-start is 6/38: collector startup/socket execution prevents
+  the other 32 tests from proving their outcomes; its released-ledger backup,
+  restore and move test passes. Runtime digest mismatch remains expected.
+- Final targeted checks: **10/10 pass**, 15.73 s, including the real subprocess
+  timeout/retry and direct signature-deletion mutation. Across five named-module
+  runners: 963 test executions including repeats, 278.48 s wall time in total;
+  every individual batch is below five minutes. No full suite was run, no test
+  remains in flight, and no sockets/PTY-dependent result is represented as green.
 
-Use the supplied test venv (`PY`) on a host allowing subprocess sandboxing and
-Unix sockets, with a short writable TMPDIR. Named modules only:
+The primary should rerun failed named modules on a host permitting Unix sockets
+and sandboxed helpers, using the supplied venv and a short writable TMPDIR:
 
 ```sh
-$PY -B scripts/parallel_tests.py --module codex:tests.test_signature_inputs --module codex:tests.test_account_claim_jobs --module codex:tests.test_admission_history_growth
-$PY -B scripts/parallel_tests.py --module codex:tests.test_event_retention --module codex:tests.test_collector_read_scope --module codex:tests.test_state_location --module codex:tests.test_learning_migration
-$PY -B scripts/parallel_tests.py --profile soak --module codex:tests.test_reply_shape_live
+$PY -B scripts/parallel_tests.py --module codex:tests.test_signature_inputs --module codex:tests.test_e2a_launch_record
+$PY -B scripts/parallel_tests.py --module codex:tests.test_learning_engine --module codex:tests.test_project_start
+$PY -B scripts/parallel_tests.py --module codex:tests.test_state_location --module codex:tests.test_collector_read_scope --module codex:tests.test_learning_migration --module codex:tests.test_learning_store
 ```
 
-The primary owns the merge-time release digest update and final release gate.
+`git diff --check` passes. The primary owns the merge-time runtime digest update.

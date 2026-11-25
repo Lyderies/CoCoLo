@@ -3819,9 +3819,11 @@ OWNER_GRANT_REQUEST_FIELDS = {
 class OwnerGrantAuthority:
     """Verify detached owner signatures using public keys only."""
 
-    def __init__(self, allowed_signers: Path, *, signer_line: bytes | None = None) -> None:
+    def __init__(self, allowed_signers: Path, *, signer_line: bytes | None = None,
+                 raise_verifier_failures: bool = False) -> None:
         self.allowed_signers = allowed_signers
         self.signer_line = signer_line
+        self.raise_verifier_failures = raise_verifier_failures
         if allowed_signers.is_symlink() or not allowed_signers.is_file():
             raise ContractError("owner allowed-signers file is unavailable")
 
@@ -3962,6 +3964,10 @@ class OwnerGrantAuthority:
             )
             return completed.returncode == 0
         except (OSError, subprocess.SubprocessError):
+            # Maintenance must distinguish a definitive invalid signature from
+            # an unavailable verifier before caching a negative verdict.
+            if self.raise_verifier_failures:
+                raise
             return False
         finally:
             if "signature_path" in locals():

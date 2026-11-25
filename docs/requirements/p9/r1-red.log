@@ -1,0 +1,97 @@
+FEEFE
+======================================================================
+ERROR: test_P9_verifier_race_and_exceptions_leave_inputs_unchecked (tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_verifier_race_and_exceptions_leave_inputs_unchecked) (error=<class 'subprocess.TimeoutExpired'>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_signature_inputs.py", line 343, in test_P9_verifier_race_and_exceptions_leave_inputs_unchecked
+    self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=100))
+                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py", line 2591, in sweep_superseded_attestations
+    return sweep(self, batch, _cited_sql)
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/attestation_capture.py", line 123, in sweep
+    valid = bool(signature) and authority.verify_owner_record(project, record, signature)
+                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1241, in _execute_mock_call
+    raise effect
+subprocess.TimeoutExpired: Command 'ssh-keygen' timed out after 1 seconds
+
+======================================================================
+ERROR: test_P9_verifier_race_and_exceptions_leave_inputs_unchecked (tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_verifier_race_and_exceptions_leave_inputs_unchecked) (error=<class 'RuntimeError'>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_signature_inputs.py", line 343, in test_P9_verifier_race_and_exceptions_leave_inputs_unchecked
+    self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=100))
+                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py", line 2591, in sweep_superseded_attestations
+    return sweep(self, batch, _cited_sql)
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/attestation_capture.py", line 123, in sweep
+    valid = bool(signature) and authority.verify_owner_record(project, record, signature)
+                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1241, in _execute_mock_call
+    raise effect
+RuntimeError: verifier failed
+
+======================================================================
+ERROR: test_P9_capture_vm_work_is_independent_of_cited_superseded_history (tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_capture_vm_work_is_independent_of_cited_superseded_history)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_signature_inputs.py", line 381, in test_P9_capture_vm_work_is_independent_of_cited_superseded_history
+    grown = measure()
+  File "packages/codex-agents/tests/test_signature_inputs.py", line 354, in measure
+    self.capture(limits=SignatureCaptureLimits(1, 65_536))
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "packages/codex-agents/tests/test_signature_inputs.py", line 107, in capture
+    return self.views.capture_signature_inputs(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self.projects[0] if project is None else project, provider,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        self.limits if limits is None else limits,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        self.work_limits if work_limits is None else work_limits,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "packages/codex-agents/native-package/.codex/orchestration/codex_agents/account_service.py", line 602, in capture_signature_inputs
+    raise SignatureCaptureError(reason)
+codex_agents.signature_inputs.SignatureCaptureError: signature_capture_work_limit
+
+======================================================================
+FAIL: test_P9_invalid_verdicts_are_cached_and_verification_holds_no_lock (tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_invalid_verdicts_are_cached_and_verification_holds_no_lock)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_signature_inputs.py", line 325, in test_P9_invalid_verdicts_are_cached_and_verification_holds_no_lock
+    self.assertEqual([(False, False)] * 100, calls)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [(False, False), (False, False), (False, Fa[1552 chars]lse)] != [(True, True), (True, True), (True, True), [1352 chars]rue)]
+
+First differing element 0:
+(False, False)
+(True, True)
+
+Diff is 3600 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_P9_due_cursor_advances_past_cited_rows_with_bounded_work (tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_due_cursor_advances_past_cited_rows_with_bounded_work)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_signature_inputs.py", line 400, in test_P9_due_cursor_advances_past_cited_rows_with_bounded_work
+    self.assertTrue(0 < positions[0] < positions[1] < positions[2], positions)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true : [0, 0, 0]
+
+----------------------------------------------------------------------
+Ran 4 tests in 4.429s
+
+FAILED (failures=2, errors=3)

@@ -2308,8 +2308,6 @@ class LearningLedger:
             self._connection = self._connect()
             self._connection.share_with_lock(self._lock, waits=self._lock_waits)
             self._migrate()
-            from .attestation_capture import initialize
-            initialize(self._connection)
             # O10 AP: after every migration path (each returns early), one additive index lets an
             # append find the project's latest observed time from an index end, not by reading every
             # record. No schema version change: an older version opens the ledger and ignores it.
@@ -2360,6 +2358,8 @@ class LearningLedger:
             )
             self._initialize_launch_and_wake()  # RS-E E2a-1: additive, no schema version change
             self._record_first_owner_key()
+            from .attestation_capture import initialize
+            initialize(self._connection)
             self.state.mark_initialized()
             self._reconcile_managed_files()
         except BaseException:
@@ -2585,10 +2585,7 @@ class LearningLedger:
     def sweep_superseded_attestations(self, *, batch: int = LEARNING_SWEEP_BATCH) -> int:
         """P9: bounded verified supersession; cited history stays readable."""
         from .attestation_capture import sweep
-        with self._held():
-            if self._readers() or self._connection.in_transaction:
-                return 0
-            return sweep(self, batch, _cited_sql)
+        return sweep(self, batch, _cited_sql)
 
     def sweep_event_retention(self, *, now_ms: int | None = None, batch: int = EVENT_SWEEP_BATCH) -> int:
         """Summarise, then remove, up to `batch` expired raw events; returns how many were removed.
@@ -6959,15 +6956,14 @@ class LearningLedger:
     def _attestation_rows_locked(
         self, project_id: str, provider: str,
     ) -> tuple[tuple[str, int, bytes, str, str, bytes | None], ...]:
-        from .attestation_capture import candidate_sql
         rows = self._connection.execute(
             "SELECT r.record_id,r.source_sequence,r.content,r.content_digest,r.source,a.signature "
-            "FROM records r LEFT JOIN owner_attestations a "
+            "FROM temp.capture_candidates c CROSS JOIN records r LEFT JOIN owner_attestations a "
             "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
-            "WHERE r.project_id=? AND r.record_type='billing_attestation' "
-            "AND json_extract(CAST(r.content AS TEXT),'$.provider')=? AND "
-            + candidate_sql() + " ORDER BY r.source_sequence",
-            (project_id, provider),
+            "WHERE c.consumer=? AND c.project_id=? AND c.record_type='billing_attestation' "
+            "AND r.rowid=c.record_rowid AND json_extract(CAST(r.content AS TEXT),'$.provider')=? "
+            "ORDER BY c.source_sequence",
+            (provider, project_id, provider),
         ).fetchall()
         result = []
         for row in rows:

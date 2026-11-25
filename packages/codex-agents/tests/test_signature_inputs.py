@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import hashlib
 import sqlite3
+import subprocess
+import json
 import time
 import tempfile
 import threading
@@ -261,6 +263,13 @@ class SignatureInputOwnerTests(unittest.TestCase):
                     self.assert_capture_error('signature_capture_limit', lambda: self.capture(limits=limits))
                 finally:
                     connection.execute(sql, (old, project, identifier))
+        saved_signature = tuple(connection.execute(
+            'SELECT * FROM owner_attestations WHERE project_id=? AND subject_record_id=?',
+            (project, self.record['record_id'])).fetchone())
+        connection.execute('DELETE FROM owner_attestations WHERE project_id=? AND subject_record_id=?',
+                           (project, self.record['record_id']))
+        self.assert_capture_error('signature_capture_limit', lambda: self.capture(limits=limits))
+        connection.execute('INSERT INTO owner_attestations VALUES(?,?,?,?)', saved_signature)
         # A record which is no longer an attestation cannot supersede one.
         connection.execute("UPDATE records SET record_type='event' WHERE project_id=? AND record_id=?",
                            (project, latest['record_id']))
@@ -285,12 +294,146 @@ class SignatureInputOwnerTests(unittest.TestCase):
     @requirements('P9-3', why_not_scenario=
                   'A transient signature-verifier failure must not become permanent negative projection state.')
     def test_P9_failed_verification_is_retried_on_later_bounded_passes(self):
-        with mock.patch.object(OwnerGrantAuthority, 'verify_owner_record', return_value=False):
+        with mock.patch('codex_agents.learning_engine.subprocess.run', side_effect=subprocess.TimeoutExpired('ssh-keygen', 1)):
             self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=1))
-        self.assertEqual((), self.capture().rows)
+        self.assertEqual(self.record['record_id'], self.capture().rows[0][0])
         for _ in range(2):
             self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=1))
         self.assertEqual(self.record['record_id'], self.capture().rows[0][0])
+
+    def _add_scale_history(self, count):
+        connection, project = self.ledger._connection, self.projects[0]
+        original = dict(connection.execute("SELECT * FROM records WHERE record_id=?",
+                                           (self.record['record_id'],)).fetchone())
+        rows = []
+        for number in range(count):
+            record = dict(self.record, record_id='scale-' + str(number), observed_at_ms=0)
+            content = json.dumps(record, sort_keys=True, separators=(',', ':')).encode()
+            rows.append(tuple(dict(original, record_id=record['record_id'], source_sequence=number + 2,
+                                   observed_at_ms=0, content=content,
+                                   content_digest=hashlib.sha256(content).hexdigest()).values()))
+        connection.executemany('INSERT INTO records(' + ','.join(original) + ') VALUES(' +
+                               ','.join('?' for _ in original) + ')', rows)
+        connection.executemany('INSERT INTO owner_attestations VALUES(?,?,?,?)',
+                               [(project, 'scale-' + str(i), b'test-signature', 0) for i in range(count)])
+        connection.executemany('INSERT INTO record_links VALUES(?,?,?,?)',
+                               [(project, self.record['record_id'], 'scale-' + str(i), 'cites') for i in range(count)])
+
+    @requirements('P9-3', why_not_scenario='Instrument exact lock/transaction spans around verifier calls.')
+    def test_P9_invalid_verdicts_are_cached_and_verification_holds_no_lock(self):
+        self._add_scale_history(99)
+        calls = []
+        def verify(*args):
+            calls.append((self.ledger._lock._is_owned(), self.ledger._connection.in_transaction))
+            return False
+        with mock.patch.object(OwnerGrantAuthority, 'verify_owner_record', side_effect=verify):
+            self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=100))
+            self.assertEqual(100, len(calls))
+            self.assertEqual([(False, False)] * 100, calls)
+            for _ in range(3):
+                self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=100))
+            self.assertEqual(100, len(calls))
+        self.assertEqual((), self.capture().rows)
+
+    @requirements('P9-3', why_not_scenario='A verifier race must not publish a verdict for replaced inputs.')
+    def test_P9_verifier_race_and_exceptions_leave_inputs_unchecked(self):
+        connection = self.ledger._connection
+        def verify(*args):
+            connection.execute("UPDATE owner_attestations SET signature=?", (b'changed',))
+            return True
+        with mock.patch.object(OwnerGrantAuthority, 'verify_owner_record', side_effect=verify):
+            self.ledger.sweep_superseded_attestations(batch=100)
+        self.assertEqual(1, len(self.capture().rows))
+        for error in (subprocess.TimeoutExpired('ssh-keygen', 1), RuntimeError('verifier failed'), OSError('unavailable')):
+            with self.subTest(error=type(error)), mock.patch.object(
+                    OwnerGrantAuthority, 'verify_owner_record', side_effect=error):
+                self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=100))
+            self.assertEqual(1, len(self.capture().rows))
+        def replace_generation(*args):
+            connection.execute('INSERT INTO owner_key_history(signer_line,reason,recorded_at_ms) '
+                               'SELECT signer_line,reason,recorded_at_ms+1 FROM owner_key_history '
+                               'ORDER BY sequence DESC LIMIT 1')
+            return True
+        with mock.patch.object(OwnerGrantAuthority, 'verify_owner_record', side_effect=replace_generation):
+            self.ledger.sweep_superseded_attestations(batch=100)
+        self.assertEqual(0, connection.execute('SELECT COUNT(*) FROM temp.attestation_checks').fetchone()[0])
+        def replace_type(*args):
+            connection.execute("UPDATE records SET record_type='event'")
+            return True
+        with mock.patch.object(OwnerGrantAuthority, 'verify_owner_record', side_effect=replace_type):
+            self.ledger.sweep_superseded_attestations(batch=100)
+        self.assertEqual(0, connection.execute('SELECT COUNT(*) FROM temp.attestation_checks').fetchone()[0])
+        connection.execute("UPDATE records SET record_type='billing_attestation'")
+        self.assertEqual(1, len(self.capture().rows))
+
+    @requirements('P9-4', why_not_scenario='SQLite VM steps directly measure the claim capture queries at scale.')
+    def test_P9_capture_vm_work_is_independent_of_cited_superseded_history(self):
+        from codex_agents.admission_inputs import AdmissionCaptureLimits, AdmissionInputPolicy
+        connection = self.ledger._connection
+        def measure():
+            statements = []
+            connection.set_trace_callback(statements.append)
+            try:
+                captured = self.capture(limits=SignatureCaptureLimits(1, 65_536))
+                admission = self.views.capture_admission_inputs(
+                    self.projects[0], 'codex', AdmissionInputPolicy('0.164.0', '0.164.1', 60),
+                    AdmissionCaptureLimits(1, 65_536), self.work_limits)
+                self.assertEqual(captured.rows[0][0], admission.rows[0][2])
+            finally:
+                connection.set_trace_callback(None)
+            queries = [sql for sql in statements if sql.startswith('SELECT typeof(r.record_id)') or
+                       sql.startswith('SELECT r.record_id,r.source_sequence') or
+                       sql.startswith('SELECT r.rowid,typeof(r.project_id)') or
+                       sql.startswith('SELECT r.rowid,r.project_id,r.record_id')]
+            self.assertEqual(4, len(queries))
+            work = []
+            for sql in queries:
+                connection.execute(sql, {'p': self.projects[0], 'provider': 'codex',
+                                         'a': 100000, 'limit': 2}).fetchall()
+                steps = []
+                connection.set_progress_handler(lambda: steps.append(1) or 0, 1)
+                try:
+                    rows = connection.execute(sql, {'p': self.projects[0], 'provider': 'codex',
+                                                   'a': 100000, 'limit': 2}).fetchall()
+                finally:
+                    connection.set_progress_handler(None, 0)
+                self.assertEqual(1, len(rows))
+                work.append(len(steps))
+            return work
+        self.ledger.sweep_superseded_attestations(batch=100)
+        baseline = measure()
+        self._add_scale_history(10000)
+        with mock.patch.object(OwnerGrantAuthority, 'verify_owner_record', return_value=True):
+            self.ledger.sweep_superseded_attestations(batch=10001)
+        self.assertEqual(10001, connection.execute("SELECT COUNT(*) FROM records WHERE record_type='billing_attestation'").fetchone()[0])
+        grown = measure()
+        for before, after in zip(baseline, grown):
+            self.assertLessEqual(abs(after - before), 100, (baseline, grown))
+
+    @requirements('P9-2', why_not_scenario='Deletion cursor and SQL VM steps prove bounded cited-row traversal.')
+    def test_P9_due_cursor_advances_past_cited_rows_with_bounded_work(self):
+        self._add_scale_history(200)
+        with mock.patch.object(OwnerGrantAuthority, 'verify_owner_record', return_value=True):
+            self.ledger.sweep_superseded_attestations(batch=300)
+        positions, work = [], []
+        for _ in range(3):
+            steps = []
+            self.ledger._connection.set_progress_handler(lambda: steps.append(1) or 0, 1)
+            try:
+                self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=10))
+            finally:
+                self.ledger._connection.set_progress_handler(None, 0)
+            positions.append(getattr(self.ledger, '_attestation_due_after', 0))
+            work.append(len(steps))
+        self.assertTrue(0 < positions[0] < positions[1] < positions[2], positions)
+        self.assertLess(max(work), 20000, work)
+        self.ledger._connection.execute("DELETE FROM record_links WHERE to_record_id='scale-150'")
+        for _ in range(20):
+            self.assertLessEqual(self.ledger.sweep_superseded_attestations(batch=10), 1)
+        self.assertIsNone(self.ledger._connection.execute(
+            "SELECT 1 FROM records WHERE record_id='scale-150'").fetchone())
+        self.assertIsNotNone(self.ledger._connection.execute(
+            'SELECT 1 FROM records WHERE record_id=?', (self.record['record_id'],)).fetchone())
 
     def test_other_provider_history_is_charged_before_filtering(self):
         attest_provider(self.ledger, self.projects[0], self.key, "claude", "b" * 64, issued_at=2)
@@ -454,21 +597,23 @@ class SignatureInputOwnerTests(unittest.TestCase):
         owner.assert_not_called()
 
     def test_unrelated_history_scan_exhausts_work_before_body_copy_then_recovers(self):
-        captured = self.capture()
+        limits = SignatureCaptureLimits(201, MAX_SIGNATURE_CAPTURE_BYTES)
+        self._add_scale_history(200)
+        captured = self.capture(limits=limits)
         connection = self.ledger._connection
-        self.add_unrelated_history()
         before = connection.total_changes
         with mock.patch.object(self.ledger, "_attestation_rows_locked") as copy:
             self.assert_capture_error("signature_capture_work_limit", lambda: self.capture(
-                work_limits=SQLReadLimits(4, 1000, MAX_SIGNATURE_CAPTURE_BYTES)))
+                limits=limits, work_limits=SQLReadLimits(4, 1000, MAX_SIGNATURE_CAPTURE_BYTES)))
         copy.assert_not_called()
-        self.assertEqual(captured.rows, self.capture().rows)
+        self.assertEqual(captured.rows, self.capture(limits=limits).rows)
         self.assertEqual(before, connection.total_changes)
         self.assertEqual(5000, connection.execute("PRAGMA busy_timeout").fetchone()[0])
 
     def test_capture_deadline_refuses_during_scan_and_restores_the_owner(self):
-        captured = self.capture()
-        self.add_unrelated_history()
+        limits = SignatureCaptureLimits(201, MAX_SIGNATURE_CAPTURE_BYTES)
+        self._add_scale_history(200)
+        captured = self.capture(limits=limits)
         connection = self.ledger._connection
         observed = []
 
@@ -481,12 +626,12 @@ class SignatureInputOwnerTests(unittest.TestCase):
 
         with mock.patch("codex_agents.sql_read_budget._clock_ns", side_effect=clock), \
                 mock.patch.object(self.ledger, "_attestation_rows_locked") as copy:
-            self.assert_capture_error("signature_capture_work_limit", self.capture)
+            self.assert_capture_error("signature_capture_work_limit", lambda: self.capture(limits=limits))
         copy.assert_not_called()
         self.assertTrue(observed)
         self.assertIsNone(connection._sql_scope)
         self.assertFalse(connection._sql_unusable)
-        self.assertEqual(captured.rows, self.capture().rows)
+        self.assertEqual(captured.rows, self.capture(limits=limits).rows)
 
     def test_capture_busy_refusal_is_bounded_and_restores_the_previous_timeout(self):
         connection = self.ledger._connection

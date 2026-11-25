@@ -1,0 +1,14 @@
+E
+======================================================================
+ERROR: test_P9_failed_verification_is_retried_on_later_bounded_passes (tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "packages/codex-agents/tests/test_signature_inputs.py", line 299, in test_P9_failed_verification_is_retried_on_later_bounded_passes
+    self.assertEqual(self.record['record_id'], self.capture().rows[0][0])
+                                               ~~~~~~~~~~~~~~~~~~~^^^
+IndexError: tuple index out of range
+
+----------------------------------------------------------------------
+Ran 1 test in 0.110s
+
+FAILED (errors=1)
