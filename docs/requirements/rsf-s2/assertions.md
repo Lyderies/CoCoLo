@@ -302,3 +302,10 @@ These strengthen newly added tests; no existing assertion was relaxed.
 No other pre-existing assertion changes in this fix round. In particular the
 process cleanup `history_not_authorized` assertion, all named-savepoint callers,
 read-only no-private-file check, and lifetime-cap guard remain intact.
+## Final targeted correction (base bf161e39)
+
+No existing test assertion was removed or changed. Four new RSF-S2-3 tests
+pin read-only WITH budgets, fenced WITH write keywords, interrupted epoch reads
+and fail-closed handling of other SQLite errors. The initial new budget-test
+fixture included ProjectHistory, which has no read-budget API; it was corrected
+to LearningLedger before runtime edits, with every assertion retained.

@@ -108,3 +108,17 @@ statements in the current owner transaction without SQLite's usual implicit
 COMMIT. An error leaves prior script statements pending in that transaction;
 the caller can roll them all back. Explicit transaction control in a script
 retains its ordinary fenced semantics.
+
+## Final targeted read-budget correction (2026-11-25)
+
+RSF-S2-3: a statement starting with WITH is a read only when it contains no
+INSERT, UPDATE, DELETE or REPLACE keyword anywhere (case insensitive). WITH
+statements containing any such keyword retain the fenced write path and refuse
+after takeover. A read-only WITH SELECT inside either `read_call` or
+`transaction_read_call` with `SQLReadLimits(max_callbacks=1, ...)` must report
+`sql_read_work_limit`, never an ownership refusal, and perform no fence check.
+
+RSF-S2-3: an epoch read interrupted by the SQLite read budget must re-raise
+the original `sqlite3.OperationalError('interrupted')` so the read scope can
+report its budget error. Every other SQLite epoch-read error continues to
+fail closed with the existing ownership refusal.

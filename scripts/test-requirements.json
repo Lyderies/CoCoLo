@@ -2150,7 +2150,11 @@
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_sqlite_commit_error_preserves_deferred_foreign_key_transaction",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_sqlite_release_error_preserves_outer_transaction_and_earlier_writes",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_script_commit_and_outermost_release_probe_lock_before_commit",
-   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_learning_reads_skip_nested_helper_fences"
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_learning_reads_skip_nested_helper_fences",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_with_select_reports_read_budget_without_checking_fence",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_with_write_keywords_stay_fenced_after_takeover",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_interrupted_epoch_read_preserves_sqlite_error_for_read_budget",
+   "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_other_sqlite_epoch_read_error_keeps_ownership_refusal"
   ]
  },
  "RSF-S2-4": {

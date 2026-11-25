@@ -13,6 +13,7 @@ from test_framework import requirements
 from codex_agents import learning_store, project_cleanup, project_history, store_fence
 from codex_agents.history_contracts import HistoryError
 from codex_agents.owned_execution import ExecutionCleanup, OwnedExecutionRegistry
+from codex_agents.sql_read_budget import SQLReadError, SQLReadLimits
 from tests.learning_support import event_record
 
 PROJECT = 'prj_' + '1' * 32
@@ -93,6 +94,79 @@ class FenceRegressionTests(unittest.TestCase):
         history = project_history.ProjectHistory(self.directory, PROJECT)
         self.addCleanup(history.close)
         return ledger, history
+
+    @requirements('RSF-S2-3')
+    def test_with_select_reports_read_budget_without_checking_fence(self):
+        sql = ('WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000) '
+               'SELECT SUM(x) FROM n')
+        limits = SQLReadLimits(max_callbacks=1, max_duration_ms=1000, max_value_bytes=65_536)
+        for owner in (learning_store.LearningLedger(self.state),):
+            self.addCleanup(owner.close)
+            db = owner._connection
+            for transaction in (False, True):
+                with self.subTest(owner=type(owner).__name__, transaction=transaction):
+                    if transaction:
+                        db.execute('BEGIN IMMEDIATE')
+                    read = db.transaction_read_call if transaction else db.read_call
+                    try:
+                        with mock.patch.object(owner._fence, 'check', wraps=owner._fence.check) as check:
+                            with self.assertRaises(SQLReadError) as caught:
+                                read(limits, lambda: db.execute(sql).fetchone())
+                            self.assertEqual('sql_read_work_limit', caught.exception.reason_code)
+                            check.assert_not_called()
+                    finally:
+                        db.rollback()
+
+    @requirements('RSF-S2-3')
+    def test_with_write_keywords_stay_fenced_after_takeover(self):
+        for owner in self.owners():
+            db = owner._connection
+            db.execute('CREATE TEMP TABLE with_values(value)')
+            insert = 'WITH n(x) AS (SELECT 1) INSERT INTO with_values SELECT x FROM n'
+            db.execute(insert)
+            self.assertEqual([1], [row[0] for row in db.execute('SELECT * FROM with_values')])
+            db.execute('DELETE FROM with_values')
+            sqlite3.Connection.execute(db, 'UPDATE runtime_takeover SET epoch=epoch+1')
+            for sql in (insert, *(f"WITH n(x) AS (SELECT '{word}') SELECT x FROM n"
+                                  for word in ('insert', 'UPDATE', 'delete', 'REPLACE'))):
+                with self.subTest(owner=type(owner).__name__, sql=sql):
+                    with self.assertRaisesRegex((learning_store.LedgerError, HistoryError), 'replaced'):
+                        db.execute(sql)
+                    self.assertFalse(db.in_transaction)
+                    self.assertEqual([], list(db.execute('SELECT * FROM with_values')))
+
+    @requirements('RSF-S2-3')
+    def test_interrupted_epoch_read_preserves_sqlite_error_for_read_budget(self):
+        limits = SQLReadLimits(max_callbacks=1, max_duration_ms=1000, max_value_bytes=65_536)
+        for owner in (learning_store.LearningLedger(self.state),):
+            self.addCleanup(owner.close)
+            db = owner._connection
+            interrupted = []
+
+            def epoch_read():
+                try:
+                    owner._fence.check(db, full=False)
+                except sqlite3.OperationalError as error:
+                    interrupted.append(error)
+                    raise
+
+            with self.subTest(owner=type(owner).__name__), \
+                    mock.patch('codex_agents.sql_read_budget.SQL_READ_PROGRESS_INTERVAL', 1):
+                with self.assertRaises(SQLReadError) as caught:
+                    db.read_call(limits, epoch_read)
+                self.assertEqual('sql_read_work_limit', caught.exception.reason_code)
+                self.assertEqual(1, len(interrupted))
+                self.assertEqual('interrupted', str(interrupted[0]))
+                self.assertEqual(sqlite3.SQLITE_INTERRUPT, interrupted[0].sqlite_errorcode)
+
+    @requirements('RSF-S2-3')
+    def test_other_sqlite_epoch_read_error_keeps_ownership_refusal(self):
+        for owner in self.owners():
+            db = owner._connection
+            sqlite3.Connection.execute(db, 'DROP TABLE runtime_takeover')
+            with self.subTest(owner=type(owner).__name__):
+                with self.assertRaisesRegex((learning_store.LedgerError, HistoryError), 'replaced'):
+                    owner._fence.check(db, full=False)
 
     @requirements('RSF-S2-3')
     def test_nested_named_savepoints_preserve_rollback_to_and_outer_transaction(self):

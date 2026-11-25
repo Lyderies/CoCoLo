@@ -1,5 +1,58 @@
 # RS-F S2 status — 2026-11-25
 
+## Final targeted read-budget correction — current handoff
+
+Base `bf161e39`; only the two final requested `store_fence.py` fixes and their
+tests, requirement links and documentation changed. Changes are uncommitted
+because this builder is sandboxed. VERSION and the runtime digest catalogue
+remain unchanged. This section supersedes the previous current handoff below.
+
+All test names below belong to
+`tests.test_rsf_s2_regressions.FenceRegressionTests` and map to **RSF-S2-3**.
+Requirements were documented first, then tests run against unchanged runtime
+code, then the two runtime changes applied.
+
+| Requirement | Test | Red → green evidence |
+| --- | --- | --- |
+| RSF-S2-3: read-only WITH skips the fence and retains read budgets | `test_with_select_reports_read_budget_without_checking_fence` | Red: `read_call` returned `sql_read_unavailable`; `transaction_read_call` performed a fence check. Green: both return `sql_read_work_limit` with zero fence checks at one callback. |
+| RSF-S2-3: WITH containing write keywords stays fenced | `test_with_write_keywords_stay_fenced_after_takeover` | Green before and after: valid WITH INSERT works before takeover; after epoch replacement it refuses with zero inserted rows. Each of INSERT/UPDATE/DELETE/REPLACE, including mixed case and keywords in literals, retains fencing on both owners. |
+| RSF-S2-3: interrupted epoch reads preserve the original SQLite error | `test_interrupted_epoch_read_preserves_sqlite_error_for_read_budget` | Red: `LedgerError` ownership refusal escaped the budget scope. Green: the epoch check re-raises SQLite's `OperationalError('interrupted')` with `SQLITE_INTERRUPT`; the surrounding read scope reports `sql_read_work_limit`. A one-instruction progress interval forces interruption in the short epoch SELECT. |
+| RSF-S2-3: other SQLite errors fail closed | `test_other_sqlite_epoch_read_error_keeps_ownership_refusal` | Green before and after: a missing epoch table produces the existing ownership refusal on both owners. |
+
+The corrected red module run executed **20 tests in 0.538 s**, with two
+failing subtests and one error, all matching the requested defects. An earlier
+fixture attempt also tried budget APIs on ProjectHistory, which has none;
+the new budget fixtures were corrected to use LearningLedger before runtime
+edits. No assertions were removed or weakened. Existing assertions are unchanged;
+see [assertions.md](assertions.md).
+
+Final named run: **54 tests / 2 modules**, all pass, **0.862 job-seconds**
+(runner execution wall time **0.7 s**), `metadata_errors: []`,
+`budget_failures: []`, `failed_units: []`. Command, using the approved test
+interpreter as `PY` from the repository root:
+
+```sh
+"$PY" -B scripts/parallel_tests.py \
+  --module codex:tests.test_rsf_s2_regressions \
+  --module codex:tests.test_sql_read_budget
+```
+
+The regression module remains registered as unit; no new module or requirement
+ID was added. Its four new checks have reciprocal RSF-S2-3 catalogue links.
+There is no schema or record-shape change, so copier/backup modules were not
+rerun. `git diff --check` passes. No run remains in flight.
+
+As requested, the primary must rerun `tests.test_run_provenance` and the fence
+modules unsandboxed, including process/socket cases in `tests.test_rsf_s2_fence`.
+These were not rerun here. No socket or PTY test was attempted in this round.
+`tests.test_runtime_release` was not run: changing this collector runtime file
+leaves the known digest mismatch until the primary's merge-time bookkeeping.
+
+Files changed: `store_fence.py`, `test_rsf_s2_regressions.py`,
+`scripts/test-requirements.json`, `docs/requirements/rsf-s2.md`, and this unit's
+`STATUS.md` and `assertions.md`. Runtime/test basenames refer to their existing
+paths under `packages/codex-agents`.
+
 ## Fixed-scope review correction — current handoff
 
 Base `cd78dcb3`; the six requested review items are implemented and left

@@ -96,7 +96,9 @@ class StoreFence:
                 row = sqlite3.Connection.execute(connection,
                     'SELECT epoch,new_digest FROM runtime_takeover WHERE singleton=1').fetchone()
                 valid = row is not None and tuple(row) == (self.epoch, self.digest)
-            except sqlite3.Error:
+            except sqlite3.Error as error:
+                if isinstance(error, sqlite3.OperationalError) and str(error) == 'interrupted':
+                    raise
                 valid = False
             if not valid:
                 raise self.refusal()
@@ -193,7 +195,9 @@ class FencedConnection(sqlite3.Connection):
             or ('journal_mode' in clean.lower() and ('=' in clean or '(' in clean)) or ('=' in clean and any(
             name in clean.lower() for name in ('user_version', 'application_id', 'schema_version',
                                               'journal_mode', 'writable_schema'))))
-        if word in {'SELECT', 'EXPLAIN'} or (word == 'PRAGMA' and not database_pragma):
+        if (word in {'SELECT', 'EXPLAIN'}
+                or (word == 'WITH' and not re.search(r'\b(?:INSERT|UPDATE|DELETE|REPLACE)\b', sql, re.I))
+                or (word == 'PRAGMA' and not database_pragma)):
             return operation()
         if word in {'BEGIN', 'SAVEPOINT'}:
             # SAVEPOINT starts its own transaction when necessary. Preserve its
