@@ -592,6 +592,10 @@ class BackoffTests(StarterBase):
         advance(self.now_ms())
         self.launch(constants={'START_BACKOFF_FIRST_SECONDS': 0.3, 'START_BACKOFF_MAX_SECONDS': 0.6,
                                'START_PARK_AFTER_SECONDS': 2.0}, clock=str(clock))
+        # The collector marks the stopped project due on its own real clock once it is up; the policy clock
+        # starts there (no earlier frozen time can ever reach that due mark).
+        due = wait_for(self, lambda: (self.wake('broken') or {}).get('due_at_ms'), 30, 'never marked due')
+        advance(max(int(clock.read_text()), due))
         rows = []
         while not rows or rows[-1]['parked_reason'] is None:
             previous = len(rows)

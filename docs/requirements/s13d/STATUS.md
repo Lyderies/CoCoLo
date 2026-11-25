@@ -1,9 +1,10 @@
 # S13d status
 
-**PARTIAL — not ready for acceptance.** Worktree base `ce81bd96` (0.8.67),
-branch `feat/s13d-idle`. Changes are uncommitted because this session is
-sandboxed. No VERSION or runtime digest catalogue changes. No install, push,
-merge, live-service access, schema change or record-shape change.
+**Continuation (2026-11-26): A/B done, ready for review.** Worktree base
+`ce81bd96` (0.8.67), branch `feat/s13d-idle`. Read "Continuation" at the end
+first; the sections before it are the earlier sandboxed Codex session's notes
+(their "blocked"/"uncommitted" remarks are superseded). No VERSION or runtime
+digest catalogue changes. No install, push, merge, schema or record-shape change.
 
 ## Requirements and evidence
 
@@ -145,3 +146,95 @@ Only named modules/tests; no full-suite or affected run.
   `tests/requirements/s13d.json`.
 - Requirements/evidence: `docs/requirements/s13d.md`,
   `docs/requirements/s13d/assertions.md`, this `STATUS.md`.
+
+## Continuation (A/B and final checks)
+
+Method: each arm ran `scripts/parallel_tests.py --jobs 16 --keep --module
+codex:tests.test_lost_run_settlement --module codex:tests.test_project_start
+--module codex:tests.test_project_service_startup --module root:test_install`
+from its own tree, unsandboxed, clean env, short TMPDIR, arms interleaved
+(rotated order each round). Trees: base `ce81bd96`, Codex `17c946a8`, head
+`1da5664e`, no-pacer (head with only PassPacer reverted: collector,
+account host/ingress and `serve()` back to the fixed 2 ms wait), final (this
+commit with the original E2c-4 test, P2) and fixed (final's E2c-4 fixture fix,
+P3). Raw rows: [evidence/ab-continuation.tsv](evidence/ab-continuation.tsv).
+Cells are passing runs / runs.
+
+| Phase | Arm | E2c-4 | E2c-9 | idle-stop | lost_run (module) | E2c-3 | L15.1 deletion | wall s |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| P1 | base | 8/8 | 8/8 | 8/8 | 8/8 | 8/8 | 8/8 | 60-75 |
+| P1 | codex 17c946a8 | 0/8 | 8/8 | 8/8 | **0/8** | 7/8 | 8/8 | 70-116 |
+| P1 | head 1da5664e | 0/8 | 8/8 | 8/8 | 8/8 | 7/8 | 8/8 | 77-100 |
+| P1 | no-pacer | 0/8 | 8/8 | 8/8 | 8/8 | 7/8 | 8/8 | 76-106 |
+| P2 | base | 6/8 | 8/8 | 8/8 | 8/8 | 7/8 | 6/8 | 64-85 |
+| P2 | final, original E2c-4 | 6/8 | 8/8 | 8/8 | 8/8 | 8/8 | 8/8 | 65-94 |
+| P3 | base | 8/8 | 8/8 | 8/8 | 8/8 | 8/8 | 7/8 | 53-66 |
+| P3 | fixed (committed) | **8/8** | 8/8 | 8/8 | 8/8 | 8/8 | 8/8 | 52-61 |
+
+E2c-4 in P1 non-base arms is Codex's rewritten test; base and P2 run the
+original. idle-stop = `test_a_host_stops_when_its_hint_is_withdrawn_or_it_has_been_idle`.
+
+Findings:
+- **E2c-9 and idle-stop did not fail in any of 64 runs** (any arm); no change
+  is attributable. They stay known load flakes with no fix here.
+- **lost_run**: Codex's lock-only-when-settled change fails
+  `test_a_lost_reply_and_repeated_restarts_settle_the_run_exactly_once` 8/8
+  (next host finds the lock held); head's `finally` release passes 8/8 and 16/16
+  later. Module seconds (summed fragments) are the same at base and head
+  (base 123-181, head/final 123-186): the 136.7 s overage is load, not S13d;
+  base is over its 60 s budget in the same runs.
+- **L15.1 / S13d-3 target**: base failed 3/24 (one `(1, False, 'stopped')`
+  deletion-not-ready = the cleanup-pending race; two `ProcessLookupError` in
+  `stop_hosts` = the S13d-4 test race); branch arms 0/40. The S13d-3
+  regressions copied onto base product code fail 3/3 (lock released while the
+  writer still runs) and pass on this branch.
+- **E2c-4**: Codex's frozen-clock rewrite failed 24/24 ("failure was not
+  recorded"): the collector marks the project due on its real clock after the
+  policy clock is frozen, so no claim ever matches. The original wall-clock test
+  flakes 2/24 at base and 2/8 on the branch (`waits[1] > waits[0]`, 1.640 vs
+  1.645 s: child start time dominates 300/600 ms). With the one-wait fixture fix
+  (advance the policy clock to the wake row's due mark) it passed 8/8 under load.
+- **E2c-3** (scheduler outliers 51-56 ms vs 50 ms, one production-drain start
+  failure): 1/8 in base P2 and 1/8 in each P1 non-base arm; claim-path code is
+  unchanged, the test runs on a ledger in the test process; not attributable.
+- **PassPacer is not the cause**: no-pacer and head have identical failure
+  profiles (E2c-4 rewrite 0/8 in both, E2c-3 1/8 in both, lost_run 8/8 in both).
+
+Decisions:
+- **Kept (product):** S13d-2 git cache; S13d-1 PassPacer; S13d-3 host lock held
+  through writer drain and final settlement, released in `finally` after the
+  one final settlement attempt, plus the failed-constructor bounded drain and
+  the lock release in `settle_lost_runs_later`. Evidence: deterministic
+  regression red on base / green here, base L15.1 deletion race 1/24 vs 0/40,
+  no test worse than base.
+- **Reverted:** Codex's `if settled: release` form (it alone broke lost_run 8/8;
+  already replaced by the `finally` in `1da5664e`). Nothing else reverted.
+- **Kept (tests):** `stop_hosts` ProcessLookupError suppression (base 2/24
+  ProcessLookupError, branch 0/40; no assertion changed); the E2c-4 rewrite with
+  its due-mark fix. Pairs: [assertions.md](assertions.md) (E2c-4 old wall-clock
+  begin-to-begin waits -> committed `next_start_at_ms - outcome_at_ms` waits,
+  plus exact `[300, 600, 600, 600]`; fixed 2 s sleep -> acknowledged empty claim
+  pass; due-mark wait added; `GitExecutableTests` call-site helper; E2c-3
+  unchanged).
+
+Final checks (unsandboxed, TMPDIR under /tmp/claude-501/):
+- `tests.test_idle_cpu_budget` 3x: OK, OK, OK (15.4-15.5 s each).
+- Named `--module` run of test_lost_run_settlement, test_s13d_regressions,
+  test_project_start, test_project_service_startup, test_collector_exit:
+  123 tests, 0 failed units, `metadata_errors: []`, `budget_failures: []`,
+  43.7 s wall at --jobs 16 (rc 0).
+- `--jobs 8 --affected ce81bd96`: 895 s wall, preflight 7.5 s,
+  7,767 tests (codex 6,454, root 1,179, claude 134), `metadata_errors: []`,
+  `requirement_failures: []`. Failed units: only `codex:tests.test_runtime_release`
+  (runtime digest pin, stale by design until release bookkeeping). One budget
+  failure: `codex:tests.test_host_slots` 65.3 s vs 60 s (known S13c item). A/B
+  3 rounds each beside `root:test_install` at --jobs 8: base 51.4-55.4 s,
+  this branch 49.6-51.4 s (summed fragments), so it is load, not S13d.
+  The first attempt used a PATH with `/usr/bin` before Homebrew and failed
+  `root:test_setup_sh` (setup.sh refuses the macOS python3 shim); it was
+  stopped and rerun with Homebrew first. No run is left in flight.
+- Not stopped (not this session's): two orphaned processes from an earlier
+  builder's rounds in this tree, started 10:54-10:55 before this session
+  (a test_project_start starter wrapper and a collector_host); left for the
+  primary.
+

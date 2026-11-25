@@ -11,6 +11,16 @@
   publication, continued parked status, owner-only unpark and fresh streak
   assertions all remain. The fixed 2 s sleep after publication is replaced by
   advancing beyond the park deadline and awaiting a completed empty claim pass.
+  **Continuation fix (A/B):** as committed in `17c946a8` the rewrite failed
+  24/24 under load with "failure was not recorded": the collector marks the
+  stopped project due on its own real clock after the policy clock was frozen,
+  so the frozen clock never reached the due mark. The fixture now waits for
+  the wake row's `due_at_ms` and advances the policy clock to it before the
+  loop. No assertion is changed or removed by this fix; it adds one wait
+  ('never marked due'). Fixed rewrite: 8/8 beside `root:test_install` at
+  `--jobs 16`; the original wall-clock test failed 2/24 at base and 2/8 on
+  this branch (`waits[1] > waits[0]`: 1.640 s vs 1.645 s, child start time
+  dominating the 300/600 ms backoff).
 - `GitExecutableTests`: `git_plumbing.git_executable(...)` ->
   `self.resolve_git(...)` at the existing assertions and initial assignment.
   Expected values and assertion predicates are unchanged.
