@@ -403,5 +403,6 @@
  "codex:tests.test_u4_probe_capacity": "integration",
  "codex:tests.test_u4_probe_execution_capacity": "integration",
  "codex:tests.test_u4_probe_live_capacity": "integration",
- "codex:tests.test_u4_probe_product_capacity": "integration"
+ "codex:tests.test_u4_probe_product_capacity": "integration",
+ "codex:tests.test_u1_orchestration_lifetime": "integration"
 }

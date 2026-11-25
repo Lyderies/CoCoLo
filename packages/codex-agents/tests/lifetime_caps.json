@@ -1193,7 +1193,7 @@
   },
   "orchestration_store.py::apply": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR; U1 automatic runner/core continuation replaces the current orchestration at independent run/report/event caps; direct guard behavior and reserved close capacity are preserved"
   },
   "orchestration_store.py::end_earlier": {
    "checks": 1,
@@ -1383,7 +1383,7 @@
   },
   "project_history.py::record_registered_run": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR; U1 automatic runner/core continuation replaces the current orchestration at independent run/report/event caps; direct guard behavior and reserved close capacity are preserved"
   },
   "project_history.py::record_account_settlement": {
    "checks": 1,
@@ -1558,7 +1558,7 @@
   },
   "project_orchestration_report.py::orchestration_report": {
    "checks": 7,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR; U1 automatic runner/core continuation replaces the current orchestration at independent run/report/event caps; direct guard behavior and reserved close capacity are preserved"
   },
   "project_qa_checks.py::_report": {
    "checks": 1,
@@ -2033,6 +2033,16 @@
    "checks": 1,
    "ends": "refusal counts keep at most MAX_REFUSAL_CALLERS caller buckets; further callers fold into 'other' with totals kept, so the map never grows",
    "test": "test_refusal_caller_buckets_are_bounded_and_preserve_totals"
+  },
+  "orchestration_api.py::checked_resume_state": {
+   "checks": 1,
+   "ends": "U1: per-checkpoint canonical JSON size (2048 bytes), replaced by the next recorded state and removed with closed orchestration retention; no cumulative count.",
+   "test": "test_resume_state_exact_byte_limit_and_one_past_preserves_packet"
+  },
+  "orchestration_lifetime.py::_capacity_due": {
+   "checks": 4,
+   "ends": "U1: registration attempt rows, open report rows, mixed distinct report runs and journal events belong to one orchestration. At each safe-point continuation the product atomically closes it and opens a successor before admitting more work; the old report and replay remain available during existing retention.",
+   "test": "test_events_replay_and_reserved_close_roll_repeatedly_past_limit"
   }
  }
 }

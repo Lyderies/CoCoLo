@@ -2609,6 +2609,7 @@
  "codex:tests.test_trial_run_driver_bugs.TrialRunDriverTests.test_the_result_reservation_outlasts_the_longest_route_time_limit": 2.42,
  "codex:tests.test_trial_run_driver_bugs.TrialRunDriverTests.test_verifier_prechecks_succeed_while_another_child_runs": 2.42,
  "codex:tests.test_type_lookups": 0.96,
+ "codex:tests.test_u1_orchestration_lifetime": 4.0,
  "codex:tests.test_u3_review_fixes": 1.8,
  "codex:tests.test_u4_probe_capacity": 1.13,
  "codex:tests.test_u4_probe_execution_capacity": 6.38,

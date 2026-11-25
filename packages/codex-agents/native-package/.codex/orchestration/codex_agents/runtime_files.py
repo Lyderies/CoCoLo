@@ -139,6 +139,7 @@ RUNTIME_FILES = (
     "codex_agents/open_withdrawal.py",
     "codex_agents/operational_qa_contracts.py",
     "codex_agents/orchestration_api.py",
+    "codex_agents/orchestration_lifetime.py",
     "codex_agents/orchestration_schema.py",
     "codex_agents/orchestration_service.py",
     "codex_agents/orchestration_store.py",

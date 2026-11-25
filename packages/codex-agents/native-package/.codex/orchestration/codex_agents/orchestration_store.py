@@ -4,6 +4,7 @@ This borrows exactly the history owner's connection. It never creates an account
 ledger, imports a writable account orchestration or treats a JSON state as proof.
 """
 from copy import deepcopy
+from contextlib import nullcontext
 import secrets
 
 from .execution_grant import MAX_EXECUTION_GRANT_BYTES, verify_execution_grant
@@ -13,6 +14,7 @@ from .orchestration_api import (
     MAX_ORCHESTRATION_CHECKPOINT_BYTES, OrchestrationScope, OrchestrationRequest,
     checked_orchestration_view, decode_orchestration_request, encode_orchestration_request,
     orchestration_request_digest, HOST_CLIENT_VERSIONS, ORCHESTRATION_TERMINAL_STATES, SCOPE_FIELDS,
+    checked_resume_state, checked_handoff,
 )
 from .project_history import LEASE_ORCHESTRATION, MAX_LEASE_ROWS, ProjectHistory, _operation
 from . import project_holds_schema
@@ -82,7 +84,9 @@ class OrchestrationOwner:
             raise HistoryError('history_incompatible')
         raw = self._history._stored_blob(row['content'], maximum=MAX_ORCHESTRATION_CHECKPOINT_BYTES)
         data = parse_bounded_json(raw, max_bytes=MAX_ORCHESTRATION_CHECKPOINT_BYTES)
-        if (type(data) is not dict or data.keys() != {'snapshot', 'previous_digest', 'request_key', 'request_digest'}
+        required = {'snapshot', 'previous_digest', 'request_key', 'request_digest'}
+        if (type(data) is not dict or not required <= data.keys()
+                or data.keys() - required - {'resume_state', 'handoff'}
                 or canonical_json(data) != raw
                 or not matches(data['request_key'], _DIGEST) or not matches(data['request_digest'], _DIGEST)
                 or (data['previous_digest'] is not None and not matches(data['previous_digest'], _DIGEST))):
@@ -91,6 +95,11 @@ class OrchestrationOwner:
         if not matches(row['checkpoint_digest'], _DIGEST) or not secrets.compare_digest(row['checkpoint_digest'], digest):
             raise HistoryError('history_incompatible')
         try:
+            checked_resume_state(data.get('resume_state', {}))
+            if 'handoff' in data:
+                link = checked_handoff(data['handoff'])
+                if handle not in {link['previous_handle'], link['next_handle']}:
+                    raise HistoryError('history_incompatible')
             view = checked_orchestration_view({'snapshot': data['snapshot'], 'checkpoint_digest': digest})
         except HistoryError:
             raise HistoryError('history_incompatible') from None
@@ -113,6 +122,15 @@ class OrchestrationOwner:
                            for name in ('goal_tokens_used', 'goal_time_used_seconds'))):
                 raise HistoryError('history_incompatible')
         return view
+
+    def _continuation(self, handle, sequence):
+        """Read extras only after the caller verified this checkpoint/chain with _current or _checkpoint."""
+        row = self._db.execute('SELECT content FROM project_orchestration_checkpoints '
+                               'WHERE project_id=? AND orchestration_handle=? AND sequence=?',
+                               (self._history.project_id, handle, sequence)).fetchone()
+        data = parse_bounded_json(self._history._stored_blob(row[0], maximum=MAX_ORCHESTRATION_CHECKPOINT_BYTES),
+                                  max_bytes=MAX_ORCHESTRATION_CHECKPOINT_BYTES)
+        return {name: data[name] for name in ('resume_state', 'handoff') if name in data}
 
     def _current(self, scope, handle, *, missing_reference=False):
         row = self._db.execute('SELECT * FROM project_orchestrations WHERE project_id=? AND orchestration_handle=?',
@@ -534,13 +552,17 @@ class OrchestrationOwner:
             (project, handle)).fetchone() is None
 
     @_operation
-    def apply(self, request, *, client_version, before_commit, _runtime_update=False, _unattended=False):
+    def apply(self, request, *, client_version, before_commit, _runtime_update=False, _unattended=False,
+              _in_transaction=False, _continuation=None, _handle=None):
         if type(request) is not OrchestrationRequest or client_version not in HOST_CLIENT_VERSIONS or not callable(before_commit):
             raise HistoryError('history_invalid_input')
         request = decode_orchestration_request(encode_orchestration_request(request))
         scope = request.scope
         if scope.project_id != self._history.project_id:
             raise HistoryError('history_not_authorized')
+        if request.operation in {'orchestration.rollover', 'orchestration.packet'}:
+            from .orchestration_lifetime import lifetime_call
+            return lifetime_call(self, request, client_version=client_version, before_commit=before_commit)
         digest = orchestration_request_digest(request)
         scope_digest = self._scope_digest(scope)
         request_key = keyed_digest(self._key(), canonical_json({'scope_digest': scope_digest, 'request_id': request.request_id}))
@@ -571,22 +593,26 @@ class OrchestrationOwner:
         # B6 (RS-B-B6-2): the unattended close judges at max(wall, persisted floor), read without moving the floor,
         # inside the close's own transaction (review r1).
         now = None if _unattended else self._history._result_now()
-        with self._history._transaction():
+        if _in_transaction and not self._db.in_transaction:
+            raise HistoryError('history_wrong_owner')
+        with (nullcontext() if _in_transaction else self._history._transaction()):
             if _unattended:
                 now = self._history._hold_now()
             if operation == 'orchestration.open':
                 # Only open or paused ones count (0.3.4 R6); in 0.8.29 every one ever opened did.
                 if self._open_count() >= limits.max_orchestrations:
                     raise HistoryError('history_orchestration_full')
-                handle = 'orc_' + secrets.token_hex(24)
+                handle = _handle or 'orc_' + secrets.token_hex(24)
                 snapshot = {'scope': scope.as_data(), 'orchestration_handle': handle,
                             'orchestration_id': external_id(self._key(), 'orc', handle), 'client_version': client_version,
                             'status': 'active', 'sequence': 1, 'started_at_ms': now, 'observed_at_ms': now,
                             'ended_at_ms': None, 'goal_tokens_used': None, 'goal_time_used_seconds': None}
                 previous_digest = None
+                continuation = {}
             else:
                 handle = payload['orchestration_handle']
                 previous = self._current(scope, handle)
+                continuation = self._continuation(handle, previous['snapshot']['sequence'])
                 snapshot = deepcopy(previous['snapshot'])
                 if (snapshot['sequence'] != payload['expected_sequence'] or snapshot['client_version'] != client_version):
                     raise HistoryError('history_conflict')
@@ -619,8 +645,12 @@ class OrchestrationOwner:
                 snapshot['sequence'] += 1
                 snapshot['observed_at_ms'] = now
                 previous_digest = previous['checkpoint_digest']
+            if 'resume_state' in payload:
+                continuation['resume_state'] = payload['resume_state']
+            if _continuation is not None:
+                continuation = deepcopy(_continuation)
             raw = canonical_json({'snapshot': snapshot, 'previous_digest': previous_digest,
-                                  'request_key': request_key, 'request_digest': digest})
+                                  'request_key': request_key, 'request_digest': digest, **continuation})
             if len(raw) > MAX_ORCHESTRATION_CHECKPOINT_BYTES:
                 raise HistoryError('history_orchestration_unavailable')
             checkpoint_digest = keyed_digest(self._key(), b'project-orchestration-checkpoint-v1\0' + raw)
