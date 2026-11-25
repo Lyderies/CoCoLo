@@ -556,7 +556,10 @@
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_sweep_failure_keeps_existing_containment_and_owner_serves_next",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_fatal_sql_error_reaches_owner",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_real_account_handler_keeps_failure_answer_and_processes_next_request",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_full_queue_returns_existing_account_busy_and_retry_succeeds"
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_full_queue_returns_existing_account_busy_and_retry_succeeds",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_unregistered_project_keeps_its_unregistered_answer",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_project_not_yet_published_answers_in_full",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_idle_project_keeps_its_answer_shape"
   ]
  },
  "E1b-6": {
@@ -570,7 +573,10 @@
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_sql_trace_without_transport_covers_wakes_sweeps_restart_and_close",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_paused_owner_leaves_project_health_responsive",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_exit_is_recorded_after_final_handled_request",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_published_health_evicts_past_project_limit"
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_published_health_evicts_past_project_limit",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_unregistered_project_keeps_its_unregistered_answer",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_project_not_yet_published_answers_in_full",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_idle_project_keeps_its_answer_shape"
   ]
  },
  "E1b-7": {
@@ -3768,7 +3774,10 @@
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_preparation_does_not_occupy_owner_and_commit_rechecks_authority",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_signature_preparation_yields_owner_and_changed_generation_refuses_commit",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_real_account_handler_keeps_failure_answer_and_processes_next_request",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_real_original_open_rechecks_and_rolls_back_within_one_request"
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_real_original_open_rechecks_and_rolls_back_within_one_request",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_unregistered_project_keeps_its_unregistered_answer",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_project_not_yet_published_answers_in_full",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerWiringTests.test_health_for_registered_idle_project_keeps_its_answer_shape"
   ]
  },
  "E1b-8": {

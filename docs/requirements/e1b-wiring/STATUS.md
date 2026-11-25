@@ -76,3 +76,29 @@ Exact assertion replacements are in `assertions.md`: production defaults
 counter fixture whose assertions stay unchanged. No other existing assertion
 was changed or removed. The health snapshot cap is registered with its ninth
 project eviction test.
+
+## Fix round (status regression)
+
+Found by the primary's affected run: `test_learning_cli` `test_status_reports_unregistered_project_without_identifiers`
+failed (`'unregistered' != 'unavailable'`) on this branch and passed on 0.8.66.
+
+Cause: `CollectorServer._published_project` answered a project with no published snapshot by offering a refresh and
+returning nothing, which the health handler turned into `ledger_busy`. An unregistered project can never be published
+(the refresh raises `ProjectNotRegisteredError`), so it stayed busy forever and the CLI reported `unavailable` instead of
+the `project_unregistered` answer. Any registered project not yet published (cold) also changed from a full answer to busy.
+
+Fix: for a cold project only, `_published_project` waits on its own refresh for at most `HEALTH_LEDGER_WAIT_MS` (the old
+ledger-lock wait), so a registered project answers in full and the refusal reaches the handler's existing
+`project_unregistered` mapping. Published projects are still read without any owner wait (E1b-6, paused-owner test
+unchanged). Late or refused refresh stays `ledger_busy`. No new wire code or field.
+
+New checks in `tests.test_ledger_owner_wiring` (E1b-2, E1b-5, E1b-6):
+`test_health_for_unregistered_project_keeps_its_unregistered_answer` (red before: busy shape; green after),
+`test_health_for_registered_project_not_yet_published_answers_in_full` (red before: `ledger_busy`; green after),
+`test_health_for_registered_idle_project_keeps_its_answer_shape` (pinned; already passed, red only on the wrong
+first expectation while writing). Stale-collector and missing-ledger answers come from the client side and file reads, not
+this path; they are covered by the unchanged `test_learning_cli` modules, which pass. No existing assertion changed.
+
+Run: `parallel_tests.py --jobs 8` over test_learning_cli, test_ledger_owner_wiring, test_ledger_owner_queue,
+test_ledger_owner_queue_lifecycle, test_collector_exit, test_account_ingress, test_ledger_busy_answers, test_e1a_evidence:
+failed_units [], metadata_errors [], 155 codex tests. VERSION and digests untouched.

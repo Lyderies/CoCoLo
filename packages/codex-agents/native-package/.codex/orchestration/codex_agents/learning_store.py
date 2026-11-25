@@ -13633,12 +13633,26 @@ class CollectorServer:
         from copy import deepcopy
         root = str(_canonical_project_root(project_root))
         published = self._published_health.get(root)
-        # One outstanding refresh. A health caller never waits for the owner.
+        # One outstanding refresh. A published project is never waited for.
         if self._health_refresh is None or self._health_refresh.handled.is_set():
-            with contextlib.suppress(SQLReadError):
-                self._health_refresh = self._ledger_owner.offer(
+            cold = published is None
+            try:
+                handle = self._ledger_owner.offer(
                     lambda: self.publish_health(Path(root)),
-                    project_id=published[0] if published else "prj_" + "0" * 32, caller="health")
+                    project_id=published[0] if published else "prj_" + "0" * 32, caller="health",
+                    deadline_ns=(time.monotonic_ns() + HEALTH_LEDGER_WAIT_MS * 1_000_000) if cold else None)
+            except SQLReadError:
+                handle = None
+            self._health_refresh = handle
+            if cold and handle is not None:
+                # Nothing is published yet: the project's existing answer (E1b-5) needs this one read, so wait
+                # for it as long as the old ledger-lock wait did. A refusal such as ProjectNotRegisteredError
+                # reaches the caller's handler unchanged; a late or refused wait stays the existing ledger_busy.
+                try:
+                    self._ledger_owner.result(handle)
+                except SQLReadError:
+                    return None
+                published = self._published_health.get(root)
         return deepcopy(published)
 
     def _pump_ledger(self):

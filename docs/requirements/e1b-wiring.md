@@ -44,7 +44,8 @@ the registered project identity and runs outside the owner request after it.
 
 Published project health is an eight-entry replaceable working set, not a
 registration or admission limit. New projects evict the oldest publication;
-cold health returns the existing `ledger_busy` shape while an acknowledged
-refresh is pending. Ledger changes replace cached snapshots, and frontend file
+a cold project (nothing published yet) waits at most the old 250 ms health wait for its one
+refresh, so registered projects answer in full and unregistered ones keep `project_unregistered`;
+only a late or refused refresh returns the existing `ledger_busy` shape. Ledger changes replace cached snapshots, and frontend file
 counters are merged without SQL. Queue refusals join the existing `ledger_waits`
 counters without a new wire code or field.

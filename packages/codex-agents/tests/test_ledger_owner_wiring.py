@@ -198,6 +198,43 @@ class LedgerOwnerWiringTests(unittest.TestCase):
             front.join(2)
         self.assertTrue(handle.handled.wait(2))
 
+    @requirements('E1b-2', 'E1b-5', 'E1b-6')
+    def test_health_for_unregistered_project_keeps_its_unregistered_answer(self):
+        self.start_owner()
+        other = self.root.parent / 'unregistered'
+        (other / '.git').mkdir(parents=True)
+        reply = self.server._dispatch({'protocol': 1, 'op': 'health', 'project_root': str(other)})
+        self.assertEqual({'ok': False, 'code': 'project_unregistered'}, reply)
+        self.assertNotIn(str(other.resolve()), self.server._published_health)
+        # The refusal is passing: the next request is served and the registered project still answers.
+        again = self.server._dispatch({'protocol': 1, 'op': 'health', 'project_root': str(self.root)})
+        self.assertTrue(again['ok'])
+        self.assertNotIn('ledger_busy', again)
+
+    @requirements('E1b-2', 'E1b-5', 'E1b-6')
+    def test_health_for_registered_project_not_yet_published_answers_in_full(self):
+        self.start_owner()
+        cold = self.root.parent / 'cold'
+        (cold / '.git').mkdir(parents=True)
+        self.owner.client.register_project(cold)
+        self.assertNotIn(str(cold.resolve()), self.server._published_health)
+        reply = self.server._dispatch({'protocol': 1, 'op': 'health', 'project_root': str(cold)})
+        self.assertTrue(reply['ok'])
+        self.assertNotIn('ledger_busy', reply)
+        for section in ('provider_attestations', 'collector_health', 'account_capacity', 'account_slots', 'ingestion'):
+            self.assertIn(section, reply)
+        self.assertEqual('active', reply['ingestion']['registered_project_state'])
+
+    @requirements('E1b-2', 'E1b-5', 'E1b-6')
+    def test_health_for_registered_idle_project_keeps_its_answer_shape(self):
+        self.start_owner()
+        reply = self.server._dispatch({'protocol': 1, 'op': 'health', 'project_root': str(self.root)})
+        self.assertTrue(reply['ok'])
+        self.assertNotIn('ledger_busy', reply)
+        self.assertEqual('active', reply['ingestion']['registered_project_state'])
+        self.assertEqual(0, reply['ingestion']['rejected_hook_event_count'])
+        self.assertIsNone(reply['ingestion']['last_rejected_hook_event_at_ms'])
+
     @requirements('E1b-6', 'E1b-7')
     def test_exit_is_recorded_after_final_handled_request(self):
         self.start_owner()
