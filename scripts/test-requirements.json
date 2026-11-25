@@ -3937,5 +3937,36 @@
   ],
   "source": "tests/requirements/u1.json#O0C-U1-5",
   "statement": "Prove independent boundaries, exact replay, reserved close, repeated past-cap operation, rollback and abrupt process exit with fast tests."
+ },
+ "S13d-1": {
+  "checks": [],
+  "source": "tests/requirements/s13d.json#S13d-1",
+  "statement": "Measure real idle host CPU before setting a regression budget or changing waits; preserve queue and latency contracts."
+ },
+ "S13d-2": {
+  "checks": [
+   "codex:tests.test_s13d_regressions.GitPinTests.test_repeated_git_resolution_validates_candidates_once",
+   "codex:tests.test_s13d_regressions.GitPinTests.test_cached_git_still_excludes_each_callers_root_and_its_symlink"
+  ],
+  "source": "tests/requirements/s13d.json#S13d-2",
+  "statement": "Cache trusted git resolution per process without caching caller repository exclusions or doing import-time I/O."
+ },
+ "S13d-3": {
+  "checks": [
+   "codex:tests.test_s13d_regressions.HostCloseTests.test_host_lock_stays_held_until_writer_drain_and_final_settlement",
+   "codex:tests.test_s13d_regressions.HostCloseTests.test_faulted_host_keeps_lock_until_threads_stop_then_relinquishes_without_settling",
+   "codex:tests.test_s13d_regressions.FailedStartupTests.test_failed_startup_drains_writer_before_releasing_its_host_lock"
+  ],
+  "source": "tests/requirements/s13d.json#S13d-3",
+  "statement": "Retain the project host lock through history writer drain and final settlement before acknowledging stopped."
+ },
+ "S13d-4": {
+  "checks": [
+   "codex:tests.test_project_start.BackoffTests.test_E2c_4_a_crash_loop_parks_and_only_the_owner_unparks",
+   "codex:tests.test_project_start.BudgetTests.test_E2c_3_claim_batches_are_short_indexed_and_flat_at_100000_settled_rows",
+   "codex:tests.test_s13d_regressions.HostCleanupTests.test_stop_hosts_tolerates_a_pid_that_exits_after_enumeration"
+  ],
+  "source": "tests/requirements/s13d.json#S13d-4",
+  "statement": "Diagnose claim and crash-loop timing flakes and tolerate an already-exited enumerated host without weakening existing guarantees."
  }
 }

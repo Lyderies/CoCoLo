@@ -71,6 +71,10 @@ for name, value in options['constants'].items():
 for name, value in options['store'].items():
     assert hasattr(learning_store, name), name
     setattr(learning_store, name, value)
+if options.get('clock'):
+    # S13d: only the starter's policy clock is controlled. Enrollment, child
+    # startup timeouts and real process/scheduler clocks are unchanged.
+    project_start._now_ms = lambda: int(Path(options['clock']).read_text())
 log = options['log']
 
 def note(**fields):
@@ -103,10 +107,13 @@ if options.get('unserved'):
 claim_due = learning_store.LearningLedger.claim_due_starts
 def timed_claim(self, **kwargs):
     began = time.perf_counter()
+    claimed = None
     try:
-        return claim_due(self, **kwargs)
+        claimed = claim_due(self, **kwargs)
+        return claimed
     finally:
-        note(event='claim', seconds=time.perf_counter() - began)
+        note(event='claim', seconds=time.perf_counter() - began, now_ms=kwargs['now_ms'],
+             claimed=None if claimed is None else len(claimed))
 learning_store.LearningLedger.claim_due_starts = timed_claim
 
 attempt = project_start.ProjectStarter._attempt
@@ -209,10 +216,10 @@ class StarterBase(unittest.TestCase):
         (self.state.root / 'projects' / self.projects[name][1] / 'history.sqlite3').unlink()
 
     def launch(self, constants=None, store=None, env=None, block=None, fail=None, trust_temp=True,
-               orchestration=ORCHESTRATION_ROOT, unserved=None):
+               orchestration=ORCHESTRATION_ROOT, unserved=None, clock=None):
         options = {'constants': {**self.CONSTANTS, **(constants or {})}, 'store': {**self.STORE, **(store or {})},
                    'log': str(self.log), 'block': block, 'fail': fail, 'trust_temp': trust_temp,
-                   'unserved': unserved}
+                   'unserved': unserved, 'clock': clock}
         self.options = options
         errors = open(self.base / 'collector.err', 'ab')
         self.addCleanup(errors.close)
@@ -573,33 +580,54 @@ class StartTests(StarterBase):
 
 
 class BackoffTests(StarterBase):
-    @requirements('E2c-4', why_not_scenario=SCENARIO)
+    @requirements('E2c-4', 'S13d-4', why_not_scenario=SCENARIO)
     def test_E2c_4_a_crash_loop_parks_and_only_the_owner_unparks(self):
         self.add('broken')
         self.break_store('broken')
+        clock = self.base / 'starter-clock'
+        def advance(now):
+            staged = clock.with_suffix('.new')
+            staged.write_text(str(now))
+            staged.replace(clock)  # child threads never read a partial clock
+        advance(self.now_ms())
         self.launch(constants={'START_BACKOFF_FIRST_SECONDS': 0.3, 'START_BACKOFF_MAX_SECONDS': 0.6,
-                               'START_PARK_AFTER_SECONDS': 2.0})
+                               'START_PARK_AFTER_SECONDS': 2.0}, clock=str(clock))
+        rows = []
+        while not rows or rows[-1]['parked_reason'] is None:
+            previous = len(rows)
+            row = wait_for(self, lambda: (self.starts('broken') or {}).get('failures', 0) > previous
+                           and self.starts('broken'), 30, 'failure was not recorded')
+            self.assertEqual(previous + 1, row['failures'])
+            rows.append(row)
+            if row['next_start_at_ms'] is not None:
+                advance(row['next_start_at_ms'])
         line = wait_for(self, lambda: (self.status('broken') or '').startswith('recovery failed: ')
                         and self.status('broken'), 30, f'never parked: {self.status("broken")}')
         row = self.starts('broken')
         self.assertEqual(f'recovery failed: {row["parked_reason"]}; stopped trying after an hour of failed starts: '
                          + self.command('broken'), line)
         self.assertGreaterEqual(row['failures'], 3)
-        waits = [b['t'] - a['t'] for a, b in zip(self.events('begin', 'broken'), self.events('begin', 'broken')[1:])]
+        waits = [row['next_start_at_ms'] - row['outcome_at_ms'] for row in rows[:-1]]
         self.assertGreater(waits[1], waits[0])  # the backoff grows (exact waits: LedgerStartTests)
+        self.assertEqual([300, 600, 600, 600], waits)
         attempts = len(self.events('begin', 'broken'))
         # The project reports again: still parked.
         accepted = self.publish('broken', {'epoch': None, 'seq': 1, 'state': 'pending', 'next_due_at_ms': None})
         self.publish('broken', {'epoch': accepted['epoch'], 'seq': 2, 'state': 'exact',
                                 'next_due_at_ms': self.now_ms() - 1})
-        time.sleep(2.0)
+        later = rows[-1]['outcome_at_ms'] + 20_000
+        advance(later)
+        wait_for(self, lambda: any(event['now_ms'] == later and event['claimed'] == 0
+                                  for event in self.events('claim')), 30, 'no post-publication claim pass')
         self.assertEqual(attempts, len(self.events('begin', 'broken')))
         self.assertTrue(self.status('broken').startswith('recovery failed: '))
         # The owner's start command unparks it (and its streak starts afresh).
         parked = self.starts('broken')
+        advance(later + 1)
         self.cli('learning-start-project-service', 'broken')
+        advance(max(later + 1, self.now_ms()))  # owner's real-time due mark has now committed
         wait_for(self, lambda: len(self.events('begin', 'broken')) > attempts, 20, 'never tried again')
-        # A fresh streak (it may park again later on its own hour: here 2 s).
+        # A fresh streak; the policy clock stays fixed until this assertion.
         fresh = self.starts('broken')['streak_first_ms']
         self.assertTrue(fresh is None or fresh > parked['outcome_at_ms'], (parked, self.starts('broken')))
 
@@ -875,7 +903,7 @@ class BudgetTests(unittest.TestCase):
         self.assertEqual({claim.project_id for claim in claimed}, set(starter._foreign))
         self.assertEqual([], self.ledger.claim_due_starts(now_ms=20, limit=64))  # none claimed within probation
 
-    @requirements('E2c-3', why_not_scenario='Lock and batch budgets measured on a real ledger.')
+    @requirements('E2c-3', 'S13d-4', why_not_scenario='Lock and batch budgets measured on a real ledger.')
     def test_E2c_3_claim_batches_are_short_indexed_and_flat_at_100000_settled_rows(self):
         self.bulk_projects(1_000, due_ms=1, prefix='d')
         plan = ' '.join(str(row[-1]) for row in self.ledger._connection.execute(

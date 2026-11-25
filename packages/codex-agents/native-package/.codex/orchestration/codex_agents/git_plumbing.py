@@ -32,7 +32,9 @@ import stat
 import subprocess
 import sys
 import time
+import tempfile
 from collections.abc import Iterable, Mapping
+from functools import lru_cache
 from pathlib import Path
 
 from .host_paths import executable_location_problem, temp_roots, within
@@ -160,18 +162,16 @@ def git_candidates() -> tuple[str, ...]:
     )
 
 
-def git_executable(untrusted: Iterable[Path] = ()) -> str | None:
-    """The first real git binary whose location a sandboxed session cannot change.
+@lru_cache(maxsize=1)
+def _trusted_git_candidates(pid: int, temporary: tuple[str, str]) -> tuple[str, ...]:
+    """Pin trusted installation paths lazily, once per process/temp environment.
 
-    Each candidate is pinned as its realpath and must be a regular executable
-    file outside every temporary directory and every `untrusted` root (callers
-    pass the repository they inspect) and every ordinary folder under the home
-    folder, with no symlink on its path and no component another user could
-    change. On macOS the xcrun shim in /usr/bin is
-    never accepted. None when no candidate passes; callers then fail closed.
+    The PID prevents a fork from inheriting its parent's pin. These locations
+    cannot be changed by a sandboxed caller; caller-controlled roots are checked
+    separately on every use. The cache has one entry, including a failed lookup.
     """
-
-    untrusted = [*temp_roots(), *untrusted]
+    untrusted = list(temp_roots())
+    trusted = []
     for candidate in git_candidates():
         real = os.path.realpath(candidate)
         if sys.platform == "darwin" and os.path.dirname(real) == "/usr/bin":
@@ -183,7 +183,22 @@ def git_executable(untrusted: Iterable[Path] = ()) -> str | None:
         if not stat.S_ISREG(info.st_mode) or not os.access(real, os.X_OK):
             continue
         if executable_location_problem(Path(real), untrusted) is None:
-            return real
+            if real not in trusted:
+                trusted.append(real)
+    return tuple(trusted)
+
+
+def git_executable(untrusted: Iterable[Path] = ()) -> str | None:
+    """The first pinned real git outside this call's untrusted roots, or None.
+
+    Installation trust checks are cached per process. Repository exclusions are
+    never cached: a root (including a symlink) supplied by this call still makes
+    an otherwise trusted binary ineligible. No PATH lookup or import-time I/O.
+    """
+    roots = tuple(Path(os.path.realpath(root)) for root in untrusted)
+    for candidate in _trusted_git_candidates(os.getpid(), (tempfile.gettempdir(), os.environ.get('TMPDIR', ''))):
+        if not any(within(Path(candidate), root) for root in roots):
+            return candidate
     return None
 
 

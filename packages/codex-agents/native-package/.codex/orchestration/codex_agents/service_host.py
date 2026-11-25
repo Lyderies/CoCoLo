@@ -418,6 +418,13 @@ class ProjectServiceHost:
         except BaseException as error:
             try:
                 self.close()
+                # No serve_project caller receives a failed constructor to
+                # drain it. Finish the same bounded drain here, retaining the
+                # host acknowledgement lock while the writer still owns its store.
+                end = time.monotonic() + 10
+                while not self.threads_stopped() and time.monotonic() < end:
+                    time.sleep(0.01)
+                self.settle_lost_runs_later()
             except BaseException:
                 pass  # Preserve the original startup failure.
             if isinstance(error, (StateError, EnrollmentError, OSError, ValueError)):
@@ -705,8 +712,10 @@ class ProjectServiceHost:
     def settle_lost_runs_later(self):
         """O10 D13: once closed with every thread stopped, free the journal lock and settle nothing here:
         the next host settles this one's runs as those of a stopped instance."""
-        if self._driver is not None and self.threads_stopped():
-            self._driver.settle_on_exit(settle=False)
+        if self.threads_stopped():
+            if self._driver is not None:
+                self._driver.settle_on_exit(settle=False)
+            self._release_host_lock()
 
     def idle_ns(self):
         """Time since the last enrolled connection, or 0 while any run is held."""
@@ -733,8 +742,12 @@ class ProjectServiceHost:
             self._driver.close()
         if self._runtime is not None:
             self._runtime.request_close()
+
+    def _release_host_lock(self):
+        # S13d-3: stop_project_host treats this lock's release as the stopped
+        # acknowledgement. Keep it through writer drain and final settlement.
         if self._lock_fd is not None:
-            os.close(self._lock_fd)  # Last: nothing of this host's is left to disturb.
+            os.close(self._lock_fd)
             self._lock_fd = None
 
     def threads_stopped(self):
@@ -750,4 +763,7 @@ class ProjectServiceHost:
         if not self.threads_stopped():
             return False
         # RS-E E2a-8: True only once every thread stopped and final settlement ran to its end.
-        return self._driver is None or self._driver.settle_on_exit() is True
+        settled = self._driver is None or self._driver.settle_on_exit() is True
+        if settled:
+            self._release_host_lock()
+        return settled
