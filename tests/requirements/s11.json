@@ -1,0 +1,55 @@
+{
+ "authority": "docs/requirements/s11-hm2a.md",
+ "requirements": [
+  {
+   "id": "HM2A-1",
+   "source": "tests/requirements/s11.json#HM2A-1",
+   "statement": "A leftover prepare-* folder with no live owner and no pending record, old enough to be sure, is removed, proven by its observed absence, and reported fixed; a removal not proven is reported and retried."
+  },
+  {
+   "id": "HM2A-2",
+   "source": "tests/requirements/s11.json#HM2A-2",
+   "statement": "A folder a live driver owns (named by any launch-journal entry) or a young folder is kept."
+  },
+  {
+   "id": "HM2A-3",
+   "source": "tests/requirements/s11.json#HM2A-3",
+   "statement": "A symlink, a foreign-owned folder or a file named like a preparation folder is reported and left exactly as it is, never followed."
+  },
+  {
+   "id": "HM2A-4",
+   "source": "tests/requirements/s11.json#HM2A-4",
+   "statement": "A folder pending under decision 309 is left to the driver (no double removal); one still pending after PENDING_REPORT_PASSES passes is reported."
+  },
+  {
+   "id": "HM2A-5",
+   "source": "tests/requirements/s11.json#HM2A-5",
+   "statement": "Path safety equals remove_recorded_workspace: absolute, no .., prepare-* name, the real scratch container as parent, a real folder owned by this user; an unsafe container removes nothing."
+  },
+  {
+   "id": "HM2A-6",
+   "source": "tests/requirements/s11.json#HM2A-6",
+   "statement": "Reads and work are bounded (folders read, removals per pass, time share, journal projects and entries, record paths); each limit is in lifetime_caps.json with a past-the-limit test."
+  },
+  {
+   "id": "HM2A-7",
+   "source": "tests/requirements/s11.json#HM2A-7",
+   "statement": "Records that cannot be read completely mean nothing is removed and one finding says so; a check without both readers does nothing."
+  },
+  {
+   "id": "HM2A-8",
+   "source": "tests/requirements/s11.json#HM2A-8",
+   "statement": "Findings are plain, closed, machine-scope, one sentence naming the folder and never a path, exception message or decision number."
+  },
+  {
+   "id": "HM2A-9",
+   "source": "tests/requirements/s11.json#HM2A-9",
+   "statement": "The module never touches the ledger, history or preparation state: no SQLite or ledger import, its pending reader is injected (owner thread, E1b-1)."
+  },
+  {
+   "id": "HM2A-10",
+   "source": "tests/requirements/s11.json#HM2A-10",
+   "statement": "register adds the check to a health monitor with the journal live set and the caller's pending reader; a pass removes an orphan and shows it."
+  }
+ ]
+}

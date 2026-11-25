@@ -2080,6 +2080,26 @@
    "checks": 4,
    "ends": "U1: registration attempt rows, open report rows, mixed distinct report runs and journal events belong to one orchestration. At each safe-point continuation the product atomically closes it and opens a successor before admitting more work; the old report and replay remain available during existing retention.",
    "test": "test_events_replay_and_reserved_close_roll_repeatedly_past_limit"
+  },
+  "health_workspaces.py::run": {
+   "checks": 3,
+   "ends": "HM-2a: MAX_REMOVALS_PER_PASS counts removals in one pass only (it starts again at 0 every pass; the folders left over are reported as waiting and removed at the next pass, and a folder that is removed leaves the listing); PENDING_REPORT_PASSES is a number of passes a folder is pending, kept only for folders pending now and dropped when the driver removes the folder",
+   "test": "test_HM2A_6_more_orphans_than_one_pass_removes_wait_and_all_go"
+  },
+  "health_workspaces.py::read": {
+   "checks": 2,
+   "ends": "HM-2a: MAX_JOURNAL_PROJECTS and MAX_JOURNAL_ENTRIES bound what one read of the launch journals takes; past either the live set is reported as not complete and nothing is removed; journals are pruned by the driver (settled entries end after their tombstone time) and the count is taken afresh at every pass",
+   "test": "test_HM2A_6_more_journal_entries_than_the_reader_takes_remove_nothing"
+  },
+  "health_workspaces.py::_listing": {
+   "checks": 2,
+   "ends": "HM-2a: MAX_ENTRIES_SCANNED and MAX_FOLDERS_LISTED bound what one pass reads of the scratch container; folders past them are reported (too_many_folders) and are reached once the listed ones are removed (the listing is taken afresh at every pass)",
+   "test": "test_HM2A_6_more_folders_than_one_pass_reads_are_reported_and_the_rest_still_work"
+  },
+  "health_workspaces.py::_records": {
+   "checks": 1,
+   "ends": "HM-2a: MAX_RECORD_PATHS bounds the paths a record reader may hand back in one pass; past it nothing is removed and the pass says so; nothing is stored between passes",
+   "test": "test_HM2A_6_a_reader_that_hands_back_more_paths_than_the_check_takes_removes_nothing"
   }
  }
 }

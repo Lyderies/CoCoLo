@@ -25,6 +25,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from test_framework import requirements
 import tests.support  # noqa: F401
 from tests.support import SHORT_TMP
 
@@ -47,6 +48,10 @@ def context(now_ms=None, seconds=30.0):
 
 class Case(unittest.TestCase):
     """A scratch container with folders, and a check wired to readers the test controls."""
+
+    __why_not_scenario__ = ("One health pass over a real scratch folder is the scenario (listing, journal reads, "
+                            "removal, observed absence); each method isolates one rule of it, and the monitor "
+                            "registration test needs the pass's own worker thread.")
 
     def setUp(self):
         folder = tempfile.TemporaryDirectory(dir=SHORT_TMP)
@@ -85,6 +90,7 @@ class Case(unittest.TestCase):
 
 
 class OrphanTests(Case):
+    @requirements('HM2A-1')
     def test_HM2A_1_an_orphan_folder_is_removed_and_reported_fixed(self):
         orphan, keeper = self.folder(), self.folder()
         self.live = {str(keeper)}
@@ -94,6 +100,7 @@ class OrphanTests(Case):
         self.assertEqual(['orphan_removed'], self.reasons(found))
         self.assertEqual(('fixed', 'machine', orphan.name), (found[0].outcome, found[0].scope, found[0].subject))
 
+    @requirements('HM2A-1')
     def test_HM2A_1_a_removal_that_does_not_prove_the_folder_gone_is_reported_and_retried(self):
         orphan = self.folder()
         attempts = []
@@ -125,6 +132,7 @@ class LiveOwnerTests(Case):
                         storage_evidence=b'{"evidence":1}', workspace=workspace)
         return journal
 
+    @requirements('HM2A-2')
     def test_HM2A_2_a_folder_named_by_a_launch_journal_entry_is_kept(self):
         self.state = self.base / 'state'
         owned, other_owned, orphan = self.folder(), self.folder(), self.folder()
@@ -137,6 +145,7 @@ class LiveOwnerTests(Case):
         self.assertFalse(os.path.lexists(orphan))
         self.assertEqual(['orphan_removed'], self.reasons(found))
 
+    @requirements('HM2A-2')
     def test_HM2A_2_a_young_folder_is_kept_and_not_reported(self):
         young = self.folder(age_days=0)
         found = self.run_check()
@@ -148,6 +157,7 @@ class LiveOwnerTests(Case):
 
 
 class UnsafeEntryTests(Case):
+    @requirements('HM2A-3')
     def test_HM2A_3_a_symlink_is_reported_and_never_followed_or_removed(self):
         target = self.outside / 'precious'
         target.mkdir(mode=0o700)
@@ -159,12 +169,14 @@ class UnsafeEntryTests(Case):
         self.assertTrue(link.is_symlink())
         self.assertEqual('keep', (target / 'keep.txt').read_text())
 
+    @requirements('HM2A-3')
     def test_HM2A_3_a_foreign_owned_folder_is_reported_and_kept(self):
         foreign = self.folder()
         found = self.run_check(self.check(uid=os.geteuid() + 1))
         self.assertEqual(['folder_foreign_owner'], self.reasons(found))
         self.assertTrue((foreign / 'export' / 'file.txt').is_file())
 
+    @requirements('HM2A-3')
     def test_HM2A_3_a_file_named_like_a_preparation_folder_is_reported_and_kept(self):
         plain = self.container / 'prepare-0badf00d'
         plain.write_text('not a folder')
@@ -174,6 +186,7 @@ class UnsafeEntryTests(Case):
 
 
 class PendingTests(Case):
+    @requirements('HM2A-4')
     def test_HM2A_4_a_pending_folder_is_left_to_the_driver(self):
         owed = self.folder()
         self.pending = {str(owed)}
@@ -183,6 +196,7 @@ class PendingTests(Case):
         self.assertEqual([], calls)  # no second removal beside the driver's own retries
         self.assertTrue(owed.is_dir())
 
+    @requirements('HM2A-4')
     def test_HM2A_4_a_folder_pending_for_many_passes_is_reported_then_forgotten_when_gone(self):
         owed = self.folder()
         self.pending = {str(owed)}
@@ -202,6 +216,7 @@ class PendingTests(Case):
 
 
 class PathSafetyTests(Case):
+    @requirements('HM2A-5')
     def test_HM2A_5_the_path_test_matches_remove_recorded_workspace_case_by_case(self):
         from codex_agents import bridge, codex_preparation
         hw = workspaces()
@@ -247,6 +262,7 @@ class PathSafetyTests(Case):
         self.assertEqual('folder_foreign_owner', hw.workspace_problem(foreign, self.container, uid=os.geteuid() + 1))
         self.assertIsNone(hw.workspace_problem(foreign, self.container))
 
+    @requirements('HM2A-5')
     def test_HM2A_5_a_container_that_is_a_link_is_reported_and_nothing_is_removed(self):
         real = self.base / 'real-container'
         real.mkdir(mode=0o700)
@@ -260,6 +276,7 @@ class PathSafetyTests(Case):
         self.assertEqual(['container_unsafe'], self.reasons(found))
         self.assertTrue(orphan.is_dir())
 
+    @requirements('HM2A-5')
     def test_HM2A_5_names_outside_the_prepare_pattern_are_never_listed(self):
         other = [self.folder('probe-12345678'), self.folder('prepare'), self.folder('xprepare-12345678'),
                  self.folder('Prepare-12345678')]
@@ -268,6 +285,7 @@ class PathSafetyTests(Case):
 
 
 class BoundTests(Case):
+    @requirements('HM2A-6')
     def test_HM2A_6_more_orphans_than_one_pass_removes_wait_and_all_go(self):
         hw = workspaces()
         count = hw.MAX_REMOVALS_PER_PASS + 3
@@ -282,6 +300,7 @@ class BoundTests(Case):
             self.run_check(check)
         self.assertEqual([], [path for path in orphans if os.path.lexists(path)])
 
+    @requirements('HM2A-6')
     def test_HM2A_6_more_folders_than_one_pass_reads_are_reported_and_the_rest_still_work(self):
         hw = workspaces()
         keepers = [self.folder(contents=False) for _ in range(hw.MAX_FOLDERS_LISTED + 1)]
@@ -295,25 +314,44 @@ class BoundTests(Case):
             self.run_check()
         self.assertEqual([], [path for path in keepers if os.path.lexists(path)])
 
+    @requirements('HM2A-6')
     def test_HM2A_6_removal_stops_when_the_time_share_ends(self):
         orphans = [self.folder() for _ in range(3)]
         found = self.run_check(seconds=-1.0)
         self.assertEqual(['folders_waiting'], self.reasons(found))
         self.assertTrue(all(path.is_dir() for path in orphans))
 
+    @requirements('HM2A-6')
     def test_HM2A_6_more_journal_entries_than_the_reader_takes_remove_nothing(self):
         hw = workspaces()
         state = self.base / 'state'
         directory = state / 'projects' / PROJECT / 'launches'
         directory.mkdir(mode=0o700, parents=True)
-        for number in range(hw.MAX_JOURNAL_ENTRIES + 1):
+        for number in range(hw.MAX_JOURNAL_ENTRIES):
             (directory / ('lnc_%032x.json' % number)).write_text('{}')
-        self.assertIsNone(hw.journal_live_workspaces(state)())
-        orphan = self.folder()
-        found = self.run_check(self.check(live=hw.journal_live_workspaces(state)))
+        from codex_agents import launch_journal
+        readable = {'workspace': None, 'state': 'settled'}  # isolates the count from the entry's own checks
+        with mock.patch.object(launch_journal, '_read_entry_or_none', return_value=readable):
+            self.assertEqual(set(), hw.journal_live_workspaces(state)())  # exactly the limit is read in full
+            (directory / ('lnc_%032x.json' % hw.MAX_JOURNAL_ENTRIES)).write_text('{}')
+            reader = hw.journal_live_workspaces(state)
+            self.assertIsNone(reader())  # one past it: the live set is not complete
+            orphan = self.folder()
+            found = self.run_check(self.check(live=reader))
         self.assertEqual(['records_unreadable'], self.reasons(found))
         self.assertTrue(orphan.is_dir())
 
+    @requirements('HM2A-6')
+    def test_HM2A_6_a_reader_that_hands_back_more_paths_than_the_check_takes_removes_nothing(self):
+        hw = workspaces()
+        orphan = self.folder()
+        found = self.run_check(self.check(live=lambda: (f'/x/{n}' for n in range(hw.MAX_RECORD_PATHS + 1))))
+        self.assertEqual(['records_unreadable'], self.reasons(found))
+        self.assertTrue(orphan.is_dir())
+        found = self.run_check(self.check(live=lambda: (f'/x/{n}' for n in range(hw.MAX_RECORD_PATHS))))
+        self.assertEqual(['orphan_removed'], self.reasons(found))
+
+    @requirements('HM2A-6')
     def test_HM2A_6_more_journal_projects_than_the_reader_takes_remove_nothing(self):
         hw = workspaces()
         state = self.base / 'state'
@@ -324,6 +362,7 @@ class BoundTests(Case):
 
 
 class FailSafeTests(Case):
+    @requirements('HM2A-7')
     def test_HM2A_7_unreadable_live_records_remove_nothing_and_are_reported(self):
         orphan = self.folder()
         self.live = None
@@ -331,6 +370,7 @@ class FailSafeTests(Case):
         self.assertEqual(['records_unreadable'], self.reasons(found))
         self.assertTrue(orphan.is_dir())
 
+    @requirements('HM2A-7')
     def test_HM2A_7_unreadable_pending_records_remove_nothing_and_are_reported(self):
         orphan = self.folder()
         self.pending = None
@@ -338,6 +378,7 @@ class FailSafeTests(Case):
         self.assertEqual(['records_unreadable'], self.reasons(found))
         self.assertTrue(orphan.is_dir())
 
+    @requirements('HM2A-7')
     def test_HM2A_7_a_reader_that_raises_is_reported_by_type_only(self):
         orphan = self.folder()
 
@@ -349,6 +390,7 @@ class FailSafeTests(Case):
         self.assertNotIn('secret', found[0].text)
         self.assertTrue(orphan.is_dir())
 
+    @requirements('HM2A-7')
     def test_HM2A_7_a_check_without_its_readers_does_nothing(self):
         orphan = self.folder()
         hw = workspaces()
@@ -359,6 +401,7 @@ class FailSafeTests(Case):
 
 
 class WordingTests(Case):
+    @requirements('HM2A-8')
     def test_HM2A_8_findings_are_plain_closed_and_carry_no_path(self):
         orphan, failed = self.folder(), self.folder()
         link = self.container / 'prepare-11112222'
@@ -380,7 +423,27 @@ class WordingTests(Case):
         self.assertIn(orphan.name, ''.join(item.text for item in found))
 
 
+class RegistrationTests(Case):
+    @requirements('HM2A-10')
+    def test_HM2A_10_register_adds_the_check_to_a_monitor_and_a_pass_removes_and_shows_it(self):
+        hw = workspaces()
+        orphan = self.folder()
+        monitor = hm.HealthMonitor.with_builtin_checks(sweep_interval_seconds=60.0)
+        with mock.patch.object(hw.WorkspaceCheck, '_container_path', lambda check: self.container):
+            hw.register(monitor, self.base / 'state', pending=lambda: set())
+            monitor.run_pass()
+        self.assertFalse(os.path.lexists(orphan))
+        view = monitor.view(None)
+        self.assertEqual({'self_check': 'ok', 'workspaces': 'ok'}, {c['check']: c['state'] for c in view['checks']})
+        self.assertEqual(['orphan_removed'], [item['reason_code'] for item in view['findings']])
+        with self.assertRaises(ValueError):  # registered once
+            hw.register(monitor, self.base / 'state', pending=lambda: set())
+
+
 class OwnerThreadTests(unittest.TestCase):
+    __why_not_scenario__ = "A source scan of the module; it isolates one rule of the same scenario."
+
+    @requirements('HM2A-9')
     def test_HM2A_9_the_module_has_no_ledger_or_preparation_write_access(self):
         hw = workspaces()
         source = Path(hw.__file__).read_text(encoding='utf-8')
