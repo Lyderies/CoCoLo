@@ -22,6 +22,28 @@ from codex_agents.learning_contracts import canonical_json
 DAY_MS = 24 * 60 * 60 * 1000
 
 
+def _limit_headroom(record, now, index, pad=0, change=None):
+    """Valid worst-payload filler; another provider still consumes capture bytes.
+
+    Its ample foreign windows avoid quadratic current-account classification in
+    the full open tests. A supplied restriction keeps the original provider.
+    """
+    observed = now - 60_000 - index
+    identity = hashlib.sha256(f"limit-{index}".encode()).hexdigest()
+    record.update(record_id=f"provider_headroom:{identity}" + ("-" + "x" * (pad - 1) if pad else ""),
+                  observed_at_ms=observed)
+    if change is not None:
+        change(record, now)
+    else:
+        record.update(provider="claude", account_fingerprint=hashlib.sha256(b"limit-account").hexdigest(),
+                      status="allowed", windows=[{
+                          "scope": None, "window_minutes": 1000 + window,
+                          "used_percent": int(hashlib.sha256(f"usage-{window}".encode()).hexdigest()[:13], 16) / 2**53 * 50,
+                          "resets_at": now + DAY_MS + int(hashlib.sha256(f"reset-{window}".encode()).hexdigest()[:13], 16) % DAY_MS,
+                      } for window in range(16)])
+    return record
+
+
 class AdmissionHistoryGrowthTests(unittest.TestCase):
     def setUp(self):
         self.open = original_open.OriginalAccountOpenJobTests(methodName="runTest")
@@ -304,13 +326,8 @@ class AdmissionCaptureLimitTests(unittest.TestCase):
         sequence = connection.execute("SELECT MAX(source_sequence) FROM records").fetchone()[0]
         now = self.ledger._clock_ms()
         for index in range(start, start + count):
-            record = json.loads(bytes(template["content"]))
-            observed = now - 60_000 - index
-            identity = hashlib.sha256(f"limit-{index}".encode()).hexdigest()
-            record.update(record_id=f"provider_headroom:{identity}" + ("-" + "x" * (pad - 1) if pad else ""),
-                          observed_at_ms=observed)
-            if change is not None:
-                change(record, now)
+            record = _limit_headroom(json.loads(bytes(template["content"])), now, index, pad, change)
+            observed = record["observed_at_ms"]
             content = canonical_json(record)
             sequence += 1
             connection.execute(
@@ -328,15 +345,38 @@ class AdmissionCaptureLimitTests(unittest.TestCase):
         _, after = self.charged(anchor_ms)
         each = after - before
         self.assertGreater(each, 500)
-        # A record ID padded by n characters charges 2n more (its column and its content), up to 156.
-        whole, rest = divmod(self.limit - after, each)
-        padded = -(-rest // 156)
-        index = self.add(whole - padded, start=index)
-        share = rest // 2
-        for number in range(padded):
-            pad = share // (padded - number)
-            index = self.add(1, pad=pad, start=index)
-            share -= pad
+        # Keep the boundary assertions while accounting for the lossless packing:
+        # the ID's canonical-content spelling is now referenced from its column.
+        from codex_agents.admission_capture_content import pack_content
+        connection = self.ledger._connection
+        template = connection.execute(
+            "SELECT project_id,source,content FROM records WHERE record_type='provider_headroom' "
+            "ORDER BY observed_at_ms DESC LIMIT 1").fetchone()
+        now = self.ledger._clock_ms()
+
+        def cost(number, pad):
+            record = _limit_headroom(json.loads(bytes(template["content"])), now, number, pad)
+            identifier, observed = record["record_id"], record["observed_at_ms"]
+            content = pack_content("provider_headroom", canonical_json(record), identifier, observed)
+            return 32 + len(identifier) + len(content) + 64  # metadata already shared by existing rows
+
+        remaining, planned = self.limit - after, []
+        while cost(index + len(planned), 0) <= remaining:
+            charge = cost(index + len(planned), 0)
+            planned.append([0, charge])
+            remaining -= charge
+        # At most a few rows need ID padding; calculate it before insertion.
+        for offset in range(len(planned) - 1, -1, -1):
+            base = planned[offset][1]
+            choices = [(cost(index + offset, pad) - base, pad) for pad in range(79)]
+            delta, pad = max((delta, pad) for delta, pad in choices if delta <= remaining)
+            planned[offset][0] = pad
+            remaining -= delta
+            if remaining <= 1:
+                break
+        from itertools import groupby
+        for pad, group in groupby(planned, key=lambda item: item[0]):
+            index = self.add(sum(1 for _ in group), pad=pad, start=index)
         rows, charged = self.charged(anchor_ms)
         self.assertLessEqual(charged, self.limit)
         self.assertGreater(charged, self.limit - 2)

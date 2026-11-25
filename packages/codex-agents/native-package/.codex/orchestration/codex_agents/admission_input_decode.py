@@ -12,8 +12,9 @@ import hashlib
 import re
 from dataclasses import dataclass
 
+from .admission_capture_content import unpack_content
 from .admission_inputs import (
-    ADMISSION_CAPTURE_RECORD_TYPES, AdmissionCaptureLimits, AdmissionInputPolicy,
+    ADMISSION_CAPTURE_RECORD_TYPES, MAX_ADMISSION_CAPTURE_BYTES, AdmissionCaptureLimits, AdmissionInputPolicy,
     AdmissionInputRow, AdmissionInputSnapshot, admission_input_size,
 )
 from .contracts import ContractError
@@ -117,7 +118,7 @@ def _preflight(snapshot: AdmissionInputSnapshot, limits: AdmissionCaptureLimits)
     # Charge the whole capture before hashing, parsing or copying decoded values.
     size = admission_input_size(project, provider, runtime, policy, owner, signer, ())
     previous = 0
-    identifiers = set()
+    identifiers, shared = set(), {}
     for row in rows:
         if type(row) is not tuple or len(row) != 11:
             _invalid()
@@ -136,7 +137,15 @@ def _preflight(snapshot: AdmissionInputSnapshot, limits: AdmissionCaptureLimits)
                 _invalid()
         elif source != ("provider" if kind in {"provider_billing", "provider_headroom"} else "lifecycle"):
             _invalid()
-        size += 32 + len(scope) + identifier_size + len(kind) + len(content) + len(digest) + source_size
+        size += 32 + identifier_size + len(content) + len(digest)
+        for value, length in ((scope, len(scope)), (kind, len(kind)), (source, source_size)):
+            if value not in shared:
+                shared[value] = value
+                size += length
+            elif value is not shared[value]:
+                # Owner-local rows must really share these copies. A caller
+                # cannot undercharge separately allocated equal strings.
+                _invalid()
         size += 0 if signature is None else len(signature)
         if size > limits.max_bytes:
             raise AdmissionDecodeError("admission_decode_limit")
@@ -144,7 +153,22 @@ def _preflight(snapshot: AdmissionInputSnapshot, limits: AdmissionCaptureLimits)
         identifiers.add((scope, identifier))
     if size != retained:
         _invalid()
+    # Bound the aggregate expansion before hashing or allocating any decoded
+    # records. Each temporary expansion also has the original 64-KiB record cap.
+    expanded = 0
+    for row in rows:
+        expanded += len(_content(row))
+        if expanded > MAX_ADMISSION_CAPTURE_BYTES:
+            raise AdmissionDecodeError("admission_decode_limit")
     return rows
+
+
+def _content(row):
+    try:
+        return unpack_content(row[5], row[2], row[8])
+    except ValueError:
+        pass
+    _invalid()
 
 
 def _depth_bounded(content: bytes) -> bool:
@@ -185,6 +209,7 @@ def decode_admission_inputs(
     result = []
     for row in rows:
         _, _, identifier, _, kind, content, digest, _, observed, _, _ = row
+        content = _content(row)
         if not _depth_bounded(content) or hashlib.sha256(content).hexdigest() != digest:
             _invalid()
         failed = False

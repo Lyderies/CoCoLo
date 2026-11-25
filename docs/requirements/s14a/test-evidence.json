@@ -1,0 +1,251 @@
+{
+ "base": "ce81bd96",
+ "branch": "feat/s14a-capture",
+ "version_changed": false,
+ "digest_catalogue_changed": false,
+ "red_before_runtime": {
+  "test": "AdmissionCaptureBytesTests.test_doubled_peak_four_accounts_and_sixteen_windows_fit_with_twenty_percent_margin",
+  "charged_bytes": 4737875,
+  "required_maximum_bytes": 1677721,
+  "metadata_errors": []
+ },
+ "strengthening_controls": [
+  {
+   "check": "hash-shaped account fingerprints",
+   "red_charged_bytes": 1764392,
+   "required_maximum_bytes": 1677721
+  },
+  {
+   "check": "actual shared metadata object identity",
+   "red": "equal project strings were distinct objects",
+   "green": "same-object assertion and separately-allocated-copy refusal pass"
+  },
+  {
+   "check": "expanded content bound before JSON",
+   "red": "admission_decode_invalid_input instead of admission_decode_limit",
+   "green": "admission_decode_limit"
+  },
+  {
+   "check": "fully valid byte-boundary fixture",
+   "red": "closed-record decoder rejected padded identifiers",
+   "green": "all boundary records decode; all old limit assertions remain"
+  }
+ ],
+ "runs": [
+  {
+   "label": "offline_compatibility",
+   "jobs": 2,
+   "elapsed_seconds": 80.813,
+   "metadata_errors": [],
+   "modules_seconds": {
+    "codex:tests.test_account_observation_backup": 0.869,
+    "codex:tests.test_admission_capture_bytes": 12.981,
+    "codex:tests.test_backup_installed_project": 1.156,
+    "codex:tests.test_backup_reply_private": 6.06,
+    "codex:tests.test_large_project_backups": 38.173,
+    "codex:tests.test_learning_migration": 27.395,
+    "codex:tests.test_learning_source_image": 4.017,
+    "codex:tests.test_learning_source_image_legacy": 3.524,
+    "codex:tests.test_lifetime_cap_guard": 1.226,
+    "codex:tests.test_owner_backup_streamed": 65.888,
+    "codex:tests.test_runtime_release": 0.284
+   },
+   "workers": [
+    {
+     "module": "codex:tests.test_large_project_backups#1",
+     "tests": 4,
+     "seconds": 10.037,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_large_project_backups#0",
+     "tests": 4,
+     "seconds": 28.137,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_owner_backup_streamed#1",
+     "tests": 20,
+     "seconds": 40.468,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_owner_backup_streamed#0",
+     "tests": 20,
+     "seconds": 25.42,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_learning_migration#0",
+     "tests": 6,
+     "seconds": 8.792,
+     "returncode": 1
+    },
+    {
+     "module": "codex:tests.test_learning_migration#1",
+     "tests": 11,
+     "seconds": 18.604,
+     "returncode": 1
+    },
+    {
+     "module": "codex:tests.test_backup_reply_private",
+     "tests": 11,
+     "seconds": 6.06,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_admission_capture_bytes",
+     "tests": 8,
+     "seconds": 12.981,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_learning_source_image_legacy",
+     "tests": 7,
+     "seconds": 3.524,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_learning_source_image",
+     "tests": 33,
+     "seconds": 4.017,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_account_observation_backup",
+     "tests": 2,
+     "seconds": 0.869,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_backup_installed_project",
+     "tests": 2,
+     "seconds": 1.156,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_lifetime_cap_guard",
+     "tests": 4,
+     "seconds": 1.226,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_runtime_release",
+     "tests": 3,
+     "seconds": 0.284,
+     "returncode": 1
+    }
+   ],
+   "budget_failures": [
+    {
+     "module": "codex:tests.test_owner_backup_streamed",
+     "seconds": 65.888,
+     "budget": 60.0
+    }
+   ]
+  },
+  {
+   "label": "affected_checks",
+   "jobs": 2,
+   "elapsed_seconds": 42.277,
+   "metadata_errors": [],
+   "modules_seconds": {
+    "codex:tests.test_admission_capture_bytes": 37.842,
+    "codex:tests.test_admission_input_decode": 2.23,
+    "codex:tests.test_admission_inputs": 8.644,
+    "codex:tests.test_admission_metadata": 0.283,
+    "codex:tests.test_lifetime_cap_guard": 1.231,
+    "codex:tests.test_read_growth": 28.42,
+    "codex:tests.test_runtime_release": 0.274,
+    "codex:tests.test_signature_job_intake": 5.193
+   },
+   "workers": [
+    {
+     "module": "codex:tests.test_read_growth",
+     "tests": 14,
+     "seconds": 28.42,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_admission_inputs",
+     "tests": 26,
+     "seconds": 8.644,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_admission_capture_bytes",
+     "tests": 8,
+     "seconds": 37.842,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_lifetime_cap_guard",
+     "tests": 4,
+     "seconds": 1.231,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_admission_input_decode",
+     "tests": 7,
+     "seconds": 2.23,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_runtime_release",
+     "tests": 3,
+     "seconds": 0.274,
+     "returncode": 1
+    },
+    {
+     "module": "codex:tests.test_admission_metadata",
+     "tests": 13,
+     "seconds": 0.283,
+     "returncode": 0
+    },
+    {
+     "module": "codex:tests.test_signature_job_intake",
+     "tests": 19,
+     "seconds": 5.193,
+     "returncode": 0
+    }
+   ],
+   "budget_failures": []
+  },
+  {
+   "label": "final_capture",
+   "jobs": 1,
+   "elapsed_seconds": 19.65,
+   "metadata_errors": [],
+   "modules_seconds": {
+    "codex:tests.test_admission_capture_bytes": 19.635
+   },
+   "workers": [
+    {
+     "module": "codex:tests.test_admission_capture_bytes",
+     "tests": 8,
+     "seconds": 19.635,
+     "returncode": 0
+    }
+   ],
+   "budget_failures": []
+  }
+ ],
+ "unresolved": [
+  {
+   "test": "tests.test_learning_migration.MigrationCliTests.test_first_start_of_the_project_service_moves_the_history_by_itself",
+   "result": "orchestration_client_unavailable"
+  },
+  {
+   "test": "tests.test_learning_migration.MigrationCliTests.test_command_moves_reports_refuses_and_rolls_back",
+   "result": "project learning has moved to its project store"
+  },
+  {
+   "test": "tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version",
+   "result": "expected unchanged VERSION/catalogue pin"
+  },
+  {
+   "test": "tests.test_admission_capture_claim.AdmissionCaptureClaimTests.test_U2_4_a_claim_anchored_at_its_open_is_charged_alike",
+   "result": "primary rerun; pre-change helper path reached its 10-second wait ceiling"
+  }
+ ]
+}

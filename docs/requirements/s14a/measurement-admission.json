@@ -1,0 +1,374 @@
+{
+ "limits": {
+  "rows": 4096,
+  "bytes": 2097152
+ },
+ "envelopes": {
+  "base": {
+   "envelope": {
+    "runs_per_day": 387,
+    "readings_per_run": 1,
+    "burst": 4,
+    "codex_accounts": 1,
+    "claude_accounts": 1,
+    "headroom_windows": 2,
+    "deny_ratio": 2,
+    "project_share": 0.5,
+    "attestations_per_account": 36
+   },
+   "placed": {
+    "provider_billing": 675,
+    "provider_headroom": 675,
+    "admission_decision": 360,
+    "provider_identity": 23,
+    "billing_attestation": 72,
+    "cap_codex": 60,
+    "cap_claude": 40
+   },
+   "job_refused": false,
+   "rows": 1892,
+   "bytes": 742553,
+   "signature_again_bytes": 60870,
+   "fixed_bytes": 640,
+   "margin_rows": 2204,
+   "margin_bytes": 1354599,
+   "rows_used_percent": 46.2,
+   "bytes_used_percent": 35.4,
+   "nearer_limit": "rows",
+   "by_rule": {
+    "attestation_every_age": {
+     "rows": 73,
+     "charged_bytes": 62281
+    },
+    "billing_24h": {
+     "rows": 679,
+     "charged_bytes": 220682
+    },
+    "decision_5h": {
+     "rows": 362,
+     "charged_bytes": 158717
+    },
+    "headroom_24h_or_live": {
+     "rows": 679,
+     "charged_bytes": 228921
+    },
+    "identity_30min": {
+     "rows": 26,
+     "charged_bytes": 10442
+    }
+   },
+   "seconds": 1.6
+  },
+  "no_probes": {
+   "envelope": {
+    "runs_per_day": 387,
+    "readings_per_run": 1,
+    "burst": 4,
+    "codex_accounts": 1,
+    "claude_accounts": 1,
+    "headroom_windows": 2,
+    "deny_ratio": 2,
+    "project_share": 0.5,
+    "attestations_per_account": 36,
+    "probe_share": 0.0
+   },
+   "placed": {
+    "provider_billing": 387,
+    "provider_headroom": 387,
+    "admission_decision": 300,
+    "provider_identity": 17,
+    "billing_attestation": 72,
+    "cap_codex": 60,
+    "cap_claude": 40
+   },
+   "job_refused": false,
+   "rows": 1250,
+   "bytes": 525008,
+   "signature_again_bytes": 60870,
+   "fixed_bytes": 640,
+   "margin_rows": 2846,
+   "margin_bytes": 1572144,
+   "rows_used_percent": 30.5,
+   "bytes_used_percent": 25.0,
+   "nearer_limit": "rows",
+   "by_rule": {
+    "attestation_every_age": {
+     "rows": 73,
+     "charged_bytes": 62281
+    },
+    "billing_24h": {
+     "rows": 391,
+     "charged_bytes": 127967
+    },
+    "decision_5h": {
+     "rows": 302,
+     "charged_bytes": 132390
+    },
+    "headroom_24h_or_live": {
+     "rows": 391,
+     "charged_bytes": 132788
+    },
+    "identity_30min": {
+     "rows": 20,
+     "charged_bytes": 8072
+    }
+   },
+   "seconds": 1.2
+  },
+  "four_accounts": {
+   "envelope": {
+    "runs_per_day": 387,
+    "readings_per_run": 1,
+    "burst": 4,
+    "codex_accounts": 2,
+    "claude_accounts": 2,
+    "headroom_windows": 2,
+    "deny_ratio": 2,
+    "project_share": 0.5,
+    "attestations_per_account": 36
+   },
+   "placed": {
+    "provider_billing": 963,
+    "provider_headroom": 963,
+    "admission_decision": 720,
+    "provider_identity": 29,
+    "billing_attestation": 144,
+    "cap_codex": 60,
+    "cap_claude": 40
+   },
+   "job_refused": false,
+   "rows": 2978,
+   "bytes": 1216755,
+   "signature_again_bytes": 120918,
+   "fixed_bytes": 640,
+   "margin_rows": 1118,
+   "margin_bytes": 880397,
+   "rows_used_percent": 72.7,
+   "bytes_used_percent": 58.0,
+   "nearer_limit": "rows",
+   "by_rule": {
+    "attestation_every_age": {
+     "rows": 145,
+     "charged_bytes": 123697
+    },
+    "billing_24h": {
+     "rows": 967,
+     "charged_bytes": 315167
+    },
+    "decision_5h": {
+     "rows": 722,
+     "charged_bytes": 316519
+    },
+    "headroom_24h_or_live": {
+     "rows": 967,
+     "charged_bytes": 326945
+    },
+    "identity_30min": {
+     "rows": 32,
+     "charged_bytes": 12869
+    }
+   },
+   "seconds": 1.9
+  },
+  "largest_payload": {
+   "envelope": {
+    "runs_per_day": 387,
+    "readings_per_run": 1,
+    "burst": 4,
+    "codex_accounts": 1,
+    "claude_accounts": 1,
+    "headroom_windows": 16,
+    "deny_ratio": 2,
+    "project_share": 0.5,
+    "attestations_per_account": 36
+   },
+   "placed": {
+    "provider_billing": 675,
+    "provider_headroom": 675,
+    "admission_decision": 360,
+    "provider_identity": 23,
+    "billing_attestation": 72,
+    "cap_codex": 60,
+    "cap_claude": 40
+   },
+   "job_refused": false,
+   "rows": 1892,
+   "bytes": 773621,
+   "signature_again_bytes": 60870,
+   "fixed_bytes": 640,
+   "margin_rows": 2204,
+   "margin_bytes": 1323531,
+   "rows_used_percent": 46.2,
+   "bytes_used_percent": 36.9,
+   "nearer_limit": "rows",
+   "by_rule": {
+    "attestation_every_age": {
+     "rows": 73,
+     "charged_bytes": 62281
+    },
+    "billing_24h": {
+     "rows": 679,
+     "charged_bytes": 221037
+    },
+    "decision_5h": {
+     "rows": 362,
+     "charged_bytes": 157958
+    },
+    "headroom_24h_or_live": {
+     "rows": 679,
+     "charged_bytes": 260336
+    },
+    "identity_30min": {
+     "rows": 26,
+     "charged_bytes": 10499
+    }
+   },
+   "seconds": 1.6
+  },
+  "combined_double_peak": {
+   "envelope": {
+    "runs_per_day": 774,
+    "readings_per_run": 1,
+    "burst": 4,
+    "codex_accounts": 2,
+    "claude_accounts": 2,
+    "headroom_windows": 16,
+    "deny_ratio": 2,
+    "project_share": 0.5,
+    "attestations_per_account": 36
+   },
+   "placed": {
+    "provider_billing": 1350,
+    "provider_headroom": 1350,
+    "admission_decision": 720,
+    "provider_identity": 45,
+    "billing_attestation": 144,
+    "cap_codex": 60,
+    "cap_claude": 40
+   },
+   "job_refused": false,
+   "rows": 3768,
+   "bytes": 1542869,
+   "signature_again_bytes": 120918,
+   "fixed_bytes": 640,
+   "margin_rows": 328,
+   "margin_bytes": 554283,
+   "rows_used_percent": 92.0,
+   "bytes_used_percent": 73.6,
+   "nearer_limit": "rows",
+   "by_rule": {
+    "attestation_every_age": {
+     "rows": 145,
+     "charged_bytes": 123697
+    },
+    "billing_24h": {
+     "rows": 1354,
+     "charged_bytes": 441937
+    },
+    "decision_5h": {
+     "rows": 722,
+     "charged_bytes": 315976
+    },
+    "headroom_24h_or_live": {
+     "rows": 1354,
+     "charged_bytes": 520430
+    },
+    "identity_30min": {
+     "rows": 48,
+     "charged_bytes": 19271
+    }
+   },
+   "seconds": 2.2
+  },
+  "double_peak": {
+   "envelope": {
+    "runs_per_day": 774,
+    "readings_per_run": 1,
+    "burst": 4,
+    "codex_accounts": 1,
+    "claude_accounts": 1,
+    "headroom_windows": 2,
+    "deny_ratio": 2,
+    "project_share": 0.5,
+    "attestations_per_account": 36
+   },
+   "placed": {
+    "provider_billing": 1062,
+    "provider_headroom": 1062,
+    "admission_decision": 360,
+    "provider_identity": 39,
+    "billing_attestation": 72,
+    "cap_codex": 60,
+    "cap_claude": 40
+   },
+   "job_refused": false,
+   "rows": 2682,
+   "bytes": 1006270,
+   "signature_again_bytes": 60870,
+   "fixed_bytes": 640,
+   "margin_rows": 1414,
+   "margin_bytes": 1090882,
+   "rows_used_percent": 65.5,
+   "bytes_used_percent": 48.0,
+   "nearer_limit": "rows",
+   "by_rule": {
+    "attestation_every_age": {
+     "rows": 73,
+     "charged_bytes": 62281
+    },
+    "billing_24h": {
+     "rows": 1066,
+     "charged_bytes": 346659
+    },
+    "decision_5h": {
+     "rows": 362,
+     "charged_bytes": 158274
+    },
+    "headroom_24h_or_live": {
+     "rows": 1066,
+     "charged_bytes": 360710
+    },
+    "identity_30min": {
+     "rows": 42,
+     "charged_bytes": 16836
+    }
+   },
+   "seconds": 1.8
+  }
+ },
+ "job_limit_binds": [
+  {
+   "name": "base",
+   "accepted_runs_per_day": 1463,
+   "accepted_bytes": 1482574,
+   "accepted_rows": 4088,
+   "refused_runs_per_day": 1507,
+   "refused_bytes": 1509214,
+   "refused_rows": 4178,
+   "nearer_limit_when_refused": "rows",
+   "times_the_recorded_peak": 3.78
+  },
+  {
+   "name": "no_probes",
+   "accepted_runs_per_day": 1753,
+   "accepted_bytes": 1453365,
+   "accepted_rows": 4039,
+   "refused_runs_per_day": 1806,
+   "refused_bytes": 1496092,
+   "refused_rows": 4147,
+   "nearer_limit_when_refused": "rows",
+   "times_the_recorded_peak": 4.53
+  },
+  {
+   "name": "largest_payload",
+   "accepted_runs_per_day": 1443,
+   "accepted_bytes": 1546286,
+   "accepted_rows": 4048,
+   "refused_runs_per_day": 1487,
+   "refused_bytes": 1579985,
+   "refused_rows": 4137,
+   "nearer_limit_when_refused": "rows",
+   "times_the_recorded_peak": 3.73
+  }
+ ]
+}

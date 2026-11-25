@@ -1,0 +1,15 @@
+# S14a assertion mapping
+
+The one changed base assertion and fixture adaptation are mapped below. Accepted S14 U2 parity tests 1, 3 and 4 and their helpers are ported to the two capture test modules with requirement labels updated, assertions unchanged; the shared-copy oracle adjustment is mapped below. The S14 measurement script remains measurement-only; the new combined envelope asserts >=20% margin and real-intake acceptance.
+
+- `test_admission_inputs.test_exact_six_family_raw_capture_without_crypto_connections_or_writes`: exact stored rows == captured rows -> exact stored rows == captured rows with only content losslessly reconstructed, plus explicit evidence that some captured content is smaller. Preserves every column, byte, foreign row, ordering and signature; the transient content representation now uses packing.
+
+- `AdmissionCaptureLimitTests.add` and `fill_to_the_limit` fixture arithmetic: IDs charged twice (`2n` padding) -> compute each synthetic row's exact packed content length plus all original columns, then distribute bounded ID padding to hit the same limit. The filler uses valid 16-window headroom with hash-derived numeric readings for a foreign provider, whose candidates still count toward capture. IDs stay within the record validator's 160-character ceiling. Explicit restrictions retain the original provider. A new assertion decodes every boundary record before handing the fixture to the primary. Contiguous equal-padding inserts are batched. Every existing boundary/refusal/unchanged-state assertion stays unchanged, including `each > 500`, `limit - 2 < charged <= limit` and `rows < 4096`. The old raw-byte arithmetic cannot place the new capture at the boundary.
+- Accepted S14 anchored claim test moved unchanged to `test_admission_capture_claim.py`, keeping the non-socket capture module independently runnable. No assertion removed.
+
+- Runtime file-set and lifetime-cap guard assertions are unchanged. The runtime manifest adds the codec; the cap registry documents record reconstruction and per-snapshot expanded-byte bounds, each with its boundary test.
+- S14 sizing-tool bootstrap selection now orders by observation time, project and identifier, matching the runtime, rather than assuming rowid order. Packing exposed a two-byte charge difference between formerly equal-sized first-pass candidates; the unchanged cutoff parity assertion caught it.
+
+- S14 envelope fixture account fingerprints: zero-padded numeric hex -> deterministic SHA-256 hex, still exactly 64 bytes and the same number of accounts. This strengthens the packing margin check: low-entropy identifiers must not inflate reported compression savings. No count, cadence, payload bound or margin assertion is weakened.
+
+- Ported S14 `oracle` helper: repeated project/type/source bytes per row -> one copy per distinct shared string within the snapshot; all other field and signature charges remain unchanged. Every equality, mutation control, exact acceptance, one-byte-over and row-over assertion is unchanged. A new identity assertion proves repeated metadata are actually the same immutable object, rather than only reducing the charge on paper.

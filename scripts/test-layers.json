@@ -1,4 +1,6 @@
 {
+ "codex:tests.test_admission_capture_claim": "scenario",
+ "codex:tests.test_admission_capture_bytes": "scenario",
  "claude:tests.test_contracts": "unit",
  "claude:tests.test_job_read_tool": "component",
  "claude:tests.test_journal": "component",

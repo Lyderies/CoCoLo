@@ -1,4 +1,6 @@
 {
+ "codex:tests.test_admission_capture_claim": "integration",
+ "codex:tests.test_admission_capture_bytes": "integration",
  "claude:tests.test_contracts": "unit",
  "claude:tests.test_job_read_tool": "integration",
  "claude:tests.test_journal": "integration",
