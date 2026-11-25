@@ -405,5 +405,8 @@
  "codex:tests.test_u4_probe_live_capacity": "integration",
  "codex:tests.test_u4_probe_product_capacity": "integration",
  "codex:tests.test_ledger_owner_wiring": "integration",
- "codex:tests.test_u1_orchestration_lifetime": "integration"
+ "codex:tests.test_u1_orchestration_lifetime": "integration",
+ "codex:tests.test_collector_first_response": "integration",
+ "codex:tests.test_s7_owner_load": "integration",
+ "root:test_e2e_owner_load": "unit"
 }

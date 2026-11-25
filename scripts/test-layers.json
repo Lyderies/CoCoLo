@@ -405,5 +405,8 @@
  "codex:tests.test_u4_probe_live_capacity": "scenario",
  "codex:tests.test_u4_probe_product_capacity": "scenario",
  "codex:tests.test_ledger_owner_wiring": "scenario",
- "codex:tests.test_u1_orchestration_lifetime": "scenario"
+ "codex:tests.test_u1_orchestration_lifetime": "scenario",
+ "codex:tests.test_collector_first_response": "scenario",
+ "codex:tests.test_s7_owner_load": "scenario",
+ "root:test_e2e_owner_load": "unit"
 }

@@ -18,7 +18,8 @@
   "L14": "Status and diagnostics",
   "L15": "Project deletion",
   "API": "Core API (terminal plan TM0)",
-  "TERM": "Terminal requirements testable at the core"
+  "TERM": "Terminal requirements testable at the core",
+  "L16": "Sole ledger owner under load (M4b E2/E3)"
  },
  "requirements": [
   {
@@ -399,6 +400,33 @@
    "statement": "learning-delete-project removes the project's records and services and leaves another project untouched.",
    "checks": [
     "l15_1_delete_project_removes_records_and_service_leaves_the_other_untouched"
+   ]
+  },
+  {
+   "id": "L16.1",
+   "flow": "L16",
+   "source": "PLAN-0.4.0.md M4b E2/E3",
+   "statement": "Hook events from two projects and account calls arriving at once, through the installed product, are each written or answered exactly once: every event is in the ledger once (its own project, counted again by the collector's status), every account request id is recorded once however often it is sent, and the owner queue refuses nothing inside its limits (E2: hooks and account calls at once; no lost or duplicated request).",
+   "checks": [
+    "l16_1_hooks_and_account_calls_at_once_lose_and_duplicate_nothing"
+   ]
+  },
+  {
+   "id": "L16.2",
+   "flow": "L16",
+   "source": "PLAN-0.4.0.md M4b E2/E3",
+   "statement": "While a large project's hook backlog drains, a small project's events are written among them, not after them: no project is starved (E2: fair turns; the one-turn-per-round order itself is proved by the in-process owner load test, because real processes never queue deeply enough to show it).",
+   "checks": [
+    "l16_2_small_project_gets_its_turns_while_the_large_projects_backlog_drains"
+   ]
+  },
+  {
+   "id": "L16.3",
+   "flow": "L16",
+   "source": "PLAN-0.4.0.md M4b E2/E3",
+   "statement": "Health keeps answering within its limit while the load runs, the plain health never refuses, and the same single collector process is ready and unrestarted afterwards (E2: health stays responsive; E3: the sole owner serves the load).",
+   "checks": [
+    "l16_3_health_stays_responsive_and_the_collector_is_not_restarted"
    ]
   },
   {
