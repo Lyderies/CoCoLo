@@ -314,6 +314,12 @@ def _install(home, kind, argv, log_dir, runner, *, uid: int,
             was_on = runner([SYSTEMCTL, "--user", "is-active", UNIT]) == 0
             if not was_on:  # only a stopped unit can be started by enable --now
                 was_enabled = runner([SYSTEMCTL, "--user", "is-enabled", UNIT]) == 0
+    if (refreshing and kind == 'systemd'
+            and runner([SYSTEMCTL, '--user', 'is-failed', UNIT]) == 0):
+        # Old-copy starts refused by the quiesce marker can exhaust systemd's
+        # start limit. Clear it before enabling the verified successor entry.
+        if runner([SYSTEMCTL, '--user', 'reset-failed', UNIT]) != 0:
+            return Result(False, 'the failed login start could not be reset; the earlier entry was kept'), old, was_on, was_enabled
     reason = _write_entry(home, path, data)  # A new file renamed over the old one: the old stays until the swap.
     if reason:
         return Result(False, reason), None, False, False

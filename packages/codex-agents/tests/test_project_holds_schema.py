@@ -136,7 +136,7 @@ class SchemaStepTests(unittest.TestCase):
         from codex_agents import project_holds_schema
         before = self.format_17_store()
         db = self.upgrade()._connection
-        self.assertEqual(22, db.execute('PRAGMA user_version').fetchone()[0])  # B6: schema 21 (decision 131)
+        self.assertEqual(23, db.execute('PRAGMA user_version').fetchone()[0])  # B4t additive owner authority
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertLessEqual(set(SCHEMA_18_TABLES), tables)
         for name in SCHEMA_18_TABLES:
@@ -164,7 +164,8 @@ class SchemaStepTests(unittest.TestCase):
         after = self.rows()
         self.assertEqual([], after.pop('project_result_recorders'))  # schema20 (B2, decision 114.1 A): created empty, adopts nothing
         self.assertEqual(before, {name: rows for name, rows in after.items()
-                                  if name not in (*SCHEMA_18_TABLES, "runtime_takeover")})
+                                  if name not in (*SCHEMA_18_TABLES, "runtime_takeover", "runtime_floor",
+                                                  "takeover_record", "takeover_runs", "takeover_obligations")})
         self.assertEqual(1, after["runtime_takeover"][0][1])
         self.assertTrue(project_holds_schema.register_consistent(db))
         self.assertTrue(project_holds_schema.custody_consistent(db, KEY))
@@ -238,6 +239,8 @@ class SchemaStepTests(unittest.TestCase):
                          'project_execution_consumptions_orchestration'):
                 db.execute('DROP INDEX ' + name)  # schema21 (B6, decision 131): format 18 never had them
             db.execute('DROP INDEX IF EXISTS project_host_opens_orchestration')  # U1 additive index
+            for table in ('takeover_obligations', 'takeover_runs', 'takeover_record', 'runtime_floor'):
+                db.execute('DROP TABLE IF EXISTS ' + table)
             db.execute('DROP TABLE runtime_takeover')  # RSF-S2: genuine pre-22 fixture
             db.execute('ALTER TABLE project_orchestrations DROP COLUMN state')  # schema21 (B6, decision 131)
             db.execute('PRAGMA user_version=18')
@@ -252,7 +255,7 @@ class SchemaStepTests(unittest.TestCase):
         self.assertEqual([], self.copies())  # HS-18: the copy made for the failed step goes too
         self.assertFalse(list(self.directory.glob('*.partial')))
         self.upgrade()  # a later attempt upgrades, with its one copy
-        self.assertEqual(22, self.version())  # B6: schema 21 (decision 131)
+        self.assertEqual(23, self.version())  # B6: schema 21 (decision 131)
         self.assertEqual(1, len(self.copies()))
 
     def indexes(self, path=None):
@@ -271,7 +274,7 @@ class SchemaStepTests(unittest.TestCase):
             for allowed in (False, True):
                 with self.assertRaisesRegex(HistoryError, '^history_incompatible$'):
                     self.fixture.open(allow_schema_upgrade=allowed)
-        self.assertEqual(22, self.version())  # B6: schema 21 (decision 131)
+        self.assertEqual(23, self.version())  # B6: schema 21 (decision 131)
         self.assertEqual(before, self.rows())
         self.assertEqual([], self.copies())
 
@@ -296,7 +299,7 @@ class SchemaStepTests(unittest.TestCase):
             self.upgrade(Cut)
         self.assert_left_at_17(before)
         self.upgrade()
-        self.assertEqual(22, self.version())  # B6: schema 21 (decision 131)
+        self.assertEqual(23, self.version())  # B6: schema 21 (decision 131)
         self.assertEqual(1, len(self.copies()))
 
     def test_M2_a_failed_backup_refuses_the_step(self):
@@ -328,13 +331,13 @@ class SchemaStepTests(unittest.TestCase):
         self.assert_left_at_17(before)
         fcntl.flock(lock, fcntl.LOCK_UN)
         self.upgrade()
-        self.assertEqual(22, self.version())  # B6: schema 21 (decision 131)
+        self.assertEqual(23, self.version())  # B6: schema 21 (decision 131)
 
     def test_M2_the_copy_keeps_the_17_store_as_it_was(self):
         before = self.format_17_store()
         self.upgrade()
         (copy,) = self.copies()
-        self.assertTrue(copy.name.startswith('history.sqlite3.before-22.'))  # B6: schema 21 (decision 131)
+        self.assertTrue(copy.name.startswith('history.sqlite3.before-23.'))  # B6: schema 21 (decision 131)
         self.assertEqual(0o600, stat.S_IMODE(os.stat(copy).st_mode))
         self.assertEqual(17, self.version(copy))
         self.assertEqual(before, self.rows(copy))

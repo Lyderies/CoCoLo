@@ -6,7 +6,7 @@ from typing import Any
 
 from .learning_contracts import MAX_RECORD_BYTES
 
-LEDGER_SCHEMA_VERSION = 17  # RSF-S2: lifetime owner epoch and legacy writer exclusion
+LEDGER_SCHEMA_VERSION = 18  # B4t: additive version floor and machine-local custody lineage
 COLLECTOR_PROTOCOL_VERSION = 1
 MAX_REQUEST_BYTES = MAX_RECORD_BYTES + 16_384
 

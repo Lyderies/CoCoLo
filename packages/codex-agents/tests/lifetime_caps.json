@@ -1397,7 +1397,7 @@
   },
   "project_history.py::replay_candidates": {
    "checks": 1,
-   "ends": "D4 (RS-D draft 3 §6): one bounded page per replay pass (at most REPLAY_PASS_LIMIT = 4 publications tried, each one body of at most 1 MiB) over `project_result_publications`, which holds only unfinished publications: a row ends with its commit or with the transaction that records `retiring`, so nothing accumulates and tombstones cost nothing; a refused row stays for retirement and the cursor moves on, so it never holds later ones back",
+   "ends": "D4 (RS-D draft 3 \u00a76): one bounded page per replay pass (at most REPLAY_PASS_LIMIT = 4 publications tried, each one body of at most 1 MiB) over `project_result_publications`, which holds only unfinished publications: a row ends with its commit or with the transaction that records `retiring`, so nothing accumulates and tombstones cost nothing; a refused row stays for retirement and the cursor moves on, so it never holds later ones back",
    "test": "test_the_replay_pass_completes_at_most_four_publications_and_the_next_pass_the_rest"
   },
   "project_history.py::settle_earlier_registrations": {
@@ -1416,7 +1416,7 @@
   "project_holds_report.py::_ended_by_update": {
    "checks": 1,
    "ends": "B7a snapshot aggregation only: COUNT of unrecorded contexts ended by an update, no admission bound; source rows retain their existing purge rules.",
-   "test": "test_B7_2_ended_by_update_unrecorded_uses_verified_checkpoint_and_release"
+   "test": "test_B4t_runtime_change_creates_no_legacy_update_close_count"
   },
   "project_holds_report.py::_holds": {
    "checks": 1,
@@ -1601,7 +1601,7 @@
   },
   "project_result_contexts.py::_sweep_candidates": {
    "checks": 1,
-   "ends": "D3 (RS-D draft 4 §1): a per-pass batch bound over the live partial index (rows not `ended` or `expired`); a selected context ends `ended` when its files are gone, so only unfinished custody is ever scanned and tombstones cost nothing",
+   "ends": "D3 (RS-D draft 4 \u00a71): a per-pass batch bound over the live partial index (rows not `ended` or `expired`); a selected context ends `ended` when its files are gone, so only unfinished custody is ever scanned and tombstones cost nothing",
    "test": "test_U8_the_context_sweep_is_bounded_and_fair_across_passes"
   },
   "project_result_contexts.py::context_rows": {
@@ -1616,7 +1616,7 @@
   },
   "project_result_contexts.py::repairs": {
    "checks": 3,
-   "ends": "D3 (RS-D draft 3 §4): three report bounds per page, over contexts in `repair_required`, over reservations in `retiring` that have no context row, and over contexts in `retiring`, in that order with a cursor for the next page; each ends `ended` or `expired` once the retry succeeds or an operator removes the directory under its fixed name",
+   "ends": "D3 (RS-D draft 3 \u00a74): three report bounds per page, over contexts in `repair_required`, over reservations in `retiring` that have no context row, and over contexts in `retiring`, in that order with a cursor for the next page; each ends `ended` or `expired` once the retry succeeds or an operator removes the directory under its fixed name",
    "test": "test_M1_a_directory_under_a_reservation_only_body_name_is_shown_charged_retried_and_finished_when_removed"
   },
   "project_result_contexts.py::reservation_rows": {
@@ -1998,7 +1998,7 @@
   },
   "learning_store.py::__init__": {
    "checks": 1,
-   "ends": "Schema-version comparison, not a lifetime count: the legacy flag lasts one owner connection. Step 16→17 replaces the singleton machine-local epoch, preserves project records, and creates no accumulating quota.",
+   "ends": "Schema-version comparison, not a lifetime count: the legacy flag lasts one owner connection. Step 16\u219217 replaces the singleton machine-local epoch, preserves project records, and creates no accumulating quota.",
    "test": "test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent"
   },
   "hold_migration.py::__init__": {
@@ -2080,6 +2080,96 @@
    "checks": 4,
    "ends": "U1: registration attempt rows, open report rows, mixed distinct report runs and journal events belong to one orchestration. At each safe-point continuation the product atomically closes it and opens a successor before admitting more work; the old report and replay remain available during existing retention.",
    "test": "test_events_replay_and_reserved_close_roll_repeatedly_past_limit"
+  },
+  "runtime_lineage.py::release_versions": {
+   "checks": 1,
+   "test": "test_release_catalogue_past_the_byte_limit_is_not_trusted",
+   "ends": "One bounded read of the shipped catalogue; excess bytes refuse trust and retain custody."
+  },
+  "runtime_lineage.py::successor_custody": {
+   "checks": 1,
+   "test": "test_lineage_cycles_and_past_sixteen_links_are_refused_without_writes",
+   "ends": "At most 16 immutable lineage links per verification, not a lifetime record cap; longer or cyclic paths keep custody."
+  },
+  "takeover_journal.py::validate": {
+   "checks": 1,
+   "test": "test_prior_authorization_past_the_byte_limit_changes_nothing",
+   "ends": "Prior authorization bytes are limited to the existing 1 KiB record shape; the journal is removed after completion or pre-stop undo."
+  },
+  "takeover_journal.py::read": {
+   "checks": 1,
+   "test": "test_journal_rejects_symlink_oversize_duplicate_keys_and_wrong_project",
+   "ends": "One journal is at most 16 KiB, removed after completion or pre-stop undo; an oversized file is retained and refused."
+  },
+  "takeover_journal.py::write": {
+   "checks": 1,
+   "test": "test_journal_past_the_run_and_byte_limits_changes_nothing",
+   "ends": "Bounded intent bytes, not a lifetime run count; no replacement is made when it cannot fit."
+  },
+  "takeover_journal.py::create": {
+   "checks": 1,
+   "test": "test_prior_authorization_past_the_byte_limit_changes_nothing",
+   "ends": "Prior authorization cannot exceed 1 KiB; refused before intent and any stop."
+  },
+  "takeover_process.py::bounded_processes": {
+   "checks": 1,
+   "test": "test_process_scan_past_limit_is_unproven_and_never_signals",
+   "ends": "One sole-holder scan is limited to 4096 candidate processes and 5 seconds; excess refuses all signals."
+  },
+  "takeover_process.py::identity": {
+   "checks": 1,
+   "test": "test_process_arguments_and_fd_scan_past_byte_limits_are_unproven",
+   "ends": "One kernel argument read is bounded to 4 MiB; uninspectable or oversized arguments never authorize a signal."
+  },
+  "takeover_process.py::sole_holder": {
+   "checks": 1,
+   "test": "test_process_arguments_and_fd_scan_past_byte_limits_are_unproven",
+   "ends": "One fd scan is bounded to 4 MiB and the shared 5-second scan deadline; no truncation counts as proof."
+  },
+  "update_takeover.py::stop_until_excluded": {
+   "checks": 1,
+   "test": "test_B4t_3_a_straggler_that_passed_its_check_is_caught",
+   "ends": "At most three stop/probe rounds after the start barrier; an inherited lock leaves a resumable failure, never adoption."
+  },
+  "update_takeover.py::run": {
+   "checks": 2,
+   "test": "test_B4t_10_crash_at_each_phase_then_resume",
+   "ends": "Phase-index comparisons only, not admission counts; the finite intent is removed on completion or pre-stop undo."
+  },
+  "update_takeover.py::installed": {
+   "checks": 1,
+   "test": "test_B4t_10_crash_at_each_phase_then_resume",
+   "ends": "Phase ordering only; the installed phase cannot precede account completion."
+  },
+  "update_takeover.py::complete": {
+   "checks": 1,
+   "test": "test_B4t_10_crash_at_each_phase_then_resume",
+   "ends": "Phase ordering only; successful completion removes the journal."
+  },
+  "takeover_owner.py::stop_collector": {
+   "checks": 1,
+   "test": "test_wrong_identity_sends_nothing_and_the_stop_past_thirty_seconds_is_resumable",
+   "ends": "A finite protocol-version split and one 30-second authenticated collector stop, never a lifetime count; an exceeded stop budget remains resumable."
+  },
+  "takeover_preflight.py::_registry": {
+   "checks": 2,
+   "test": "test_update_check_replaces_only_the_running_child_refusal",
+   "ends": "COUNT(*) is a read-only diagnostic of live, unreleased child slots. It imposes no limit and refuses no update; normal authenticated settlement or crash grace ends each slot."
+  },
+  "takeover_preflight.py::read_plan": {
+   "checks": 1,
+   "test": "test_preflight_prior_authorization_past_the_existing_limit_is_read_only",
+   "ends": "One read of the existing 1 KiB authorization record. Growth beyond it refuses before intent or a stop and changes no bytes."
+  },
+  "account_takeover.py::takeover_report": {
+   "checks": 4,
+   "test": "test_past_the_reply_byte_budget_continues_on_the_next_page_and_old_senders_stay_refused",
+   "ends": "At most eight rows and 14 KiB per read-only diagnostic page, with a continuation offset. More projects/bytes continue on the next page, never refuse a run or release any custody. COUNT(*) supplies diagnostic totals only."
+  },
+  "takeover_process.py::_darwin_argv": {
+   "checks": 1,
+   "test": "test_a_kernel_argument_limit_past_four_MiB_is_unproven_before_reading_arguments",
+   "ends": "One kernel-declared argument buffer, capped at 4 MiB before allocation or reading. Excess or an unreadable kernel limit refuses proof without a signal."
   }
  }
 }

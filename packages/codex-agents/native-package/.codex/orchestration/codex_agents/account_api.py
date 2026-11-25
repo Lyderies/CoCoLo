@@ -54,6 +54,7 @@ ACCOUNT_PROTOCOL_VERSION = 1
 MAX_ACCOUNT_FRAME_BYTES = 16_384
 MAX_ACCOUNT_INTEGER = (1 << 63) - 1
 ACCOUNT_READ_OPERATIONS = frozenset({
+    'account.takeover_report',
     "account.health", "account.project", "account.owner_key", "account.owner_public_key", "account.capacity_status",
     "account.provider_state_snapshot",
 })
@@ -211,6 +212,12 @@ def _checked_request(data: object) -> None:
             decode_wake_publish(data['payload'])
         except ValueError:
             raise AccountError('account_invalid_request') from None
+    elif data['operation'] == 'account.takeover_report':
+        value = data['payload']
+        if (set(value) not in (set(), {'offset', 'predecessor_version'}) or not integer(value.get('offset', 0))
+                or (value.get('predecessor_version') is not None and (type(value['predecessor_version']) is not str
+                    or re.fullmatch(r'\d+\.\d+\.\d+', value['predecessor_version']) is None))):
+            raise AccountError('account_invalid_request')
     elif data["payload"]:
         raise AccountError("account_invalid_request")
 
@@ -247,7 +254,19 @@ def account_request_digest(request: AccountRequest) -> str:
 def _checked_result(result: object, request: AccountRequest) -> dict:
     if not reply_fields_match(request.operation, result):
         raise AccountError("account_invalid_response")
-    if request.operation == 'account.publish_wake':
+    if request.operation == 'account.takeover_report':
+        if (not integer(result['other_projects']) or not integer(result['other_runs'])
+                or (result['recorded_at_ms'] is not None and not integer(result['recorded_at_ms']))
+                or (result['next_offset'] is not None and (not integer(result['next_offset'])
+                    or result['next_offset'] <= request.payload.get('offset', 0)))
+                or type(result['updates']) is not list
+                or any(type(row) is not dict or set(row) != {'version', 'children', 'update_message'}
+                       or not integer(row['children']) or type(row['update_message']) is not str
+                       or (row['version'] is not None and (type(row['version']) is not str
+                           or re.fullmatch(r'\d+\.\d+\.\d+', row['version']) is None)) for row in result['updates'])):
+            raise AccountError('account_invalid_response')
+        return result
+    elif request.operation == 'account.publish_wake':
         try:
             return checked_wake_reply(result, decode_wake_publish(request.payload))
         except ValueError:
@@ -466,9 +485,10 @@ class AccountClient:
             raise AccountError("account_invalid_request")
         self._path, self._project, self._runtime, self._timeout = socket_path, project_id, runtime_digest, timeout
 
-    def _read(self, operation: str, request_id: str | None) -> dict:
+    def _read(self, operation: str, request_id: str | None, payload=None) -> dict:
         identity = "read-" + secrets.token_hex(16) if request_id is None else request_id
-        request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, operation, identity, self._project, self._runtime, {})
+        request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, operation, identity, self._project, self._runtime,
+                                 {} if payload is None else payload)
         raw = encode_account_request(request)
         sent = decode_account_request(raw)
         try:
@@ -483,6 +503,9 @@ class AccountClient:
 
     def health(self, *, request_id: str | None = None) -> dict:
         return self._read("account.health", request_id)
+
+    def takeover_report(self, offset=0, predecessor_version=None):
+        return self._read('account.takeover_report', None, dict(offset=offset, predecessor_version=predecessor_version))
 
     def provider_state_snapshot(self, *, request_id: str | None = None):
         from .admission_metadata import ProviderStateSnapshot

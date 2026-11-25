@@ -178,6 +178,24 @@ class ServiceRecordAuthority:
             return False
         try:
             evidence = json.loads(custody['evidence'])
+            if evidence.get('takeover_id') is not None:
+                from .runtime_lineage import successor_custody
+                adopted = history._connection.execute('SELECT predecessor_digest,predecessor_version,successor_digest,state FROM takeover_record '
+                    'WHERE takeover_id=?', (evidence['takeover_id'],)).fetchone()
+                if (adopted is None or adopted['state'] not in ('adopted', 'complete')
+                        or adopted['successor_digest'] != self.runtime_digest
+                        or not successor_custody(history._connection, binding.runtime_digest,
+                            adopted['predecessor_digest'], project=True, current_version=adopted['predecessor_version'])
+                        or not successor_custody(history._connection, binding.runtime_digest,
+                                                 self.runtime_digest, project=True)):
+                    return False
+            else:
+                # A stage-A legacy classification is not takeover authority.
+                # Once this store has a takeover chain, every cross-runtime
+                # recording must be bound to that chain by its own evidence.
+                if (evidence.get('classified_owner') != self.runtime_digest
+                        or history._connection.execute('SELECT 1 FROM takeover_record LIMIT 1').fetchone()):
+                    return False
             _, reservation = history._result_row(binding)
             return (evidence.get('classified') == 22 and evidence.get('reason') == 'legacy_finished_result'
                 and evidence.get('binding_digest') == keyed_digest(history._result_key, canonical_json(binding.as_data()))

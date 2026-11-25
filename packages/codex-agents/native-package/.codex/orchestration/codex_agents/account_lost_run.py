@@ -10,6 +10,8 @@ itself stays as it is: no terminal, cleanup or release receipt is invented,
 and a released row is reported as released. Repeating the request returns
 the same receipt; nothing is settled twice.
 """
+from .runtime_lineage import successor_custody
+from .collector_client import COLLECTOR_RUNTIME_DIGEST
 from .account_claim_contracts import ClaimError, LaunchClaimInput
 from .learning_contracts import canonical_json, content_digest
 from .lost_run_contracts import LOST_RUN_REASON, SettleLostInput, decode_settle_lost, settlement_digest
@@ -29,10 +31,14 @@ def _known_claim(ledger, project_id, runtime_digest, caller_scope, settle, launc
 
     from .learning_contracts import keyed_digest
 
+    if (expected.runtime_digest != runtime_digest
+            or not successor_custody(ledger, expected.runtime_digest, COLLECTOR_RUNTIME_DIGEST)):
+        raise ClaimError('claim_cleanup_invalid')
     try:
         context, known, _, _ = ledger._claim_preflight(project_id, runtime_digest=runtime_digest,
                                                       caller_scope=caller_scope, request_id=settle.claim_request_id,
-                                                      launch=launch, storage_binding=expected)
+                                                      launch=launch, storage_binding=expected,
+                                                      earlier_runtime=runtime_digest != COLLECTOR_RUNTIME_DIGEST)
         return context, known
     except ClaimError as error:
         if error.reason_code != 'claim_storage_invalid':
@@ -104,10 +110,13 @@ def settle_lost_run(ledger, project_id, *, runtime_digest, caller_scope, settle,
     expected, raw = capture_storage_evidence(storage_binding, storage_evidence)
     if expected is None or raw is None:
         raise ClaimError('claim_storage_required')
+    custody = expected.runtime_digest
+    if not successor_custody(ledger, custody, runtime_digest):
+        raise ClaimError('claim_cleanup_invalid')
     launch = LaunchClaimInput(settle.run_handle, settle.identity_digest)
     original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.claim_launch', settle.claim_request_id,
-                              project_id, runtime_digest, launch.payload())
-    if (expected.project_id != project_id or expected.runtime_digest != runtime_digest
+                              project_id, custody, launch.payload())
+    if (expected.project_id != project_id or expected.runtime_digest != custody
             or expected.run_handle != settle.run_handle or expected.claim_request_id != settle.claim_request_id
             or expected.claim_request_digest != account_request_digest(original)):
         raise ClaimError('claim_cleanup_invalid')
@@ -115,7 +124,7 @@ def settle_lost_run(ledger, project_id, *, runtime_digest, caller_scope, settle,
     lease = verify_pending_storage_evidence(key, expected, raw)
     if lease.lease_digest != settle.lease_digest:
         raise ClaimError('claim_cleanup_invalid')
-    context, known = _known_claim(ledger, project_id, runtime_digest, caller_scope, settle, launch, expected)
+    context, known = _known_claim(ledger, project_id, custody, caller_scope, settle, launch, expected)
     if (known is None or known['state'] != 'claimed' or known['bridge_run_id'] != settle.bridge_run_id
             or known['run_id'] != expected.run_id):
         raise ClaimError('claim_cleanup_unavailable')
@@ -176,10 +185,13 @@ def lost_run_closure(ledger, project_id, *, runtime_digest, caller_scope, settle
     expected, raw = capture_storage_evidence(storage_binding, storage_evidence)
     if expected is None or raw is None:
         raise ClaimError('claim_storage_required')
+    custody = expected.runtime_digest
+    if not successor_custody(ledger, custody, runtime_digest):
+        raise ClaimError('claim_cleanup_invalid')
     launch = LaunchClaimInput(settle.run_handle, settle.identity_digest)
     original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.claim_launch', settle.claim_request_id,
-                              project_id, runtime_digest, launch.payload())
-    if (expected.project_id != project_id or expected.runtime_digest != runtime_digest
+                              project_id, custody, launch.payload())
+    if (expected.project_id != project_id or expected.runtime_digest != custody
             or expected.run_handle != settle.run_handle or expected.claim_request_id != settle.claim_request_id
             or expected.claim_request_digest != account_request_digest(original)):
         raise ClaimError('claim_cleanup_invalid')
@@ -187,7 +199,7 @@ def lost_run_closure(ledger, project_id, *, runtime_digest, caller_scope, settle
     lease = verify_pending_storage_evidence(key, expected, raw)
     if lease.lease_digest != settle.lease_digest:
         raise ClaimError('claim_cleanup_invalid')
-    context, known = _known_claim(ledger, project_id, runtime_digest, caller_scope, settle, launch, expected)
+    context, known = _known_claim(ledger, project_id, custody, caller_scope, settle, launch, expected)
     if (known is None or known['state'] != 'claimed' or known['bridge_run_id'] != settle.bridge_run_id
             or known['run_id'] != expected.run_id):
         raise ClaimError('claim_cleanup_unavailable')

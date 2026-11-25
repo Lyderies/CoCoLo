@@ -1076,6 +1076,39 @@ def holds_report_client(state_root, project_root, *, host_client):
         return None  # A diagnostic; no database fallback or private error text.
 
 
+def takeover_report_client(state_root, project_root, *, host_client, run_handle=None):
+    """New B4t diagnostic operation; existing replies keep their closed shapes."""
+    try:
+        state = CollectorPaths(state_root)
+        scope, _, endpoint = read_runtime_hint(state, project_root)
+        history = HistoryClient(endpoint, scope.project_id, scope.runtime_digest, timeout=2)
+        enroll_clients(state, project_root, scope, (endpoint,), host_client=host_client)
+        return history.takeover_report(run_handle)
+    except Exception:
+        return None
+
+
+def account_takeover_report_client(state_root, project_root, *, host_client, predecessor_version=None, await_start=False):
+    """Read every bounded diagnostic page; enrollment remains per request."""
+    try:
+        state = CollectorPaths(state_root)
+        project_id, endpoint = _account_target(state, project_root, await_start=await_start)
+        client = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=2)
+        offset, result = 0, None
+        while True:
+            enroll_clients(state, project_root, None, account=endpoint, host_client=host_client)
+            page = client.takeover_report(offset, predecessor_version)
+            if result is None:
+                result = dict(page, updates=[])
+            result['updates'].extend(page['updates'])
+            if page['next_offset'] is None:
+                result['next_offset'] = None
+                return result
+            offset = page['next_offset']
+    except (DispatchError, StateError, OSError, AccountError):
+        return None
+
+
 def capacity_report_client(state_root, project_root, *, host_client):
     """Each limit of this project's store with its live count, or None when its service is not running."""
     try:

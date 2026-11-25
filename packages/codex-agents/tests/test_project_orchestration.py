@@ -211,7 +211,7 @@ class ProjectOrchestrationTests(unittest.TestCase):
         self.store = ProjectHistory(self.directory, PROJECT_A, result_key=KEY, allow_schema_upgrade=True,
                                     result_capacity=ResultCapacity(8, 4 * MAX_RESULT_BODY_BYTES, 60_000, 120_000),
                                     result_clock_ms=lambda: self.now, orchestration_limits=self.limits)
-        self.assertEqual(22, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) B6: schema 21 (decision 131)
+        self.assertEqual(23, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # B4t additive schema
         self.assertEqual(before, self.store._connection.execute('SELECT * FROM project_orchestration_checkpoints').fetchall())
         self.assertEqual(0, self.store._connection.execute('SELECT COUNT(*) FROM project_registered_runs').fetchone()[0])
 
@@ -324,7 +324,7 @@ class ProjectOrchestrationTests(unittest.TestCase):
                                                   (handle,)).fetchone()[0]
         self.assertEqual((1, 0), (kept(handles[0]), kept(handles[1])))
 
-    def test_034_R10_an_update_ends_the_earlier_runtimes_open_orchestrations(self):
+    def test_B4t_an_update_keeps_earlier_open_and_paused_orchestrations(self):
         """R10 (live 2026-11-19): after an update, nothing could close an orchestration opened under the
         earlier runtime, and it counted as open for good."""
         from dataclasses import replace
@@ -337,12 +337,12 @@ class ProjectOrchestrationTests(unittest.TestCase):
         self.assertEqual(2, owner._open_count())
         self.assertEqual(0, owner.end_earlier(other_instance, 10))  # Not this service's journals.
         self.assertEqual(0, owner.end_earlier(self.scope, 10))      # Its own scope: nothing earlier.
-        self.assertEqual(2, owner.end_earlier(updated, 10))
-        self.assertEqual(0, owner._open_count())
-        for snapshot in (first, paused):
+        self.assertEqual(0, owner.end_earlier(updated, 10))
+        self.assertEqual(2, owner._open_count())
+        for snapshot, expected in ((first, 'active'), (paused, 'paused')):
             ended = owner._current(self.scope, snapshot['orchestration_handle'])['snapshot']
-            self.assertEqual('interrupted', ended['status'])
-            self.assertIsNotNone(ended['ended_at_ms'])
+            self.assertEqual(expected, ended['status'])
+            self.assertIsNone(ended['ended_at_ms'])
         self.assertEqual(0, owner.end_earlier(updated, 10))  # Already ended: once only.
 
     def test_O0c_P5_abandoned_orchestrations_end_after_24_hours_idle_so_a_new_one_opens(self):
@@ -387,7 +387,7 @@ class ProjectOrchestrationTests(unittest.TestCase):
         self.assertEqual(0, owner.end_idle(self.now, 10))
         self.assertEqual(1, owner._open_count())
 
-    def test_034_R10_a_used_request_id_never_stops_the_end(self):
+    def test_B4t_a_used_legacy_close_id_does_not_trigger_an_update_close(self):
         """Review 034-r10: the end used the predictable request id 'end-earlier-<handle>'; one already
         used by an old client made every attempt conflict, so the orchestration stayed open for good."""
         from dataclasses import replace
@@ -396,10 +396,10 @@ class ProjectOrchestrationTests(unittest.TestCase):
         self.call('checkpoint', self.target(opened, goal_tokens_used=0, goal_time_used_seconds=0),
                   'end-earlier-' + handle)
         owner = self.store._orchestration_owner()
-        self.assertEqual(1, owner.end_earlier(replace(self.scope, runtime_digest='b' * 64), 10))
-        self.assertEqual('interrupted', owner._current(self.scope, handle)['snapshot']['status'])
+        self.assertEqual(0, owner.end_earlier(replace(self.scope, runtime_digest='b' * 64), 10))
+        self.assertEqual('active', owner._current(self.scope, handle)['snapshot']['status'])
 
-    def test_034_R10_each_pass_tries_at_most_its_limit(self):
+    def test_B4t_runtime_change_does_not_attempt_the_retired_close(self):
         """Review 034-r10: only successful ends counted, so orchestrations kept open by a run not yet
         over were all retried on every pass."""
         from dataclasses import replace
@@ -417,8 +417,8 @@ class ProjectOrchestrationTests(unittest.TestCase):
         with mock.patch.object(orchestration_store.OrchestrationOwner, 'apply', pending):
             for _ in range(3):
                 self.assertEqual(0, owner.end_earlier(replace(self.scope, runtime_digest='b' * 64), 1))
-        self.assertEqual(3, len(tries))
-        self.assertEqual(3, len(set(tries)))  # Each pass went on to the next one.
+        self.assertEqual(0, len(tries))
+        self.assertEqual(0, len(set(tries)))  # B4t never attempts the retired runtime-only close.
 
     def test_034_R6_a_closed_orchestration_is_removed_after_its_retention(self):
         from codex_agents.orchestration_store import ORCHESTRATION_RETENTION_MS

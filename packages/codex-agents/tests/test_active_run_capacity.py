@@ -326,7 +326,7 @@ class ActiveRunCapacityTests(unittest.TestCase):
         self.schema_eight(backup=True)
         self.case.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         self.addCleanup(self.case.ledger.close)
-        self.assertEqual(17, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(18, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
         self.assertEqual(["legacy_unknown"], [row["kind"] for row in self.rows()])
         self.assertTrue(all(self.rows()[0][field] is None for field in ("provider", "account_fingerprint", "released_at_ms")))
         after = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid")]

@@ -35,6 +35,8 @@ _RECORD_OPERATIONS = {
     "history.commit_terminal": "dispatch_result",
 }
 HISTORY_OPERATIONS = frozenset({
+    'service.stop_for_update',
+    'history.takeover_report',
     *_RECORD_OPERATIONS, "history.pending_terminals", "history.acknowledge_terminal", "history.read_record",
     "history.admit_host_result", "history.record_host_open", "history.worker_reference", "history.qa_scope",
     "history.issue_qa_checks",
@@ -135,6 +137,13 @@ def _validate_request(request: HistoryRequest) -> None:
         if (not _closed(payload, {'host_outcome_digest'}) or not matches(payload['host_outcome_digest'], _DIGEST)
                 or request.request_id != payload['host_outcome_digest']):
             raise HistoryError('history_invalid_request')
+    elif operation == 'service.stop_for_update':
+        if not _closed(payload, set()) or request.request_id != 'update-stop':
+            raise HistoryError('history_invalid_request')
+    elif operation == 'history.takeover_report':
+        if (not (_closed(payload, set()) or (_closed(payload, {'run_handle'})
+                    and matches(payload['run_handle'], _RUN))) or request.request_id != 'takeover'):
+            raise HistoryError('history_invalid_request')
     elif operation == 'history.holds_report':
         if not _closed(payload, set()) or request.request_id != 'holds':
             raise HistoryError('history_invalid_request')
@@ -205,8 +214,10 @@ def _validate_request(request: HistoryRequest) -> None:
             raise HistoryError('history_invalid_request')
     elif operation == "history.admit_host_result":
         reference = decode_host_result_reference(payload)
-        if (reference.binding.project_id != request.project_id or reference.binding.runtime_digest != request.runtime_digest
-                or request.request_id != reference.binding.claim_id):
+        # The envelope names the current enrolled service. The immutable
+        # reference can name predecessor custody; the writer's B2 predicate
+        # requires its takeover authority before recording it.
+        if (reference.binding.project_id != request.project_id or request.request_id != reference.binding.claim_id):
             raise HistoryError("history_invalid_request")
     elif operation == "history.acknowledge_terminal":
         if (
@@ -346,6 +357,17 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
             raise HistoryError('history_invalid_response')
     elif operation == 'history.routing_evidence':
         if not _closed(result, {'trusted'}) or type(result['trusted']) is not bool:
+            raise HistoryError('history_invalid_response')
+    elif operation == 'service.stop_for_update':
+        if result != {'stopping': True}:
+            raise HistoryError('history_invalid_response')
+    elif operation == 'history.takeover_report':
+        if (type(result['records']) is not list or any(not valid_integer(result[name]) for name in
+                ('lost', 'lost_held', 'finished_kept', 'refused_unverifiable'))
+                or any(not _closed(row, {'predecessor_version', 'successor_version', 'state'})
+                       or row['state'] not in {'adopting', 'adopted', 'complete'}
+                       or any(type(row[key]) is not str or re.fullmatch(r'\d+\.\d+\.\d+', row[key]) is None
+                              for key in ('predecessor_version', 'successor_version')) for row in result['records'])):
             raise HistoryError('history_invalid_response')
     elif operation == 'history.holds_report':
         from .holds_report_contracts import checked_holds_report
@@ -643,6 +665,9 @@ class HistoryClient:
     def holds_report(self) -> dict:
         """This project's holds, custody and plain retirement repairs (B7a)."""
         return self._call('history.holds_report', 'holds', {})
+
+    def takeover_report(self, run_handle=None) -> dict:
+        return self._call('history.takeover_report', 'takeover', {} if run_handle is None else {'run_handle': run_handle})
 
     def capacity_report(self) -> dict:
         """Each limit of this project's store with its live count (0.3.4 R9)."""

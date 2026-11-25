@@ -26,8 +26,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
+from . import takeover_schema
 from .store_fence import FencedConnection, StoreFence, EPOCH_SCHEMA, EPOCH_COLUMNS, FENCE_MESSAGE, BUSY_MESSAGE
-from .collector_client import COLLECTOR_RUNTIME_DIGEST
+from .collector_client import COLLECTOR_RUNTIME_DIGEST, PACKAGE_VERSION
 
 from .contracts import ContractError, validate_task
 from .claim_storage import MAX_STORAGE_EVIDENCE_BYTES, encode_storage_evidence, lease_data, lease_receipt_digest, lease_state_seal
@@ -67,7 +68,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 22
+_SCHEMA_VERSION = 23
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
@@ -235,8 +236,12 @@ CREATE INDEX project_execution_consumptions_orchestration ON project_execution_c
 STEP_21_SCHEMA = (ORCHESTRATION_STATE_INDEX_SCHEMA + RESULT_LIVE_INDEX_SCHEMA
                   + project_holds_schema.ORCHESTRATION_CHECK_INDEX_SCHEMA + TARGET_INDEX_SCHEMA)
 _SCHEMA_V21 = with_orchestration_state(_SCHEMA_V20) + STEP_21_SCHEMA
-_SCHEMA = _SCHEMA_V21 + EPOCH_SCHEMA
+_SCHEMA_V22 = _SCHEMA_V21 + EPOCH_SCHEMA
+# B4t machine-local authority: runtime_floor, takeover_record, takeover_runs and
+# takeover_obligations never become another store's authority through a copy.
+_SCHEMA = _SCHEMA_V22 + takeover_schema.PROJECT_SCHEMA
 _COLUMNS = {
+    **takeover_schema.PROJECT_COLUMNS,
     "runtime_takeover": EPOCH_COLUMNS,
     **PROJECT_HOLDS_COLUMNS,
     **service_record.RECORDER_COLUMNS,
@@ -344,7 +349,10 @@ class ProjectHistory:
         allow_schema_upgrade: bool = False,
         orchestration_limits: OrchestrationLimits | None = None,
         allow_legacy_orchestration_reference: bool = False,
+        takeover: dict | None = None,
     ) -> None:
+        self._takeover_intent = takeover
+        self._migration_target = 23
         self._pid = os.getpid()
         self._successor_position = ('', '')  # where the next successor pass reads from (in memory only)
         self._thread = threading.current_thread()
@@ -423,6 +431,8 @@ class ProjectHistory:
             # them. A valid record plus its fixed metadata fits this ceiling.
             self._connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_HISTORY_ROW_BYTES)
             self._connection.row_factory = sqlite3.Row
+            takeover_schema.check_floor(self._connection, PACKAGE_VERSION,
+                lambda: HistoryError("history_wrong_owner", message=FENCE_MESSAGE))
             self._connection.execute("PRAGMA trusted_schema=OFF")
             self._connection.execute("PRAGMA foreign_keys=ON")
             self._connection.execute("PRAGMA synchronous=FULL")
@@ -533,6 +543,7 @@ class ProjectHistory:
         connection = self._connection
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         application = connection.execute("PRAGMA application_id").fetchone()[0]
+        self._migration_target = 22 if 0 < version < 22 or (version == 22 and pending(connection)) else 23
         objects = connection.execute("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL").fetchall()
         # Only this exact derived index is optional, never an arbitrary same-named
         # schema object. Legacy layout fixtures explicitly drop it.
@@ -542,8 +553,8 @@ class ProjectHistory:
         def schema_set(schema):
             return {_normalized_sql(statement) for statement in schema.split(";") if statement.strip()}
         if pending(connection):
-            if (not self._allow_schema_upgrade or version != _SCHEMA_VERSION or application != _APPLICATION_ID
-                    or actual_schema != schema_set(_SCHEMA + ';' + PROGRESS_SCHEMA)):
+            if (not self._allow_schema_upgrade or version not in (22, 23) or application != _APPLICATION_ID
+                    or actual_schema != schema_set((_SCHEMA_V22 if version == 22 else _SCHEMA) + ';' + PROGRESS_SCHEMA)):
                 raise HistoryError('history_incompatible', message=PENDING_MESSAGE)
             # A checkpoint replaced the old atomic rollback boundary. Require
             # the original attempt's kept recovery copy before any resume write.
@@ -557,7 +568,7 @@ class ProjectHistory:
                     'The kept project before-copy for this pending hold migration is missing or unsafe. '
                     'Restore the original copy and its attempt marker before retrying. '
                     'Run: ./setup.sh --update')) from None
-            self._check_schema_identity(_COLUMNS)
+            self._check_schema_identity(self._migration_columns())
             self._check_result_identity_before_upgrade(version)
             # The original before-copy and attempt marker belong to the whole
             # migration, not this successor. Never discard them on resume.
@@ -571,15 +582,20 @@ class ProjectHistory:
                         connection.execute('INSERT INTO hold_migration_progress '
                             'SELECT store,?,NULL,0,started_at_ms,clock_reference_ns '
                             'FROM hold_migration_progress WHERE class=\'orchestration\'', (name,))
-                migration = HoldMigration(connection, 'project', classes, self._hold_now(), _SCHEMA_VERSION,
+                migration = HoldMigration(connection, 'project', classes, self._hold_now(), self._migration_target,
                                           lambda: HistoryError('history_incompatible'))
                 self._adopt_hold_migration(migration)
-            self._recover_interrupted_upgrade(remove_copy=False)
+            if version == 22:
+                self._initialize()  # stage A published; same before-copy remains for B
+            else:
+                self._recover_interrupted_upgrade(remove_copy=False)
             return
         if not objects and version == 0 and application == 0:
             # executescript is used only for this fixed, empty schema, never requests.
             connection.executescript("BEGIN IMMEDIATE;" + _SCHEMA)
             try:
+                takeover_schema.raise_floor(connection, PACKAGE_VERSION,
+                    lambda: HistoryError("history_wrong_owner"), initialize=True)
                 self._fence.claim(connection)
                 connection.execute("INSERT INTO history_identity VALUES(?,1,1)", (self.project_id,))
                 connection.execute(f"PRAGMA application_id={_APPLICATION_ID}")
@@ -588,21 +604,21 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
+        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}
               and application == _APPLICATION_ID
               and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4,
                                                5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7, 8: _SCHEMA_V8,
                                                9: _SCHEMA_V9, 10: _SCHEMA_V10, 11: _SCHEMA_V11,
                                                12: _SCHEMA_V12, 13: _SCHEMA_V13, 14: _SCHEMA_V14,
                                                15: _SCHEMA_V15, 16: _SCHEMA_V16, 17: _SCHEMA_V17, 18: _SCHEMA_V18,
-                                               19: _SCHEMA_V19, 20: _SCHEMA_V20, 21: _SCHEMA_V21}[version])):
+                                               19: _SCHEMA_V19, 20: _SCHEMA_V20, 21: _SCHEMA_V21, 22: _SCHEMA_V22}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {"runtime_takeover", *(service_record.RECORDER_COLUMNS if version < 20 else set()), *(PROJECT_HOLDS_COLUMNS if version < 18 else set()), *(REGISTERED_RUN_COLUMNS if version < 17 else set()), *(ACTIVATION_COLUMNS if version < 16 else set()), *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
+            omitted = {*takeover_schema.PROJECT_COLUMNS, *({"runtime_takeover"} if version < 22 else set()), *(service_record.RECORDER_COLUMNS if version < 20 else set()), *(PROJECT_HOLDS_COLUMNS if version < 18 else set()), *(REGISTERED_RUN_COLUMNS if version < 17 else set()), *(ACTIVATION_COLUMNS if version < 16 else set()), *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
             old_columns = {name: (columns[:-1] if ((name == 'result_leases' and version < 9)
                                                  or (name == 'project_cleanup_reservations' and version == 9)
@@ -612,20 +628,32 @@ class ProjectHistory:
             # O10 HS-5/HS-6: every check passes before anything is written, and the store is kept as it
             # was, under this writer lock, on every path that upgrades.
             self._check_result_identity_before_upgrade(version)
-            self._recover_interrupted_upgrade(remove_copy=True)  # B6 review r1: a dead attempt's own copy goes
-            copy = self._keep_copy_before_upgrade(version)
-            marker = self._upgrade_marker
+            retained = self._upgrade_markers() if version == 22 else []
+            if retained:
+                if len(retained) != 1 or retained[0][1] is None:
+                    raise HistoryError('history_incompatible')
+                marker, identity = retained[0]
+                copy = self._directory / identity['copy']
+                self._check_owned(copy.lstat())
+                self._upgrade_marker = marker
+            else:
+                self._recover_interrupted_upgrade(remove_copy=True)
+                copy = self._keep_copy_before_upgrade(version)
+                marker = self._upgrade_marker
             try:
                 self._upgrade(connection, version)
             except BaseException:
                 # Before the first checkpoint retain HS-18 rollback behavior.
                 # Durable partial adoption keeps its original recovery copy.
-                if not pending(connection):
+                if not pending(connection) and not retained:
                     with contextlib.suppress(OSError):
                         copy.unlink()
                     with contextlib.suppress(OSError):
                         marker.unlink()
                 raise
+            if self._migration_target == 22:
+                self._initialize()
+                return
             with contextlib.suppress(OSError):
                 marker.unlink()  # committed: the copy is the kept one; a marker left by a death here is cleared below
         elif (
@@ -633,6 +661,11 @@ class ProjectHistory:
             or actual_schema != schema_set(_SCHEMA)
         ):
             raise HistoryError("history_incompatible")
+        if self._takeover_intent is not None and version == 23:
+            with self._transaction():
+                migration = HoldMigration(connection, 'project', self._hold_migration_classes(),
+                    self._hold_now(), 23, lambda: HistoryError('history_incompatible'))
+                self._adopt_hold_migration(migration)
         if self._fence.epoch is None:
             with self._transaction():
                 self._check_schema_identity(_COLUMNS)
@@ -688,16 +721,24 @@ class ProjectHistory:
                 for statement in STEP_21_SCHEMA.split(';'):
                     if statement.strip():
                         connection.execute(statement)
+            if self._migration_target == 23:
+                takeover_schema.install(connection, takeover_schema.PROJECT_SCHEMA)
+                takeover_schema.raise_floor(connection, PACKAGE_VERSION, lambda: HistoryError('history_wrong_owner'),
+                                            initialize=True)
             migration = HoldMigration(connection, 'project', self._hold_migration_classes(),
-                self._hold_now(), _SCHEMA_VERSION, lambda: HistoryError('history_incompatible'))
+                self._hold_now(), self._migration_target, lambda: HistoryError('history_incompatible'))
             self._adopt_hold_migration(migration)
-            connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+            connection.execute(f"PRAGMA user_version={self._migration_target}")
 
-    @staticmethod
-    def _hold_migration_classes():
-        return (('lease', 'result_leases'), ('reservation', 'result_reservations'),
+    def _migration_columns(self):
+        return {name: columns for name, columns in _COLUMNS.items()
+                if self._migration_target == 23 or name not in takeover_schema.PROJECT_COLUMNS}
+
+    def _hold_migration_classes(self):
+        classes = (('lease', 'result_leases'), ('reservation', 'result_reservations'),
                 ('context', 'result_reservations'), ('result_custody', 'result_reservations'),
                 ('orchestration', 'project_orchestrations'))
+        return classes + ((('takeover_obligation', 'project_holds'),) if self._migration_target == 23 else ())
 
     def _adopt_hold_migration(self, migration):
         connection = self._connection
@@ -706,7 +747,8 @@ class ProjectHistory:
             migration.project_classifiers = {
                 'lease': lambda rows: self._classify_legacy_leases(rows, migration.now_ms),
                 'reservation': self._classify_legacy_reservations,
-                'result_custody': self._classify_legacy_custody}
+                'result_custody': self._classify_takeover_custody if self._migration_target == 23
+                                  else self._classify_legacy_custody}
             project_holds_schema.adopt_project_holds(connection, migration.now_ms)
             if migration.active:
                 for _, _, rowids in migration.batches('orchestration'):
@@ -714,7 +756,13 @@ class ProjectHistory:
                         self._orchestrations_to_adopt(rowids, now_ms=migration.now_ms))
             else:
                 project_holds_schema.adopt_orchestrations(connection, self.project_id, self._orchestrations_to_adopt())
-            self._check_schema_identity(_COLUMNS)
+            if self._migration_target == 23 and self._takeover_intent is not None:
+                from .project_takeover import adopt_project
+                adopt_project(self, self._takeover_intent, migration=migration)
+            elif self._migration_target == 23 and migration.active:
+                for _ in migration.batches('takeover_obligation'):
+                    pass
+            self._check_schema_identity(self._migration_columns())
             self._check_project_holds()
             migration.finish()
         finally:
@@ -724,6 +772,29 @@ class ProjectHistory:
         # Compiled table names only; S3 supplies at most 64 native source rowids.
         selection = '' if rowids is None else ' WHERE rowid IN (' + ','.join('?' for _ in rowids) + ')'
         return self._connection.execute('SELECT * FROM ' + table + selection, rowids or ()).fetchall()
+
+    def _classify_takeover_custody(self, rowids):
+        from .runtime_lineage import verified_predecessor, successor_custody
+        intent = self._takeover_intent
+        old = None if intent is None else intent.get('predecessor_service')
+        if old is None or not verified_predecessor(old, PACKAGE_VERSION):
+            return
+        selection = '' if rowids is None else ' WHERE rowid IN (' + ','.join('?' for _ in rowids) + ')'
+        for row in self._connection.execute('SELECT rowid,* FROM result_reservations' + selection, rowids or ()):
+            value = self._reservation(row)
+            digest = value.binding.runtime_digest
+            if digest != old['digest'] and not successor_custody(self._connection, digest, old['digest'],
+                    project=True, current_version=old['version']):
+                continue
+            self._classify_legacy_custody([row['rowid']])
+            identity = attempt_identity(value.binding.run_handle, value.binding.attempt)
+            held = self._connection.execute("SELECT evidence FROM project_holds WHERE kind='result_custody' AND identity=?",
+                                             (identity,)).fetchone()
+            if held is not None and held['evidence'] is not None:
+                evidence = json.loads(held['evidence'])
+                evidence['takeover_id'] = intent['takeover_id']
+                self._connection.execute("UPDATE project_holds SET evidence=? WHERE kind='result_custody' AND identity=?",
+                                        (project_holds_schema.evidence_json(**evidence), identity))
 
     def _legacy_evidence(self, kind, identity, reason, next_step, **facts):
         """Classify a held obligation without changing its state or authenticated outbox/reply evidence."""
@@ -737,7 +808,8 @@ class ProjectHistory:
             return  # Unknown historical evidence is not ours to replace.
         if type(evidence) is not dict or 'reason' in evidence:
             return
-        evidence.update(classified=22, reason=reason, next_step=next_step, **facts)  # keep the original 'adopted' step
+        evidence.update(classified=22, classified_owner=self._fence.digest,
+                        reason=reason, next_step=next_step, **facts)  # keep the original 'adopted' step
         self._connection.execute("UPDATE project_holds SET evidence=? WHERE project_id=? AND kind=? AND identity=?",
             (project_holds_schema.evidence_json(**evidence), self.project_id, kind, identity))
 
@@ -913,7 +985,7 @@ class ProjectHistory:
         attempt ends. A marker left behind is a dead attempt's. Nothing is taken from a marker's name. Returns
         (marker, identity or None when its content is not a valid identity)."""
         found = []
-        for path in self._directory.glob(f".history.sqlite3.upgrade-{_SCHEMA_VERSION}.*.attempt"):
+        for path in self._directory.glob(".history.sqlite3.upgrade-*.*.attempt"):
             identity = None
             with contextlib.suppress(OSError, ValueError, UnicodeDecodeError, HistoryError, ContractError):
                 descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
@@ -921,8 +993,8 @@ class ProjectHistory:
                     if stat.S_ISREG(os.fstat(descriptor).st_mode):
                         raw = os.read(descriptor, self._MARKER_BYTES + 1)
                         data = parse_bounded_json(raw, max_bytes=self._MARKER_BYTES)
-                        copy = re.compile(rf"history\.sqlite3\.before-{_SCHEMA_VERSION}\.[0-9]+(\.[0-9a-f]{{8}})?")
-                        partial = re.compile(rf"\.history\.sqlite3\.before-{_SCHEMA_VERSION}\.[0-9]+\.[0-9a-f]{{16}}\.partial")
+                        copy = re.compile(rf"history\.sqlite3\.before-(?:22|23)\.[0-9]+(\.[0-9a-f]{{8}})?")
+                        partial = re.compile(rf"\.history\.sqlite3\.before-(?:22|23)\.[0-9]+\.[0-9a-f]{{16}}\.partial")
                         if (type(data) is dict and data.keys() == {"copy", "partial", "size", "sha256"}
                                 and type(data["copy"]) is str and copy.fullmatch(data["copy"])
                                 and type(data["partial"]) is str and partial.fullmatch(data["partial"])
@@ -3094,6 +3166,7 @@ class ProjectHistory:
         Expired replay evidence is refused with `history_result_not_reserved`. An attempt with nothing left
         to settle here (no register row, a row released some other way, a lease never claimed or already ended) is
         `history_result_not_reserved`: the account is then only asked to settle, as before B4s."""
+        from .project_takeover import successor_settlement
         from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountError, AccountRequest, account_request_digest
         from .account_claim_contracts import ClaimError
         from .lost_run_closure import CLOSURE_OPERATION, RELEASE_KINDS
@@ -3154,9 +3227,10 @@ class ProjectHistory:
                             else lease_row is None)
                 if not verified:
                     raise HistoryError("history_conflict")
-                if hold["request_id"] != request_id or hold["request_digest"] != digest:
+                if (hold["request_id"] != request_id or (hold["request_digest"] != digest
+                        and not successor_settlement(self, hold, request_id, digest, payload=payload))):
                     raise HistoryError("history_conflict")
-                return {"state": "settled", "request_id": hold["request_id"], "request_digest": hold["request_digest"],
+                return {"state": "settled", "request_id": hold["request_id"], "request_digest": digest,
                         "release_kind": hold["release_kind"]}
             if hold["state"] == "held":
                 if kind == "reservation" and reservation["state"] == "reserved":
@@ -3165,8 +3239,11 @@ class ProjectHistory:
                         "SELECT state FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
                         (self.project_id, run_handle, attempt)).fetchone()[0] != "claim_pending":
                     raise HistoryError("history_result_not_reserved")
-            elif (hold["request_digest"] not in (None, digest) or hold["request_id"] not in (None, request_id)):
+            elif ((hold["request_digest"] not in (None, digest) or hold["request_id"] not in (None, request_id))
+                  and not successor_settlement(self, hold, request_id, digest, payload=payload)):
                 raise HistoryError("history_conflict")  # the first complete request stands
+            if hold["request_digest"] not in (None, digest):
+                return {"state": "releasing", "request_id": request_id, "request_digest": digest}
             self._connection.execute(
                 "UPDATE project_holds SET state='releasing',request_id=?,request_digest=? WHERE project_id=? AND kind=? "
                 "AND identity=? AND state<>'released'", (request_id, digest, self.project_id, kind, hold["identity"]))
@@ -3190,6 +3267,7 @@ class ProjectHistory:
         outbox request the register row holds (RS-B-B4-2). An identical closure again is answered from the settlement
         row, or after the purge from the register tombstone (`known`), within the replay window; after it,
         `history_result_not_reserved`. Any other closure is refused with nothing written."""
+        from .project_takeover import successor_settlement
         from .lost_run_closure import MAX_LOST_RUN_CLOSURE_BYTES, verify_lost_run_closure
 
         lease_binding = self._lease_binding(lease_binding)
@@ -3241,7 +3319,8 @@ class ProjectHistory:
             lease = self._lease_row(lease_binding)
             if (lease.lease_digest != closure["lease_digest"] or lease.assignment_digest != closure["assignment_digest"]
                     or closure["released_at_ms"] < lease.created_at_ms
-                    or hold["state"] != "releasing" or hold["request_digest"] != closure["request_digest"]):
+                    or hold["state"] != "releasing" or (hold["request_digest"] != closure["request_digest"]
+                        and not successor_settlement(self, hold, hold["request_id"], closure["request_digest"]))):
                 raise HistoryError("history_conflict")
             # Batch 4 (RSF-S7-1 with RS-B-B5a-3, decision 219): the released hold keeps ONE bounded evidence value,
             # written once by release_hold below: S7's authenticated closure; for `crashed`, B5a's minimal process

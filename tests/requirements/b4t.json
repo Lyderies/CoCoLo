@@ -1,0 +1,60 @@
+{
+ "authority": "docs/requirements/b4t/requirements.md",
+ "requirements": [
+  {
+   "id": "RS-B-B4t-0",
+   "source": "tests/requirements/b4t.json#RS-B-B4t-0",
+   "statement": "Update with a child running proceeds; lost settlement, retained committed custody and phase recovery; all other preflight refusals write nothing."
+  },
+  {
+   "id": "RS-B-B4t-1",
+   "source": "tests/requirements/b4t.json#RS-B-B4t-1",
+   "statement": "No idle wait or manual stop for a verified predecessor."
+  },
+  {
+   "id": "RS-B-B4t-2",
+   "source": "tests/requirements/b4t.json#RS-B-B4t-2",
+   "statement": "Committed results and open/paused orchestrations stay recordable under current authority."
+  },
+  {
+   "id": "RS-B-B4t-3",
+   "source": "tests/requirements/b4t.json#RS-B-B4t-3",
+   "statement": "Proven predecessor exit before adoption; lifetime lock and epoch fence; schema and version floor prevent reopen."
+  },
+  {
+   "id": "RS-B-B4t-4",
+   "source": "tests/requirements/b4t.json#RS-B-B4t-4",
+   "statement": "Updated project's running children end lost; other work follows D2.5 and other projects survive."
+  },
+  {
+   "id": "RS-B-B4t-5",
+   "source": "tests/requirements/b4t.json#RS-B-B4t-5",
+   "statement": "One recording or settlement effect per binding across versions and retries."
+  },
+  {
+   "id": "RS-B-B4t-6",
+   "source": "tests/requirements/b4t.json#RS-B-B4t-6",
+   "statement": "Primary recheck remains idempotent across takeover."
+  },
+  {
+   "id": "RS-B-B4t-7",
+   "source": "tests/requirements/b4t.json#RS-B-B4t-7",
+   "statement": "Existing B4m commands and documented installed-old-client refusals remain accurate."
+  },
+  {
+   "id": "RS-B-B4t-8",
+   "source": "tests/requirements/b4t.json#RS-B-B4t-8",
+   "statement": "Status names each takeover outcome using D2.8 wording without changing existing reply shapes."
+  },
+  {
+   "id": "RS-B-B4t-9",
+   "source": "tests/requirements/b4t.json#RS-B-B4t-9",
+   "statement": "Unknown lineage or corrupt custody is refused and held, never guessed or freed."
+  },
+  {
+   "id": "RS-B-B4t-10",
+   "source": "tests/requirements/b4t.json#RS-B-B4t-10",
+   "statement": "Every named phase resumes with one effect, including internal migration and atomic-file crash cuts."
+  }
+ ]
+}

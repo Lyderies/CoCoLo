@@ -219,12 +219,14 @@ class FenceTests(unittest.TestCase):
                                     connection.execute('DROP TRIGGER IF EXISTS ' + name)
                             connection.execute('DROP TABLE run_holds')
                             connection.execute('DROP TABLE runtime_takeover')
+                            connection.execute('DROP TABLE runtime_floor')
+                            connection.execute('DROP TABLE runtime_lineage')
                             connection.execute('ALTER TABLE records DROP COLUMN probe_id')
                             connection.execute('PRAGMA user_version=14')
                         original = LearningLedger._initialize_run_holds_locked
-                        def adopt(owner):
+                        def adopt(owner, **options):
                             observe(owner._connection)
-                            original(owner)
+                            original(owner, **options)
                             if cut:
                                 raise Cut()
                         patch = mock.patch.object(LearningLedger, '_initialize_run_holds_locked', adopt)
@@ -262,9 +264,10 @@ class FenceTests(unittest.TestCase):
                             owner = open_owner()
                             self.assertEqual(seen[0], self.epoch(owner))
                             owner.close()
-                    self.assertEqual(1, len(seen))
+                    self.assertEqual(1 if cut else 2, len(seen))  # the predecessor stage, then B4t
+                    self.assertTrue(all(row == seen[0] for row in seen))  # one epoch throughout both stages
                     with sqlite3.connect(database) as connection:
-                        self.assertEqual(prior if cut else (17 if kind == 'ledger' else 22),
+                        self.assertEqual(prior if cut else (18 if kind == 'ledger' else 23),
                                          connection.execute('PRAGMA user_version').fetchone()[0])
                         self.assertEqual(0 if cut else 1, connection.execute(
                             "SELECT COUNT(*) FROM sqlite_master WHERE name='runtime_takeover'").fetchone()[0])

@@ -142,17 +142,18 @@ class RegisterRowTests(OrchestrationStore):
         consistent(self, self.store)
 
     @requirements('RS-B-B6-1', why_not_scenario=WHY)
-    def test_B6_1_end_earlier_releases_the_row_taken_at_open_closed_and_the_unattended_close_interrupted_unattended(
+    def test_B4t_keeps_open_rows_and_unattended_close_still_uses_its_own_rule(
             self):
         from dataclasses import replace
         updated = self.open('open-updated')['orchestration_handle']
         idle = self.open('open-idle')['orchestration_handle']
         self.now = 1500
-        self.assertEqual(2, self.owner.end_earlier(replace(self.scope, runtime_digest='b' * 64), 10))
+        self.assertEqual(0, self.owner.end_earlier(replace(self.scope, runtime_digest='b' * 64), 10))
         state, kind, taken, _, _, evidence = hold(self.store, updated)
-        self.assertEqual(('released', 'closed', 1000, {'ended_by_update_unrecorded': False}),
-                         (state, kind, taken, json.loads(evidence)))
+        self.assertEqual(('held', None, 1000, None), (state, kind, taken, evidence))
         self.assertEqual({'ended_by_update_unrecorded': 0}, self.store.runtime_close_status())
+        self.close(self.owner._current(self.scope, updated)['snapshot'], request_id='close-updated')
+        self.close(self.owner._current(self.scope, idle)['snapshot'], request_id='close-idle')
         other = self.open('open-other')['orchestration_handle']
         self.now = 1500 + ORCHESTRATION_IDLE_MS
         self.assertEqual(1, self.owner.end_idle(self.now))
@@ -558,9 +559,9 @@ class SchemaStepTests(OrchestrationStore):
         self.now = 4000
         store = self.upgrade()
         db = store._connection
-        self.assertEqual(22, db.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(23, db.execute('PRAGMA user_version').fetchone()[0])
         self.assertEqual(1, len(self.copies()))
-        self.assertTrue(self.copies()[0].name.startswith('history.sqlite3.before-22.'))
+        self.assertTrue(self.copies()[0].name.startswith('history.sqlite3.before-23.'))
         with closing(sqlite3.connect(self.copies()[0])) as copy:
             self.assertEqual(20, copy.execute('PRAGMA user_version').fetchone()[0])
         after = self.rows()
@@ -569,6 +570,10 @@ class SchemaStepTests(OrchestrationStore):
         self.assertEqual(before.pop('project_orchestrations'), sorted((row[:5] for row in orchestrations), key=repr))
         old_holds = before.pop('project_holds')
         self.assertEqual(1, after.pop("runtime_takeover")[0][1])
+        from codex_agents.collector_client import PACKAGE_VERSION
+        self.assertEqual([(1, PACKAGE_VERSION)], after.pop('runtime_floor'))
+        for name in ('takeover_record', 'takeover_runs', 'takeover_obligations'):
+            self.assertEqual([], after.pop(name))
         self.assertEqual(before, after)  # every historical table byte for byte
         self.assertLessEqual(set(old_holds), set(holds))  # the update's tombstone kept as it was
         statuses = {}
@@ -632,7 +637,7 @@ class SchemaStepTests(OrchestrationStore):
             with self.assertRaises((HistoryError, OSError)):
                 self.upgrade()
         self.assert_left_at_20(before, digest)
-        self.assertEqual(22, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(23, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
 
     @requirements('RS-B-B6-7', why_not_scenario=WHY)
     def test_B6_7_process_death_inside_the_step_leaves_20_and_a_later_attempt_upgrades(self):
@@ -656,7 +661,7 @@ class SchemaStepTests(OrchestrationStore):
         self.assertEqual(9, completed.returncode, completed.stderr)
         self.assertEqual(20, self.version())
         self.assertEqual(before, self.rows())
-        self.assertEqual(22, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(23, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
         # B6 review r1 (MED crash copy): the dead attempt's own copy is removed by the retry; exactly one is left,
         # the store as it was (format 20), and no attempt marker or temporary file stays behind.
         (copy,) = self.copies()
@@ -684,7 +689,7 @@ class SchemaStepTests(OrchestrationStore):
                     if 'ADD COLUMN' in statement:
                         db.execute('ALTER TABLE project_orchestrations DROP COLUMN state')
                     db.commit()
-        self.assertEqual(22, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(23, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
 
     @requirements('RS-B-B6-7', 'RS-D-9-S3', why_not_scenario=WHY)
     def test_B6_7_the_step_adds_the_retirement_partial_index(self):
@@ -1033,7 +1038,7 @@ class FinalCrashCopyTests(Step20Store):
         marker = self.directory / f'.history.sqlite3.upgrade-22.{status.st_dev}-{status.st_ino}.attempt'
         marker.write_text(json.dumps({'copy': kept.name, 'partial': '.' + kept.name + '.0000000000000000.partial',
                                       'size': 4096, 'sha256': hashlib.sha256(b'the dead copy').hexdigest()}))
-        self.assertEqual(22, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(23, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assertEqual(b'a copy this attempt never made', kept.read_bytes())
         self.assertFalse(marker.exists())
 
@@ -1041,14 +1046,14 @@ class FinalCrashCopyTests(Step20Store):
     def test_B6_7_a_dead_attempts_copy_with_another_hard_link_is_left_alone(self):
         die_inside_step(self)
         (copy,) = self.copies()
-        (marker,) = self.directory.glob('.history.sqlite3.upgrade-22.*.attempt')
+        (marker,) = self.directory.glob('.history.sqlite3.upgrade-23.*.attempt')
         content = copy.read_bytes()
         named = json.loads(marker.read_text())  # the identity is in the marker's content
         self.assertEqual((copy.name, len(content), hashlib.sha256(content).hexdigest()),
                          (named['copy'], named['size'], named['sha256']))
         elsewhere = self.directory.parent / 'operator-link'
         os.link(copy, elsewhere)
-        self.assertEqual(22, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(23, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assertEqual((content, content), (copy.read_bytes(), elsewhere.read_bytes()))
         self.assertEqual(2, len(self.copies()))  # the linked dead copy and this attempt's own
         self.assertEqual([], list(self.directory.glob('*.attempt')))
@@ -1213,7 +1218,7 @@ class FinalStalePartialTests(Step20Store):
         for path in (other_format, linked, lookalike):
             path.write_bytes(b'not this attempt')
         os.link(linked, self.directory.parent / 'operator-link')
-        self.assertEqual(22, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(23, self.upgrade()._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assertFalse(dead.exists())
         self.assertTrue(all(path.read_bytes() == b'not this attempt' for path in (other_format, linked, lookalike)))
         self.assertEqual(1, len(self.copies()))

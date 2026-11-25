@@ -313,11 +313,11 @@
    "id": "L12.3",
    "flow": "L12",
    "source": "PLAN-0.4.0.md T7",
-   "statement": "An update with a child really running refuses plainly and changes nothing.",
+   "statement": "An update with a child really running goes ahead: the old child ends lost, status names the hand-over, finished results stay recordable, and nothing is half-installed at any step.",
    "checks": [
-    "l12_3_update_with_a_running_child_is_refused_plainly_and_the_child_goes_on",
-    "l12_3_refused_update_with_a_running_child_changes_nothing",
-    "l12_3_the_update_after_the_refused_one_goes_through_when_the_child_has_ended"
+    "l12_3_update_with_a_running_child_goes_ahead_and_the_child_ends_lost",
+    "l12_3_finished_result_stays_recordable_after_the_update",
+    "l12_3_no_half_installed_file_at_any_step"
    ]
   },
   {
@@ -455,7 +455,7 @@
    "id": "G6",
    "flow": "all",
    "source": "PLAN-0.4.0.md T7",
-   "statement": "An update never needs the collector stopped by hand, and finishes with the collector healthy on the new build.",
+   "statement": "An update never needs the collector stopped by hand, also with a child running, and finishes with the collector healthy on the new build.",
    "checks": [
     "g6_update_never_needs_the_collector_stopped_by_hand_and_ends_healthy_on_the_new_build"
    ]

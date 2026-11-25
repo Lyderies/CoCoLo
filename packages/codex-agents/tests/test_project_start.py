@@ -541,7 +541,9 @@ class StartTests(StarterBase):
             'result_endpoint': str(directory / 'result.sock')}))
         hint.chmod(0o600)
         started = self.launch()['started_at_ms']
-        expected = 'recovery: needs update handover: ' + self.command('alpha')
+        from codex_agents.compatibility_message import compatibility_message
+        expected = 'recovery: needs update hand-over: ' + compatibility_message(
+            None, project_root=root, state_name='project service')
         wait_for(self, lambda: self.status('alpha') == expected, 20, f'status: {self.status("alpha")}')
         time.sleep(1.5)  # rechecked, still not replaced
         self.assertEqual([], self.events('spawned'))
@@ -994,7 +996,9 @@ class OtherVersionTests(StarterBase):
         authorize_collector_runtime(self.state, ORCHESTRATION_ROOT / 'cli.py')
         started = self.launch()['started_at_ms']
         CollectorClient(self.state.socket, timeout=30).record_launch(root, str(copy), copy.name)
-        expected = 'recovery: needs update handover: ' + self.command('alpha')
+        from codex_agents.compatibility_message import compatibility_message
+        expected = 'recovery: needs update hand-over: ' + compatibility_message(
+            None, project_root=root, state_name='project service')
         wait_for(self, lambda: self.status('alpha') == expected, 20, lambda: f'status: {self.status("alpha")}')
         time.sleep(1.5)  # rechecked, still not replaced
         self.assertIsNone(host.poll())  # the earlier runtime's host still serves

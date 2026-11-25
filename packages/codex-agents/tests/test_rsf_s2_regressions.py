@@ -36,6 +36,8 @@ class FenceRegressionTests(unittest.TestCase):
         rows = [tuple(row) for row in ledger._connection.execute('SELECT * FROM records')]
         ledger.close()
         with closing(sqlite3.connect(self.state.database)) as connection:
+            connection.execute('DROP TABLE IF EXISTS runtime_floor')
+            connection.execute('DROP TABLE IF EXISTS runtime_lineage')
             connection.execute('DROP TABLE runtime_takeover')
             connection.execute('PRAGMA user_version=16')
         return rows
@@ -58,7 +60,7 @@ class FenceRegressionTests(unittest.TestCase):
         for epoch in (1, 2):
             ledger = learning_store.LearningLedger(self.state)
             try:
-                self.assertEqual(17, ledger._connection.execute('PRAGMA user_version').fetchone()[0])
+                self.assertEqual(18, ledger._connection.execute('PRAGMA user_version').fetchone()[0])
                 self.assertEqual(epoch, ledger._connection.execute('SELECT epoch FROM runtime_takeover').fetchone()[0])
                 self.assertEqual(rows, [tuple(row) for row in ledger._connection.execute('SELECT * FROM records')])
                 self.assertEqual(0, ledger._connection.execute(
@@ -75,7 +77,7 @@ class FenceRegressionTests(unittest.TestCase):
             ledger = learning_store.LearningLedger(self.state, allow_schema_upgrade=True)
         try:
             self.assertEqual(rows, [tuple(row) for row in ledger._connection.execute('SELECT * FROM records')])
-            self.assertEqual(17, ledger._connection.execute('PRAGMA user_version').fetchone()[0])
+            self.assertEqual(18, ledger._connection.execute('PRAGMA user_version').fetchone()[0])
         finally:
             ledger.close()
 

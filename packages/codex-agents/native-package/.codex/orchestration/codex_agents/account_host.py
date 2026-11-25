@@ -45,6 +45,7 @@ SECOND = 1_000_000_000
 # What an enrolled primary may ask the account owner. Owner-only operations are
 # never offered. A host open must carry its originals; a claim, the run's lease.
 HOST_OPERATIONS = frozenset({
+    'account.takeover_report',
     'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
     'account.provider_state_snapshot',
     'account.observe_provider', 'account.record_observation_unavailable', 'account.billing_probe',
@@ -67,6 +68,7 @@ WAKE_OPERATIONS = frozenset({'account.publish_wake'})
 # never an open, a claim or a probe. Its provider observation is the standalone kind
 # (who is signed in): one for a run's launch evidence is refused.
 OWNER_OPERATIONS = frozenset({
+    'account.takeover_report',
     'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
     'account.provider_state_snapshot',
     'account.observe_provider',

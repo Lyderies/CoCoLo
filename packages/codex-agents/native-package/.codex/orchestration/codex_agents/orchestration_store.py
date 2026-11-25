@@ -199,49 +199,16 @@ class OrchestrationOwner:
         return counts
 
     def end_earlier(self, current, limit):
-        """End, as interrupted, the open or paused orchestrations an earlier runtime of this same service
-        left (0.3.4 R10): same project, namespace, supervisor instance and generation, another runtime
-        digest. Nothing could use or close them after an update. The ordinary close does it, under each
-        one's own sealed scope, so a run not yet over still keeps it open. Returns how many ended."""
-        current = OrchestrationScope(**{name: getattr(current, name) for name in SCOPE_FIELDS})
-        if current.project_id != self._history.project_id:
-            return 0
-        same = {name: getattr(current, name) for name in SCOPE_FIELDS if name != 'runtime_digest'}
-        own = self._scope_digest(current)
-        # A bounded window from where the last pass stopped; every attempt counts (review 034-r10).
-        after = self._history._purge_cursors.get('earlier')
-        rows = self._db.execute('SELECT rowid,orchestration_handle,sequence,checkpoint_digest,scope_digest '
-                                'FROM project_orchestrations WHERE project_id=? AND scope_digest!=?'
-                                + ('' if after is None else ' AND rowid>?') + ' ORDER BY rowid LIMIT ?',
-                                (current.project_id, own, *(() if after is None else (after,)), limit * 16)).fetchall()
-        if not rows and after is not None:
-            self._history._purge_cursors['earlier'] = None
-            return self.end_earlier(current, limit)
-        ended = tried = 0
-        for row in rows:
-            if tried >= limit:
-                break
-            self._history._purge_cursors['earlier'] = row['rowid']
-            snapshot = self._latest_snapshot(row)
-            if (snapshot is None or snapshot['status'] in ORCHESTRATION_TERMINAL_STATES
-                    or any(snapshot['scope'].get(name) != value for name, value in same.items())
-                    or snapshot['scope'].get('runtime_digest') == current.runtime_digest):
-                continue
-            earlier = OrchestrationScope(**snapshot['scope'])
-            if self._scope_digest(earlier) != row['scope_digest']:
-                continue  # The row does not belong to the scope its checkpoint names: left as it is.
-            tried += 1
-            # A fresh request id each time: no client can have used it before (review 034-r10).
-            request = OrchestrationRequest(1, 'orchestration.close', 'end-earlier-' + secrets.token_hex(16), earlier, {
-                'orchestration_handle': row['orchestration_handle'], 'expected_sequence': snapshot['sequence'],
-                'status': 'interrupted', 'goal_tokens_used': None, 'goal_time_used_seconds': None})
-            try:
-                self.apply(request, client_version=snapshot['client_version'], before_commit=lambda: None,
-                           _runtime_update=True)
-            except HistoryError:
-                continue  # A run not yet over, or anything else: it stays open for a later pass.
-            ended += 1
-        return ended
+        """B4t retires the interim runtime-only close (D2.11, decision 90.6).
+
+        Adopted open/paused orchestrations keep their sealed scope and custody.
+        Unknown and newer scopes are also kept: a recomputed scope digest is
+        integrity evidence, never provenance or permission to close anything.
+        Their ordinary primary close, rollover and idle rules still apply.
+        """
+        OrchestrationScope(**{name: getattr(current, name) for name in SCOPE_FIELDS})
+        self._history._require_owner(read_only=True)
+        return 0
 
     _UNATTENDED_SELECT = (
         "SELECT identity FROM project_holds INDEXED BY project_holds_orchestration_check WHERE project_id=? "

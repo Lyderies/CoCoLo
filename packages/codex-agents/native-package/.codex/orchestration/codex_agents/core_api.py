@@ -843,6 +843,20 @@ def peer_uid(sock):
         return None
 
 
+def peer_pid(sock):
+    """Candidate listener pid from kernel peer credentials; never a signal proof."""
+    try:
+        if sys.platform == 'darwin':
+            data = sock.getsockopt(0, 0x002, 4)  # SOL_LOCAL, LOCAL_PEERPID
+            pid = struct.unpack('i', data)[0]
+        else:
+            data = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i'))
+            pid = struct.unpack('3i', data)[0]
+        return pid if pid > 0 else None
+    except (OSError, AttributeError, struct.error):
+        return None
+
+
 # --- sessions and subscriptions ----------------------------------------------------------------
 
 class Session:

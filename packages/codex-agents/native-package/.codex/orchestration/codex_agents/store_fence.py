@@ -110,6 +110,9 @@ class StoreFence:
             raise self.refusal()
         if not connection.in_transaction:
             raise self.refusal()
+        from .collector_client import PACKAGE_VERSION
+        from .takeover_schema import check_floor, raise_floor
+        check_floor(connection, PACKAGE_VERSION, self.refusal)
         # BEGIN already performed the full lifetime-lock probe.
         if self.epoch is not None:
             self.check(connection, full=False)
@@ -134,6 +137,7 @@ class StoreFence:
                     or not isinstance(row[3], str) or re.fullmatch('[0-9a-f]{64}', row[3]) is None):
                 raise self.refusal()
             epoch, old = row[1] + 1, row[3]
+        raise_floor(connection, PACKAGE_VERSION, self.refusal)
         sqlite3.Connection.execute(connection,
             'INSERT OR REPLACE INTO runtime_takeover VALUES(1,?,?,?)', (epoch, old, self.digest))
         self.epoch = epoch

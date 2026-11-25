@@ -303,7 +303,7 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
 
     # UPDFIX (L12.3) ----------------------------------------------------------------------------------
 
-    CHILD = '{"ready": true, "children_running": true, "would_replace": true, "refused": true}'
+    REFUSED = '{"ready": true, "children_running": true, "would_replace": true, "refused": true, "reason": "predecessor_unverified", "message": "the running version could not be confirmed; nothing was changed"}'
 
     def snapshot(self, project: Path) -> tuple:
         """The manifest's bytes, Git's HEAD and the commit count: what a refused update must leave alone."""
@@ -313,14 +313,14 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
                               env=self.env).stdout.strip()
         return manifest.read_bytes(), head, self.commit_count(project)
 
-    def test_UPDFIX_3_an_update_with_a_child_running_is_refused_before_anything_is_installed(self):
+    def test_B4t_unverified_predecessor_is_refused_before_anything_is_installed(self):
         project = self.installed()
         before = self.snapshot(project)
-        code, screen = self.update(project, {**REGISTERED, "FAKE_CHILDREN": self.CHILD})
+        code, screen = self.update(project, {**REGISTERED, "FAKE_CHILDREN": self.REFUSED})
         flat = " ".join(screen.split())
         self.assertEqual(1, code, screen[-1500:])
-        self.assertIn("child_run_active", flat)
-        for words in ("a child run is active", "nothing was changed", "try again when none is running"):
+        self.assertIn("predecessor_unverified", flat)
+        for words in ("the running version could not be confirmed", "nothing was changed"):
             self.assertIn(words, flat)
         self.assertEqual(before, self.snapshot(project))  # no file written, nothing committed
         self.assertNotIn("Installing", screen)  # the installer never ran
@@ -339,11 +339,34 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
                 self.assertEqual(0, code, screen[-1500:])
                 self.assertNotIn("child_run_active", screen)
 
+    def test_B4t_the_busy_takeover_finishes_before_install_and_completes_after_service_start(self):
+        project = self.installed()
+        plan = json.dumps(dict(ready=True, children_running=True, would_replace=True, refused=False,
+            takeover=dict(takeover='planned', children=1, other_children=0, service_version='0.8.66',
+                          records_upgrade=False)))
+        reply = json.dumps(dict(ready=True, takeover=True, phase='account_done', predecessor_version='0.8.66',
+                                successor_version='0.8.67', runs=1, lost=1, finished_kept=2, killed=False))
+        code, screen = self.update(project, {**REGISTERED, 'FAKE_CHILDREN': plan, 'FAKE_TAKEOVER': reply})
+        self.assertEqual(0, code, screen[-1500:])
+        flat = ' '.join(screen.split())
+        self.assertIn('that run ends as lost', flat)
+        self.assertIn('Finished results are kept and can still be recorded', flat)
+        self.assertIn('1 child run ended (lost, ended by the update). 2 finished results kept.', flat)
+        self.assertNotIn('try again when none is running', flat)
+        calls = (self.base / 'register.log').read_text().splitlines()
+        stops = [i for i, call in enumerate(calls) if 'learning-update-takeover' in call]
+        self.assertEqual(3, len(stops), calls)
+        self.assertIn('--action run', calls[stops[0]])
+        self.assertIn('--action installed', calls[stops[1]])
+        self.assertIn('--action complete', calls[stops[2]])
+        self.assertLess(stops[0], next(i for i, call in enumerate(calls) if 'learning-register' in call))
+        self.assertLess(next(i for i, call in enumerate(calls) if 'learning-start-project-service' in call), stops[2])
+
     def test_UPDFIX_3_a_refused_project_is_not_remembered(self):
         project = self.installed()
         listed = self.home / ".local" / "state" / "codex-agents" / "installer" / "setup-projects"
         listed.write_text("")
-        code, _ = self.update(project, {**REGISTERED, "FAKE_CHILDREN": self.CHILD})
+        code, _ = self.update(project, {**REGISTERED, "FAKE_CHILDREN": self.REFUSED})
         self.assertEqual(1, code)
         self.assertEqual("", listed.read_text())
 
@@ -366,17 +389,17 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
                 self.assertNotIn("Installing", screen)
                 self.assertEqual(0, self.attested())
 
-    def test_UPDFIX_3_a_child_that_appears_before_the_install_is_refused_before_any_write(self):
+    def test_B4t_a_predecessor_that_becomes_unverified_is_refused_before_any_write(self):
         # Review r1 MED: the check is repeated right before the installer's --apply (step 4's first write).
         project = self.installed()
         before = self.snapshot(project)
         applies = self.py_full.read_text().count("--apply")
         code, screen = self.update(project, {**REGISTERED, "FAKE_CHILDREN": self.NOT_REFUSED,
-                                             "FAKE_CHILDREN_LATER": self.CHILD})
+                                             "FAKE_CHILDREN_LATER": self.REFUSED})
         flat = " ".join(screen.split())
         self.assertEqual(1, code, screen[-1500:])
-        self.assertIn("child_run_active", flat)
-        self.assertIn("a child run is active", flat)
+        self.assertIn("predecessor_unverified", flat)
+        self.assertIn("the running version could not be confirmed", flat)
         self.assertEqual(before, self.snapshot(project))
         self.assertEqual(applies, self.py_full.read_text().count("--apply"))  # the installer never wrote
         calls = (self.base / "register.log").read_text().splitlines()
@@ -390,14 +413,14 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
         listed = self.home / ".local" / "state" / "codex-agents" / "installer" / "setup-projects"
         listed.write_text("")
         self.attest_count = self.base / "attest.count"
-        self.start(project, {**REGISTERED, "FAKE_ATTEST": str(self.attest_count), "FAKE_CHILDREN": self.CHILD})
+        self.start(project, {**REGISTERED, "FAKE_ATTEST": str(self.attest_count), "FAKE_CHILDREN": self.REFUSED})
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
         self.expect("Update this project (recommended)")
         self.send("\r")
         self.assertEqual(1, self.finish(timeout=60))
-        self.assertIn("a child run is active", " ".join(self.plain(self.transcript).split()))
+        self.assertIn("the running version could not be confirmed", " ".join(self.plain(self.transcript).split()))
         self.assertEqual("", listed.read_text())
 
     def test_UPDFIX_3_a_refusal_at_the_check_before_the_install_leaves_the_remembered_projects_alone(self):
@@ -406,10 +429,10 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
         project = self.installed()
         listed = self.home / ".local" / "state" / "codex-agents" / "installer" / "setup-projects"
         listed.write_text("")
-        env = {**REGISTERED, "FAKE_CHILDREN": self.NOT_REFUSED, "FAKE_CHILDREN_LATER": self.CHILD}
+        env = {**REGISTERED, "FAKE_CHILDREN": self.NOT_REFUSED, "FAKE_CHILDREN_LATER": self.REFUSED}
         code, screen = self.update(project, env)
         self.assertEqual(1, code, screen[-1500:])
-        self.assertIn("a child run is active", " ".join(screen.split()))
+        self.assertIn("the running version could not be confirmed", " ".join(screen.split()))
         self.assertEqual("", listed.read_text(), "the update path")
         self.attest_count = self.base / "attest.count"
         self.start(project, {**env, "FAKE_ATTEST": str(self.attest_count)})
@@ -419,19 +442,25 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
         self.expect("Update this project (recommended)")
         self.send("\r")
         self.assertEqual(1, self.finish(timeout=60))
-        self.assertIn("a child run is active", " ".join(self.plain(self.transcript).split()))
+        self.assertIn("the running version could not be confirmed", " ".join(self.plain(self.transcript).split()))
         self.assertEqual("", listed.read_text(), "the interactive path")
 
-    def test_UPDFIX_4_a_child_that_started_later_is_told_the_files_were_already_updated(self):
+    def test_B4t_a_failed_service_stop_is_resumable_before_the_installer_writes(self):
         project = self.installed()
-        code, screen = self.update(project, {"FAKE_REGISTER_BUSY": "1"})
+        before = self.snapshot(project)
+        plan = json.dumps(dict(ready=True, refused=False, children_running=True, would_replace=True,
+                               takeover=dict(takeover='planned', records_upgrade=False)))
+        reply = json.dumps(dict(ready=False, takeover=True, phase='hint_withdrawn', reason_code='service_stop_failed',
+            error="The update stopped partway (service_stop_failed): this project's old service was told to stop, and 1 child run ended as lost. Run ./setup.sh --update to finish."))
+        code, screen = self.update(project, {'FAKE_CHILDREN': plan, 'FAKE_TAKEOVER': reply})
         flat = " ".join(screen.split())
         self.assertEqual(1, code, screen[-1500:])
-        self.assertIn("had already updated this project's files in step 4", flat)
-        self.assertIn("run the update again when no child is running", flat)
-        # Review r1 MED: the collector's own "nothing was changed" is not shown for a project step 4 already updated.
-        self.assertNotIn("nothing was changed", flat)
-        self.assertNotIn("Nothing was changed", flat)
+        self.assertIn('service_stop_failed', flat)
+        self.assertIn('old service was told to stop, and 1 child run ended as lost', flat)
+        self.assertIn('./setup.sh --update', flat)
+        self.assertNotIn('nothing was changed', flat)
+        self.assertNotIn('Nothing was changed', flat)
+        self.assertEqual(before, self.snapshot(project))
 
 
 def load_tests(loader, tests, pattern):

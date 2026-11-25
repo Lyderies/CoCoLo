@@ -10,6 +10,7 @@ from unittest import mock
 from tests import test_learning_source_image_legacy as legacy
 from tests.learning_support import backup_body, event_record
 from codex_agents import project_history as history
+from codex_agents.takeover_schema import PROJECT_COLUMNS as TAKEOVER_COLUMNS
 from codex_agents import learning_source_transfer as transfer
 from codex_agents import project_learning_source as archive
 from codex_agents.history_contracts import HistoryError
@@ -32,7 +33,7 @@ class LearningSourceTransferTests(unittest.TestCase):
 
     def target_rows(self):
         return {name: [tuple(row) for row in self.target._connection.execute('SELECT * FROM ' + name)]
-                for name in history._COLUMNS if name != "runtime_takeover"}
+                for name in history._COLUMNS if name not in {'runtime_takeover', *TAKEOVER_COLUMNS}}
 
     def reopen(self):
         self.target.close()
