@@ -14,3 +14,5 @@ caps and registrations follow. Not merged, not installed, VERSION and digest cat
 - Run: `scripts/parallel_tests.py --jobs 4 --module codex:tests.test_health_workspaces --module
   codex:tests.test_health_monitor --module codex:tests.test_codex_preparation --module
   codex:tests.test_lifetime_cap_guard` with a short TMPDIR; expect `metadata_errors: []`.
+
+- `runtime_files.py` lists the new module (a test keeps the list equal to the package). The runtime digest in `runtime-releases.json` is now stale by design: the primary bumps VERSION and records it at merge (`tests.test_runtime_release` fails until then).
