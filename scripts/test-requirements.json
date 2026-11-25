@@ -3969,7 +3969,9 @@
    "codex:tests.test_account_lane_restart.BillingLaneRestartTests.test_N2_status_names_a_held_probe_process",
    "codex:tests.test_s12_account_lanes.S12RestartStatusTests.test_admitted_probe_wait_names_process_without_clearing_its_hold",
    "codex:tests.test_s12_account_lanes.S12CollectorLoopTests.test_Q3_admitted_never_launched_probe_still_spends_bootstrap",
-   "codex:tests.test_s12_account_lanes.S12RecheckProofTests.test_lost_tracking_or_known_live_descendant_cannot_be_replaced_by_absent_marker"
+   "codex:tests.test_s12_account_lanes.S12RecheckProofTests.test_lost_tracking_or_known_live_descendant_cannot_be_replaced_by_absent_marker",
+   "codex:tests.test_s12_account_lanes.S12RestartStatusTests.test_probe_kill_hint_requires_not_reaped_root",
+   "codex:tests.test_s12_account_lanes.S12RestartStatusTests.test_probe_kill_hint_skips_reaped_root_before_owned_unreaped_root"
   ]
  },
  "H1c-1": {
@@ -3982,7 +3984,10 @@
    "codex:tests.test_account_lane_restart.BillingLaneRestartTests.test_N2_a_probe_tree_not_confirmed_at_its_end_is_checked_again_settled_and_the_restart_comes",
    "codex:tests.test_account_lane_restart.BillingLaneRestartTests.test_N2_a_wait_on_an_admitted_probe_names_its_process_and_the_next_step",
    "codex:tests.test_account_lane_restart.BillingLaneRestartTests.test_N2_status_names_a_held_probe_process",
-   "codex:tests.test_s12_account_lanes.S12RestartStatusTests.test_admitted_probe_wait_names_process_without_clearing_its_hold"
+   "codex:tests.test_s12_account_lanes.S12RestartStatusTests.test_admitted_probe_wait_names_process_without_clearing_its_hold",
+   "codex:tests.test_s12_account_lanes.S12SignatureBirthTests.test_missing_signature_process_record_waits_boundedly_and_names_missing_evidence",
+   "codex:tests.test_s12_account_lanes.S12RestartStatusTests.test_probe_kill_hint_requires_not_reaped_root",
+   "codex:tests.test_s12_account_lanes.S12RestartStatusTests.test_probe_kill_hint_skips_reaped_root_before_owned_unreaped_root"
   ]
  },
  "H1c-3": {
@@ -3998,7 +4003,9 @@
    "codex:tests.test_s12_account_lanes.S12CollectorLoopTests.test_H1c_3_every_lane_child_must_clear_before_restart",
    "codex:tests.test_account_lane_restart.SignatureLaneRestartTests.test_N4_a_retained_root_ended_by_the_proof_has_its_pipes_closed",
    "codex:tests.test_s12_account_lanes.S12SignatureBirthTests.test_signature_restart_never_signals_a_root_with_unconfirmed_birth",
-   "codex:tests.test_s12_account_lanes.S12RecheckProofTests.test_lost_tracking_or_known_live_descendant_cannot_be_replaced_by_absent_marker"
+   "codex:tests.test_s12_account_lanes.S12RecheckProofTests.test_lost_tracking_or_known_live_descendant_cannot_be_replaced_by_absent_marker",
+   "codex:tests.test_s12_account_lanes.S12SignatureBirthTests.test_missing_signature_process_record_waits_boundedly_and_names_missing_evidence",
+   "codex:tests.test_s12_account_lanes.S12SignatureBirthTests.test_missing_signature_record_and_reaped_root_still_need_descendant_proof"
   ]
  },
  "S12-B0-6": {
@@ -4025,7 +4032,9 @@
    "codex:tests.test_s12_account_lanes.S12SettlementLimitTests.test_record_retry_limit_denies_once_and_later_passes_do_not_retry_records",
    "codex:tests.test_s12_account_lanes.S12SettlementLimitTests.test_busy_record_commit_remains_retryable_past_record_failure_limit",
    "codex:tests.test_account_lane_restart.BillingLaneRestartTests.test_N3_records_that_cannot_be_committed_fall_back_to_a_denial_after_a_few_tries",
-   "codex:tests.test_s12_account_lanes.S12SettlementLimitTests.test_oversized_record_read_exhausts_record_budget_and_settles_once"
+   "codex:tests.test_s12_account_lanes.S12SettlementLimitTests.test_oversized_record_read_exhausts_record_budget_and_settles_once",
+   "codex:tests.test_s12_account_lanes.S12SettlementLimitTests.test_raw_sqlite_busy_and_locked_remain_retryable_past_record_failure_limit",
+   "codex:tests.test_s12_account_lanes.S12SettlementLimitTests.test_other_sqlite_operational_errors_still_exhaust_record_budget"
   ]
  }
 }

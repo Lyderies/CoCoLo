@@ -808,7 +808,6 @@ def _restart_attention(decision, this_project=None):
         named = _waiting_processes(processes, [])
         return [f"the account is stuck{cause} and waits to restart itself: {'; '.join(parts + named)}; "
                 "it checks again every minute and settles the probe once nothing is listed; "
-                "if one stays listed, it is a leftover model process you can stop "
                 + _probe_stop_hint(processes)]
     what = ', '.join(parts) or 'work still running'
     return [f"the account is stuck{cause} but is not restarting itself while something runs: {what}"]
@@ -816,8 +815,11 @@ def _restart_attention(decision, this_project=None):
 
 def _probe_stop_hint(processes):
     pids = [item.get('pid') for item in processes if type(item) is dict and item.get('lane') == 'probe_worker'
+            and item.get('why') == 'not_reaped'
             and account_integer(item.get('pid')) and item['pid'] > 1]
-    return f"(kill {pids[0]})" if pids else "after checking its identity"
+    if pids:
+        return f"if one stays listed, it is a leftover model process you can stop (kill {pids[0]})"
+    return "check the listed group or session for remaining processes; the original root id may have been reused"
 
 
 _PROCESS_NAMES = {'signature': 'signature helper process', 'probe_worker': 'probe model process',
@@ -847,6 +849,10 @@ def _waiting_processes(processes, children):
         elif why == 'tree_not_confirmed':
             phrases.append(f"{name} {pid} was not confirmed ended with every process it started "
                            f"(check: pgrep -g {pid})")
+        elif why == 'unchecked' and lane == 'signature':
+            phrases.append(f"{name} {pid} could not be checked: its process record (birth and parent) "
+                           f"or descendant evidence is missing or does not match (check: ps -p {pid}); "
+                           "the collector retries its bounded wait without assuming the child has ended")
         else:
             phrases.append(f"{name} {pid} could not be checked (check: ps -p {pid})")
     if not phrases:

@@ -7,6 +7,7 @@ Native enrollment and closed-descendant containment remain adapter gates.
 from collections import deque
 from dataclasses import dataclass
 import itertools
+import sqlite3
 import time
 
 from . import lane_health
@@ -31,6 +32,19 @@ RETRIED_OBSERVATION_REASONS = frozenset({'observation_unavailable', 'account_una
 # after this many new judgments it is refused by name (probe_replay_stale) and the client asks again.
 MAX_REJUDGMENTS = 2
 MAX_RECORD_FAILURES = 3
+
+
+def _transient_record_failure(error):
+    if isinstance(error, SQLReadError):
+        return error.reason_code in {'sql_read_busy', 'sql_read_deadline', 'sql_read_unavailable'}
+    if not isinstance(error, sqlite3.OperationalError):
+        return False
+    code = getattr(error, 'sqlite_errorcode', None)
+    if type(code) is int:
+        return code & 255 in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+    # Constructed/forwarded OperationalErrors may lack SQLite's numeric code.
+    return str(error) in {'database is locked', 'database table is locked', 'database schema is locked'}
+
 
 @dataclass(frozen=True)
 class BillingJobLimits:
@@ -398,8 +412,7 @@ class AccountBillingJobs:
                     # started a child): settled as a denial below. A busy ledger is retried instead.
                     pass
                 except Exception as error:
-                    if isinstance(error, SQLReadError) and error.reason_code in {
-                            'sql_read_busy', 'sql_read_deadline', 'sql_read_unavailable'}:
+                    if _transient_record_failure(error):
                         raise  # Transient reads never exhaust the record budget.
                     job.record_failures += 1
                     if job.record_failures < MAX_RECORD_FAILURES:

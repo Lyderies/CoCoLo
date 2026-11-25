@@ -172,8 +172,9 @@ def unproven_children(context):
     What proves a helper root gone, in order:
     - it was never created: no spawn was in doubt (`spawn_ambiguous`, cleared when the factory provably
       left no child: process_tree.create_child), and every root it did create was released (None);
-    - a root this process never reaped is its own child, so its pid and group id cannot belong to anyone
-      else: its group is killed, then it is reaped without waiting (asked again at the next check);
+    - an unreaped root with a fresh matching birth and our parent id can be signalled, then reaped
+      without waiting (asked again at the next check). A missing process record authorizes no signal;
+      only a bounded wait on the retained Popen handle can establish that root's end;
     - once reaped by this process: when it had reported ready from inside its confinement (`guarded`,
       the normal release's rule), it could have had no descendant. Otherwise, on macOS
       (`no_fork_from_exec`): sandbox-exec applied the `(deny process-fork)` profile to itself before it
@@ -189,18 +190,18 @@ def unproven_children(context):
         if process is not None:
             if not context.reaped and process.returncode is None:
                 record = process_record(process.pid)
-                if (record is None or record[0] != os.getpid()
+                if record is not None and (record[0] != os.getpid()
                         or (context.tree is not None and context.tree.root_birth != record[2])):
                     return [{'pid': process.pid, 'why': 'unchecked'}]
-                if not record[3]:
+                if record is not None and not record[3]:
                     with contextlib.suppress(OSError):
                         os.killpg(process.pid, signal.SIGKILL)
                     with contextlib.suppress(OSError):
                         process.kill()
                 try:
                     process.wait(timeout=0)
-                except subprocess.TimeoutExpired:
-                    return [{'pid': process.pid, 'why': 'not_reaped'}]
+                except (OSError, subprocess.TimeoutExpired):
+                    return [{'pid': process.pid, 'why': 'unchecked' if record is None else 'not_reaped'}]
             context.reaped = True
             pid = process.pid
             guarded = context.guarded and context.tree is not None and context.tree.identified

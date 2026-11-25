@@ -73,6 +73,39 @@ class S12SettlementLimitTests(unittest.TestCase):
         billing._owner.settle_ended.assert_called_once()
         self.assertTrue(job.ended)
 
+    @requirements('S12-N3')
+    def test_raw_sqlite_busy_and_locked_remain_retryable_past_record_failure_limit(self):
+        coded = []
+        for code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED, sqlite3.SQLITE_LOCKED | (1 << 8)):
+            error = sqlite3.OperationalError('locked by sqlite')
+            error.sqlite_errorcode = code
+            coded.append(error)
+        for error in (sqlite3.OperationalError('database is locked'),
+                      sqlite3.OperationalError('database table is locked'), *coded):
+            with self.subTest(error=str(error), code=getattr(error, 'sqlite_errorcode', None)):
+                billing, job = self.job()
+                billing._executions.complete_ended.side_effect = [error] * 5 + [None]
+                with mock.patch.object(account_billing_jobs.time, 'monotonic_ns',
+                                       side_effect=range(0, 100_000_000_000, 2_000_000_000)):
+                    for _ in range(10):
+                        billing._settle_ended(job)
+                self.assertEqual(6, billing._executions.complete_ended.call_count)
+                self.assertEqual(0, job.record_failures)
+                billing._owner.settle_ended.assert_not_called()
+                self.assertTrue(job.ended)
+
+    @requirements('S12-N3')
+    def test_other_sqlite_operational_errors_still_exhaust_record_budget(self):
+        billing, job = self.job()
+        billing._executions.complete_ended.side_effect = sqlite3.OperationalError('no such table: records')
+        with mock.patch.object(account_billing_jobs.time, 'monotonic_ns',
+                               side_effect=range(0, 100_000_000_000, 2_000_000_000)):
+            for _ in range(10):
+                billing._settle_ended(job)
+        self.assertEqual(3, billing._executions.complete_ended.call_count)
+        billing._owner.settle_ended.assert_called_once()
+        self.assertTrue(job.ended)
+
 
 class S12RecheckProofTests(unittest.TestCase):
     __why_not_scenario__ = 'Adverse kernel answers and custody guards complement the real collector scenarios.'
@@ -180,9 +213,93 @@ class S12SignatureBirthTests(unittest.TestCase):
                 group.assert_not_called()
                 root.assert_not_called()
 
+    @requirements('H1c-3', 'H1c-1')
+    def test_missing_signature_process_record_waits_boundedly_and_names_missing_evidence(self):
+        process = mock.Mock(pid=4242, returncode=None, stdin=io.BytesIO(), stdout=io.BytesIO())
+        process.wait.side_effect = subprocess.TimeoutExpired('signature helper', 0)
+        context = signature_execution._Context(None, None, 1, threading.Event(), 1, 1)
+        context.process, context.tree = process, ProcessTree(process.pid)
+        context.tree.root_birth, context.tree.identified = '100.1', True
+        context.guarded = True
+        notes = lane_tests.notes_of(signature=lane_tests.lane(faulted=True, kept=1))
+        def decision():
+            return account_restart.check(lambda: notes, lambda: lane_tests.IDLE, None, now_ms=lane_tests.NOW,
+                read_children=lambda: {'signature': signature_execution.unproven_children(context)})
+        with mock.patch.object(signature_execution, 'process_record', return_value=None), \
+                mock.patch.object(signature_execution.os, 'killpg') as group:
+            for _ in range(10):
+                waiting = decision()
+                self.assertEqual('wait', waiting['action'])
+                text = ' '.join(lane_tests.client_runtime._restart_attention(waiting))
+                self.assertIn('signature helper process 4242', text)
+                self.assertIn('process record', text)
+                self.assertIn('birth and parent', text)
+                self.assertNotIn('kill', text)
+                self.assertIs(process, context.process)
+                self.assertEqual(0, context.roots_reaped)
+            self.assertEqual([mock.call(timeout=0)] * 10, process.wait.call_args_list)
+            # Reaping through the owned handle can establish the root's end even
+            # when the process-table record has gone; absence alone cannot.
+            def reaped(*, timeout):
+                self.assertEqual(0, timeout)
+                process.returncode = 0
+                return 0
+            process.wait.side_effect = reaped
+            self.assertEqual('restart', decision()['action'])
+            self.assertEqual('restart', decision()['action'])
+            self.assertEqual(1, context.roots_reaped)
+            self.assertTrue(process.stdin.closed)
+            self.assertTrue(process.stdout.closed)
+            process.kill.assert_not_called()
+            group.assert_not_called()
+
+    @requirements('H1c-3')
+    def test_missing_signature_record_and_reaped_root_still_need_descendant_proof(self):
+        process = mock.Mock(pid=4242, returncode=None)
+        def reaped(*, timeout):
+            self.assertEqual(0, timeout)
+            process.returncode = 0
+            return 0
+        process.wait.side_effect = reaped
+        context = signature_execution._Context(None, None, 1, threading.Event(), 1, 1)
+        context.process, context.tree = process, ProcessTree(process.pid)
+        with mock.patch.object(signature_execution, 'process_record', return_value=None), \
+                mock.patch.object(signature_execution, 'group_empty', return_value=False), \
+                mock.patch.object(signature_execution.os, 'killpg') as group:
+            self.assertEqual([{'pid': 4242, 'why': 'group_not_empty'}],
+                             signature_execution.unproven_children(context))
+            self.assertIs(process, context.process)
+            self.assertEqual(0, context.roots_reaped)
+            process.wait.assert_called_once_with(timeout=0)
+            process.kill.assert_not_called()
+            group.assert_not_called()
+
 
 class S12RestartStatusTests(unittest.TestCase):
     __why_not_scenario__ = 'Malformed status callbacks complement the admitted-probe collector scenario.'
+
+    @requirements('M10', 'H1c-1')
+    def test_probe_kill_hint_requires_not_reaped_root(self):
+        for why in ('tree_not_confirmed', 'not_reaped'):
+            with self.subTest(why=why):
+                decision = {'action': 'wait', 'lane': 'probe_worker', 'cause': 'probe_worker_failed',
+                            'held': {'probes': ['prj_' + '1' * 32],
+                                     'processes': [{'lane': 'probe_worker', 'pid': 4242, 'why': why}]}}
+                text = ' '.join(lane_tests.client_runtime._restart_attention(decision))
+                if why == 'tree_not_confirmed':
+                    self.assertNotIn('kill', text)
+                    self.assertNotIn('you can stop', text)
+                    self.assertIn('pgrep -g 4242', text)
+                else:
+                    self.assertIn('kill 4242', text)
+
+    @requirements('M10', 'H1c-1')
+    def test_probe_kill_hint_skips_reaped_root_before_owned_unreaped_root(self):
+        processes = [{'lane': 'probe_worker', 'pid': 4242, 'why': 'tree_not_confirmed'},
+                     {'lane': 'probe_worker', 'pid': 5151, 'why': 'not_reaped'}]
+        hint = lane_tests.client_runtime._probe_stop_hint(processes)
+        self.assertIn('kill 5151', hint)
+        self.assertNotIn('kill 4242', hint)
 
     @requirements('M10', 'H1c-1')
     def test_admitted_probe_wait_names_process_without_clearing_its_hold(self):
