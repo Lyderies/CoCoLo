@@ -62,17 +62,25 @@ def pack_content(kind, content, identifier=None, observed=None):
     return packed if len(packed) < len(content) else content
 
 
-def unpack_content(content: bytes, identifier=None, observed=None) -> bytes:
+class AdmissionContentLimitError(ValueError):
+    """Reconstruction reached the first byte beyond the remaining job budget."""
+
+
+def unpack_content(content: bytes, identifier=None, observed=None, *, max_bytes=MAX_RECORD_BYTES) -> bytes:
     """Reject malformed, trailing and over-expanding streams before JSON work."""
     if type(content) is not bytes or not 0 < len(content) <= MAX_RECORD_BYTES:
         raise ValueError("invalid admission content")
     if not content.startswith(_MAGIC):
+        if len(content) > max_bytes:
+            raise AdmissionContentLimitError("admission content limit")
         return content
     decoder = zlib.decompressobj(zdict=_dictionary(identifier, observed))
     try:
-        raw = decoder.decompress(content[len(_MAGIC):], MAX_RECORD_BYTES + 1)
+        raw = decoder.decompress(content[len(_MAGIC):], min(MAX_RECORD_BYTES, max_bytes) + 1)
     except zlib.error:
         raise ValueError("invalid admission content") from None
+    if len(raw) > max_bytes:
+        raise AdmissionContentLimitError("admission content limit")
     if (not 0 < len(raw) <= MAX_RECORD_BYTES or not decoder.eof
             or decoder.unused_data or decoder.unconsumed_tail):
         raise ValueError("invalid admission content")

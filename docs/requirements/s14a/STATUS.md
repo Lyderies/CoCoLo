@@ -2,6 +2,89 @@
 
 Base `ce81bd96` (0.8.67), branch `feat/s14a-capture`. Changes are uncommitted because this builder is sandboxed. VERSION and the digest catalogue are unchanged. Builder checks are complete; primary integration, review and merge gates remain open.
 
+## Fix round
+
+Review `040-s14a-r1` (`READY-WITH-CORRECTIONS`), starting at `4425c21a`.
+MED-1, LOW-1 and LOW-2 are handled under the existing S14A-2 requirement;
+no requirement ID, module, record shape, reason code, schema, VERSION or runtime
+catalogue is added/changed. The earlier evidence below describes the first
+implementation; this section supersedes its fixed-64-MiB expansion claim.
+
+Requirements were updated before the regression tests, and all regressions were
+observed RED before runtime edits (12 tests, 13.273 s, nine failing assertions/
+subtests): both +1 decoded fixtures were accepted; accepted capture compressed
+9 rows 18 times, decoder unpacked 9 rows 18 times; row/metadata refusals compressed
+2/13 candidates; and 1024 x 64 KiB was accepted. Four new test methods were added
+to the existing scenario/integration module and registered under S14A-2. Initial
+metadata omissions were corrected in `scripts/test-requirements.json`; subsequent
+named runners report `metadata_errors: []`.
+
+| Requirement / review item | Test in `AdmissionCaptureBytesTests` | Evidence |
+| --- | --- | --- |
+| S14A-1 | `test_doubled_peak_four_accounts_and_sixteen_windows_fit_with_twenty_percent_margin` | PASS. Original margin, row capacity, both providers, anchored capture and real-intake/oracle assertions retained. |
+| S14A-2 / MED-1 | `test_capture_decoded_content_exact_limit_and_one_byte_over_before_compression`, `test_decoded_content_exact_limit_and_one_byte_over_streaming` | RED before fix. Complete valid canonical records total exactly 12,288 bytes or 12,289 bytes under a 4,096-byte retained limit. Capture refuses +1 before compression. Streaming allowance is exactly remaining + 1, with no JSON parse of the excess row. |
+| S14A-2 / MED-1 | `test_expanded_byte_bound_is_checked_before_json` | RED before fix: 1024 x 64-KiB accepted. Replacement requires refusal at the 97th row under a 2-MiB charge, after exactly 96 semantic-stub parser calls. |
+| S14A-2 / LOW-1 | `test_capture_preflights_before_compression_and_packs_accepted_rows_once` | RED before fix: refused captures compressed candidates; accepted capture compressed 13 rows 26 times. Checks require zero compression on row/metadata refusal and exactly one compression per eligible accepted row. |
+| S14A-2 / LOW-2 | `test_decoder_unpacks_each_row_once` | RED before fix: 18 unpacks for 9 rows. Requires 9 unpacks. |
+| S14A-3 | `test_real_two_mib_boundary_still_refuses_one_byte_over`, `test_U2_1_the_tool_equals_the_real_jobs_charge_and_follows_a_product_change`, `test_U2_3_records_exactly_at_each_cutoff_and_older_evidence_in_effect_are_charged_alike` | PASS. Every original assertion retained, including the independent oracle, signature mutation controls and exact-byte/row refusals. |
+
+Measured all six honest S14 envelope fixtures through real intake before choosing
+the multiplier: [expansion-measurement.json](expansion-measurement.json). For each
+fresh `AdmissionCaptureBytesTests` fixture, call `measure_s14_admission_day.populate`
+with its named `ENVELOPES` entry, then real `capture_admission`; sum
+`len(unpack_content(row[5], row[2], row[8]))` over `job.admission.rows`. Divide by
+`job.admission.retained_bytes` (and separately by the combined admission/signature
+charge). Maximum admission ratio is 2.611913 in `combined_double_peak`; 3 adds
+14.9% margin. The 2-MiB job therefore allows at most 6 MiB decoded content,
+independent of the 64-MiB maximum configurable retained limit. This bounds content,
+not exact Python heap usage.
+
+Capture first checks metadata-only headers: rows, minimum possible retained
+charge, original per-record lengths and `3 * limits.max_bytes` decoded bytes.
+It then streams an indexed rowid query of packed content, charges it immediately
+and caches each packed value for reuse. Only after exact byte acceptance does it
+copy owner values and final row metadata. There is no second compression or JSON
+parse. Decode validates the complete retained charge and row shapes first, then
+unpacks, measures, hashes and parses each row once with the remaining budget.
+The previous full-row-before-size prototype failed the two existing owner/raw
+preflight assertions; those assertions remain unchanged and drove this ordering.
+A per-row SQL prototype hit the unchanged cursor budget; one indexed streaming
+query replaces it, with no SQL budget increase.
+
+Assertion/fixture changes are mapped in [assertions.md](assertions.md): the old
+aggregate-before-all-JSON test now checks the first excess row before its JSON,
+and the 16-window retained-byte fixture uses hash-derived numeric minutes so its
+2.855x expansion fits independently of the retained boundary. No parity or 2-MiB
+one-byte-over assertion is weakened.
+
+Fix-round verification (final behavior):
+
+- 56/56 PASS, 19.9 s: `test_admission_capture_bytes` (12 tests, 19.300 s test time), `test_admission_inputs` (26), `test_lifetime_cap_guard` (4), `test_read_growth` (14). Every MED-1 / LOW-1 / LOW-2 regression above is GREEN. Complete owner/raw preflight and work-budget assertions pass unchanged. `metadata_errors: []`, no budget failure.
+- 42 tests, 2.4 s: `test_admission_input_decode` (7 PASS), `test_admission_metadata` (13 PASS), `test_signature_job_intake` (19 PASS), `test_runtime_release` (2 PASS; only `test_current_runtime_is_recorded_for_the_current_version` has the expected unchanged-version digest-pin failure). `metadata_errors: []`, no budget failure.
+- Total final named checks: 98, 97 PASS and the one expected release-pin failure. No socket or PTY tests run. No checks remain in flight. Syntax compilation and `git diff --check` pass. Only comments/formatting and evidence documentation changed after these checks; no behavior changed.
+
+The unchanged-version runtime digest pin remains red until the primary's merge
+refresh. No schema/record-shape change, so copier/backup/move enumeration reruns
+are not required for this fix. Structured durable results, including the original
+RED evidence, are in [test-evidence.json](test-evidence.json).
+
+Exact primary reruns (all existing assertions; unsandboxed, clean short TMPDIR):
+
+1. `codex:tests.test_admission_capture_claim`, `codex:tests.test_admission_history_growth`.
+2. `codex:tests.test_account_original_open`, `codex:tests.test_account_claim_jobs`, `codex:tests.test_account_billing_admission`, `codex:tests.test_account_billing_jobs`, `codex:tests.test_billing_rejudge`.
+3. `codex:tests.test_signature_worker_pool`, `codex:tests.test_signature_inputs`, `codex:tests.test_account_host`.
+
+The two previously unresolved migration CLI cases and batch/release gates listed
+below remain primary responsibilities; this round does not claim to resolve them.
+No full suite, affected expansion, install, service mutation, commit or push was
+performed. Fix-round changes remain in this sandboxed worktree.
+
+Fix-round files: `docs/requirements/s14a.md`, this `STATUS.md`, `assertions.md`,
+`expansion-measurement.json`, `test-evidence.json`; runtime `account_service.py`,
+`admission_capture_content.py`, `admission_input_decode.py`, `admission_inputs.py`;
+tests `test_admission_capture_bytes.py`, `test_admission_history_growth.py`,
+`lifetime_caps.json`; `scripts/test-requirements.json`.
+
 ## Requirement evidence
 
 All short test names below are methods of `test_admission_capture_bytes.AdmissionCaptureBytesTests`, except the explicitly named anchored claim test. The complete requirement links are registered in `tests/requirements/s14a.json` and `scripts/test-requirements.json`.

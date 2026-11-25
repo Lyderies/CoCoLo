@@ -321,6 +321,12 @@ class AdmissionCaptureBytesTests(unittest.TestCase):
             self.jobs._intake._release(handle)
     @requirements("S14A-2", why_not_scenario="Synthetic bounded decoder input, no process or socket.")
     def test_expanded_byte_bound_is_checked_before_json(self):
+        """The former 1024 x 64-KiB case must refuse under a 2-MiB charge.
+
+        Semantic checks are stubbed only here to isolate the aggregate quota;
+        the exact/+1 tests below use complete, valid canonical identity records.
+        """
+        import hashlib
         from dataclasses import replace
         from codex_agents.admission_capture_content import pack_content
         from codex_agents.admission_input_decode import AdmissionDecodeError, decode_admission_inputs
@@ -332,19 +338,148 @@ class AdmissionCaptureBytesTests(unittest.TestCase):
         self.addCleanup(case.doCleanups)
         template = case.snapshot.rows[0]
         rows = []
-        for number in range(1025):
+        for number in range(1024):
             identifier = f"expanded-{number}"
             content = pack_content("provider_headroom", b"x" * MAX_RECORD_BYTES, identifier, fixture.NOW)
             rows.append((number + 1, template[1], identifier, number + 1, "provider_headroom", content,
-                         "0" * 64, "provider", fixture.NOW, fixture.NOW, None))
+                         hashlib.sha256(b"x" * MAX_RECORD_BYTES).hexdigest(), "provider", fixture.NOW, fixture.NOW, None))
         rows = tuple(rows)
         snapshot = replace(case.snapshot, rows=rows, retained_bytes=admission_input_size(
             case.snapshot.project_id, case.snapshot.provider, case.snapshot.runtime_digest, case.snapshot.policy,
             case.snapshot.owner, case.snapshot.signer, rows))
         self.assertLess(snapshot.retained_bytes, 2 * MIB)
-        with mock.patch("codex_agents.admission_input_decode.parse_bounded_json", side_effect=AssertionError("JSON before expanded quota")):
+        def parsed(_):
+            return {"record_id": f"expanded-{parser.call_count - 1}", "record_type": "provider_headroom",
+                    "observed_at_ms": fixture.NOW}
+        with mock.patch("codex_agents.admission_input_decode._depth_bounded", return_value=True), \
+                mock.patch("codex_agents.admission_input_decode.parse_bounded_json", side_effect=parsed) as parser, \
+                mock.patch("codex_agents.admission_input_decode.validate_learning_record", side_effect=lambda record: record), \
+                mock.patch("codex_agents.admission_input_decode.canonical_json", return_value=b"x" * MAX_RECORD_BYTES):
             with self.assertRaisesRegex(AdmissionDecodeError, "^admission_decode_limit$"):
                 decode_admission_inputs(snapshot, AdmissionCaptureLimits(4096, 2 * MIB))
+            self.assertEqual(96, parser.call_count, "the 97th row exceeds 3 x 2 MiB before its JSON is parsed")
+
+    def expanded_fixture(self, extra=0):
+        """Valid records totaling exactly 3 * 4096 (+ extra) decoded bytes."""
+        import hashlib
+        import json
+        from dataclasses import replace
+        from codex_agents.admission_capture_content import pack_content, unpack_content
+        from codex_agents.admission_inputs import admission_input_size
+        from codex_agents.learning_contracts import canonical_json, validate_learning_record
+        from tests import test_admission_input_decode as fixture
+        case = fixture.AdmissionInputDecodeTests("runTest")
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        template = next(row for row in case.snapshot.rows if row[4] == "provider_identity")
+        record = json.loads(unpack_content(template[5], template[2], template[8]))
+        records = [dict(record, record_id=f"expanded-{i:04}", client_path="/x") for i in range(9)]
+        padding = 3 * 4096 + extra - sum(len(canonical_json(r)) for r in records)
+        self.assertGreater(padding, 0)
+        for record in records:
+            count = min(padding, 1022)
+            record["client_path"] += "x" * count
+            padding -= count
+            validate_learning_record(record)
+        self.assertEqual(0, padding)
+        raw, packed = [], []
+        for i, record in enumerate(records, 1):
+            content = canonical_json(record)
+            row = (i, template[1], record["record_id"], i, template[4], content,
+                   hashlib.sha256(content).hexdigest(), template[7], template[8], template[9], None)
+            raw.append(row)
+            packed.append((*row[:5], pack_content(row[4], content, row[2], row[8]), *row[6:]))
+        snapshot = replace(case.snapshot, rows=tuple(packed), retained_bytes=admission_input_size(
+            case.snapshot.project_id, case.snapshot.provider, case.snapshot.runtime_digest, case.snapshot.policy,
+            case.snapshot.owner, case.snapshot.signer, packed))
+        self.assertEqual(3 * 4096 + extra, sum(len(row[5]) for row in raw))
+        self.assertLess(snapshot.retained_bytes, 4096)
+        return case, snapshot, raw
+
+    @requirements("S14A-2", why_not_scenario="Pure decoder with valid canonical records, no service or socket.")
+    def test_decoded_content_exact_limit_and_one_byte_over_streaming(self):
+        from codex_agents import admission_capture_content as codec
+        from codex_agents import admission_input_decode as decoder
+        limits = AdmissionCaptureLimits(64, 4096)
+        for extra in (0, 1):
+            with self.subTest(extra=extra):
+                _, snapshot, raw = self.expanded_fixture(extra)
+                calls = []
+                real = codec.zlib.decompressobj
+                class Stream:
+                    def __init__(self, *args, **kwargs):
+                        self.decoder = real(*args, **kwargs)
+                    def __getattr__(self, name):
+                        return getattr(self.decoder, name)
+                    def decompress(self, data, max_length=0):
+                        calls.append(max_length)
+                        return self.decoder.decompress(data, max_length)
+                with mock.patch.object(codec.zlib, "decompressobj", Stream), \
+                        mock.patch.object(decoder, "parse_bounded_json", wraps=decoder.parse_bounded_json) as parser:
+                    if extra:
+                        with self.assertRaisesRegex(decoder.AdmissionDecodeError, "^admission_decode_limit$") as caught:
+                            decoder.decode_admission_inputs(snapshot, limits)
+                        self.assertIsNone(caught.exception.__context__)
+                        self.assertEqual(len(raw) - 1, parser.call_count)
+                    else:
+                        self.assertEqual(len(raw), len(decoder.decode_admission_inputs(snapshot, limits)))
+                remaining = 3 * limits.max_bytes
+                self.assertEqual(len(raw), len(calls))
+                for length, row in zip(calls, raw, strict=True):
+                    self.assertEqual(remaining + 1, length, "stream stops at the first byte over the remaining quota")
+                    remaining -= len(row[5])
+
+    @requirements("S14A-2", why_not_scenario="Owner capture over a synthetic ledger, no service or socket.")
+    def test_capture_decoded_content_exact_limit_and_one_byte_over_before_compression(self):
+        from codex_agents import admission_capture_content as codec
+        from codex_agents.account_service import AccountOwnerViews
+        for extra in (0, 1):
+            with self.subTest(extra=extra):
+                case, expected, raw = self.expanded_fixture(extra)
+                connection = case.ledger._connection
+                connection.execute("DELETE FROM owner_attestations")
+                connection.execute("DELETE FROM records")
+                connection.executemany(
+                    "INSERT INTO records(rowid,project_id,record_id,source_sequence,record_type,content,content_digest,"
+                    "source,observed_at_ms,ingested_at_ms,expires_at_ms,late) VALUES(?,?,?,?,?,?,?,?,?,?,?,0)",
+                    [(*row[:10], row[8] + DAY_MS) for row in raw])
+                with mock.patch.object(case.ledger, "_clock_ms", return_value=expected.captured_at_ms), \
+                        mock.patch.object(codec.zlib, "compressobj", wraps=codec.zlib.compressobj) as compressor:
+                    def capture():
+                        return AccountOwnerViews(case.ledger).capture_admission_inputs(
+                            expected.project_id, expected.provider, expected.policy, AdmissionCaptureLimits(64, 4096), self.work)
+                    if extra:
+                        with self.assertRaisesRegex(AdmissionCaptureError, "^admission_capture_limit$"):
+                            capture()
+                        self.assertEqual(0, compressor.call_count, "length preflight precedes compression")
+                    else:
+                        snapshot = capture()
+                        self.assertEqual(expected.rows, snapshot.rows)
+                        self.assertEqual(expected.retained_bytes, snapshot.retained_bytes)
+                        self.assertEqual(len(raw), compressor.call_count)
+
+    @requirements("S14A-2", why_not_scenario="Synthetic owner capture and detached decode, no service or socket.")
+    def test_capture_preflights_before_compression_and_packs_accepted_rows_once(self):
+        from codex_agents import admission_capture_content as codec
+        from codex_agents.account_service import AccountOwnerViews
+        views = AccountOwnerViews(self.ledger)
+        policy = self.jobs._views._claim_policy("codex")
+        for limits in (AdmissionCaptureLimits(1, 2 * MIB), AdmissionCaptureLimits(4096, 700)):
+            with self.subTest(limits=limits), mock.patch.object(codec.zlib, "compressobj", wraps=codec.zlib.compressobj) as compressor:
+                with self.assertRaisesRegex(AdmissionCaptureError, "^admission_capture_limit$"):
+                    views.capture_admission_inputs(self.project, "codex", policy, limits, self.work)
+                self.assertEqual(0, compressor.call_count)
+        with mock.patch.object(codec.zlib, "compressobj", wraps=codec.zlib.compressobj) as compressor:
+            snapshot = views.capture_admission_inputs(self.project, "codex", policy, AdmissionCaptureLimits(4096, 2 * MIB), self.work)
+        self.assertEqual(sum(row[4] != "billing_attestation" for row in snapshot.rows), compressor.call_count)
+
+    @requirements("S14A-2", why_not_scenario="Detached pure decoder over a real captured fixture, no service or socket.")
+    def test_decoder_unpacks_each_row_once(self):
+        from codex_agents import admission_input_decode as decoder
+        _, snapshot, _ = self.expanded_fixture()
+        with mock.patch.object(decoder, "unpack_content", wraps=decoder.unpack_content) as unpack:
+            self.assertEqual(len(snapshot.rows), len(decoder.decode_admission_inputs(snapshot, AdmissionCaptureLimits(64, 4096))))
+        self.assertEqual(len(snapshot.rows), unpack.call_count)
     @requirements("S14A-2", why_not_scenario="Pure recapture comparison with real packed fixture rows, no service or socket.")
     def test_open_and_probe_appended_record_recaptures_remain_exact(self):
         from dataclasses import replace

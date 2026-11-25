@@ -3953,6 +3953,10 @@
    "codex:tests.test_admission_capture_bytes.AdmissionCaptureBytesTests.test_packed_content_is_lossless_bounded_and_rejects_corruption",
    "codex:tests.test_admission_capture_bytes.AdmissionCaptureBytesTests.test_every_stored_byte_and_decision_input_survives_packing",
    "codex:tests.test_admission_capture_bytes.AdmissionCaptureBytesTests.test_expanded_byte_bound_is_checked_before_json",
+   "codex:tests.test_admission_capture_bytes.AdmissionCaptureBytesTests.test_decoded_content_exact_limit_and_one_byte_over_streaming",
+   "codex:tests.test_admission_capture_bytes.AdmissionCaptureBytesTests.test_capture_decoded_content_exact_limit_and_one_byte_over_before_compression",
+   "codex:tests.test_admission_capture_bytes.AdmissionCaptureBytesTests.test_capture_preflights_before_compression_and_packs_accepted_rows_once",
+   "codex:tests.test_admission_capture_bytes.AdmissionCaptureBytesTests.test_decoder_unpacks_each_row_once",
    "codex:tests.test_admission_capture_bytes.AdmissionCaptureBytesTests.test_open_and_probe_appended_record_recaptures_remain_exact"
   ]
  },

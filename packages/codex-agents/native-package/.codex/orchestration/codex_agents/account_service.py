@@ -21,7 +21,7 @@ from .account_api import (
     decode_account_request, decode_account_response, encode_account_request, integer, matches,
 )
 from .admission_inputs import (
-    ADMISSION_CAPTURE_PUBLIC_REASONS, ADMISSION_CAPTURE_RECORD_TYPES, MAX_ADMISSION_CAPTURE_BYTES,
+    ADMISSION_CAPTURE_PUBLIC_REASONS, ADMISSION_CAPTURE_RECORD_TYPES, ADMISSION_DECODED_CONTENT_MULTIPLE,
     AdmissionCaptureError, AdmissionCaptureLimits,
     AdmissionInputPolicy, AdmissionInputSnapshot, admission_input_size, public_capture_reason,
 )
@@ -153,8 +153,8 @@ _ADMISSION_INPUT_JOIN = (
     "LEFT JOIN owner_attestations a ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
     "WHERE r.rowid=c.record_rowid ORDER BY c.record_rowid LIMIT :limit"
 )
-# Guard before invoking Python: corrupt storage must never pass an unbounded
-# BLOB to the packer. Headers still validate the original storage type/length.
+# Guard the streaming packing query even though headers have already
+# validated these lengths inside this same read snapshot.
 _ADMISSION_CONTENT = (
     f"CASE WHEN typeof(r.content)='blob' AND length(r.content) BETWEEN 1 AND {MAX_RECORD_BYTES} "
     "AND typeof(r.record_id)='text' AND length(CAST(r.record_id AS BLOB)) BETWEEN 1 AND 640 "
@@ -547,7 +547,7 @@ class AccountOwnerViews:
             "CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,"
             "CASE WHEN typeof(r.observed_at_ms)='integer' THEN r.observed_at_ms END,"
             "CASE WHEN typeof(r.ingested_at_ms)='integer' THEN r.ingested_at_ms END,"
-            "typeof(a.signature),length(a.signature),length(" + _ADMISSION_CONTENT + "),"
+            "typeof(a.signature),length(a.signature),"
             # Charge the actual shared copies of these immutable strings. The
             # join has already bounded the candidate set before these windows.
             "CASE WHEN r.rowid=MIN(r.rowid) OVER (PARTITION BY r.project_id) "
@@ -565,7 +565,7 @@ class AccountOwnerViews:
             connection._before_statement()
             rowid, project_type, project_bytes, identifier_type, identifier_bytes, kind_type, kind_bytes, \
                 content_type, content_bytes, digest_type, digest_bytes, source_type, source_bytes, \
-                sequence, observed, ingested, signature_type, signature_bytes, packed_bytes, \
+                sequence, observed, ingested, signature_type, signature_bytes, \
                 project_charge, kind_charge, source_charge = header
             if (any(type(value) is not int or value < 0 for value in
                     (rowid, project_bytes, identifier_bytes, kind_bytes, content_bytes, digest_bytes,
@@ -574,7 +574,6 @@ class AccountOwnerViews:
                     or identifier_type != "text" or not 0 < identifier_bytes <= 640
                     or kind_type != "text" or not 0 < kind_bytes <= 24
                     or content_type != "blob" or not 0 < content_bytes <= MAX_RECORD_BYTES
-                    or type(packed_bytes) is not int or not 0 < packed_bytes <= content_bytes
                     or digest_type != "text" or digest_bytes != 64
                     or source_type != "text" or not 0 < source_bytes <= 32
                     or signature_type not in {"null", "blob"}
@@ -585,11 +584,36 @@ class AccountOwnerViews:
             if any(type(charge) is not int or charge not in (0, length) for charge, length in
                    ((project_charge, project_bytes), (kind_charge, kind_bytes), (source_charge, source_bytes))):
                 raise AdmissionCaptureError("admission_capture_incompatible")
-            size += (32 + project_charge + identifier_bytes + kind_charge + packed_bytes + digest_bytes
+            # Even packed content must retain at least one byte. This lower
+            # bound rejects impossible charges before fetching/compressing any
+            # content; exact packed bytes are added once as rows are streamed.
+            size += (32 + project_charge + identifier_bytes + kind_charge + 1 + digest_bytes
                      + source_charge + (signature_bytes or 0))
             expanded += content_bytes
-            if size > limits.max_bytes or expanded > MAX_ADMISSION_CAPTURE_BYTES:
+            if size > limits.max_bytes or expanded > ADMISSION_DECODED_CONTENT_MULTIPLE * limits.max_bytes:
                 raise AdmissionCaptureError("admission_capture_limit")
+        # Pack one bounded record at a time, after the cheap refusal checks.
+        # Retain only its packed bytes; charge streamed values and stop on
+        # overflow. Reuse this cache in the final raw tuples.
+        contents = []
+        if headers:
+            # Indexed rowid order streams expressions without sorting BLOBs.
+            # One cursor also preserves the unchanged SQL cursor budget.
+            packed_rows = connection.execute(
+                "SELECT r.rowid," + _ADMISSION_CONTENT + " FROM records r WHERE r.rowid IN (" +
+                ",".join("?" for _ in headers) + ") ORDER BY r.rowid", tuple(header[0] for header in headers),
+            )
+            for header in headers:
+                packed = packed_rows.fetchone()
+                if (packed is None or packed[0] != header[0] or type(packed[1]) is not bytes
+                        or not 0 < len(packed[1]) <= header[8]):
+                    raise AdmissionCaptureError("admission_capture_incompatible")
+                size += len(packed[1]) - 1
+                if size > limits.max_bytes:
+                    raise AdmissionCaptureError("admission_capture_limit")
+                contents.append(packed[1])
+            if packed_rows.fetchone() is not None:
+                raise AdmissionCaptureError("admission_capture_incompatible")
         # Complete every row/aggregate check before copying even the bounded
         # owner-history value. The current public signer was observed separately.
         incompatible = False
@@ -600,26 +624,27 @@ class AccountOwnerViews:
         if incompatible:
             raise AdmissionCaptureError("admission_capture_incompatible")
         raw = connection.execute(
-            "SELECT r.rowid,r.project_id,r.record_id,r.source_sequence,r.record_type," + _ADMISSION_CONTENT + ","
+            "SELECT r.rowid,r.project_id,r.record_id,r.source_sequence,r.record_type,NULL,"
             "r.content_digest,r.source,r.observed_at_ms,r.ingested_at_ms,a.signature" + _ADMISSION_INPUT_JOIN,
             scope,
-        ).fetchall()
-        if len(raw) != len(headers):
-            raise AdmissionCaptureError("admission_capture_incompatible")
+        )
         rows, shared = [], {}
-        for header, row in zip(headers, raw, strict=True):
+        for header, content in zip(headers, contents, strict=True):
             connection._before_statement()
-            values = tuple(row)
+            row = raw.fetchone()
+            if row is None:
+                raise AdmissionCaptureError("admission_capture_incompatible")
+            values = (*row[:5], content, *row[6:])
             rowid, project, identifier, sequence, kind, content, digest, source, observed, ingested, signature = values
             if (any(type(value) is not int for value in (rowid, sequence, observed, ingested))
                     or rowid != header[0] or not matches(project, _PROJECT) or type(identifier) is not str
                     or type(kind) is not str or kind not in ADMISSION_CAPTURE_RECORD_TYPES
                     or type(content) is not bytes or not matches(digest, _DIGEST) or type(source) is not str
                     or (signature is not None and type(signature) is not bytes)
-                    or (len(project.encode("utf-8")), len(identifier.encode("utf-8")), len(kind), len(content),
+                    or (len(project.encode("utf-8")), len(identifier.encode("utf-8")), len(kind),
                         len(digest), len(source.encode("utf-8")), sequence, observed, ingested,
                         None if signature is None else len(signature)) !=
-                       (header[2], header[4], header[6], header[18], header[10], header[12],
+                       (header[2], header[4], header[6], header[10], header[12],
                         header[13], header[14], header[15], header[17])):
                 raise AdmissionCaptureError("admission_capture_incompatible")
             original = None
@@ -633,6 +658,8 @@ class AccountOwnerViews:
             rows.append((rowid, shared.setdefault(project, project), identifier, sequence,
                          shared.setdefault(kind, kind), content, digest, shared.setdefault(source, source),
                          observed, ingested, signature))
+        if raw.fetchone() is not None:
+            raise AdmissionCaptureError("admission_capture_incompatible")
         rows = tuple(rows)
         retained = admission_input_size(project_id, provider, COLLECTOR_RUNTIME_DIGEST, policy, owner, signer, rows)
         if retained != size:

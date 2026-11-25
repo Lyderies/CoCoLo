@@ -1,7 +1,8 @@
 """Detached admission-input parsing, never admission or signature authority.
 
-This pure step validates a complete owner-local raw capture before decoding any
-JSON. It preserves row order and every candidate, including foreign restrictive
+This pure step validates a complete owner-local raw capture's shapes and charge
+before decoding any JSON, then bounds reconstruction of each row before parsing
+it. It preserves row order and every candidate, including foreign restrictive
 evidence. Returned dictionaries are detached mutable data, not authenticated or
 immutable decisions. No normal client or public operation uses this module.
 """
@@ -12,9 +13,9 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-from .admission_capture_content import unpack_content
+from .admission_capture_content import AdmissionContentLimitError, unpack_content
 from .admission_inputs import (
-    ADMISSION_CAPTURE_RECORD_TYPES, MAX_ADMISSION_CAPTURE_BYTES, AdmissionCaptureLimits, AdmissionInputPolicy,
+    ADMISSION_CAPTURE_RECORD_TYPES, ADMISSION_DECODED_CONTENT_MULTIPLE, AdmissionCaptureLimits, AdmissionInputPolicy,
     AdmissionInputRow, AdmissionInputSnapshot, admission_input_size,
 )
 from .contracts import ContractError
@@ -153,21 +154,19 @@ def _preflight(snapshot: AdmissionInputSnapshot, limits: AdmissionCaptureLimits)
         identifiers.add((scope, identifier))
     if size != retained:
         _invalid()
-    # Bound the aggregate expansion before hashing or allocating any decoded
-    # records. Each temporary expansion also has the original 64-KiB record cap.
-    expanded = 0
-    for row in rows:
-        expanded += len(_content(row))
-        if expanded > MAX_ADMISSION_CAPTURE_BYTES:
-            raise AdmissionDecodeError("admission_decode_limit")
     return rows
 
 
-def _content(row):
+def _content(row, remaining):
+    limited = False
     try:
-        return unpack_content(row[5], row[2], row[8])
+        return unpack_content(row[5], row[2], row[8], max_bytes=remaining)
+    except AdmissionContentLimitError:
+        limited = True
     except ValueError:
         pass
+    if limited:
+        raise AdmissionDecodeError("admission_decode_limit")
     _invalid()
 
 
@@ -201,15 +200,17 @@ def decode_admission_inputs(
 ) -> tuple[ParsedAdmissionRow, ...]:
     """Parse all six closed record families without filtering or granting trust.
 
-    Limits bound rows and retained input-field bytes, not exact Python heap or
-    elapsed time. Owner signatures, current evidence/policy, native caller and
+    Limits bound rows, retained bytes and decoded content (3x retained limit),
+    not exact Python heap or elapsed time. Owner signatures, current evidence/policy, native caller and
     atomic account-cap/launch checks must be established elsewhere at use.
     """
     rows = _preflight(snapshot, limits)
     result = []
+    remaining = ADMISSION_DECODED_CONTENT_MULTIPLE * limits.max_bytes
     for row in rows:
         _, _, identifier, _, kind, content, digest, _, observed, _, _ = row
-        content = _content(row)
+        content = _content(row, remaining)
+        remaining -= len(content)
         if not _depth_bounded(content) or hashlib.sha256(content).hexdigest() != digest:
             _invalid()
         failed = False

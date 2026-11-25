@@ -8,9 +8,9 @@
   "test": "test_packed_content_is_lossless_bounded_and_rejects_corruption"
  },
  "admission_capture_content.py::unpack_content": {
-  "checks": 2,
-  "ends": "S14a: per-record 64-KiB input/reconstruction ceilings; one bounded temporary record is released after capture or decode. No cumulative history or admission counter.",
-  "test": "test_packed_content_is_lossless_bounded_and_rejects_corruption"
+  "checks": 4,
+  "ends": "S14a fix round: per-record 64-KiB ceiling and remaining 3x caller byte budget; stop streaming at the first excess byte before parsing that row. Temporary content ends with this snapshot decode; no cumulative admission counter.",
+  "test": "test_decoded_content_exact_limit_and_one_byte_over_streaming"
  },
   "recovery_report.py::recovery_pending": {
    "checks": 1,
@@ -183,8 +183,9 @@
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
   "account_service.py::_capture_admission_rows_locked": {
-   "checks": 5,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "checks": 6,
+   "ends": "S14a fix round: row and retained-byte budgets apply only to one capture; decoded content is at most 3x the caller byte limit, checked from headers before content copying or compression. All counters end with the snapshot capture.",
+   "test": "test_capture_decoded_content_exact_limit_and_one_byte_over_before_compression"
   },
   "account_service.py::_capture_signature_inputs_locked": {
    "checks": 8,
@@ -203,9 +204,9 @@
    "ends": "per-request frame-size check on one inbound request; stores nothing, so nothing accumulates (RS-F S1, integration 2026-11-24)"
   },
   "admission_input_decode.py::_preflight": {
-   "checks": 4,
-   "ends": "S14a: retained input bytes and the 64-MiB aggregate expanded-content bound apply to one detached snapshot only; all quota state ends with that check, not a lifetime admission count.",
-   "test": "test_expanded_byte_bound_is_checked_before_json"
+   "checks": 3,
+   "ends": "S14a fix round: retained input bytes and row counts apply to one detached snapshot only; expansion is measured once during decode under the remaining 3x caller byte budget. All quota state ends with that check, not a lifetime admission count.",
+   "test": "test_decoded_content_exact_limit_and_one_byte_over_streaming"
   },
   "admission_input_decode.py::_signer": {
    "checks": 1,

@@ -37,7 +37,8 @@ def _limit_headroom(record, now, index, pad=0, change=None):
     else:
         record.update(provider="claude", account_fingerprint=hashlib.sha256(b"limit-account").hexdigest(),
                       status="allowed", windows=[{
-                          "scope": None, "window_minutes": 1000 + window,
+                          "scope": None,
+                          "window_minutes": int(hashlib.sha256(f"window-{window}".encode()).hexdigest()[:15], 16),
                           "used_percent": int(hashlib.sha256(f"usage-{window}".encode()).hexdigest()[:13], 16) / 2**53 * 50,
                           "resets_at": now + DAY_MS + int(hashlib.sha256(f"reset-{window}".encode()).hexdigest()[:13], 16) % DAY_MS,
                       } for window in range(16)])

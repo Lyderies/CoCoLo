@@ -14,6 +14,9 @@ from .signature_inputs import OwnerGeneration
 
 MAX_ADMISSION_CAPTURE_ROWS = 4096
 MAX_ADMISSION_CAPTURE_BYTES = 64 * 1_048_576
+# S14a measured maximum: 2.612 decoded-content bytes per admission charge byte.
+# Three adds 14.9% margin; applied to the caller's limit, not the global ceiling.
+ADMISSION_DECODED_CONTENT_MULTIPLE = 3
 ADMISSION_CAPTURE_RECORD_TYPES = frozenset({
     "provider_identity", "billing_attestation", "provider_billing",
     "provider_headroom", "admission_decision", "probe_admission",
