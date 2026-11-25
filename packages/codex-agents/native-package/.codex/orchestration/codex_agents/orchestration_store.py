@@ -516,11 +516,15 @@ class OrchestrationOwner:
     def _unattended_eligible(self, handle, now):
         """B6 (RS-B-B6-2), inside the close's transaction: the register row is held and due, and no reservation of
         the orchestration is held or releasing (read through the held reservation rows, never the tombstones). A held
-        lease is `_unfinished`'s (SH-7: a held lease row is exactly a live lease); memory kinds are not checked."""
+        lease is `_unfinished`'s (SH-7: a held lease row is exactly a live lease); memory holds are checked before their source lease exists."""
         project = self._history.project_id
         row = self._db.execute("SELECT due_at_ms FROM project_holds WHERE project_id=? AND kind='orchestration' "
                                "AND identity=? AND state='held'", (project, handle)).fetchone()
         if row is None or not valid_integer(row[0]) or now < row[0]:
+            return False
+        if self._db.execute("SELECT 1 FROM project_holds INDEXED BY project_holds_due WHERE project_id=? "
+                "AND state<>'released' AND kind IN ('driver_entry','preparation') "
+                "AND json_extract(evidence,'$.orchestration_handle')=? LIMIT 1", (project, handle)).fetchone():
             return False
         # B6 review r1: this orchestration's own reservations by index, each with its register row by key.
         return self._db.execute(

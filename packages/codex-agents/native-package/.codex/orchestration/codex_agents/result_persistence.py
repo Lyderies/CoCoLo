@@ -159,6 +159,7 @@ class ResultPersistenceLane:
         # This service process's own instance, new at every start (O10 D2). The scope's supervisor id is
         # durable per project, so it cannot tell a restarted service's rows from its predecessor's.
         self._service_instance = 'svc-' + secrets.token_hex(16)
+        self._memory_journal = None
         # B2-18: what the recording sweep last published, for the health check (read without any store or lock).
         self.recording_notes = service_record.RecordingNotes()
         from .recovery_report import RecoveryNotes
@@ -1214,6 +1215,54 @@ class ResultPersistenceLane:
             if type(store) is ProjectHistory:
                 store.close()
 
+    def configure_memory(self, journal):
+        """Trusted driver attachment; this instance's journal lock outlives every memory row."""
+        self._check_owner()
+        self._memory_journal = journal
+        self._service_instance = journal.instance
+        journal.keep_lock = True
+        return self.memory_hold('recover', journal.directory, journal.instance)
+
+    def memory_hold(self, operation, *arguments):
+        from .memory_holds import OPERATIONS
+        if operation not in OPERATIONS:
+            raise HistoryError('history_invalid_input')
+        return self._queue_counted(_EarlierLeases('memory', arguments=(operation, arguments)),
+                                   '_earlier_held', EARLIER_SLOTS)
+
+    def retire_memory_after_stop(self, instance):
+        """Owner after every runtime thread stopped; never callable on a serving writer."""
+        self._check_owner()
+        if not self._closed or self._fault or self._writer.is_alive():
+            raise HistoryError('history_service_unavailable')
+        store = self._open()
+        try:
+            from .memory_holds import retire_instance
+            return retire_instance(store, instance)
+        finally:
+            store.close()
+
+    def check_detach(self, handle):
+        pending = self._job(handle)
+        with self._lock:
+            if (pending.state not in {'claim_pending', 'lease_claim_pending', 'failed'}
+                    or pending.claim_binding is not None or pending.grant_raw is not None
+                    or pending.grant is not None or pending.supervisor is not None or pending.execution_issued):
+                raise HistoryError('history_result_not_ready')
+        with self._pool._registry._lock:
+            original = self._pool._job(pending.worker_handle)
+            if original is not pending.original_job or original.state != 'prepared' or original.ticket is not None:
+                raise HistoryError('history_not_authorized')
+
+    def detach(self, handle):
+        """After durable sweep handoff: withdraw prepared worker, drop lane memory, retain armed lease."""
+        self.check_detach(handle)
+        pending = self._job(handle)
+        self._pool.withdraw_prepared(pending.worker_handle)
+        with self._lock:
+            self._jobs.pop(handle)
+            self._by_worker.pop(pending.worker_handle)
+
     def report_registered_run(self, orchestration_handle, run_handle, run_id, attempt):
         """S1-R6: record that the driver registered this run, under this service process's own instance (O10 D2);
         poll its `state`. `history_writer_busy` when every reporting slot is in use: ask again later."""
@@ -1256,11 +1305,24 @@ class ResultPersistenceLane:
         """Writer step: the history's own checked leases, or one settled with its closure."""
         try:
             history = self._history()
-            if request.kind in {'open_binding', 'settlement'}:
+            if request.kind == 'memory':
+                from . import memory_holds
+                operation, arguments = request.arguments
+                result = getattr(memory_holds, operation)(history, *arguments)
+                if operation == 'recover':
+                    self._memory_journal.memory_instances = result
+            elif request.kind in {'open_binding', 'settlement'}:
                 operation, arguments, options = request.arguments
                 result = getattr(history, operation)(*arguments, **options)
             elif request.kind == 'expire':
                 maintenance_ok = True
+                if getattr(self, '_memory_journal', None) is not None:
+                    from .memory_holds import recover
+                    try:
+                        self._memory_journal.memory_instances = recover(
+                            history, self._memory_journal.directory, self._service_instance)
+                    except (HistoryError, sqlite3.Error):
+                        maintenance_ok = False
                 # An update leaves the earlier runtime's open orchestrations to this service (0.3.4 R10).
                 # A failure here never stops the result cleanup below (review 034-r10).
                 try:
@@ -1326,7 +1388,9 @@ class ResultPersistenceLane:
             elif request.kind == 'register':
                 handle, run_handle, run_id, attempt, instance = request.arguments
                 result = history.record_registered_run(handle, run_handle, run_id, attempt, instance=instance,
-                                                       now_ms=history._result_now())
+                                                       now_ms=history._result_now(),
+                                                       memory=None if getattr(self, '_memory_journal', None) is None
+                                                       else self._memory_journal.directory)
             elif request.kind == 'failed_before_open':
                 result = history.record_run_failed_before_open(*request.arguments, now_ms=history._result_now())
             elif request.kind == 'list':

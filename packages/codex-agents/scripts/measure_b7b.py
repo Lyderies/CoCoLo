@@ -185,6 +185,40 @@ def recovery_work(count):
         test.doCleanups()
 
 
+
+def memory_writer_samples():
+    """B2's actual memory transactions including commit, not a full normal-run proxy."""
+    from tests.test_memory_holds import MemoryHoldTests
+    from codex_agents import memory_holds
+    samples, recovery = [], []
+    for trial in range(4):
+        test = MemoryHoldTests(methodName='runTest')
+        test.setUp()
+        try:
+            calls = (test.register, test.prep, lambda: test.release('preparation'),
+                     lambda: test.release('driver_entry'))
+            times = [elapsed(call)[0] for call in calls]
+            if trial:
+                samples.append(times)
+            test.key = ('hrn_' + 'd'*48,1)
+            test.register()
+            test.prep()
+            test.journal.keep_lock = True
+            test.journal.release()
+            ms, _ = elapsed(lambda: memory_holds.recover(test.store,test.journal.directory,'current'))
+            released = test.store._connection.execute("SELECT COUNT(*) FROM project_holds WHERE kind IN "
+                "('driver_entry','preparation') AND release_kind='service_stopped'").fetchone()[0]
+            if released != 2:
+                raise RuntimeError('memory recovery did not release its two proven-stopped rows')
+            if trial:
+                recovery.append(ms)
+        finally:
+            test.doCleanups()
+    return {'memory_transactions_samples_ms':samples,'memory_writer_ms':statistics.median(map(sum,samples)),
+            'memory_recovery_samples_ms':recovery,'memory_recovery_ms':statistics.median(recovery),
+            'memory_rows_released':2,'memory_limit_ms':5,'memory_warmup_runs':1}
+
+
 def measure():
     from tests import test_result_leases as leases
     from tests.learning_support import assignment
@@ -210,7 +244,7 @@ def measure():
             test.bound()
             test.publish()
         result['B1'] = {'status': 'unmeasured', 'numbers': {'partial_register_ms': sum(costs), 'calls': len(costs)},
-            'unmeasured_reason': 'Memory hold lifecycle is untracked; full normal-run writer delta including release/commit is not measured.',
+            'unmeasured_reason': 'Full normal-run writer delta including the account release tail is not measured; memory transactions are measured separately.',
             'scope': 'Actual reserve/arm/bind/commit register calls; excludes release tail and transaction commit cost. Full normal-run writer delta is not established.'}
     with fixture() as test:
         _, baseline = median_elapsed(lambda: test.base.reopen(result_capacity=test.fixture.capacity))
@@ -280,8 +314,12 @@ def measure():
         ms, released = elapsed(lambda: test.store.release_earlier_unarmed_leases(frozenset(live), limit=64))
         result['B6'] = {'status': 'unmeasured', 'numbers': {'blocked': 128, 'arrivals': 50, 'released': released,
                           'store_pass_ms': ms, 'store_batches': 1, 'limit_batches': 4},
-            'unmeasured_reason': 'Memory holds and their generic recurring-arrival/re-due scheduler are absent.',
-            'scope': 'Real lease pass releases target behind 128 live rows plus 50 arrivals. Generic re-due/backoff register scheduler and memory holds do not exist; required recurring-arrival scenario is not established.'}
+            'unmeasured_reason': 'The generic recurring-arrival/re-due scheduler is not measured; memory recovery is measured separately.',
+            'scope': 'Real lease pass releases target behind 128 live rows plus 50 arrivals. The generic re-due/backoff recurring-arrival scenario is not established by this lease pass.'}
+    memory = memory_writer_samples()
+    result['B1']['numbers'].update(memory)
+    result['B6']['numbers'].update(memory_rows_released=memory['memory_rows_released'],
+        memory_recovery_ms=memory['memory_recovery_ms'],memory_recovery_samples_ms=memory['memory_recovery_samples_ms'])
     comparisons = []
     for count in (0, 100000):
         with fixture() as test:

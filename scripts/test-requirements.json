@@ -1816,6 +1816,47 @@
   "source": "tests/requirements/recov.json#RECOV-3",
   "statement": "**RECOV-3 \u2014 Preserve E2c-9's stuck-service signal and stopped-service recovery.**\nAfter the initial validated history open, only a periodic history-writer maintenance pass whose maintenance steps\nall succeeded supplies progress. A suppressed failure in any maintenance step prevents renewal for that pass,\nwhile the remaining cleanup steps still run. Status reads, a serving process,\nthe publisher's sender thread, unrelated writes and failed maintenance do not renew this check. If progress stops\nand a serving project's published due time is at least START_RECHECK_SECONDS past, keep the exact line\n`recovery pending: service unresponsive`, including at the threshold. A clean stop publishes the actual outstanding\ndeadline, including an overdue evidence obligation, so the collector still wakes a stopped project conservatively.\nAcceptance: no completed pass and a failed pass leave the overdue warning; after successful passes stop, the warning\nreturns at the threshold, including when one sub-step fails persistently inside otherwise completed passes;\nclean_stop retains the raw overdue deadline. Existing E2c-9 assertions stay unchanged."
  },
+ "RS-B-4": {
+  "checks": [
+   "codex:tests.test_memory_holds.DriverMemoryTests.test_I1_interleaved_observations",
+   "codex:tests.test_memory_holds.DriverMemoryTests.test_I1_take_and_release_reply_interleavings",
+   "codex:tests.test_memory_holds.DriverMemoryTests.test_L4_never_launch_predicates",
+   "codex:tests.test_memory_holds.DriverMemoryTests.test_L6_live_handoff",
+   "codex:tests.test_memory_holds.DriverMemoryTests.test_M2_abandon_does_not_drop_entry_before_preparation_retirement",
+   "codex:tests.test_memory_holds.DriverMemoryTests.test_M2_unknown_cleanup_keeps_both_holds",
+   "codex:tests.test_memory_holds.DriverMemoryTests.test_M6_autonomous_retirement",
+   "codex:tests.test_memory_holds.DriverMemoryTests.test_M8_submit_refused_compensates",
+   "codex:tests.test_memory_holds.DriverMemoryTests.test_existing_failed_view_oracle_remains_valid",
+   "codex:tests.test_memory_holds.DriverMemoryTests.test_retired_tombstones_rotate_past_bound",
+   "codex:tests.test_memory_holds.MemoryHoldTests.test_M3_close_and_takes_both_orders",
+   "codex:tests.test_memory_holds.MemoryHoldTests.test_M4_sweeper_cannot_prune_memory_stopping_evidence",
+   "codex:tests.test_memory_holds.MemoryHoldTests.test_M5_recovery_once_and_graceful_stop",
+   "codex:tests.test_memory_holds.MemoryHoldTests.test_M7_registration_refusal_preserves_duty",
+   "codex:tests.test_memory_holds.MemoryHoldTests.test_live_memory_prevents_attempt_source_purge",
+   "codex:tests.test_memory_holds.MemoryHoldTests.test_register_requires_explicit_journal_directory",
+   "codex:tests.test_memory_holds.MemoryHoldTests.test_register_uses_explicit_non_sibling_journal_directory",
+   "codex:tests.test_memory_holds.MemoryHoldTests.test_registration_rollback_validator_and_status",
+   "codex:tests.test_memory_holds.MemoryHoldTests.test_status_memory_blocks_close_eligibility_and_has_holds",
+   "codex:tests.test_memory_holds.MemoryHoldTests.test_validator_refuses_missing_tracked_registration_hold",
+   "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_L7_handoff_kills",
+   "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M1_entry_deleted_before_release_record",
+   "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M1_transition_kills",
+   "codex:tests.test_memory_holds_crash.MemoryCrashTests.test_M4_hung_and_missing_lock",
+   "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_L4_L6_ten_refused_fences_handoff_detaches_real_lane_and_same_service_lists",
+   "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_L6_same_service_fences_handed_over_lease_once",
+   "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M1_writer_commit_waits_before_submit_and_retire_receipt_follows_actual_retire",
+   "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M5_graceful_stop_retires_rows_before_unlock",
+   "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M6_denied_closed_run_retires_without_another_client",
+   "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M7_faulted_writer_sends_one_memory_withdrawal",
+   "codex:tests.test_memory_holds_lane.MemoryLaneTests.test_M7_refused_registration_drops_entry_and_keeps_withdrawal_outbox",
+   "codex:tests.test_project_driver.RefusedRegistrationViewTests.test_R6_16_a_a_prepare_after_the_failed_run_left_memory_still_answers_run_failed",
+   "codex:tests.test_project_driver.StartupRecoverOpenTests.test_R6_16_a_during_the_start_up_recovery_dispatch_still_answers_run_failed",
+   "codex:tests.test_project_driver.StartupRecoverOpenTests.test_a_failed_start_up_recovery_refuses_the_waiting_register_as_an_unavailable_service",
+   "codex:tests.test_project_driver.StartupRecoverOpenTests.test_an_open_during_the_start_up_recovery_is_registered_and_dispatches"
+  ],
+  "source": "tests/requirements/rsb-memory-holds.json#RS-B-4",
+  "statement": "Instance-bound driver and preparation rows commit before their effects, retire only after memory retirement, and recover only from positive stopped-instance evidence; preserve withdrawal and handoff custody (M1-M8, I1, L4, L6, L7)."
+ },
  "RS-B-5": {
   "checks": [
    "codex:tests.test_hold_lifecycle.HoldLifecycleTests.test_B0_1_a_run_refused_before_launch_frees_its_account_binding_by_itself",
@@ -2591,7 +2632,7 @@
    "codex:tests.test_rsf_s6_classify.ClassificationTests.test_unarmed_lease_guidance_names_the_existing_automatic_expiry"
   ],
   "source": "tests/requirements/rsf-s6.json#RSF-S6-5",
-  "statement": "**RSF-S6-5 \u2014 Memory-only preparation.** Do not reconstruct driver or preparation\nmemory. Report those categories as not_tracked. Classify any surviving unarmed\nlease as held with a named legacy preparation reason and plain owner next step;\nno missing-memory inference releases an uncertain obligation. Pure memory with\nno durable source creates no invented hold or launch authority.\n\nFix round MED-1/LOW-3: every new owner step names an existing CLI command or a\ndocumented automatic release. Ordinary fresh-store runtime mismatch points to\nthe existing setup update command. Unarmed leases still release automatically\non the service's expiry sweep or when the successor releases unused leases;\npending claims require the account's authenticated no-launch evidence."
+  "statement": "**RSF-S6-5 \u2014 Memory-only preparation.** Do not reconstruct driver or preparation\nmemory. Report those categories as tracked with zero invented historical holds (B2). Classify any surviving unarmed\nlease as held with a named legacy preparation reason and plain owner next step;\nno missing-memory inference releases an uncertain obligation. Pure memory with\nno durable source creates no invented hold or launch authority.\n\nFix round MED-1/LOW-3: every new owner step names an existing CLI command or a\ndocumented automatic release. Ordinary fresh-store runtime mismatch points to\nthe existing setup update command. Unarmed leases still release automatically\non the service's expiry sweep or when the successor releases unused leases;\npending claims require the account's authenticated no-launch evidence."
  },
  "RSF-S6-6": {
   "checks": [

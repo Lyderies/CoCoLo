@@ -2351,10 +2351,11 @@ class ProjectHistory:
         return actual
 
     @_operation
-    def record_registered_run(self, orchestration_handle, run_handle, run_id, attempt, *, instance, now_ms):
+    def record_registered_run(self, orchestration_handle, run_handle, run_id, attempt, *, instance, now_ms, memory=None):
         """S1-R6: the driver registered this run (before its preparation), under its supervisor
         instance. A replay is a no-op; another run under the same (run handle, attempt) is refused, and
-        so is a new one past the orchestration's limit (R6-12). Reporting only."""
+        so is a new one past the orchestration's limit (R6-12). Reporting only, unless `memory` names the
+        registering instance's launch-journal directory: its RS-B-4 driver-entry hold then commits here too."""
         if (not matches(orchestration_handle, _ID) or not matches(run_handle, _RUN) or not matches(run_id, _ID)
                 or not valid_integer(attempt, minimum=1) or not matches(instance, _ID) or not valid_integer(now_ms)):
             raise HistoryError("history_invalid_input")
@@ -2366,6 +2367,11 @@ class ProjectHistory:
                 # A run an earlier service registered never resumes under another (R6-17).
                 if tuple(known) != (orchestration_handle, run_id, instance):
                     raise HistoryError("history_conflict")
+                if memory:
+                    from .memory_holds import _owned
+                    row = _owned(self, 'driver_entry', (run_handle, attempt), instance)
+                    if row['state'] != 'held':
+                        raise HistoryError('history_conflict')
                 return
             held = self._connection.execute(
                 "SELECT COUNT(*) FROM project_registered_runs WHERE project_id=? AND orchestration_handle=?",
@@ -2375,6 +2381,9 @@ class ProjectHistory:
             self._connection.execute(
                 "INSERT INTO project_registered_runs VALUES(?,?,?,?,?,?,?,NULL,NULL)",
                 (self.project_id, run_handle, attempt, orchestration_handle, run_id, instance, now_ms))
+            if memory:
+                from .memory_holds import registration_hold
+                registration_hold(self, orchestration_handle, run_handle, attempt, instance, now_ms, memory)
 
     @_operation
     def record_run_failed_before_open(self, run_handle, attempt, reason, *, now_ms):
@@ -3649,6 +3658,10 @@ class ProjectHistory:
         """Whether an attempt may go (0.3.4 R1f): it reserved no cleanup, it was never admitted (O10 D3), or
         the account's release of it is verified here. Otherwise the account could still hold the run while its project record went.
         B4s (RS-B-B4-5): a verified account settlement of the attempt (lost or released unacknowledged) releases it too."""
+        if self._connection.execute("SELECT 1 FROM project_holds WHERE project_id=? AND "
+                "kind IN ('driver_entry','preparation') AND identity=? AND state<>'released' LIMIT 1",
+                (self.project_id, attempt_identity(lease.binding.run_handle, lease.binding.attempt))).fetchone():
+            return False  # Memory holds still need their retained registration source for SH-7.
         if lease.cleanup_reservation_digest is None or self._attempt_settled(lease):
             return True
         if lease.state == "expired" and self._connection.execute(

@@ -1,7 +1,7 @@
 """B7a: project-local hold/custody counts and bounded, content-free D3 repairs.
 
 Read only, on the history writer thread. Deadlines never imply an evidence-only
-release. Memory holds remain explicitly untracked until their writer slice exists.
+release. Memory holds report the durable driver and preparation lifecycle.
 """
 from .holds_report_contracts import (HOLD_KINDS, UNTRACKED_KINDS, TIMER_KINDS, MAX_REPAIR_ENTRIES,
                                       DIRECTORY_REPAIR, OPERATOR_REPAIR, RETRY_REPAIR)

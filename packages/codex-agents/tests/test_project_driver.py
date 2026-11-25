@@ -20,6 +20,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from tests.support import ORCHESTRATION_ROOT
@@ -879,6 +880,157 @@ class LifecycleBoundaryTests(DriverHarness):
         self.assertEqual(sorted(item['path'] for item in preview['files']), sorted(self.executions()[0]['files']))
         self.assertEqual(preview['capabilities']['model'], route['model'])
         self.assertEqual(preview['capabilities']['sandbox'], 'read-only')
+
+
+STARTUP_WHY = ('Real CLI and service boundaries: an open landing inside the start-up memory recovery is registered '
+               'and dispatches as without the delay (RS-B-4 final fix, review 040-memholds-r2c).')
+
+
+class StartupRecoverOpenTests(DriverHarness):
+    """RS-B-4 (final fix, review 040-memholds-r2c): an open that arrives while the service's start-up memory
+    recovery is still under way is registered once that recovery is done, and its dispatch answers as it would
+    without the delay. The service's start-up recovery is put on its writer only once the open's run.register
+    has been taken by the driver, so the open always lands inside it; nothing here sleeps or depends on load.
+    (Holding the writer itself would also hold the orchestration open the test needs first.)"""
+
+    def setUp(self):
+        from codex_agents import result_persistence
+        self.recover_held, self.memory_at_register, self.recover_fails = threading.Event(), [], False
+        self.deferred = None
+        original_configure, original_request = (result_persistence.ResultPersistenceLane.configure_memory,
+                                                project_driver.RunDriver._request)
+        test = self
+
+        class Deferred:
+            """The start-up recovery's request, as the driver sees it: queued until it is put on the writer."""
+            def __init__(self, lane, arguments):
+                self.lane, self.arguments, self.real = lane, arguments, None
+
+            def start(self):
+                if self.real is None:
+                    self.real = (SimpleNamespace(state='failed', reason='history_unavailable') if test.recover_fails
+                                 else self.lane.memory_hold(*self.arguments))
+
+            state = property(lambda self: 'queued' if self.real is None else self.real.state)
+            reason = property(lambda self: None if self.real is None else self.real.reason)
+
+        def configure(lane, journal):
+            # The real attachment; only the queueing of its recovery is deferred.
+            lane.memory_hold = lambda *arguments: Deferred(lane, arguments)
+            try:
+                self.deferred = original_configure(lane, journal)
+            finally:
+                del lane.memory_hold
+            self.recover_held.set()
+            return self.deferred
+
+        def request(driver, connection, enrolled, raw):
+            if b'"run.register"' not in raw:
+                return original_request(driver, connection, enrolled, raw)
+            self.memory_at_register.append(driver._memory_start.state)
+            try:
+                return original_request(driver, connection, enrolled, raw)
+            finally:
+                self.deferred.start()
+
+        for owner, name, value in ((result_persistence.ResultPersistenceLane, 'configure_memory', configure),
+                                   (project_driver.RunDriver, '_request', request)):
+            patcher = mock.patch.object(owner, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        super().setUp()
+
+    def open_during_recovery(self):
+        task = self.write('task.json', self.task())
+        route = self.cli('learning-route', '--task', task)
+        context = ('--task', task, '--assignment', self.write('assignment.json', self.assignment_for(route)),
+                   '--parent-grant', self.write('grant.json', PARENT_GRANT))
+        route_path = self.write('route.json', route)
+        orchestration = self.cli('learning-open-orchestration')
+        self.assertTrue(self.recover_held.is_set(), 'the start-up recovery was not held')
+        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
+                          '--orchestration-handle', orchestration['orchestration_handle'])
+        self.assertEqual(['queued'], self.memory_at_register, 'the register did not arrive during the recovery')
+        return context, route_path, opened
+
+    def registered_rows(self):
+        store = sqlite3.connect('file:' + str(next(self.state.root.glob('projects/*/history.sqlite3'))) + '?mode=ro',
+                                uri=True)
+        try:
+            return store.execute('SELECT run_id,attempt,failed_reason FROM project_registered_runs').fetchall()
+        finally:
+            store.close()
+
+    @__import__('test_framework').requirements('RS-B-4', why_not_scenario=STARTUP_WHY)
+    def test_an_open_during_the_start_up_recovery_is_registered_and_dispatches(self):
+        context, route_path, opened = self.open_during_recovery()
+        self.assertEqual(('admitted', True), (opened['admission'], opened['project_host_registered']),
+                         self.stopped_runs)
+        self.wait_for(lambda: len(self.registered_rows()) == 1, seconds=30)
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
+        self.assertEqual('result', dispatched['bridge_report']['outcome'], self.stopped_runs)
+        self.assertEqual(1, len(self.executions()))
+
+    @__import__('test_framework').requirements('RS-B-4', why_not_scenario=STARTUP_WHY)
+    def test_R6_16_a_during_the_start_up_recovery_dispatch_still_answers_run_failed(self):
+        # The exact R6_16_a scenario (the registration report refused by the writer), with the open landing inside
+        # the start-up recovery: dispatch answers the required run_failed, never dispatch_unavailable.
+        from codex_agents import result_persistence
+        from codex_agents.history_contracts import HistoryError
+        with mock.patch.object(result_persistence.ResultPersistenceLane, 'report_registered_run',
+                               side_effect=HistoryError('history_service_unavailable')), \
+                mock.patch.object(codex_preparation.CodexPreparationLane, 'submit') as submit:
+            context, route_path, opened = self.open_during_recovery()
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'],
+                               expected=2)
+        self.assertEqual('run_failed', refused['reason_code'], (refused, self.stopped_runs))
+        self.assertTrue(opened['project_host_registered'], self.stopped_runs)
+        submit.assert_not_called()
+
+    @__import__('test_framework').requirements('RS-B-4', why_not_scenario=STARTUP_WHY)
+    def test_a_failed_start_up_recovery_refuses_the_waiting_register_as_an_unavailable_service(self):
+        # Compatibility, not a red claim: when the recovery itself fails, the waiting register gets the answer an
+        # unavailable service gave before this unit (refused history_service_unavailable; the open is left
+        # unregistered and its dispatch answers dispatch_unavailable, as before).
+        self.recover_fails = True
+        context, route_path, opened = self.open_during_recovery()
+        self.assertEqual(('admitted', False), (opened['admission'], opened['project_host_registered']))
+        self.assertEqual([('refused', 'history_service_unavailable')],
+                         [(entry[2].get('state'), entry[2].get('reason_code')) for entry in self.stopped_runs
+                          if entry[0] == 'client' and isinstance(entry[2], dict)], self.stopped_runs)
+        self.assertEqual([], self.registered_rows())
+        refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'],
+                           expected=2)
+        self.assertEqual('dispatch_unavailable', refused['reason_code'], refused)
+
+
+class RefusedRegistrationViewTests(DriverHarness):
+    """RS-B-4 final fix with W5: a run whose registration report is refused leaves the driver's memory at once (M7),
+    yet a prepare that arrives after that, within FAILED_VIEW_SECONDS, still reads its failure (run_failed),
+    never dispatch_unavailable. The dispatch is sent only once the driver has dropped the run (event-coordinated)."""
+
+    @__import__('test_framework').requirements('RS-B-4', why_not_scenario=STARTUP_WHY)
+    def test_R6_16_a_a_prepare_after_the_failed_run_left_memory_still_answers_run_failed(self):
+        from codex_agents import result_persistence
+        from codex_agents.history_contracts import HistoryError
+        released, original = [], project_driver.RunDriver._release_failed
+
+        def release(driver, run):
+            original(driver, run)
+            if run.state == 'released':
+                released.append((driver, run.key))
+        with mock.patch.object(result_persistence.ResultPersistenceLane, 'report_registered_run',
+                               side_effect=HistoryError('history_service_unavailable')), \
+                mock.patch.object(project_driver.RunDriver, '_release_failed', release), \
+                mock.patch.object(codex_preparation.CodexPreparationLane, 'submit') as submit:
+            context, route_path, _, run_handle = self.open_run()
+            self.wait_for(lambda: released and released[-1][1][0] == run_handle
+                          and released[-1][1] not in released[-1][0]._runs, seconds=30)
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('run_failed', refused['reason_code'], (refused, self.stopped_runs))
+        submit.assert_not_called()
 
 
 class WarmUpGateTests(unittest.TestCase):

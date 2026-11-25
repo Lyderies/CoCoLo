@@ -204,7 +204,7 @@ REASON_CODES = frozenset({
 _REGISTER_FIELDS = {'purpose', 'orchestration_handle', 'run_id', 'host_client', 'assignment', 'task', 'route',
                     'parent_grant'}
 _PREPARE_FIELDS = {'purpose', 'expected_export_commit'}
-_ACTIVE = frozenset({'recording_registration', 'reading', 'preparing', 'observing', 'leasing', 'arming', 'recording_open', 'claiming', 'binding',
+_ACTIVE = frozenset({'recording_registration', 'reading', 'taking_preparation', 'preparing', 'observing', 'leasing', 'arming', 'recording_open', 'claiming', 'binding',
                      'registering', 'provenance', 'consuming', 'closing', 'settling', 'withdrawing', 'fencing'})
 # A run that can never launch closes itself through these, then ends 'failed' and closed.
 _CLOSING = frozenset({'closing', 'settling', 'withdrawing', 'fencing'})
@@ -270,6 +270,7 @@ class _Run:
     closed: bool = False  # Failed and holding nothing: no lease, no preparation, nothing to reconcile.
     fence_attempts: int = 0  # Fences the account refused or that could not be sent.
     fence_at: float | None = None  # When a refused fence is asked again.
+    hand_over_due: bool = False  # Exhausted local fences; retry the durable handoff until it commits.
     publish_attempts: int = 0  # Failed publications of the run's result retried (O10 D4).
     publish_at: float | None = None  # When the failed publication is retried.
     launch_token: str | None = None  # C2: its container intent's token (containers switched on only).
@@ -358,6 +359,7 @@ class _RateLimitRecorder:
 
 
 class RunDriver:
+    _memory = None
     # C2: the container launcher; None while containers are switched off (`container_launch.SETTINGS`).
     _containers = None
     # C4: the recovery of earlier instances' container entries, made on its first use (containers only).
@@ -382,6 +384,9 @@ class RunDriver:
         # Released and retired runs: key -> (host class, orchestration handle); and the
         # bindings whose monitor slots are still to be freed: binding -> (refusals, next try).
         self._retired, self._forgetting = {}, {}
+        # RS-B-4 final fix (W5): failed runs memory released before their view window ended, by key:
+        # (host class, inputs digest, failure reason, answered until). Bounded by MAX_RETIRED_RUNS.
+        self._failed_views = {}
         self._withdraw_request = self._withdraw_future = self._withdraw_entry = None
         self._withdraw_phase, self._next_withdraw, self._withdraw_queue = 'start', 0.0, []
         self._call = _Call()
@@ -399,6 +404,12 @@ class RunDriver:
             self._journal = LaunchJournal(Path(state.root) / 'projects' / scope.project_id / 'launches')
         except JournalError:
             raise HistoryError('history_service_unavailable') from None
+        from .memory_holds import DriverMemory
+        self._memory = DriverMemory(self)
+        self._memory_start = runtime.persistence.configure_memory(self._journal)
+        # RS-B-4 final fix: run.register requests that arrived while that start-up recovery is still queued,
+        # answered once it is done (or failed): (connection, enrolled, request, context, answer-by time).
+        self._register_waiting = []
         runtime.pool._registry.launch_journal = self._journal
         # C2: None while containers are switched off (`container_launch.SETTINGS`, as shipped).
         self._containers = container_launch.launcher_for(scope.project_id, self._journal)
@@ -516,7 +527,25 @@ class RunDriver:
         except Exception:
             connection.close()
             return
+        if (request['operation'] == 'run.register' and self._memory is not None
+                and self._memory_start.state not in {'done', 'failed'}):
+            # RS-B-4 final fix: an open made just after the service started waits for the start-up memory
+            # recovery instead of being refused (the CLI does not retry its register); bounded by WAIT_SECONDS,
+            # the driver's bound on any waiting request, inside the CLI's own register timeout.
+            if len(self._register_waiting) >= MAX_INTAKE:
+                self._reply(connection, {'state': 'refused', 'reason_code': 'history_service_unavailable'})
+            else:
+                self._register_waiting.append((connection, enrolled, request, context, self._clock() + WAIT_SECONDS))
+            return
+        self._answer(connection, enrolled, request, context)
+
+    def _answer(self, connection, enrolled, request, context):
         key = (request['run_handle'], request['attempt'])
+        if request['operation'] == 'run.prepare':
+            failed = self._late_failure(key, request['inputs_digest'], enrolled.host_client)
+            if failed is not None:
+                self._reply(connection, failed)
+                return
         if request['operation'] in {'run.describe', 'run.abandon'}:
             # Commands that know only a run handle: which host class holds it, or
             # dropping one that never took a lease.
@@ -529,7 +558,10 @@ class RunDriver:
                 self._reply(connection, self._view(held[0]))
             elif held[0].closed:
                 # It already closed by itself; dropping it changes nothing anywhere.
-                del self._runs[held[0].key]
+                if self._memory is None:
+                    del self._runs[held[0].key]
+                elif held[0].claim_sent or held[0].duty_done_at is not None:
+                    self._memory.drop(held[0])  # Cleanup and its durable release may still be pending.
                 self._reply(connection, {'state': 'failed', 'reason_code': 'run_closed'})
             elif (held[0].lease is not None or held[0].state not in {'registered', 'recording_registration', 'failed'}
                   or held[0].future is not None):
@@ -563,6 +595,24 @@ class RunDriver:
             self._reply(connection, self._view(run))
         else:
             run.waiters.append((connection, self._clock() + WAIT_SECONDS))
+
+    def _release_registers(self):
+        """Owner step (RS-B-4 final fix): answer the registers waiting on the start-up memory recovery.
+
+        Once it is done they register as any other; once it failed, `_register` answers as an unavailable
+        service did before memory holds (refused history_service_unavailable) and asks for the recovery again.
+        One still waiting at its bound is refused the same way."""
+        if not self._register_waiting:
+            return
+        waiting, now, self._register_waiting = self._register_waiting, self._clock(), []
+        for item in waiting:
+            connection, enrolled, request, context, until = item
+            if self._memory_start.state in {'done', 'failed'}:
+                self._answer(connection, enrolled, request, context)
+            elif now >= until:
+                self._reply(connection, {'state': 'refused', 'reason_code': 'history_service_unavailable'})
+            else:
+                self._register_waiting.append(item)
 
     def _recorded(self, key, inputs_digest, value, host_client):
         """The opening primary reports its result admitted: a hint only (D1).
@@ -601,6 +651,11 @@ class RunDriver:
             if known.inputs_digest != inputs_digest or known.run_id != value['run_id']:
                 raise HistoryError('history_conflict')
             return
+        if self._memory_start.state != 'done':
+            if self._memory_start.state == 'failed':
+                self._memory_start = self._runtime.persistence.memory_hold(
+                    'recover', self._journal.directory, self._journal.instance)
+            raise HistoryError('history_service_unavailable')
         # O0c M11: no dispatch slot left in this host's lifetime: refuse before any claim (exhausted() has the
         # host replaced), never admit a run that would meet dispatch_full.
         if len(self._runs) >= MAX_RUNS or len(self._dispatch._jobs) >= DISPATCH_SLOTS:
@@ -662,6 +717,7 @@ class RunDriver:
         if request.state != 'done':
             run.withdraw_reason = 'refused_before_claim'
             self._fail(run, 'run_failed')  # Registration refused; the open's duty already committed.
+            run.failed_viewed = True
             return
         self._begin(run)
 
@@ -683,6 +739,9 @@ class RunDriver:
     def _start_preparation(self, run, worker_result):
         run.preparation = PreparationContext(preparation_payload(run.prospective, self._root, self._bundle,
             {'PATH': os.defpath}, expected_export_commit=run.commit, worker_result=worker_result))
+        if self._memory is not None:
+            self._memory.prepare(run)
+            return
         try:
             run.prepared = self._preparation.submit(run.preparation)
         except PreparationError as error:
@@ -835,7 +894,11 @@ class RunDriver:
         run.fence_attempts += 1
         if run.fence_attempts >= MAX_FENCE_ATTEMPTS:
             run.fence_at = None
-            self._give_back(run)
+            if self._memory is not None:
+                run.hand_over_due = True
+                self._memory.hand_over(run)
+            else:
+                self._give_back(run)
             return
         delay = min(FENCE_RETRY_MAX_SECONDS, FENCE_RETRY_SECONDS * 2 ** (run.fence_attempts - 1))
         run.fence_at = self._clock() + delay
@@ -950,10 +1013,14 @@ class RunDriver:
                 state = self._preparation.snapshot(handle)['state']
                 if state in {'cleaned', 'failed'}:
                     self._preparation.retire(handle)
+                    if self._memory is not None:
+                        self._memory.retired_preparation(handle)
                     self._giving_back.remove(handle)
                     self._cleanup_retry.pop(handle, None)
                 elif state == 'unknown':
                     # Its workspace may still be there: kept, and its removal asked for again later.
+                    if self._memory is not None:
+                        self._memory.unknown_cleanup(handle)
                     self._retry_cleanup(handle)
             except Exception:
                 pass  # Still cleaning up; asked again on the next step.
@@ -1025,6 +1092,15 @@ class RunDriver:
     def step(self):
         if self._closed:
             return
+        if self._memory is not None:
+            self._release_registers()
+            if self._memory_start.state == 'failed':
+                try:
+                    self._memory_start = self._runtime.persistence.memory_hold(
+                        'recover', self._journal.directory, self._journal.instance)
+                except HistoryError:
+                    pass
+            self._memory.step()
         self._read_intake()
         self._retire_given_back()
         self._forget_retired()
@@ -1046,7 +1122,10 @@ class RunDriver:
                     self._reply(connection, self._view(run))
                 run.waiters = []
             if run.state == 'released' and not run.waiters:
-                del self._runs[run.key]  # Recorded and released; nothing here is owed to it.
+                if self._memory is None:
+                    del self._runs[run.key]
+                else:
+                    self._memory.drop(run)
             else:
                 now = self._clock()
                 for connection, deadline in [w for w in run.waiters if now >= w[1]]:
@@ -1111,9 +1190,31 @@ class RunDriver:
         now = self._clock()
         if run.duty_done_at is None:
             run.duty_done_at = now
-        if (run.withdraw_reason in {'registered_idle', 'cancelled_before_claim'} or run.failed_viewed
+        if (run.closed is True or run.withdraw_reason in {
+                'registered_idle', 'cancelled_before_claim', 'refused_before_claim'} or run.failed_viewed
                 or now - run.duty_done_at >= FAILED_VIEW_SECONDS):
             run.state = 'released'
+            if ((run.closed is True or run.withdraw_reason == 'refused_before_claim')
+                    and now - run.duty_done_at < FAILED_VIEW_SECONDS):
+                # RS-B-4 final fix (W5): memory lets these go at once (M7), but a late prepare still reads the
+                # failure it would have read while the run was kept (FAILED_VIEW_SECONDS).
+                self._failed_views.pop(run.key, None)
+                self._failed_views[run.key] = (run.host_client, run.inputs_digest, run.reason,
+                                               run.duty_done_at + FAILED_VIEW_SECONDS)
+                while len(self._failed_views) > MAX_RETIRED_RUNS:
+                    self._failed_views.pop(next(iter(self._failed_views)))
+
+    def _late_failure(self, key, inputs_digest, host_client):
+        """The failure a late prepare reads for a failed run already released (W5), or None."""
+        now = self._clock()
+        for known in [k for k, view in self._failed_views.items() if now >= view[3]]:
+            del self._failed_views[known]
+        view = self._failed_views.get(key)
+        run = self._runs.get(key)
+        if (view is None or (run is not None and run.state != 'released')
+                or view[0] != host_client or view[1] != inputs_digest):
+            return None
+        return {'state': 'failed', 'reason_code': view[2]}
 
     def _withdraw_opens(self):
         """One bounded writer batch and account call at a time; retries use the stored envelope.
@@ -1240,6 +1341,8 @@ class RunDriver:
     def _advance(self, run):
         lane, prep = self._runtime.persistence, self._preparation
         if run.state == 'failed':
+            if self._memory is not None and run.hand_over_due:
+                self._memory.hand_over(run)
             if run.fence_at is not None and self._clock() >= run.fence_at:
                 run.fence_at = None
                 self._fence(run)  # A refused fence, asked again (see `_fence_later`).
@@ -1250,6 +1353,7 @@ class RunDriver:
             elif run.reporting is not None and run.reporting.state == 'failed':
                 run.withdraw_reason = 'refused_before_claim'
                 self._fail(run, 'run_failed')
+                run.failed_viewed = True
             elif self._clock() - run.opened_at >= REGISTERED_IDLE_SECONDS:
                 run.withdraw_reason = 'registered_idle'
                 self._fail(run, 'run_abandoned')
@@ -1560,6 +1664,7 @@ class RunDriver:
                 return  # The capacity is released; its dispatch view stays a while for the dispatching command.
             lane.finish_release(run.persistence)
             lane.retire(run.persistence)
+            run.persistence = None
             self._runtime.owner.retire(run.binding, self._runtime.pool, run.prepared_inputs.worker)
             self._preparation.discard(run.prepared)
             run.state = 'retiring'
@@ -1568,6 +1673,8 @@ class RunDriver:
             if state in {'cleaned', 'unknown'}:
                 if state == 'cleaned':
                     self._preparation.retire(run.prepared)
+                    if self._memory is not None:
+                        self._memory.retired_preparation(run.prepared)
                 else:
                     # O0c M4: its workspace removal did not finish. It is given back like any other
                     # preparation: its removal is asked again and its slot retired once clean.
@@ -1782,6 +1889,11 @@ class RunDriver:
             if lost[0] != host_client:
                 return {'state': 'refused', 'reason_code': 'history_not_authorized'}
             return {'state': 'failed', 'reason_code': 'run_lost' if lost[1] == 'released' else 'run_lost_held'}
+        retired = None if self._memory is None else next(
+            (owner for key, owner in self._retired.items() if key[0] == run_handle), None)
+        if retired is not None:
+            return ({'state': 'failed', 'reason_code': 'run_closed'} if retired[0] == host_client
+                    else {'state': 'refused', 'reason_code': 'history_not_authorized'})
         return {'state': 'refused', 'reason_code': 'history_orchestration_unavailable'}
 
     def warm_up(self):
@@ -1790,7 +1902,8 @@ class RunDriver:
         `ready` once the earlier leases are listed and the first sweep is collected; `failing` while a
         check last failed; else `warming`. Fixed codes only, never paths or raw error text."""
         elapsed = max(0, int((self._clock() - self._warm_started) * 1000))
-        if self._earlier_listed and self._swept:
+        if (self._earlier_listed and self._swept and
+                (self._memory is None or self._memory_start.state == 'done')):
             return ('ready', elapsed, None, None)
         for phase in ('listing', 'sweep'):
             if phase in self._warm_failures:
@@ -2359,6 +2472,24 @@ class RunDriver:
             install_enrollment(None, owner=self._owner_name)
             if self._containers is not None:
                 self._containers.close()
+        if self._memory is not None:
+            try:
+                # No runtime thread can launch or publish. Drop the actual retained memory before the receipt.
+                self._runtime.persistence._jobs.clear()
+                self._runtime.persistence._by_worker.clear()
+                self._runtime.pool._jobs.clear()
+                self._preparation._jobs.clear()
+                self._preparation._reserved_bytes = self._preparation._reserved_export_bytes = 0
+                for slot in self._preparation._slots:
+                    slot.current = None
+                self._runs.clear()
+                self._giving_back.clear()
+                self._memory.takes.clear()
+                self._memory.preparations.clear()
+                self._runtime.persistence.retire_memory_after_stop(self._journal.instance)
+                self._journal.keep_lock = False
+            except Exception:
+                settled = False  # Keep stopping evidence for the next start.
         self._journal.release()
         return settled  # RS-E E2a-8: whether final settlement released every run (a clean stop may then be published)
 
@@ -2420,9 +2551,9 @@ class RunDriver:
             return
         self._closed = True
         install_enrollment(None, owner=self._owner_name)
-        for connection, *_ in self._intake:
+        for connection, *_ in self._intake + self._register_waiting:
             connection.close()
-        self._intake = []
+        self._intake, self._register_waiting = [], []
         for run in self._runs.values():
             for connection, _ in run.waiters:
                 connection.close()

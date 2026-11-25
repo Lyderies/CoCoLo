@@ -126,7 +126,7 @@ class ClassificationTests(unittest.TestCase):
         from codex_agents.project_holds_report import holds_report
         report = holds_report(self.store)
         for kind in ('preparation', 'driver_entry'):
-            self.assertEqual('not_tracked', report['project_holds'][kind]['tracking'])
+            self.assertEqual('tracked', report['project_holds'][kind]['tracking'])
             self.assertEqual(0, report['project_holds'][kind]['held'])
         before = self.snapshot()
         for _ in range(2):

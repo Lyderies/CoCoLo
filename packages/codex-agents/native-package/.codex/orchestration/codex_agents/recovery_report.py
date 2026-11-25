@@ -78,20 +78,10 @@ def recovery_pending(history):
     result = (notes or RecoveryNotes()).snapshot(pending=pending)
     # Count blocked orchestrations, rather than every hold of the same orchestration.
     # Live indexes exclude tombstones. No checkpoint or result contents are opened.
-    from .project_holds_schema import LEASE_ORCHESTRATION
+    from .project_holds_schema import ORCHESTRATION_EXECUTION_HELD
     result['reasons']['has_holds'] = history._connection.execute(
         "SELECT COUNT(*) FROM project_orchestrations o INDEXED BY project_orchestrations_state "
-        "WHERE o.project_id=? AND o.state='open' AND (EXISTS("
-        "SELECT 1 FROM project_holds h INDEXED BY project_holds_due CROSS JOIN result_reservations s "
-        "ON s.project_id=h.project_id AND s.claim_id=h.identity "
-        "WHERE h.project_id=o.project_id AND h.kind='reservation' AND h.state<>'released' "
-        "AND s.orchestration_handle=o.orchestration_handle) OR EXISTS("
-        "SELECT 1 FROM project_holds h INDEXED BY project_holds_due CROSS JOIN result_leases l "
-        "ON l.project_id=h.project_id AND l.run_handle=substr(h.identity,1,instr(h.identity,':')-1) "
-        "AND l.attempt=CAST(substr(h.identity,instr(h.identity,':')+1) AS INTEGER) "
-        "WHERE h.project_id=o.project_id AND h.kind='lease' AND h.state<>'released' "
-        "AND " + LEASE_ORCHESTRATION + "=o.orchestration_handle "
-        "AND l.state IN ('reserved','claim_pending')))",
+        "WHERE o.project_id=? AND o.state='open' AND " + ORCHESTRATION_EXECUTION_HELD,
         (history.project_id,)).fetchone()[0]
     if result['stale']:
         result['reasons'] = dict.fromkeys(RECOVERY_REASONS)

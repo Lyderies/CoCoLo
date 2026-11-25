@@ -49,7 +49,7 @@ B4 includes 100,000 released lease and reservation rows as well as custody/conte
 tombstones, and measures recovery_pending including its has_holds query. Attempt
 identities split at their single colon: the run-handle grammar excludes colons,
 and the identity constructor must raise ValueError for a colon, including under -O.
-Missing memory hold tracking stays asserted while B1/B6 remain unmeasured.
+B2 memory transactions and positive-lock recovery are measured separately. B1 full normal-run delta and B6 generic recurring-arrival scheduling remain explicitly unmeasured; memory-only samples never establish those wider budgets.
 Probe Unix socket binding with try/except OSError. When available, measure actual
 ProjectServiceHost startup (writer bootstrap, RunDriver, listeners and published runtime hint)
 with 1,064 held leases versus empty (B2 <=+100 ms) and 64 live contexts versus none

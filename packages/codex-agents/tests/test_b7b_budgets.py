@@ -56,10 +56,17 @@ class BudgetMeasurements(unittest.TestCase):
         for name in ('B1', 'B6'):
             self.assertEqual('unmeasured', measurements[name]['status'])
             self.assertTrue(measurements[name]['unmeasured_reason'])
-        # The absent memory-kind lifecycle/scheduler is a real capability gap.
+        # B2 closes memory tracking. These real memory transactions do not establish
+        # the full normal-run delta or the generic recurring-arrival scheduler above.
         from codex_agents.holds_report_contracts import UNTRACKED_KINDS
-        self.assertEqual({'driver_entry', 'preparation', 'orchestration'}, set(UNTRACKED_KINDS),
-                         'Memory tracking changed: implement full B1/B6 measurements.')
+        self.assertEqual({'orchestration'},set(UNTRACKED_KINDS))
+        memory = measurements['B1']['numbers']
+        self.assertEqual(3,len(memory['memory_transactions_samples_ms']))
+        self.assertTrue(all(len(row)==4 for row in memory['memory_transactions_samples_ms']))
+        self.assertEqual(statistics.median(map(sum,memory['memory_transactions_samples_ms'])),memory['memory_writer_ms'])
+        self.assertLess(memory['memory_writer_ms'],5)
+        self.assertEqual(2,measurements['B6']['numbers']['memory_rows_released'])
+        self.assertEqual(3,len(measurements['B6']['numbers']['memory_recovery_samples_ms']))
         # A sandbox skips only service startup, after all store assertions ran.
         with self.subTest(operation='real_service_startup'):
             if measurements['B2']['service_startup_status'] == 'unmeasured':
