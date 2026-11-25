@@ -149,8 +149,12 @@ def install_run_holds_schema(connection) -> None:
 
 def adopt_run_holds(connection) -> None:
     """Give every account hold without a register row its row from its evidence (idempotent)."""
-    for sql in _ADOPT:
-        connection.execute(sql)
+    migration = getattr(connection, '_hold_migration', None)
+    for name, alias, sql in zip(RUN_HOLD_KINDS, ('a', 'h', 'p'), _ADOPT):
+        if migration is None:
+            connection.execute(sql)
+        else:
+            migration.adopt_sql(name, sql + ' WHERE 1', alias)
 
 
 # A slot released by a written lost or crashed decision: its register row is released, at the slot's own release

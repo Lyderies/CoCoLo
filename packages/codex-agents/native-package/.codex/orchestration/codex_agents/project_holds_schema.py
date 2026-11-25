@@ -410,8 +410,13 @@ def adopt_project_holds(connection, now_ms: int) -> None:
     its `legacy_no_context` context and custody row (idempotent; in the step)."""
     if not connection.in_transaction:
         raise HistoryError("history_unavailable")
-    for sql in _ADOPT:
-        connection.execute(sql, {"now": now_ms, "evidence": ADOPTED})
+    migration = getattr(connection, '_hold_migration', None)
+    for name, alias, sql in zip(('lease', 'reservation', 'context', 'result_custody'), ('l', 's', 's', 's'), _ADOPT):
+        parameters = {"now": now_ms, "evidence": ADOPTED}
+        if migration is None:
+            connection.execute(sql, parameters)
+        else:
+            migration.adopt_sql(name, sql, alias, parameters)
 
 
 _HELD_LEASE = ("EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=c.project_id AND h.kind='lease' "

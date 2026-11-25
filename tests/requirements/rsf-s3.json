@@ -1,0 +1,30 @@
+{
+ "authority": "docs/requirements/rsf-s3.md",
+ "requirements": [
+  {
+   "id": "RSF-S3-1",
+   "statement": "**RSF-S3-1 \u2014 Durable bounded progress.** Adopt historical account slots,\nbindings and probes, and project leases, reservations, contexts, custody and\norchestrations by class, seeking a durable source cursor. Each adoption batch visits at\nmost 64 source rows. Its writes and cursor commit together. Resume skips\ncommitted batches and retries an uncommitted batch. A migration whose entire\nadoption fits in 64 source rows may retain one atomic transaction. Freeze\nclassification time across resumptions. Historical records remain upgradeable.\nThe first transaction's legacy backfills for account ledgers below 17 and the\nfinal transaction's account release-due sweep and full account/project validators\nare **not batch-bounded**. These transactions are atomic and idempotent on resume;\nthe 64-row bound applies to adoption, not to the entire upgrade.",
+   "source": "tests/requirements/rsf-s3.json#RSF-S3-1"
+  },
+  {
+   "id": "RSF-S3-2",
+   "statement": "**RSF-S3-2 \u2014 Fence every batch.** Retain S2's lifetime writer lock and claim\nthe runtime_takeover epoch before adoption. Check ownership and epoch at each\nbatch transaction and commit. A dead owner releases its lock; a successor\nclaims a fresh epoch. Revocation must roll back the pending batch and cursor.\nPreserve the authorization and verified backup gates on the original upgrade.\nExercise a real successor process after SIGKILL, assert its epoch increments on\nresume, and prove a retained stale owner cannot commit adoption rows and cursor.",
+   "source": "tests/requirements/rsf-s3.json#RSF-S3-2"
+  },
+  {
+   "id": "RSF-S3-3",
+   "statement": "**RSF-S3-3 \u2014 Validate before exposure.** Pending migration metadata prevents\nordinary startup from serving a partial register. Only an explicitly authorized\nowner may resume it. Before the first durable batch, install the existing\ntarget version to exclude old executables. This version is an exclusion fence,\nnot publication: remove the pending marker only with successful register,\ncustody and schema validation. Keep the original project pre-upgrade copy\nthrough an interrupted migration. A failure before the first checkpoint keeps\nthe existing rollback behavior; after it, retain progress for retry.\nPending refusals give the plain next step and `Run: ./setup.sh --update`.\nReset the connection's temporary migration context even if adoption or validation\nraises. Before resuming a project, require the kept before-copy named by the\noriginal attempt marker; refuse plainly if that recovery copy is missing.",
+   "source": "tests/requirements/rsf-s3.json#RSF-S3-3"
+  },
+  {
+   "id": "RSF-S3-4",
+   "statement": "**RSF-S3-4 \u2014 Process-death equivalence.** Use real subprocesses and SIGKILL\nimmediately before and after a batch commit, including a second interruption\nafter resume, the last short batch / `done=1` commit for every class, and the\npublication commit containing progress-table removal after full validation.\nReopen twice and compare all historical identities, row counts,\nsigned/sealed bytes and adopted rows against an uninterrupted upgrade from\nthe same source. Verify durable cursors at the kill boundary, class coverage,\nbounded batches, failed validation and revoked ownership.",
+   "source": "tests/requirements/rsf-s3.json#RSF-S3-4"
+  },
+  {
+   "id": "RSF-S3-5",
+   "statement": "**RSF-S3-5 \u2014 Stable final formats.** Reuse ledger 17 and project 22. Temporary\nprogress metadata exists only during migration and disappears atomically on\npublication; no permanent schema step, VERSION or runtime catalogue bump is\nneeded. Keep progress out of backups and source images by withholding the\nowner until validation. Exercise the source-image reader and named copy,\nbackup, restore, move and record-enumeration modules. Register scenario tests\nand prove `metadata_errors: []`. Record evidence and limitations in\n[STATUS.md](rsf-s3/STATUS.md); pair any existing assertion edits in\n[assertions.md](rsf-s3/assertions.md).",
+   "source": "tests/requirements/rsf-s3.json#RSF-S3-5"
+  }
+ ]
+}

@@ -518,6 +518,8 @@ class ProjectHistory:
         project_holds_schema.wake_settled(self.project_id, self._connection)  # RS-E E2a-7: exact, after commit
 
     def _initialize(self) -> None:
+        from .hold_migration import HoldMigration, pending, PENDING_MESSAGE, SCHEMA as PROGRESS_SCHEMA
+
         connection = self._connection
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         application = connection.execute("PRAGMA application_id").fetchone()[0]
@@ -525,6 +527,34 @@ class ProjectHistory:
         actual_schema = {_normalized_sql(row[2]) for row in objects}
         def schema_set(schema):
             return {_normalized_sql(statement) for statement in schema.split(";") if statement.strip()}
+        if pending(connection):
+            if (not self._allow_schema_upgrade or version != _SCHEMA_VERSION or application != _APPLICATION_ID
+                    or actual_schema != schema_set(_SCHEMA + ';' + PROGRESS_SCHEMA)):
+                raise HistoryError('history_incompatible', message=PENDING_MESSAGE)
+            # A checkpoint replaced the old atomic rollback boundary. Require
+            # the original attempt's kept recovery copy before any resume write.
+            markers = self._upgrade_markers()
+            try:
+                if len(markers) != 1 or markers[0][1] is None:
+                    raise OSError('missing attempt marker')
+                self._check_owned((self._directory / markers[0][1]['copy']).lstat())
+            except (OSError, HistoryError):
+                raise HistoryError('history_incompatible', message=(
+                    'The kept project before-copy for this pending hold migration is missing or unsafe. '
+                    'Restore the original copy and its attempt marker before retrying. '
+                    'Run: ./setup.sh --update')) from None
+            self._check_schema_identity(_COLUMNS)
+            self._check_result_identity_before_upgrade(version)
+            # The original before-copy and attempt marker belong to the whole
+            # migration, not this successor. Never discard them on resume.
+            names = {row[0] for row in connection.execute('SELECT class FROM hold_migration_progress')}
+            classes = self._hold_migration_classes('lease' in names)
+            with self._transaction():
+                migration = HoldMigration(connection, 'project', classes, self._hold_now(), _SCHEMA_VERSION,
+                                          lambda: HistoryError('history_incompatible'))
+                self._adopt_hold_migration(migration)
+            self._recover_interrupted_upgrade(remove_copy=False)
+            return
         if not objects and version == 0 and application == 0:
             # executescript is used only for this fixed, empty schema, never requests.
             connection.executescript("BEGIN IMMEDIATE;" + _SCHEMA)
@@ -567,11 +597,13 @@ class ProjectHistory:
             try:
                 self._upgrade(connection, version)
             except BaseException:
-                # O10 HS-18: the store is unchanged, so the copy made for this attempt goes too.
-                with contextlib.suppress(OSError):
-                    copy.unlink()
-                with contextlib.suppress(OSError):
-                    marker.unlink()
+                # Before the first checkpoint retain HS-18 rollback behavior.
+                # Durable partial adoption keeps its original recovery copy.
+                if not pending(connection):
+                    with contextlib.suppress(OSError):
+                        copy.unlink()
+                    with contextlib.suppress(OSError):
+                        marker.unlink()
                 raise
             with contextlib.suppress(OSError):
                 marker.unlink()  # committed: the copy is the kept one; a marker left by a death here is cleared below
@@ -598,6 +630,8 @@ class ProjectHistory:
         self._check_orchestration_states()  # B6 review r1
 
     def _upgrade(self, connection, version) -> None:
+        from .hold_migration import HoldMigration
+
         with self._transaction():
             additions = ((_RESULT_SCHEMA if version == 1 else "") + (_LEASE_SCHEMA if version < 3 else "")
                          + (_EXECUTION_SCHEMA if version < 4 else "")
@@ -633,15 +667,34 @@ class ProjectHistory:
                 for statement in STEP_21_SCHEMA.split(';'):
                     if statement.strip():
                         connection.execute(statement)
-            # B1: every lease and reservation gets its register row by class, idempotently, before the validators.
-            if version < 18:
-                project_holds_schema.adopt_project_holds(connection, self._hold_now())
-            # B6: every orchestration's state from its latest checkpoint; every open one its held register row.
-            project_holds_schema.adopt_orchestrations(connection, self.project_id, self._orchestrations_to_adopt())
-            # SH-1: both validators inside the step, before it commits; a failure rolls everything back to the
-            # earlier format (and the copy made for it goes, O10 HS-18).
-            self._check_project_holds()
+            migration = HoldMigration(connection, 'project', self._hold_migration_classes(version < 18),
+                self._hold_now(), _SCHEMA_VERSION, lambda: HistoryError('history_incompatible'))
+            self._adopt_hold_migration(migration)
             connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+
+    @staticmethod
+    def _hold_migration_classes(include_results):
+        return ((('lease', 'result_leases'), ('reservation', 'result_reservations'),
+                 ('context', 'result_reservations'), ('result_custody', 'result_reservations'))
+                if include_results else ()) + (('orchestration', 'project_orchestrations'),)
+
+    def _adopt_hold_migration(self, migration):
+        connection = self._connection
+        connection._hold_migration = migration
+        try:
+            if 'lease' in dict(migration.classes):
+                project_holds_schema.adopt_project_holds(connection, migration.now_ms)
+            if migration.active:
+                for _, _, rowids in migration.batches('orchestration'):
+                    project_holds_schema.adopt_orchestrations(connection, self.project_id,
+                        self._orchestrations_to_adopt(rowids, now_ms=migration.now_ms))
+            else:
+                project_holds_schema.adopt_orchestrations(connection, self.project_id, self._orchestrations_to_adopt())
+            self._check_schema_identity(_COLUMNS)
+            self._check_project_holds()
+            migration.finish()
+        finally:
+            connection._hold_migration = None
 
     def _check_orchestration_states(self) -> None:
         """B6 review r1 (MED state): at integrity validation (every open, so every restore, and inside the step)
@@ -661,17 +714,19 @@ class ProjectHistory:
                     "closed" if snapshot["status"] in ORCHESTRATION_TERMINAL_STATES else "open"):
                 raise HistoryError("history_incompatible")
 
-    def _orchestrations_to_adopt(self) -> list:
+    def _orchestrations_to_adopt(self, rowids=None, *, now_ms=None) -> list:
         """B6 (step 20 -> 21): (handle, open, started_at_ms, last activity) of every orchestration, from its latest
         checkpoint verified by its own keyed seal. One that does not verify is taken as open here (and the step's
         state validator then refuses the store, decision 210 item 4; it never frees a place,
         as before), from now. A store with orchestrations and no result key cannot be classified: refused."""
+        selection = '' if rowids is None else ' AND rowid IN (' + ','.join('?' for _ in rowids) + ')'
         rows = self._connection.execute("SELECT orchestration_handle,sequence,checkpoint_digest FROM "
-                                        "project_orchestrations WHERE project_id=?", (self.project_id,)).fetchall()
+            "project_orchestrations WHERE project_id=?" + selection,
+            (self.project_id, *(rowids or ()))).fetchall()
         if rows and self._result_key is None:
             raise HistoryError("history_incompatible")
         from .orchestration_api import ORCHESTRATION_TERMINAL_STATES
-        owner, now, adopted = self._orchestration_owner(), self._hold_now(), []
+        owner, now, adopted = self._orchestration_owner(), self._hold_now() if now_ms is None else now_ms, []
         for row in rows:
             snapshot = owner._latest_snapshot(row)
             if snapshot is None:

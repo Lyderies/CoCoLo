@@ -2105,8 +2105,6 @@
   "statement": "**RSA3-5 \u2014 Release-batch rows unchanged.** The same seeded ledger selects the same due rows before and after the query-cost fix; account_holds_due agrees with _release_due_locked."
  },
  "RSF-S2-1": {
-  "source": "tests/requirements/rsf-s2.json#RSF-S2-1",
-  "statement": "**RSF-S2-1 \u2014 Exclusive lifetime ownership.** Both store owners acquire their\nexisting, protected writer flock before opening/migrating a database. A live\npredecessor, including a stopped/paused executable, prevents adoption and new\nadmissions. Do not infer exit from a failed health check. Keep the same lock\ninode/descriptor until the connection closes; refuse lost, replaced, unlinked,\ninherited or released ownership, without reacquiring it. Never unlink locks.\nA released lifetime lock proves the predecessor has retired its connection;\nreal executable tests additionally wait for process exit before migration.",
   "checks": [
    "codex:tests.test_rsf_s2_fence.FenceTests.test_lost_or_replaced_lifetime_lock_refuses_admissions",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_paused_ledger_writer_cannot_resume_after_successor",
@@ -2115,11 +2113,11 @@
    "codex:tests.test_rsf_s2_fence.FenceTests.test_another_lock_holder_is_not_mistaken_for_our_lifetime_ownership",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_unsafe_hard_link_lock_is_refused_before_writing_an_owner_stamp",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent"
-  ]
+  ],
+  "source": "tests/requirements/rsf-s2.json#RSF-S2-1",
+  "statement": "**RSF-S2-1 \u2014 Exclusive lifetime ownership.** Both store owners acquire their\nexisting, protected writer flock before opening/migrating a database. A live\npredecessor, including a stopped/paused executable, prevents adoption and new\nadmissions. Do not infer exit from a failed health check. Keep the same lock\ninode/descriptor until the connection closes; refuse lost, replaced, unlinked,\ninherited or released ownership, without reacquiring it. Never unlink locks.\nA released lifetime lock proves the predecessor has retired its connection;\nreal executable tests additionally wait for process exit before migration."
  },
  "RSF-S2-2": {
-  "source": "tests/requirements/rsf-s2.json#RSF-S2-2",
-  "statement": "**RSF-S2-2 \u2014 Atomic epoch before adoption.** Each successful owner acquisition\nadvances one durable singleton `runtime_takeover` epoch, retaining the preceding\nand current loaded runtime digest. Install it in the schema transaction before\nany historical hold adoption; roll it back with a failed migration. A successor\nopening the same build also advances the epoch. Publish no owner/admission\ninterface until initialization and validation succeed. Supported historical\nrecords still upgrade through the existing authorization and backup gates.",
   "checks": [
    "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_advances_and_signed_records_are_unchanged",
    "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_real_0855_owners_block_migration_then_cannot_reopen",
@@ -2128,11 +2126,11 @@
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_explicit_upgrade_does_not_request_project_backups",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_record_changing_schema15_still_requires_explicit_upgrade"
-  ]
+  ],
+  "source": "tests/requirements/rsf-s2.json#RSF-S2-2",
+  "statement": "**RSF-S2-2 \u2014 Atomic epoch before adoption.** Each successful owner acquisition\nadvances one durable singleton `runtime_takeover` epoch, retaining the preceding\nand current loaded runtime digest. Install it in the schema transaction before\nany historical hold adoption; roll it back with a failed migration. A successor\nopening the same build also advances the epoch. Publish no owner/admission\ninterface until initialization and validation succeed. Supported historical\nrecords still upgrade through the existing authorization and backup gates."
  },
  "RSF-S2-3": {
-  "source": "tests/requirements/rsf-s2.json#RSF-S2-3",
-  "statement": "**RSF-S2-3 \u2014 Every current write.** A central connection boundary checks the\ncaptured epoch and lifetime ownership inside every write transaction and again\nbefore commit. Cover account/project admissions, direct writes, autocommit,\ncursor/batch/script writes, explicit transactions, sweeps, backup registration,\ndeletion and VACUUM/journal maintenance. Transactional writes by a paused stale\nwriter must refuse with zero committed changes after takeover, even if it\nretains a connection. VACUUM/journal-mode maintenance checks immediately before\nand after the operation while retaining the lifetime flock. SQLite cannot wrap\nthese operations in the epoch transaction: a revocation during maintenance can\nbe detected afterwards but cannot undo its already durable changes.\nRollback and connection close must remain possible after revocation.",
   "checks": [
    "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_commit_rechecks_epoch_and_rolls_back",
@@ -2155,29 +2153,29 @@
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_with_write_keywords_stay_fenced_after_takeover",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_interrupted_epoch_read_preserves_sqlite_error_for_read_budget",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_other_sqlite_epoch_read_error_keeps_ownership_refusal"
-  ]
+  ],
+  "source": "tests/requirements/rsf-s2.json#RSF-S2-3",
+  "statement": "**RSF-S2-3 \u2014 Every current write.** A central connection boundary checks the\ncaptured epoch and lifetime ownership inside every write transaction and again\nbefore commit. Cover account/project admissions, direct writes, autocommit,\ncursor/batch/script writes, explicit transactions, sweeps, backup registration,\ndeletion and VACUUM/journal maintenance. Transactional writes by a paused stale\nwriter must refuse with zero committed changes after takeover, even if it\nretains a connection. VACUUM/journal-mode maintenance checks immediately before\nand after the operation while retaining the lifetime flock. SQLite cannot wrap\nthese operations in the epoch transaction: a revocation during maintenance can\nbe detected afterwards but cannot undo its already durable changes.\nRollback and connection close must remain possible after revocation."
  },
  "RSF-S2-4": {
-  "source": "tests/requirements/rsf-s2.json#RSF-S2-4",
-  "statement": "**RSF-S2-4 \u2014 Exclude old executable reopen.** Advance ledger schema 16\u219217\nand project schema 21\u219222 so genuine older executables cannot reopen either\nmigrated store, including an offline CLI. Test an unmodified git archive of\n0.8.55 (`8d4a7ce3`) holding each store, racing migration, and retrying after\nmigration. Old stores are positive upgrade fixtures; old runtimes are negative\nwriter fixtures. Do not change VERSION or the runtime digest catalogue.",
   "checks": [
    "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_real_0855_owners_block_migration_then_cannot_reopen",
    "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_old_offline_cli_cannot_reopen_migrated_ledger",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent"
-  ]
+  ],
+  "source": "tests/requirements/rsf-s2.json#RSF-S2-4",
+  "statement": "**RSF-S2-4 \u2014 Exclude old executable reopen.** Advance ledger schema 16\u219217\nand project schema 21\u219222 so genuine older executables cannot reopen either\nmigrated store, including an offline CLI. Test an unmodified git archive of\n0.8.55 (`8d4a7ce3`) holding each store, racing migration, and retrying after\nmigration. Old stores are positive upgrade fixtures; old runtimes are negative\nwriter fixtures. Do not change VERSION or the runtime digest catalogue."
  },
  "RSF-S2-5": {
-  "source": "tests/requirements/rsf-s2.json#RSF-S2-5",
-  "statement": "**RSF-S2-5 \u2014 Plain refusals.** Current fencing refusals identify ownership or\nruntime replacement in plain language and include the exact trusted command\n`./setup.sh --update`. Keep existing busy/incompatible reason codes so wire\nreason inventories do not grow. Already installed old binaries cannot acquire\nnew message text; their existing schema refusal is the negative fence proof.",
   "checks": [
    "codex:tests.test_rsf_s2_fence.FenceTests.test_lost_or_replaced_lifetime_lock_refuses_admissions",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_gate_covers_connection_cursor_batch_script_and_maintenance",
    "codex:tests.test_rsf_s2_fence.FenceTests.test_unsafe_hard_link_lock_is_refused_before_writing_an_owner_stamp"
-  ]
+  ],
+  "source": "tests/requirements/rsf-s2.json#RSF-S2-5",
+  "statement": "**RSF-S2-5 \u2014 Plain refusals.** Current fencing refusals identify ownership or\nruntime replacement in plain language and include the exact trusted command\n`./setup.sh --update`. Keep existing busy/incompatible reason codes so wire\nreason inventories do not grow. Already installed old binaries cannot acquire\nnew message text; their existing schema refusal is the negative fence proof."
  },
  "RSF-S2-6": {
-  "source": "tests/requirements/rsf-s2.json#RSF-S2-6",
-  "statement": "**RSF-S2-6 \u2014 Preservation and validation.** Preserve signed/historical records,\nexisting backup formats and project partitions. The machine-local epoch never\ntravels in a per-project learning backup or source image. Register new tests,\nrun them red before code then green, and prove `metadata_errors: []`. Run only\nnamed modules, including every copier/backup/restore/move/enumeration module\naffected by the schema step. Record evidence and unrun checks in\n[STATUS.md](rsf-s2/STATUS.md). Existing assertions may change only with an\nold\u2192new entry in [assertions.md](rsf-s2/assertions.md).",
   "checks": [
    "codex:tests.test_rsf_s2_fence.FenceTests.test_epoch_advances_and_signed_records_are_unchanged",
    "codex:tests.test_rsf_s2_fence.HistoricalExecutableTests.test_real_0855_owners_block_migration_then_cannot_reopen",
@@ -2189,7 +2187,67 @@
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_epoch_is_exact_global_metadata_not_project_partitioned_local_data",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_history_reads_skip_fence_probe_and_epoch_queries",
    "codex:tests.test_rsf_s2_regressions.FenceRegressionTests.test_pure_learning_reads_skip_nested_helper_fences"
-  ]
+  ],
+  "source": "tests/requirements/rsf-s2.json#RSF-S2-6",
+  "statement": "**RSF-S2-6 \u2014 Preservation and validation.** Preserve signed/historical records,\nexisting backup formats and project partitions. The machine-local epoch never\ntravels in a per-project learning backup or source image. Register new tests,\nrun them red before code then green, and prove `metadata_errors: []`. Run only\nnamed modules, including every copier/backup/restore/move/enumeration module\naffected by the schema step. Record evidence and unrun checks in\n[STATUS.md](rsf-s2/STATUS.md). Existing assertions may change only with an\nold\u2192new entry in [assertions.md](rsf-s2/assertions.md)."
+ },
+ "RSF-S3-1": {
+  "checks": [
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_resumed_classification_keeps_original_wall_and_monotonic_evidence"
+  ],
+  "source": "tests/requirements/rsf-s3.json#RSF-S3-1",
+  "statement": "**RSF-S3-1 \u2014 Durable bounded progress.** Adopt historical account slots,\nbindings and probes, and project leases, reservations, contexts, custody and\norchestrations by class, seeking a durable source cursor. Each adoption batch visits at\nmost 64 source rows. Its writes and cursor commit together. Resume skips\ncommitted batches and retries an uncommitted batch. A migration whose entire\nadoption fits in 64 source rows may retain one atomic transaction. Freeze\nclassification time across resumptions. Historical records remain upgradeable.\nThe first transaction's legacy backfills for account ledgers below 17 and the\nfinal transaction's account release-due sweep and full account/project validators\nare **not batch-bounded**. These transactions are atomic and idempotent on resume;\nthe 64-row bound applies to adoption, not to the entire upgrade."
+ },
+ "RSF-S3-2": {
+  "checks": [
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_real_successor_after_sigkill_increments_epoch_and_stale_batch_cannot_commit",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_revoked_batch_and_failed_validation_keep_progress_unpublished"
+  ],
+  "source": "tests/requirements/rsf-s3.json#RSF-S3-2",
+  "statement": "**RSF-S3-2 \u2014 Fence every batch.** Retain S2's lifetime writer lock and claim\nthe runtime_takeover epoch before adoption. Check ownership and epoch at each\nbatch transaction and commit. A dead owner releases its lock; a successor\nclaims a fresh epoch. Revocation must roll back the pending batch and cursor.\nPreserve the authorization and verified backup gates on the original upgrade.\nExercise a real successor process after SIGKILL, assert its epoch increments on\nresume, and prove a retained stale owner cannot commit adoption rows and cursor."
+ },
+ "RSF-S3-3": {
+  "checks": [
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_migration_context_is_reset_after_adoption_and_validation_exceptions",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_pending_refusal_gives_plain_next_step_and_update_command",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_resume_refuses_missing_kept_before_copy_without_writes",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_revoked_batch_and_failed_validation_keep_progress_unpublished"
+  ],
+  "source": "tests/requirements/rsf-s3.json#RSF-S3-3",
+  "statement": "**RSF-S3-3 \u2014 Validate before exposure.** Pending migration metadata prevents\nordinary startup from serving a partial register. Only an explicitly authorized\nowner may resume it. Before the first durable batch, install the existing\ntarget version to exclude old executables. This version is an exclusion fence,\nnot publication: remove the pending marker only with successful register,\ncustody and schema validation. Keep the original project pre-upgrade copy\nthrough an interrupted migration. A failure before the first checkpoint keeps\nthe existing rollback behavior; after it, retain progress for retry.\nPending refusals give the plain next step and `Run: ./setup.sh --update`.\nReset the connection's temporary migration context even if adoption or validation\nraises. Before resuming a project, require the kept before-copy named by the\noriginal attempt marker; refuse plainly if that recovery copy is missing."
+ },
+ "RSF-S3-4": {
+  "checks": [
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_real_successor_after_sigkill_increments_epoch_and_stale_batch_cannot_commit",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_resumed_classification_keeps_original_wall_and_monotonic_evidence",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_revoked_batch_and_failed_validation_keep_progress_unpublished"
+  ],
+  "source": "tests/requirements/rsf-s3.json#RSF-S3-4",
+  "statement": "**RSF-S3-4 \u2014 Process-death equivalence.** Use real subprocesses and SIGKILL\nimmediately before and after a batch commit, including a second interruption\nafter resume, the last short batch / `done=1` commit for every class, and the\npublication commit containing progress-table removal after full validation.\nReopen twice and compare all historical identities, row counts,\nsigned/sealed bytes and adopted rows against an uninterrupted upgrade from\nthe same source. Verify durable cursors at the kill boundary, class coverage,\nbounded batches, failed validation and revoked ownership."
+ },
+ "RSF-S3-5": {
+  "checks": [
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_account_last_short_done_and_publication_commits_reopen_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_killed_before_and_after_each_class_commit_reopens_twice_identically",
+   "codex:tests.test_rsf_s3_resumable.ResumableMigrationTests.test_project_last_short_done_and_publication_commits_reopen_twice_identically"
+  ],
+  "source": "tests/requirements/rsf-s3.json#RSF-S3-5",
+  "statement": "**RSF-S3-5 \u2014 Stable final formats.** Reuse ledger 17 and project 22. Temporary\nprogress metadata exists only during migration and disappears atomically on\npublication; no permanent schema step, VERSION or runtime catalogue bump is\nneeded. Keep progress out of backups and source images by withholding the\nowner until validation. Exercise the source-image reader and named copy,\nbackup, restore, move and record-enumeration modules. Register scenario tests\nand prove `metadata_errors: []`. Record evidence and limitations in\n[STATUS.md](rsf-s3/STATUS.md); pair any existing assertion edits in\n[assertions.md](rsf-s3/assertions.md)."
  },
  "RT-RX-1": {
   "checks": [
