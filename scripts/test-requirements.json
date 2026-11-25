@@ -2428,6 +2428,58 @@
   "source": "tests/requirements/rsf-s3.json#RSF-S3-5",
   "statement": "**RSF-S3-5 \u2014 Stable final formats.** Reuse ledger 17 and project 22. Temporary\nprogress metadata exists only during migration and disappears atomically on\npublication; no permanent schema step, VERSION or runtime catalogue bump is\nneeded. Keep progress out of backups and source images by withholding the\nowner until validation. Exercise the source-image reader and named copy,\nbackup, restore, move and record-enumeration modules. Register scenario tests\nand prove `metadata_errors: []`. Record evidence and limitations in\n[STATUS.md](rsf-s3/STATUS.md); pair any existing assertion edits in\n[assertions.md](rsf-s3/assertions.md)."
  },
+ "RSF-S6-1": {
+  "checks": [
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_each_class_commit_survives_sigkill_and_two_reopens_identically",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_mixed_store_backfills_orchestration_open_duty_and_preparation_without_guessing"
+  ],
+  "source": "tests/requirements/rsf-s6.json#RSF-S6-1",
+  "statement": "**RSF-S6-1 \u2014 Orchestration.** Adopt open and paused sealed orchestrations as\nheld, with their original identity and activity-based due time. Preserve closed\norchestrations. Run classification inside S3's bounded, cursor-based migration\nunder S2's lifetime lock and epoch, including interruption and two reopens."
+ },
+ "RSF-S6-2": {
+  "checks": [
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_each_class_commit_survives_sigkill_and_two_reopens_identically",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_missing_legacy_inputs_keep_context_and_custody_without_fabrication",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_mixed_store_backfills_orchestration_open_duty_and_preparation_without_guessing"
+  ],
+  "source": "tests/requirements/rsf-s6.json#RSF-S6-2",
+  "statement": "**RSF-S6-2 \u2014 Open-binding duty.** Backfill missing pre-B3 duties from retained\nhost opens. Verify the original journal and lease before using their facts.\nA bound lease has a claimed duty tombstone; an unresolved open stays held.\nRetain the original run and attempt. If withdrawal inputs are absent, keep a\nnamed evidence wait with a plain owner next step; never guess inputs or release\non a timer. Existing duties and authenticated replies remain unchanged. An\nalready recorded result proves its open duty fulfilled; preserve its register\nwithout adding a duty."
+ },
+ "RSF-S6-3": {
+  "checks": [
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_missing_legacy_inputs_keep_context_and_custody_without_fabrication",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_unrecoverable_running_attempt_waits_for_b4s_lost_and_refuses_late_publication"
+  ],
+  "source": "tests/requirements/rsf-s6.json#RSF-S6-3",
+  "statement": "**RSF-S6-3 \u2014 Settlement.** Classify an unfinished historical reservation as\nheld awaiting account settlement, with a named reason and plain next step.\nRun B4s publication arbitration before the account outbox; only its verified\nclosure releases the reservation as lost. Show lost in the existing attempt\nstatus. Preserve a completed result during arbitration. Replay remains stable."
+ },
+ "RSF-S6-4": {
+  "checks": [
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_each_class_commit_survives_sigkill_and_two_reopens_identically",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_finished_result_remains_recordable_only_by_current_fenced_runtime_after_two_reopens",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_missing_legacy_inputs_keep_context_and_custody_without_fabrication",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_other_runtime_guidance_keeps_custody_and_names_update_recovery"
+  ],
+  "source": "tests/requirements/rsf-s6.json#RSF-S6-4",
+  "statement": "**RSF-S6-4 \u2014 Result custody.** Preserve finished result, terminal, sealed\ncontext and historical record bytes. A verifiable committed result with its\nstored inputs and open sealed orchestration remains recordable by the current\nfenced service after upgrade, including after restart. Bind that permission to\nthis migrated attempt and the current owner runtime; an arbitrary runtime or an\nordinary fresh-store mismatch still refuses. Missing inputs remain\nlegacy_no_context with custody and an owner next step, without fabricated inputs."
+ },
+ "RSF-S6-5": {
+  "checks": [
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_each_class_commit_survives_sigkill_and_two_reopens_identically",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_mixed_store_backfills_orchestration_open_duty_and_preparation_without_guessing"
+  ],
+  "source": "tests/requirements/rsf-s6.json#RSF-S6-5",
+  "statement": "**RSF-S6-5 \u2014 Memory-only preparation.** Do not reconstruct driver or preparation\nmemory. Report those categories as not_tracked. Classify any surviving unarmed\nlease as held with a named legacy preparation reason and plain owner next step;\nno missing-memory inference releases an uncertain obligation. Pure memory with\nno durable source creates no invented hold or launch authority."
+ },
+ "RSF-S6-6": {
+  "checks": [
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_each_class_commit_survives_sigkill_and_two_reopens_identically",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_revoked_epoch_rolls_back_classification_and_its_cursor",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_unrecoverable_running_attempt_waits_for_b4s_lost_and_refuses_late_publication"
+  ],
+  "source": "tests/requirements/rsf-s6.json#RSF-S6-6",
+  "statement": "**RSF-S6-6 \u2014 Late publication refusal.** The B4s releasing fence and verified\nlost settlement each refuse a late publication with zero changes to terminal,\nrecord, context, body or reservation state. Resume classification without\nreplacing existing duty/settlement evidence. Verify bounded batches and atomic\ncursor rollback under real process death and a revoked S2 epoch."
+ },
  "RT-RX-1": {
   "checks": [
    "codex:tests.test_route_exhausted.RouteExhaustedTests.test_boundaries_unknown_and_billing_share_the_admission_classifier",

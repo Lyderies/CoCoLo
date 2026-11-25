@@ -1,0 +1,35 @@
+{
+ "authority": "docs/requirements/rsf-s6.md",
+ "requirements": [
+  {
+   "id": "RSF-S6-1",
+   "statement": "**RSF-S6-1 \u2014 Orchestration.** Adopt open and paused sealed orchestrations as\nheld, with their original identity and activity-based due time. Preserve closed\norchestrations. Run classification inside S3's bounded, cursor-based migration\nunder S2's lifetime lock and epoch, including interruption and two reopens.",
+   "source": "tests/requirements/rsf-s6.json#RSF-S6-1"
+  },
+  {
+   "id": "RSF-S6-2",
+   "statement": "**RSF-S6-2 \u2014 Open-binding duty.** Backfill missing pre-B3 duties from retained\nhost opens. Verify the original journal and lease before using their facts.\nA bound lease has a claimed duty tombstone; an unresolved open stays held.\nRetain the original run and attempt. If withdrawal inputs are absent, keep a\nnamed evidence wait with a plain owner next step; never guess inputs or release\non a timer. Existing duties and authenticated replies remain unchanged. An\nalready recorded result proves its open duty fulfilled; preserve its register\nwithout adding a duty.",
+   "source": "tests/requirements/rsf-s6.json#RSF-S6-2"
+  },
+  {
+   "id": "RSF-S6-3",
+   "statement": "**RSF-S6-3 \u2014 Settlement.** Classify an unfinished historical reservation as\nheld awaiting account settlement, with a named reason and plain next step.\nRun B4s publication arbitration before the account outbox; only its verified\nclosure releases the reservation as lost. Show lost in the existing attempt\nstatus. Preserve a completed result during arbitration. Replay remains stable.",
+   "source": "tests/requirements/rsf-s6.json#RSF-S6-3"
+  },
+  {
+   "id": "RSF-S6-4",
+   "statement": "**RSF-S6-4 \u2014 Result custody.** Preserve finished result, terminal, sealed\ncontext and historical record bytes. A verifiable committed result with its\nstored inputs and open sealed orchestration remains recordable by the current\nfenced service after upgrade, including after restart. Bind that permission to\nthis migrated attempt and the current owner runtime; an arbitrary runtime or an\nordinary fresh-store mismatch still refuses. Missing inputs remain\nlegacy_no_context with custody and an owner next step, without fabricated inputs.",
+   "source": "tests/requirements/rsf-s6.json#RSF-S6-4"
+  },
+  {
+   "id": "RSF-S6-5",
+   "statement": "**RSF-S6-5 \u2014 Memory-only preparation.** Do not reconstruct driver or preparation\nmemory. Report those categories as not_tracked. Classify any surviving unarmed\nlease as held with a named legacy preparation reason and plain owner next step;\nno missing-memory inference releases an uncertain obligation. Pure memory with\nno durable source creates no invented hold or launch authority.",
+   "source": "tests/requirements/rsf-s6.json#RSF-S6-5"
+  },
+  {
+   "id": "RSF-S6-6",
+   "statement": "**RSF-S6-6 \u2014 Late publication refusal.** The B4s releasing fence and verified\nlost settlement each refuse a late publication with zero changes to terminal,\nrecord, context, body or reservation state. Resume classification without\nreplacing existing duty/settlement evidence. Verify bounded batches and atomic\ncursor rollback under real process death and a revoked S2 epoch.",
+   "source": "tests/requirements/rsf-s6.json#RSF-S6-6"
+  }
+ ]
+}

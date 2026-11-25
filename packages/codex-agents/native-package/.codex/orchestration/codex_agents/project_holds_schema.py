@@ -447,12 +447,23 @@ def adopt_project_holds(connection, now_ms: int) -> None:
     if not connection.in_transaction:
         raise HistoryError("history_unavailable")
     migration = getattr(connection, '_hold_migration', None)
+    classifiers = getattr(migration, 'project_classifiers', {})
     for name, alias, sql in zip(('lease', 'reservation', 'context', 'result_custody'), ('l', 's', 's', 's'), _ADOPT):
         parameters = {"now": now_ms, "evidence": ADOPTED}
-        if migration is None:
+        classify = classifiers.get(name)
+        if migration is None or not migration.active:
             connection.execute(sql, parameters)
+            if classify is not None:
+                classify(None)
         else:
-            migration.adopt_sql(name, sql, alias, parameters)
+            # S6: classification uses the same source window and transaction as
+            # adoption, before S3 commits that window's cursor. No second scan
+            # outside the checkpoint protocol, including on schema 18--21.
+            for _, _, rowids in migration.batches(name):
+                selection = ','.join(str(rowid) for rowid in rowids)
+                connection.execute(sql + f' AND {alias}.rowid IN ({selection})', parameters)
+                if classify is not None:
+                    classify(rowids)
 
 
 _HELD_LEASE = ("EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=c.project_id AND h.kind='lease' "

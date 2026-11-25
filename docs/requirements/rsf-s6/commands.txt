@@ -1,0 +1,29 @@
+# Run at the repository root; PY is the builder-approved test venv.
+# Every invocation selects named modules. No full run or affected run was used.
+
+# Registered red baseline, checkpoint red, and final acceptance:
+"$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_rsf_s6_classify
+
+# Final settled-tree owner fence, resumability and classification:
+"$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_rsf_s2_fence --module codex:tests.test_rsf_s3_resumable --module codex:tests.test_rsf_s6_classify
+
+# Core preservation/publication checks:
+"$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_rsf_s6_classify --module codex:tests.test_rsf_s3_resumable --module codex:tests.test_account_settlement --module codex:tests.test_b2_service_outcome --module codex:tests.test_project_holds_schema --module codex:tests.test_result_leases --module codex:tests.test_project_results --module codex:tests.test_publication_replay
+
+# Recording, replay and wire inventory. RuntimeReleaseTests has its expected pin failure.
+"$PY" -B scripts/parallel_tests.py --jobs 3 --module codex:tests.test_rsf_s6_classify --module codex:tests.test_b2_service_outcome --module codex:tests.test_rsf_s3_resumable --module codex:tests.test_refusal_steps --module codex:tests.test_rsf_s7_project --module codex:tests.test_run_holds --module codex:tests.test_runtime_release
+
+# Copier/backup/restore/move/record enumeration:
+"$PY" -B scripts/parallel_tests.py --jobs 4 --module codex:tests.test_account_cleanup_schema --module codex:tests.test_account_observation_backup --module codex:tests.test_account_observation_schema --module codex:tests.test_account_open_schema --module codex:tests.test_backup_installed_project --module codex:tests.test_backup_reply_private --module codex:tests.test_history_service_upgrade --module codex:tests.test_large_project_backups --module codex:tests.test_learning_chunk_upgrade --module codex:tests.test_learning_qa_upgrade --module codex:tests.test_learning_source_image --module codex:tests.test_learning_source_image_legacy --module codex:tests.test_learning_source_transfer --module codex:tests.test_legacy_history_compatibility --module codex:tests.test_owner_backup_streamed --module codex:tests.test_reply_shape_compatibility --module codex:tests.test_learning_chunk_membership --module codex:tests.test_learning_outcome_pages --module codex:tests.test_learning_retention --module codex:tests.test_merge_library_adversarial --module codex:tests.test_merge_library_contract --module codex:tests.test_merge_library_recovery --module codex:tests.test_merge_library_states --module codex:tests.test_project_learning_corpus --module codex:tests.test_project_store_removal --module codex:tests.test_rsa_step3 --module codex:tests.test_sql_read_budget --module codex:tests.test_append_lookup --module codex:tests.test_binding_lookup --module codex:tests.test_project_release_ack --module codex:tests.test_release_batch_queries --module codex:tests.test_type_lookups --module codex:tests.test_lifetime_cap_guard --module codex:tests.test_account_settlement_wire --module codex:tests.test_account_store_recovery
+
+# Recording, orchestration, custody and S2 regressions:
+COCOLO_WORKER_TIMEOUT=60 "$PY" -B scripts/parallel_tests.py --jobs 4 --module codex:tests.test_rsf_s2_fence --module codex:tests.test_rsf_s2_regressions --module codex:tests.test_b6_unattended_close --module codex:tests.test_project_orchestration --module codex:tests.test_record_context --module codex:tests.test_deadlines_retention --module codex:tests.test_b2_service_outcome_paths --module codex:tests.test_b2_service_outcome_round2 --module codex:tests.test_b2_service_outcome_sweep --module codex:tests.test_holds_report
+
+# OWNER SHELL: these were attempted here with a short TMPDIR, but service/socket
+# startup is restricted. Repeat with working Unix sockets. No PTY check is needed.
+mkdir -p /tmp/rsfs6-owner
+TMPDIR=/tmp/rsfs6-owner COCOLO_WORKER_TIMEOUT=60 "$PY" -B scripts/parallel_tests.py --jobs 4 --module codex:tests.test_learning_migration --module codex:tests.test_learning_store --module codex:tests.test_state_location --module codex:tests.test_open_withdrawal
+
+# Source hygiene:
+git diff --check
+"$PY" -B scripts/check_identifiers.py

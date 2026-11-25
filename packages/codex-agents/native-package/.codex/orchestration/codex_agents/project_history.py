@@ -548,8 +548,15 @@ class ProjectHistory:
             # The original before-copy and attempt marker belong to the whole
             # migration, not this successor. Never discard them on resume.
             names = {row[0] for row in connection.execute('SELECT class FROM hold_migration_progress')}
-            classes = self._hold_migration_classes('lease' in names)
+            classes = self._hold_migration_classes()
             with self._transaction():
+                # A pre-S6 pending 18--21 upgrade only classified orchestrations.
+                # Add the missing source classes with its original clock sample.
+                if names == {'orchestration'}:
+                    for name, _ in classes[:-1]:
+                        connection.execute('INSERT INTO hold_migration_progress '
+                            'SELECT store,?,NULL,0,started_at_ms,clock_reference_ns '
+                            'FROM hold_migration_progress WHERE class=\'orchestration\'', (name,))
                 migration = HoldMigration(connection, 'project', classes, self._hold_now(), _SCHEMA_VERSION,
                                           lambda: HistoryError('history_incompatible'))
                 self._adopt_hold_migration(migration)
@@ -667,23 +674,26 @@ class ProjectHistory:
                 for statement in STEP_21_SCHEMA.split(';'):
                     if statement.strip():
                         connection.execute(statement)
-            migration = HoldMigration(connection, 'project', self._hold_migration_classes(version < 18),
+            migration = HoldMigration(connection, 'project', self._hold_migration_classes(),
                 self._hold_now(), _SCHEMA_VERSION, lambda: HistoryError('history_incompatible'))
             self._adopt_hold_migration(migration)
             connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
 
     @staticmethod
-    def _hold_migration_classes(include_results):
-        return ((('lease', 'result_leases'), ('reservation', 'result_reservations'),
-                 ('context', 'result_reservations'), ('result_custody', 'result_reservations'))
-                if include_results else ()) + (('orchestration', 'project_orchestrations'),)
+    def _hold_migration_classes():
+        return (('lease', 'result_leases'), ('reservation', 'result_reservations'),
+                ('context', 'result_reservations'), ('result_custody', 'result_reservations'),
+                ('orchestration', 'project_orchestrations'))
 
     def _adopt_hold_migration(self, migration):
         connection = self._connection
         connection._hold_migration = migration
         try:
-            if 'lease' in dict(migration.classes):
-                project_holds_schema.adopt_project_holds(connection, migration.now_ms)
+            migration.project_classifiers = {
+                'lease': lambda rows: self._classify_legacy_leases(rows, migration.now_ms),
+                'reservation': self._classify_legacy_reservations,
+                'result_custody': self._classify_legacy_custody}
+            project_holds_schema.adopt_project_holds(connection, migration.now_ms)
             if migration.active:
                 for _, _, rowids in migration.batches('orchestration'):
                     project_holds_schema.adopt_orchestrations(connection, self.project_id,
@@ -695,6 +705,112 @@ class ProjectHistory:
             migration.finish()
         finally:
             connection._hold_migration = None
+
+    def _legacy_rows(self, table, rowids):
+        # Compiled table names only; S3 supplies at most 64 native source rowids.
+        selection = '' if rowids is None else ' WHERE rowid IN (' + ','.join('?' for _ in rowids) + ')'
+        return self._connection.execute('SELECT * FROM ' + table + selection, rowids or ()).fetchall()
+
+    def _legacy_evidence(self, kind, identity, reason, next_step, **facts):
+        """Classify a held obligation without changing its state or authenticated outbox/reply evidence."""
+        row = self._connection.execute("SELECT state,evidence FROM project_holds WHERE project_id=? "
+            "AND kind=? AND identity=?", (self.project_id, kind, identity)).fetchone()
+        if row is None or row['state'] != 'held':
+            return
+        try:
+            evidence = {} if row['evidence'] is None else json.loads(row['evidence'])
+        except (ValueError, TypeError):
+            return  # Unknown historical evidence is not ours to replace.
+        if type(evidence) is not dict or 'reason' in evidence:
+            return
+        evidence.update(adopted=22, reason=reason, next_step=next_step, **facts)
+        self._connection.execute("UPDATE project_holds SET evidence=? WHERE project_id=? AND kind=? AND identity=?",
+            (project_holds_schema.evidence_json(**evidence), self.project_id, kind, identity))
+
+    def _classify_legacy_leases(self, rowids, now_ms):
+        from .project_host_open import read_host_open
+
+        for row in self._legacy_rows('result_leases', rowids):
+            lease = self._lease(row)  # Includes the original binding and state seal.
+            binding = lease.binding
+            identity = attempt_identity(binding.run_handle, binding.attempt)
+            if lease.state in ('reserved', 'claim_pending'):
+                self._legacy_evidence('lease', identity,
+                    'legacy_preparation_memory_lost' if lease.state == 'reserved' else 'legacy_claim_needs_settlement',
+                    'Keep this hold until the original open and account claim are checked; then use the drained '
+                    'update recovery to withdraw an unsent open or obtain an authenticated account settlement.')
+            if (self._open_binding(identity) is not None or self._connection.execute(
+                    'SELECT 1 FROM project_host_opens WHERE project_id=? AND run_handle=? AND attempt=?',
+                    (self.project_id, binding.run_handle, binding.attempt)).fetchone() is None):
+                continue
+            evidence = dict(run_handle=binding.run_handle, attempt=binding.attempt, run_id=binding.run_id,
+                            instance='legacy:' + binding.supervisor_instance_id, adopted=22)
+            verified = False
+            try:
+                read_host_open(self, binding)
+                verified = True
+                context = project_result_contexts._row(self, binding.run_handle, binding.attempt)
+                # A recorded result already carries its fulfilled open/claim
+                # association. Preserve its historical register byte for byte;
+                # it has no unresolved open duty to backfill.
+                if (context is not None and context['state'] == 'recorded'
+                        and context['claim_id'] == lease.claim_id
+                        and context['claim_digest'] == lease.claim_digest):
+                    continue
+                inputs = project_result_contexts._read(self, context) if context is not None else {}
+                if matches(inputs.get('inputs_digest'), _DIGEST):
+                    evidence.update(inputs_digest=inputs['inputs_digest'], host_client=inputs['host_class'])
+            except (HistoryError, OSError, ValueError, TypeError):
+                pass
+            evidence.update(reason=('legacy_open_needs_account_evidence' if not verified else
+                                    'legacy_open_inputs_missing' if 'inputs_digest' not in evidence else
+                                    'legacy_open_needs_reconciliation'),
+                next_step='Keep this open held. Check its original account binding and inputs, then use '
+                          'authenticated withdrawal or claim settlement during drained update recovery.')
+            project_holds_schema.take_hold(self._connection, self.project_id, 'open_binding', identity,
+                now_ms=lease.created_at_ms, evidence=project_holds_schema.evidence_json(**evidence))
+            if verified and lease.state == 'bound':
+                project_holds_schema.release_hold(self._connection, self.project_id, 'open_binding', identity,
+                    'claimed', now_ms=now_ms, receipt=lease.claim_digest)
+
+    def _classify_legacy_reservations(self, rowids):
+        for row in self._legacy_rows('result_reservations', rowids):
+            reservation = self._reservation(row)
+            if reservation.state == 'reserved':
+                self._legacy_evidence('reservation', reservation.binding.claim_id,
+                    'legacy_attempt_needs_settlement',
+                    'Keep this attempt held. Run publication arbitration, then obtain and record the '
+                    'authenticated account lost-run closure through drained update recovery.')
+
+    def _classify_legacy_custody(self, rowids):
+        for row in self._legacy_rows('result_reservations', rowids):
+            reservation = self._reservation(row)
+            binding = reservation.binding
+            context = project_result_contexts._row(self, binding.run_handle, binding.attempt)
+            if context is None or context['state'] in ('ended', 'expired'):
+                continue
+            identity = attempt_identity(binding.run_handle, binding.attempt)
+            if context['state'] == 'legacy_no_context':
+                self._legacy_evidence('result_custody', identity, 'legacy_result_inputs_missing',
+                    'Keep custody. Recover the original verified inputs if available; otherwise obtain '
+                    'an authenticated account settlement for an unfinished attempt and retain finished bytes '
+                    'until their original retention deadline.')
+            elif reservation.state == 'committed' and context['state'] == 'committed':
+                try:
+                    project_result_contexts.stored_result_context(self, binding, host_class=context['host_class'])
+                    body = self._read_result_file(binding, reservation.result_digest)
+                    if len(body) != reservation.body_size:
+                        raise HistoryError('history_conflict')
+                except (HistoryError, OSError, ValueError, TypeError):
+                    self._legacy_evidence('result_custody', identity, 'legacy_result_evidence_missing',
+                        'Keep custody. Recover and verify the original result and stored inputs before recording; '
+                        'do not replace their bytes or release an unfinished account obligation.')
+                    continue
+                self._legacy_evidence('result_custody', identity, 'legacy_finished_result',
+                    'The current project service can record this verified finished result before its original '
+                    'retention deadline while its orchestration remains open.',
+                    binding_digest=keyed_digest(self._result_key, canonical_json(binding.as_data())),
+                    context_digest=context['context_digest'], result_digest=reservation.result_digest)
 
     def _check_orchestration_states(self) -> None:
         """B6 review r1 (MED state): at integrity validation (every open, so every restore, and inside the step)
@@ -2028,6 +2144,10 @@ class ProjectHistory:
             if lease is not None and (lease['state'] != 'released' or lease['release_kind'] != 'withdrawn_unsent'):
                 raise HistoryError('history_conflict')
             evidence = json.loads(row['evidence'])
+            # Pre-B3 opens can have a verified journal but no retained withdrawal
+            # inputs. Keep their named evidence wait; never invent an envelope.
+            if not matches(evidence.get('inputs_digest'), _DIGEST):
+                raise HistoryError('history_conflict')
             value = WithdrawOpenInput(run_handle, attempt, evidence['run_id'], evidence['inputs_digest'], 1, reason)
             request_id = withdrawal_request_id(run_handle, attempt)
             request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.withdraw_open', request_id,
@@ -2531,6 +2651,7 @@ class ProjectHistory:
         binding = self._result_binding(binding)
         if type(observation) is not ResultObservation:
             raise HistoryError("history_invalid_input")
+        self._refuse_late_publication(binding)
         captured = observation.as_data()
         encoded_assignment = assignment_bytes(assignment, binding)
         snapshot = parse_bounded_json(encoded_assignment, max_bytes=MAX_ASSIGNMENT_CANONICAL_BYTES)
@@ -2568,6 +2689,7 @@ class ProjectHistory:
         result reference, terminal record and outbox commit in one transaction.
         """
         binding = self._result_binding(binding)
+        self._refuse_late_publication(binding)
         encoded_assignment = assignment_bytes(assignment, binding)
         snapshot = parse_bounded_json(encoded_assignment, max_bytes=MAX_ASSIGNMENT_CANONICAL_BYTES)
         now = self._result_now()
@@ -2642,6 +2764,13 @@ class ProjectHistory:
         """D4 (RS-D draft 3 §3): the exact canonical bytes the prepared digest covers, in the caller's transaction."""
         self._connection.execute("INSERT OR IGNORE INTO project_result_publications(project_id,claim_id,material) "
                                  "VALUES(?,?,?)", (self.project_id, binding.claim_id, encoded_material))
+
+    def _refuse_late_publication(self, binding) -> None:
+        # S6: refuse before sampling/persisting the clock or allowing _live_result
+        # to finish retirement. Late children cannot drive cleanup side effects.
+        _, value = self._result_row(binding)
+        if value.state != 'committed':
+            self._require_publishable(value)
 
     def _require_publishable(self, value) -> None:
         """D4 (S-3): a new publication needs its actual reservation obligation row `held`. A missing
