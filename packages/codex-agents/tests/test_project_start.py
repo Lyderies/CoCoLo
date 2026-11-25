@@ -54,6 +54,9 @@ from codex_agents.service_transport import exchange_frame
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'scripts'))
 from test_framework import requirements  # noqa: E402
 
+# E2c-1: the starter's own time from a start's `begin` to its project-host process being spawned (see the test).
+SPAWN_BOUND = 1.0
+
 SCENARIO = 'Real collector and project host processes over their sockets; only the home folder seam and named intervals are set.'
 
 LAUNCHER = r'''
@@ -157,6 +160,10 @@ class StarterBase(unittest.TestCase):
         super().setUpClass()
         cls.pycache = tempfile.mkdtemp(prefix='start-pyc-', dir=SHORT_TMP)
         cls.addClassCleanup(shutil.rmtree, cls.pycache, ignore_errors=True)
+        # S13C-2 (round 1 fix): the runtime is compiled into the class cache before any test's clock starts, so the
+        # first collector of the class does not compile inside a measured window.
+        subprocess.run([sys.executable, '-I', '-X', 'pycache_prefix=' + cls.pycache, '-m', 'compileall', '-q',
+                        str(ORCHESTRATION_ROOT)], stdout=subprocess.DEVNULL, check=True)
 
     @classmethod
     def python_flags(cls, *flags):
@@ -438,23 +445,37 @@ class StartTests(StarterBase):
             begun = wait_for(self, lambda: self.events('begin', name), max(0.0, deadline - time.monotonic()),
                              f'{name}: no start began within one interval')
             self.assertLessEqual(begun[0]['t'], deadline)
-        # Review round 2 (decision 243, MED 2): serving, not only begun. S13C-2: a host is a real process whose
-        # start-up (a runtime compile, a socket, a ledger open) takes a variable time on a loaded machine, so the
-        # bound is not one fixed second after the interval but the start's own deadline: each project serves
-        # within `START_TIMEOUT_SECONDS` of its own start beginning (the starter fails and reports the start
-        # past that), measured from that start's `begin` event.
+        # Review round 2 (decision 243, MED 2): serving, not only begun. S13C-2 (round 1 fix, HIGH): the bound is
+        # not widened to the start's 8 s deadline, which let a 2 s delay between `begin` and the spawn pass. It is
+        # split at the process boundary, each part measured from its own event and each deterministic under load:
+        #   1. the starter's own path (in the collector, bytecode cached, no compile) from `begin` to the host
+        #      process being spawned takes at most SPAWN_BOUND (measured 0.06 s quiet, 0.1 to 0.3 s at `--jobs 16`;
+        #      a 2 s sleep before `posix_spawn` fails it);
+        #   2. the host process, whose start-up compiles the runtime itself (the product starts it with
+        #      `-B -X pycache_prefix=/dev/null`, so no test cache can reach it: 0.5 s quiet, 0.7 to 1.3 s loaded),
+        #      serves within the product's own start deadline (`START_TIMEOUT_SECONDS`) of its spawn.
+        names = ('never', 'stopped')
+        begun_at = {name: self.events('begin', name)[0]['t'] for name in names}
+
+        def spawn_time(name):
+            return next((row['t'] for row in self.events('spawned') if str(self.root(name)) in row['argv']), None)
+
+        spawned_at = {name: wait_for(self, lambda name=name: spawn_time(name), 30, f'{name}: its host was never spawned')
+                      for name in names}
+        for name in names:
+            self.assertLessEqual(spawned_at[name] - begun_at[name], SPAWN_BOUND,
+                                 f'{name}: the start took longer than {SPAWN_BOUND} s from begin to spawning its host')
         start_timeout = project_host_client.START_TIMEOUT_SECONDS
-        begun_at = {name: self.events('begin', name)[0]['t'] for name in ('never', 'stopped')}
         served = {}
-        end = max(begun_at.values()) + start_timeout
-        while len(served) < len(begun_at) and time.monotonic() <= end:
-            for name in begun_at:
+        end = max(spawned_at.values()) + start_timeout
+        while len(served) < len(names) and time.monotonic() <= end:
+            for name in names:
                 if name not in served and self.serving(name):
                     served[name] = time.monotonic()
             time.sleep(0.05)
-        self.assertEqual(sorted(begun_at), sorted(served), 'the due projects were not serving within their start deadline')
+        self.assertEqual(sorted(names), sorted(served), 'the due projects were not serving within their start deadline')
         for name, at in served.items():
-            self.assertLessEqual(at, begun_at[name] + start_timeout, name)
+            self.assertLessEqual(at, spawned_at[name] + start_timeout, name)
         time.sleep(1.0)
         self.assertFalse(self.serving('idle'))
         self.assertEqual([], self.events('begin', 'idle'))

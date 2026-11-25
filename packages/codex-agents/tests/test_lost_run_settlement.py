@@ -164,24 +164,24 @@ class LostRunAfterCrashTests(LostRunHarness):
         return orchestration, run_handle, self.launches()[0]
 
     def count_sweeps(self):
-        """S13C-1: the sweeps the next host has collected so far (`self.sweeps`), so a test that watches a hold over
-        "several sweeps" waits for that many sweeps instead of a fixed number of seconds."""
+        """S13C-1: the sweeps the next host has completed so far (`self.sweeps`: one entry per `_settle_lost` call that
+        returned without raising), so a test that watches a hold over "several sweeps" waits for that many sweeps
+        instead of a fixed number of seconds."""
         self.sweeps = []
         original = project_driver.RunDriver._settle_lost
         sweeps = self.sweeps
 
         def counted(driver, *arguments, **options):
-            try:
-                return original(driver, *arguments, **options)
-            finally:
-                sweeps.append(time.monotonic())
+            result = original(driver, *arguments, **options)
+            sweeps.append(time.monotonic())  # only a sweep that returned; a raising one is not counted
+            return result
 
         patcher = mock.patch.object(project_driver.RunDriver, '_settle_lost', counted)
         patcher.start()
         self.addCleanup(patcher.stop)
 
     def through_sweeps(self, count):
-        """Wait until the next host has collected `count` more sweeps (bounded 60 s)."""
+        """Wait until the next host has completed `count` more sweeps (bounded 60 s)."""
         target = len(self.sweeps) + count
         self.wait_for(lambda: len(self.sweeps) >= target, seconds=60)
 
@@ -207,7 +207,7 @@ class LostRunAfterCrashTests(LostRunHarness):
     def test_a_crashed_hosts_child_that_still_runs_keeps_its_capacity_until_it_ends(self):
         orchestration, run_handle, child = self.crash_while_running(60)
         # The child sleeps on in its own session; the new host must not settle it.
-        # S13C-1: held across as many sweeps as the old 6 s held it across (one a second), each one collected.
+        # S13C-1: held across as many sweeps as the old 6 s held it across (one a second), each one completed.
         target = len(self.sweeps) + 6
         while len(self.sweeps) < target:
             self.assertEqual(1, self.counted())
@@ -240,7 +240,7 @@ class LostRunAfterCrashTests(LostRunHarness):
         self.wait_for(lambda: self.gone(child), seconds=30)
         self.count_sweeps()
         DriverHarness.start_project_host(self, self.project)
-        self.through_sweeps(5)  # Several sweeps of the new host (S13C-1: five collected, not five seconds).
+        self.through_sweeps(5)  # Several sweeps of the new host (S13C-1: five completed, not five seconds).
         self.assertEqual(1, self.counted())
         self.assertEqual([('pending', None, 0)], self.claimed_bindings())
         self.assertTrue(entries[0].exists())  # Left as it was found.
