@@ -9,11 +9,13 @@ Fix round, review 040-s8-r1, against ce81bd96 (0.8.67). Requirements were extend
 | same test | states == {self_check: ok, containers: ok, holds: ok} | states == {self_check: ok, containers: ok} (original base assertion) | MED-3: same deferred registration. |
 | test_health_holds.HoldsTests.test_registration | with_builtin_checks(checks=(check,)) registers holds | unchanged builtin factory followed by register(check) registers holds | MED-3: restore the original factory API; explicit registration remains tested. |
 
-No other existing assertion was removed or weakened. The original real D13 startup test now delegates to a shared
-helper; every stop, successor-settlement, hint and capability assertion remains, with added monitor/status assertions.
-A second test exercises that same real wiring when the stop predicate sees the writer fault before finished() does.
+No other existing assertion was removed or weakened. Final fix: the original real D13 startup test
+(test_O10_D13_a_faulted_lane_writer_stops_the_service_and_the_next_one_settles) is restored byte-identical to base
+(the fix round had turned it into a delegate that also observed the health monitor). The monitor/status assertions now
+live only in two new tests, test_HM3_faulted_service_reaches_health_monitor_status and
+test_HM3_stop_signal_first_reaches_health_monitor_status (stop predicate sees the writer fault before finished() does).
 Only the writer's expire_results operation is fault-injected; hosts, publisher, collector, report persistence and monitor
-are real. These socket tests cannot get past fixture setup in this sandbox.
+are real. Their observer works on a snapshot of the state root, never the live writer lock.
 
 Existing runtime fixtures now attach a real LedgerOwner to their existing ledger. New-test fixture corrections supply
 unique binding run IDs, a ResultCapacity and private project directories. An initially assumed queue counter did not

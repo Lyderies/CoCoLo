@@ -70,3 +70,24 @@ runtime_files membership and module layer/stage/timing registrations remain. No 
 Remaining primary gates: real normal/stop-first shutdown and successor recovery, unresolved owner deferred-claim timeouts,
 merge registration after S5, unsandboxed affected checks against ce81bd96, macOS/Linux lifecycle checks, other-provider
 review and merged-batch full suites. VERSION and catalogue remain the primary's responsibility.
+
+
+## Final fix
+
+Cause: test-side, not a product lock leak. The fix round added an observation helper to the real D13 startup test; it
+built a second LedgerOwner on the live state root while the socket fixture's ledger still held that root's single writer
+lock (flock), so it raised BlockingIOError (LedgerError). The reviewed product (serve_project reporting before
+host.close) passes the base version of the D13 test unchanged: confirmed by running the base test file against the fix-round
+product. The product holds no new lock across the stop (the status write is one atomic file replace, closed at once).
+
+Fix: test_O10_D13_a_faulted_lane_writer_stops_the_service_and_the_next_one_settles is restored byte-identical to base.
+Two new tests, test_HM3_faulted_service_reaches_health_monitor_status (normal path) and
+test_HM3_stop_signal_first_reaches_health_monitor_status, run the real service and writer fault, then observe the real
+HoldsCheck and HealthMonitor view on a snapshot of the state root (sqlite backup plus the status file) with its own ledger
+owner: fault visible after the stop, gone after the healthy successor. No product code changed in this round.
+The S8-HM3-3 registry entry lists the new test in place of the (untagged again) base D13 test.
+
+Known pre-existing flake, not from S8: tests.test_project_service_startup L15.1 deletion tests
+(test_L15_1_deletion_removes_the_projects_history_store, test_L15_1_deleting_a_project_stops_its_service_and_leaves_the_other_running)
+sometimes see 'cleanup pending' (the stopped service still holds its history store), and stop_hosts can raise
+ProcessLookupError. Reproduced on the unmodified 0.8.67 base (about 1 in 25 alone, more under parallel load).

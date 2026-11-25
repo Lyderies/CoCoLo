@@ -3966,7 +3966,7 @@
    "codex:tests.test_health_holds.HoldsTests.test_faulted_service_reported_then_stopped",
    "codex:tests.test_health_holds.HoldsTests.test_service_stop_failure",
    "codex:tests.test_health_holds.HoldsTests.test_healthy_service",
-   "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_O10_D13_a_faulted_lane_writer_stops_the_service_and_the_next_one_settles",
+   "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_HM3_faulted_service_reaches_health_monitor_status",
    "codex:tests.test_project_service_startup.ProjectServiceStartupTests.test_HM3_stop_signal_first_reaches_health_monitor_status",
    "codex:tests.test_health_holds.HoldsTests.test_durable_service_status_reaches_monitor_and_clears_on_recovery",
    "codex:tests.test_health_holds.HoldsTests.test_durable_service_fault_survives_unreadable_history",

@@ -239,13 +239,62 @@ class ProjectServiceStartupTests(unittest.TestCase):
         self.assertFalse(runtime_hint_path(self.paths, self.project).exists())
 
 
+    def test_O10_D13_a_faulted_lane_writer_stops_the_service_and_the_next_one_settles(self):
+        """O10 D13: a service whose result-persistence writer faulted stops itself at once, by its normal
+        stop path, with an exit record naming the cause. It settles nothing itself; the next start does.
+
+        Before D13 it served on for ever while holding (`holding` counted the lane's jobs), so its
+        lost-run settlement never began: bounded here so the test fails, not hangs."""
+        from unittest import mock
+        from codex_agents import project_driver, project_history, service_host
+
+        class WriterFault(BaseException):
+            """Escapes the writer's per-request handling, so the lane faults."""
+
+        def fault(history, *args, **kwargs):
+            raise WriterFault('the writer stopped')
+        settled, original = [], project_driver.RunDriver._settle_lost
+
+        def settle_lost(driver, own):
+            settled.append(own)
+            return original(driver, own)
+        stop, reports = threading.Event(), []
+        self.addCleanup(stop.set)  # Never left serving if the service does not stop by itself.
+        with mock.patch.object(project_history.ProjectHistory, 'expire_results', fault), \
+                mock.patch.object(project_driver.RunDriver, '_settle_lost', settle_lost), \
+                mock.patch.object(service_host.ProjectServiceHost, 'holding', lambda host: True):
+            served = threading.Thread(daemon=True, target=lambda: reports.append(serve_project(
+                self.state.root, self.project, stopped=stop.is_set, idle_stop_ns=3600 * 10**9)))
+            served.start()
+            served.join(15)
+            alive = served.is_alive()
+            stop.set()
+            served.join(15)
+        self.assertFalse(alive, 'a service whose writer faulted kept serving')
+        self.assertEqual([{'ready': True, 'stopped': True, 'reason_code': 'writer_fault'}], reports)
+        self.assertNotIn(True, settled, 'the faulted service settled its own runs itself')
+        self.assertFalse(runtime_hint_path(self.paths, self.project).exists())
+        self.assertFalse(capability_path(self.paths, self.project, 'host').exists())
+
+        # The next start takes the project's locks, settles the stopped instance's runs, and idles out.
+        settled.clear()
+        with mock.patch.object(project_driver.RunDriver, '_settle_lost', settle_lost):
+            again = threading.Thread(daemon=True, target=lambda: reports.append(serve_project(
+                self.state.root, self.project, stopped=lambda: False,
+                idle_stop_ns=1_500_000_000)))
+            again.start()
+            again.join(15)
+        self.assertFalse(again.is_alive(), 'the next service did not start and idle out')
+        self.assertEqual({'ready': True, 'stopped': True}, reports[-1])
+        self.assertIn(False, settled, "the next service swept the stopped instance's runs")
+
+    @__import__('test_framework').requirements('S8-HM3-3', why_not_scenario='Real service, writer and collector; only the writer failure is injected.')
+    def test_HM3_faulted_service_reaches_health_monitor_status(self):
+        self.faulted_service_and_successor(stop_signal_first=False)
+
     @__import__('test_framework').requirements('S8-HM3-3', why_not_scenario='Real service, writer and collector; only the writer failure is injected.')
     def test_HM3_stop_signal_first_reaches_health_monitor_status(self):
         self.faulted_service_and_successor(stop_signal_first=True)
-
-    @__import__('test_framework').requirements('S8-HM3-3', why_not_scenario='Real service, writer and collector; only the writer failure is injected.')
-    def test_O10_D13_a_faulted_lane_writer_stops_the_service_and_the_next_one_settles(self):
-        self.faulted_service_and_successor(stop_signal_first=False)
 
     def faulted_service_and_successor(self, *, stop_signal_first):
         """O10 D13: a service whose result-persistence writer faulted stops itself at once, by its normal
@@ -303,26 +352,57 @@ class ProjectServiceStartupTests(unittest.TestCase):
         self.assert_service_health_fault(False)
 
     def assert_service_health_fault(self, expected):
+        """What the health monitor reports for the project, observed on a snapshot of the state root.
+
+        The fixture's registry holds the state root's one writer lock for the whole test, so the observer never
+        opens the live root: it copies the ledger (sqlite backup) and the project's service status file into a
+        fresh root of its own and runs the real holds check there, on that root's own ledger owner."""
+        import shutil
+        import sqlite3
         from codex_agents.health_holds import HoldsCheck
         from codex_agents.ledger_owner import LedgerOwner
-        # The socket fixture's registry remains live on its own connection; this
-        # offline observation owner is closed before starting the successor.
-        state = LearningState(self.state.root)
+        from codex_agents.project_service import history_directory
+        copy = Path(tempfile.mkdtemp(dir=TEMP_ROOT))
+        self.addCleanup(shutil.rmtree, copy, True)
+        live = self.state.root
+        skipped = {self.state.lock.name, 'learning.sqlite3', 'learning.sqlite3-wal', 'learning.sqlite3-shm',
+                   'learning.sqlite3-journal', 'projects'}
+        for entry in live.iterdir():
+            if entry.name in skipped or entry.is_socket():
+                continue
+            if entry.is_dir():
+                shutil.copytree(entry, copy / entry.name, symlinks=True, ignore=lambda _d, names: [n for n in names if (Path(_d) / n).is_socket()])
+            elif entry.is_file():
+                shutil.copy2(entry, copy / entry.name)
+        source = sqlite3.connect(self.ledger.state.database.as_uri() + '?mode=ro', uri=True)
+        target = sqlite3.connect(copy / 'learning.sqlite3')
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+            source.close()
+        os.chmod(copy / 'learning.sqlite3', 0o600)
+        state = LearningState(copy)
+        status = history_directory(self.state, self.project_id) / 'service-writer-status'
+        history_directory(state, self.project_id).mkdir(parents=True, mode=0o700, exist_ok=True)
+        if status.exists():
+            shutil.copy2(status, history_directory(state, self.project_id) / status.name)
         owner = LedgerOwner(state)
-        self.addCleanup(owner.close)
-        server = CollectorServer(owner.client)
-        server.health_monitor.register(HoldsCheck(state, sweep_interval_seconds=60))
-        worker = threading.Thread(target=server._run_health_pass)
-        worker.start()
-        end = time.monotonic() + 5
-        while worker.is_alive() and time.monotonic() < end:
-            owner.pump()
-            worker.join(.01)
-        self.assertFalse(worker.is_alive())
-        view = server.health_monitor.view(self.project_id)
+        try:
+            server = CollectorServer(owner.client)
+            server.health_monitor.register(HoldsCheck(state, sweep_interval_seconds=60))
+            worker = threading.Thread(target=server._run_health_pass)
+            worker.start()
+            end = time.monotonic() + 5
+            while worker.is_alive() and time.monotonic() < end:
+                owner.pump()
+                worker.join(.01)
+            self.assertFalse(worker.is_alive())
+            view = server.health_monitor.view(self.project_id)
+        finally:
+            owner.close()
         self.assertEqual(expected, 'service_writer_fault' in [f['reason_code'] for f in view['findings']], view)
         self.assertIn('finding(s) to look at' if expected else 'no findings', view['summary'])
-        owner.close()
 
     @__import__('test_framework').requirements('L15.1', why_not_scenario='Real host processes and the unmodified CLI; '
                                                'the lifecycle check L15.1 also counts the ledger rows table by table.')
