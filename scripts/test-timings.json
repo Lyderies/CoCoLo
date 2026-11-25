@@ -1410,6 +1410,7 @@
  "codex:tests.test_ledger_lock_limits": 25.32,
  "codex:tests.test_ledger_owner_queue": 0.16,
  "codex:tests.test_ledger_owner_queue_lifecycle": 0.16,
+ "codex:tests.test_ledger_owner_wiring": 2.0,
  "codex:tests.test_ledger_startup": 0.76,
  "codex:tests.test_ledger_startup.LedgerStartupTests.test_connect_failure_releases_writer_lock": 0.03,
  "codex:tests.test_ledger_startup.LedgerStartupTests.test_connection_setup_failures_close_actual_connection": 0.21,

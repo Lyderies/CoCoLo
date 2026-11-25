@@ -2033,6 +2033,11 @@
    "checks": 1,
    "ends": "refusal counts keep at most MAX_REFUSAL_CALLERS caller buckets; further callers fold into 'other' with totals kept, so the map never grows",
    "test": "test_refusal_caller_buckets_are_bounded_and_preserve_totals"
+  },
+  "learning_store.py::publish_health": {
+   "checks": 1,
+   "ends": "Published health is a working set of eight snapshots. The oldest publication is evicted when a new project enters; durable registrations and admission are never capped.",
+   "test": "test_published_health_evicts_past_project_limit"
   }
  }
 }

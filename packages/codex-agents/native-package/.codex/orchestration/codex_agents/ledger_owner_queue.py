@@ -42,8 +42,8 @@ class LedgerQueueLimits:
             raise ValueError("invalid ledger queue limits")
 
 
-# Provisional conservative sizes, pending E0b-v2; not measured production values.
-DEFAULT_LEDGER_QUEUE_LIMITS = LedgerQueueLimits(16, 8, 2, LEDGER_REQUEST_WAIT_MS * 1_000_000)
+# Decision 304: E0b-v2 measured sizing, after LOCKHOLD bounded long holds.
+DEFAULT_LEDGER_QUEUE_LIMITS = LedgerQueueLimits(12, 8, 6, LEDGER_REQUEST_WAIT_MS * 1_000_000)
 
 
 class LedgerQueueBusy(RuntimeError):

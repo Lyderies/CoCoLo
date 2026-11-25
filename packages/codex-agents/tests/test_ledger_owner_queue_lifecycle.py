@@ -5,7 +5,7 @@ from unittest import mock
 
 import tests.support  # noqa: F401
 from test_framework import requirements
-from codex_agents.ledger_owner_queue import LedgerOwnerQueue, LedgerQueueBusy
+from codex_agents.ledger_owner_queue import LedgerOwnerQueue, LedgerQueueBusy, LedgerQueueLimits
 
 A = 'prj_' + 'a' * 32
 ERROR = {'ok': False, 'reason_code': 'operation_rejected'}
@@ -239,6 +239,7 @@ class LedgerQueueLifecycleTests(unittest.TestCase):
 
     @requirements('E1b-3')
     def test_overflow_refusal_counters_are_bounded_without_close(self):
+        self.queue = LedgerOwnerQueue(LedgerQueueLimits(16, 8, 2, 800_000_000), clock_ns=lambda: self.now)
         self.offer()
         self.offer()
         for index in range(100):

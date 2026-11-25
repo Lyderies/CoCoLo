@@ -16,6 +16,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from . import lane_health
+from .sql_read_budget import SQLReadError
 from .account_api import MAX_ACCOUNT_FRAME_BYTES, AccountError, decode_account_request
 from .account_service import AccountService
 
@@ -400,11 +401,21 @@ class AccountIngress:
                     self._subscriptions[token] = reply
                 else:
                     raise AccountError("account_incompatible")
-            self._service.drive_claims()
+            try:
+                self._service.drive_claims()
+            except SQLReadError as error:
+                if error.reason_code != "sql_read_busy":
+                    raise
+                return  # Existing tickets retain custody until a later owner turn.
             for _ in range(min(steps, len(self._rotation))):
                 ticket = self._rotation.popleft()
                 self._rotation.append(ticket)
-                reply = self._service.take_claim_reply(ticket, _ingress=self)
+                try:
+                    reply = self._service.take_claim_reply(ticket, _ingress=self)
+                except SQLReadError as error:
+                    if error.reason_code != "sql_read_busy":
+                        raise
+                    continue  # Queue admission failed before consuming the completion.
                 if reply is None:
                     continue
                 group = self._groups[ticket]

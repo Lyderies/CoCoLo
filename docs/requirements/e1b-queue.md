@@ -16,17 +16,17 @@ All names below are methods of `tests.test_ledger_owner_queue.LedgerOwnerQueueTe
 | E1b-3 | Queued and running requests retain global, project and project-count custody until handled, including abandonment and caller expiry. No lock spans callback execution. | `test_running_abandonment_keeps_global_and_project_custody`, `test_abandoned_queue_entry_is_handled_without_execution`, `test_running_timeout_keeps_custody_until_whole_completion` |
 | E1b-3 | FIFO within each project, one turn per active project per round; one project's backlog cannot take another project's share. Reuse ProjectFairQueue scheduling and ProjectRequestQueue custody rules without changing them. | `test_project_backlog_yields_turns_and_preserves_fifo`, `test_running_project_keeps_project_count_slot` |
 | E1b-3 | Overflow immediately raises the caller-selected existing busy reason and increments exact per-caller/per-cause counters; snapshots contain counters, not work. | `test_overflow_is_named_counted_and_snapshot_is_detached` |
-| E1b-3 | Limits are validated constructor configuration; defaults are provisional and named once. Foreign/copied handles and another owner thread cannot consume work. | `test_limits_and_handle_owner_validation` |
+| E1b-3 | Limits are validated constructor configuration; defaults are named once and sized by decision 304. Foreign/copied handles and another owner thread cannot consume work. | `test_limits_and_handle_owner_validation` |
 | E1b-4 | Admission uses the earlier of the caller's absolute monotonic deadline and the configured 800 ms maximum. Waiting uses only its remaining budget; expiry refuses once and never recycles unfinished custody. | `test_wait_uses_remaining_deadline_and_counts_once`, `test_expired_queued_work_is_skipped_and_acknowledged`, `test_running_timeout_keeps_custody_until_whole_completion` |
 | E1b-4 | Once execution begins it runs whole even after expiry. A late result or an on-time result collected after its deadline answers busy, never success. | `test_late_execution_commits_whole_and_answers_busy`, `test_reply_collected_after_deadline_answers_busy` |
 | E1b-7 | Each accepted handle exposes a `handled` Event set after execution/skipping, custody release and outcome publication, independently of a caller timeout. Tests await it, using events and a controlled clock rather than sleeps or polling. | `test_running_abandonment_keeps_global_and_project_custody`, `test_running_timeout_keeps_custody_until_whole_completion`, `test_late_execution_commits_whole_and_answers_busy` |
 
-The conservative provisional limits are 16 retained requests, 8 retained projects,
-2 requests per project, and E1a's 800 ms maximum client wait. They live in
+Slice A used provisional limits of 16 retained requests, 8 projects and 2 per
+project. Slice B adopts decision 304 after E0b-v2 and LOCKHOLD: **12 retained
+requests, 8 projects, 6 per project, 800 ms maximum wait**. These live in
 `DEFAULT_LEDGER_QUEUE_LIMITS`; `LedgerOwnerQueue(limits=...)` overrides them.
-Queue size and project share are **not measured or decided production values**;
-they await E0b-v2. The count bound covers callbacks/references, not arbitrary
-callback payload bytes: only trusted internal callers may submit bounded work.
+The count bound covers callbacks/references, not arbitrary callback payload
+bytes: only trusted internal callers may submit bounded work.
 
 `offer(project_id, operation, caller=..., busy_reason=..., deadline_ns=...)`
 accepts a callable, never wire-selected code. Busy reasons are the existing

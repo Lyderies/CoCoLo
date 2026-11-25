@@ -2052,6 +2052,9 @@ class LearningState:
         against now. A ledger that cannot be read fails closed.
         """
 
+        owner = getattr(self, "_ledger_owner", None)
+        if owner is not None and not owner.owns_thread():
+            return owner.call(self.recorded_owner_key, caller="owner_key")
         if self.database.is_symlink():
             raise StateError("database path is unsafe")
         if not self.database.is_file() or self.database.stat().st_size == 0:
@@ -2266,6 +2269,7 @@ class _ClaimRequest:
 
 # S1-H1a: SQLite VM steps allowed for one slot-health read.
 SLOT_HEALTH_STEPS = 200_000
+MAX_PUBLISHED_PROJECT_HEALTH = 8
 
 class LearningLedger:
     """The only SQLite writer. Callers receive scoped repositories, never its connection."""
@@ -2278,10 +2282,12 @@ class LearningLedger:
         admission_policy: dict[str, Any] | None = None,
         allow_schema_upgrade: bool = False,
         backup_before_upgrade: bool = False,
+        sole_owner: bool = False,
     ) -> None:
         if type(allow_schema_upgrade) is not bool or type(backup_before_upgrade) is not bool or (
                 backup_before_upgrade and not allow_schema_upgrade):
             raise LedgerError('ledger schema upgrade option is invalid')
+        self._sole_owner = sole_owner
         self._allow_schema_upgrade = allow_schema_upgrade
         # The owner's approved upgrade (setup's registration): each active project's
         # records are first kept as they are, then the migration checks those copies.
@@ -2449,7 +2455,7 @@ class LearningLedger:
             uri=True,
             timeout=5,
             isolation_level=None,
-            check_same_thread=False,
+            check_same_thread=self._sole_owner,
             factory=SQLReadConnection,
         )
         try:
@@ -4769,6 +4775,8 @@ class LearningLedger:
         client_version: str,
         *,
         now_ms: int | None = None,
+        _prepared: _PreparedAttestations | None = None,
+        _capture_only: bool = False,
     ) -> tuple[str, str, str]:
         with self._held():
             if self._connection.in_transaction:
@@ -4837,7 +4845,10 @@ class LearningLedger:
                     if complete is not None:
                         return project_id, session_digest, root_run_id
                 return persist(None)
-        prepared = self._prepare_attestations(project_id, "codex")
+        if _capture_only:
+            from .ledger_owner import _BindPreparation
+            return _BindPreparation(project_id, self._capture_attestation_inputs(project_id, "codex"))
+        prepared = _prepared if _prepared is not None else self._prepare_attestations(project_id, "codex")
         return persist(prepared)
 
     def _admit_session_run_locked(
@@ -7098,21 +7109,20 @@ class LearningLedger:
         except (StateError, OSError):
             return None
 
-    def _prepare_attestations(self, project_id: str, provider: str) -> _PreparedAttestations:
-        """Verify immutable signature inputs outside the account lock/transaction.
-
-        This owner-only value never crosses a request API. It authenticates no
-        caller, cannot substitute a daemon's environment for launch facts, and
-        does not implement bounded service job scheduling or native enrollment.
-        """
-
-        from .learning_engine import OwnerGrantAuthority
-
+    def _capture_attestation_inputs(self, project_id: str, provider: str):
         with self._held():
             if self._connection.in_transaction:
                 raise LedgerError("account write transaction is already active")
             owner = self._owner_generation_locked()
             rows = self._attestation_rows_locked(project_id, provider)
+        return owner, rows
+
+    def _prepare_attestations(self, project_id: str, provider: str) -> _PreparedAttestations:
+        return self._verify_attestation_inputs(project_id, provider, *self._capture_attestation_inputs(project_id, provider))
+
+    def _verify_attestation_inputs(self, project_id: str, provider: str, owner, rows) -> _PreparedAttestations:
+        """No SQL: verify captured bytes before the final owner request."""
+        from .learning_engine import OwnerGrantAuthority
         signer = self._current_signer_bytes()
         authority = None
         if signer is not None and (owner is None or owner[1] == signer):
@@ -10233,6 +10243,7 @@ class LearningLedger:
         record: dict[str, Any],
         signature: bytes,
         now_ms: int | None = None,
+        _prepared=None,
     ) -> dict[str, Any]:
         """Verify and atomically store signed owner feedback or calibration."""
 
@@ -10251,11 +10262,20 @@ class LearningLedger:
             # attest) is recorded before its first signature counts, as opening would have.
             if not self._connection.in_transaction and self._owner_generation_locked() is None:
                 self._record_first_owner_key()
-        authority = OwnerGrantAuthority.for_state(self.state)
-        if not authority.verify_owner_record(project_id, checked, signature):
-            raise LedgerError("owner record signature is invalid")
+        if _prepared is None:
+            authority = OwnerGrantAuthority.for_state(self.state)
+            if not authority.verify_owner_record(project_id, checked, signature):
+                raise LedgerError("owner record signature is invalid")
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
         with self._write_unit():
+            if _prepared is not None:
+                from .ledger_owner import _PreparedOwnerRecord
+                if (type(_prepared) is not _PreparedOwnerRecord
+                        or _prepared.origin is not self._attestation_origin
+                        or _prepared.project_id != project_id or _prepared.record != canonical_json(checked)
+                        or _prepared.signature != signature or _prepared.owner != self._owner_generation_locked()
+                        or _prepared.signer != self._current_signer_bytes()):
+                    raise LedgerError("owner record signature is invalid")
             project = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
@@ -13531,6 +13551,9 @@ class CollectorServer:
         client_capabilities: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.ledger = ledger
+        self._ledger_owner = getattr(ledger, "owner", None)
+        self._published_health = {}
+        self._health_refresh = None
         self.state = ledger.state
         self._bindings: dict[str, SessionBinding] = {}
         self._stop = threading.Event()
@@ -13559,6 +13582,68 @@ class CollectorServer:
         self._clients = client_capabilities or load_client_capabilities(
             Path(__file__).resolve().parent.parent / "config" / "learning-clients.json"
         )
+        if self._ledger_owner is not None:
+            try:
+                for _, root in self.ledger.active_project_roots()[:MAX_PUBLISHED_PROJECT_HEALTH]:
+                    try:
+                        self._ledger_owner.call(lambda root=root: self.publish_health(Path(root)), caller="health_startup",
+                                                contain_errors=True)
+                    except (LedgerError, StateError, SQLReadError, ValueError) as error:
+                        self.sweep_error = type(error).__name__
+            except (LedgerError, StateError, SQLReadError) as error:
+                self.sweep_error = type(error).__name__
+            self._published_generation = self._ledger_owner.ledger._connection.total_changes
+            self._ledger_owner.after_request = self._publish_changes
+
+    def publish_health(self, project_root: Path) -> None:
+        """Owner-only, bounded replacement of published project ledger state."""
+        if self._ledger_owner is not None:
+            self._ledger_owner.guard()
+        root = str(_canonical_project_root(project_root))
+        project_id = self.ledger.project_for_root(Path(root))
+        snapshot = {
+            "provider_attestations": self.ledger.provider_attestation_status(project_id),
+            "collector_health": self.ledger.health_snapshot(project_id),
+            "account_capacity": self.ledger.account_capacity(project_id),
+            "account_slots": self.ledger.account_slot_health(project_id),
+            "ingestion": self.ledger.ingestion_snapshot(project_id),
+        }
+        published = dict(self._published_health)
+        published.pop(root, None)
+        published[root] = (project_id, snapshot)
+        while len(published) > MAX_PUBLISHED_PROJECT_HEALTH:  # Decision 304: the queue's project ceiling.
+            del published[next(iter(published))]
+        self._published_health = published
+
+    def _publish_changes(self):
+        """Owner request epilogue; snapshots change atomically after ledger writes."""
+        generation = self._ledger_owner.ledger._connection.total_changes
+        if generation == self._published_generation:
+            return
+        for root in tuple(self._published_health):
+            try:
+                self.publish_health(Path(root))
+            except ProjectNotRegisteredError:
+                published = dict(self._published_health)
+                published.pop(root, None)
+                self._published_health = published
+        self._published_generation = generation
+
+    def _published_project(self, project_root: Path):
+        from copy import deepcopy
+        root = str(_canonical_project_root(project_root))
+        published = self._published_health.get(root)
+        # One outstanding refresh. A health caller never waits for the owner.
+        if self._health_refresh is None or self._health_refresh.handled.is_set():
+            with contextlib.suppress(SQLReadError):
+                self._health_refresh = self._ledger_owner.offer(
+                    lambda: self.publish_health(Path(root)),
+                    project_id=published[0] if published else "prj_" + "0" * 32, caller="health")
+        return deepcopy(published)
+
+    def _pump_ledger(self):
+        if self._ledger_owner is not None:
+            self._ledger_owner.pump()
 
     def start(self) -> None:
         if not hasattr(socket, "AF_UNIX") or fcntl is None:
@@ -13576,9 +13661,12 @@ class CollectorServer:
             self.ledger._collector_active = True
         self._thread = threading.Thread(target=self.serve, name="codex-agents-collector")
         self._thread.start()
-        if not self._ready.wait(5):
-            self._release_lock()
-            raise CollectorError("collector did not start")
+        deadline = time.monotonic() + 5
+        while not self._ready.wait(0.002 if self._ledger_owner is not None else 5):
+            self._pump_ledger()
+            if time.monotonic() >= deadline:
+                self._release_lock()
+                raise CollectorError("collector did not start")
         if self._startup_error is not None:
             self._release_lock()
             raise CollectorError("collector endpoint could not be created") from self._startup_error
@@ -13791,6 +13879,11 @@ class CollectorServer:
         """O0b RS-A round 2 G6: the idle check, whether any account hold is due. The ledger lock is taken
         without waiting: a held ledger, or a reader or transaction inside, means not now (the next idle check
         comes SWEEP_IDLE_CHECK_SECONDS later), and is not a lock refusal."""
+        if self._ledger_owner is not None and not (self._ledger_owner.owns_thread() and self._ledger_owner._running):
+            try:
+                return self._ledger_owner.call(self._holds_due_idle, caller="sweep_idle", contain_errors=True)
+            except SQLReadError:
+                return False
         lock = self.ledger._lock
         if not lock.acquire(blocking=False):
             return False
@@ -13808,6 +13901,11 @@ class CollectorServer:
         release plus any pending event batch; returns "busy" when nothing ran for a held ledger or a reader inside,
         "more" when either filled its batch (more may be due), else None. Event rows are the durable cursor:
         each committed batch disappears, so a later collector resumes without a separate checkpoint."""
+        if self._ledger_owner is not None and not (self._ledger_owner.owns_thread() and self._ledger_owner._running):
+            try:
+                return self._ledger_owner.call(lambda: self._sweep_cycle(holds_only=holds_only), caller="sweeps", contain_errors=True)
+            except SQLReadError:
+                return "busy"
         lock = self.ledger._lock
         deadline = time.monotonic() + LEDGER_LOCK_WAIT_MS / 1000  # E1a-2: a busy ledger skips the cycle
         while True:
@@ -14122,23 +14220,42 @@ class CollectorServer:
                     project_root = Path(request["project_root"])
                     # Read from the filesystem before the hold, so it covers ledger reads only.
                     client_failures = client_health_snapshot(self.ledger.state, project_root)
-                    # S1-H1a-6a: one bounded hold for every project read (they re-enter it at once);
-                    # when it is not free in time, none is read and the reply says so.
-                    if not self.ledger._lock.acquire(timeout=HEALTH_LEDGER_WAIT_MS / 1000):
-                        self.ledger._lock_waits.refused("health")  # E1a-3
-                        response["ledger_busy"] = True
-                        return response
-                    try:
-                        project_id = self.ledger.project_for_root(project_root)
-                        project = {
-                            "provider_attestations": self.ledger.provider_attestation_status(project_id),
-                            "collector_health": self.ledger.health_snapshot(project_id),
-                            "account_capacity": self.ledger.account_capacity(project_id),
-                            "account_slots": self.ledger.account_slot_health(project_id),  # S1-H1a
-                            "ingestion": self.ledger.ingestion_snapshot(project_id, client_failures=client_failures),
-                        }
-                    finally:
-                        self.ledger._lock.release()
+                    if self._ledger_owner is not None:
+                        published = self._published_project(project_root)
+                        if published is None:
+                            response["ledger_busy"] = True
+                            return response
+                        project_id, project = published
+                        ingestion = project["ingestion"]
+                        rejected, last_rejected = 0, None
+                        for code in HOOK_REJECTION_CODES:
+                            counter = client_failures.get(code)
+                            if not isinstance(counter, dict):
+                                continue
+                            rejected += int(counter.get("count", 0))
+                            updated = counter.get("updated_at_ms")
+                            if isinstance(updated, int) and not isinstance(updated, bool):
+                                last_rejected = updated if last_rejected is None else max(last_rejected, updated)
+                        ingestion["rejected_hook_event_count"] = rejected
+                        ingestion["last_rejected_hook_event_at_ms"] = last_rejected
+                    else:
+                        # S1-H1a-6a: one bounded hold for every project read (they re-enter it at once);
+                        # when it is not free in time, none is read and the reply says so.
+                        if not self.ledger._lock.acquire(timeout=HEALTH_LEDGER_WAIT_MS / 1000):
+                            self.ledger._lock_waits.refused("health")  # E1a-3
+                            response["ledger_busy"] = True
+                            return response
+                        try:
+                            project_id = self.ledger.project_for_root(project_root)
+                            project = {
+                                "provider_attestations": self.ledger.provider_attestation_status(project_id),
+                                "collector_health": self.ledger.health_snapshot(project_id),
+                                "account_capacity": self.ledger.account_capacity(project_id),
+                                "account_slots": self.ledger.account_slot_health(project_id),  # S1-H1a
+                                "ingestion": self.ledger.ingestion_snapshot(project_id, client_failures=client_failures),
+                            }
+                        finally:
+                            self.ledger._lock.release()
                     response.update(project)
                 try:  # HM-0: this project's findings and the machine's, never another project's
                     response["health_monitor"] = self.health_monitor.view(project_id)
@@ -14188,7 +14305,10 @@ class CollectorServer:
         self._stop.set()
         self._sweeps_stop.set()  # G1: no sweep cycle starts after a stop, even mid-request
         if self._thread:
-            self._thread.join(5)
+            deadline = time.monotonic() + 5
+            while self._thread.is_alive() and time.monotonic() < deadline:
+                self._pump_ledger()
+                self._thread.join(0.002 if self._ledger_owner is not None else 5)
             if self._thread.is_alive() or (self._sweeps is not None and self._sweeps.is_alive()):
                 raise CollectorError("collector did not stop")
         self._release_lock()

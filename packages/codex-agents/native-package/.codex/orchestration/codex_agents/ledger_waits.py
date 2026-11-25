@@ -58,3 +58,19 @@ class LockWaits:
     def snapshot(self) -> dict[str, int]:
         with self._lock:
             return dict(self._counts)
+
+
+def deadline_ns() -> int:
+    """Carry the caller's absolute request budget across the owner handoff."""
+    deadline = getattr(_request, "deadline", None)
+    return int(deadline * 1_000_000_000) if deadline is not None else time.monotonic_ns() + LEDGER_REQUEST_WAIT_MS * 1_000_000
+
+
+@contextlib.contextmanager
+def request_until(deadline_ns: int):
+    previous = getattr(_request, "deadline", None)
+    _request.deadline = deadline_ns / 1_000_000_000
+    try:
+        yield
+    finally:
+        _request.deadline = previous

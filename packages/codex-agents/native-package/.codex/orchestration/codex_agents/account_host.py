@@ -125,6 +125,9 @@ class AccountServiceHost:
     def __init__(self, ledger, state, *, clock_ns=time.monotonic_ns):
         if type(state) is not CollectorPaths or not callable(clock_ns):
             raise HistoryError('history_invalid_input')
+        self._ledger_owner = getattr(ledger, "_owner", None)
+        if self._ledger_owner is not None:
+            self._ledger_owner.guard()
         self._state, self._clock_ns = state, clock_ns
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._closed = self._issued = False
