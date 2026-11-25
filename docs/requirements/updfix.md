@@ -31,16 +31,21 @@ Requirement ids served are the lifecycle test's own (tests/e2e/requirements.json
   but never claimed does not count), `would_replace` (the running collector is not this build, or the project's service is
   another version's), `unreadable`, and `refused` (`unreadable`, or both of the first two) with a `reason`
   (`child_run_active` or `ledger_unreadable`) and a plain `message`. It never stops, starts, writes or changes anything.
-  Decision 265, it FAILS CLOSED: only a state folder with no ledger at all (no learning database) says `refused: false`
-  and the later steps decide as before. A ledger that exists but cannot be opened, read or evaluated (damaged or not a
-  database, refused folder, an evaluation error) says `unreadable: true`, `refused: true`, reason `ledger_unreadable`,
+  Decision 265, it FAILS CLOSED: only a state folder with no ledger at all (the ledger path does not exist: `lstat` says
+  file not found; any other error, such as a folder this account cannot look into, refuses) says `refused: false`
+  and the later steps decide as before. Decision 269: a ledger of an older release that has no `active_run_capacity` table
+  (looked up in `sqlite_master`) holds no child this check can see, so it reports `children_running: false` and is not
+  refused (the collector's own drained stop at step 5 still refuses a running old child); every other schema, permission
+  and SQL failure stays closed (a capacity table of the wrong shape refuses). A busy or locked ledger (the collector's own
+  maintenance) is waited for on a 3 second busy timeout and tried once more before it refuses. A ledger that exists but cannot be opened, read or evaluated (damaged or not a
+  database, refused folder, an evaluation error, a lock that outlasts the retry) says `unreadable: true`, `refused: true`, reason `ledger_unreadable`,
   and its message gives the next step: close any running child, check the state folder is readable, try again. The wizard
   also fails closed on any answer that is not a readable `refused` boolean (command failed, not JSON).
 - UPDFIX-3 (L12.3): An update (and a setup run again on an installed project) whose check says `refused` stops in step 2 with
   "a child run is active; nothing was changed, try again when none is running" (the same words as the collector's refusal;
   for an unreadable ledger, the check's own plain sentence with its next step), exit non-zero, before the installer, the
-  commit, registration or attestation run, and before the project is remembered (an interactive open of an installed
-  project remembers it only once accepted, for both entry paths). The check is asked again immediately before the installer's
+  commit, registration or attestation run, and before the project is remembered (an installed project is remembered only once accepted, that is after the
+  check right before the installer's `--apply` passes, for both entry paths: the update and the interactive open). The check is asked again immediately before the installer's
   `--apply` (step 4's first write): a child that appeared after step 2 is refused there, before any write. The update after the child has ended goes through.
   A child running with a collector that is already this build, and a project with no collector, are not refused.
 - UPDFIX-4 (L12.3): A child that starts after the check and is refused at step 5 anyway is told the truth: the step says that
@@ -96,3 +101,16 @@ Done and committed on fix/update-refusal; nothing pushed, installed or merged; V
   files; stated above rather than claimed away (UPDFIX-1).
 - Test gap: the lifecycle check also asserts the refusal is reported as the update stopping with `child_run_active` and that
   step 2 is not OK.
+
+## Fix round 2 (review 040-updfix-r2c, NOT-READY, decision 269)
+
+- Decision 269: a ledger without the capacity tables is not refused (`_update_check_children`, cli.py). Tests
+  `test_UPDFIX_2_a_ledger_of_an_older_release_without_the_capacity_tables_is_not_a_refusal` and
+  `test_UPDFIX_2_a_capacity_table_that_cannot_be_read_still_refuses` (the wrong shape stays closed).
+- Fail-open: `os.path.lexists` hid a permission error; now `os.lstat`, only FileNotFoundError proceeds. Test
+  `test_UPDFIX_2_an_existing_ledger_in_a_folder_that_cannot_be_looked_into_refuses`.
+- Side effect: the project is remembered only after the check before `--apply` passes (flow.py `remember_accepted`).
+  Test `test_UPDFIX_3_a_refusal_at_the_check_before_the_install_leaves_the_remembered_projects_alone` (both entry paths).
+- Healthy busy states: busy timeout `UPDATE_CHECK_BUSY_SECONDS` (3 s) on the read-only connection, one retry, then refuse
+  (decision 265). Tests `test_UPDFIX_2_a_brief_writer_lock_is_waited_for_not_refused` and
+  `test_UPDFIX_2_a_busy_ledger_is_tried_once_more_then_refuses_with_the_plain_reason`.

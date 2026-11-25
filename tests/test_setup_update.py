@@ -400,6 +400,28 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
         self.assertIn("a child run is active", " ".join(self.plain(self.transcript).split()))
         self.assertEqual("", listed.read_text())
 
+    def test_UPDFIX_3_a_refusal_at_the_check_before_the_install_leaves_the_remembered_projects_alone(self):
+        # Review r2c: the project was remembered between step 2's check and the one right before --apply, so a refusal
+        # at the second changed setup-projects. Both entry paths (the update and the interactive open).
+        project = self.installed()
+        listed = self.home / ".local" / "state" / "codex-agents" / "installer" / "setup-projects"
+        listed.write_text("")
+        env = {**REGISTERED, "FAKE_CHILDREN": self.NOT_REFUSED, "FAKE_CHILDREN_LATER": self.CHILD}
+        code, screen = self.update(project, env)
+        self.assertEqual(1, code, screen[-1500:])
+        self.assertIn("a child run is active", " ".join(screen.split()))
+        self.assertEqual("", listed.read_text(), "the update path")
+        self.attest_count = self.base / "attest.count"
+        self.start(project, {**env, "FAKE_ATTEST": str(self.attest_count)})
+        self.expect("Everything looks good")
+        self.send("\r")
+        self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\r")
+        self.assertEqual(1, self.finish(timeout=60))
+        self.assertIn("a child run is active", " ".join(self.plain(self.transcript).split()))
+        self.assertEqual("", listed.read_text(), "the interactive path")
+
     def test_UPDFIX_4_a_child_that_started_later_is_told_the_files_were_already_updated(self):
         project = self.installed()
         code, screen = self.update(project, {"FAKE_REGISTER_BUSY": "1"})

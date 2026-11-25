@@ -601,14 +601,15 @@ def _update_check_report(state_root, project_root):
     Decision 265 (fails closed): only a project with no ledger at all (no learning database in the state folder) goes ahead
     unchecked. A ledger that exists but cannot be opened or evaluated is reported `unreadable` and `refused`.
     """
-    from codex_agents.learning_source_image import _drained
-    from codex_agents.legacy_slots import register_legacy_functions
-
     children = False
     replace = False
     root = Path(state_root).expanduser() if state_root is not None else default_state_root()
-    if not os.path.lexists(root / "learning.sqlite3"):
+    try:
+        os.lstat(root / "learning.sqlite3")  # not lexists: that hides a permission error as "absent" (review 040-updfix-r2c)
+    except FileNotFoundError:
         return _update_check_result(children, replace, unreadable=False)  # no ledger at all: nothing to protect
+    except OSError:
+        return _update_check_result(children, replace, unreadable=True)
     try:
         state = LearningState(state_root, create=False)
         client = CollectorClient(state.socket)
@@ -620,18 +621,43 @@ def _update_check_report(state_root, project_root):
             pass  # not running, or newer than this build: nothing here can replace it
         if not replace and other_version_host(state_root, project_root) is not None:
             replace = True
-        connection = sqlite3.connect(state.database.as_uri() + "?mode=ro", uri=True, timeout=5)
-        try:
-            # The same functions the collector's connection has: an unreleased earlier-version slot needs them.
-            register_legacy_functions(connection)
-            _drained(connection, time.time_ns() // 1_000_000, children_only=True)
-        except HistoryError:
-            children = True
-        finally:
-            connection.close()
+        for attempt in (1, 2):
+            try:
+                children = _update_check_children(state.database)
+                break
+            except sqlite3.OperationalError as error:
+                # Busy or locked is a healthy moment (the collector's own maintenance): wait, then try once more.
+                busy = (getattr(error, "sqlite_errorcode", None) in (5, 6)  # SQLITE_BUSY, SQLITE_LOCKED
+                        or "locked" in str(error) or "busy" in str(error))
+                if attempt == 2 or not busy:
+                    raise
     except (StateError, OSError, sqlite3.Error, ValueError):
         return _update_check_result(children, replace, unreadable=True)
     return _update_check_result(children, replace, unreadable=False)
+
+
+UPDATE_CHECK_BUSY_SECONDS = 3.0
+
+
+def _update_check_children(database):
+    """Whether a child may be running, on a read-only connection. A ledger of an older release has no capacity tables, so
+    it holds no child this check can see (decision 269); every other schema, permission and SQL failure raises."""
+    from codex_agents.learning_source_image import _drained
+    from codex_agents.legacy_slots import register_legacy_functions
+
+    connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=UPDATE_CHECK_BUSY_SECONDS)
+    try:
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE name='active_run_capacity'").fetchone() is None:
+            return False
+        # The same functions the collector's connection has: an unreleased earlier-version slot needs them.
+        register_legacy_functions(connection)
+        try:
+            _drained(connection, time.time_ns() // 1_000_000, children_only=True)
+        except HistoryError:
+            return True
+        return False
+    finally:
+        connection.close()
 
 
 def _update_check_result(children, replace, *, unreadable):

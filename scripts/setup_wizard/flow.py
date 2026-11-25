@@ -145,6 +145,7 @@ class Wizard:
         self.fail_reason = ""
         self.mode = "full"
         self.install_exists = False
+        self.accept_pending: str | None = None  # an accepted installed project not yet remembered (UPDFIX-3)
         self.install_applied = False  # UPDFIX-4: the installer has written during this run
         self.profile_wanted = self.profile_ready = self.codex_primary = False
         self.rule_file = self.rule_copy = self.rule_status = self.rule_reason = ""
@@ -508,6 +509,12 @@ class Wizard:
         if kept is not None:
             effects.write_projects(path, kept)
 
+    def remember_accepted(self) -> None:
+        """Remember the installed project that step 2 accepted, once nothing can refuse it any more (UPDFIX-3)."""
+        folder, self.accept_pending = self.accept_pending, None
+        if folder:
+            self.remember_project(folder)
+
     def pick_project(self, default: str) -> str | None:
         path = self.projects_file()
         lines = effects.read_projects(path) if path is not None else []
@@ -724,8 +731,9 @@ class Wizard:
                 self.choose_another(sentence)
                 default = folder
                 continue
-            if self.install_exists:  # Accepted (an installed project is offered first next time; review 040-s1-update).
-                self.remember_project(folder)
+            # An installed project is offered first next time, but only once it is really accepted: after the check
+            # right before the install's --apply passes (review 040-s1-update, 040-updfix-r2c); see remember_accepted.
+            self.accept_pending = folder if self.install_exists else None
             self.prepare_project_inputs(folder)
             t.screen_reset()
             self.begin_step(2)
@@ -932,9 +940,11 @@ class Wizard:
                 continue
             break
         if choice == 2:
+            self.remember_accepted()  # nothing is written, so nothing can refuse it
             self.mark_step(4, "skip", "install skipped")
             return True
         if choice == 3:
+            self.remember_accepted()
             raise Stop(0, "Stopped.")
         t.screen_reset()
         self.begin_step(4)
@@ -950,6 +960,7 @@ class Wizard:
             self.fail_reason = code
             self.failure_menu()
             return False
+        self.remember_accepted()  # the last check that can refuse has passed
         if self.run_installer("Installing", "install", "--target", project, *self.install_opts, "--apply",
                               draw=t.render) != 0:
             t.screen_reset()

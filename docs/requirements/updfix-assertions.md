@@ -18,3 +18,11 @@ tests/test_setup_update.py `test_UPDFIX_*`, fake `FAKE_CHILDREN` / `FAKE_REGISTE
 | packages/codex-agents/tests/test_updfix.py `test_UPDFIX_2_no_state_at_all_is_not_a_refusal` | unchanged | unchanged (a state folder with no ledger still goes ahead; `test_UPDFIX_2_a_state_folder_with_no_ledger_is_not_a_refusal` added) | Only no ledger at all proceeds. |
 | scripts/e2e_checks_update_safety.py `l12_3_update_with_a_running_child_is_refused_plainly_and_the_child_goes_on` | (round 0 replacement) "no step 3..8 is OK" alone | that assertion kept, plus: the text contains "The update stopped (child_run_active)" and step 2 is not OK | The first alone passes an empty summary. |
 | UPDFIX-2 text in updfix.md | "When it cannot tell (no ledger, no collector, an unreadable or older ledger) it says refused: false" | only no ledger at all says refused false; an unreadable ledger refuses | Decision 265. |
+
+## Fix round 2 (review 040-updfix-r2c)
+
+No existing assertion was changed or removed. Added only: the older-schema, wrong-shape, unreadable-folder, brief-lock and
+persistent-lock tests in packages/codex-agents/tests/test_updfix.py, and
+`test_UPDFIX_3_a_refusal_at_the_check_before_the_install_leaves_the_remembered_projects_alone` in tests/test_setup_update.py.
+The requirement text of UPDFIX-2 and UPDFIX-3 in updfix.md is reconciled (older ledger proceeds, lstat, remember after the
+pre-apply check, busy retry).

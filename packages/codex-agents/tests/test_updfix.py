@@ -142,6 +142,102 @@ class UpdateCheckTests(unittest.TestCase):
         self.assertEqual(0, code, report)
         self.assertEqual((False, False, False), (report["unreadable"], report["refused"], report["children_running"]))
 
+    # Review r2c (decision 269 and the fail-open, busy findings).
+
+    def test_UPDFIX_2_a_ledger_of_an_older_release_without_the_capacity_tables_is_not_a_refusal(self):
+        # Decision 269: an older ledger has no active_run_capacity table, so it cannot hold a child this check could see;
+        # the collector's own drained stop at step 5 still refuses a running old child.
+        self.fixture.ledger.close()
+        import sqlite3
+        raw = sqlite3.connect(self.fixture.state.database)
+        raw.execute("DROP TABLE active_run_capacity")
+        raw.commit()
+        raw.close()
+        code, report, _ = self.run_check()
+        self.assertEqual(0, code, report)
+        self.assertEqual((False, False, False, None), (report["children_running"], report["unreadable"],
+                                                       report["refused"], report["reason"]), report)
+
+    def test_UPDFIX_2_a_capacity_table_that_cannot_be_read_still_refuses(self):
+        # Only a MISSING table proceeds. A table that exists but has the wrong shape is a schema failure: closed.
+        self.fixture.ledger.close()
+        import sqlite3
+        raw = sqlite3.connect(self.fixture.state.database)
+        raw.execute("DROP TABLE active_run_capacity")
+        raw.execute("CREATE TABLE active_run_capacity(something_else TEXT)")
+        raw.commit()
+        raw.close()
+        code, report, _ = self.run_check()
+        self.assertEqual(0, code, report)
+        self.assertEqual((True, True, "ledger_unreadable"), (report["unreadable"], report["refused"], report["reason"]))
+
+    def test_UPDFIX_2_an_existing_ledger_in_a_folder_that_cannot_be_looked_into_refuses(self):
+        # Review r2c: os.path.lexists hid a permission error, so an inaccessible existing ledger was treated as absent.
+        root = Path(self.fixture.temporary.name) / "closed-state"
+        root.mkdir(mode=0o700)
+        (root / "learning.sqlite3").write_bytes(b"x")
+        os.chmod(root, 0)
+        self.addCleanup(os.chmod, root, 0o700)
+        if os.access(root / "learning.sqlite3", os.R_OK):
+            self.skipTest("this account can read through a mode 0 folder")
+        code, report, _ = self.run_check(state_root=root)
+        self.assertEqual(0, code, report)
+        self.assertEqual((True, True, "ledger_unreadable"), (report["unreadable"], report["refused"], report["reason"]))
+
+    def hold_exclusive(self, release_after):
+        """A rollback-journal ledger with a writer holding an exclusive lock; released after `release_after` seconds
+        (None: until the test releases it). Returns the release function."""
+        import sqlite3
+        import threading
+        self.fixture.ledger.close()
+        raw = sqlite3.connect(self.fixture.state.database)
+        raw.execute("PRAGMA journal_mode=DELETE").fetchall()
+        raw.close()
+        writer = sqlite3.connect(self.fixture.state.database, isolation_level=None, check_same_thread=False)
+        writer.execute("BEGIN EXCLUSIVE")
+        released = threading.Event()
+
+        def release():
+            if not released.is_set():
+                released.set()
+                writer.execute("ROLLBACK")
+                writer.close()
+        self.addCleanup(release)
+        if release_after is not None:
+            timer = threading.Timer(release_after, release)
+            timer.start()
+            self.addCleanup(timer.cancel)
+        return release
+
+    def test_UPDFIX_2_a_brief_writer_lock_is_waited_for_not_refused(self):
+        # Review r2c: normal collector maintenance holds the ledger briefly; that must not refuse an update.
+        import cli
+        self.hold_exclusive(0.4)
+        with mock.patch.object(cli, "UPDATE_CHECK_BUSY_SECONDS", 3.0):
+            report = cli._update_check_report(self.fixture.state_root, self.fixture.project_a)
+        self.assertEqual((False, False, False), (report["unreadable"], report["refused"], report["children_running"]), report)
+
+    def test_UPDFIX_2_a_busy_ledger_is_tried_once_more_then_refuses_with_the_plain_reason(self):
+        import cli
+        import sqlite3
+        release = self.hold_exclusive(None)
+        with mock.patch.object(cli, "UPDATE_CHECK_BUSY_SECONDS", 0.2):
+            report = cli._update_check_report(self.fixture.state_root, self.fixture.project_a)
+        self.assertEqual((True, True, "ledger_unreadable"), (report["unreadable"], report["refused"], report["reason"]))
+        self.assertIn("try again", report["message"])
+        # One retry, not an unbounded wait: a busy error on the first try, a clean answer on the second.
+        calls = []
+
+        def busy_once(connection, now, **kwargs):
+            calls.append(now)
+            if len(calls) == 1:
+                raise sqlite3.OperationalError("database is locked")
+        release()
+        with mock.patch("codex_agents.learning_source_image._drained", side_effect=busy_once):
+            report = cli._update_check_report(self.fixture.state_root, self.fixture.project_a)
+        self.assertEqual(2, len(calls))
+        self.assertEqual((False, False), (report["unreadable"], report["refused"]), report)
+
     def decide(self, *, health=None, other_host=None):
         """The command's own decision, in this process, with the collector's identity and the service's version given."""
         import cli
