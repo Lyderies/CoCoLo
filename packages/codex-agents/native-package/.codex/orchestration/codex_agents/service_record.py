@@ -17,6 +17,7 @@ Nothing here is reachable over a socket: the entry points are methods of the pro
 from __future__ import annotations
 
 import re
+import json
 import threading
 import time
 from dataclasses import dataclass
@@ -124,7 +125,8 @@ class ServiceRecordAuthority:
             raise HistoryError(UNRECORDABLE["expired"])
         elif state != "committed" or not contexts._associated(row, binding):
             raise HistoryError(UNRECORDABLE["context_state"])
-        if self.runtime_digest is not None and binding.runtime_digest != self.runtime_digest:
+        if (self.runtime_digest is not None and binding.runtime_digest != self.runtime_digest
+                and not self._migrated_finished(history, binding, row)):
             raise HistoryError(UNRECORDABLE["other_runtime"])
         self._orchestration(history, binding, row)
         return self._reservation(history, binding, phase, reservation)
@@ -152,8 +154,37 @@ class ServiceRecordAuthority:
         if (snapshot["client_version"] not in HOST_CLIENT_VERSIONS
                 or (row is not None and row["host_class"] != snapshot["client_version"])):
             raise HistoryError(UNRECORDABLE["host_class"])
-        if self.runtime_digest is not None and snapshot["scope"]["runtime_digest"] != self.runtime_digest:
+        if (self.runtime_digest is not None and snapshot["scope"]["runtime_digest"] != self.runtime_digest
+                and not (snapshot["scope"]["runtime_digest"] == binding.runtime_digest
+                         and self._migrated_finished(history, binding, row))):
             raise HistoryError(UNRECORDABLE["other_runtime"])
+
+    def _migrated_finished(self, history, binding, row) -> bool:
+        """S6/129.2: custody classified under the migration fence permits current recording only.
+
+        This never authorizes publication, an old caller, missing inputs, or a
+        different attempt. K1/K3 still verify the context, body, terminal and
+        original open orchestration through the ordinary admission path.
+        """
+        from .learning_contracts import canonical_json, keyed_digest
+
+        if (row is None or row['state'] != 'committed'
+                or self.runtime_digest != history._fence.digest):
+            return False
+        custody = history._connection.execute("SELECT evidence FROM project_holds WHERE project_id=? "
+            "AND kind='result_custody' AND identity=? AND state='held'",
+            (history.project_id, f'{binding.run_handle}:{binding.attempt}')).fetchone()
+        if custody is None:
+            return False
+        try:
+            evidence = json.loads(custody['evidence'])
+            _, reservation = history._result_row(binding)
+            return (evidence.get('classified') == 22 and evidence.get('reason') == 'legacy_finished_result'
+                and evidence.get('binding_digest') == keyed_digest(history._result_key, canonical_json(binding.as_data()))
+                and evidence.get('context_digest') == row['context_digest']
+                and evidence.get('result_digest') == reservation.result_digest)
+        except (ValueError, TypeError, AttributeError):
+            return False
 
     @staticmethod
     def _reservation(history, binding, phase, before) -> None:

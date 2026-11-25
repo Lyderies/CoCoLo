@@ -301,6 +301,7 @@
  "codex:tests.test_rsf_s4_slots": "integration",
  "codex:tests.test_rsf_s4_transport": "integration",
  "codex:tests.test_rsf_s5_probe": "integration",
+ "codex:tests.test_rsf_s6_classify": "integration",
  "codex:tests.test_rsf_s7_account": "integration",
  "codex:tests.test_rsf_s7_journal": "integration",
  "codex:tests.test_rsf_s7_project": "integration",
