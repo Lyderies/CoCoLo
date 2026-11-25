@@ -723,7 +723,7 @@ class ProjectHistory:
             return  # Unknown historical evidence is not ours to replace.
         if type(evidence) is not dict or 'reason' in evidence:
             return
-        evidence.update(adopted=22, reason=reason, next_step=next_step, **facts)
+        evidence.update(classified=22, reason=reason, next_step=next_step, **facts)  # keep the original 'adopted' step
         self._connection.execute("UPDATE project_holds SET evidence=? WHERE project_id=? AND kind=? AND identity=?",
             (project_holds_schema.evidence_json(**evidence), self.project_id, kind, identity))
 
@@ -737,8 +737,8 @@ class ProjectHistory:
             if lease.state in ('reserved', 'claim_pending'):
                 self._legacy_evidence('lease', identity,
                     'legacy_preparation_memory_lost' if lease.state == 'reserved' else 'legacy_claim_needs_settlement',
-                    'Keep this hold until the original open and account claim are checked; then use the drained '
-                    'update recovery to withdraw an unsent open or obtain an authenticated account settlement.')
+                    'Run learning-status to inspect this lease. The service releases an unarmed lease on expiry '
+                    'or after its predecessor stops; a pending claim waits for authenticated account settlement.')
             if (self._open_binding(identity) is not None or self._connection.execute(
                     'SELECT 1 FROM project_host_opens WHERE project_id=? AND run_handle=? AND attempt=?',
                     (self.project_id, binding.run_handle, binding.attempt)).fetchone() is None):
@@ -765,13 +765,25 @@ class ProjectHistory:
             evidence.update(reason=('legacy_open_needs_account_evidence' if not verified else
                                     'legacy_open_inputs_missing' if 'inputs_digest' not in evidence else
                                     'legacy_open_needs_reconciliation'),
-                next_step='Keep this open held. Check its original account binding and inputs, then use '
-                          'authenticated withdrawal or claim settlement during drained update recovery.')
+                next_step='Run learning-status to inspect this open. The successor service withdraws opens with '
+                          'verified inputs or settles their claims; missing original evidence keeps this duty held.')
             project_holds_schema.take_hold(self._connection, self.project_id, 'open_binding', identity,
                 now_ms=lease.created_at_ms, evidence=project_holds_schema.evidence_json(**evidence))
             if verified and lease.state == 'bound':
                 project_holds_schema.release_hold(self._connection, self.project_id, 'open_binding', identity,
                     'claimed', now_ms=now_ms, receipt=lease.claim_digest)
+            elif verified and lease.state == 'expired':
+                # A pre-B3 open can outlive its account denial in a schema-21 store.
+                # Reuse its no-launch evidence, never a deadline. Pre-B1 adoption
+                # retained only the sealed expired lease + verified open (B1's
+                # existing denied predicate), so its receipt can be absent.
+                ended = self._connection.execute("SELECT state,release_kind,receipt FROM project_holds "
+                    "WHERE project_id=? AND kind='lease' AND identity=?", (self.project_id, identity)).fetchone()
+                if (ended is not None and ended['state'] == 'released'
+                        and ended['release_kind'] in ('denied', 'fenced')
+                        and (ended['receipt'] is None or matches(ended['receipt'], _DIGEST))):
+                    project_holds_schema.release_hold(self._connection, self.project_id, 'open_binding', identity,
+                        'fenced', now_ms=now_ms, receipt=ended['receipt'])
 
     def _classify_legacy_reservations(self, rowids):
         for row in self._legacy_rows('result_reservations', rowids):
@@ -779,8 +791,8 @@ class ProjectHistory:
             if reservation.state == 'reserved':
                 self._legacy_evidence('reservation', reservation.binding.claim_id,
                     'legacy_attempt_needs_settlement',
-                    'Keep this attempt held. Run publication arbitration, then obtain and record the '
-                    'authenticated account lost-run closure through drained update recovery.')
+                    'Run learning-run-status to inspect this attempt. The project service arbitrates publication '
+                    'before requesting an authenticated account lost-run closure; only that closure releases it.')
 
     def _classify_legacy_custody(self, rowids):
         for row in self._legacy_rows('result_reservations', rowids):
@@ -792,9 +804,8 @@ class ProjectHistory:
             identity = attempt_identity(binding.run_handle, binding.attempt)
             if context['state'] == 'legacy_no_context':
                 self._legacy_evidence('result_custody', identity, 'legacy_result_inputs_missing',
-                    'Keep custody. Recover the original verified inputs if available; otherwise obtain '
-                    'an authenticated account settlement for an unfinished attempt and retain finished bytes '
-                    'until their original retention deadline.')
+                    'Run learning-status to inspect custody. Missing original inputs keep an unfinished result '
+                    'held pending authenticated account settlement; finished bytes retain their original deadline.')
             elif reservation.state == 'committed' and context['state'] == 'committed':
                 try:
                     project_result_contexts.stored_result_context(self, binding, host_class=context['host_class'])
@@ -803,12 +814,12 @@ class ProjectHistory:
                         raise HistoryError('history_conflict')
                 except (HistoryError, OSError, ValueError, TypeError):
                     self._legacy_evidence('result_custody', identity, 'legacy_result_evidence_missing',
-                        'Keep custody. Recover and verify the original result and stored inputs before recording; '
+                        'Run learning-status to inspect custody. Recover the original result and inputs before recording; '
                         'do not replace their bytes or release an unfinished account obligation.')
                     continue
                 self._legacy_evidence('result_custody', identity, 'legacy_finished_result',
-                    'The current project service can record this verified finished result before its original '
-                    'retention deadline while its orchestration remains open.',
+                    'Run learning-start-project-service. The fenced service can record this verified finished result '
+                    'before its original retention deadline while its orchestration remains open.',
                     binding_digest=keyed_digest(self._result_key, canonical_json(binding.as_data())),
                     context_digest=context['context_digest'], result_digest=reservation.result_digest)
 

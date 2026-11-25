@@ -20,11 +20,21 @@ on a timer. Existing duties and authenticated replies remain unchanged. An
 already recorded result proves its open duty fulfilled; preserve its register
 without adding a duty.
 
+Fix round MED-2: a verified historical open whose expired lease already has a
+released `denied` or `fenced` tombstone uses that retained authenticated receipt
+to release its backfilled duty as `fenced`, as the existing denial path does.
+Prove this from a real schema-21 store, without inferring closure from expiry,
+missing inputs or predecessor exit alone; preserve existing duties and receipts.
+For a pre-B1 denial adopted without a receipt, the verified sealed expired lease
+plus its verified host open and the existing B1 `denied` adoption predicate are
+the retained no-launch evidence; preserve the absent receipt without inventing one.
+
 **RSF-S6-3 — Settlement.** Classify an unfinished historical reservation as
 held awaiting account settlement, with a named reason and plain next step.
 Run B4s publication arbitration before the account outbox; only its verified
-closure releases the reservation as lost. Show lost in the existing attempt
-status. Preserve a completed result during arbitration. Replay remains stable.
+closure releases the reservation as lost. In the report, lost maps to the
+existing `abandoned` count; the reservation hold records release kind `lost`.
+Preserve a completed result during arbitration. Replay remains stable.
 
 **RSF-S6-4 — Result custody.** Preserve finished result, terminal, sealed
 context and historical record bytes. A verifiable committed result with its
@@ -40,11 +50,21 @@ lease as held with a named legacy preparation reason and plain owner next step;
 no missing-memory inference releases an uncertain obligation. Pure memory with
 no durable source creates no invented hold or launch authority.
 
+Fix round MED-1/LOW-3: every new owner step names an existing CLI command or a
+documented automatic release. Ordinary fresh-store runtime mismatch points to
+the existing setup update command. Unarmed leases still release automatically
+on the service's expiry sweep or when the successor releases unused leases;
+pending claims require the account's authenticated no-launch evidence.
+
 **RSF-S6-6 — Late publication refusal.** The B4s releasing fence and verified
 lost settlement each refuse a late publication with zero changes to terminal,
 record, context, body or reservation state. Resume classification without
 replacing existing duty/settlement evidence. Verify bounded batches and atomic
 cursor rollback under real process death and a revoked S2 epoch.
+
+Fix round LOW-1: both `publish_result` and `commit_result` must refuse with the
+specific reason `history_result_expired` before and after lost settlement and
+after reopen, with zero database or artifact changes.
 
 ## Evidence and scope
 

@@ -27,3 +27,24 @@ TMPDIR=/tmp/rsfs6-owner COCOLO_WORKER_TIMEOUT=60 "$PY" -B scripts/parallel_tests
 # Source hygiene:
 git diff --check
 "$PY" -B scripts/check_identifiers.py
+
+# Fix round: registered initial red/green and the receipt-less behavioral red.
+"$PY" -B scripts/parallel_tests.py --jobs 1 --module codex:tests.test_rsf_s6_classify
+
+# Fix-round regression batch (also final after receipt-less coverage).
+# project_hold_register has a reproduced baseline adoption-pin failure and
+# five service-start failures in the sandbox; all other modules pass.
+"$PY" -B scripts/parallel_tests.py --jobs 4 --module codex:tests.test_rsf_s6_classify --module codex:tests.test_rsf_s2_fence --module codex:tests.test_rsf_s3_resumable --module codex:tests.test_claim_denial_recovery --module codex:tests.test_project_hold_register --module codex:tests.test_result_leases --module codex:tests.test_refusal_steps --module codex:tests.test_b2_service_outcome
+"$PY" -B scripts/parallel_tests.py --jobs 1 --module codex:tests.test_runtime_release
+
+# Final frozen-clock regression: existing S3 resumability plus all S6 cases.
+"$PY" -B scripts/parallel_tests.py --jobs 2 --module codex:tests.test_rsf_s6_classify --module codex:tests.test_rsf_s3_resumable
+
+# Baseline reproduction: archive 4a00f22d in a disposable test directory, then
+# run this named module there with its scripts directory on PYTHONPATH:
+"$PY" -B -m unittest tests.test_project_hold_register
+
+# PRIMARY: the original four modules passed unsandboxed at 4a00f22d (188 tests,
+# primary-provided result). Rerun on this fix diff; include the register services.
+mkdir -p /tmp/rsfs6-owner
+TMPDIR=/tmp/rsfs6-owner COCOLO_WORKER_TIMEOUT=60 "$PY" -B scripts/parallel_tests.py --jobs 4 --module codex:tests.test_learning_migration --module codex:tests.test_learning_store --module codex:tests.test_state_location --module codex:tests.test_open_withdrawal --module codex:tests.test_project_hold_register
