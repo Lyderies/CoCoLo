@@ -4,6 +4,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.63: RS-F S6: project classification of old records (orchestration, open duty, settlement, result custody; late publications of old runs refused). 3.8 E1a: contention evidence tests. AP5: candidate evidence looked up by index (first open of a 286 MiB ledger 0.2 s).
+
 - Package 0.8.62: RS-F S3: an interrupted hold-store upgrade resumes class by class from its saved cursor (bounded batches, published only after validation).
 
 - Package 0.8.61: release batch.
