@@ -23,7 +23,7 @@ def main():
     parser.add_argument('--control', default='green', choices=(
         'green', 'claim-completion', 'claim-lane', 'recapture', 'initial-open',
         'open-completion', 'open-provenance', 'run-provenance', 'publication',
-        'restoration', 'account-entry', 'collector-frame', 'counts'))
+        'restoration', 'account-entry', 'collector-frame', 'collector-exception', 'counts'))
     parser.add_argument('--direct-signatures', action='store_true')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -74,6 +74,7 @@ def main():
         'restoration': 'OpenContentionTests.test_exhausted_deferred_publication_restores_next_request_and_owner_pump',
         'account-entry': 'RequestDeadlineEvidenceTests.test_real_handle_and_begin_share_successive_waits_and_refresh',
         'collector-frame': 'RequestDeadlineEvidenceTests.test_slow_collector_receipt_and_next_frame_get_fresh_budgets',
+        'collector-exception': 'RequestDeadlineEvidenceTests.test_raising_collector_frame_restores_deadline_and_next_frame_budget',
         'counts': 'ConcurrentRefusalEvidenceTests.test_event_coordinated_exact_counts_for_all_acquisition_paths_during_health',
     }
     loader = unittest.defaultTestLoader
@@ -82,9 +83,22 @@ def main():
     with contextlib.ExitStack() as patches:
         if args.direct_signatures:
             patches.enter_context(mock.patch.object(signature_execution, '_execute_signature_job', direct_signatures))
-        if args.control in {'claim-completion', 'recapture'}:
+        if args.control == 'claim-completion':
             patches.enter_context(mock.patch.object(evidence.account_claim_jobs, 'completion_reason',
                 side_effect=lambda error, kind: 'open_failed' if kind == 'open' else 'claim_unavailable'))
+        elif args.control == 'recapture':
+            intake = evidence.account_claim_jobs.SignatureJobIntake
+            capture = intake.capture_admission
+
+            def drop_recapture_busy(self, *args, **kwargs):
+                try:
+                    return capture(self, *args, **kwargs)
+                except evidence.SQLReadError as error:
+                    if error.reason_code == 'sql_read_busy':
+                        raise evidence.account_claim_jobs.ClaimError('claim_unavailable') from None
+                    raise
+
+            patches.enter_context(mock.patch.object(intake, 'capture_admission', drop_recapture_busy))
         elif args.control == 'claim-lane':
             patches.enter_context(mock.patch.object(evidence.account_claim_jobs, 'completion_fault', return_value=True))
         elif args.control == 'open-completion':
@@ -129,6 +143,14 @@ def main():
                     self._handle_request(raw, token, deferred=deferred, ingress=ingress)))
         elif args.control == 'collector-frame':
             patches.enter_context(mock.patch.object(ledger_waits, 'request', contextlib.nullcontext))
+        elif args.control == 'collector-exception':
+            @contextlib.contextmanager
+            def restore_only_on_success():
+                previous = getattr(ledger_waits._request, 'deadline', None)
+                ledger_waits._request.deadline = ledger_waits.time.monotonic() + .8
+                yield
+                ledger_waits._request.deadline = previous
+            patches.enter_context(mock.patch.object(ledger_waits, 'request', restore_only_on_success))
         elif args.control == 'counts':
             original = ledger_waits.LockWaits.refused
             patches.enter_context(mock.patch.object(ledger_waits.LockWaits, 'refused',
@@ -152,6 +174,7 @@ def main():
         'restoration': "self.assertIsNone(getattr(ledger_waits._request, 'deadline', None))",
         'account-entry': 'self.assertAlmostEqual(.3, timeouts[1])',
         'collector-frame': 'self.assertAlmostEqual(expected, actual)',
+        'collector-exception': 'exceptional collector frame leaked request deadline',
         'counts': 'self.assertEqual([], errors)',
     }.get(args.control, '')
     observed_red = (len(result.failures) == 1 and not result.errors

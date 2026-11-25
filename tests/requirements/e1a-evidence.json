@@ -8,7 +8,7 @@
   },
   {
    "id": "E1a-T3",
-   "statement": "Real `AccountService.handle` and `begin` entries give successive waits one\nrequest budget. A deferred open publication exhausts its own budget; the next\nrequest and owner pump must observe a fresh budget. A collector frame received\nslowly starts its ledger budget only after receipt, and the next frame gets a\nfresh budget. Check restoration on the same thread. A controlled clock may\nadvance time without sleeping; actual ledger operations remain wired in.",
+   "statement": "Real `AccountService.handle` and `begin` entries give successive waits one\nrequest budget. A deferred open publication exhausts its own budget; the next\nrequest and owner pump must observe a fresh budget. A collector frame received\nslowly starts its ledger budget only after receipt, and the next frame gets a\nfresh budget. A frame whose dispatch raises must also restore the request\ndeadline on the same thread, allowing the next frame a fresh budget. A controlled\nclock may advance time without sleeping; actual ledger operations remain wired in.",
    "source": "tests/requirements/e1a-evidence.json#E1a-T3"
   },
   {

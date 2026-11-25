@@ -21,8 +21,9 @@ Real `AccountService.handle` and `begin` entries give successive waits one
 request budget. A deferred open publication exhausts its own budget; the next
 request and owner pump must observe a fresh budget. A collector frame received
 slowly starts its ledger budget only after receipt, and the next frame gets a
-fresh budget. Check restoration on the same thread. A controlled clock may
-advance time without sleeping; actual ledger operations remain wired in.
+fresh budget. A frame whose dispatch raises must also restore the request
+deadline on the same thread, allowing the next frame a fresh budget. A controlled
+clock may advance time without sleeping; actual ledger operations remain wired in.
 
 ## E1a-T4
 

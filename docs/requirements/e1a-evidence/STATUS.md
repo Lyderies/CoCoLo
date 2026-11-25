@@ -4,11 +4,61 @@ Requirements accepted before tests; base `230c2fc0` (0.8.62 candidate), branch
 `feat/e1a-evidence`. Changes are left uncommitted under the sandbox rule.
 
 **Evidence added; unrestricted signature-worker gate remains outstanding.**
+The counts and timings in the original-round sections below are historical;
+the following fix round records the current eleven-test file and replaces the
+original recapture-control evidence.
 Ten new tests pass with the explicitly selected supplementary signature adapter
 (15.370 s). Five tests also pass with every runtime boundary unmodified (9.525 s). All
 twelve broken-wiring controls produce exactly one assertion failure and zero
 errors. These are evidence-only changes; no runtime fix, schema/record-shape
 change, VERSION change or runtime-digest catalogue change was made.
+
+## Fix round
+
+Fixed scope: review `040-e1a-r1/RESULT-claude.md`, MED-1, MED-2, LOW-1 and LOW-2,
+on `2d4a66f2` over base `230c2fc0` (VERSION 0.8.62). The exceptional-exit
+requirement was made explicit in E1a-T3 and its authoritative registry before
+adding the test. No runtime defect was demonstrated and no runtime file changed.
+
+| Item / requirement | Change and test | Evidence this round |
+| --- | --- | --- |
+| MED-1 / E1a-T2 | `ClaimContentionTests.test_real_stale_recapture_busy_then_retry`; `recapture` now wraps `SignatureJobIntake.capture_admission`, converting only a real `sql_read_busy` into `ClaimError('claim_unavailable')`. Initial capture succeeds before the test introduces contention at stale recapture. `completion_reason` is untouched by this control. | Red first: exactly one failure at `assert_busy`'s exact reason assertion (`account_busy` versus `claim_unavailable`), zero errors, `intended_assertion=True`, 1.313 s. Mutation removed: passes in the 11-test supplementary green. |
+| MED-2 / E1a-T4 | `ConcurrentRefusalEvidenceTests.test_event_coordinated_exact_counts_for_all_acquisition_paths_during_health`; all T4 barriers, event waits and joins now use 20 s. Its holder safety bound scales from 30 s to 120 s; other tests retain 5 s/30 s defaults. Coordination still uses events and three fixed waves. | Passes in the supplementary green. The `counts` control still finishes all waves and fails only the exact-count assertion, zero errors, `intended_assertion=True`, 6.934 s. No timed load loop or product budget changed. |
+| LOW-1 / E1a-T4 | Same exact-count test: idle-probe comment explicitly says it adds no `read_call`; the eight one-per-wave labels omit `read_call`, which `expected()` adds as `3 * wave` from the three owner-thread SQL reads. | Expected dictionaries are identical before and after; final `read_call` remains 9. Same green/counts-red evidence as MED-2. |
+| LOW-2 / E1a-T3 | New `RequestDeadlineEvidenceTests.test_raising_collector_frame_restores_deadline_and_next_frame_budget`: real `_handle` dispatch performs a real ledger read, then raises; assert the identical exception, prior deadline restoration, and a successful next frame with fresh actual lock budgets. | Red first: `collector-exception` restores only on successful exit, so it fails precisely at `exceptional collector frame leaked request deadline`, one failure, zero errors, `intended_assertion=True`, 0.061 s. Mutation removed: passes in the supplementary green; unmodified named-gate result below. |
+
+The supplementary command `"$PY" -B scripts/e1a_evidence_controls.py
+--direct-signatures` passes all 11 tests, zero failures/errors, 15.570 s. This
+retains the signature-adapter limitation documented below. Controls were run
+sequentially before the unmodified gate, without parallel test load.
+
+Normal gate: `"$PY" -B scripts/parallel_tests.py --module
+codex:tests.test_e1a_evidence --jobs 1` completed with `metadata_errors: []`,
+11 tests, 113.546 s worker time (112.944 s unittest time). Six tests passed on
+unmodified runtime: both provenance cases, all three request-deadline cases
+(including the new exceptional frame), and T4 counts. The same five
+signature-dependent cases failed completion and drain at their unchanged 10 s
+bounds: ten assertion failures, no test errors. The module also exceeded its
+60 s scenario budget. This reproduces the previously established sandbox-worker
+limitation; it does not establish a green production-worker gate for E1a-T2/T3.
+The module remains registered as scenario/integration; the new test is linked
+reciprocally to E1a-T3. No new module or requirement ID was introduced. Syntax,
+JSON and `git diff --check` passed; unit docs contain no absolute home paths or
+raw logs. All runs finished; nothing is left running.
+
+Assertion changes are paired in [assertions.md](assertions.md): 5 s → 20 s test
+coordination bounds, identical count dictionaries after the label clarification,
+and additive exceptional-frame assertions. No existing product-result assertion
+was removed or weakened. Changed this round: the evidence test module, control
+script, E1a requirement document/source JSON/catalogue, this status, and assertion
+notes. VERSION and the runtime digest catalogue are unchanged. No commit under
+the sandbox rule.
+
+No full suite, copier/backup/move/enumeration campaign, release-digest test or
+live socket/PTY integration was run: there is no runtime/schema/record-shape
+change, and the collector test uses a controlled connection at the real frame
+handler. Production signature confinement still requires the normal named gate
+on an unrestricted builder before accepting the five blocked worker cases.
 
 ## Requirement → test → evidence
 

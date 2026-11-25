@@ -33,14 +33,14 @@ from codex_agents.signature_job_intake import SignatureIntakeLimits
 from codex_agents.signature_worker_pool import SignatureWorkerLimits
 
 
-def hold_ledger(test, ledger):
+def hold_ledger(test, ledger, *, coordination_timeout=5):
     """A real foreign thread owns the real RLock until an explicit acknowledgement."""
     held, release, stopped = threading.Event(), threading.Event(), threading.Event()
 
     def holder():
         with ledger._lock:
             held.set()
-            release.wait(30)
+            release.wait(6 * coordination_timeout)
         stopped.set()
 
     thread = threading.Thread(target=holder, daemon=True)
@@ -48,11 +48,11 @@ def hold_ledger(test, ledger):
 
     def finish():
         release.set()
-        thread.join(5)
+        thread.join(coordination_timeout)
         test.assertTrue(stopped.is_set(), 'ledger holder did not stop')
 
     test.addCleanup(finish)
-    test.assertTrue(held.wait(5), 'ledger holder did not acquire')
+    test.assertTrue(held.wait(coordination_timeout), 'ledger holder did not acquire')
     return finish
 
 
@@ -351,13 +351,48 @@ class RequestDeadlineEvidenceTests(api_tests.AccountApiTests):
         for actual, expected in zip(recording.timeouts, (.75, .3, .75, .3)):
             self.assertAlmostEqual(expected, actual)
 
+    @requirements('E1a-T3')
+    def test_raising_collector_frame_restores_deadline_and_next_frame_budget(self):
+        clock = Clock()
+        server = learning_store.CollectorServer(self.ledger)
+        recording = RecordingLock(self.ledger._lock)
+        frame = canonical_json({'protocol': learning_store.COLLECTOR_PROTOCOL_VERSION, 'op': 'project',
+                                'project_root': str(self.roots[0])}) + b'\n'
+        connection = mock.Mock()
+        connection.recv.return_value = frame
+        dispatch = server._dispatch
+        failure = RuntimeError('collector dispatch failed after ledger read')
+        previous = getattr(ledger_waits._request, 'deadline', None)
+        self.addCleanup(setattr, ledger_waits._request, 'deadline', previous)
+
+        def raising_dispatch(request):
+            self.assertEqual({'ok': True, 'project_id': self.projects[0]}, dispatch(request))
+            clock.now += .5
+            raise failure
+
+        with mock.patch.object(ledger_waits, 'time', clock), \
+                mock.patch.object(self.ledger, '_lock', recording):
+            with mock.patch.object(server, '_dispatch', side_effect=raising_dispatch):
+                with self.assertRaises(RuntimeError) as raised:
+                    server._handle(connection)
+            self.assertIs(failure, raised.exception)
+            self.assertEqual(previous, getattr(ledger_waits._request, 'deadline', None),
+                             'exceptional collector frame leaked request deadline')
+            clock.now += 10
+            self.assertEqual({'ok': True, 'project_id': self.projects[0]}, server._handle(connection))
+            self.assertEqual(previous, getattr(ledger_waits._request, 'deadline', None))
+        self.assertEqual(2, len(recording.timeouts))
+        for timeout in recording.timeouts:
+            self.assertAlmostEqual(.75, timeout)
+
 
 class ConcurrentRefusalEvidenceTests(api_tests.AccountApiTests):
     __why_not_scenario__ = 'Real acquisition paths and health dispatch; event-coordinated foreign holder, no installed services.'
     @requirements('E1a-T4')
     def test_event_coordinated_exact_counts_for_all_acquisition_paths_during_health(self):
         server = learning_store.CollectorServer(self.ledger)
-        release = hold_ledger(self, self.ledger)
+        coordination_timeout = 20
+        release = hold_ledger(self, self.ledger, coordination_timeout=coordination_timeout)
         limits = SQLReadLimits(1000, 1000, 4096)
 
         def held_default():
@@ -388,7 +423,7 @@ class ConcurrentRefusalEvidenceTests(api_tests.AccountApiTests):
             self.assertEqual('busy', server._sweep_cycle())
 
         def idle_probe():
-            self.assertIs(False, server._holds_due_idle())  # Opportunistic probe skips, without a refusal count.
+            self.assertIs(False, server._holds_due_idle())  # Skips without adding to read_call.
 
         def project_health():
             self.assertIs(True, server._dispatch({'protocol': learning_store.COLLECTOR_PROTOCOL_VERSION,
@@ -397,9 +432,10 @@ class ConcurrentRefusalEvidenceTests(api_tests.AccountApiTests):
         paths = [held_default, held_explicit, write_unit, account_transaction, reader_entry,
                  slot_health, sweep, project_health, idle_probe]
         labels = ['held_default', 'explicit', 'write_unit', 'account_transaction', 'repository',
-                  'slot_health', 'sweeps', 'health', 'read_call']
+                  'slot_health', 'sweeps', 'health']
 
         def expected(wave):
+            # Only the three owner-thread SQL reads below add read_call counts; idle_probe adds none.
             return {**dict.fromkeys(labels, wave), 'read_call': 3 * wave}
         start, finished = threading.Barrier(len(paths) + 2), threading.Barrier(len(paths) + 2)
         counted, health_read = threading.Event(), threading.Event()
@@ -409,7 +445,7 @@ class ConcurrentRefusalEvidenceTests(api_tests.AccountApiTests):
         def refused(label):
             original_refused(label)
             counted.set()
-            self.assertTrue(health_read.wait(5), 'health blocked behind ledger')
+            self.assertTrue(health_read.wait(coordination_timeout), 'health blocked behind ledger')
 
         def invoke(call):
             try:
@@ -422,9 +458,9 @@ class ConcurrentRefusalEvidenceTests(api_tests.AccountApiTests):
         def worker(call):
             try:
                 for _ in range(3):
-                    start.wait(5)
+                    start.wait(coordination_timeout)
                     invoke(call)
-                    finished.wait(5)
+                    finished.wait(coordination_timeout)
             except BaseException as error:
                 errors.append(error)
                 start.abort()
@@ -433,13 +469,13 @@ class ConcurrentRefusalEvidenceTests(api_tests.AccountApiTests):
         def health():
             try:
                 for wave in range(1, 4):
-                    start.wait(5)
-                    self.assertTrue(counted.wait(5))
+                    start.wait(coordination_timeout)
+                    self.assertTrue(counted.wait(coordination_timeout))
                     reply = server._dispatch({'protocol': learning_store.COLLECTOR_PROTOCOL_VERSION, 'op': 'health'})
                     self.assertIs(True, reply['ok'])
                     self.assertTrue(reply['ledger_waits'])
                     health_read.set()  # Refusers cannot complete before a ledger-free health read.
-                    finished.wait(5)
+                    finished.wait(coordination_timeout)
                     snapshots.append(server._dispatch({'protocol': learning_store.COLLECTOR_PROTOCOL_VERSION,
                                                        'op': 'health'})['ledger_waits'])
                     if snapshots[-1] != expected(wave):
@@ -454,19 +490,19 @@ class ConcurrentRefusalEvidenceTests(api_tests.AccountApiTests):
         threads = [threading.Thread(target=worker, args=(path,), daemon=True) for path in paths]
         threads.append(threading.Thread(target=health, daemon=True))
         for thread in threads:
-            self.addCleanup(thread.join, 5)
+            self.addCleanup(thread.join, coordination_timeout)
         with mock.patch.object(self.ledger._lock_waits, 'refused', side_effect=refused):
             for thread in threads:
                 thread.start()
             for _ in range(3):
-                start.wait(5)
+                start.wait(coordination_timeout)
                 # SQLReadConnection enforces owner-thread reads: exercise this path on its real owner.
                 for read in (self.ledger._connection.read_call, self.ledger._connection.transaction_read_call,
                              self.ledger._connection.read_in_current_mode):
                     invoke(lambda: read(limits, lambda: self.fail('read body ran')))
-                finished.wait(5)
+                finished.wait(coordination_timeout)
             for thread in threads:
-                thread.join(5)
+                thread.join(coordination_timeout)
                 self.assertFalse(thread.is_alive())
         self.assertEqual([], errors)
         self.assertEqual(3, len(snapshots))
