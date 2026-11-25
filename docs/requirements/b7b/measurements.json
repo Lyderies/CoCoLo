@@ -1,0 +1,205 @@
+{
+  "measurements": {
+    "B1": {
+      "numbers": {
+        "calls": 5,
+        "partial_register_ms": 0.265667
+      },
+      "scope": "Actual reserve/arm/bind/commit register calls; excludes release tail and transaction commit cost. Full normal-run writer delta is not established.",
+      "status": "unmeasured"
+    },
+    "B2": {
+      "numbers": {
+        "empty_open_ms": [
+          2.595,
+          2.355,
+          2.577791
+        ],
+        "held_1064_open_ms": [
+          5.789167,
+          3.941208,
+          4.181542
+        ],
+        "limit_ms": 100,
+        "store_overhead_ms": 1.6037510000000004
+      },
+      "scope": "Real store reopen with 1,064 held leases, including validators; whole service startup needs sockets and is unmeasured.",
+      "status": "unmeasured"
+    },
+    "B3": {
+      "numbers": {
+        "batch_ms": [
+          16.333792,
+          18.941666,
+          13.730041,
+          12.560209,
+          13.686167,
+          13.772459,
+          12.666583,
+          12.326917,
+          12.931125,
+          12.64725,
+          13.847458,
+          12.912916,
+          13.069084,
+          12.387125,
+          12.252291,
+          7.248667
+        ],
+        "limit_ms": 50,
+        "maximum_ms": 18.941666
+      },
+      "scope": "Real release_earlier_unarmed_leases(limit=64); individual durable source/register transactions included.",
+      "status": "met"
+    },
+    "B4": {
+      "numbers": {
+        "comparisons": [
+          {
+            "context_sweep_vm_steps": 223,
+            "holds_vm_steps": 1722,
+            "live_index_plan": [
+              [
+                3,
+                0,
+                213,
+                "SCAN project_result_contexts USING INDEX project_result_contexts_live"
+              ]
+            ],
+            "lookup_ms": 0.005875,
+            "lookup_vm_steps": 15,
+            "reconcile_vm_steps": 157,
+            "retired": 10,
+            "retirement_ms": 8.625208,
+            "retirement_vm_steps": 10512,
+            "tombstones": 0
+          },
+          {
+            "context_sweep_vm_steps": 223,
+            "holds_vm_steps": 9001722,
+            "live_index_plan": [
+              [
+                3,
+                0,
+                213,
+                "SCAN project_result_contexts USING INDEX project_result_contexts_live"
+              ]
+            ],
+            "lookup_ms": 0.005,
+            "lookup_vm_steps": 15,
+            "reconcile_vm_steps": 157,
+            "retired": 10,
+            "retirement_ms": 7.511583,
+            "retirement_vm_steps": 10512,
+            "tombstones": 100000
+          }
+        ]
+      },
+      "scope": "Actual hold report, context candidate sweep, reconciliation and absent outcome lookup at 0/100,000 valid custody tombstones. VM instructions are recorded; source lease/reservation tombstone growth is not covered.",
+      "status": "failed"
+    },
+    "B5": {
+      "numbers": {
+        "batches": 16,
+        "blocked": 64,
+        "eligible": 1000,
+        "limit_batches": 18,
+        "released": 1000
+      },
+      "scope": "Real unarmed-lease start pass; 1,000 eligible leases behind 64 live leases. Does not establish memory-kind drain.",
+      "status": "met"
+    },
+    "B6": {
+      "numbers": {
+        "arrivals": 50,
+        "blocked": 128,
+        "limit_batches": 4,
+        "released": 1,
+        "store_batches": 1,
+        "store_pass_ms": 0.408875
+      },
+      "scope": "Real lease pass releases target behind 128 live rows plus 50 arrivals. Generic re-due/backoff register scheduler and memory holds do not exist; required recurring-arrival scenario is not established.",
+      "status": "unmeasured"
+    },
+    "S3": {
+      "numbers": {
+        "comparisons": [
+          {
+            "context_sweep_vm_steps": 223,
+            "holds_vm_steps": 1722,
+            "live_index_plan": [
+              [
+                3,
+                0,
+                213,
+                "SCAN project_result_contexts USING INDEX project_result_contexts_live"
+              ]
+            ],
+            "lookup_ms": 0.005875,
+            "lookup_vm_steps": 15,
+            "reconcile_vm_steps": 157,
+            "retired": 10,
+            "retirement_ms": 8.625208,
+            "retirement_vm_steps": 10512,
+            "tombstones": 0
+          },
+          {
+            "context_sweep_vm_steps": 223,
+            "holds_vm_steps": 9001722,
+            "live_index_plan": [
+              [
+                3,
+                0,
+                213,
+                "SCAN project_result_contexts USING INDEX project_result_contexts_live"
+              ]
+            ],
+            "lookup_ms": 0.005,
+            "lookup_vm_steps": 15,
+            "reconcile_vm_steps": 157,
+            "retired": 10,
+            "retirement_ms": 7.511583,
+            "retirement_vm_steps": 10512,
+            "tombstones": 100000
+          }
+        ],
+        "empty_store_open_ms": 2.070583,
+        "live_64_store_open_ms": 3.384666,
+        "lookup_limit_ms": 5,
+        "retirement_limit_ms": 50,
+        "service_start_overhead_limit_ms": 200,
+        "store_start_overhead_ms": 1.3140830000000001
+      },
+      "scope": "Real retirement of ten committed bodies/contexts (VM counting enabled, so time includes tracing overhead), absent outcome lookup and context reconciliation at 0/100,000 tombstones; store startup with 64 context files. Successful authenticated lookup is measured separately by measure_lookup; full service startup remains unmeasured.",
+      "status": "unmeasured"
+    }
+  },
+  "successful_lookup": [
+    {
+      "limit_ms": 5,
+      "lookup_ms": 0.640792,
+      "lookup_samples_ms": [
+        0.640792,
+        0.619375,
+        0.608917,
+        0.59825,
+        0.588583
+      ],
+      "lookup_vm_steps": 491,
+      "tombstones": 0
+    },
+    {
+      "limit_ms": 5,
+      "lookup_ms": 0.663458,
+      "lookup_samples_ms": [
+        0.663458,
+        0.633541,
+        0.632,
+        0.622625,
+        0.607542
+      ],
+      "lookup_vm_steps": 491,
+      "tombstones": 100000
+    }
+  ]
+}

@@ -2797,7 +2797,7 @@ def main() -> int:
             # How near each limit of this project's store is (0.3.4 R9); None while its service is not running.
             report['project_capacity'] = capacity_report_client(args.state_root, args.project_root, host_client=label)
             holds = holds_report_client(args.state_root, args.project_root, host_client=label)
-            for name in ('project_holds', 'result_custody', 'result_retirement_repairs'):
+            for name in ('project_holds', 'result_custody', 'result_retirement_repairs', 'recovery_pending'):
                 report[name] = None if holds is None else holds[name]
             # T7 S2 (L14.1): orchestrations live in the project's own store, so its service's count replaces the
             # ledger's (whose table holds only those of versions before the project store); while the service is

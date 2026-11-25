@@ -161,6 +161,8 @@ class ResultPersistenceLane:
         self._service_instance = 'svc-' + secrets.token_hex(16)
         # B2-18: what the recording sweep last published, for the health check (read without any store or lock).
         self.recording_notes = service_record.RecordingNotes()
+        from .recovery_report import RecoveryNotes
+        self.recovery_notes = RecoveryNotes()
         self._runtime = owner._monitor.scope().runtime_digest
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._maximum = max_entries
@@ -903,6 +905,7 @@ class ResultPersistenceLane:
                 if type(store) is ProjectHistory:
                     store.close()
                 raise HistoryError("history_service_unavailable")
+            store._recovery_notes = self.recovery_notes
             self._store = store
         return self._store
 

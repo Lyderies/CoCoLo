@@ -2,6 +2,11 @@
  "note": "Every count-based limit in the runtime: file::function -> checks, how what it counts ends, and its past-the-limit test. Maintained by hand; see test_lifetime_cap_guard.py.",
  "schema": 1,
  "sites": {
+  "recovery_report.py::recovery_pending": {
+   "checks": 1,
+   "ends": "B7b snapshot aggregation only, no admission/refusal cap: COUNT of open orchestrations blocked by execution holds; releasing the last execution hold clears the count, closing removes the orchestration. Pending identities are projected from live holds, sweep observations are replaced after each completed pass, and own-run observations are removed when recovery finishes.",
+   "test": "test_open_orchestrations_count_once_and_other_projects_never_leak"
+  },
   "account_api.py::__init__": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
