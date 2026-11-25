@@ -12,7 +12,7 @@ from unittest import mock
 from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
 from tests.learning_support import attest_provider, generate_test_owner_key, provider_fixture
 from test_framework import requirements
-from codex_agents import attestation_capture, learning_engine
+from codex_agents import account_service, attestation_capture, learning_engine
 from codex_agents.account_service import AccountOwnerViews
 from codex_agents.admission_inputs import AdmissionCaptureLimits, AdmissionInputPolicy
 from codex_agents.learning_engine import OwnerGrantAuthority
@@ -118,6 +118,111 @@ class P9bAttestationTests(unittest.TestCase):
             'SELECT valid,current FROM temp.attestation_checks WHERE record_id=?',
             (self.record['record_id'],)).fetchone()))
         self.assertEqual({other['record_id']}, self.capture_ids())
+
+    def assert_invalid_cached_once(self):
+        with mock.patch.object(learning_engine.subprocess, 'run', wraps=subprocess.run) as run:
+            self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=100))
+            self.assertEqual(1, run.call_count)
+            self.assertEqual((0, 1), tuple(self.ledger._connection.execute(
+                'SELECT valid,current FROM temp.attestation_checks WHERE record_id=?',
+                (self.record['record_id'],)).fetchone()))
+            self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=100))
+            self.assertEqual(1, run.call_count)
+        self.assertNotIn(self.record['record_id'], self.capture_ids())
+
+    @requirements('P9b-1', why_not_scenario='Rotate a real owner key and verify the previous key signature with real ssh-keygen.')
+    def test_previous_owner_key_signature_is_cached_invalid_without_reverification(self):
+        replacement = self.base / 'replacement'
+        replacement.mkdir()
+        _, public = generate_test_owner_key(replacement)
+        self.ledger.replace_owner_key(public, now_ms=42)
+        self.assert_invalid_cached_once()
+
+    @requirements('P9b-1', why_not_scenario='Truncate a real SSH signature and exercise the actual parser and maintenance cache.')
+    def test_truncated_signature_is_cached_invalid_without_reverification(self):
+        connection = self.ledger._connection
+        signature = connection.execute('SELECT signature FROM owner_attestations WHERE subject_record_id=?',
+                                       (self.record['record_id'],)).fetchone()[0]
+        connection.execute('UPDATE owner_attestations SET signature=? WHERE subject_record_id=?',
+                           (signature[:len(signature) // 2], self.record['record_id']))
+        self.assert_invalid_cached_once()
+
+    @requirements('P9b-1', why_not_scenario='Pin deterministic parser diagnostics independently of the installed OpenSSH version.')
+    def test_deterministic_malformed_signature_diagnostics_are_definitive(self):
+        authority = OwnerGrantAuthority(self.state.allowed_signers_path, raise_verifier_failures=True)
+        diagnostics = [b'invalid format', b'decode base64', b'missing footer',
+                       b'missing header', b'incomplete message', b'namespace does not match']
+        for diagnostic in diagnostics:
+            with self.subTest(diagnostic=diagnostic):
+                completed = subprocess.CompletedProcess(['ssh-keygen'], 255, b'',
+                    b"Couldn't parse signature: " + diagnostic + b'\n')
+                with mock.patch.object(learning_engine.subprocess, 'run', return_value=completed):
+                    self.assertFalse(authority.verify_owner_record(self.project, self.record, b'bad-signature'))
+
+    @requirements('P9b-1', why_not_scenario='Infrastructure diagnostics override rejection text; ambiguous results remain unchecked and retryable.')
+    def test_infrastructure_and_ambiguous_results_raise_and_leave_rows_unchecked(self):
+        authority = OwnerGrantAuthority(self.state.allowed_signers_path, raise_verifier_failures=True)
+        rejection = b'Could not verify signature.\n'
+        infrastructure = [b'Cannot open signer', b'No such file or directory', b'Permission denied',
+                          b'Cannot allocate memory', b'Out of memory', b'Internal error', b'Killed by signal 9']
+        outcomes = [subprocess.CompletedProcess(['ssh-keygen'], 255, rejection,
+                    b"Couldn't parse signature: invalid format\n" + diagnostic) for diagnostic in infrastructure]
+        outcomes += [subprocess.CompletedProcess(['ssh-keygen'], code, rejection, b'invalid format')
+                     for code in (-15, -9, 1, 2, 137)]
+        outcomes += [subprocess.CompletedProcess(['ssh-keygen'], 255, stdout, b'unknown diagnostic')
+                     for stdout in (b'', b' Could not verify signature.\n', rejection + b'extra\n')]
+        outcomes.append(subprocess.TimeoutExpired(['ssh-keygen'], 5))
+        for outcome in outcomes:
+            with self.subTest(outcome=outcome):
+                patch = ({'side_effect': outcome} if isinstance(outcome, Exception)
+                         else {'return_value': outcome})
+                with mock.patch.object(learning_engine.subprocess, 'run', **patch):
+                    with self.assertRaises((OSError, subprocess.SubprocessError)):
+                        authority.verify_owner_record(self.project, self.record, b'bad-signature')
+                    self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=100))
+                self.assertIsNone(self.ledger._connection.execute(
+                    'SELECT valid FROM temp.attestation_checks WHERE record_id=?',
+                    (self.record['record_id'],)).fetchone())
+                self.assertIn(self.record['record_id'], self.capture_ids())
+        self.assert_unchecked_then_recovered(self.record)
+
+    @requirements('P9b-2', why_not_scenario='Inspect the actual admission union plan and count rows entering its final sort on overflowing history.')
+    def test_admission_union_uses_indexes_and_bounds_rows_before_final_sort(self):
+        connection = self.ledger._connection
+        original = dict(connection.execute('SELECT * FROM records WHERE record_id=?',
+                                           (self.record['record_id'],)).fetchone())
+        # Interleave both union branches with unrelated records so the bounded
+        # result must retain the exact rowid prefix across branch boundaries.
+        connection.executemany('INSERT INTO records(' + ','.join(original) + ') VALUES(' +
+                               ','.join('?' for _ in original) + ')',
+            [tuple(dict(original, record_id='union-' + str(i),
+                        record_type=('billing_attestation', 'provider_identity', 'event')[i % 3],
+                        source_sequence=i + 2).values()) for i in range(3000)])
+        scope = {'p': self.project, 'provider': 'codex', 'a': 1, 'limit': 3}
+        # An always-true predicate counts every union row reaching the final
+        # joins/sort. A SELECT expression would only count top-N insertions.
+        query = 'SELECT r.rowid,a.signature' + account_service._ADMISSION_INPUT_JOIN.replace(
+            'WHERE r.rowid=c.record_rowid',
+            'WHERE r.rowid=c.record_rowid AND p9b_sort_input(c.record_rowid)')
+        sort_inputs = []
+        connection.create_function('p9b_sort_input', 1, lambda rowid: sort_inputs.append(rowid) or rowid)
+        self.addCleanup(lambda: connection.create_function('p9b_sort_input', 1, None))
+        plan = [row[3] for row in connection.execute('EXPLAIN QUERY PLAN ' + query, scope)]
+        self.assertTrue(any(detail.startswith('SEARCH ') and 'capture_candidates USING' in detail
+                            for detail in plan), plan)
+        self.assertTrue(any('SEARCH r USING' in detail and 'records_type_project' in detail
+                            for detail in plan), plan)
+        self.assertFalse(any(detail.startswith('SCAN r') or detail.startswith('SCAN records')
+                             for detail in plan), plan)
+        # Count predicate evaluations before SQLite's final ORDER BY/LIMIT
+        # discards overflow.
+        rows = connection.execute(query, scope).fetchall()
+        expected = connection.execute("SELECT rowid FROM records WHERE project_id=? AND record_type IN "
+            "('billing_attestation','provider_identity') ORDER BY rowid LIMIT ?",
+            (self.project, scope['limit'])).fetchall()
+        self.assertEqual([row[0] for row in expected], [row[0] for row in rows])
+        self.assertGreaterEqual(len(sort_inputs), scope['limit'])
+        self.assertLessEqual(len(sort_inputs), 2 * scope['limit'])
 
     @requirements('P9b-2', why_not_scenario='Measure the actual per-open TEMP rebuild at SQLite VM instruction granularity.')
     def test_candidate_count_and_open_rebuild_ignore_non_attestation_history(self):

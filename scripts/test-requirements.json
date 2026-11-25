@@ -1599,20 +1599,25 @@
  "P9b-1": {
   "checks": [
    "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_clean_signature_invalid_is_cached",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deterministic_malformed_signature_diagnostics_are_definitive",
    "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_failed_verifier_process_is_retryable_without_restart",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_infrastructure_and_ambiguous_results_raise_and_leave_rows_unchecked",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_previous_owner_key_signature_is_cached_invalid_without_reverification",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_truncated_signature_is_cached_invalid_without_reverification",
    "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_unsafe_verifier_leaves_genuine_rows_unchecked_until_repaired"
   ],
   "source": "tests/requirements/p9b.json#P9b-1",
-  "statement": "### P9b-1 \u2014 Only definitive verifier results are cached\n\nAn unsafe verifier executable or parent (symlink, wrong owner, writable mode),\nor an unavailable, killed, out-of-memory or otherwise failed verifier, must\nraise in the maintenance authority's `raise_verifier_failures` mode. Its row\nstays unchecked, charged and retryable without restart. Only a clean successful\nverification or clean definitive ssh-keygen signature-invalid result can be\ncached. Existing non-maintenance callers continue to fail closed."
+  "statement": "### P9b-1 \u2014 Only definitive verifier results are cached\n\nAn unsafe verifier executable or parent (symlink, wrong owner, writable mode),\nor an unavailable, killed, out-of-memory or otherwise failed verifier, must\nraise in the maintenance authority's `raise_verifier_failures` mode. Its row\nstays unchecked, charged and retryable without restart. Only a clean successful\nverification or clean definitive ssh-keygen signature-invalid result can be\ncached. Existing non-maintenance callers continue to fail closed.\n\nReview fix round on `9333772e`: exit 255 with stdout exactly\n`Could not verify signature.` (allowing its line terminator) is definitive\ninvalid, including a well-formed signature from the previous owner key. Exit\n255 with deterministic malformed-signature diagnostics (`invalid format`,\n`decode base64`, `missing footer`, `missing header`, `incomplete message`, or\n`namespace does not match`) is also definitive invalid. In either case,\nstderr indicating `cannot open`, `no such file`, `permission denied`,\n`allocate`, `out of memory`, `internal error`, or `killed by signal` takes\nprecedence and leaves the row unchecked. Unsafe prechecks, timeouts, signals,\nother exit codes and all other ambiguous results remain non-definitive.\nReal ssh-keygen regressions must prove wrong-key and truncated signatures\nare cached invalid without verification on the next maintenance pass, while\nunsafe verifier metadata remains retryable."
  },
  "P9b-2": {
   "checks": [
    "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_keeps_other_evidence_outside_candidate_table",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_union_uses_indexes_and_bounds_rows_before_final_sort",
    "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_count_and_open_rebuild_ignore_non_attestation_history",
    "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_membership_tracks_record_type_changes"
   ],
   "source": "tests/requirements/p9b.json#P9b-2",
-  "statement": "### P9b-2 \u2014 Candidate membership contains only attestations\n\n`temp.capture_candidates` contains billing attestations only. Insert, update,\nrestart and projection rebuild preserve that restriction. Candidate count and\nthe per-open candidate rebuild's SQLite VM work are independent of unrelated\nnon-attestation history. Admission still captures all relevant evidence families\nunder its existing time, project, source and quota rules, excluding unrelated\nhistory. Both public capture boundaries retain bounded superseded-history work."
+  "statement": "### P9b-2 \u2014 Candidate membership contains only attestations\n\n`temp.capture_candidates` contains billing attestations only. Insert, update,\nrestart and projection rebuild preserve that restriction. Candidate count and\nthe per-open candidate rebuild's SQLite VM work are independent of unrelated\nnon-attestation history. Admission still captures all relevant evidence families\nunder its existing time, project, source and quota rules, excluding unrelated\nhistory. Both public capture boundaries retain bounded superseded-history work.\n\nReview fix round: EXPLAIN QUERY PLAN must show indexed admission-union access\nwithout a full records scan. Each union branch supplies at most the capture\nlimit (including its overflow sentinel) before the final rowid sort and\nrecord/signature joins. This preserves the exact globally ordered prefix and\noverflow refusal while bounding the rows materialized for that final sort;\nthe existing SQL work/deadline budget still governs scope filtering."
  },
  "P9b-3": {
   "checks": [

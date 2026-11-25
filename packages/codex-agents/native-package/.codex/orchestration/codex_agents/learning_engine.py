@@ -3966,16 +3966,22 @@ class OwnerGrantAuthority:
                 return True
             if not self.raise_verifier_failures:
                 return False
-            # Exit 255 alone also covers unavailable files, internal failures
-            # and resource exhaustion. Only a clean cryptographic mismatch or
-            # a known malformed-signature rejection is a definitive negative.
+            # Wrong-key signatures can produce only the rejection stdout, with
+            # no stderr. Parser rejections are also deterministic, but known
+            # environment/resource failures always take precedence over them.
+            diagnostic = completed.stderr.lower()
+            infrastructure_failure = any(pattern in diagnostic for pattern in (
+                b"cannot open", b"no such file", b"permission denied", b"allocate",
+                b"out of memory", b"internal error", b"killed by signal",
+            ))
+            malformed_signature = any(pattern in diagnostic for pattern in (
+                b"invalid format", b"decode base64", b"missing footer", b"missing header",
+                b"incomplete message", b"namespace does not match",
+            ))
             if (completed.returncode == 255
-                    and completed.stdout.splitlines() == [b"Could not verify signature."]
-                    and completed.stderr.splitlines() in (
-                        [b"Signature verification failed: incorrect signature"],
-                        [b"Couldn't parse signature: missing header",
-                         b"sig_verify: sshsig_armor: incomplete message"],
-                    )):
+                    and not infrastructure_failure
+                    and (completed.stdout.splitlines() == [b"Could not verify signature."]
+                         or malformed_signature)):
                 return False
             raise OSError("owner signature verifier did not return a definitive verdict")
         except (OSError, subprocess.SubprocessError):

@@ -67,6 +67,127 @@
   "test_failures": 6,
   "tests": 7
  },
+ "review_fix_round": {
+  "assertions": "assertions.md",
+  "base": "9333772e",
+  "green_notes": {
+   "P9b-1": "Real ssh-keygen wrong-key and truncated signatures cache valid=0,current=1 after one call; the next pass makes no verifier call. Six unsafe metadata cases still remain unchecked and recover.",
+   "P9b-2": "Indexed SEARCH access without a full records scan; at most 6 union rows enter the final sort for limit=3, preserving the globally ordered prefix. Scope filtering remains subject to the existing SQL work/deadline budget."
+  },
+  "red_notes": {
+   "P9b-1": "Wrong-key and truncated signatures have no cached row; six deterministic parser diagnostics raise. Unsafe and infrastructure results remain retryable.",
+   "P9b-2": "2001 rows reach the final sorter for limit=3, exceeding the required upper bound of 6."
+  },
+  "runs": {
+   "green": {
+    "budget_failures": [],
+    "discovery_seconds": 2.407945957966149,
+    "elapsed_seconds": 2.424731749924831,
+    "metadata_errors": [],
+    "partial": false,
+    "preflight_seconds": 6.929267959087156,
+    "workers": [
+     {
+      "outcomes": {
+       "codex:tests.test_admission_inputs.AdmissionInputLimitTests.test_limits_and_policy_are_bounded_exact_and_immutable": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_ambiguous_begin_failure_cannot_leave_a_reusable_open_transaction": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_candidates_include_other_provider_future_restrictions_before_filtering": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_capture_does_not_read_unrelated_raw_result_content": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_capture_uses_no_json_parsing_in_sql_or_python": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_closed_owner_refuses_before_filesystem_work": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_complete_row_and_byte_preflight_precedes_owner_history_values": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_deadline_failure_is_fixed_and_does_not_leave_an_outer_transaction": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_digest_corruption_returns_fixed_error_and_releases_the_read_snapshot": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_domain_faults_and_internal_baseexceptions_roll_back_without_positive_capture": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_empty_unconfigured_capture_does_not_enroll_or_create_a_signer": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_exact_field_and_row_quotas_refuse_before_raw_fetch": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_exact_six_family_raw_capture_without_crypto_connections_or_writes": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_foreign_progress_handler_is_preserved_on_refused_capture": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_headers_return_no_variable_value_even_for_non_strict_corruption": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_invalid_input_and_clock_cannot_create_a_capture": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_malformed_signature_values_are_refused_before_any_owner_or_record_value": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_missing_and_inactive_projects_keep_the_account_error_contract": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_outer_transaction_and_wrong_thread_fail_before_filesystem_work": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_owner_header_checks_precede_owner_blob_fetch": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_project_metadata_is_preflighted_without_legacy_unbounded_reads": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_real_second_writer_commit_cannot_mix_headers_and_values": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_restoration_fault_discards_capture_and_poison_prevents_reuse": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_rollback_fault_poisons_and_refuses_reuse_without_database_work": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_sql_work_limit_refuses_without_fetching_raw_values": "passed",
+       "codex:tests.test_admission_inputs.AdmissionInputOwnerTests.test_success_restores_scope_settings_and_closes_all_cursors": "passed"
+      },
+      "returncode": 0,
+      "seconds": 2.086450041970238,
+      "suite": "codex",
+      "summary": "",
+      "tests": 26,
+      "timed_out": false,
+      "unit": "tests.test_admission_inputs"
+     },
+     {
+      "outcomes": {
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_keeps_other_evidence_outside_candidate_table": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_union_uses_indexes_and_bounds_rows_before_final_sort": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_count_and_open_rebuild_ignore_non_attestation_history": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_membership_tracks_record_type_changes": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_clean_signature_invalid_is_cached": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deleting_newest_restores_predecessor_for_every_record_delete_path": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deterministic_malformed_signature_diagnostics_are_definitive": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_failed_verifier_process_is_retryable_without_restart": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_infrastructure_and_ambiguous_results_raise_and_leave_rows_unchecked": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_previous_owner_key_signature_is_cached_invalid_without_reverification": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_truncated_signature_is_cached_invalid_without_reverification": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_unsafe_verifier_leaves_genuine_rows_unchecked_until_repaired": "passed"
+      },
+      "returncode": 0,
+      "seconds": 2.4203854580409825,
+      "suite": "codex",
+      "summary": "",
+      "tests": 12,
+      "timed_out": false,
+      "unit": "tests.test_p9b_attestation_followups"
+     }
+    ]
+   },
+   "red-final": {
+    "budget_failures": [],
+    "discovery_seconds": 2.350097667076625,
+    "elapsed_seconds": 2.4293077499605715,
+    "metadata_errors": [],
+    "partial": false,
+    "preflight_seconds": 7.1415667498949915,
+    "workers": [
+     {
+      "outcomes": {
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_keeps_other_evidence_outside_candidate_table": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_union_uses_indexes_and_bounds_rows_before_final_sort": "failed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_count_and_open_rebuild_ignore_non_attestation_history": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_membership_tracks_record_type_changes": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_clean_signature_invalid_is_cached": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deleting_newest_restores_predecessor_for_every_record_delete_path": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deterministic_malformed_signature_diagnostics_are_definitive": "failed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_failed_verifier_process_is_retryable_without_restart": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_infrastructure_and_ambiguous_results_raise_and_leave_rows_unchecked": "passed",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_previous_owner_key_signature_is_cached_invalid_without_reverification": "error",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_truncated_signature_is_cached_invalid_without_reverification": "error",
+       "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_unsafe_verifier_leaves_genuine_rows_unchecked_until_repaired": "passed"
+      },
+      "returncode": 1,
+      "seconds": 2.4212438330287114,
+      "suite": "codex",
+      "summary": "failures=1, errors=8",
+      "tests": 12,
+      "timed_out": false,
+      "unit": "tests.test_p9b_attestation_followups"
+     }
+    ]
+   }
+  },
+  "scope": [
+   "HIGH-1 / P9b-1",
+   "LOW-1 / P9b-2"
+  ]
+ },
  "runs": {
   "compat": {
    "budget_failures": [
