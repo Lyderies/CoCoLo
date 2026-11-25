@@ -1,0 +1,526 @@
+{
+  "note": "Named-module runner evidence copied into the worktree; temporary log paths are not required to resume. Failed test outcomes are retained, including environmental failures. No full suite was run.",
+  "environment": {
+    "platform": "macOS, sandboxed workspace-write",
+    "sandbox_probe": {
+      "command": "/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true",
+      "exit_code": 71,
+      "stderr": "sandbox-exec: sandbox_apply: Operation not permitted"
+    },
+    "socket_evidence": "CollectorServer.serve listener.bind raised PermissionError [Errno 1] Operation not permitted in test_collector_read_scope."
+  },
+  "runs": [
+    {
+      "name": "p9-red",
+      "run_id": "5afff4db790c45afbf56ed552256d80a",
+      "modules": [
+        "codex:tests.test_signature_inputs"
+      ],
+      "elapsed_seconds": 4.525245083961636,
+      "job_seconds": 4.520113207981922,
+      "metadata_errors": [],
+      "p9_requirements": {
+        "P9-1": "failed",
+        "P9-2": "failed",
+        "P9-3": "failed",
+        "P9-4": "failed"
+      },
+      "workers": [
+        {
+          "unit": "tests.test_signature_inputs",
+          "tests": 37,
+          "seconds": 4.520113207981922,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "error"
+          },
+          "p9_outcomes": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "error",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims": "passed"
+          }
+        }
+      ]
+    },
+    {
+      "name": "p9-mutation-red",
+      "run_id": "dd6a021b3660443b855b13b15deb7e32",
+      "modules": [
+        "codex:tests.test_signature_inputs"
+      ],
+      "elapsed_seconds": 25.317946708062664,
+      "job_seconds": 25.30822270794306,
+      "metadata_errors": [],
+      "p9_requirements": {
+        "P9-1": "failed",
+        "P9-2": "failed",
+        "P9-3": "failed",
+        "P9-4": "failed"
+      },
+      "workers": [
+        {
+          "unit": "tests.test_signature_inputs",
+          "tests": 38,
+          "seconds": 25.30822270794306,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "failed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart": "error"
+          },
+          "p9_outcomes": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "failed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart": "error"
+          }
+        }
+      ]
+    },
+    {
+      "name": "p9-retry-red",
+      "run_id": "607839cad5d54ae8b8595d8a8d6089a6",
+      "modules": [
+        "codex:tests.test_signature_inputs"
+      ],
+      "elapsed_seconds": 27.858493124949746,
+      "job_seconds": 27.85381374997087,
+      "metadata_errors": [],
+      "p9_requirements": {
+        "P9-1": "failed",
+        "P9-2": "passed",
+        "P9-3": "failed",
+        "P9-4": "passed"
+      },
+      "workers": [
+        {
+          "unit": "tests.test_signature_inputs",
+          "tests": 40,
+          "seconds": 27.85381374997087,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes": "error"
+          },
+          "p9_outcomes": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "passed",
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes": "error",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart": "passed"
+          }
+        }
+      ]
+    },
+    {
+      "name": "p9-final",
+      "run_id": "3a08d1fad7e545bcbaabd08bd761ddc5",
+      "modules": [
+        "codex:tests.test_admission_inputs",
+        "codex:tests.test_event_retention",
+        "codex:tests.test_learning_retention",
+        "codex:tests.test_lifetime_cap_guard",
+        "codex:tests.test_runtime_release",
+        "codex:tests.test_signature_inputs",
+        "codex:tests.test_signature_job_intake"
+      ],
+      "elapsed_seconds": 29.789829499903135,
+      "job_seconds": 47.09745833312627,
+      "metadata_errors": [],
+      "p9_requirements": {
+        "P9-1": "failed",
+        "P9-2": "passed",
+        "P9-3": "passed",
+        "P9-4": "passed"
+      },
+      "workers": [
+        {
+          "unit": "tests.test_runtime_release",
+          "tests": 3,
+          "seconds": 0.3962981660151854,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version": "failed"
+          },
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_learning_retention",
+          "tests": 15,
+          "seconds": 1.4777970840223134,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_lifetime_cap_guard",
+          "tests": 4,
+          "seconds": 1.6452045829501003,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end": "failed"
+          },
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_signature_job_intake",
+          "tests": 19,
+          "seconds": 3.6934424160281196,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_admission_inputs",
+          "tests": 26,
+          "seconds": 4.928305542096496,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_event_retention",
+          "tests": 22,
+          "seconds": 5.179173292010091,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_event_retention.CollectorSweepTests.test_the_collector_applies_retention_by_itself": "error"
+          },
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_signature_inputs",
+          "tests": 40,
+          "seconds": 29.777237250003964,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed"
+          },
+          "p9_outcomes": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "passed",
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart": "passed"
+          }
+        }
+      ]
+    },
+    {
+      "name": "p9-persistence",
+      "run_id": "b06f23c929ce4acb9da8135290500f7b",
+      "modules": [
+        "codex:tests.test_account_observation_backup",
+        "codex:tests.test_backup_installed_project",
+        "codex:tests.test_collector_read_scope",
+        "codex:tests.test_learning_migration",
+        "codex:tests.test_learning_source_image",
+        "codex:tests.test_learning_source_image_legacy",
+        "codex:tests.test_learning_source_transfer",
+        "codex:tests.test_owner_backup_streamed",
+        "codex:tests.test_refusal_steps",
+        "codex:tests.test_reply_shape_compatibility",
+        "codex:tests.test_state_location"
+      ],
+      "elapsed_seconds": 45.14013499999419,
+      "job_seconds": 122.44732829113491,
+      "metadata_errors": [],
+      "p9_requirements": {
+        "P9-1": "not_run",
+        "P9-2": "not_run",
+        "P9-3": "not_run",
+        "P9-4": "not_run"
+      },
+      "workers": [
+        {
+          "unit": "tests.test_reply_shape_compatibility",
+          "tests": 3,
+          "seconds": 0.3654115410754457,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_refusal_steps",
+          "tests": 14,
+          "seconds": 0.9203795000212267,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_account_observation_backup",
+          "tests": 2,
+          "seconds": 1.1551132500171661,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_backup_installed_project",
+          "tests": 2,
+          "seconds": 1.6811138750053942,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_learning_source_image",
+          "tests": 33,
+          "seconds": 4.074543750029989,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_learning_source_image_legacy",
+          "tests": 7,
+          "seconds": 4.13633804093115,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_state_location",
+          "tests": 22,
+          "seconds": 6.4286868328927085,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_state_location.LegacyStateMoveTests.test_old_records_of_an_earlier_version_move_only_once_the_upgrade_is_approved_too": "failed",
+            "codex:tests.test_state_location.LegacyStateMoveTests.test_only_the_new_folder_is_normal": "failed",
+            "codex:tests.test_state_location.LegacyStateMoveTests.test_registration_stops_the_collector_copies_and_sets_the_old_folder_aside": "error"
+          },
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_learning_migration#0",
+          "tests": 6,
+          "seconds": 6.657497583073564,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_learning_migration.MigrationCliTests.test_first_start_of_the_project_service_moves_the_history_by_itself": "failed"
+          },
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_learning_source_transfer",
+          "tests": 13,
+          "seconds": 6.808180459076539,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_owner_backup_streamed#0",
+          "tests": 20,
+          "seconds": 12.370095708989538,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_learning_migration#1",
+          "tests": 11,
+          "seconds": 14.296512750093825,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_learning_migration.MigrationCliTests.test_command_moves_reports_refuses_and_rolls_back": "failed"
+          },
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_owner_backup_streamed#1",
+          "tests": 20,
+          "seconds": 18.435617749928497,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_collector_read_scope",
+          "tests": 17,
+          "seconds": 45.117837249999866,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_a_defect_or_broken_connection_still_stops_the_collector_and_is_recorded": "failed",
+            "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_a_passing_refusal_during_a_bind_is_answered_and_the_collector_keeps_serving": "error",
+            "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_an_unusable_connection_stops_the_collector": "error",
+            "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_every_ingest_outcome_uses_up_its_binding_token": "error",
+            "codex:tests.test_collector_read_scope.HostOpenPublishLockTests.test_the_publish_check_holds_the_lock_so_a_concurrent_statement_waits_and_succeeds": "failed",
+            "codex:tests.test_collector_read_scope.HostOpenPublishLockTests.test_the_publish_check_waits_for_the_lock_no_longer_than_its_budget": "failed"
+          },
+          "p9_outcomes": {}
+        }
+      ]
+    },
+    {
+      "name": "p9-compatibility-final",
+      "run_id": "371746379afa4f3a86513c10e43dd601",
+      "modules": [
+        "codex:tests.test_account_cleanup_schema",
+        "codex:tests.test_account_observation_schema",
+        "codex:tests.test_account_open_schema",
+        "codex:tests.test_backup_reply_private",
+        "codex:tests.test_large_project_backups",
+        "codex:tests.test_legacy_capacity_upgrade",
+        "codex:tests.test_lifetime_cap_guard",
+        "codex:tests.test_project_holds_schema"
+      ],
+      "elapsed_seconds": 29.28490349999629,
+      "job_seconds": 59.33339091704693,
+      "metadata_errors": [],
+      "p9_requirements": {
+        "P9-1": "not_run",
+        "P9-2": "not_run",
+        "P9-3": "not_run",
+        "P9-4": "not_run"
+      },
+      "workers": [
+        {
+          "unit": "tests.test_account_cleanup_schema",
+          "tests": 3,
+          "seconds": 0.8297379169380292,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_account_open_schema",
+          "tests": 10,
+          "seconds": 1.1574995840201154,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_lifetime_cap_guard",
+          "tests": 4,
+          "seconds": 1.4339806659845635,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_project_holds_schema",
+          "tests": 40,
+          "seconds": 2.2838746670167893,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_legacy_capacity_upgrade",
+          "tests": 12,
+          "seconds": 2.7724732500500977,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_account_observation_schema",
+          "tests": 7,
+          "seconds": 3.5207457919605076,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_backup_reply_private",
+          "tests": 11,
+          "seconds": 6.782743333023973,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_large_project_backups#1",
+          "tests": 4,
+          "seconds": 11.283961583045311,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_large_project_backups#0",
+          "tests": 4,
+          "seconds": 29.26837412500754,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        }
+      ]
+    },
+    {
+      "name": "p9-scheduled-final",
+      "run_id": "9bc250c4f67a4c258587203bf378d3d9",
+      "modules": [
+        "codex:tests.test_signature_inputs"
+      ],
+      "elapsed_seconds": 29.001024959026836,
+      "job_seconds": 28.986778000020422,
+      "metadata_errors": [],
+      "p9_requirements": {
+        "P9-1": "failed",
+        "P9-2": "passed",
+        "P9-3": "passed",
+        "P9-4": "passed"
+      },
+      "workers": [
+        {
+          "unit": "tests.test_signature_inputs",
+          "tests": 40,
+          "seconds": 28.986778000020422,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed"
+          },
+          "p9_outcomes": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "passed",
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart": "passed"
+          }
+        }
+      ]
+    }
+  ],
+  "initial_red": "The first public scenario failed at the post-collector limit-two capture with SignatureCaptureError: signature_capture_limit (37 tests, 4.525 seconds; metadata_errors []). Runtime files were unchanged before this run.",
+  "retry_red": "test_P9_failed_verification_is_retried_on_later_bounded_passes failed with empty capture rows (IndexError) before retrying cached negative results was implemented.",
+  "interrupted_run": "The earlier named test_account_claim_jobs + test_admission_history_growth batch was interrupted with Ctrl-C after repeated worker/cleanup timeouts under the restricted sandbox. It has no completed run record and is not acceptance evidence; no full run remains in flight."
+}

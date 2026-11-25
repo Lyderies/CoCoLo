@@ -1561,6 +1561,37 @@
   "source": "docs/requirements/rsd-s3/requirements.md#P4-REPORT",
   "statement": "**P4-REPORT \u2014 Measure the pre-handoff window.**\nA script under scripts/ measures packet return to the directory fsync under load\nand prints p99. It is a report with no numeric acceptance gate."
  },
+ "P9-1": {
+  "checks": [
+   "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history",
+   "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates"
+  ],
+  "source": "tests/requirements/p9.json#P9-1",
+  "statement": "### P9-1 \u2014 Claims use current verified applicable evidence\n\nAfter collector maintenance, a public deferred claim succeeds with an attestation capture limit of two despite three valid attestations for the same account/provider whose superseded rows remain cited. The latest verified applicable attestation wins, with source sequence breaking observation-time ties. Another account and another provider cannot replace it, and an invalid newer stored signature cannot supersede it. Admission and standalone signature capture use the same attestation candidates. The deferred job's aggregate admission budget remains separate from its two-attestation regression boundary."
+ },
+ "P9-2": {
+  "checks": [
+   "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history"
+  ],
+  "source": "tests/requirements/p9.json#P9-2",
+  "statement": "### P9-2 \u2014 Collector maintenance preserves references and makes bounded progress\n\nThe collector's own sweep cycle removes eligible uncited superseded attestations in bounded batches, retains cited records and signatures, and eventually finishes across repeated cycles. References remain readable through the repository. A signature row alone never proves supersession; only a verified later attestation for the same project, account and provider permits deletion."
+ },
+ "P9-3": {
+  "checks": [
+   "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history",
+   "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes",
+   "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart"
+  ],
+  "source": "tests/requirements/p9.json#P9-3",
+  "statement": "### P9-3 \u2014 Projection is derived and fails closed on changes\n\nSupersession results are connection-local derived data, never durable signature authority. Results bind exact stored content, digest, source, sequence, observation time, signature and owner generation. A changed input or owner generation invalidates its cached result; uncached inputs remain candidates until checked. Capture performs no cryptography or writes, and the worker still verifies captured signatures and exact recapture before admission. Restart requires collector maintenance to rebuild the projection. Failed verifications are retried on later bounded passes so transient verifier failure cannot permanently hide valid evidence. No persistent schema or record shape changes."
+ },
+ "P9-4": {
+  "checks": [
+   "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history"
+  ],
+  "source": "tests/requirements/p9.json#P9-4",
+  "statement": "### P9-4 \u2014 Remaining capture candidates retain hard quotas\n\nAfter maintenance, exact checked foreign-provider rows are excluded from signature capture. Unknown or changed rows are conservatively charged before provider filtering. Row and byte quotas still refuse overflow before copying bodies, and malformed metadata still refuses safely. Cited superseded history is retained independently of these capture quotas."
+ },
  "RS-B-5": {
   "checks": [
    "codex:tests.test_hold_lifecycle.HoldLifecycleTests.test_B0_1_a_run_refused_before_launch_frees_its_account_binding_by_itself",

@@ -237,6 +237,11 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "attestation_capture.py::sweep": {
+   "checks": 3,
+   "ends": "P9: per-pass scan, deletion and stale-cache cleanup batches, not a lifetime quota. The cursor advances past cited rows; exact verified later rows permit uncited deletion. TEMP results vanish on connection close and are rebuilt; cited history is omitted from capture without deletion.",
+   "test": "test_public_claim_with_two_attestation_limit_keeps_cited_tied_history"
+  },
   "billing_probe_contracts.py::checked_billing_probe_reply": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
@@ -1085,11 +1090,6 @@
    "checks": 1,
    "ends": "O0c P8: the legacy ledger cycle reads outcomes of the retention window and the cases and candidates of it plus the kept ones; the collector sweep (learning_store.sweep_learning_retention, bounded batches, only projects whose learning has not moved to the project store) removes unpromoted, unreferenced cases and candidates past it; outcomes still go by the owner's learning-expire",
    "test": "test_P8_the_collector_sweep_removes_unpromoted_cases_and_candidates_past_the_retention"
-  },
-  "learning_store.py::sweep_superseded_attestations": {
-   "checks": 1,
-   "ends": "O0c P9: a batch per sweep; attestations a later signed one supersedes are deleted, the latest per provider and account stays",
-   "test": "test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims"
   },
   "legacy_slots.py::deadline_sql": {
    "checks": 1,

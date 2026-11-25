@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
+from test_framework import requirements
 from tests.learning_support import attest_provider, generate_test_owner_key
 from tests.test_owner_key_contracts import public_value
 
@@ -225,6 +226,71 @@ class SignatureInputOwnerTests(unittest.TestCase):
             self.assertIn(cited["record_id"], kept)
         self.assertNotIn(older[4]["record_id"], kept)
         self.assertIn(latest["record_id"], kept)
+
+    @requirements('P9-3', why_not_scenario=
+                  'Exact stored-input and owner-generation mutations around the derived projection.')
+    def test_P9_projection_invalidates_mutations_and_rebuilds_after_restart(self):
+        latest = attest_provider(self.ledger, self.projects[0], self.key, 'codex', 'a' * 64, issued_at=2)
+        project, connection = self.projects[0], self.ledger._connection
+        with self.ledger._held(), connection:
+            connection.execute('INSERT INTO record_links VALUES(?,?,?,?)',
+                               (project, latest['record_id'], self.record['record_id'], 'cites'))
+        self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=2))
+        limits = SignatureCaptureLimits(1, 65_536)
+        before = connection.total_changes
+        with mock.patch.object(OwnerGrantAuthority, 'verify_owner_record', side_effect=AssertionError('capture crypto')):
+            self.assertEqual(latest['record_id'], self.capture(limits=limits).rows[0][0])
+        self.assertEqual(before, connection.total_changes)
+        mutations = (
+            ('records', 'content', b'changed', latest['record_id']),
+            ('records', 'content_digest', '0' * 64, latest['record_id']),
+            ('records', 'source', 'other', latest['record_id']),
+            ('records', 'source_sequence', 999, latest['record_id']),
+            ('records', 'observed_at_ms', 999, latest['record_id']),
+            ('owner_attestations', 'signature', b'changed', latest['record_id']),
+            ('owner_attestations', 'signature', b'changed', self.record['record_id']),
+        )
+        for table, field, value, identifier in mutations:
+            with self.subTest(table=table, field=field, record=identifier):
+                column = 'subject_record_id' if table == 'owner_attestations' else 'record_id'
+                sql = f'UPDATE {table} SET {field}=? WHERE project_id=? AND {column}=?'
+                old = connection.execute(f'SELECT {field} FROM {table} WHERE project_id=? AND {column}=?',
+                                         (project, identifier)).fetchone()[0]
+                try:
+                    connection.execute(sql, (value, project, identifier))
+                    self.assert_capture_error('signature_capture_limit', lambda: self.capture(limits=limits))
+                finally:
+                    connection.execute(sql, (old, project, identifier))
+        # A record which is no longer an attestation cannot supersede one.
+        connection.execute("UPDATE records SET record_type='event' WHERE project_id=? AND record_id=?",
+                           (project, latest['record_id']))
+        self.assertEqual(self.record['record_id'], self.capture(limits=limits).rows[0][0])
+        connection.execute("UPDATE records SET record_type='billing_attestation' WHERE project_id=? AND record_id=?",
+                           (project, latest['record_id']))
+        connection.execute('INSERT INTO owner_key_history(signer_line,reason,recorded_at_ms) '
+                           'SELECT signer_line,reason,recorded_at_ms+1 FROM owner_key_history '
+                           'ORDER BY sequence DESC LIMIT 1')
+        self.assert_capture_error('signature_capture_limit', lambda: self.capture(limits=limits))
+        for _ in range(2):  # finish the cursor's previous pass, then refresh the two rows
+            self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=2))
+        self.assertEqual(latest['record_id'], self.capture(limits=limits).rows[0][0])
+        self.ledger.close()
+        self.ledger = LearningLedger(self.state)
+        self.addCleanup(self.ledger.close)
+        self.views = AccountOwnerViews(self.ledger)
+        self.assert_capture_error('signature_capture_limit', lambda: self.capture(limits=limits))
+        self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=2))
+        self.assertEqual(latest['record_id'], self.capture(limits=limits).rows[0][0])
+
+    @requirements('P9-3', why_not_scenario=
+                  'A transient signature-verifier failure must not become permanent negative projection state.')
+    def test_P9_failed_verification_is_retried_on_later_bounded_passes(self):
+        with mock.patch.object(OwnerGrantAuthority, 'verify_owner_record', return_value=False):
+            self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=1))
+        self.assertEqual((), self.capture().rows)
+        for _ in range(2):
+            self.assertEqual(0, self.ledger.sweep_superseded_attestations(batch=1))
+        self.assertEqual(self.record['record_id'], self.capture().rows[0][0])
 
     def test_other_provider_history_is_charged_before_filtering(self):
         attest_provider(self.ledger, self.projects[0], self.key, "claude", "b" * 64, issued_at=2)
@@ -633,3 +699,162 @@ class SignatureInputOwnerTests(unittest.TestCase):
         self.assertEqual(1, len(errors))
         self.assertIs(type(errors[0]), AccountError)
         self.assertEqual("account_wrong_owner", errors[0].reason_code)
+
+
+class RetainedAttestationClaimTests(unittest.TestCase):
+    """Public deferred claim, actual signature workers, and collector maintenance."""
+
+    def setUp(self):
+        from tests import test_account_claim_jobs as claim_fixture
+        self.fixture = claim_fixture.AccountClaimJobTests(
+            'test_actual_deferred_claim_verifies_off_owner_and_uses_original_atomic_receipt')
+        self.fixture.setUp()
+        self.addCleanup(lambda: self.assertTrue(self.fixture.doCleanups()))
+        self.addCleanup(self.fixture.tearDown)
+        self.ledger, self.project = self.fixture.ledger, self.fixture.project
+
+    @requirements('P9-1', 'P9-2', 'P9-3', 'P9-4', why_not_scenario=
+                  'Canonical P9 public claim scenario with real signature workers and collector sweep cycles.')
+    def test_public_claim_with_two_attestation_limit_keeps_cited_tied_history(self):
+        self._exercise_retained_history(deferred=False)
+
+    @requirements('P9-1', why_not_scenario=
+                  'The same P9 public scenario through real deferred signature helpers; requires OS sandbox support.')
+    def test_public_deferred_claim_uses_the_same_two_attestation_candidates(self):
+        self._exercise_retained_history(deferred=True)
+
+    def _exercise_retained_history(self, *, deferred):
+        from codex_agents import learning_store
+        from codex_agents.account_api import decode_account_response
+        from codex_agents.learning_contracts import content_digest
+        from codex_agents.claim_admission import admission_signature_rows
+
+        fixture, ledger, project = self.fixture, self.ledger, self.project
+        bridge = fixture.fixture.fixture.fixture
+        key = bridge.owner_key
+        fingerprint = fixture.fixture.identity['account_fingerprint']
+        with ledger.repository(project) as repository:
+            first = repository.records('billing_attestation')[0]
+        second = attest_provider(ledger, project, key, 'codex', fingerprint, issued_at=2)
+        latest = attest_provider(ledger, project, key, 'codex', fingerprint, issued_at=2,
+                                 credits_spending_disabled=True)
+        invalid = attest_provider(ledger, project, key, 'codex', fingerprint, issued_at=3)
+        import json
+        rate_limits_path = bridge.tools / 'codex-result.json'
+        rate_limits = json.loads(rate_limits_path.read_text())
+        rate_limits['rateLimits']['credits']['hasCredits'] = True
+        rate_limits_path.write_text(json.dumps(rate_limits))
+        identity = fixture.fixture.observe()[0]
+        self.assertEqual(fixture.fixture.launch.identity_digest, content_digest(identity))
+        witness = attest_provider(ledger, project, key, 'claude', 'b' * 64, issued_at=5)
+        other = [attest_provider(ledger, project, key, 'codex', 'd' * 64, issued_at=i)
+                 for i in range(1, 5)]
+        connection = ledger._connection
+        with ledger._held(), connection:
+            connection.execute('UPDATE owner_attestations SET signature=? WHERE project_id=? AND subject_record_id=?',
+                               (b'invalid-newer-signature', project, invalid['record_id']))
+            for record in (first, second):
+                connection.execute('INSERT INTO record_links VALUES(?,?,?,?)',
+                                   (project, witness['record_id'], record['record_id'], 'cites'))
+        views = fixture.views
+        limits = SignatureCaptureLimits(2, 65_536)
+        work = SQLReadLimits(100_000, 1000, MAX_SIGNATURE_CAPTURE_BYTES)
+        # This is the attestation boundary, independent of the deferred job's
+        # larger aggregate budget for identities, decisions and billing rows.
+        with self.assertRaises(SignatureCaptureError):
+            views.capture_signature_inputs(project, 'codex', limits, work)
+        removed = []
+        sweep = ledger.sweep_superseded_attestations
+
+        def bounded_sweep():
+            count = sweep(batch=2)
+            removed.append(count)
+            return count
+
+        collector = learning_store.CollectorServer(ledger)
+
+        class SweepClock:
+            now = 0.0
+
+            def wait(self, delay):
+                self.now += delay
+                return self.is_set()
+
+            def is_set(self):
+                return len(removed) >= 12
+
+        clock = SweepClock()
+        # Run the collector's actual scheduled loop. Only its clock/wait and
+        # unrelated health reporting are substituted; no sockets are needed.
+        with mock.patch.object(ledger, 'sweep_superseded_attestations', side_effect=bounded_sweep), \
+                mock.patch.object(collector, '_sweeps_stop', clock), \
+                mock.patch.object(learning_store.time, 'monotonic', side_effect=lambda: clock.now), \
+                mock.patch.object(collector, '_run_health_pass'):
+            collector._sweep_loop()
+        self.assertGreaterEqual(clock.now, 12 * learning_store.WORKER_RESULT_SWEEP_SECONDS)
+        captured = views.capture_signature_inputs(project, 'codex', limits, work)
+        self.assertEqual({latest['record_id'], other[-1]['record_id']}, {row[0] for row in captured.rows})
+        self.assertEqual(captured.rows, views.capture_signature_inputs(
+            project, 'codex', SignatureCaptureLimits(2, captured.retained_bytes), work).rows)
+        for quota in (SignatureCaptureLimits(1, 65_536), SignatureCaptureLimits(2, captured.retained_bytes - 1)):
+            with self.subTest(quota=quota), mock.patch.object(
+                    ledger, '_attestation_rows_locked', side_effect=AssertionError('body copy')):
+                with self.assertRaises(SignatureCaptureError) as caught:
+                    views.capture_signature_inputs(project, 'codex', quota, work)
+                self.assertEqual('signature_capture_limit', caught.exception.reason_code)
+        self.assertEqual(3, sum(removed))
+        self.assertTrue(all(0 <= count <= 2 for count in removed))
+        self.assertEqual(0, removed[-1])
+        with ledger.repository(project) as repository:
+            kept = {record['record_id']: record for record in repository.records('billing_attestation')}
+            for record in (first, second, latest, invalid, witness, other[-1]):
+                self.assertEqual({k: v for k, v in record.items() if not k.startswith('_')},
+                                 {k: v for k, v in kept[record['record_id']].items() if not k.startswith('_')})
+        for record in (first, second):
+            self.assertIsNotNone(connection.execute(
+                'SELECT signature FROM owner_attestations WHERE project_id=? AND subject_record_id=?',
+                (project, record['record_id'])).fetchone())
+        self.assertEqual(2, connection.execute('SELECT COUNT(*) FROM record_links WHERE project_id=?',
+                                               (project,)).fetchone()[0])
+        captured_admission = []
+        original = views.capture_admission_inputs
+
+        def capture_admission(*args, **kwargs):
+            snapshot = original(*args, **kwargs)
+            self.assertEqual(captured.rows, admission_signature_rows(snapshot))
+            self.assertLessEqual(len(admission_signature_rows(snapshot)), limits.max_rows)
+            captured_admission.append(snapshot)
+            return snapshot
+
+        from codex_agents import providers
+        evaluator = mock.patch.object(providers, 'evaluate_launch', wraps=providers.evaluate_launch)
+        launch_check = self.enterContext(evaluator)
+        if deferred:
+            with mock.patch.object(views, 'capture_admission_inputs', side_effect=capture_admission):
+                ticket = fixture.begin()
+                result = decode_account_response(fixture.pump(ticket), fixture.request())
+        else:
+            from codex_agents.admission_inputs import AdmissionCaptureLimits
+            capture_admission(project, 'codex', views._claim_policy('codex'),
+                              AdmissionCaptureLimits(128, 262_144), work)
+            # The synchronous public reference service still performs real owner
+            # signature verification. Enforce the two-attestation capture at its
+            # preparation boundary as well as checking admission capture above.
+            prepare = ledger._prepare_attestations
+
+            def bounded_prepare(project_id, provider):
+                inputs = views.capture_signature_inputs(project_id, provider, limits, work)
+                self.assertEqual(captured.rows, inputs.rows)
+                return prepare(project_id, provider)
+
+            with mock.patch.object(ledger, '_prepare_attestations', side_effect=bounded_prepare):
+                result = fixture.fixture.call()
+        self.assertEqual('claimed', result['state'])
+        self.assertTrue(captured_admission)
+        self.assertEqual(1, launch_check.call_count)
+        selected = launch_check.call_args.kwargs['attestations']
+        applicable = [(record, digest) for record, digest in selected
+                      if record['provider'] == 'codex' and record['account_fingerprint'] == fingerprint]
+        self.assertEqual([(latest, content_digest(latest))], applicable)
+        self.assertTrue(any(record['has_credits'] is True and record['paid_usage_usable'] is True
+                            for record, _ in launch_check.call_args.kwargs['billing']))

@@ -34,6 +34,7 @@ from .learning_store import (
 )
 from .owner_key_contracts import owner_public_key_from_line
 from . import ledger_waits, lane_health
+from .attestation_capture import candidate_sql, provider_sql
 from .sql_read_budget import SQLReadError, SQLReadLimits
 from .signature_inputs import (
     SignatureCaptureError, SignatureCaptureLimits, SignatureInputSnapshot, signature_input_size,
@@ -66,7 +67,7 @@ WITHDRAW_LEDGER_REASONS = {
 # keeps every row a consumer could read at any such `now` (admission_metadata
 # and its account, claim and probe callers):
 #   identities: observed in the last 30 minutes (or later);
-#   attestations: all, the latest verified one wins at any age;
+#   attestations: applicable candidates not yet proven invalid or superseded;
 #   decisions and probes: the last 5 hours (run cap, probe cooldown, a run's own
 #     decision); and the first passing Claude decision per account, any age (the
 #     one bootstrap run per account);
@@ -75,13 +76,14 @@ WITHDRAW_LEDGER_REASONS = {
 #     age; and for Claude, the latest older billing and headroom per account,
 #     keeping ties (a probe may reuse old evidence; a bootstrap needs none).
 # Rows from the future are kept by every time rule. Foreign-account/provider
-# candidates are still charged. Content is never parsed here: the account, a
+# candidates are still charged until checked. Content is never parsed here: the account, a
 # headroom record's latest reset and a passing Claude decision come from the
 # admission_evidence index, which a trigger fills as each record is written.
 _ADMISSION_EVIDENCE = "SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id"
 _ADMISSION_INPUT_SCOPE = (
     "((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000)"
-    " OR (r.project_id=:p AND r.record_type='billing_attestation')"
+    " OR (r.project_id=:p AND r.record_type='billing_attestation' AND "
+    + provider_sql() + " AND " + candidate_sql() + ")"
     " OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle')"
     " OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission')"
     " AND (r.observed_at_ms>=:a-18000000 OR EXISTS(" + _ADMISSION_EVIDENCE + " AND e.claude_pass=1"
@@ -461,7 +463,7 @@ class AccountOwnerViews:
         elif type(anchor_ms) is not int or not 0 <= anchor_ms <= timestamp:
             # A clock earlier than the anchor could need history the scope left out.
             raise AdmissionCaptureError("admission_capture_unavailable")
-        scope = {"p": project_id, "a": anchor_ms, "limit": limits.max_rows + 1}
+        scope = {"p": project_id, "provider": provider, "a": anchor_ms, "limit": limits.max_rows + 1}
         owner_header = connection.execute(
             "SELECT CASE WHEN typeof(sequence)='integer' THEN sequence END,"
             "typeof(signer_line),length(signer_line),"
@@ -566,7 +568,8 @@ class AccountOwnerViews:
     ) -> SignatureInputSnapshot:
         """Capture unverified inputs within explicit field and SQL work limits.
 
-        All project billing rows are charged before the legacy provider filter.
+        Checked foreign-provider and superseded history is omitted. Unknown
+        and changed inputs remain candidates until collector verification.
         The cooperative callback budget does not bound OS I/O or global job
         capacity. No RPC, worker or installed defaults are activated here.
         """
@@ -650,9 +653,9 @@ class AccountOwnerViews:
             "typeof(a.signature),length(a.signature) "
             "FROM records r LEFT JOIN owner_attestations a "
             "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
-            "WHERE r.project_id=? AND r.record_type='billing_attestation' "
-            "ORDER BY r.source_sequence LIMIT ?",
-            (project_id, limits.max_rows + 1),
+            "WHERE r.project_id=? AND r.record_type='billing_attestation' AND "
+            + provider_sql(parameter="?") + " AND " + candidate_sql() + " ORDER BY r.source_sequence LIMIT ?",
+            (project_id, provider, limits.max_rows + 1),
         ).fetchall()
         if len(headers) > limits.max_rows:
             raise SignatureCaptureError("signature_capture_limit")
