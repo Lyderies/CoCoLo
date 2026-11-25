@@ -459,6 +459,8 @@
   "checks": [
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_discarded_world_is_still_owned_until_cleanup",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_failure_mid_flow_leaves_no_collector_or_world",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_guardian_wait_failure_preserves_original_error_and_forgets_world",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_last_world_restores_previous_signal_handlers",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_late_boot_without_ownership_helper_never_runs_product_code",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_lifecycle_parent_sigterm_stops_workers_and_their_worlds",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_pass_exit_and_timeout_leave_no_survivor",
@@ -469,8 +471,13 @@
  },
  "E2ELEAK-2": {
   "checks": [
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_boot_owned_popen_prunes_record_after_wait_and_poll",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_concurrent_world_spawns_and_boot_registration_do_not_serialize",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_late_boot_without_ownership_helper_never_runs_product_code",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_reaped_popen_and_dead_survivors_prune_records_but_detached_live_remains",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_reaper_and_world_close_refuse_directory_outside_expected_cache",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_reaper_uses_world_marker_and_start_time_across_sessions",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_spawn_racing_close_is_recorded_and_swept_or_refused",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_verified_exiting_child_is_not_gone_until_waitpid_releases_it"
   ],
   "source": "tests/requirements/e2eleak.json#E2ELEAK-2",
@@ -478,10 +485,13 @@
  },
  "E2ELEAK-3": {
   "checks": [
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_drained_client_discovery_is_cached_and_skipped_without_socket",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_drained_stop_precedes_term_and_kill_and_closed_world_refuses_spawn",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_drained_stop_uses_world_installed_client_without_starting_collector",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_failure_mid_flow_leaves_no_collector_or_world",
-   "root:test_e2e_process_cleanup.WorldCleanupTests.test_pass_exit_and_timeout_leave_no_survivor"
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_graceful_drain_can_spawn_a_child_and_leaves_no_survivor",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_pass_exit_and_timeout_leave_no_survivor",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_spawn_racing_close_is_recorded_and_swept_or_refused"
   ],
   "source": "tests/requirements/e2eleak.json#E2ELEAK-3",
   "statement": "**E2ELEAK-3 \u2014 Drained stop before escalation.** Teardown first requests the collector's own shutdown_if_drained operation using the World's installed runtime and socket, without starting a collector. Then signal matching recorded survivors with SIGTERM and finally SIGKILL, verifying exit before removing the World directory. Registration closes during teardown so a late child cannot escape."
@@ -489,13 +499,14 @@
  "E2ELEAK-4": {
   "checks": [
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_lifecycle_parent_sigterm_stops_workers_and_their_worlds",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_reaper_and_world_close_refuse_directory_outside_expected_cache",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_reaper_uses_world_marker_and_start_time_across_sessions",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_runner_reaps_detached_registered_hosts_on_all_exit_paths",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_sigterm_and_hard_owner_death_remove_detached_collector",
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_verified_exiting_child_is_not_gone_until_waitpid_releases_it"
   ],
   "source": "tests/requirements/e2eleak.json#E2ELEAK-4",
-  "statement": "**E2ELEAK-4 \u2014 Runner recovery crosses sessions and cache roots.** Each worker records its Worlds in its assigned runner folder. On completion, failure, timeout or runner SIGTERM/interruption, the runner reaps these recorded Worlds as well as its worker group, including detached processes outside TMPDIR. A World guardian also handles abrupt owner death. Discovery never scans other e2e directories or touches pre-existing leaked processes."
+  "statement": "**E2ELEAK-4 \u2014 Runner recovery owns recorded detached processes.** Each worker records its Worlds in its assigned runner folder. On completion, failure, timeout or runner SIGTERM/interruption, the runner reaps these recorded Worlds as well as its worker group, including detached processes outside TMPDIR. A World guardian also handles abrupt owner death. Discovery never scans other e2e directories or touches pre-existing leaked processes. If both runner and guardian are SIGKILLed, or the machine reboots, no next-run scan recovers them; surviving processes and directories require a manual sweep."
  },
  "E2a-1": {
   "checks": [

@@ -21,6 +21,7 @@ import time
 
 MANIFEST = '.e2e-owner.json'
 PROCESSES = '.e2e-processes'
+_CLIENT_PATHS = {}
 
 
 def identity(pid):
@@ -69,9 +70,9 @@ def write_json(path, value):
 
 
 @contextlib.contextmanager
-def locked(base, name='.e2e-register.lock'):
+def locked(base, name='.e2e-register.lock', *, shared=False):
     with (base / name).open('a') as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
+        fcntl.flock(stream, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
         yield
 
 
@@ -108,7 +109,7 @@ def _register(base, pid):
 
 def register(base, pid):
     base = Path(base).resolve()
-    with locked(base):
+    with locked(base, shared=True):
         return _register(base, pid)
 
 
@@ -120,17 +121,35 @@ def install_tracking(base):
     # A subclass preserves Popen's class interface used by some clients.
     class OwnedPopen(original):
         def __init__(self, *args, **kwargs):
-            with locked(base):
+            with locked(base, shared=True):
                 if (base / '.e2e-closing').exists():
                     raise RuntimeError('e2e World is closing')
                 super().__init__(*args, **kwargs)
                 try:
-                    _register(base, self.pid)
+                    self._e2e_record = _register(base, self.pid)
                 except BaseException:
                     self.kill()
                     self.wait()
                     raise
+        def wait(self, *args, **kwargs):
+            result = super().wait(*args, **kwargs)
+            forget(base, getattr(self, '_e2e_record', None))
+            return result
+
+        def poll(self):
+            result = super().poll()
+            if result is not None:
+                forget(base, getattr(self, '_e2e_record', None))
+            return result
     subprocess.Popen = OwnedPopen
+
+
+def forget(base, record):
+    """Only prune the record belonging to the child this Popen actually reaped."""
+    if record:
+        path = base / PROCESSES / f"{record['pid']}.json"
+        if read_json(path) == record:
+            path.unlink(missing_ok=True)
 
 
 def survivors(base, owner):
@@ -139,8 +158,11 @@ def survivors(base, owner):
         record = read_json(path)
         if (record and record.get('marker') == owner.get('marker') and record.get('base') == str(base)
                 and type(record.get('pid')) is int and record['pid'] not in (os.getpid(), owner.get('owner_pid'))
-                and isinstance(record.get('start'), str) and identity(record['pid']) == record['start']):
-            found.append(record)
+                and isinstance(record.get('start'), str)):
+            if identity(record['pid']) == record['start']:
+                found.append(record)
+            else:
+                forget(base, record)
     return found
 
 
@@ -149,20 +171,23 @@ def drained_stop(base):
     socket = base / 'h/.local/state/codex-agents/collector.sock'
     if not socket.exists():
         return
-    for client in base.rglob('collector_client.py'):
-        runtime = client.parent.parent
-        if client.parent.name != 'codex_agents':
-            continue
-        code = ('import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); '
-                'from codex_agents.collector_client import CollectorClient; '
-                'CollectorClient(Path(sys.argv[2]), timeout=.5).shutdown(only_if_drained=True)')
-        try:
-            subprocess.run([sys.executable, '-I', '-B', '-S', '-c', code, str(runtime), str(socket)],
-                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           env={'PATH': os.defpath}, timeout=2, check=False)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        return
+    client = _CLIENT_PATHS.get(base)
+    if client is None or not client.is_file():
+        client = next((path for path in base.rglob('collector_client.py')
+                       if path.parent.name == 'codex_agents'), None)
+        if client is None:
+            return
+        _CLIENT_PATHS[base] = client
+    runtime = client.parent.parent
+    code = ('import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); '
+            'from codex_agents.collector_client import CollectorClient; '
+            'CollectorClient(Path(sys.argv[2]), timeout=.5).shutdown(only_if_drained=True)')
+    try:
+        subprocess.run([sys.executable, '-I', '-B', '-S', '-c', code, str(runtime), str(socket)],
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       env={'PATH': os.defpath}, timeout=2, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def _signal(record, sig):
@@ -189,6 +214,7 @@ def _wait(base, owner, seconds, pending=()):
             except ChildProcessError:
                 continue  # A detached grandchild belongs to init; its kernel identity suffices.
             if reaped:
+                forget(base, record)
                 live.pop(pid, None)
             elif current is None:
                 live[pid] = record
@@ -206,23 +232,39 @@ def cleanup(base, *, remove=True, marker=None):
             owner = read_json(base / MANIFEST)
             if not owner or owner.get('base') != str(base.resolve()) or (marker and owner.get('marker') != marker):
                 return
-            with locked(base):
-                (base / '.e2e-closing').touch()
             drained_stop(base)
             live = _wait(base, owner, .3)
             for record in live:
                 _signal(record, signal.SIGTERM)
             live = _wait(base, owner, 1., live)
+            # Wait for in-flight spawners, then prevent any new registration. Draining
+            # and TERM handlers may still spawn until this final escalation boundary.
+            with locked(base):
+                (base / '.e2e-closing').touch()
+            live = _wait(base, owner, 0, live)
             for record in live:
                 _signal(record, signal.SIGKILL)
             if _wait(base, owner, 2., live):
                 raise RuntimeError('e2e World still has live recorded processes')
             reap_worlds(base / 'worlds')
             if remove:
-                shutil.rmtree(base)
+                remove_world(base)
     except FileNotFoundError:
         if base.exists():
             raise
+
+
+def safe_world_base(base):
+    base = Path(base).resolve()
+    cache = (Path.home() / '.cache').resolve()
+    return base.parent == cache and base.name.startswith('e2e-')
+
+
+def remove_world(base):
+    base = Path(base).resolve()
+    if safe_world_base(base):
+        shutil.rmtree(base)
+        _CLIENT_PATHS.pop(base, None)
 
 
 def reap_worlds(registry):
@@ -235,6 +277,8 @@ def reap_worlds(registry):
         if not owner or not isinstance(owner.get('base'), str) or not isinstance(owner.get('marker'), str):
             continue
         base = Path(owner['base'])
+        if not safe_world_base(base):
+            continue
         actual = read_json(base / MANIFEST)
         if actual == owner:
             cleanup(base, marker=owner['marker'])

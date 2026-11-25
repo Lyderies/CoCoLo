@@ -1,41 +1,60 @@
-# E2ELEAK status — 2026-11-25
+# E2ELEAK status — review round 1, 2026-11-25
 
-Worktree: `cocolo-e2eleak`; branch: `fix/e2e-collector-leak`. Changes remain uncommitted as requested for the sandbox. The eight pre-existing leaked processes were not inspected or signalled. No VERSION, product runtime source, runtime digest catalogue, product record schema or collector operation changed.
-
-The requested `docs/requirements/e2eleak.md` was absent at checkout. It now records E2ELEAK-1 through E2ELEAK-4 from the task's acceptance criteria; the matching source is `tests/requirements/e2eleak.json` and the test catalogue has reciprocal check links.
+Worktree `cocolo-e2eleak`, starting commit `4db46b5a`. Fixed scope: HIGH1, HIGH2,
+MED3, MED4, MED6, MED7, LOW8 and LOW9 from the READY-WITH-CORRECTIONS review.
+Changes are uncommitted as requested in this sandbox. No VERSION, runtime digest
+catalogue, product runtime, product schema, collector operation or process-name scan
+changed. Pre-existing leaked processes were not inspected or signalled.
 
 ## Requirement → test → evidence
 
-All names below are methods of `root:test_e2e_process_cleanup.WorldCleanupTests` (scenario layer, integration stage).
+All test names below are methods of
+`root:test_e2e_process_cleanup.WorldCleanupTests`. Requirements were recorded before
+adding the failing witnesses, and implementation followed the red named-module run.
+The complete per-test results and red diagnostics are retained in `evidence.json`
+under `review_round_1`, alongside the earlier round's evidence.
 
-| Requirement | Witnesses | Red / green evidence |
-| --- | --- | --- |
-| E2ELEAK-1 | `test_failure_mid_flow_leaves_no_collector_or_world`; `test_pass_exit_and_timeout_leave_no_survivor`; `test_sigterm_and_hard_owner_death_remove_detached_collector`; `test_discarded_world_is_still_owned_until_cleanup`; `test_lifecycle_parent_sigterm_stops_workers_and_their_worlds`; `test_late_boot_without_ownership_helper_never_runs_product_code` | Before implementation, assertion and exception subcases both failed with **World collector survived flow end** (16.813 s). Later witnesses cover partial construction, timeout, atexit, SIGTERM, SIGKILL, a discarded reference and a late bootstrap. Each World-like host also starts a detached native project-service child with no World path in its argv. Both children and the World directory must disappear. |
-| E2ELEAK-2 | `test_reaper_uses_world_marker_and_start_time_across_sessions`; `test_late_boot_without_ownership_helper_never_runs_product_code`; `test_verified_exiting_child_is_not_gone_until_waitpid_releases_it` | The ownership API was absent before implementation (`ModuleNotFoundError` red). Positive control stops only the matching pid/start/World marker. Stale start time, foreign marker, malformed JSON and an unrecorded lookalike remain untouched. A removed bootstrap helper cannot bypass registration. |
-| E2ELEAK-3 | `test_drained_stop_precedes_term_and_kill_and_closed_world_refuses_spawn`; `test_drained_stop_uses_world_installed_client_without_starting_collector`; failure/pass/timeout witnesses above | Missing API red before implementation. Green verifies drained-client call → TERM → KILL, idempotence and refusal of registration after closing. A disposable installed-client fixture verifies `shutdown(only_if_drained=True)` uses the World socket without starting a collector. |
-| E2ELEAK-4 | `test_runner_reaps_detached_registered_hosts_on_all_exit_paths`; `test_reaper_uses_world_marker_and_start_time_across_sessions`; `test_sigterm_and_hard_owner_death_remove_detached_collector`; `test_lifecycle_parent_sigterm_stops_workers_and_their_worlds` | Missing ownership API red; standalone lifecycle scheduler also had no worker ownership argument. Green uses the real runner for pass/failure/timeout/SIGTERM/interruption, deliberately without a World guardian so the reaper must stop the detached host. Lifecycle-parent SIGTERM covers worker → World → detached native service. |
+| Review item / requirement | Test | Red → green evidence | Changed files |
+| --- | --- | --- | --- |
+| HIGH1 / E2ELEAK-2, -3 | `test_concurrent_world_spawns_and_boot_registration_do_not_serialize`; `test_spawn_racing_close_is_recorded_and_swept_or_refused` | Eight spawns took 1.272 s against the 0.85 s bound; close could not reach its final pass while a spawner held the lock. Both now pass. Eight concurrent spawn and bootstrap registrations each meet the bound. The final closing boundary waits for an in-flight spawn, sweeps its child and refuses a subsequent spawn. | `scripts/e2e_processes.py`, `scripts/e2e_support.py`, cleanup tests |
+| HIGH2 / E2ELEAK-3 | `test_graceful_drain_can_spawn_a_child_and_leaves_no_survivor`; racing-close test above | Red: `RuntimeError: e2e World is closing` inside drained stop. Green: drain spawns a tracked child and cleanup reaps it. Closing is set only after drained stop and the TERM wait, under the exclusive registration lock, followed by a fresh survivors pass before KILL. | both harness files, cleanup tests |
+| MED3 / E2ELEAK-2 | `test_reaped_popen_and_dead_survivors_prune_records_but_detached_live_remains`; `test_boot_owned_popen_prunes_record_after_wait_and_poll` | Red: both wait/poll retained records; dead survivor record remained; boot-owned wait retained its record. Green: both Popen wrappers prune matching records on wait/poll, survivors prunes dead identities, and a live detached process retains its record. The existing verified-exiting-child waitpid witness also passes. | both harness files, cleanup tests |
+| MED4 / E2ELEAK-3 | `test_drained_client_discovery_is_cached_and_skipped_without_socket`; existing `test_drained_stop_uses_world_installed_client_without_starting_collector` | Red: two rglob calls for two drains. Green: one discovery, cached installed path reused, zero discovery without a socket; installed-client shutdown still passes. | `scripts/e2e_processes.py`, cleanup tests |
+| MED6 / E2ELEAK-2, -4 | `test_reaper_and_world_close_refuse_directory_outside_expected_cache`; existing matching reaper/runner/guardian scenarios | Red: reaper deleted the outside-cache sentinel and wrong-prefix directory. Green: registry reaping, direct cleanup removal and World exit preserve outside-cache, wrong-prefix and symlink-escape sentinels. Positive reaper/runner/guardian scenarios use a disposable HOME's `.cache/e2e-*` and still remove their Worlds. | both harness files, cleanup tests |
+| MED7 / E2ELEAK-4 | existing `test_reaper_uses_world_marker_and_start_time_across_sessions`; requirement-source/catalogue validation | Documentation correction only: replace the misleading “crosses sessions and cache roots” recovery claim with recorded detached ownership. If runner and guardian are both SIGKILLed, or the machine reboots, no next-run scan discovers the leftovers; surviving processes and directories require a manual sweep. No new behavioral red claimed. Existing no-lookalike-selection assertions stay green; source and catalogue wording agree. | requirement doc, source JSON, requirement catalogue, this STATUS |
+| LOW8 / E2ELEAK-1 | `test_last_world_restores_previous_signal_handlers` | Red: previous-handler map remained populated and harness handlers stayed installed. Green: first of two closes retains the handlers; last close restores both exact previous handlers and clears the map. | `scripts/e2e_support.py`, cleanup tests |
+| LOW9 / E2ELEAK-1 | `test_guardian_wait_failure_preserves_original_error_and_forgets_world` | Red: guardian TimeoutExpired replaced the original ValueError. Green: original flow/cleanup errors survive guardian wait failure and the World is always removed from `_LIVE_WORLDS`. Partial construction now passes its active exception into exit as well. | `scripts/e2e_support.py`, cleanup tests |
 
-Detailed run outcomes and durations are preserved in `evidence.json`. This is a selective verification, not a full suite or full lifecycle certification.
+Shared evidence/registration files: `tests/test_e2e_process_cleanup.py`,
+`scripts/test-requirements.json`, `docs/requirements/e2eleak/assertions.md`,
+`docs/requirements/e2eleak/evidence.json` and this STATUS. Requirement authority/source:
+`docs/requirements/e2eleak.md`, `tests/requirements/e2eleak.json`.
 
-## Implementation
+## Verification
 
-- `scripts/e2e_processes.py`: atomic World markers and pid/start records; microsecond kernel birth identity on macOS, boot ticks on Linux; serialized spawn registration/closing; own installed collector client's drained shutdown; verified TERM/KILL and bounded waits; marker-checked runner registry traversal. No command-name/process-table scan. Direct children remain pending through the kernel's exit/reap transition.
-- `scripts/e2e_support.py`: strong ownership of every entered World, including discarded scene-build locals; context/finally/atexit and signal unwinding; an EOF-pipe guardian for abrupt owner death; bootstrap self-registration before product code and tracking of Popen children; direct terminal pid recording. World paths are normalized before identity comparison. Registry metadata is stripped from product environments.
-- `scripts/e2e_lifecycle.py`: always closes entered Worlds even if scene registration failed; parallel worker groups have their own ownership journal/guardian, with nested World registries. Parent SIGTERM closes the guardian pipe before the thread pool waits for workers.
-- `scripts/parallel_tests.py`: assigns a per-worker World registry and reaps it on normal exit, worker timeout and runner interruption/SIGTERM, even when the worker process group has already disappeared.
+- Red: named `root:test_e2e_process_cleanup`, 20 tests, 22.814 s measured execution,
+  both worker units failed as expected; `metadata_errors: []`.
+- Green: same named module, 20 tests, 18.780 s measured execution, all passed;
+  `metadata_errors: []`, no budget failures. All E2ELEAK-1 through -4 passed.
+- Harness regression: six named modules (`test_e2e_strictness`, `test_e2e_run_control`,
+  `test_e2e_recovery`, `test_e2e_learning_guard`, `test_e2e_requirements`,
+  `test_test_framework_guards`), 253 tests, 21.293 s measured execution, all passed;
+  `metadata_errors: []`, no budget failures. Total: 273 passing tests across seven
+  named modules. No tests remain running at handoff.
+- No new test modules or requirement IDs were introduced. The existing cleanup module
+  remains registered as scenario/integration; all added test links are reciprocal.
+- No full suite, `--affected`, copier/backup/move modules or runtime-release check:
+  no product schema, record shape or runtime source changed.
+- Installed collector/socket/PTY lifecycle and L1 timing were not run in this sandbox.
+  The primary will remeasure L1 unsandboxed. Real disposable subprocesses, detached
+  hosts, kernel birth identities, signals and runner interruption/timeout were tested;
+  collector-client protocol coverage uses the disposable installed-client stand-in.
+  Linux identity was not exercised on this macOS host.
+- Assertion accounting: fixture directory assertions move from `<scratch>/e2e-fixture`
+  to `<scratch>/.cache/e2e-fixture`, with the same required absence; positive reaper
+  fixtures likewise use a disposable cache root. No assertion is removed or weakened.
 
-Signals unwind before ordinary World cleanup takes locks. This avoids re-entering a registration lock from a signal handler. Registration is closed before shutdown begins, so new bootstrap/product work fails closed.
-
-## Verification and limitations
-
-- Initial test attempt hit sandbox denial of `/bin/ps`; the test's liveness helper now uses only exact recorded pids with `os.kill(pid, 0)`. Kernel identity reads via libproc are permitted. The initial short-lived fixture processes expired after 90 s; no pre-existing processes were selected.
-- A 262-test named-module run passed in 31.136 s, `metadata_errors: []`, no budget failures. Modules: `test_e2e_process_cleanup`, `test_e2e_strictness`, `test_e2e_run_control`, `test_e2e_recovery`, `test_e2e_learning_guard`, `test_e2e_requirements`, `test_test_framework_guards`.
-- A later selective check caught one transient direct-child survivor assertion. The assertion was retained; cleanup was hardened to keep previously verified direct children pending until waitpid confirms exit, including when proc_pidinfo reports them gone first. Fifteen focused repetitions did not reproduce the original failure. `test_verified_exiting_child_is_not_gone_until_waitpid_releases_it` deterministically models the kernel transition and proves the wait. The final post-fix run passed 69 tests in 14.687 s, followed by all 11 new cleanup tests in 14.401 s; both report `metadata_errors: []` and all four E2ELEAK IDs passed.
-- Real installed collector/socket/PTY lifecycle flows were not run: this builder's writable roots exclude the account's `~/.cache`, and `/bin/ps` is explicitly denied. The new scenarios use disposable World-like hosts and a disposable installed-client stand-in, with real detached processes, signals, birth identity and runner timeout handling. A primary smoke run with an installed collector is still appropriate outside this sandbox. The actual collector protocol and runtime are unchanged.
-- Linux identity handling was not exercised on this macOS host. No full suite, `--affected`, product copier/backup modules or runtime-release module was run: there is no product schema/runtime change, and only named affected modules are authorized.
-- No assertion from an existing test file was removed or changed. `assertions.md` accounts for the new fixture helper adjustment and coverage additions. No tests remain running at handoff.
-
-Re-run the affected modules with the supplied test venv's Python (`PY`):
+Re-run only the named modules with the supplied test venv Python (`PY`):
 
 ```sh
 "$PY" -B scripts/parallel_tests.py --jobs 2 \
@@ -47,7 +66,3 @@ Re-run the affected modules with the supplied test venv's Python (`PY`):
   --module root:test_e2e_requirements \
   --module root:test_test_framework_guards
 ```
-
-## Files changed
-
-`scripts/e2e_processes.py`, `scripts/e2e_support.py`, `scripts/e2e_lifecycle.py`, `scripts/parallel_tests.py`, `tests/test_e2e_process_cleanup.py`, `scripts/test-layers.json`, `scripts/test-stages.json`, `scripts/test-timings.json`, `scripts/test-requirements.json`, `tests/requirements/e2eleak.json`, `docs/requirements/e2eleak.md`, and this directory's `STATUS.md`, `assertions.md`, `evidence.json`.

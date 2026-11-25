@@ -18,7 +18,7 @@
   },
   {
    "id": "E2ELEAK-4",
-   "statement": "**E2ELEAK-4 \u2014 Runner recovery crosses sessions and cache roots.** Each worker records its Worlds in its assigned runner folder. On completion, failure, timeout or runner SIGTERM/interruption, the runner reaps these recorded Worlds as well as its worker group, including detached processes outside TMPDIR. A World guardian also handles abrupt owner death. Discovery never scans other e2e directories or touches pre-existing leaked processes.",
+   "statement": "**E2ELEAK-4 \u2014 Runner recovery owns recorded detached processes.** Each worker records its Worlds in its assigned runner folder. On completion, failure, timeout or runner SIGTERM/interruption, the runner reaps these recorded Worlds as well as its worker group, including detached processes outside TMPDIR. A World guardian also handles abrupt owner death. Discovery never scans other e2e directories or touches pre-existing leaked processes. If both runner and guardian are SIGKILLed, or the machine reboots, no next-run scan recovers them; surviving processes and directories require a manual sweep.",
    "source": "tests/requirements/e2eleak.json#E2ELEAK-4"
   }
  ]

@@ -172,16 +172,27 @@ def _watch_world(world):
                 if owner is None:
                     super().__init__(*args, **kwargs)
                 else:
-                    with e2e_processes.locked(owner.base):
+                    with e2e_processes.locked(owner.base, shared=True):
                         if (owner.base / ".e2e-closing").exists():
                             raise RuntimeError("e2e World is closing")
                         super().__init__(*args, **kwargs)
                         try:
-                            e2e_processes._register(owner.base, self.pid)
+                            self._e2e_record = e2e_processes._register(owner.base, self.pid)
+                            self._e2e_base = owner.base
                         except BaseException:
                             self.kill()
                             self.wait()
                             raise
+            def wait(self, *args, **kwargs):
+                result = super().wait(*args, **kwargs)
+                e2e_processes.forget(getattr(self, '_e2e_base', None), getattr(self, '_e2e_record', None))
+                return result
+
+            def poll(self):
+                result = super().poll()
+                if result is not None:
+                    e2e_processes.forget(getattr(self, '_e2e_base', None), getattr(self, '_e2e_record', None))
+                return result
         _WORLD_POPEN = original
         subprocess.Popen = WorldPopen
     if threading.current_thread() is threading.main_thread() and not _PREVIOUS_SIGNALS:
@@ -295,7 +306,7 @@ class World:
         try:
             self._build()
         except BaseException:
-            self.__exit__(None, None, None)
+            self.__exit__(*sys.exc_info())
             raise
         return self
 
@@ -304,13 +315,23 @@ class World:
             self.stop_processes()
             if getattr(self, "base", None) is not None:
                 with contextlib.suppress(FileNotFoundError):
-                    shutil.rmtree(self.base)
+                    e2e_processes.remove_world(self.base)
         finally:
-            guardian = getattr(self, "_guardian", None)
-            if guardian is not None:
-                guardian.stdin.close()
-                guardian.wait(timeout=8)
-            _LIVE_WORLDS.pop(id(self), None)
+            active_error = sys.exc_info()[0] is not None or bool(exc and exc[0])
+            try:
+                guardian = getattr(self, "_guardian", None)
+                if guardian is not None:
+                    guardian.stdin.close()
+                    guardian.wait(timeout=8)
+            except Exception:
+                if not active_error:
+                    raise
+            finally:
+                _LIVE_WORLDS.pop(id(self), None)
+                if not _LIVE_WORLDS and threading.current_thread() is threading.main_thread():
+                    for signum, handler in _PREVIOUS_SIGNALS.items():
+                        signal.signal(signum, handler)
+                    _PREVIOUS_SIGNALS.clear()
 
     # Building ------------------------------------------------------------------------------------
 
