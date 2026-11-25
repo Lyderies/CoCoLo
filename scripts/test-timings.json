@@ -2812,6 +2812,7 @@
  "root:test_attest.StateRootTests.test_the_state_root_is_the_runtimes_owner_state_root": 0.14,
  "root:test_check_identifiers": 0.05,
  "root:test_ci_stages": 0.05,
+ "root:test_e2e_core_api": 0.6,
  "root:test_e2e_requirements": 0.05,
  "root:test_e2e_strictness": 0.12,
  "root:test_install": 61.78,
