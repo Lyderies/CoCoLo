@@ -1,19 +1,29 @@
 {
  "baseline": "b531844030fa619c1f62ddd6c092ebc2ea4fca38",
  "modules": {
-  "codex:tests.test_bridge": 299.5,
-  "codex:tests.test_container_stop": 67.62,
+  "codex:tests.test_b2_service_outcome_paths": 69.16,
+  "codex:tests.test_billing_gate": 78.58,
+  "codex:tests.test_bridge": 368.25,
+  "codex:tests.test_cli_billing_runtime": 68.29,
+  "codex:tests.test_cli_open_client_runtime": 69.85,
+  "codex:tests.test_container_stop": 72.23,
+  "codex:tests.test_core_api_round3": 67.54,
   "codex:tests.test_host_commands": 119.56,
-  "codex:tests.test_learning_cli": 95.44,
-  "codex:tests.test_lost_run_settlement": 98.64,
-  "codex:tests.test_project_driver": 390.32,
-  "codex:tests.test_trial_run_driver_bugs": 70.22,
-  "codex:tests.test_write_merge": 241.24,
-  "root:test_install": 110.14,
-  "root:test_install_claude_upgrade": 120.33,
-  "root:test_setup_sh": 177.88,
-  "root:test_setup_straight": 264.44,
-  "root:test_setup_update": 167.88,
-  "root:test_setup_wizard_direct": 265.86
- }
+  "codex:tests.test_learning_cli": 112.56,
+  "codex:tests.test_lost_run_settlement": 119.75,
+  "codex:tests.test_project_driver": 520.37,
+  "codex:tests.test_project_start": 183.4,
+  "codex:tests.test_result_lifetime": 73.05,
+  "codex:tests.test_routing_judgment": 5.54,
+  "codex:tests.test_session_guard": 7.23,
+  "codex:tests.test_trial_run_driver_bugs": 103.34,
+  "codex:tests.test_write_merge": 247.71,
+  "root:test_install": 113.54,
+  "root:test_install_claude_upgrade": 135.45,
+  "root:test_setup_sh": 203.64,
+  "root:test_setup_straight": 293.12,
+  "root:test_setup_update": 181.93,
+  "root:test_setup_wizard_direct": 282.08
+ },
+ "note": "238 A (owner 2026-11-25): ceilings = max of 0.8.60 full runs 1-4 x 1.10; test review/refactor before 0.4.0 goes live"
 }
