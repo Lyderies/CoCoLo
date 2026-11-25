@@ -22,7 +22,7 @@ from .history_api import (
     HistoryRequest, decode_history_request, decode_history_response, history_request_digest,
 )
 import re
-from .history_contracts import AttemptBinding, HistoryEntry, HistoryError, _DIGEST, _PROJECT, matches
+from .history_contracts import AttemptBinding, HistoryEntry, HistoryError, _DIGEST, _PROJECT, matches, valid_integer
 from .project_learning_live import ProjectLearning
 from .host_result_contracts import (HostResultContext, OperationalCheckContext, OperationalQAContext,
                                     WorkerResultContext, decode_host_result_reference)
@@ -60,6 +60,8 @@ class HistoryAuthorization:
     run_slots: tuple | None = None
     # LRS-7: (state, elapsed ms, failed phase, failure code) of the host's start-up checks, for the same report.
     warm_up: tuple | None = None
+    # Decision 309: diagnostic count, supplied by the live owner, not stored history.
+    preparation_cleanup_pending: int | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -77,6 +79,8 @@ class HistoryAuthorization:
             or (self.open_scope_context is not None and type(self.open_scope_context) is not OpenScopeContext)
             or (self.run_slots is not None and (type(self.run_slots) is not tuple or len(self.run_slots) != 2
                                                 or any(type(n) is not int or n < 0 for n in self.run_slots)))
+            or (self.preparation_cleanup_pending is not None
+                and not valid_integer(self.preparation_cleanup_pending, maximum=64))
             or (self.warm_up is not None and (type(self.warm_up) is not tuple or len(self.warm_up) != 4
                                               or self.warm_up[0] not in {'warming', 'ready', 'failing'}
                                               or type(self.warm_up[1]) is not int or self.warm_up[1] < 0
@@ -428,6 +432,8 @@ class HistoryService:
                 if authorization.run_slots is not None:
                     stuck, limit = authorization.run_slots
                     result['run_slots'] = {'stuck': stuck, 'limit': limit}
+                    if authorization.preparation_cleanup_pending is not None:
+                        result['run_slots']['cleanup_pending'] = authorization.preparation_cleanup_pending
                     if authorization.warm_up is not None:
                         state, since_ms, phase, code = authorization.warm_up
                         result['run_slots']['warm_up'] = {'state': state, 'since_ms': since_ms,

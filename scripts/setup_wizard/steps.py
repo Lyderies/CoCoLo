@@ -700,3 +700,10 @@ def commit_status(status: int) -> tuple[str, str]:
         return "committed", ("Committed, but Git could not update the project's index. Run git status in the "
                              "project and stage the committed files yourself.")
     return "failed", ""
+
+
+def status_warnings(reply) -> list[str]:
+    """Plain status warnings for the terminal list, without paths or command output."""
+    service = reply.get('project_service') if isinstance(reply, dict) else None
+    warnings = service.get('warnings') if isinstance(service, dict) else None
+    return [line for line in warnings if isinstance(line, str)] if isinstance(warnings, list) else []

@@ -128,6 +128,11 @@ def preparation_payload(prospective, project_root, bundle_root, environ, *, expe
 def _remove(workspace):
     try:
         remove_private_directory(workspace)
+    except BaseException:
+        pass
+    # The remover may raise ENOENT for a child. Only observing this directory's
+    # absence proves cleanup, whatever the remover returned or raised.
+    try:
         workspace.lstat()
     except FileNotFoundError:
         return True

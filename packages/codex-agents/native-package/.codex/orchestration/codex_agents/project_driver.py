@@ -51,11 +51,13 @@ O0c M1, M3, M4, M7: every way a run ends gives back every host slot it took. An
 execution that provably never launched is clean once its worker returns, so the
 normal release frees it; a preparation whose removal did not finish at retirement
 is given back and its removal retried. What nothing here can free (a run failed
-after its claim was admitted, a child whose cleanup is unconfirmed, a removal or a
+after its claim was admitted, a child whose cleanup is unconfirmed, or a
 monitor slot given up) keeps its slot, since a process may live, and is counted
 (`stuck_slots`, shown in learning-status): the host is then replaced once idle, at
 once if no slot is left, and the stopping service settles those runs on the
-kernel's evidence, or the next one does.
+kernel's evidence, or the next one does. Decision 309: pending preparation folder
+cleanup keeps retrying with capped backoff and defers automatic replacement until
+observed removal and retirement, retaining its slot and memory holds meanwhile.
 
 D1 (RS-D D5): nothing a later record, verifier or QA needs is kept here. The run's record context (its assignment,
 task, route, the client capability it was prepared with and its host class) is stored with its lease by the project
@@ -168,9 +170,8 @@ FENCE_OUTAGES = frozenset({'account_unavailable', 'account_closed_without_reply'
 # never forgotten, so its slot then stays taken, and the host is replaced once idle (O0c M7).
 CLEANUP_RETRY_SECONDS = 1.0
 CLEANUP_RETRY_MAX_SECONDS = 60.0
-# After this many refused removals a given-back preparation is no longer asked: it
-# stays listed (its workspace may still be there), so its place is never counted free.
-MAX_CLEANUP_ATTEMPTS = 12
+# Decision 309: preparation removal keeps being retried while this host owns it.
+# Save a capped delay, never an unbounded attempt count/exponent.
 MAX_FORGET_ATTEMPTS = 12
 # O10 D4: a result publication that failed while this service runs is retried from the packet
 # the writer still holds, after this long, doubling up to the cap, until it commits or the
@@ -1026,12 +1027,12 @@ class RunDriver:
                 pass  # Still cleaning up; asked again on the next step.
 
     def _retry_cleanup(self, handle):
-        attempts, when = self._cleanup_retry.get(handle, (0, self._clock()))
-        if self._clock() < when or attempts >= MAX_CLEANUP_ATTEMPTS:
+        now = self._clock()
+        pause, when = self._cleanup_retry.get(handle, (0.0, now))
+        if now < when:
             return
-        attempts += 1
-        self._cleanup_retry[handle] = (attempts, self._clock() + min(
-            CLEANUP_RETRY_MAX_SECONDS, CLEANUP_RETRY_SECONDS * 2 ** (attempts - 1)))
+        pause = min(CLEANUP_RETRY_MAX_SECONDS, max(CLEANUP_RETRY_SECONDS, pause * 2))
+        self._cleanup_retry[handle] = (pause, now + pause)
         self._preparation.retry_cleanup(handle)
 
     # The dispatch service names only runs this driver has made ready.
@@ -2527,24 +2528,27 @@ class RunDriver:
             return False
         return run.persistence is not None or run.prepared is not None
 
+    def pending_cleanup(self):
+        """Discarded preparations still owned here until observed cleanup and retirement.
+
+        Keep custody through unknown, queued retry and cleaned-but-not-retired
+        states. A live host must not turn an idle timeout into abandoned folders.
+        """
+        return len(self._giving_back)
+
     def stuck_slots(self):
-        """O0c M1, M3, M4, M7: host slots held by what nothing in this service will free: stranded runs,
-        given-back preparations whose removal was asked MAX_CLEANUP_ATTEMPTS times, and monitor attempts
-        given up. Each is held until the host is replaced: never freed while a process may live."""
-        preparations = sum(1 for handle in self._giving_back
-                           if self._cleanup_retry.get(handle, (0, 0.0))[0] >= MAX_CLEANUP_ATTEMPTS)
-        return sum(1 for run in self._runs.values() if self._stranded(run)) + preparations + len(self._stuck_monitor)
+        """Stranded runs and abandoned monitor slots; cleanup keeps its live retry duty."""
+        return sum(1 for run in self._runs.values() if self._stranded(run)) + len(self._stuck_monitor)
 
     def replace_when_idle(self):
-        """O0c M3: something here holds a slot it will never free, so a fresh host replaces this one
-        once no run is under way and no client has called for the idle period."""
-        return not self.busy() and self.stuck_slots() > 0
+        """Replace stranded work only after pending folder cleanup has retired."""
+        return not self.pending_cleanup() and not self.busy() and self.stuck_slots() > 0
 
     def exhausted(self):
-        """No room for another run in this host's lifetime; a fresh host has it all."""
-        # O0c M3: with every run slot stuck nothing can run here, so it is replaced at once when idle.
-        return not self.busy() and (len(self._runs) >= MAX_RUNS or len(self._dispatch._jobs) >= DISPATCH_SLOTS
-                                    or self.stuck_slots() >= PREPARATION_SLOTS)
+        """No room for another run; preserve the live cleanup custodian before replacement."""
+        return not self.pending_cleanup() and not self.busy() and (
+            len(self._runs) >= MAX_RUNS or len(self._dispatch._jobs) >= DISPATCH_SLOTS
+            or self.stuck_slots() >= PREPARATION_SLOTS)
 
     def close(self):
         if self._closed:

@@ -710,7 +710,8 @@
   },
   "history_service.py::__post_init__": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "PREPCLEAN-3: cleanup_pending uses the existing run-slot diagnostic wire range 0..64, not an admission limit; malformed counts and the past-bound value 65 are refused by authorization and response validation. Count falls to zero only after preparation retirement.",
+   "test": "test_PREPCLEAN_3_capacity_transport_warning_and_clear"
   },
   "history_service.py::_wire_operation": {
    "checks": 1,
@@ -1302,7 +1303,8 @@
   },
   "project_driver.py::_retry_cleanup": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "PREPCLEAN-2 (decision 309): retries have no attempt limit. The saved pause doubles from one second to the existing sixty-second cap; only the capped pause and next deadline are retained. Observed folder removal and retirement delete retry state. The past-the-limit test makes twenty due requests and checks exact capped monotone pauses and no early request.",
+   "test": "test_PREPCLEAN_2_retries_continue_past_twelve_with_capped_monotone_backoff"
   },
   "project_driver.py::_settle_lost": {
    "checks": 1,
@@ -1311,7 +1313,7 @@
   },
   "project_driver.py::exhausted": {
    "checks": 2,
-   "ends": "O0c M3: MAX_RUNS and DISPATCH_SLOTS as audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); stuck_slots() >= PREPARATION_SLOTS is not a limit on new work but the trigger that replaces the host: the replacement ends every stuck hold (the stopping service settles its runs on kernel evidence, the next starts with all slots free)",
+   "ends": "O0c M3: MAX_RUNS and DISPATCH_SLOTS trigger idle replacement when no work runs. PREPCLEAN-2 keeps the current host while given-back preparation cleanup is pending, even at exhaustion; observed removal and retirement unblock replacement. Other stuck slots retain the existing kernel-evidence settlement policy.",
    "test": "test_M3_with_every_slot_stuck_the_host_is_replaced_at_once_when_no_run_is_under_way"
   },
   "project_driver.py::handle": {
@@ -1323,9 +1325,9 @@
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
   "project_driver.py::stuck_slots": {
-   "checks": 1,
-   "ends": "O0c M4: counts given-back preparations whose removal was asked MAX_CLEANUP_ATTEMPTS times; each is retired once its retried removal finishes, and all end when the host they hold is replaced once idle",
-   "test": "test_M4_a_preparation_whose_removal_was_given_up_is_kept_and_counted_stuck"
+   "checks": 0,
+   "ends": "PREPCLEAN-2: pending folder cleanup is no longer abandoned or counted as a stuck slot; its live custodian blocks automatic replacement until observed removal. Other stranded runs and monitor slots keep their existing replacement policy.",
+   "test": "test_M4_pending_cleanup_keeps_custody_and_defers_replacement"
   },
   "project_history.py::<module>": {
    "checks": 1,
@@ -1395,7 +1397,7 @@
   },
   "project_history.py::replay_candidates": {
    "checks": 1,
-   "ends": "D4 (RS-D draft 3 §6): one bounded page per replay pass (at most REPLAY_PASS_LIMIT = 4 publications tried, each one body of at most 1 MiB) over `project_result_publications`, which holds only unfinished publications: a row ends with its commit or with the transaction that records `retiring`, so nothing accumulates and tombstones cost nothing; a refused row stays for retirement and the cursor moves on, so it never holds later ones back",
+   "ends": "D4 (RS-D draft 3 \u00a76): one bounded page per replay pass (at most REPLAY_PASS_LIMIT = 4 publications tried, each one body of at most 1 MiB) over `project_result_publications`, which holds only unfinished publications: a row ends with its commit or with the transaction that records `retiring`, so nothing accumulates and tombstones cost nothing; a refused row stays for retirement and the cursor moves on, so it never holds later ones back",
    "test": "test_the_replay_pass_completes_at_most_four_publications_and_the_next_pass_the_rest"
   },
   "project_history.py::settle_earlier_registrations": {
@@ -1599,7 +1601,7 @@
   },
   "project_result_contexts.py::_sweep_candidates": {
    "checks": 1,
-   "ends": "D3 (RS-D draft 4 §1): a per-pass batch bound over the live partial index (rows not `ended` or `expired`); a selected context ends `ended` when its files are gone, so only unfinished custody is ever scanned and tombstones cost nothing",
+   "ends": "D3 (RS-D draft 4 \u00a71): a per-pass batch bound over the live partial index (rows not `ended` or `expired`); a selected context ends `ended` when its files are gone, so only unfinished custody is ever scanned and tombstones cost nothing",
    "test": "test_U8_the_context_sweep_is_bounded_and_fair_across_passes"
   },
   "project_result_contexts.py::context_rows": {
@@ -1614,7 +1616,7 @@
   },
   "project_result_contexts.py::repairs": {
    "checks": 3,
-   "ends": "D3 (RS-D draft 3 §4): three report bounds per page, over contexts in `repair_required`, over reservations in `retiring` that have no context row, and over contexts in `retiring`, in that order with a cursor for the next page; each ends `ended` or `expired` once the retry succeeds or an operator removes the directory under its fixed name",
+   "ends": "D3 (RS-D draft 3 \u00a74): three report bounds per page, over contexts in `repair_required`, over reservations in `retiring` that have no context row, and over contexts in `retiring`, in that order with a cursor for the next page; each ends `ended` or `expired` once the retry succeeds or an operator removes the directory under its fixed name",
    "test": "test_M1_a_directory_under_a_reservation_only_body_name_is_shown_charged_retried_and_finished_when_removed"
   },
   "project_result_contexts.py::reservation_rows": {
@@ -1996,7 +1998,7 @@
   },
   "learning_store.py::__init__": {
    "checks": 1,
-   "ends": "Schema-version comparison, not a lifetime count: the legacy flag lasts one owner connection. Step 16→17 replaces the singleton machine-local epoch, preserves project records, and creates no accumulating quota.",
+   "ends": "Schema-version comparison, not a lifetime count: the legacy flag lasts one owner connection. Step 16\u219217 replaces the singleton machine-local epoch, preserves project records, and creates no accumulating quota.",
    "test": "test_schema16_registration_gate_waits_for_writer_then_upgrades_without_record_consent"
   },
   "hold_migration.py::__init__": {
@@ -2033,6 +2035,11 @@
    "checks": 1,
    "ends": "refusal counts keep at most MAX_REFUSAL_CALLERS caller buckets; further callers fold into 'other' with totals kept, so the map never grows",
    "test": "test_refusal_caller_buckets_are_bounded_and_preserve_totals"
+  },
+  "history_api.py::_validate_result": {
+   "checks": 1,
+   "ends": "PREPCLEAN-3: optional run_slots.cleanup_pending shares the existing 0..64 diagnostic wire range; no stored record or admission limit changes. The bound plus one (65), bool, negative and noninteger values are refused; observed retirement makes the diagnostic zero.",
+   "test": "test_PREPCLEAN_3_capacity_transport_warning_and_clear"
   }
  }
 }

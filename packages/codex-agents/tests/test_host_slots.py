@@ -12,6 +12,7 @@ import functools
 import json
 import sqlite3
 import subprocess
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -177,6 +178,92 @@ class HostSlotLifecycleTests(HostSlotHarness):
         # Only the admitted-then-failed run holds anything: its preparation, worker and result entry.
         self.wait_for(lambda: self.held() == {'runs': 1, 'preparations': 1, 'workers': 1, 'results': 1,
                                               'executions': 0, 'monitor': 0}, seconds=30)
+
+
+class PreparationCleanupLifecycleTests(HostSlotHarness):
+    @requirements('PREPCLEAN-1', 'PREPCLEAN-2', 'PREPCLEAN-3',
+                  why_not_scenario='Canonical CLI/service-loop lifecycle: real folder, durable memory holds, status and automatic idle replacement boundary.')
+    def test_PREPCLEAN_pending_cleanup_defers_idle_replacement_then_removes_and_replaces(self):
+        self.succeed()
+        run = self.open_run()
+        code, dispatched = self.dispatch(run)
+        self.assertEqual((0, 'result'), (code, dispatched.get('bridge_report', {}).get('outcome')), dispatched)
+        host = self.hosts[-1]
+        thread = [t for t in self.threads if t.name.startswith('test-project-host-')][-1]
+        failed_twelve, allow_thirteen, idle_checked = threading.Event(), threading.Event(), threading.Event()
+        self.addCleanup(allow_thirteen.set)
+        attempts, folders = [], []
+        original_remove = codex_preparation.remove_private_directory
+        original_retry = project_driver.RunDriver._retry_cleanup
+
+        def remove(path):
+            attempts.append(len(attempts) + 1)
+            folders.append(path)
+            if len(attempts) <= 12:
+                if len(attempts) == 12:
+                    failed_twelve.set()
+                return  # Physical no-op: directory remains, despite no exception.
+            return original_remove(path)
+
+        def retry(driver, handle):
+            if driver is host._driver and failed_twelve.is_set() and not allow_thirteen.is_set():
+                return  # Parent-coordinated fault gate, not a production retry pause.
+            return original_retry(driver, handle)
+
+        original_idle, original_clock = host.idle_ns, host._clock_ns
+        def idle():
+            result = original_idle()
+            if failed_twelve.is_set():
+                idle_checked.set()
+            return result
+
+        with mock.patch.object(codex_preparation, 'remove_private_directory', side_effect=remove), \
+             mock.patch.object(project_driver.RunDriver, '_retry_cleanup', retry), \
+             mock.patch.object(project_driver, 'CLEANUP_RETRY_SECONDS', .001), \
+             mock.patch.object(project_driver, 'CLEANUP_RETRY_MAX_SECONDS', .002), \
+             mock.patch.object(host, 'idle_ns', side_effect=idle):
+            self.record(run[0], run[1], run[3], dispatched)
+            self.assertTrue(failed_twelve.wait(10), 'cleanup did not reach twelve physical failures')
+            self.wait_for(lambda: bool(host._driver._giving_back), seconds=5)
+            folder = folders[0]
+            self.assertTrue(all(path == folder for path in folders))
+            # Move the host's idle clock past the production 15 minute deadline; no sleeping through it.
+            idle_checked.clear()
+            host._clock_ns = lambda: original_clock() + 2_000_000_000_000
+            self.assertTrue(idle_checked.wait(5), 'production loop did not check the idle boundary')
+            self.assertTrue(thread.is_alive(), 'pending folder cleanup lost its live custodian at idle replacement')
+            self.assertEqual(12, len(attempts))
+            self.assertTrue(folder.is_dir())
+            self.assertEqual(1, self.held(host)['preparations'])
+            pending = self.cli('learning-status')
+            warning = ('A preparation folder could not be removed. The project service keeps retrying in the '
+                       'background and holds its slot until removal is confirmed.')
+            self.assertEqual([warning], pending['project_service']['warnings'])
+            self.assertFalse(pending['project_service']['replaced_when_idle'])
+            for kind in ('driver_entry', 'preparation'):
+                self.assertEqual(1, pending['project_holds'][kind]['held'])
+            history_path = self.state.root / 'projects' / self.project_id / 'history.sqlite3'
+            with contextlib.closing(sqlite3.connect('file:' + str(history_path) + '?mode=ro', uri=True)) as db:
+                evidence = db.execute("SELECT evidence FROM project_holds WHERE kind='preparation' AND state='held'").fetchone()[0]
+                self.assertEqual('cleanup_unknown', json.loads(evidence)['reason'])
+            host._clock_ns = original_clock
+            allow_thirteen.set()
+            self.wait_for(lambda: not folder.exists() and self.held(host)['preparations'] == 0, seconds=5)
+            self.assertEqual(13, len(attempts))
+            def cleared():
+                report = self.cli('learning-status')
+                return (report['project_service']['warnings'] == [] and
+                        all(report['project_holds'][kind]['held'] == 0 for kind in ('preparation', 'driver_entry')))
+            self.wait_for(cleared, seconds=5)
+            # Removal proved and holds retired: ordinary idle replacement is now safe.
+            host._clock_ns = lambda: original_clock() + 2_000_000_000_000
+            thread.join(5)
+            self.assertFalse(thread.is_alive(), 'clean host did not stop at its idle boundary')
+        run = self.open_run()
+        self.assertIsNot(host, self.hosts[-1])
+        self.assertFalse(folder.exists())
+        code, dispatched = self.dispatch(run)
+        self.assertEqual((0, 'result'), (code, dispatched.get('bridge_report', {}).get('outcome')), dispatched)
 
 
 class HostWarmUpStatusTests(HostSlotHarness):

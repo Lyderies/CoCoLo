@@ -551,7 +551,10 @@ class ProjectServiceHost:
                                         run_slots=self.stuck_run_slots()
                                         if request.operation == 'history.capacity_report' else None,
                                         warm_up=None if self._driver is None or request.operation != 'history.capacity_report'
-                                        else self._driver.warm_up())
+                                        else self._driver.warm_up(),
+                                        preparation_cleanup_pending=None
+                                        if self._driver is None or request.operation != 'history.capacity_report'
+                                        else self._driver.pending_cleanup())
         if request.operation == 'history.learning_feedback':
             # The authority is the owner's signature over this record, checked by the
             # account owner that holds the owner key; this process never reads that key.
@@ -680,7 +683,7 @@ class ProjectServiceHost:
         self._owner()
         runtime = self._runtime
         return bool(len(runtime.pool._jobs) or len(runtime.persistence._jobs)
-                    or (self._driver is not None and self._driver.busy()))
+                    or (self._driver is not None and (self._driver.busy() or self._driver.pending_cleanup())))
 
     def faulted(self):
         """O10 D13: whether this host's result writer faulted; it then stops and settles nothing itself."""

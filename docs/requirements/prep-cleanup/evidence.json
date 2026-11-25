@@ -1,0 +1,690 @@
+{
+  "note": "Named-module measurements and test outcomes only; no paths, exception text, raw logs or private input.",
+  "runs": {
+    "red": {
+      "metadata_errors": [],
+      "job_seconds": 22.063,
+      "modules": [
+        {
+          "module": "root:test_setup_wizard_steps",
+          "tests": 52,
+          "returncode": 1,
+          "seconds": 0.321,
+          "requirement_tests": {
+            "root:test_setup_wizard_steps.StatusWarningTests.test_PREPCLEAN_3_status_warning_list": "error"
+          }
+        },
+        {
+          "module": "codex:tests.test_run_driver_retries",
+          "tests": 27,
+          "returncode": 1,
+          "seconds": 0.909,
+          "requirement_tests": {
+            "codex:tests.test_run_driver_retries.CleanupWarningTests.test_PREPCLEAN_3_plain_warning_and_clear": "error",
+            "codex:tests.test_run_driver_retries.GivenBackPreparationTests.test_PREPCLEAN_2_retries_continue_past_twelve_with_capped_monotone_backoff": "failed",
+            "codex:tests.test_run_driver_retries.StuckSlotTests.test_M4_pending_cleanup_keeps_custody_and_defers_replacement": "failed"
+          }
+        },
+        {
+          "module": "codex:tests.test_host_slots#0",
+          "tests": 4,
+          "returncode": 1,
+          "seconds": 2.732,
+          "requirement_tests": {
+            "codex:tests.test_host_slots.PreparationCleanupLifecycleTests.test_PREPCLEAN_pending_cleanup_defers_idle_replacement_then_removes_and_replaces": "failed"
+          }
+        },
+        {
+          "module": "codex:tests.test_host_slots#1",
+          "tests": 4,
+          "returncode": 1,
+          "seconds": 3.318,
+          "requirement_tests": {}
+        },
+        {
+          "module": "codex:tests.test_codex_preparation",
+          "tests": 25,
+          "returncode": 1,
+          "seconds": 14.783,
+          "requirement_tests": {
+            "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_1_missing_child_is_not_workspace_removal": "failed",
+            "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_1_twelve_physical_failures_then_observed_removal": "passed"
+          }
+        }
+      ]
+    },
+    "green-core": {
+      "metadata_errors": [],
+      "job_seconds": 19.194,
+      "modules": [
+        {
+          "module": "root:test_setup_wizard_refusals",
+          "tests": 24,
+          "returncode": 0,
+          "seconds": 0.38,
+          "requirement_tests": {}
+        },
+        {
+          "module": "root:test_setup_wizard_steps",
+          "tests": 53,
+          "returncode": 0,
+          "seconds": 0.44,
+          "requirement_tests": {
+            "root:test_setup_wizard_steps.StatusWarningTests.test_PREPCLEAN_3_status_warning_list": "passed",
+            "root:test_setup_wizard_steps.StatusWarningTests.test_PREPCLEAN_3_status_warning_reaches_terminal_list": "passed"
+          }
+        },
+        {
+          "module": "codex:tests.test_run_driver_retries",
+          "tests": 27,
+          "returncode": 0,
+          "seconds": 1.019,
+          "requirement_tests": {
+            "codex:tests.test_run_driver_retries.CleanupWarningTests.test_PREPCLEAN_3_plain_warning_and_clear": "passed",
+            "codex:tests.test_run_driver_retries.GivenBackPreparationTests.test_PREPCLEAN_2_retries_continue_past_twelve_with_capped_monotone_backoff": "passed",
+            "codex:tests.test_run_driver_retries.StuckSlotTests.test_M4_pending_cleanup_keeps_custody_and_defers_replacement": "passed"
+          }
+        },
+        {
+          "module": "codex:tests.test_lifetime_cap_guard",
+          "tests": 4,
+          "returncode": 0,
+          "seconds": 1.44,
+          "requirement_tests": {}
+        },
+        {
+          "module": "codex:tests.test_memory_holds",
+          "tests": 20,
+          "returncode": 0,
+          "seconds": 1.649,
+          "requirement_tests": {
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M2_unknown_cleanup_keeps_both_holds": "passed"
+          }
+        },
+        {
+          "module": "codex:tests.test_codex_preparation",
+          "tests": 26,
+          "returncode": 0,
+          "seconds": 14.265,
+          "requirement_tests": {
+            "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_1_missing_child_is_not_workspace_removal": "passed",
+            "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_1_twelve_physical_failures_then_observed_removal": "passed",
+            "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_real_cleanup_keeps_host_and_slot_until_thirteenth_removal": "passed"
+          }
+        }
+      ]
+    },
+    "final-core": {
+      "metadata_errors": [],
+      "job_seconds": 17.675,
+      "modules": [
+        {
+          "module": "codex:tests.test_lifetime_cap_guard",
+          "tests": 4,
+          "returncode": 0,
+          "seconds": 1.005,
+          "requirement_tests": {}
+        },
+        {
+          "module": "codex:tests.test_memory_holds",
+          "tests": 20,
+          "returncode": 0,
+          "seconds": 1.229,
+          "requirement_tests": {
+            "codex:tests.test_memory_holds.DriverMemoryTests.test_M2_unknown_cleanup_keeps_both_holds": "passed"
+          }
+        },
+        {
+          "module": "root:test_setup_wizard_steps",
+          "tests": 53,
+          "returncode": 0,
+          "seconds": 0.27,
+          "requirement_tests": {
+            "root:test_setup_wizard_steps.StatusWarningTests.test_PREPCLEAN_3_status_warning_list": "passed",
+            "root:test_setup_wizard_steps.StatusWarningTests.test_PREPCLEAN_3_status_warning_reaches_terminal_list": "passed"
+          }
+        },
+        {
+          "module": "codex:tests.test_run_driver_retries",
+          "tests": 27,
+          "returncode": 0,
+          "seconds": 0.757,
+          "requirement_tests": {
+            "codex:tests.test_run_driver_retries.CleanupWarningTests.test_PREPCLEAN_3_plain_warning_and_clear": "passed",
+            "codex:tests.test_run_driver_retries.GivenBackPreparationTests.test_PREPCLEAN_2_retries_continue_past_twelve_with_capped_monotone_backoff": "passed",
+            "codex:tests.test_run_driver_retries.StuckSlotTests.test_M4_pending_cleanup_keeps_custody_and_defers_replacement": "passed"
+          }
+        },
+        {
+          "module": "codex:tests.test_runtime_release",
+          "tests": 3,
+          "returncode": 1,
+          "seconds": 0.43,
+          "requirement_tests": {}
+        },
+        {
+          "module": "root:test_setup_wizard_terminal",
+          "tests": 27,
+          "returncode": 0,
+          "seconds": 0.16,
+          "requirement_tests": {}
+        },
+        {
+          "module": "root:test_setup_wizard_source",
+          "tests": 12,
+          "returncode": 0,
+          "seconds": 2.357,
+          "requirement_tests": {}
+        },
+        {
+          "module": "codex:tests.test_codex_preparation",
+          "tests": 27,
+          "returncode": 0,
+          "seconds": 11.466,
+          "requirement_tests": {
+            "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_1_missing_child_is_not_workspace_removal": "passed",
+            "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_1_twelve_physical_failures_then_observed_removal": "passed",
+            "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_3_capacity_transport_warning_and_clear": "passed",
+            "codex:tests.test_codex_preparation.CodexPreparationTests.test_PREPCLEAN_real_cleanup_keeps_host_and_slot_until_thirteenth_removal": "passed"
+          }
+        }
+      ]
+    }
+  },
+  "additional_checks": {
+    "setup_wizard_steps_import_cleanup": {
+      "tests": 53,
+      "passed": true,
+      "seconds": 0.069
+    },
+    "lifetime_registry_final": {
+      "tests": 4,
+      "passed": true,
+      "seconds": 0.732
+    },
+    "direct_idle_clock_boundary": {
+      "tests": 27,
+      "passed": true,
+      "seconds": 14.633
+    },
+    "final_retry_assertion_preservation": {
+      "tests": 27,
+      "passed": 25,
+      "skipped": 2,
+      "seconds": 0.163
+    }
+  },
+  "compatibility_final": {
+    "metadata_errors": [],
+    "elapsed_seconds": 691.685,
+    "job_seconds": 1627.408,
+    "tests": 820,
+    "outcomes": {
+      "passed": 647,
+      "failed": 155,
+      "error": 18
+    },
+    "passing_modules": 24,
+    "failed_modules": 11,
+    "timed_out_modules": 2,
+    "modules": {
+      "codex:tests.test_account_billing_admission": {
+        "tests": 0,
+        "seconds": 600.078,
+        "returncodes": [
+          1
+        ],
+        "timed_out": true,
+        "outcomes": {}
+      },
+      "codex:tests.test_account_claim_operation": {
+        "tests": 25,
+        "seconds": 14.282,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 25
+        }
+      },
+      "codex:tests.test_account_cleanup_release": {
+        "tests": 15,
+        "seconds": 14.583,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 15
+        }
+      },
+      "codex:tests.test_account_launch_claims": {
+        "tests": 16,
+        "seconds": 10.233,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 16
+        }
+      },
+      "codex:tests.test_account_observation_backup": {
+        "tests": 2,
+        "seconds": 0.779,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 2
+        }
+      },
+      "codex:tests.test_account_observation_schema": {
+        "tests": 7,
+        "seconds": 1.924,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 7
+        }
+      },
+      "codex:tests.test_account_open_schema": {
+        "tests": 10,
+        "seconds": 1.018,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 10
+        }
+      },
+      "codex:tests.test_account_settlement_wire": {
+        "tests": 6,
+        "seconds": 0.369,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 6
+        }
+      },
+      "codex:tests.test_account_store_recovery": {
+        "tests": 19,
+        "seconds": 2.545,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 19
+        }
+      },
+      "codex:tests.test_active_run_capacity": {
+        "tests": 16,
+        "seconds": 14.649,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 16
+        }
+      },
+      "codex:tests.test_b2_service_outcome": {
+        "tests": 55,
+        "seconds": 26.558,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 55
+        }
+      },
+      "codex:tests.test_b2_service_outcome_hosts": {
+        "tests": 20,
+        "seconds": 14.624,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 20
+        }
+      },
+      "codex:tests.test_backup_installed_project": {
+        "tests": 2,
+        "seconds": 1.006,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 2
+        }
+      },
+      "codex:tests.test_backup_reply_private": {
+        "tests": 11,
+        "seconds": 6.006,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 11
+        }
+      },
+      "codex:tests.test_batch2_b4s_integration": {
+        "tests": 4,
+        "seconds": 0.482,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 4
+        }
+      },
+      "codex:tests.test_billing_gate": {
+        "tests": 0,
+        "seconds": 600.095,
+        "returncodes": [
+          1
+        ],
+        "timed_out": true,
+        "outcomes": {}
+      },
+      "codex:tests.test_diagnostic_delivery": {
+        "tests": 1,
+        "seconds": 1.16,
+        "returncodes": [
+          1
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "error": 1
+        }
+      },
+      "codex:tests.test_e2a_wake_wire": {
+        "tests": 31,
+        "seconds": 21.125,
+        "returncodes": [
+          1
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 19,
+          "error": 6,
+          "failed": 6
+        }
+      },
+      "codex:tests.test_event_retention": {
+        "tests": 22,
+        "seconds": 3.895,
+        "returncodes": [
+          1
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "error": 1,
+          "passed": 21
+        }
+      },
+      "codex:tests.test_history_api": {
+        "tests": 31,
+        "seconds": 1.059,
+        "returncodes": [
+          1
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 27,
+          "failed": 4
+        }
+      },
+      "codex:tests.test_host_slots": {
+        "tests": 8,
+        "seconds": 3.759,
+        "returncodes": [
+          1,
+          1
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "failed": 7,
+          "passed": 1
+        }
+      },
+      "codex:tests.test_large_project_backups": {
+        "tests": 8,
+        "seconds": 33.595,
+        "returncodes": [
+          0,
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 8
+        }
+      },
+      "codex:tests.test_learning_migration": {
+        "tests": 17,
+        "seconds": 20.559,
+        "returncodes": [
+          1,
+          1
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 15,
+          "failed": 2
+        }
+      },
+      "codex:tests.test_learning_source_image": {
+        "tests": 33,
+        "seconds": 4.246,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 33
+        }
+      },
+      "codex:tests.test_learning_source_image_legacy": {
+        "tests": 7,
+        "seconds": 2.701,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 7
+        }
+      },
+      "codex:tests.test_learning_source_transfer": {
+        "tests": 13,
+        "seconds": 8.002,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 13
+        }
+      },
+      "codex:tests.test_learning_store": {
+        "tests": 100,
+        "seconds": 20.999,
+        "returncodes": [
+          1,
+          1
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 95,
+          "error": 5
+        }
+      },
+      "codex:tests.test_owner_backup_streamed": {
+        "tests": 40,
+        "seconds": 41.457,
+        "returncodes": [
+          0,
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 40
+        }
+      },
+      "codex:tests.test_project_driver": {
+        "tests": 109,
+        "seconds": 54.796,
+        "returncodes": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "failed": 106,
+          "passed": 3
+        }
+      },
+      "codex:tests.test_project_request_queue": {
+        "tests": 11,
+        "seconds": 8.341,
+        "returncodes": [
+          1
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 9,
+          "failed": 1,
+          "error": 1
+        }
+      },
+      "codex:tests.test_project_service": {
+        "tests": 11,
+        "seconds": 0.637,
+        "returncodes": [
+          1
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "failed": 1,
+          "passed": 10
+        }
+      },
+      "codex:tests.test_project_start": {
+        "tests": 38,
+        "seconds": 53.269,
+        "returncodes": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "failed": 28,
+          "error": 4,
+          "passed": 6
+        }
+      },
+      "codex:tests.test_project_store_removal": {
+        "tests": 4,
+        "seconds": 0.216,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 4
+        }
+      },
+      "codex:tests.test_providers": {
+        "tests": 106,
+        "seconds": 33.317,
+        "returncodes": [
+          0,
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 106
+        }
+      },
+      "codex:tests.test_refusal_steps": {
+        "tests": 14,
+        "seconds": 0.321,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 14
+        }
+      },
+      "codex:tests.test_reply_shape_compatibility": {
+        "tests": 3,
+        "seconds": 0.206,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 3
+        }
+      },
+      "codex:tests.test_rsa_step3": {
+        "tests": 5,
+        "seconds": 4.519,
+        "returncodes": [
+          0
+        ],
+        "timed_out": false,
+        "outcomes": {
+          "passed": 5
+        }
+      }
+    },
+    "budget_failures": [
+      {
+        "budget": 60.0,
+        "fragments": 1,
+        "layer": "scenario",
+        "module": "codex:tests.test_account_billing_admission",
+        "seconds": 600.0781826250022,
+        "stage": "integration"
+      },
+      {
+        "budget": 60.0,
+        "fragments": 1,
+        "layer": "scenario",
+        "module": "codex:tests.test_billing_gate",
+        "seconds": 600.0949360420927,
+        "stage": "integration"
+      }
+    ],
+    "execution_note": "The two long workers hit the runner default 600-second timeout and were reaped. The attempted exact-runner stop signal was denied by the sandbox. This batch exceeded the requested five-minute bound; use an explicit 120-second worker timeout on future small named batches.",
+    "soak_not_run": "codex:tests.test_reply_shape_live requires soak and replays a wide service corpus; omitted for the socket restriction and narrow five-minute scope."
+  }
+}
