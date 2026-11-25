@@ -1,0 +1,10 @@
+{
+ "authority": "docs/requirements/u3.md",
+ "requirements": [
+  {
+   "id": "U3",
+   "statement": "Budgeted account and project reads have indexed or otherwise bounded work, unchanged answers and production-budget completion with a fixed live set at 1k and 100k historical rows.",
+   "source": "tests/requirements/u3.json#U3"
+  }
+ ]
+}

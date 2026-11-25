@@ -161,7 +161,7 @@ def _snapshot(ledger, context, request, lease, expected):
 def _legacy_original_records(connection, context, expected):
     decisions = connection.execute(
         "SELECT record_id,content,content_digest,source FROM records WHERE project_id=? AND record_type='admission_decision' "
-        "AND json_extract(CAST(content AS TEXT),'$.run_id')=? LIMIT 2", (context.project_id, expected.run_id),
+        "AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=? LIMIT 2", (context.project_id, expected.run_id),
     ).fetchall()
     if len(decisions) != 1:
         raise ClaimError('claim_execution_unavailable')
@@ -171,7 +171,7 @@ def _legacy_original_records(connection, context, expected):
     # budgeted snapshot; ambiguous history is not reconstructed or preferred.
     starts = connection.execute(
         "SELECT record_id,content,content_digest,source FROM records WHERE project_id=? AND record_type='event' "
-        "AND source='host' AND json_extract(CAST(content AS TEXT),'$.run_id')=? "
+        "AND source='host' AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=? "
         "AND json_extract(CAST(content AS TEXT),'$.event_code')='subagent_started' LIMIT 2",
         (context.project_id, expected.run_id),
     ).fetchall()

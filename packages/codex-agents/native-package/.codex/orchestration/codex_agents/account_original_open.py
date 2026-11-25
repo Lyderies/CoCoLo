@@ -464,7 +464,7 @@ def current_open_request(ledger, request):
             (request.project_id, request.run_id)).fetchone() is not None:
         raise OpenError('open_state_inconsistent')
     if ledger._connection.execute("SELECT 1 FROM records WHERE project_id=? AND record_type IN "
-            "('admission_decision','event','verification_binding') AND json_extract(CAST(content AS TEXT),'$.run_id')=? LIMIT 1",
+            "('admission_decision','event','verification_binding') AND CASE WHEN json_valid(CAST(content AS TEXT)) THEN json_extract(CAST(content AS TEXT),'$.run_id') END=? LIMIT 1",
             (request.project_id, request.run_id)).fetchone() is not None:
         raise OpenError('open_state_inconsistent')
     return journal, None

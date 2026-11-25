@@ -278,7 +278,9 @@ class P9bAttestationTests(unittest.TestCase):
         plan = [row[3] for row in connection.execute('EXPLAIN QUERY PLAN ' + query, scope)]
         self.assertTrue(any(detail.startswith('SEARCH ') and 'capture_candidates USING' in detail
                             for detail in plan), plan)
-        self.assertTrue(any('SEARCH r USING' in detail and 'records_type_project' in detail
+        # U3: the non-attestation evidence branch seeks its windows through the
+        # record type/time index (was the record type/project index).
+        self.assertTrue(any(detail.startswith('SEARCH records USING') and 'records_type_observed' in detail
                             for detail in plan), plan)
         self.assertFalse(any(detail.startswith('SCAN r') or detail.startswith('SCAN records')
                              for detail in plan), plan)

@@ -2329,10 +2329,13 @@ class ProjectHistory:
                 raise HistoryError("history_result_expired")
             actual = ResultReservation(binding, digest, value.created_at_ms, hard_deadline_at_ms,
                                        value.reserved_until_ms, value.reserved_until_ms, "reserved")
-            if self._connection.execute("SELECT 1 FROM terminal_outbox WHERE project_id=? AND "
-                                        "(claim_id=? OR (run_handle=? AND attempt=?) OR claim_digest=?)",
-                                        (self.project_id, binding.claim_id, binding.run_handle,
-                                         binding.attempt, binding.claim_digest)).fetchone() is not None:
+            # U3: seek each terminal identity through its existing unique index.
+            if self._connection.execute("SELECT 1 FROM terminal_outbox WHERE project_id=? AND claim_id=? UNION ALL "
+                                        "SELECT 1 FROM terminal_outbox WHERE project_id=? AND run_handle=? AND attempt=? "
+                                        "UNION ALL SELECT 1 FROM terminal_outbox WHERE project_id=? AND claim_digest=? "
+                                        "LIMIT 1",
+                                        (self.project_id, binding.claim_id, self.project_id, binding.run_handle,
+                                         binding.attempt, self.project_id, binding.claim_digest)).fetchone() is not None:
                 raise HistoryError("history_conflict")
             self._insert_result_reservation(actual)
             self._release_claimed_open(binding.run_handle, binding.attempt, 'claimed', digest)
@@ -2558,10 +2561,13 @@ class ProjectHistory:
             if self._connection.execute("SELECT 1 FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
                                         (self.project_id, binding.run_handle, binding.attempt)).fetchone() is not None:
                 raise HistoryError("history_conflict")
-            if self._connection.execute("SELECT 1 FROM terminal_outbox WHERE project_id=? AND "
-                                        "(claim_id=? OR (run_handle=? AND attempt=?) OR claim_digest=?)",
-                                        (self.project_id, binding.claim_id, binding.run_handle,
-                                         binding.attempt, binding.claim_digest)).fetchone() is not None:
+            # U3: seek each terminal identity through its existing unique index.
+            if self._connection.execute("SELECT 1 FROM terminal_outbox WHERE project_id=? AND claim_id=? UNION ALL "
+                                        "SELECT 1 FROM terminal_outbox WHERE project_id=? AND run_handle=? AND attempt=? "
+                                        "UNION ALL SELECT 1 FROM terminal_outbox WHERE project_id=? AND claim_digest=? "
+                                        "LIMIT 1",
+                                        (self.project_id, binding.claim_id, self.project_id, binding.run_handle,
+                                         binding.attempt, self.project_id, binding.claim_digest)).fetchone() is not None:
                 raise HistoryError("history_conflict")
             self._check_result_capacity()
             self._insert_result_reservation(value)
