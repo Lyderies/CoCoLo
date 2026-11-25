@@ -2439,26 +2439,31 @@
  "RSF-S6-2": {
   "checks": [
    "codex:tests.test_rsf_s6_classify.ClassificationTests.test_each_class_commit_survives_sigkill_and_two_reopens_identically",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_each_new_owner_step_names_an_existing_cli_command",
    "codex:tests.test_rsf_s6_classify.ClassificationTests.test_missing_legacy_inputs_keep_context_and_custody_without_fabrication",
-   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_mixed_store_backfills_orchestration_open_duty_and_preparation_without_guessing"
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_mixed_store_backfills_orchestration_open_duty_and_preparation_without_guessing",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_schema21_adopted_denial_without_receipt_clears_from_sealed_no_launch_evidence",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_schema21_expired_lease_uses_retained_denial_receipt_to_clear_open_duty"
   ],
   "source": "tests/requirements/rsf-s6.json#RSF-S6-2",
-  "statement": "**RSF-S6-2 \u2014 Open-binding duty.** Backfill missing pre-B3 duties from retained\nhost opens. Verify the original journal and lease before using their facts.\nA bound lease has a claimed duty tombstone; an unresolved open stays held.\nRetain the original run and attempt. If withdrawal inputs are absent, keep a\nnamed evidence wait with a plain owner next step; never guess inputs or release\non a timer. Existing duties and authenticated replies remain unchanged. An\nalready recorded result proves its open duty fulfilled; preserve its register\nwithout adding a duty."
+  "statement": "**RSF-S6-2 \u2014 Open-binding duty.** Backfill missing pre-B3 duties from retained\nhost opens. Verify the original journal and lease before using their facts.\nA bound lease has a claimed duty tombstone; an unresolved open stays held.\nRetain the original run and attempt. If withdrawal inputs are absent, keep a\nnamed evidence wait with a plain owner next step; never guess inputs or release\non a timer. Existing duties and authenticated replies remain unchanged. An\nalready recorded result proves its open duty fulfilled; preserve its register\nwithout adding a duty.\n\nFix round MED-2: a verified historical open whose expired lease already has a\nreleased `denied` or `fenced` tombstone uses that retained authenticated receipt\nto release its backfilled duty as `fenced`, as the existing denial path does.\nProve this from a real schema-21 store, without inferring closure from expiry,\nmissing inputs or predecessor exit alone; preserve existing duties and receipts.\nFor a pre-B1 denial adopted without a receipt, the verified sealed expired lease\nplus its verified host open and the existing B1 `denied` adoption predicate are\nthe retained no-launch evidence; preserve the absent receipt without inventing one."
  },
  "RSF-S6-3": {
   "checks": [
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_each_new_owner_step_names_an_existing_cli_command",
    "codex:tests.test_rsf_s6_classify.ClassificationTests.test_missing_legacy_inputs_keep_context_and_custody_without_fabrication",
    "codex:tests.test_rsf_s6_classify.ClassificationTests.test_unrecoverable_running_attempt_waits_for_b4s_lost_and_refuses_late_publication"
   ],
   "source": "tests/requirements/rsf-s6.json#RSF-S6-3",
-  "statement": "**RSF-S6-3 \u2014 Settlement.** Classify an unfinished historical reservation as\nheld awaiting account settlement, with a named reason and plain next step.\nRun B4s publication arbitration before the account outbox; only its verified\nclosure releases the reservation as lost. Show lost in the existing attempt\nstatus. Preserve a completed result during arbitration. Replay remains stable."
+  "statement": "**RSF-S6-3 \u2014 Settlement.** Classify an unfinished historical reservation as\nheld awaiting account settlement, with a named reason and plain next step.\nRun B4s publication arbitration before the account outbox; only its verified\nclosure releases the reservation as lost. In the report, lost maps to the\nexisting `abandoned` count; the reservation hold records release kind `lost`.\nPreserve a completed result during arbitration. Replay remains stable."
  },
  "RSF-S6-4": {
   "checks": [
    "codex:tests.test_rsf_s6_classify.ClassificationTests.test_each_class_commit_survives_sigkill_and_two_reopens_identically",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_each_new_owner_step_names_an_existing_cli_command",
    "codex:tests.test_rsf_s6_classify.ClassificationTests.test_finished_result_remains_recordable_only_by_current_fenced_runtime_after_two_reopens",
    "codex:tests.test_rsf_s6_classify.ClassificationTests.test_missing_legacy_inputs_keep_context_and_custody_without_fabrication",
-   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_other_runtime_guidance_keeps_custody_and_names_update_recovery"
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_other_runtime_guidance_keeps_custody_and_names_setup_update"
   ],
   "source": "tests/requirements/rsf-s6.json#RSF-S6-4",
   "statement": "**RSF-S6-4 \u2014 Result custody.** Preserve finished result, terminal, sealed\ncontext and historical record bytes. A verifiable committed result with its\nstored inputs and open sealed orchestration remains recordable by the current\nfenced service after upgrade, including after restart. Bind that permission to\nthis migrated attempt and the current owner runtime; an arbitrary runtime or an\nordinary fresh-store mismatch still refuses. Missing inputs remain\nlegacy_no_context with custody and an owner next step, without fabricated inputs."
@@ -2466,10 +2471,12 @@
  "RSF-S6-5": {
   "checks": [
    "codex:tests.test_rsf_s6_classify.ClassificationTests.test_each_class_commit_survives_sigkill_and_two_reopens_identically",
-   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_mixed_store_backfills_orchestration_open_duty_and_preparation_without_guessing"
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_each_new_owner_step_names_an_existing_cli_command",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_mixed_store_backfills_orchestration_open_duty_and_preparation_without_guessing",
+   "codex:tests.test_rsf_s6_classify.ClassificationTests.test_unarmed_lease_guidance_names_the_existing_automatic_expiry"
   ],
   "source": "tests/requirements/rsf-s6.json#RSF-S6-5",
-  "statement": "**RSF-S6-5 \u2014 Memory-only preparation.** Do not reconstruct driver or preparation\nmemory. Report those categories as not_tracked. Classify any surviving unarmed\nlease as held with a named legacy preparation reason and plain owner next step;\nno missing-memory inference releases an uncertain obligation. Pure memory with\nno durable source creates no invented hold or launch authority."
+  "statement": "**RSF-S6-5 \u2014 Memory-only preparation.** Do not reconstruct driver or preparation\nmemory. Report those categories as not_tracked. Classify any surviving unarmed\nlease as held with a named legacy preparation reason and plain owner next step;\nno missing-memory inference releases an uncertain obligation. Pure memory with\nno durable source creates no invented hold or launch authority.\n\nFix round MED-1/LOW-3: every new owner step names an existing CLI command or a\ndocumented automatic release. Ordinary fresh-store runtime mismatch points to\nthe existing setup update command. Unarmed leases still release automatically\non the service's expiry sweep or when the successor releases unused leases;\npending claims require the account's authenticated no-launch evidence."
  },
  "RSF-S6-6": {
   "checks": [
@@ -2478,7 +2485,7 @@
    "codex:tests.test_rsf_s6_classify.ClassificationTests.test_unrecoverable_running_attempt_waits_for_b4s_lost_and_refuses_late_publication"
   ],
   "source": "tests/requirements/rsf-s6.json#RSF-S6-6",
-  "statement": "**RSF-S6-6 \u2014 Late publication refusal.** The B4s releasing fence and verified\nlost settlement each refuse a late publication with zero changes to terminal,\nrecord, context, body or reservation state. Resume classification without\nreplacing existing duty/settlement evidence. Verify bounded batches and atomic\ncursor rollback under real process death and a revoked S2 epoch."
+  "statement": "**RSF-S6-6 \u2014 Late publication refusal.** The B4s releasing fence and verified\nlost settlement each refuse a late publication with zero changes to terminal,\nrecord, context, body or reservation state. Resume classification without\nreplacing existing duty/settlement evidence. Verify bounded batches and atomic\ncursor rollback under real process death and a revoked S2 epoch.\n\nFix round LOW-1: both `publish_result` and `commit_result` must refuse with the\nspecific reason `history_result_expired` before and after lost settlement and\nafter reopen, with zero database or artifact changes."
  },
  "RT-RX-1": {
   "checks": [

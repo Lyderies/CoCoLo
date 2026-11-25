@@ -88,5 +88,91 @@ def build(archive, destination):
         fixture.doCleanups()
 
 
+def settle_schema21(archive, destination, reason):
+    """Real 18 -> 21 upgrade and denial writer; synthetic account closure, no transport.
+
+    The disposable fixture key signs through the product's closure signer, just
+    like the mixed fixture's lost closure. No source row or schema is hand-edited.
+    The schema-18 open predates B3, so the schema-21 runtime has no duty to release.
+    """
+    sys.path.insert(0, str(archive / 'packages/codex-agents'))
+    import tests.support  # noqa: F401
+    from codex_agents.project_history import ProjectHistory
+    from codex_agents.result_contracts import ResultCapacity, ResultLeaseBinding, MAX_RESULT_BODY_BYTES
+    from codex_agents.claim_denial import denial_closure, denial_record_id
+    from codex_agents.learning_contracts import canonical_json
+
+    data = json.loads((destination / 'manifest.json').read_text())
+    key = bytes.fromhex(data['key'])
+    scope = ResultLeaseBinding(**data['pending'])
+    owner = ProjectHistory(destination / 'history', data['project'], result_key=key,
+        result_capacity=ResultCapacity(256, 256 * MAX_RESULT_BODY_BYTES, 1_800_000, 7 * 86_400_000),
+        result_clock_ms=lambda: data['now'], allow_legacy_orchestration_reference=True, allow_schema_upgrade=True)
+    try:
+        if owner._connection.execute('PRAGMA user_version').fetchone()[0] != 21:
+            raise AssertionError('supplemental runtime must really write schema 21')
+        if reason == 'upgrade-only':
+            return
+        lease = owner.result_lease(scope)
+        record = dict(lease_digest=lease.lease_digest, assignment_digest=lease.assignment_digest,
+            record_id=denial_record_id(key, data['project'], lease.lease_digest), observed_at_ms=data['now'],
+            denial=dict(state='denied', receipt_digest='8' * 64, run_id=scope.run_id,
+                bridge_run_id=None, deadline_at_ms=None, reason_code=reason, recorded_at_ms=data['now'], known=True))
+        raw = canonical_json(denial_closure(key, scope, record, known=False))
+        owner.settle_denied_result_lease(scope, raw)
+        owner.settle_denied_result_lease(scope, raw)  # The old runtime's authenticated replay path.
+    finally:
+        owner.close()
+
+
+def build_pre_b1_denial(archive, destination):
+    """Pre-B1 runtime's real account denial and project closure, then B1 adopts it.
+
+    Enrollment and removed billing attestations are disposable historical fixture
+    controls. All project source records and their no-launch seals use real APIs.
+    """
+    sys.path.insert(0, str(archive / 'packages/codex-agents'))
+    import tests.support  # noqa: F401
+    from unittest import mock
+    from tests.test_claim_denial_recovery import ClaimDenialRecoveryTests
+    from codex_agents.host_open_contracts import OpenProvenanceInput
+    from codex_agents.orchestration_api import OrchestrationLimits, OrchestrationRequest, OrchestrationScope, SCOPE_FIELDS
+    from codex_agents.learning_contracts import canonical_json
+    from codex_agents.sql_read_budget import SQLReadLimits
+
+    case = ClaimDenialRecoveryTests(methodName='runTest')
+    case.setUp()
+    try:
+        fixture = case.fixture
+        store, scope = fixture.store, fixture.scope
+        store._orchestration_limits = OrchestrationLimits(1, 8)
+        owner_scope = OrchestrationScope(**{name: getattr(scope, name) for name in SCOPE_FIELDS})
+        with mock.patch('codex_agents.orchestration_store.secrets.token_hex', return_value=scope.orchestration_handle[4:]):
+            store._orchestration_owner().apply(OrchestrationRequest(1, 'orchestration.open', 'pre-b1-open', owner_scope, {}),
+                client_version='codex-host-v1', before_commit=lambda: None)
+        request = OpenProvenanceInput(scope.run_handle, fixture.assigned['assignment_id'])
+        proof = case.ledger._attest_open_provenance(fixture.project, runtime_digest=scope.runtime_digest,
+            caller_scope='a' * 64, request=request, storage_binding=scope, storage_evidence=fixture.evidence,
+            work_limits=SQLReadLimits(100_000, 1000, 2 * 1_048_576))
+        store.record_host_open(scope, request, proof, assignment=fixture.assigned,
+            task=fixture.base.fixture.fixture.task(), route=fixture.base.fixture.route, before_commit=lambda: None)
+        store.settle_denied_result_lease(scope, canonical_json(case.call()))
+        if store._connection.execute('PRAGMA user_version').fetchone()[0] != 17:
+            raise AssertionError('pre-B1 source must precede the schema-18 adoption step')
+        if store._connection.execute("SELECT 1 FROM sqlite_master WHERE name='project_holds'").fetchone():
+            raise AssertionError('pre-B1 source must not have a register')
+        data = dict(project=fixture.project, key=fixture.key.hex(), now=fixture.base.stamp, pending=scope.as_data())
+        store.close()
+        shutil.copytree(fixture.directory, destination / 'history')
+        (destination / 'manifest.json').write_bytes(canonical_json(data))
+    finally:
+        case.doCleanups()
+
+
 if __name__ == '__main__':
-    build(Path(sys.argv[1]), Path(sys.argv[2]))
+    if len(sys.argv) == 4 and sys.argv[3] == 'pre-b1':
+        build_pre_b1_denial(Path(sys.argv[1]), Path(sys.argv[2]))
+    elif len(sys.argv) == 4:
+        settle_schema21(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3])
+    else:
+        build(Path(sys.argv[1]), Path(sys.argv[2]))

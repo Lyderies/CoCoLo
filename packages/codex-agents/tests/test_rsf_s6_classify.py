@@ -1,10 +1,13 @@
 """RSF-S6: one real pre-B3 mixed store, classification and fenced resumptions."""
 from contextlib import closing
+import ast
+import inspect
 import json
 import os
 from pathlib import Path
 import shutil
 import select
+import re
 import signal
 from unittest import mock
 import sqlite3
@@ -18,7 +21,7 @@ from test_framework import requirements
 from codex_agents import project_history, project_holds_schema, service_record, store_fence
 from codex_agents.history_contracts import AttemptBinding, HistoryError
 from codex_agents.result_contracts import ResultCapacity, ResultLeaseBinding, MAX_RESULT_BODY_BYTES, ResultObservation
-from codex_agents.learning_contracts import canonical_json
+from codex_agents.learning_contracts import canonical_json, content_digest, keyed_digest
 from codex_agents.lost_run_contracts import SettleLostInput
 from codex_agents.lost_run_closure import lost_run_closure
 
@@ -39,6 +42,16 @@ class ClassificationTests(unittest.TestCase):
             'packages/codex-agents', 'scripts'], capture_output=True, check=True)
         subprocess.run(['tar', '-x', '-C', str(archive)], input=packed.stdout, check=True)
         cls.archive = archive
+        cls.schema21_archive = cls.root / 'schema21-runtime'
+        cls.schema21_archive.mkdir()
+        packed21 = subprocess.run(['git', '-C', str(TOP), 'archive', 'e933d3a6',
+            'packages/codex-agents', 'scripts'], capture_output=True, check=True)
+        subprocess.run(['tar', '-x', '-C', str(cls.schema21_archive)], input=packed21.stdout, check=True)
+        cls.pre_b1_archive = cls.root / 'pre-b1-runtime'
+        cls.pre_b1_archive.mkdir()
+        packed_b1 = subprocess.run(['git', '-C', str(TOP), 'archive', 'dd7e5074',
+            'packages/codex-agents', 'scripts'], capture_output=True, check=True)
+        subprocess.run(['tar', '-x', '-C', str(cls.pre_b1_archive)], input=packed_b1.stdout, check=True)
         cls.source = cls.root / 'source'
         cls.source.mkdir()
         env = {k: v for k, v in os.environ.items() if not k.startswith(('CODEX_', 'PYTHON'))}
@@ -155,16 +168,30 @@ class ClassificationTests(unittest.TestCase):
         self.late_refused()
 
     def late_refused(self):
-        before = self.snapshot()
-        changes = self.store._connection.total_changes
-        files = {p.name: p.read_bytes() for p in self.directory.iterdir() if p.name.startswith(('.result-', '.context-'))}
-        with self.assertRaises(HistoryError):
-            self.store.publish_result(self.running, self.data['assignment'], self.data['body'].encode(),
-                ResultObservation(self.running.claim_id, self.now, False, True, None))
-        self.assertEqual(before, self.snapshot())
-        self.assertEqual(changes, self.store._connection.total_changes)
-        self.assertEqual(files, {p.name: p.read_bytes() for p in self.directory.iterdir()
-                                if p.name.startswith(('.result-', '.context-'))})
+        body = self.data['body'].encode()
+        observation = ResultObservation(self.running.claim_id, self.now, False, True, None)
+        # A valid terminal for THIS attempt, so commit cannot refuse for malformed input.
+        record = json.loads(self.store._connection.execute(
+            "SELECT content FROM records WHERE record_type='dispatch_result' LIMIT 1").fetchone()[0])
+        record.update(**observation.as_data(), run_id=self.running.run_id, result_digest=keyed_digest(self.key, body))
+        record.pop('record_id')
+        record['record_id'] = 'dispatch_result:' + content_digest(record)
+        for operation in ('publish_result', 'commit_result'):
+            with self.subTest(operation=operation):
+                before = self.snapshot()
+                changes = self.store._connection.total_changes
+                files = {p.name: p.read_bytes() for p in self.directory.iterdir()
+                         if p.name.startswith(('.result-', '.context-'))}
+                with self.assertRaisesRegex(HistoryError, '^history_result_expired$') as caught:
+                    if operation == 'publish_result':
+                        self.store.publish_result(self.running, self.data['assignment'], body, observation)
+                    else:
+                        self.store.commit_result(canonical_json(record), self.running, self.data['assignment'], body)
+                self.assertEqual('history_result_expired', caught.exception.reason_code)
+                self.assertEqual(before, self.snapshot())
+                self.assertEqual(changes, self.store._connection.total_changes)
+                self.assertEqual(files, {p.name: p.read_bytes() for p in self.directory.iterdir()
+                                        if p.name.startswith(('.result-', '.context-'))})
 
     @requirements('RSF-S6-2', 'RSF-S6-3', 'RSF-S6-4')
     def test_missing_legacy_inputs_keep_context_and_custody_without_fabrication(self):
@@ -205,11 +232,130 @@ owner.close()
         self.assertEqual(before, self.snapshot())
 
     @requirements('RSF-S6-4')
-    def test_other_runtime_guidance_keeps_custody_and_names_update_recovery(self):
+    def test_other_runtime_guidance_keeps_custody_and_names_setup_update(self):
         from codex_agents.refusal_steps import next_step
         step = next_step('history_unrecordable_other_runtime')
-        self.assertIn('update', step)
+        self.assertIn('Run: bash setup.sh --update', step)
+        self.assertNotIn('recovery', step)
         self.assertNotIn('start that version', step)
+
+    @requirements('RSF-S6-2', 'RSF-S6-3', 'RSF-S6-4', 'RSF-S6-5')
+    def test_each_new_owner_step_names_an_existing_cli_command(self):
+        import argparse
+        import cli
+        from codex_agents.refusal_steps import next_step
+        commands = set()
+        for action in cli.build_parser()._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                commands.update(action.choices)
+        # Inventory all S6 step literals, including evidence-missing branches.
+        steps = [next_step('history_unrecordable_other_runtime')]
+        tree = ast.parse(inspect.getsource(project_history.ProjectHistory))
+        for method in tree.body[0].body:
+            if not isinstance(method, ast.FunctionDef) or not method.name.startswith('_classify_legacy_'):
+                continue
+            for call in ast.walk(method):
+                if isinstance(call, ast.Call):
+                    if isinstance(call.func, ast.Attribute) and call.func.attr == '_legacy_evidence':
+                        steps.append(ast.literal_eval(call.args[3]))
+                    steps.extend(ast.literal_eval(kw.value) for kw in call.keywords if kw.arg == 'next_step')
+        self.assertEqual(7, len(steps))
+        for step in steps:
+            with self.subTest(step=step):
+                named = set(re.findall(r'\blearning-[a-z-]+\b', step))
+                setup = 'bash setup.sh --update' in step
+                self.assertTrue(named or setup, step)
+                self.assertLessEqual(named, commands)
+                self.assertNotIn('update recovery', step)
+        self.assertTrue((TOP / 'setup.sh').is_file())
+        self.assertIn('--update', (TOP / 'scripts/setup-wizard.py').read_text())
+
+    @requirements('RSF-S6-5')
+    def test_unarmed_lease_guidance_names_the_existing_automatic_expiry(self):
+        self.upgrade()
+        prep = ResultLeaseBinding(**self.data['preparations'][0])
+        identity = project_holds_schema.attempt_identity(prep.run_handle, prep.attempt)
+        step = json.loads(self.hold('lease', identity)['evidence'])['next_step']
+        self.assertIn('unarmed', step)
+        self.assertIn('expiry', step)
+        self.assertNotIn('Keep this hold', step)
+        self.now = self.store.result_lease(prep).reserved_until_ms + 1
+        self.assertEqual(70, self.store.expire_result_leases(limit=100))
+        self.assertEqual(('released', 'withdrawn_unsent'),
+                         (self.hold('lease', identity)['state'], self.hold('lease', identity)['release_kind']))
+
+    @requirements('RSF-S6-2')
+    def test_schema21_adopted_denial_without_receipt_clears_from_sealed_no_launch_evidence(self):
+        case = Path(tempfile.mkdtemp(dir=self.root))
+        for archive, operation in ((self.pre_b1_archive, 'pre-b1'), (self.schema21_archive, 'upgrade-only')):
+            env = {k: v for k, v in os.environ.items() if not k.startswith(('CODEX_', 'PYTHON'))}
+            env['PYTHONPATH'] = str(archive / 'scripts')
+            made = subprocess.run([sys.executable, '-B', str(HERE / 'rsf_s6_fixture.py'),
+                str(archive), str(case), operation], env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(0, made.returncode, made.stdout + made.stderr)
+        self.data = json.loads((case / 'manifest.json').read_text())
+        self.key, self.now = bytes.fromhex(self.data['key']), self.data['now']
+        pending = ResultLeaseBinding(**self.data['pending'])
+        identity = project_holds_schema.attempt_identity(pending.run_handle, pending.attempt)
+        with closing(sqlite3.connect(case / 'history/history.sqlite3')) as db:
+            self.assertEqual(21, db.execute('PRAGMA user_version').fetchone()[0])
+            self.assertEqual(('released', 'denied', None), db.execute(
+                "SELECT state,release_kind,receipt FROM project_holds WHERE kind='lease' AND identity=?",
+                (identity,)).fetchone())
+            self.assertIsNone(db.execute("SELECT 1 FROM project_holds WHERE kind='open_binding'").fetchone())
+        self.directory = case / 'history'
+        self.upgrade()
+        row = self.hold('open_binding', identity)
+        self.assertEqual(('released', 'fenced', None), (row['state'], row['release_kind'], row['receipt']))
+        before = self.snapshot()
+        for _ in range(2):
+            self.upgrade()
+            self.assertEqual(before, self.snapshot())
+
+    @requirements('RSF-S6-2')
+    def test_schema21_expired_lease_uses_retained_denial_receipt_to_clear_open_duty(self):
+        for reason, kind in (('billing_attestation_missing', 'denied'), ('claim_not_open', 'fenced')):
+            with self.subTest(release_kind=kind):
+                case = Path(tempfile.mkdtemp(dir=self.root))
+                shutil.copytree(self.source / 'history', case / 'history')
+                (case / 'manifest.json').write_text(json.dumps(self.data))
+                env = {k: v for k, v in os.environ.items() if not k.startswith(('CODEX_', 'PYTHON'))}
+                env['PYTHONPATH'] = str(self.schema21_archive / 'scripts')
+                made = subprocess.run([sys.executable, '-B', str(HERE / 'rsf_s6_fixture.py'),
+                    str(self.schema21_archive), str(case), reason], env=env,
+                    capture_output=True, text=True, timeout=30)
+                self.assertEqual(0, made.returncode, made.stdout + made.stderr)
+                identity = project_holds_schema.attempt_identity(self.pending.run_handle, self.pending.attempt)
+                with closing(sqlite3.connect(case / 'history/history.sqlite3')) as db:
+                    self.assertEqual(21, db.execute('PRAGMA user_version').fetchone()[0])
+                    self.assertEqual(('expired',), db.execute('SELECT state FROM result_leases WHERE run_handle=?',
+                        (self.pending.run_handle,)).fetchone())
+                    tombstone = db.execute("SELECT * FROM project_holds WHERE kind='lease' AND identity=?",
+                                           (identity,)).fetchone()
+                    self.assertIsNone(db.execute("SELECT 1 FROM project_holds WHERE kind='open_binding' AND identity=?",
+                                                (identity,)).fetchone())
+                self.directory = case / 'history'
+                classify = project_history.ProjectHistory._classify_legacy_leases
+                def clock_moves(owner, rows, migration_now):
+                    # The migration's frozen sample must survive a wall-clock move mid-batch.
+                    with mock.patch.object(owner, '_result_clock', return_value=migration_now + 1000):
+                        return classify(owner, rows, migration_now)
+                with mock.patch.object(project_history.ProjectHistory, '_classify_legacy_leases', clock_moves):
+                    self.upgrade()
+                duty = self.hold('open_binding', identity)
+                lease = self.hold('lease', identity)
+                self.assertEqual(('released', kind), (lease['state'], lease['release_kind']))
+                self.assertEqual(('released', 'fenced', lease['receipt']),
+                                 (duty['state'], duty['release_kind'], duty['receipt']))
+                self.assertEqual(self.now, duty['released_at_ms'])
+                self.assertEqual(tombstone, tuple(lease.values()))
+                before = self.snapshot()
+                self.assertEqual(0, self.store.withdraw_earlier_open_bindings('current-instance',
+                    project_id=self.data['project'], runtime_digest=self.store._fence.digest))
+                self.assertEqual(before, self.snapshot())
+                for _ in range(2):
+                    self.upgrade()
+                    self.assertEqual(before, self.snapshot())
 
     @requirements('RSF-S6-4')
     def test_finished_result_remains_recordable_only_by_current_fenced_runtime_after_two_reopens(self):
