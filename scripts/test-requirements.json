@@ -3021,6 +3021,32 @@
   "source": "tests/requirements/testspeed.json#TESTSPEED-6",
   "statement": "independent real-podman scenarios that share nothing run at the same moment."
  },
+ "TESTSPEED2-1": {
+  "checks": [
+   "root:test_setup_straight.SetupStraightTests.test_S4_3_update_skips_billing_when_attested_and_runs_it_otherwise",
+   "root:test_setup_straight.SetupStraightTests.test_S4_3_an_answers_rerun_signs_for_every_signature_that_is_not_current_and_shows_no_private_value",
+   "root:test_setup_straight.SetupStraightTests.test_S4_3_an_answers_file_skips_a_current_signature_signs_when_not_current_or_when_asked"
+  ],
+  "source": "tests/requirements/testspeed2.json#TESTSPEED2-1",
+  "statement": "`root:test_setup_straight` (4 fragments) totals at most 230 s, measured as the sum of its fragments' seconds (what the budget check counts), with full-run parallelism (`--jobs 16` beside `codex:tests.test_project_driver` and `root:test_install`)."
+ },
+ "TESTSPEED2-2": {
+  "checks": [
+   "codex:tests.test_lost_run_settlement.LedgerReadHelperTests.test_the_ledger_read_helpers_wait_for_a_write_the_collector_has_open"
+  ],
+  "source": "tests/requirements/testspeed2.json#TESTSPEED2-2",
+  "statement": "the lost-run test helpers `counted` and `claimed_bindings` read the account's tables under the ledger lock, never between the statements of an open account write (the load flake of the lost-run tests)."
+ },
+ "TESTSPEED2-3": {
+  "checks": [
+   "codex:tests.test_lost_run_settlement.LedgerReadHelperTests.test_the_ledger_read_helpers_wait_for_a_write_the_collector_has_open",
+   "root:test_setup_straight.SetupStraightTests.test_S4_3_an_answers_file_skips_a_current_signature_signs_when_not_current_or_when_asked",
+   "root:test_setup_straight.SetupStraightTests.test_S4_3_an_answers_rerun_signs_for_every_signature_that_is_not_current_and_shows_no_private_value",
+   "root:test_setup_straight.SetupStraightTests.test_S4_3_update_skips_billing_when_attested_and_runs_it_otherwise"
+  ],
+  "source": "tests/requirements/testspeed2.json#TESTSPEED2-3",
+  "statement": "no assertion is removed or weakened. Every changed assertion, renamed test or changed fixture behaviour is paired old -> new in [`testspeed2/assertions.md`](testspeed2/assertions.md)."
+ },
  "TF-1": {
   "checks": [
    "root:test_test_framework.ReviewEvidenceTests.test_B9_finished_test_cannot_own_module_teardown_violation",
