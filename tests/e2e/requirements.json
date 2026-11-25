@@ -283,8 +283,10 @@
    "id": "L11.2",
    "flow": "L11",
    "source": "PLAN-0.4.0.md T7",
-   "statement": "A failed upgrade forced part-way leaves the records unchanged, learning-rollback works and the next attempt succeeds.",
-   "checks": []
+   "statement": "A failed upgrade forced part-way leaves the records unchanged, the installer's automatic rollback of a failed update works and the next attempt succeeds.",
+   "checks": [
+    "l11_2_update_failed_part_way_is_rolled_back_records_unchanged_next_attempt_succeeds"
+   ]
   },
   {
    "id": "L12.1",
@@ -298,28 +300,38 @@
    "flow": "L12",
    "source": "PLAN-0.4.0.md T7",
    "statement": "A one-command update with an admitted-never-launched run and 0.2.x leftovers present needs no manual stop.",
-   "checks": []
+   "checks": [],
+   "deferred": true,
+   "reason": "0.2.x leftovers need a historical ledger: slice S4 / L12.6. The admitted-never-launched half is exercised inside G6's first update, but the ID stays unchecked until the 0.2.x half can be planted through a real product path. Decision 259."
   },
   {
    "id": "L12.3",
    "flow": "L12",
    "source": "PLAN-0.4.0.md T7",
    "statement": "An update with a child really running refuses plainly and changes nothing.",
-   "checks": []
+   "checks": [
+    "l12_3_update_with_a_running_child_is_refused_plainly_and_the_child_goes_on",
+    "l12_3_refused_update_with_a_running_child_changes_nothing",
+    "l12_3_the_update_after_the_refused_one_goes_through_when_the_child_has_ended"
+   ]
   },
   {
    "id": "L12.4",
    "flow": "L12",
    "source": "PLAN-0.4.0.md T7",
    "statement": "An update with uncommitted managed files is refused.",
-   "checks": []
+   "checks": [
+    "l12_4_update_with_uncommitted_managed_files_is_refused_and_changes_nothing"
+   ]
   },
   {
    "id": "L12.5",
    "flow": "L12",
    "source": "PLAN-0.4.0.md T7",
    "statement": "A second project updated after the first works (no other project stops working).",
-   "checks": []
+   "checks": [
+    "l12_5_second_project_updated_after_the_first_works_and_the_first_still_works"
+   ]
   },
   {
    "id": "L12.6",
@@ -426,7 +438,9 @@
    "flow": "all",
    "source": "PLAN-0.4.0.md T7",
    "statement": "An update never needs the collector stopped by hand, and finishes with the collector healthy on the new build.",
-   "checks": []
+   "checks": [
+    "g6_update_never_needs_the_collector_stopped_by_hand_and_ends_healthy_on_the_new_build"
+   ]
   },
   {
    "id": "G7",

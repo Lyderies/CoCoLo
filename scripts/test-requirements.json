@@ -765,7 +765,7 @@
  "L11.2": {
   "checks": [],
   "source": "PLAN-0.4.0.md T7",
-  "statement": "A failed upgrade forced part-way leaves the records unchanged, learning-rollback works and the next attempt succeeds."
+  "statement": "A failed upgrade forced part-way leaves the records unchanged, the installer's automatic rollback of a failed update works and the next attempt succeeds."
  },
  "L12.1": {
   "checks": [],
