@@ -3937,5 +3937,48 @@
   ],
   "source": "tests/requirements/u1.json#O0C-U1-5",
   "statement": "Prove independent boundaries, exact replay, reserved close, repeated past-cap operation, rollback and abrupt process exit with fast tests."
+ },
+ "L16.1": {
+  "statement": "Hook events from two projects and account calls arriving at once, through the installed product, are each written or answered exactly once: every event is in the ledger once (its own project, counted again by the collector's status), every account request id is recorded once however often it is sent, and the owner queue refuses nothing inside its limits (E2: hooks and account calls at once; no lost or duplicated request).",
+  "source": "PLAN-0.4.0.md M4b E2/E3",
+  "checks": []
+ },
+ "L16.2": {
+  "statement": "While a large project's hook backlog drains, a small project's events are written among them, not after them: no project is starved (E2: fair turns; the one-turn-per-round order itself is proved by the in-process owner load test, because real processes never queue deeply enough to show it).",
+  "source": "PLAN-0.4.0.md M4b E2/E3",
+  "checks": []
+ },
+ "L16.3": {
+  "statement": "Health keeps answering within its limit while the load runs, the plain health never refuses, and the same single collector process is ready and unrestarted afterwards (E2: health stays responsive; E3: the sole owner serves the load).",
+  "source": "PLAN-0.4.0.md M4b E2/E3",
+  "checks": []
+ },
+ "M4b-E2": {
+  "statement": "With hook events from several projects and account calls arriving at once, the sole ledger owner answers or counted-refuses each request exactly once (nothing lost or duplicated, sent equals accepted plus refused), gives each active project one turn per round, answers health without waiting for the owner, and runs every SQL statement on one thread. The load tests wait on the owner's handled acknowledgements, never on timeouts; the lifecycle check (L16.1-L16.3) drives the same load through the installed product.",
+  "source": "tests/requirements/s7.json#M4b-E2",
+  "checks": [
+   "codex:tests.test_s7_owner_load.OwnerLoadTests.test_a_full_project_refuses_its_overflow_counted_while_another_project_is_still_served",
+   "codex:tests.test_s7_owner_load.OwnerLoadTests.test_a_project_backlog_of_real_ingests_yields_turns_to_another_project",
+   "codex:tests.test_s7_owner_load.OwnerLoadTests.test_health_answers_while_the_owner_is_held_and_its_project_is_full",
+   "codex:tests.test_s7_owner_load.OwnerLoadTests.test_hooks_and_account_calls_at_once_lose_and_duplicate_nothing_on_one_ledger_thread"
+  ]
+ },
+ "M4b-E3": {
+  "statement": "The sole-owner product code passes the M4b-E2 tests with no test edited to fit; a product change is made only where one of them is red.",
+  "source": "tests/requirements/s7.json#M4b-E3",
+  "checks": [
+   "codex:tests.test_s7_owner_load.OwnerLoadTests.test_a_full_project_refuses_its_overflow_counted_while_another_project_is_still_served",
+   "codex:tests.test_s7_owner_load.OwnerLoadTests.test_a_project_backlog_of_real_ingests_yields_turns_to_another_project",
+   "codex:tests.test_s7_owner_load.OwnerLoadTests.test_health_answers_while_the_owner_is_held_and_its_project_is_full",
+   "codex:tests.test_s7_owner_load.OwnerLoadTests.test_hooks_and_account_calls_at_once_lose_and_duplicate_nothing_on_one_ledger_thread"
+  ]
+ },
+ "S1-U9": {
+  "statement": "A newly started collector answers its first health request, plain and for a registered project, within 1 s of its socket and its account endpoint existing.",
+  "source": "tests/requirements/s7.json#S1-U9",
+  "checks": [
+   "codex:tests.test_collector_first_response.CollectorFirstResponseTests.test_S1_U9_first_answer_comes_within_one_second_of_the_sockets_being_up",
+   "codex:tests.test_collector_first_response.CollectorFirstResponseTests.test_S1_U9_first_project_answer_comes_within_one_second_of_the_sockets_being_up"
+  ]
  }
 }

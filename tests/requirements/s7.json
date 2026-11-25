@@ -1,0 +1,20 @@
+{
+ "authority": "docs/requirements/s7.md",
+ "requirements": [
+  {
+   "id": "M4b-E2",
+   "statement": "With hook events from several projects and account calls arriving at once, the sole ledger owner answers or counted-refuses each request exactly once (nothing lost or duplicated, sent equals accepted plus refused), gives each active project one turn per round, answers health without waiting for the owner, and runs every SQL statement on one thread. The load tests wait on the owner's handled acknowledgements, never on timeouts; the lifecycle check (L16.1-L16.3) drives the same load through the installed product.",
+   "source": "tests/requirements/s7.json#M4b-E2"
+  },
+  {
+   "id": "M4b-E3",
+   "statement": "The sole-owner product code passes the M4b-E2 tests with no test edited to fit; a product change is made only where one of them is red.",
+   "source": "tests/requirements/s7.json#M4b-E3"
+  },
+  {
+   "id": "S1-U9",
+   "statement": "A newly started collector answers its first health request, plain and for a registered project, within 1 s of its socket and its account endpoint existing.",
+   "source": "tests/requirements/s7.json#S1-U9"
+  }
+ ]
+}

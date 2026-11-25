@@ -22,7 +22,7 @@ GROUP_SECONDS = {"default": 20, "fresh": 50, "key": 25, "replace": 35, "observe"
                  "route_claude": 35, "route_codex": 35, "life_claude": 55, "life_codex": 55, "life_claude_ready": 55,
                  "run_ctl": 90, "run_silence": 40, "run_capacity": 150, "rec_service": 75, "rec_collector": 130,
                  "learn": 110, "guard": 80, "retain": 70, "core_api": 60, "core_records": 60,
-                 "upd_all": 340}
+                 "upd_all": 340, "owner_load": 90}
 REASON = re.compile(r"[a-z][a-z0-9_]{0,79}")
 
 
