@@ -3,9 +3,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 
@@ -27,6 +29,12 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
     stop_clients = dispatch_fixtures.DispatchClientRuntimeTests.stop_clients
     control_scope = dispatch_fixtures.DispatchClientRuntimeTests.control_scope
     launch_cli = dispatch_fixtures.DispatchClientRuntimeTests.launch_cli
+
+    @classmethod
+    def setUpClass(cls):
+        # TESTSPEED-4: the fresh CLIs share one bytecode cache outside the source tree, so only the first compiles.
+        cls.bytecode = tempfile.mkdtemp(prefix='cli-pyc-')
+        cls.addClassCleanup(shutil.rmtree, cls.bytecode, ignore_errors=True)
 
     def listen_account(self):
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -105,7 +113,9 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
             env.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='fixture-claude-primary')
         if metered_backend:
             env['CLAUDE_CODE_USE_BEDROCK'] = '1'
-        process = subprocess.Popen([sys.executable, '-B', '-m', 'tests.dispatch_cli_fixture', 'learning-open-host-run',
+        env['COCOLO_TEST_ENDED_SERVICE_STARTS'] = '1'  # TESTSPEED-3: no service runs here, so its start ends at once
+        process = subprocess.Popen([sys.executable, '-X', 'pycache_prefix=' + self.bytecode, '-m', 'tests.dispatch_cli_fixture',
+            'learning-open-host-run',
             '--project-root', str(self.bridge.project), '--state-root', str(self.bridge.state.root),
             '--orchestration-handle', original.prospective.orchestration_handle, *args],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
@@ -184,7 +194,8 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
             env['CODEX_THREAD_ID'] = 'fixture-result-primary'
         else:
             env.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='fixture-result-primary')
-        process = subprocess.Popen([sys.executable, '-B', '-m', 'tests.dispatch_cli_fixture', 'learning-record-host-result',
+        process = subprocess.Popen([sys.executable, '-X', 'pycache_prefix=' + self.bytecode, '-m', 'tests.dispatch_cli_fixture',
+            'learning-record-host-result',
             '--project-root', str(self.bridge.project), '--state-root', str(self.bridge.state.root), *args],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         self.clients.append(process)
