@@ -59,6 +59,7 @@ RUNTIME_FILES = (
     "codex_agents/admission_inputs.py",
     "codex_agents/admission_metadata.py",
     "codex_agents/atomic_rename.py",
+    "codex_agents/attestation_capture.py",
     "codex_agents/billing_probe_contracts.py",
     "codex_agents/billing_probe_schema.py",
     "codex_agents/billing_probe_worker.py",

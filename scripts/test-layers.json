@@ -216,6 +216,7 @@
  "codex:tests.test_owner_key_contracts": "unit",
  "codex:tests.test_owner_record_payload": "scenario",
  "codex:tests.test_owner_terminal_flow": "scenario",
+ "codex:tests.test_p9b_attestation_followups": "scenario",
  "codex:tests.test_phase_report": "unit",
  "codex:tests.test_phase_report_exit": "scenario",
  "codex:tests.test_prepared_dispatch": "scenario",

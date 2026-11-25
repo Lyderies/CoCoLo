@@ -2358,6 +2358,8 @@ class LearningLedger:
             )
             self._initialize_launch_and_wake()  # RS-E E2a-1: additive, no schema version change
             self._record_first_owner_key()
+            from .attestation_capture import initialize
+            initialize(self._connection)
             self.state.mark_initialized()
             self._reconcile_managed_files()
         except BaseException:
@@ -2581,35 +2583,9 @@ class LearningLedger:
             return len(rows)
 
     def sweep_superseded_attestations(self, *, batch: int = LEARNING_SWEEP_BATCH) -> int:
-        """O0c P9 (owner 2026-11-21): remove up to `batch` billing attestations a later signed one of the same
-        owner supersedes for the same provider and account (admission reads only the latest), keeping the
-        latest per provider and account; returns how many. Only an owner-source attestation that nothing cites
-        (`_cited_sql`: a record link either way, a consumed grant, a stored file), and whose later one is
-        owner-signed, is removed (its signature row goes with it).
-        Skipped while a reader or a transaction is active."""
-        with self._held():
-            if self._readers() or self._connection.in_transaction:
-                return 0
-            rows = self._connection.execute(
-                "SELECT r.project_id,r.record_id FROM records r WHERE r.record_type='billing_attestation' "
-                "AND r.source='owner' "
-                f"AND NOT {_cited_sql('r')} "
-                "AND EXISTS (SELECT 1 FROM records n JOIN owner_attestations a ON a.project_id=n.project_id "
-                "AND a.subject_record_id=n.record_id WHERE n.project_id=r.project_id "
-                "AND n.record_type='billing_attestation' AND n.source='owner' "
-                "AND json_extract(CAST(n.content AS TEXT),'$.provider')=json_extract(CAST(r.content AS TEXT),'$.provider') "
-                "AND json_extract(CAST(n.content AS TEXT),'$.account_fingerprint')="
-                "json_extract(CAST(r.content AS TEXT),'$.account_fingerprint') "
-                "AND (n.observed_at_ms>r.observed_at_ms OR (n.observed_at_ms=r.observed_at_ms "
-                "AND n.source_sequence>r.source_sequence))) "
-                "ORDER BY r.project_id,r.source_sequence LIMIT ?", (batch,)).fetchall()
-            if not rows:
-                return 0
-            with self._account_transaction():
-                self._connection.executemany(
-                    "DELETE FROM records WHERE project_id=? AND record_id=?",
-                    [(str(row[0]), str(row[1])) for row in rows])
-            return len(rows)
+        """P9: bounded verified supersession; cited history stays readable."""
+        from .attestation_capture import sweep
+        return sweep(self, batch, _cited_sql)
 
     def sweep_event_retention(self, *, now_ms: int | None = None, batch: int = EVENT_SWEEP_BATCH) -> int:
         """Summarise, then remove, up to `batch` expired raw events; returns how many were removed.
@@ -6982,11 +6958,12 @@ class LearningLedger:
     ) -> tuple[tuple[str, int, bytes, str, str, bytes | None], ...]:
         rows = self._connection.execute(
             "SELECT r.record_id,r.source_sequence,r.content,r.content_digest,r.source,a.signature "
-            "FROM records r LEFT JOIN owner_attestations a "
+            "FROM temp.capture_candidates c CROSS JOIN records r LEFT JOIN owner_attestations a "
             "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
-            "WHERE r.project_id=? AND r.record_type='billing_attestation' "
-            "AND json_extract(CAST(r.content AS TEXT),'$.provider')=? ORDER BY r.source_sequence",
-            (project_id, provider),
+            "WHERE c.consumer=? AND c.project_id=? AND c.record_type='billing_attestation' "
+            "AND r.rowid=c.record_rowid AND json_extract(CAST(r.content AS TEXT),'$.provider')=? "
+            "ORDER BY c.source_sequence",
+            (provider, project_id, provider),
         ).fetchall()
         result = []
         for row in rows:

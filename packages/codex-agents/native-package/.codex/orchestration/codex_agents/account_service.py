@@ -66,7 +66,7 @@ WITHDRAW_LEDGER_REASONS = {
 # keeps every row a consumer could read at any such `now` (admission_metadata
 # and its account, claim and probe callers):
 #   identities: observed in the last 30 minutes (or later);
-#   attestations: all, the latest verified one wins at any age;
+#   attestations: applicable candidates not yet proven invalid or superseded;
 #   decisions and probes: the last 5 hours (run cap, probe cooldown, a run's own
 #     decision); and the first passing Claude decision per account, any age (the
 #     one bootstrap run per account);
@@ -75,7 +75,7 @@ WITHDRAW_LEDGER_REASONS = {
 #     age; and for Claude, the latest older billing and headroom per account,
 #     keeping ties (a probe may reuse old evidence; a bootstrap needs none).
 # Rows from the future are kept by every time rule. Foreign-account/provider
-# candidates are still charged. Content is never parsed here: the account, a
+# candidates are still charged until checked. Content is never parsed here: the account, a
 # headroom record's latest reset and a passing Claude decision come from the
 # admission_evidence index, which a trigger fills as each record is written.
 _ADMISSION_EVIDENCE = "SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id"
@@ -99,9 +99,18 @@ _ADMISSION_INPUT_SCOPE = (
     " AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000)))))"
 )
 _ADMISSION_INPUT_JOIN = (
-    " FROM records r LEFT JOIN owner_attestations a "
-    "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE "
-    + _ADMISSION_INPUT_SCOPE + " ORDER BY r.rowid LIMIT :limit"
+    # Attestations start from bounded projected membership. Other admission
+    # evidence comes from the record-type index and retains its original scope;
+    # unrelated record families never enter either branch. Each branch's first
+    # :limit rows contain every possible row in the global first :limit. Bound
+    # both branches before the final sort and record/signature joins.
+    " FROM (SELECT record_rowid FROM (SELECT record_rowid FROM temp.capture_candidates "
+    "WHERE consumer=:provider AND project_id=:p ORDER BY record_rowid LIMIT :limit) "
+    "UNION ALL SELECT record_rowid FROM (SELECT r.rowid AS record_rowid FROM records r WHERE r.record_type IN "
+    "('provider_identity','admission_decision','probe_admission','provider_billing','provider_headroom') "
+    "AND " + _ADMISSION_INPUT_SCOPE + " ORDER BY r.rowid LIMIT :limit)) c CROSS JOIN records r LEFT JOIN owner_attestations a "
+    "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
+    "WHERE r.rowid=c.record_rowid ORDER BY c.record_rowid LIMIT :limit"
 )
 
 
@@ -461,7 +470,7 @@ class AccountOwnerViews:
         elif type(anchor_ms) is not int or not 0 <= anchor_ms <= timestamp:
             # A clock earlier than the anchor could need history the scope left out.
             raise AdmissionCaptureError("admission_capture_unavailable")
-        scope = {"p": project_id, "a": anchor_ms, "limit": limits.max_rows + 1}
+        scope = {"p": project_id, "provider": provider, "a": anchor_ms, "limit": limits.max_rows + 1}
         owner_header = connection.execute(
             "SELECT CASE WHEN typeof(sequence)='integer' THEN sequence END,"
             "typeof(signer_line),length(signer_line),"
@@ -566,7 +575,8 @@ class AccountOwnerViews:
     ) -> SignatureInputSnapshot:
         """Capture unverified inputs within explicit field and SQL work limits.
 
-        All project billing rows are charged before the legacy provider filter.
+        Checked foreign-provider and superseded history is omitted. Unknown
+        and changed inputs remain candidates until collector verification.
         The cooperative callback budget does not bound OS I/O or global job
         capacity. No RPC, worker or installed defaults are activated here.
         """
@@ -640,7 +650,7 @@ class AccountOwnerViews:
             raise SignatureCaptureError("signature_capture_limit")
         # Only type/length/integer metadata is returned. In particular,
         # no JSON expression or content/signature value is selected.
-        # LIMIT bounds returned metadata, not the underlying scan work.
+        # Indexed candidate membership bounds work before ORDER BY/LIMIT.
         headers = self._ledger._connection.execute(
             "SELECT typeof(r.record_id),length(CAST(r.record_id AS BLOB)),"
             "typeof(r.content),length(r.content),"
@@ -648,11 +658,11 @@ class AccountOwnerViews:
             "typeof(r.source),length(CAST(r.source AS BLOB)),"
             "CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,"
             "typeof(a.signature),length(a.signature) "
-            "FROM records r LEFT JOIN owner_attestations a "
+            "FROM temp.capture_candidates c CROSS JOIN records r LEFT JOIN owner_attestations a "
             "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
-            "WHERE r.project_id=? AND r.record_type='billing_attestation' "
-            "ORDER BY r.source_sequence LIMIT ?",
-            (project_id, limits.max_rows + 1),
+            "WHERE c.consumer=? AND c.project_id=? AND c.record_type='billing_attestation' "
+            "AND r.rowid=c.record_rowid ORDER BY c.source_sequence LIMIT ?",
+            (provider, project_id, limits.max_rows + 1),
         ).fetchall()
         if len(headers) > limits.max_rows:
             raise SignatureCaptureError("signature_capture_limit")

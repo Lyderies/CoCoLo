@@ -1,0 +1,1259 @@
+{
+  "note": "Named-module runner evidence copied into the worktree; temporary log paths are not required to resume. Failed test outcomes are retained, including environmental failures. No full suite was run.",
+  "environment": {
+    "platform": "macOS, sandboxed workspace-write",
+    "sandbox_probe": {
+      "command": "/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true",
+      "exit_code": 71,
+      "stderr": "sandbox-exec: sandbox_apply: Operation not permitted"
+    },
+    "socket_evidence": "CollectorServer.serve listener.bind raised PermissionError [Errno 1] Operation not permitted in test_collector_read_scope."
+  },
+  "runs": [
+    {
+      "name": "p9-red",
+      "run_id": "5afff4db790c45afbf56ed552256d80a",
+      "modules": [
+        "codex:tests.test_signature_inputs"
+      ],
+      "elapsed_seconds": 4.525245083961636,
+      "job_seconds": 4.520113207981922,
+      "metadata_errors": [],
+      "p9_requirements": {
+        "P9-1": "failed",
+        "P9-2": "failed",
+        "P9-3": "failed",
+        "P9-4": "failed"
+      },
+      "workers": [
+        {
+          "unit": "tests.test_signature_inputs",
+          "tests": 37,
+          "seconds": 4.520113207981922,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "error"
+          },
+          "p9_outcomes": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "error",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims": "passed"
+          }
+        }
+      ]
+    },
+    {
+      "name": "p9-mutation-red",
+      "run_id": "dd6a021b3660443b855b13b15deb7e32",
+      "modules": [
+        "codex:tests.test_signature_inputs"
+      ],
+      "elapsed_seconds": 25.317946708062664,
+      "job_seconds": 25.30822270794306,
+      "metadata_errors": [],
+      "p9_requirements": {
+        "P9-1": "failed",
+        "P9-2": "failed",
+        "P9-3": "failed",
+        "P9-4": "failed"
+      },
+      "workers": [
+        {
+          "unit": "tests.test_signature_inputs",
+          "tests": 38,
+          "seconds": 25.30822270794306,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "failed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart": "error"
+          },
+          "p9_outcomes": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "failed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart": "error"
+          }
+        }
+      ]
+    },
+    {
+      "name": "p9-retry-red",
+      "run_id": "607839cad5d54ae8b8595d8a8d6089a6",
+      "modules": [
+        "codex:tests.test_signature_inputs"
+      ],
+      "elapsed_seconds": 27.858493124949746,
+      "job_seconds": 27.85381374997087,
+      "metadata_errors": [],
+      "p9_requirements": {
+        "P9-1": "failed",
+        "P9-2": "passed",
+        "P9-3": "failed",
+        "P9-4": "passed"
+      },
+      "workers": [
+        {
+          "unit": "tests.test_signature_inputs",
+          "tests": 40,
+          "seconds": 27.85381374997087,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes": "error"
+          },
+          "p9_outcomes": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "passed",
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes": "error",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart": "passed"
+          }
+        }
+      ]
+    },
+    {
+      "name": "p9-final",
+      "run_id": "3a08d1fad7e545bcbaabd08bd761ddc5",
+      "modules": [
+        "codex:tests.test_admission_inputs",
+        "codex:tests.test_event_retention",
+        "codex:tests.test_learning_retention",
+        "codex:tests.test_lifetime_cap_guard",
+        "codex:tests.test_runtime_release",
+        "codex:tests.test_signature_inputs",
+        "codex:tests.test_signature_job_intake"
+      ],
+      "elapsed_seconds": 29.789829499903135,
+      "job_seconds": 47.09745833312627,
+      "metadata_errors": [],
+      "p9_requirements": {
+        "P9-1": "failed",
+        "P9-2": "passed",
+        "P9-3": "passed",
+        "P9-4": "passed"
+      },
+      "workers": [
+        {
+          "unit": "tests.test_runtime_release",
+          "tests": 3,
+          "seconds": 0.3962981660151854,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version": "failed"
+          },
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_learning_retention",
+          "tests": 15,
+          "seconds": 1.4777970840223134,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_lifetime_cap_guard",
+          "tests": 4,
+          "seconds": 1.6452045829501003,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_lifetime_cap_guard.LifetimeCapGuardTests.test_every_count_based_limit_in_the_runtime_is_listed_with_its_end": "failed"
+          },
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_signature_job_intake",
+          "tests": 19,
+          "seconds": 3.6934424160281196,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_admission_inputs",
+          "tests": 26,
+          "seconds": 4.928305542096496,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_event_retention",
+          "tests": 22,
+          "seconds": 5.179173292010091,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_event_retention.CollectorSweepTests.test_the_collector_applies_retention_by_itself": "error"
+          },
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_signature_inputs",
+          "tests": 40,
+          "seconds": 29.777237250003964,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed"
+          },
+          "p9_outcomes": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "passed",
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart": "passed"
+          }
+        }
+      ]
+    },
+    {
+      "name": "p9-persistence",
+      "run_id": "b06f23c929ce4acb9da8135290500f7b",
+      "modules": [
+        "codex:tests.test_account_observation_backup",
+        "codex:tests.test_backup_installed_project",
+        "codex:tests.test_collector_read_scope",
+        "codex:tests.test_learning_migration",
+        "codex:tests.test_learning_source_image",
+        "codex:tests.test_learning_source_image_legacy",
+        "codex:tests.test_learning_source_transfer",
+        "codex:tests.test_owner_backup_streamed",
+        "codex:tests.test_refusal_steps",
+        "codex:tests.test_reply_shape_compatibility",
+        "codex:tests.test_state_location"
+      ],
+      "elapsed_seconds": 45.14013499999419,
+      "job_seconds": 122.44732829113491,
+      "metadata_errors": [],
+      "p9_requirements": {
+        "P9-1": "not_run",
+        "P9-2": "not_run",
+        "P9-3": "not_run",
+        "P9-4": "not_run"
+      },
+      "workers": [
+        {
+          "unit": "tests.test_reply_shape_compatibility",
+          "tests": 3,
+          "seconds": 0.3654115410754457,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_refusal_steps",
+          "tests": 14,
+          "seconds": 0.9203795000212267,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_account_observation_backup",
+          "tests": 2,
+          "seconds": 1.1551132500171661,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_backup_installed_project",
+          "tests": 2,
+          "seconds": 1.6811138750053942,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_learning_source_image",
+          "tests": 33,
+          "seconds": 4.074543750029989,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_learning_source_image_legacy",
+          "tests": 7,
+          "seconds": 4.13633804093115,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_state_location",
+          "tests": 22,
+          "seconds": 6.4286868328927085,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_state_location.LegacyStateMoveTests.test_old_records_of_an_earlier_version_move_only_once_the_upgrade_is_approved_too": "failed",
+            "codex:tests.test_state_location.LegacyStateMoveTests.test_only_the_new_folder_is_normal": "failed",
+            "codex:tests.test_state_location.LegacyStateMoveTests.test_registration_stops_the_collector_copies_and_sets_the_old_folder_aside": "error"
+          },
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_learning_migration#0",
+          "tests": 6,
+          "seconds": 6.657497583073564,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_learning_migration.MigrationCliTests.test_first_start_of_the_project_service_moves_the_history_by_itself": "failed"
+          },
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_learning_source_transfer",
+          "tests": 13,
+          "seconds": 6.808180459076539,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_owner_backup_streamed#0",
+          "tests": 20,
+          "seconds": 12.370095708989538,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_learning_migration#1",
+          "tests": 11,
+          "seconds": 14.296512750093825,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_learning_migration.MigrationCliTests.test_command_moves_reports_refuses_and_rolls_back": "failed"
+          },
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_owner_backup_streamed#1",
+          "tests": 20,
+          "seconds": 18.435617749928497,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_collector_read_scope",
+          "tests": 17,
+          "seconds": 45.117837249999866,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_a_defect_or_broken_connection_still_stops_the_collector_and_is_recorded": "failed",
+            "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_a_passing_refusal_during_a_bind_is_answered_and_the_collector_keeps_serving": "error",
+            "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_an_unusable_connection_stops_the_collector": "error",
+            "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_every_ingest_outcome_uses_up_its_binding_token": "error",
+            "codex:tests.test_collector_read_scope.HostOpenPublishLockTests.test_the_publish_check_holds_the_lock_so_a_concurrent_statement_waits_and_succeeds": "failed",
+            "codex:tests.test_collector_read_scope.HostOpenPublishLockTests.test_the_publish_check_waits_for_the_lock_no_longer_than_its_budget": "failed"
+          },
+          "p9_outcomes": {}
+        }
+      ]
+    },
+    {
+      "name": "p9-compatibility-final",
+      "run_id": "371746379afa4f3a86513c10e43dd601",
+      "modules": [
+        "codex:tests.test_account_cleanup_schema",
+        "codex:tests.test_account_observation_schema",
+        "codex:tests.test_account_open_schema",
+        "codex:tests.test_backup_reply_private",
+        "codex:tests.test_large_project_backups",
+        "codex:tests.test_legacy_capacity_upgrade",
+        "codex:tests.test_lifetime_cap_guard",
+        "codex:tests.test_project_holds_schema"
+      ],
+      "elapsed_seconds": 29.28490349999629,
+      "job_seconds": 59.33339091704693,
+      "metadata_errors": [],
+      "p9_requirements": {
+        "P9-1": "not_run",
+        "P9-2": "not_run",
+        "P9-3": "not_run",
+        "P9-4": "not_run"
+      },
+      "workers": [
+        {
+          "unit": "tests.test_account_cleanup_schema",
+          "tests": 3,
+          "seconds": 0.8297379169380292,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_account_open_schema",
+          "tests": 10,
+          "seconds": 1.1574995840201154,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_lifetime_cap_guard",
+          "tests": 4,
+          "seconds": 1.4339806659845635,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_project_holds_schema",
+          "tests": 40,
+          "seconds": 2.2838746670167893,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_legacy_capacity_upgrade",
+          "tests": 12,
+          "seconds": 2.7724732500500977,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_account_observation_schema",
+          "tests": 7,
+          "seconds": 3.5207457919605076,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_backup_reply_private",
+          "tests": 11,
+          "seconds": 6.782743333023973,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_large_project_backups#1",
+          "tests": 4,
+          "seconds": 11.283961583045311,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        },
+        {
+          "unit": "tests.test_large_project_backups#0",
+          "tests": 4,
+          "seconds": 29.26837412500754,
+          "returncode": 0,
+          "timed_out": false,
+          "nonpassing": {},
+          "p9_outcomes": {}
+        }
+      ]
+    },
+    {
+      "name": "p9-scheduled-final",
+      "run_id": "9bc250c4f67a4c258587203bf378d3d9",
+      "modules": [
+        "codex:tests.test_signature_inputs"
+      ],
+      "elapsed_seconds": 29.001024959026836,
+      "job_seconds": 28.986778000020422,
+      "metadata_errors": [],
+      "p9_requirements": {
+        "P9-1": "failed",
+        "P9-2": "passed",
+        "P9-3": "passed",
+        "P9-4": "passed"
+      },
+      "workers": [
+        {
+          "unit": "tests.test_signature_inputs",
+          "tests": 40,
+          "seconds": 28.986778000020422,
+          "returncode": 1,
+          "timed_out": false,
+          "nonpassing": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed"
+          },
+          "p9_outcomes": {
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "passed",
+            "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes": "passed",
+            "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart": "passed"
+          }
+        }
+      ]
+    }
+  ],
+  "initial_red": "The first public scenario failed at the post-collector limit-two capture with SignatureCaptureError: signature_capture_limit (37 tests, 4.525 seconds; metadata_errors []). Runtime files were unchanged before this run.",
+  "retry_red": "test_P9_failed_verification_is_retried_on_later_bounded_passes failed with empty capture rows (IndexError) before retrying cached negative results was implemented.",
+  "interrupted_run": "The earlier named test_account_claim_jobs + test_admission_history_growth batch was interrupted with Ctrl-C after repeated worker/cleanup timeouts under the restricted sandbox. It has no completed run record and is not acceptance evidence; no full run remains in flight.",
+  "r1_fix_round": {
+    "base": "5579560c",
+    "scope": [
+      "MED1 / P9-4",
+      "MED2 / P9-3",
+      "LOW1 / P9-2"
+    ],
+    "scale_vm_steps": {
+      "retained_cited_superseded_0": [
+        56,
+        37,
+        105,
+        66
+      ],
+      "retained_cited_superseded_10000": [
+        56,
+        37,
+        105,
+        66
+      ],
+      "order": [
+        "signature headers",
+        "signature bodies",
+        "admission headers",
+        "admission bodies"
+      ]
+    },
+    "runs": [
+      {
+        "name": "r1-core",
+        "run_id": "e7fc787326d64b2288e9436c9bf1d0e4",
+        "modules": [
+          "codex:tests.test_admission_inputs",
+          "codex:tests.test_learning_retention",
+          "codex:tests.test_lifetime_cap_guard",
+          "codex:tests.test_signature_inputs"
+        ],
+        "elapsed_seconds": 32.742078082985245,
+        "job_seconds": 37.4760948328767,
+        "metadata_errors": [],
+        "p9_requirements": {
+          "P9-1": "failed",
+          "P9-2": "passed",
+          "P9-3": "passed",
+          "P9-4": "passed"
+        },
+        "outcomes": {
+          "passed": 86,
+          "failed": 3
+        },
+        "workers": [
+          {
+            "unit": "tests.test_lifetime_cap_guard",
+            "tests": 4,
+            "seconds": 0.9195931249996647,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_learning_retention",
+            "tests": 15,
+            "seconds": 0.9710909170098603,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_admission_inputs",
+            "tests": 26,
+            "seconds": 2.8497722909087315,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_signature_inputs",
+            "tests": 44,
+            "seconds": 32.73563849995844,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_capture_deadline_refuses_during_scan_and_restores_the_owner": "failed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_unrelated_history_scan_exhausts_work_before_body_copy_then_recovers": "failed"
+            },
+            "p9_outcomes": {
+              "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "passed",
+              "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_capture_vm_work_is_independent_of_cited_superseded_history": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_due_cursor_advances_past_cited_rows_with_bounded_work": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_invalid_verdicts_are_cached_and_verification_holds_no_lock": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_verifier_race_and_exceptions_leave_inputs_unchecked": "passed"
+            },
+            "log_tail": ".FF............F.........................F...\n======================================================================\nFAIL: test_public_deferred_claim_uses_the_same_two_attestation_candidates (tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_signature_inputs.py\", line 837, in test_public_deferred_claim_uses_the_same_two_attestation_candidates\n    self._exercise_retained_history(deferred=True)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_signature_inputs.py\", line 948, in _exercise_retained_history\n    result = decode_account_response(fixture.pump(ticket), fixture.request())\n                                     ~~~~~~~~~~~~^^^^^^^^\n  File \"packages/codex-agents/tests/test_account_claim_jobs.py\", line 119, in pump\n    self.assertLess(time.monotonic() - started, 10, \"deferred claim did not finish\")\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 10.001445000059903 not less than 10 : deferred claim did not finish\n\n======================================================================\nFAIL: test_public_deferred_claim_uses_the_same_two_attestation_candidates (tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_account_claim_jobs.py\", line 69, in tearDown\n    self.assertLess(time.monotonic() - started, 10, \"disposable workers did not drain\")\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 10.000160625088029 not less than 10 : disposable workers did not drain\n\n======================================================================\nFAIL: test_capture_deadline_refuses_during_scan_and_restores_the_owner (tests.test_signature_inputs.SignatureInputOwnerTests.test_capture_deadline_refuses_during_scan_and_restores_the_owner)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_signature_inputs.py\", line 597, in test_capture_deadline_refuses_during_scan_and_restores_the_owner\n    self.assert_capture_error(\"signature_capture_work_limit\", self.capture)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_signature_inputs.py\", line 114, in assert_capture_error\n    with self.assertRaises(SignatureCaptureError) as caught:\n         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: SignatureCaptureError not raised\n\n======================================================================\nFAIL: test_unrelated_history_scan_exhausts_work_before_body_copy_then_recovers (tests.test_signature_inputs.SignatureInputOwnerTests.test_unrelated_history_scan_exhausts_work_before_body_copy_then_recovers)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_signature_inputs.py\", line 575, in test_unrelated_history_scan_exhausts_work_before_body_copy_then_recovers\n    self.assert_capture_error(\"signature_capture_work_limit\", lambda: self.capture(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        work_limits=SQLReadLimits(4, 1000, MAX_SIGNATURE_CAPTURE_BYTES)))\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_signature_inputs.py\", line 114, in assert_capture_error\n    with self.assertRaises(SignatureCaptureError) as caught:\n         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: SignatureCaptureError not raised\n\n----------------------------------------------------------------------\nRan 44 tests in 32.368s\n\nFAILED (failures=4)"
+          }
+        ]
+      },
+      {
+        "name": "r1-compat",
+        "run_id": "7763b478293d4032804a6ca794161651",
+        "modules": [
+          "codex:tests.test_account_cleanup_schema",
+          "codex:tests.test_account_observation_backup",
+          "codex:tests.test_account_observation_schema",
+          "codex:tests.test_account_open_schema",
+          "codex:tests.test_backup_installed_project",
+          "codex:tests.test_backup_reply_private",
+          "codex:tests.test_large_project_backups",
+          "codex:tests.test_learning_source_image",
+          "codex:tests.test_learning_source_image_legacy",
+          "codex:tests.test_learning_source_transfer",
+          "codex:tests.test_legacy_capacity_upgrade",
+          "codex:tests.test_owner_backup_streamed",
+          "codex:tests.test_project_holds_schema",
+          "codex:tests.test_refusal_steps",
+          "codex:tests.test_reply_shape_compatibility"
+        ],
+        "elapsed_seconds": 24.368187415995635,
+        "job_seconds": 96.28354512609076,
+        "metadata_errors": [],
+        "p9_requirements": {
+          "P9-1": "not_run",
+          "P9-2": "not_run",
+          "P9-3": "not_run",
+          "P9-4": "not_run"
+        },
+        "outcomes": {
+          "passed": 205
+        },
+        "workers": [
+          {
+            "unit": "tests.test_large_project_backups#1",
+            "tests": 4,
+            "seconds": 8.897274416987784,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_owner_backup_streamed#0",
+            "tests": 20,
+            "seconds": 13.097149582928978,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_reply_shape_compatibility",
+            "tests": 3,
+            "seconds": 0.16307841707020998,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_learning_source_transfer",
+            "tests": 13,
+            "seconds": 5.8176542080473155,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_learning_source_image_legacy",
+            "tests": 7,
+            "seconds": 3.25521558301989,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_backup_reply_private",
+            "tests": 11,
+            "seconds": 5.08721833396703,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_account_observation_schema",
+            "tests": 7,
+            "seconds": 2.2225884590297937,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_learning_source_image",
+            "tests": 33,
+            "seconds": 3.072043125052005,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_legacy_capacity_upgrade",
+            "tests": 12,
+            "seconds": 1.7733007909264416,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_account_observation_backup",
+            "tests": 2,
+            "seconds": 0.7603207919746637,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_backup_installed_project",
+            "tests": 2,
+            "seconds": 0.9772052080370486,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_project_holds_schema",
+            "tests": 40,
+            "seconds": 1.4057829590747133,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_owner_backup_streamed#1",
+            "tests": 20,
+            "seconds": 23.660391542012803,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_account_open_schema",
+            "tests": 10,
+            "seconds": 0.7627050830051303,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_refusal_steps",
+            "tests": 14,
+            "seconds": 0.4298612920101732,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_account_cleanup_schema",
+            "tests": 3,
+            "seconds": 0.539671582984738,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_large_project_backups#0",
+            "tests": 4,
+            "seconds": 24.36208374996204,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          }
+        ]
+      },
+      {
+        "name": "r1-copy-move",
+        "run_id": "282f1f83aac540dc8deab2bd7f0728b5",
+        "modules": [
+          "codex:tests.test_collector_read_scope",
+          "codex:tests.test_learning_chunk_upgrade",
+          "codex:tests.test_learning_migration",
+          "codex:tests.test_learning_qa_upgrade",
+          "codex:tests.test_learning_store",
+          "codex:tests.test_merge_library_adversarial",
+          "codex:tests.test_merge_library_contract",
+          "codex:tests.test_merge_library_recovery",
+          "codex:tests.test_merge_library_states",
+          "codex:tests.test_runtime_release",
+          "codex:tests.test_state_location"
+        ],
+        "elapsed_seconds": 136.39801749994513,
+        "job_seconds": 183.43920537584927,
+        "metadata_errors": [],
+        "p9_requirements": {
+          "P9-1": "not_run",
+          "P9-2": "not_run",
+          "P9-3": "not_run",
+          "P9-4": "not_run"
+        },
+        "outcomes": {
+          "passed": 357,
+          "failed": 8,
+          "error": 9,
+          "skipped": 3
+        },
+        "workers": [
+          {
+            "unit": "tests.test_learning_migration#0",
+            "tests": 6,
+            "seconds": 9.385515582980588,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_learning_migration.MigrationCliTests.test_first_start_of_the_project_service_moves_the_history_by_itself": "failed"
+            },
+            "p9_outcomes": {},
+            "log_tail": ".....F\n======================================================================\nFAIL: test_first_start_of_the_project_service_moves_the_history_by_itself (tests.test_learning_migration.MigrationCliTests.test_first_start_of_the_project_service_moves_the_history_by_itself)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_learning_migration.py\", line 330, in test_first_start_of_the_project_service_moves_the_history_by_itself\n    opened = self._run(\"learning-open-orchestration\")\n  File \"packages/codex-agents/tests/test_learning_cli.py\", line 314, in _run\n    self.assertEqual(expected, completed.returncode, completed.stderr or completed.stdout)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 0 != 2 : {\n  \"error\": \"orchestration operation unavailable\",\n  \"next_step\": \"Run learning-status to see what is held, then try again.\",\n  \"ready\": false,\n  \"reason_code\": \"orchestration_client_unavailable\",\n  \"request_id\": \"cli-orc-940dfc5eb909071d4c6dab1bfe6b0ca0\"\n}\n\n\n----------------------------------------------------------------------\nRan 6 tests in 8.670s\n\nFAILED (failures=1)"
+          },
+          {
+            "unit": "tests.test_learning_store#1",
+            "tests": 50,
+            "seconds": 9.837419749936089,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_learning_store.LearningStoreTests.test_app_server_cli_normalizes_and_ingests_through_collector": "error",
+              "codex:tests.test_learning_store.LearningStoreTests.test_collector_serializes_concurrent_clients": "error",
+              "codex:tests.test_learning_store.LearningStoreTests.test_spoofed_project_manifest_cannot_replace_active_collector": "error"
+            },
+            "p9_outcomes": {},
+            "log_tail": ".....E........E.............................E.....\n======================================================================\nERROR: test_app_server_cli_normalizes_and_ingests_through_collector (tests.test_learning_store.LearningStoreTests.test_app_server_cli_normalizes_and_ingests_through_collector)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13451, in serve\n    listener.bind(str(self.state.socket))\n    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^\nPermissionError: [Errno 1] Operation not permitted\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_learning_store.py\", line 4223, in test_app_server_cli_normalizes_and_ingests_through_collector\n    server.start()\n    ~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13443, in start\n    raise CollectorError(\"collector endpoint could not be created\") from self._startup_error\ncodex_agents.collector_contracts.CollectorError: collector endpoint could not be created\n\n======================================================================\nERROR: test_collector_serializes_concurrent_clients (tests.test_learning_store.LearningStoreTests.test_collector_serializes_concurrent_clients)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13451, in serve\n    listener.bind(str(self.state.socket))\n    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^\nPermissionError: [Errno 1] Operation not permitted\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_learning_store.py\", line 3615, in test_collector_serializes_concurrent_clients\n    server.start()\n    ~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13443, in start\n    raise CollectorError(\"collector endpoint could not be created\") from self._startup_error\ncodex_agents.collector_contracts.CollectorError: collector endpoint could not be created\n\n======================================================================\nERROR: test_spoofed_project_manifest_cannot_replace_active_collector (tests.test_learning_store.LearningStoreTests.test_spoofed_project_manifest_cannot_replace_active_collector)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13451, in serve\n    listener.bind(str(self.state.socket))\n    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^\nPermissionError: [Errno 1] Operation not permitted\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_learning_store.py\", line 3873, in test_spoofed_project_manifest_cannot_replace_active_collector\n    server.start()\n    ~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13443, in start\n    raise CollectorError(\"collector endpoint could not be created\") from self._startup_error\ncodex_agents.collector_contracts.CollectorError: collector endpoint could not be created\n\n----------------------------------------------------------------------\nRan 50 tests in 9.251s\n\nFAILED (errors=3)"
+          },
+          {
+            "unit": "tests.test_learning_store#0",
+            "tests": 50,
+            "seconds": 12.704832583083771,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_learning_store.LearningStoreTests.test_collector_rejects_forged_binding_and_unavailability_is_bounded": "error",
+              "codex:tests.test_learning_store.LearningStoreTests.test_second_collector_cannot_replace_the_active_socket": "error"
+            },
+            "p9_outcomes": {},
+            "log_tail": ".............E..............................E.....\n======================================================================\nERROR: test_collector_rejects_forged_binding_and_unavailability_is_bounded (tests.test_learning_store.LearningStoreTests.test_collector_rejects_forged_binding_and_unavailability_is_bounded)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13451, in serve\n    listener.bind(str(self.state.socket))\n    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^\nPermissionError: [Errno 1] Operation not permitted\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_learning_store.py\", line 3651, in test_collector_rejects_forged_binding_and_unavailability_is_bounded\n    server.start()\n    ~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13443, in start\n    raise CollectorError(\"collector endpoint could not be created\") from self._startup_error\ncodex_agents.collector_contracts.CollectorError: collector endpoint could not be created\n\n======================================================================\nERROR: test_second_collector_cannot_replace_the_active_socket (tests.test_learning_store.LearningStoreTests.test_second_collector_cannot_replace_the_active_socket)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13451, in serve\n    listener.bind(str(self.state.socket))\n    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^\nPermissionError: [Errno 1] Operation not permitted\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_learning_store.py\", line 4182, in test_second_collector_cannot_replace_the_active_socket\n    first.start()\n    ~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13443, in start\n    raise CollectorError(\"collector endpoint could not be created\") from self._startup_error\ncodex_agents.collector_contracts.CollectorError: collector endpoint could not be created\n\n----------------------------------------------------------------------\nRan 50 tests in 12.090s\n\nFAILED (errors=2)"
+          },
+          {
+            "unit": "tests.test_state_location",
+            "tests": 22,
+            "seconds": 6.483819874934852,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_state_location.LegacyStateMoveTests.test_old_records_of_an_earlier_version_move_only_once_the_upgrade_is_approved_too": "failed",
+              "codex:tests.test_state_location.LegacyStateMoveTests.test_only_the_new_folder_is_normal": "failed",
+              "codex:tests.test_state_location.LegacyStateMoveTests.test_registration_stops_the_collector_copies_and_sets_the_old_folder_aside": "error"
+            },
+            "p9_outcomes": {},
+            "log_tail": "................FF.E..\n======================================================================\nERROR: test_registration_stops_the_collector_copies_and_sets_the_old_folder_aside (tests.test_state_location.LegacyStateMoveTests.test_registration_stops_the_collector_copies_and_sets_the_old_folder_aside)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_state_location.py\", line 339, in test_registration_stops_the_collector_copies_and_sets_the_old_folder_aside\n    ensure_collector(state, CLI, project_root=self.project)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_runtime.py\", line 429, in ensure_collector\n    return _start_collector_locked(\n        state,\n    ...<2 lines>...\n        timeout=timeout,\n    )\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_runtime.py\", line 500, in _start_collector_locked\n    raise CollectorError(\"collector did not become healthy\")\ncodex_agents.collector_contracts.CollectorError: collector did not become healthy\n\n======================================================================\nFAIL: test_old_records_of_an_earlier_version_move_only_once_the_upgrade_is_approved_too (tests.test_state_location.LegacyStateMoveTests.test_old_records_of_an_earlier_version_move_only_once_the_upgrade_is_approved_too)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_state_location.py\", line 330, in test_old_records_of_an_earlier_version_move_only_once_the_upgrade_is_approved_too\n    report = self.run_cli(\"learning-register\", \"--project-root\", str(self.project),\n                          \"--move-legacy-state\", self.approval(), \"--upgrade-ledger\")\n  File \"packages/codex-agents/tests/test_state_location.py\", line 282, in run_cli\n    self.assertEqual(expected, code, stdout.getvalue())\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 0 != 2 : {\n  \"cause\": \"collector did not become healthy\",\n  \"error\": \"the records were upgraded and this project is registered, but the collector did not start again; run setup again; keep the copy of the records as they were\",\n  \"ledger_copy\": \"/private/tmp/mv-4ork2o8b/h/.local/state/codex-agents/ledger-before-upgrade/learning-schema6-1795575727102.sqlite3\",\n  \"ledger_schema_version\": 6,\n  \"next_step\": \"Run learning-status to see what is held, then try again.\",\n  \"ready\": false,\n  \"reason_code\": \"collector_not_started_after_registration\",\n  \"state_moved\": \"/private/tmp/mv-4ork2o8b/h/Library/Application Support/codex-agents.moved-20261125T030207Z\"\n}\n\n\n======================================================================\nFAIL: test_only_the_new_folder_is_normal (tests.test_state_location.LegacyStateMoveTests.test_only_the_new_folder_is_normal)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_state_location.py\", line 523, in test_only_the_new_folder_is_normal\n    report = self.run_cli(\"learning-register\", \"--project-root\", str(self.project))\n  File \"packages/codex-agents/tests/test_state_location.py\", line 282, in run_cli\n    self.assertEqual(expected, code, stdout.getvalue())\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 0 != 2 : {\n  \"error\": \"collector did not become healthy\",\n  \"ready\": false\n}\n\n\n----------------------------------------------------------------------\nRan 22 tests in 6.114s\n\nFAILED (failures=2, errors=1)"
+          },
+          {
+            "unit": "tests.test_learning_migration#1",
+            "tests": 11,
+            "seconds": 17.435512833995745,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_learning_migration.MigrationCliTests.test_command_moves_reports_refuses_and_rolls_back": "failed"
+            },
+            "p9_outcomes": {},
+            "log_tail": "..........F\n======================================================================\nFAIL: test_command_moves_reports_refuses_and_rolls_back (tests.test_learning_migration.MigrationCliTests.test_command_moves_reports_refuses_and_rolls_back)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_learning_migration.py\", line 315, in test_command_moves_reports_refuses_and_rolls_back\n    store_cycle = self._run(\"learning-run-cycle\")\n  File \"packages/codex-agents/tests/test_learning_cli.py\", line 314, in _run\n    self.assertEqual(expected, completed.returncode, completed.stderr or completed.stdout)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 0 != 2 : {\n  \"error\": \"project learning has moved to its project store\",\n  \"ready\": false\n}\n\n\n----------------------------------------------------------------------\nRan 11 tests in 16.640s\n\nFAILED (failures=1)"
+          },
+          {
+            "unit": "tests.test_collector_read_scope",
+            "tests": 17,
+            "seconds": 44.945012749987654,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_a_defect_or_broken_connection_still_stops_the_collector_and_is_recorded": "failed",
+              "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_a_passing_refusal_during_a_bind_is_answered_and_the_collector_keeps_serving": "error",
+              "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_an_unusable_connection_stops_the_collector": "error",
+              "codex:tests.test_collector_read_scope.CollectorRefusalTests.test_every_ingest_outcome_uses_up_its_binding_token": "error",
+              "codex:tests.test_collector_read_scope.HostOpenPublishLockTests.test_the_publish_check_holds_the_lock_so_a_concurrent_statement_waits_and_succeeds": "failed",
+              "codex:tests.test_collector_read_scope.HostOpenPublishLockTests.test_the_publish_check_waits_for_the_lock_no_longer_than_its_budget": "failed"
+            },
+            "p9_outcomes": {},
+            "log_tail": "  File \"packages/codex-agents/tests/test_collector_read_scope.py\", line 70, in test_a_passing_refusal_during_a_bind_is_answered_and_the_collector_keeps_serving\n    server, client = self.serve()\n                     ~~~~~~~~~~^^\n  File \"packages/codex-agents/tests/test_collector_read_scope.py\", line 62, in serve\n    server.start()\n    ~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13443, in start\n    raise CollectorError(\"collector endpoint could not be created\") from self._startup_error\ncodex_agents.collector_contracts.CollectorError: collector endpoint could not be created\n\n======================================================================\nERROR: test_an_unusable_connection_stops_the_collector (tests.test_collector_read_scope.CollectorRefusalTests.test_an_unusable_connection_stops_the_collector)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13451, in serve\n    listener.bind(str(self.state.socket))\n    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^\nPermissionError: [Errno 1] Operation not permitted\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_collector_read_scope.py\", line 111, in test_an_unusable_connection_stops_the_collector\n    server, client = self.serve()\n                     ~~~~~~~~~~^^\n  File \"packages/codex-agents/tests/test_collector_read_scope.py\", line 62, in serve\n    server.start()\n    ~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13443, in start\n    raise CollectorError(\"collector endpoint could not be created\") from self._startup_error\ncodex_agents.collector_contracts.CollectorError: collector endpoint could not be created\n\n======================================================================\nERROR: test_every_ingest_outcome_uses_up_its_binding_token (tests.test_collector_read_scope.CollectorRefusalTests.test_every_ingest_outcome_uses_up_its_binding_token)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13451, in serve\n    listener.bind(str(self.state.socket))\n    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^\nPermissionError: [Errno 1] Operation not permitted\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_collector_read_scope.py\", line 123, in test_every_ingest_outcome_uses_up_its_binding_token\n    server, client = self.serve()\n                     ~~~~~~~~~~^^\n  File \"packages/codex-agents/tests/test_collector_read_scope.py\", line 62, in serve\n    server.start()\n    ~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13443, in start\n    raise CollectorError(\"collector endpoint could not be created\") from self._startup_error\ncodex_agents.collector_contracts.CollectorError: collector endpoint could not be created\n\n======================================================================\nFAIL: test_the_publish_check_holds_the_lock_so_a_concurrent_statement_waits_and_succeeds (tests.test_collector_read_scope.HostOpenPublishLockTests.test_the_publish_check_holds_the_lock_so_a_concurrent_statement_waits_and_succeeds)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_collector_read_scope.py\", line 202, in test_the_publish_check_holds_the_lock_so_a_concurrent_statement_waits_and_succeeds\n    raw = t.pump_wire(service, service.begin(encode_account_request(request), t.token))\n  File \"packages/codex-agents/tests/test_account_original_open.py\", line 308, in pump_wire\n    self.assertLess(time.monotonic()-started, 10)\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 10.001362750073895 not less than 10\n\n======================================================================\nFAIL: test_the_publish_check_waits_for_the_lock_no_longer_than_its_budget (tests.test_collector_read_scope.HostOpenPublishLockTests.test_the_publish_check_waits_for_the_lock_no_longer_than_its_budget)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_collector_read_scope.py\", line 247, in test_the_publish_check_waits_for_the_lock_no_longer_than_its_budget\n    raw = t.pump_wire(service, service.begin(encode_account_request(request), t.token))\n  File \"packages/codex-agents/tests/test_account_original_open.py\", line 308, in pump_wire\n    self.assertLess(time.monotonic()-started, 10)\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 10.00270312500652 not less than 10\n\n----------------------------------------------------------------------\nRan 17 tests in 44.404s\n\nFAILED (failures=2, errors=10)"
+          },
+          {
+            "unit": "tests.test_merge_library_states",
+            "tests": 25,
+            "seconds": 0.5601755829993635,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_merge_library_recovery",
+            "tests": 9,
+            "seconds": 1.2320619589881971,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_merge_library_contract",
+            "tests": 127,
+            "seconds": 24.805436624912545,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_merge_library_adversarial",
+            "tests": 49,
+            "seconds": 55.03524266707245,
+            "returncode": 0,
+            "nonpassing": {
+              "codex:tests.test_merge_library_adversarial.RealImages.test_ml_12_really_full_image": "skipped",
+              "codex:tests.test_merge_library_adversarial.RealImages.test_ml_4_FAT_HFS_images": "skipped",
+              "codex:tests.test_merge_library_adversarial.RealImages.test_ml_4_actual_mounted_target_and_staging": "skipped"
+            },
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_runtime_release",
+            "tests": 3,
+            "seconds": 0.2775299589848146,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version": "failed"
+            },
+            "p9_outcomes": {},
+            "log_tail": "F..\n======================================================================\nFAIL: test_current_runtime_is_recorded_for_the_current_version (tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_runtime_release.py\", line 35, in test_current_runtime_is_recorded_for_the_current_version\n    self.assertEqual(\n    ~~~~~~~~~~~~~~~~^\n        releases[version], COLLECTOR_RUNTIME_DIGEST,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        \"the collector runtime changed: bump VERSION and record the new digest\",\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\nAssertionError: '152fc5bf7e3df433f177baf8ea2418c6835598dd840eb4546c296930b85c86d2' != '3271bcb8e1ffd360e53619cc654ca9fe75be2a8da98e09297dcbd09b432e1677'\n- 152fc5bf7e3df433f177baf8ea2418c6835598dd840eb4546c296930b85c86d2\n+ 3271bcb8e1ffd360e53619cc654ca9fe75be2a8da98e09297dcbd09b432e1677\n : the collector runtime changed: bump VERSION and record the new digest\n\n----------------------------------------------------------------------\nRan 3 tests in 0.021s\n\nFAILED (failures=1)"
+          },
+          {
+            "unit": "tests.test_learning_chunk_upgrade",
+            "tests": 5,
+            "seconds": 0.34090395795647055,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_learning_qa_upgrade",
+            "tests": 3,
+            "seconds": 0.39574125001672655,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          }
+        ]
+      },
+      {
+        "name": "r1-final",
+        "run_id": "e7d18c8d07784f34baec9a0b20d4cf6c",
+        "modules": [
+          "codex:tests.test_admission_inputs",
+          "codex:tests.test_e2a_launch_record",
+          "codex:tests.test_learning_retention",
+          "codex:tests.test_lifetime_cap_guard",
+          "codex:tests.test_signature_inputs",
+          "codex:tests.test_signature_job_intake"
+        ],
+        "elapsed_seconds": 40.145280249998905,
+        "job_seconds": 53.24527250009123,
+        "metadata_errors": [],
+        "p9_requirements": {
+          "P9-1": "failed",
+          "P9-2": "passed",
+          "P9-3": "passed",
+          "P9-4": "passed"
+        },
+        "outcomes": {
+          "passed": 124,
+          "error": 7,
+          "failed": 1
+        },
+        "workers": [
+          {
+            "unit": "tests.test_signature_job_intake",
+            "tests": 19,
+            "seconds": 1.8574500000104308,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_admission_inputs",
+            "tests": 26,
+            "seconds": 2.652834584005177,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_lifetime_cap_guard",
+            "tests": 4,
+            "seconds": 0.8528837079647928,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_learning_retention",
+            "tests": 15,
+            "seconds": 0.827457792009227,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_e2a_launch_record",
+            "tests": 24,
+            "seconds": 6.919345458038151,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_e2a_launch_record.CollectorRecordTests.test_E2a_3_record_launch_over_the_collector_wire_and_its_runtime_gate": "error",
+              "codex:tests.test_e2a_launch_record.FinalFixTests.test_E2a_4_a_lost_record_reply_keeps_the_new_copy_pinned": "error",
+              "codex:tests.test_e2a_launch_record.FinalWireTests.test_E2a_3_record_launch_and_launch_status_refuse_a_wrong_key_and_a_replayed_proof": "error",
+              "codex:tests.test_e2a_launch_record.LaunchAuthorityTests.test_E2a_11_launch_status_authorizes_its_subject_before_any_lookup": "error",
+              "codex:tests.test_e2a_launch_record.LaunchAuthorityTests.test_E2a_3_record_launch_needs_the_owner_and_a_copy_the_collector_verifies": "error",
+              "codex:tests.test_e2a_launch_record.SetupRecordTests.test_E2a_10_registration_records_the_launch_target_without_the_codex_rule": "error",
+              "codex:tests.test_e2a_launch_record.SetupRecordTests.test_E2a_11_status_says_run_setup_when_no_launch_record_exists": "error"
+            },
+            "p9_outcomes": {},
+            "log_tail": "======================================================================\nERROR: test_E2a_11_launch_status_authorizes_its_subject_before_any_lookup (tests.test_e2a_launch_record.LaunchAuthorityTests.test_E2a_11_launch_status_authorizes_its_subject_before_any_lookup)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13451, in serve\n    listener.bind(str(self.state.socket))\n    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^\nPermissionError: [Errno 1] Operation not permitted\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_e2a_launch_record.py\", line 338, in setUp\n    self.server.start()\n    ~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13443, in start\n    raise CollectorError(\"collector endpoint could not be created\") from self._startup_error\ncodex_agents.collector_contracts.CollectorError: collector endpoint could not be created\n\n======================================================================\nERROR: test_E2a_3_record_launch_needs_the_owner_and_a_copy_the_collector_verifies (tests.test_e2a_launch_record.LaunchAuthorityTests.test_E2a_3_record_launch_needs_the_owner_and_a_copy_the_collector_verifies)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13451, in serve\n    listener.bind(str(self.state.socket))\n    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^\nPermissionError: [Errno 1] Operation not permitted\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_e2a_launch_record.py\", line 338, in setUp\n    self.server.start()\n    ~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13443, in start\n    raise CollectorError(\"collector endpoint could not be created\") from self._startup_error\ncodex_agents.collector_contracts.CollectorError: collector endpoint could not be created\n\n======================================================================\nERROR: test_E2a_10_registration_records_the_launch_target_without_the_codex_rule (tests.test_e2a_launch_record.SetupRecordTests.test_E2a_10_registration_records_the_launch_target_without_the_codex_rule)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13451, in serve\n    listener.bind(str(self.state.socket))\n    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^\nPermissionError: [Errno 1] Operation not permitted\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_e2a_launch_record.py\", line 288, in setUp\n    self.server.start()\n    ~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13443, in start\n    raise CollectorError(\"collector endpoint could not be created\") from self._startup_error\ncodex_agents.collector_contracts.CollectorError: collector endpoint could not be created\n\n======================================================================\nERROR: test_E2a_11_status_says_run_setup_when_no_launch_record_exists (tests.test_e2a_launch_record.SetupRecordTests.test_E2a_11_status_says_run_setup_when_no_launch_record_exists)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13451, in serve\n    listener.bind(str(self.state.socket))\n    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^\nPermissionError: [Errno 1] Operation not permitted\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_e2a_launch_record.py\", line 288, in setUp\n    self.server.start()\n    ~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py\", line 13443, in start\n    raise CollectorError(\"collector endpoint could not be created\") from self._startup_error\ncodex_agents.collector_contracts.CollectorError: collector endpoint could not be created\n\n----------------------------------------------------------------------\nRan 24 tests in 6.641s\n\nFAILED (errors=7)"
+          },
+          {
+            "unit": "tests.test_signature_inputs",
+            "tests": 44,
+            "seconds": 40.13530095806345,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed"
+            },
+            "p9_outcomes": {
+              "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "passed",
+              "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_capture_vm_work_is_independent_of_cited_superseded_history": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_due_cursor_advances_past_cited_rows_with_bounded_work": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_invalid_verdicts_are_cached_and_verification_holds_no_lock": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_verifier_race_and_exceptions_leave_inputs_unchecked": "passed"
+            },
+            "log_tail": ".FF..........................................\n======================================================================\nFAIL: test_public_deferred_claim_uses_the_same_two_attestation_candidates (tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_signature_inputs.py\", line 869, in test_public_deferred_claim_uses_the_same_two_attestation_candidates\n    self._exercise_retained_history(deferred=True)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_signature_inputs.py\", line 980, in _exercise_retained_history\n    result = decode_account_response(fixture.pump(ticket), fixture.request())\n                                     ~~~~~~~~~~~~^^^^^^^^\n  File \"packages/codex-agents/tests/test_account_claim_jobs.py\", line 119, in pump\n    self.assertLess(time.monotonic() - started, 10, \"deferred claim did not finish\")\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 10.00239341694396 not less than 10 : deferred claim did not finish\n\n======================================================================\nFAIL: test_public_deferred_claim_uses_the_same_two_attestation_candidates (tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_account_claim_jobs.py\", line 69, in tearDown\n    self.assertLess(time.monotonic() - started, 10, \"disposable workers did not drain\")\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 10.00043925002683 not less than 10 : disposable workers did not drain\n\n----------------------------------------------------------------------\nRan 44 tests in 39.857s\n\nFAILED (failures=2)"
+          }
+        ]
+      },
+      {
+        "name": "r1-last",
+        "run_id": "0f66e4d0fc2c443eb36fe518b6adcaae",
+        "modules": [
+          "codex:tests.test_learning_engine",
+          "codex:tests.test_owner_key_contracts",
+          "codex:tests.test_project_start",
+          "codex:tests.test_runtime_release",
+          "codex:tests.test_signature_inputs"
+        ],
+        "elapsed_seconds": 44.82808608293999,
+        "job_seconds": 73.66268120822497,
+        "metadata_errors": [],
+        "p9_requirements": {
+          "P9-1": "failed",
+          "P9-2": "passed",
+          "P9-3": "passed",
+          "P9-4": "passed"
+        },
+        "outcomes": {
+          "error": 10,
+          "passed": 119,
+          "failed": 31
+        },
+        "workers": [
+          {
+            "unit": "tests.test_project_start#5",
+            "tests": 6,
+            "seconds": 3.6337756250286475,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_project_start.BudgetTests.test_E2c_10_the_stranded_pass_reaches_every_claim_past_one_page": "error",
+              "codex:tests.test_project_start.OwnershipTests.test_E2c_2_refused_ledger_steps_are_retried_and_no_worker_ends": "failed",
+              "codex:tests.test_project_start.RecordRefusedTests.test_E2c_10_after_the_collector_s_loss_an_unrecorded_child_keeps_its_claim_until_it_is_gone": "failed",
+              "codex:tests.test_project_start.StartTests.test_E2c_2_limits_and_round_robin_with_two_projects_ending_at_once": "failed",
+              "codex:tests.test_project_start.StopTests.test_E2c_11_a_stop_with_the_collector_s_intake_closed_is_not_delayed": "failed"
+            },
+            "p9_outcomes": {},
+            "log_tail": "FAIL: test_E2c_10_after_the_collector_s_loss_an_unrecorded_child_keeps_its_claim_until_it_is_gone (tests.test_project_start.RecordRefusedTests.test_E2c_10_after_the_collector_s_loss_an_unrecorded_child_keeps_its_claim_until_it_is_gone)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 1359, in test_E2c_10_after_the_collector_s_loss_an_unrecorded_child_keeps_its_claim_until_it_is_gone\n    pid, attempt, unserved = self.spawn_unrecorded()\n                             ~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 1323, in spawn_unrecorded\n    self.launch(constants={'START_TIMEOUT_SECONDS': self.TIMEOUT, 'START_BACKOFF_FIRST_SECONDS': 60.0},\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n                fail={'set_start_child': 10 ** 6}, unserved=str(unserved))\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n======================================================================\nFAIL: test_E2c_2_limits_and_round_robin_with_two_projects_ending_at_once (tests.test_project_start.StartTests.test_E2c_2_limits_and_round_robin_with_two_projects_ending_at_once)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 465, in test_E2c_2_limits_and_round_robin_with_two_projects_ending_at_once\n    self.launch(constants={'START_BACKOFF_FIRST_SECONDS': 0.4, 'START_BACKOFF_MAX_SECONDS': 0.8})\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n======================================================================\nFAIL: test_E2c_11_a_stop_with_the_collector_s_intake_closed_is_not_delayed (tests.test_project_start.StopTests.test_E2c_11_a_stop_with_the_collector_s_intake_closed_is_not_delayed)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 738, in test_E2c_11_a_stop_with_the_collector_s_intake_closed_is_not_delayed\n    self.launch()\n    ~~~~~~~~~~~^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n----------------------------------------------------------------------\nRan 6 tests in 3.288s\n\nFAILED (failures=4, errors=1)"
+          },
+          {
+            "unit": "tests.test_project_start#0",
+            "tests": 7,
+            "seconds": 3.695792291080579,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_project_start.BackoffTests.test_E2c_4_an_early_exit_counts_failed_and_a_lasting_start_ends_the_streak": "failed",
+              "codex:tests.test_project_start.FairnessTests.test_E2c_2_past_the_queue_and_slot_limits_every_due_project_is_still_started": "error",
+              "codex:tests.test_project_start.OwnershipTests.test_E2c_10_a_child_whose_pid_record_is_refused_is_still_timed_killed_and_reaped": "failed",
+              "codex:tests.test_project_start.RecordRefusedTests.test_E2c_10_a_clean_stop_never_releases_an_unrecorded_live_child_s_claim": "failed",
+              "codex:tests.test_project_start.StartTests.test_E2c_2_a_start_blocked_in_its_spawn_holds_no_ledger_lock": "failed",
+              "codex:tests.test_project_start.StatusTests.test_E2c_9_status_is_the_owner_s_and_learning_status_shows_it": "failed",
+              "codex:tests.test_project_start.TrustBoundaryTests.test_E2c_6_location_refusals_hold_in_the_product_path": "failed"
+            },
+            "p9_outcomes": {},
+            "log_tail": "    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n======================================================================\nFAIL: test_E2c_2_a_start_blocked_in_its_spawn_holds_no_ledger_lock (tests.test_project_start.StartTests.test_E2c_2_a_start_blocked_in_its_spawn_holds_no_ledger_lock)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 486, in test_E2c_2_a_start_blocked_in_its_spawn_holds_no_ledger_lock\n    self.launch(block=str(go))\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n======================================================================\nFAIL: test_E2c_9_status_is_the_owner_s_and_learning_status_shows_it (tests.test_project_start.StatusTests.test_E2c_9_status_is_the_owner_s_and_learning_status_shows_it)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 631, in test_E2c_9_status_is_the_owner_s_and_learning_status_shows_it\n    self.launch(constants={'START_BACKOFF_FIRST_SECONDS': 60.0})\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n======================================================================\nFAIL: test_E2c_6_location_refusals_hold_in_the_product_path (tests.test_project_start.TrustBoundaryTests.test_E2c_6_location_refusals_hold_in_the_product_path)\nReview round 1, MED 2: the fixture trusts its temporary home; without that, the product refuses it.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 1176, in test_E2c_6_location_refusals_hold_in_the_product_path\n    self.launch(trust_temp=False)  # only the account home is set: temporary directories stay untrusted\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n----------------------------------------------------------------------\nRan 7 tests in 3.326s\n\nFAILED (failures=6, errors=1)"
+          },
+          {
+            "unit": "tests.test_project_start#4",
+            "tests": 6,
+            "seconds": 3.9638522090390325,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_project_start.BudgetTests.test_E2c_3_a_collector_drains_1000_due_projects_within_60_seconds_and_starts_no_later": "error",
+              "codex:tests.test_project_start.ProbationDeadlineTests.test_E2c_4_a_host_that_died_early_is_failed_when_the_restart_comes_after_its_deadline": "failed",
+              "codex:tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2a_1_a_released_0_8_59_ledger_backs_up_restores_and_moves_after_the_upgrade": "failed",
+              "codex:tests.test_project_start.StartTests.test_E2c_5_the_child_is_the_copy_s_entry_with_isolation_flags_and_a_bare_environment": "failed",
+              "codex:tests.test_project_start.StrandedTests.test_E2c_10_a_host_that_does_not_serve_in_time_is_killed_at_twice_the_timeout": "failed"
+            },
+            "p9_outcomes": {},
+            "log_tail": "\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 1411, in test_E2c_4_a_host_that_died_early_is_failed_when_the_restart_comes_after_its_deadline\n    self.launch(constants=constants)\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n======================================================================\nFAIL: test_E2a_1_a_released_0_8_59_ledger_backs_up_restores_and_moves_after_the_upgrade (tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2a_1_a_released_0_8_59_ledger_backs_up_restores_and_moves_after_the_upgrade)\n0.8.60 full-run fixes: after the additive upgrade, with a launch record, wake, epoch and starter rows\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 1518, in test_E2a_1_a_released_0_8_59_ledger_backs_up_restores_and_moves_after_the_upgrade\n    state = self.released_ledger()\n  File \"packages/codex-agents/tests/test_project_start.py\", line 1504, in released_ledger\n    self.assertEqual(0, started.returncode, started.stdout + started.stderr)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 0 != 2 : {\n  \"error\": \"collector did not become healthy\",\n  \"ready\": false\n}\n\n\n======================================================================\nFAIL: test_E2c_5_the_child_is_the_copy_s_entry_with_isolation_flags_and_a_bare_environment (tests.test_project_start.StartTests.test_E2c_5_the_child_is_the_copy_s_entry_with_isolation_flags_and_a_bare_environment)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 447, in test_E2c_5_the_child_is_the_copy_s_entry_with_isolation_flags_and_a_bare_environment\n    self.launch(env={'PLANTED_E2C': 'must-not-leak', 'HOME': str(self.home)})\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n======================================================================\nFAIL: test_E2c_10_a_host_that_does_not_serve_in_time_is_killed_at_twice_the_timeout (tests.test_project_start.StrandedTests.test_E2c_10_a_host_that_does_not_serve_in_time_is_killed_at_twice_the_timeout)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 682, in test_E2c_10_a_host_that_does_not_serve_in_time_is_killed_at_twice_the_timeout\n    self.launch(constants={'START_TIMEOUT_SECONDS': 0.02, 'START_BACKOFF_FIRST_SECONDS': 60.0})\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n----------------------------------------------------------------------\nRan 6 tests in 3.621s\n\nFAILED (failures=4, errors=1)"
+          },
+          {
+            "unit": "tests.test_learning_engine",
+            "tests": 70,
+            "seconds": 2.1450291250366718,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_learning_engine.VerifiedQaTests.test_operational_check_enforces_temporary_storage_bound": "error",
+              "codex:tests.test_learning_engine.VerifiedQaTests.test_operational_check_runner_uses_only_approved_commands": "error",
+              "codex:tests.test_learning_engine.VerifiedQaTests.test_operational_check_sandbox_denies_fork": "error",
+              "codex:tests.test_learning_engine.VerifiedQaTests.test_operational_check_sandbox_denies_unrelated_authority": "error",
+              "codex:tests.test_learning_engine.VerifiedQaTests.test_operational_check_sandbox_preflight_is_available": "failed",
+              "codex:tests.test_learning_engine.VerifiedQaTests.test_operational_check_snapshot_guard_invalidates_tampering": "error",
+              "codex:tests.test_learning_engine.VerifiedQaTests.test_operational_check_snapshots_pinned_python_runtime_tree": "error"
+            },
+            "p9_outcomes": {},
+            "log_tail": "  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_engine.py\", line 2280, in run_operational_check_suite\n    raise ContractError(\n    ...<2 lines>...\n    )\ncodex_agents.contracts.ContractError: operational check sandbox preflight failed; run through an approved unsandboxed command boundary\n\n======================================================================\nERROR: test_operational_check_runner_uses_only_approved_commands (tests.test_learning_engine.VerifiedQaTests.test_operational_check_runner_uses_only_approved_commands)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_learning_engine.py\", line 1021, in test_operational_check_runner_uses_only_approved_commands\n    report = run_operational_check_suite(root, scratch_root=self.qa_scratch(),\n                                         diagnostics=diagnostics)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_engine.py\", line 2280, in run_operational_check_suite\n    raise ContractError(\n    ...<2 lines>...\n    )\ncodex_agents.contracts.ContractError: operational check sandbox preflight failed; run through an approved unsandboxed command boundary\n\n======================================================================\nERROR: test_operational_check_sandbox_denies_fork (tests.test_learning_engine.VerifiedQaTests.test_operational_check_sandbox_denies_fork)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_learning_engine.py\", line 1326, in test_operational_check_sandbox_denies_fork\n    report = run_operational_check_suite(root, scratch_root=self.qa_scratch())\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_engine.py\", line 2280, in run_operational_check_suite\n    raise ContractError(\n    ...<2 lines>...\n    )\ncodex_agents.contracts.ContractError: operational check sandbox preflight failed; run through an approved unsandboxed command boundary\n\n======================================================================\nERROR: test_operational_check_sandbox_denies_unrelated_authority (tests.test_learning_engine.VerifiedQaTests.test_operational_check_sandbox_denies_unrelated_authority)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_learning_engine.py\", line 1246, in test_operational_check_sandbox_denies_unrelated_authority\n    report = run_operational_check_suite(root, scratch_root=self.qa_scratch())\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_engine.py\", line 2280, in run_operational_check_suite\n    raise ContractError(\n    ...<2 lines>...\n    )\ncodex_agents.contracts.ContractError: operational check sandbox preflight failed; run through an approved unsandboxed command boundary\n\n======================================================================\nERROR: test_operational_check_snapshot_guard_invalidates_tampering (tests.test_learning_engine.VerifiedQaTests.test_operational_check_snapshot_guard_invalidates_tampering)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_learning_engine.py\", line 1097, in test_operational_check_snapshot_guard_invalidates_tampering\n    report = run_operational_check_suite(root, scratch_root=self.qa_scratch())\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_engine.py\", line 2280, in run_operational_check_suite\n    raise ContractError(\n    ...<2 lines>...\n    )\ncodex_agents.contracts.ContractError: operational check sandbox preflight failed; run through an approved unsandboxed command boundary\n\n======================================================================\nERROR: test_operational_check_snapshots_pinned_python_runtime_tree (tests.test_learning_engine.VerifiedQaTests.test_operational_check_snapshots_pinned_python_runtime_tree)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_learning_engine.py\", line 479, in test_operational_check_snapshots_pinned_python_runtime_tree\n    report = run_operational_check_suite(root, scratch_root=scratch)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_engine.py\", line 2280, in run_operational_check_suite\n    raise ContractError(\n    ...<2 lines>...\n    )\ncodex_agents.contracts.ContractError: operational check sandbox preflight failed; run through an approved unsandboxed command boundary\n\n======================================================================\nFAIL: test_operational_check_sandbox_preflight_is_available (tests.test_learning_engine.VerifiedQaTests.test_operational_check_sandbox_preflight_is_available)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_learning_engine.py\", line 1253, in test_operational_check_sandbox_preflight_is_available\n    self.assertTrue(operational_sandbox_preflight())\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: False is not true\n\n----------------------------------------------------------------------\nRan 70 tests in 1.950s\n\nFAILED (failures=1, errors=6)"
+          },
+          {
+            "unit": "tests.test_project_start#2",
+            "tests": 6,
+            "seconds": 4.13338091596961,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_project_start.OtherVersionTests.test_E2c_7_a_real_host_of_an_earlier_runtime_is_not_replaced": "failed",
+              "codex:tests.test_project_start.ProbationTests.test_E2c_4_a_serving_recheck_never_replaces_an_active_probation": "failed",
+              "codex:tests.test_project_start.SlotTests.test_E2c_2_surviving_stranded_children_hold_their_slots": "failed",
+              "codex:tests.test_project_start.StartTests.test_E2c_7_another_version_s_live_host_is_not_replaced": "error",
+              "codex:tests.test_project_start.StrandedTests.test_E2c_10_claims_left_by_a_dead_collector_are_reconciled": "failed"
+            },
+            "p9_outcomes": {},
+            "log_tail": "FAIL: test_E2c_4_a_serving_recheck_never_replaces_an_active_probation (tests.test_project_start.ProbationTests.test_E2c_4_a_serving_recheck_never_replaces_an_active_probation)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 1082, in test_E2c_4_a_serving_recheck_never_replaces_an_active_probation\n    self.launch(constants={'START_PROBATION_SECONDS': 30.0, 'START_BACKOFF_FIRST_SECONDS': 60.0})\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n======================================================================\nFAIL: test_E2c_2_surviving_stranded_children_hold_their_slots (tests.test_project_start.SlotTests.test_E2c_2_surviving_stranded_children_hold_their_slots)\nReview round 1, HIGH 3: never more than START_SLOTS starts across a collector restart.\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 1062, in test_E2c_2_surviving_stranded_children_hold_their_slots\n    self.launch(constants={'START_TIMEOUT_SECONDS': 30.0, 'START_BACKOFF_FIRST_SECONDS': 60.0},\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n                store={'WORKER_RESULT_SWEEP_SECONDS': 1.0})\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n======================================================================\nFAIL: test_E2c_10_claims_left_by_a_dead_collector_are_reconciled (tests.test_project_start.StrandedTests.test_E2c_10_claims_left_by_a_dead_collector_are_reconciled)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 669, in test_E2c_10_claims_left_by_a_dead_collector_are_reconciled\n    self.launch(constants={'START_TIMEOUT_SECONDS': 30.0, 'START_BACKOFF_FIRST_SECONDS': 0.2},\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n                store={'WORKER_RESULT_SWEEP_SECONDS': 1.0})\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n----------------------------------------------------------------------\nRan 6 tests in 3.843s\n\nFAILED (failures=4, errors=1)"
+          },
+          {
+            "unit": "tests.test_runtime_release",
+            "tests": 3,
+            "seconds": 0.21860645804554224,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version": "failed"
+            },
+            "p9_outcomes": {},
+            "log_tail": "F..\n======================================================================\nFAIL: test_current_runtime_is_recorded_for_the_current_version (tests.test_runtime_release.RuntimeReleaseTests.test_current_runtime_is_recorded_for_the_current_version)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_runtime_release.py\", line 35, in test_current_runtime_is_recorded_for_the_current_version\n    self.assertEqual(\n    ~~~~~~~~~~~~~~~~^\n        releases[version], COLLECTOR_RUNTIME_DIGEST,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        \"the collector runtime changed: bump VERSION and record the new digest\",\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\nAssertionError: '152fc5bf7e3df433f177baf8ea2418c6835598dd840eb4546c296930b85c86d2' != 'd144d39ce02413ced7057159ff8e001aea201f9b03cbd0a1c5114ea3af8b4a23'\n- 152fc5bf7e3df433f177baf8ea2418c6835598dd840eb4546c296930b85c86d2\n+ d144d39ce02413ced7057159ff8e001aea201f9b03cbd0a1c5114ea3af8b4a23\n : the collector runtime changed: bump VERSION and record the new digest\n\n----------------------------------------------------------------------\nRan 3 tests in 0.012s\n\nFAILED (failures=1)"
+          },
+          {
+            "unit": "tests.test_owner_key_contracts",
+            "tests": 5,
+            "seconds": 0.16480758402030915,
+            "returncode": 0,
+            "nonpassing": {},
+            "p9_outcomes": {}
+          },
+          {
+            "unit": "tests.test_project_start#3",
+            "tests": 6,
+            "seconds": 4.947707833023742,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_project_start.ProbationTests.test_E2c_4_a_probation_is_kept_across_a_collector_restart": "failed",
+              "codex:tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2c_10_a_released_0_8_59_ledger_opens_and_works_under_this_build": "failed",
+              "codex:tests.test_project_start.StartTests.test_E2c_6_a_changed_or_missing_install_starts_nothing": "failed",
+              "codex:tests.test_project_start.StrandedTests.test_E2c_10_a_killed_service_starts_and_a_restart_keeps_the_backoff": "failed"
+            },
+            "p9_outcomes": {},
+            "log_tail": "  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 1102, in test_E2c_4_a_probation_is_kept_across_a_collector_restart\n    self.launch(constants=constants)\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n======================================================================\nFAIL: test_E2c_10_a_released_0_8_59_ledger_opens_and_works_under_this_build (tests.test_project_start.ReleasedLedgerUpgradeTests.test_E2c_10_a_released_0_8_59_ledger_opens_and_works_under_this_build)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 1459, in test_E2c_10_a_released_0_8_59_ledger_opens_and_works_under_this_build\n    self.assertEqual(0, started.returncode, started.stdout + started.stderr)\n    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 0 != 2 : {\n  \"error\": \"collector did not become healthy\",\n  \"ready\": false\n}\n\n\n======================================================================\nFAIL: test_E2c_6_a_changed_or_missing_install_starts_nothing (tests.test_project_start.StartTests.test_E2c_6_a_changed_or_missing_install_starts_nothing)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 512, in test_E2c_6_a_changed_or_missing_install_starts_nothing\n    self.launch()\n    ~~~~~~~~~~~^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n======================================================================\nFAIL: test_E2c_10_a_killed_service_starts_and_a_restart_keeps_the_backoff (tests.test_project_start.StrandedTests.test_E2c_10_a_killed_service_starts_and_a_restart_keeps_the_backoff)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 700, in test_E2c_10_a_killed_service_starts_and_a_restart_keeps_the_backoff\n    self.launch(constants=constants)\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n----------------------------------------------------------------------\nRan 6 tests in 4.656s\n\nFAILED (failures=4)"
+          },
+          {
+            "unit": "tests.test_project_start#1",
+            "tests": 7,
+            "seconds": 12.060541499988176,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_project_start.BackoffTests.test_E2c_4_a_crash_loop_parks_and_only_the_owner_unparks": "failed",
+              "codex:tests.test_project_start.OwnerCommandTests.test_E2c_4_the_owner_start_command_unparks_with_the_collector_down": "failed",
+              "codex:tests.test_project_start.ProductionIntervalTests.test_E2c_3_1000_due_projects_with_launch_records_drain_within_60_seconds": "failed",
+              "codex:tests.test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client": "failed",
+              "codex:tests.test_project_start.StartTests.test_E2c_8_pre_start_steps": "failed",
+              "codex:tests.test_project_start.TimeoutSlotTests.test_E2c_2_a_surviving_child_s_slot_is_freed_only_once_it_is_killed_and_gone": "failed"
+            },
+            "p9_outcomes": {},
+            "log_tail": "\n======================================================================\nFAIL: test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client (tests.test_project_start.StartTests.test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 419, in test_E2c_1_a_stopped_project_with_due_holds_starts_without_any_client\n    self.launch()\n    ~~~~~~~~~~~^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n======================================================================\nFAIL: test_E2c_8_pre_start_steps (tests.test_project_start.StartTests.test_E2c_8_pre_start_steps)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 562, in test_E2c_8_pre_start_steps\n    self.launch(constants={'START_BACKOFF_FIRST_SECONDS': 60.0})\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n======================================================================\nFAIL: test_E2c_2_a_surviving_child_s_slot_is_freed_only_once_it_is_killed_and_gone (tests.test_project_start.TimeoutSlotTests.test_E2c_2_a_surviving_child_s_slot_is_freed_only_once_it_is_killed_and_gone)\nReview round 2 (decision 243, HIGH 3): never more than START_SLOTS live started children, also when a\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 232, in launch\n    return CollectorClient(self.state.socket, timeout=2).health()\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 239, in health\n    response = self._request(request)\n  File \"packages/codex-agents/native-package/.codex/orchestration/codex_agents/collector_client.py\", line 192, in _request\n    raise CollectorTransportError(\"collector is unavailable\", code=\"transport_unavailable\")\ncodex_agents.collector_contracts.CollectorTransportError: collector is unavailable\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_project_start.py\", line 1395, in test_E2c_2_a_surviving_child_s_slot_is_freed_only_once_it_is_killed_and_gone\n    self.launch(constants={'START_TIMEOUT_SECONDS': 1.0, 'START_BACKOFF_FIRST_SECONDS': 60.0},\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n                store={'WORKER_RESULT_SWEEP_SECONDS': 1.0})\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_project_start.py\", line 235, in launch\n    self.fail('collector did not start: ' + (self.base / 'collector.err').read_text()[-3000:])\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: collector did not start: \n\n----------------------------------------------------------------------\nRan 7 tests in 11.710s\n\nFAILED (failures=6)"
+          },
+          {
+            "unit": "tests.test_signature_inputs",
+            "tests": 44,
+            "seconds": 38.69918766699266,
+            "returncode": 1,
+            "nonpassing": {
+              "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed"
+            },
+            "p9_outcomes": {
+              "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history": "passed",
+              "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates": "failed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_a_superseded_attestation_that_anything_cites_is_never_deleted": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_O0c_P9_superseded_attestations_are_removed_so_repeated_attesting_never_stops_claims": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_capture_vm_work_is_independent_of_cited_superseded_history": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_due_cursor_advances_past_cited_rows_with_bounded_work": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_invalid_verdicts_are_cached_and_verification_holds_no_lock": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart": "passed",
+              "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_verifier_race_and_exceptions_leave_inputs_unchecked": "passed"
+            },
+            "log_tail": ".FF..........................................\n======================================================================\nFAIL: test_public_deferred_claim_uses_the_same_two_attestation_candidates (tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_signature_inputs.py\", line 869, in test_public_deferred_claim_uses_the_same_two_attestation_candidates\n    self._exercise_retained_history(deferred=True)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^\n  File \"packages/codex-agents/tests/test_signature_inputs.py\", line 980, in _exercise_retained_history\n    result = decode_account_response(fixture.pump(ticket), fixture.request())\n                                     ~~~~~~~~~~~~^^^^^^^^\n  File \"packages/codex-agents/tests/test_account_claim_jobs.py\", line 119, in pump\n    self.assertLess(time.monotonic() - started, 10, \"deferred claim did not finish\")\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 10.000842374982312 not less than 10 : deferred claim did not finish\n\n======================================================================\nFAIL: test_public_deferred_claim_uses_the_same_two_attestation_candidates (tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"packages/codex-agents/tests/test_account_claim_jobs.py\", line 69, in tearDown\n    self.assertLess(time.monotonic() - started, 10, \"disposable workers did not drain\")\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 10.001798250013962 not less than 10 : disposable workers did not drain\n\n----------------------------------------------------------------------\nRan 44 tests in 38.428s\n\nFAILED (failures=2)"
+          }
+        ]
+      }
+    ],
+    "targeted_log": "r1-targeted.log",
+    "red_logs": [
+      "r1-red.log",
+      "r1-invalidation-red.log",
+      "r1-timeout-red.log"
+    ],
+    "interrupted_preliminary_red": {
+      "note": "An earlier original-code scale setup repeatedly ran the known due-query scan and was interrupted with Ctrl-C. It finished with exit 130; no process remains. The smaller equivalent setup was then used for the completed 4.429 s original-code red run in r1-red.log.",
+      "module": "codex:tests.test_signature_inputs"
+    }
+  }
+}

@@ -1562,6 +1562,74 @@
   "source": "docs/requirements/rsd-s3/requirements.md#P4-REPORT",
   "statement": "**P4-REPORT \u2014 Measure the pre-handoff window.**\nA script under scripts/ measures packet return to the directory fsync under load\nand prints p99. It is a report with no numeric acceptance gate."
  },
+ "P9-1": {
+  "checks": [
+   "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history",
+   "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_deferred_claim_uses_the_same_two_attestation_candidates"
+  ],
+  "source": "tests/requirements/p9.json#P9-1",
+  "statement": "### P9-1 \u2014 Claims use current verified applicable evidence\n\nAfter collector maintenance, a public deferred claim succeeds with an attestation capture limit of two despite three valid attestations for the same account/provider whose superseded rows remain cited. The latest verified applicable attestation wins, with source sequence breaking observation-time ties. Another account and another provider cannot replace it, and an invalid newer stored signature cannot supersede it. Admission and standalone signature capture use the same attestation candidates. The deferred job's aggregate admission budget remains separate from its two-attestation regression boundary."
+ },
+ "P9-2": {
+  "checks": [
+   "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history",
+   "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_due_cursor_advances_past_cited_rows_with_bounded_work"
+  ],
+  "source": "tests/requirements/p9.json#P9-2",
+  "statement": "### P9-2 \u2014 Collector maintenance preserves references and makes bounded progress\n\nThe collector's own sweep cycle uses independent inspection and deletion rowid cursors. Each pass examines at most a batch of deletion candidates even when they are cited, removes eligible uncited superseded attestations in bounded batches, retains cited records and signatures, and eventually finishes across repeated cycles. References remain readable through the repository. A signature row alone never proves supersession; only a verified later attestation for the same project, account and provider permits deletion."
+ },
+ "P9-3": {
+  "checks": [
+   "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history",
+   "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_failed_verification_is_retried_on_later_bounded_passes",
+   "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_invalid_verdicts_are_cached_and_verification_holds_no_lock",
+   "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_projection_invalidates_mutations_and_rebuilds_after_restart",
+   "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_verifier_race_and_exceptions_leave_inputs_unchecked"
+  ],
+  "source": "tests/requirements/p9.json#P9-3",
+  "statement": "### P9-3 \u2014 Projection is derived and fails closed on changes\n\nSupersession results are connection-local derived data, never durable signature authority. Results bind exact stored content, digest, source, sequence, observation time, signature and owner generation. A changed input or owner generation invalidates its cached result; uncached inputs remain candidates until checked. Capture performs no cryptography or writes, and the worker still verifies captured signatures and exact recapture before admission. Restart requires collector maintenance to rebuild the projection. Verification runs outside the ledger lock and account transaction, then records a verdict only after exact row and owner-generation recheck. Both valid and invalid verdicts are cached for unchanged inputs and generation. Verifier exceptions (including subprocess timeouts) leave rows unchecked for retry. No persistent schema or record shape changes."
+ },
+ "P9-4": {
+  "checks": [
+   "codex:tests.test_signature_inputs.RetainedAttestationClaimTests.test_public_claim_with_two_attestation_limit_keeps_cited_tied_history",
+   "codex:tests.test_signature_inputs.SignatureInputOwnerTests.test_P9_capture_vm_work_is_independent_of_cited_superseded_history"
+  ],
+  "source": "tests/requirements/p9.json#P9-4",
+  "statement": "### P9-4 \u2014 Remaining capture candidates retain hard quotas\n\nAfter maintenance, exact checked foreign-provider rows are excluded from signature capture. Unknown or changed rows are conservatively charged before provider filtering. Row and byte quotas still refuse overflow before copying bodies, and malformed metadata still refuses safely. Cited superseded history is retained independently of these capture quotas.\n\nThe P9-4 header, body and admission selection queries use indexed materialized candidate membership before ordering and limiting. SQLite VM work for a claim with zero versus 10,000 retained cited superseded rows differs by only a small constant. Unchecked rows remain charged.\n\nWork-budget and deadline refusal tests exercise unchecked candidate history, which is still charged, while unrelated events can be skipped by the candidate index. Refusal still precedes body copying and restores the read scope and owner connection."
+ },
+ "P9b-1": {
+  "checks": [
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_clean_signature_invalid_is_cached",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deterministic_malformed_signature_diagnostics_are_definitive",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_failed_verifier_process_is_retryable_without_restart",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_infrastructure_and_ambiguous_results_raise_and_leave_rows_unchecked",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_previous_owner_key_signature_is_cached_invalid_without_reverification",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_rejection_requires_exact_stdout_and_only_allowlisted_stderr_lines",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_truncated_signature_is_cached_invalid_without_reverification",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_unallowlisted_stderr_is_not_cached_and_recovers_without_restart",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_unsafe_verifier_leaves_genuine_rows_unchecked_until_repaired",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_wrong_namespace_signature_is_cached_invalid_without_reverification"
+  ],
+  "source": "tests/requirements/p9b.json#P9b-1",
+  "statement": "### P9b-1 \u2014 Only definitive verifier results are cached\n\nAn unsafe verifier executable or parent (symlink, wrong owner, writable mode),\nor an unavailable, killed, out-of-memory or otherwise failed verifier, must\nraise in the maintenance authority's `raise_verifier_failures` mode. Its row\nstays unchecked, charged and retryable without restart. Only a clean successful\nverification or clean definitive ssh-keygen signature-invalid result can be\ncached. Existing non-maintenance callers continue to fail closed.\n\nFinal targeted fix on `1e6b5e13` (confirming review `040-p9b-r2c`): a\nnonzero verifier result is definitive invalid only for exit 255 with stdout\nexactly `Could not verify signature.` (optionally terminated by LF or CRLF),\nand stderr either empty or containing only exact allowlisted diagnostic lines.\nThe allowlist is the following eight lines observed from real OpenSSH 10.5p1\nmalformed/truncated, payload-mismatch or wrong-namespace signatures (LF and CRLF are accepted):\n\n- `Couldn't parse signature: missing footer`\n- `Couldn't parse signature: missing header`\n- `sig_verify: sshsig_armor: invalid format`\n- `sshsig_dearmor: decode base64: invalid format`\n- `Couldn't verify signature: invalid format`\n- `sshsig_peek_hashalg: parse signature object: incomplete message`\n- `Couldn't verify signature: namespace does not match`\n- `Signature verification failed: incorrect signature`\n\nAny other stderr line, including an extra unknown line after a known diagnostic,\nis non-definitive. Infrastructure diagnostics always take precedence, including\n`memory allocation failed`, `libcrypto error: x`, `error in libcrypto`,\n`Unable to open allowed keys file F: Too many open files`,\n`Unable to open allowed keys file F: Input/output error`, and\n`Couldn't read signature file: Input/output error`; arbitrary strerror text is\nnever allowlisted. Unsafe prechecks, timeouts, signals, other exit codes,\nmissing/extra stdout and all other ambiguous results remain non-definitive.\nTheir rows stay unchecked, capturable and retryable without restart. Existing\ninfrastructure-precedence assertions remain in place.\n\nReal ssh-keygen regressions must prove wrong-key, truncated and wrong-namespace\nsignatures are cached invalid without verification on the next maintenance\npass. With this OpenSSH version an empty allowed-signers file or a directory\nused as allowed-signers can produce exit 255, exact rejection stdout and empty\nstderr, just like a wrong key: those outputs are deliberately definitive invalid\nunder this contract. A reported allowed-signers or signature-file I/O diagnostic\nis non-definitive regardless of its strerror. Existing constructor checks still\nreject a directory already present at authority creation; the output contract\nalso covers a path changed after that check. No new signer-path precheck is\npart of this fix."
+ },
+ "P9b-2": {
+  "checks": [
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_keeps_other_evidence_outside_candidate_table",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_admission_union_uses_indexes_and_bounds_rows_before_final_sort",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_count_and_open_rebuild_ignore_non_attestation_history",
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_candidate_membership_tracks_record_type_changes"
+  ],
+  "source": "tests/requirements/p9b.json#P9b-2",
+  "statement": "### P9b-2 \u2014 Candidate membership contains only attestations\n\n`temp.capture_candidates` contains billing attestations only. Insert, update,\nrestart and projection rebuild preserve that restriction. Candidate count and\nthe per-open candidate rebuild's SQLite VM work are independent of unrelated\nnon-attestation history. Admission still captures all relevant evidence families\nunder its existing time, project, source and quota rules, excluding unrelated\nhistory. Both public capture boundaries retain bounded superseded-history work.\n\nReview fix round: EXPLAIN QUERY PLAN must show indexed admission-union access\nwithout a full records scan. Each union branch supplies at most the capture\nlimit (including its overflow sentinel) before the final rowid sort and\nrecord/signature joins. This preserves the exact globally ordered prefix and\noverflow refusal while bounding the rows materialized for that final sort;\nthe existing SQL work/deadline budget still governs scope filtering."
+ },
+ "P9b-3": {
+  "checks": [
+   "codex:tests.test_p9b_attestation_followups.P9bAttestationTests.test_deleting_newest_restores_predecessor_for_every_record_delete_path"
+  ],
+  "source": "tests/requirements/p9b.json#P9b-3",
+  "statement": "### P9b-3 \u2014 Record deletion restores surviving predecessors\n\nDeleting a billing attestation by any record-deletion path rebuilds the derived\nsupersession state for its project/account/provider. Deleting the newest valid\nrow immediately restores the latest surviving verified predecessor as a capture\ncandidate, without restart or re-verification. Other accounts and providers\nremain independent. Deleting superseded rows must preserve bounded sweep work."
+ },
  "RECOV-1": {
   "checks": [
    "codex:tests.test_recovery_line.RecoveryTests.test_future_and_null_deadlines_and_clean_stop_are_preserved",

@@ -3819,9 +3819,11 @@ OWNER_GRANT_REQUEST_FIELDS = {
 class OwnerGrantAuthority:
     """Verify detached owner signatures using public keys only."""
 
-    def __init__(self, allowed_signers: Path, *, signer_line: bytes | None = None) -> None:
+    def __init__(self, allowed_signers: Path, *, signer_line: bytes | None = None,
+                 raise_verifier_failures: bool = False) -> None:
         self.allowed_signers = allowed_signers
         self.signer_line = signer_line
+        self.raise_verifier_failures = raise_verifier_failures
         if allowed_signers.is_symlink() or not allowed_signers.is_file():
             raise ContractError("owner allowed-signers file is unavailable")
 
@@ -3923,7 +3925,7 @@ class OwnerGrantAuthority:
                 or executable_stat.st_uid != 0
                 or executable_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
             ):
-                return False
+                raise OSError("owner signature verifier executable is unsafe")
             for parent in (executable.parent, executable.parent.parent):
                 parent_stat = parent.lstat()
                 if (
@@ -3932,7 +3934,7 @@ class OwnerGrantAuthority:
                     or parent_stat.st_uid != 0
                     or parent_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
                 ):
-                    return False
+                    raise OSError("owner signature verifier parent is unsafe")
             with tempfile.NamedTemporaryFile(
                 dir=self.allowed_signers.parent, prefix="owner-signature-", delete=False
             ) as handle:
@@ -3955,13 +3957,41 @@ class OwnerGrantAuthority:
                     "-s", str(signature_path),
                 ],
                 input=payload,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE if self.raise_verifier_failures else subprocess.DEVNULL,
+                stderr=subprocess.PIPE if self.raise_verifier_failures else subprocess.DEVNULL,
                 timeout=5,
                 check=False,
             )
-            return completed.returncode == 0
+            if completed.returncode == 0:
+                return True
+            if not self.raise_verifier_failures:
+                return False
+            # Wrong-key rejection can have empty stderr. Otherwise accept only
+            # exact deterministic lines observed from ssh-keygen; any unknown
+            # line (including resource or I/O failures) leaves the row retryable.
+            signature_diagnostics = {
+                b"Couldn't parse signature: missing footer",
+                b"Couldn't parse signature: missing header",
+                b"sig_verify: sshsig_armor: invalid format",
+                b"sig_verify: sshsig_armor: incomplete message",
+                b"sshsig_dearmor: decode base64: invalid format",
+                b"Couldn't verify signature: invalid format",
+                b"sshsig_peek_hashalg: parse signature object: incomplete message",
+                b"Couldn't verify signature: namespace does not match",
+                b"Signature verification failed: incorrect signature",
+            }
+            if (completed.returncode == 255
+                    and completed.stdout in (b"Could not verify signature.",
+                                             b"Could not verify signature.\n",
+                                             b"Could not verify signature.\r\n")
+                    and all(line in signature_diagnostics for line in completed.stderr.splitlines())):
+                return False
+            raise OSError("owner signature verifier did not return a definitive verdict")
         except (OSError, subprocess.SubprocessError):
+            # Maintenance must distinguish a definitive invalid signature from
+            # an unavailable verifier before caching a negative verdict.
+            if self.raise_verifier_failures:
+                raise
             return False
         finally:
             if "signature_path" in locals():
