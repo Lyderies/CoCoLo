@@ -71,6 +71,7 @@ class AccountObservationSchemaTests(unittest.TestCase):
         db.execute('DROP TABLE account_observation_origins')
         db.execute('DROP INDEX IF EXISTS records_observed_at')  # O10 AP: 0.4.0's additive index is newer
         db.execute('DROP INDEX IF EXISTS records_type_project')  # O10 AP5: likewise
+        db.execute('DROP INDEX IF EXISTS records_project_digest')  # 3.8 AP5-2: likewise
         db.execute('DROP INDEX IF EXISTS host_run_bindings_live')  # O0b B0-1: likewise
         db.execute('DROP INDEX IF EXISTS billing_probes_in_progress')  # O0b B0-5: likewise
         db.execute('DROP INDEX IF EXISTS account_open_requests_in_flight')  # OP-1: likewise

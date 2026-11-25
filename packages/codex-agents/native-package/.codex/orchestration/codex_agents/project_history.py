@@ -2788,6 +2788,9 @@ class ProjectHistory:
     def _refuse_late_publication(self, binding) -> None:
         # S6: refuse before sampling/persisting the clock or allowing _live_result
         # to finish retirement. Late children cannot drive cleanup side effects.
+        # An unconfigured result store keeps its earlier answer (checked first, as _result_now does).
+        if self._result_key is None or self._result_capacity is None:
+            raise HistoryError("history_result_unavailable")
         _, value = self._result_row(binding)
         if value.state != 'committed':
             self._require_publishable(value)

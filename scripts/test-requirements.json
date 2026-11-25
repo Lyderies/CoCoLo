@@ -1,4 +1,32 @@
 {
+ "AP3": {
+  "checks": [
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_digest_index_is_additive_on_first_open",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_indexed_copy_opens_reads_and_appends_with_real_previous_release",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_reopen_recreates_digest_index_and_preserves_lookup_answers",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_missing_previous_source_has_actionable_failure",
+   "codex:tests.test_candidate_index_build.CandidateIndexBuildTests.test_AP3_first_open_builds_index_used_by_candidate_lookups"
+  ],
+  "source": "tests/requirements/ap5-lookup.json#AP3",
+  "statement": "No schema version change and no owner step: an older same-schema release still opens, reads and appends to an indexed account-ledger copy."
+ },
+ "AP5-2": {
+  "checks": [
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP5_2_fixed_links_have_flat_vm_work_as_unrelated_records_grow"
+  ],
+  "source": "tests/requirements/ap5-lookup.json#AP5-2",
+  "statement": "The candidate evidence-link check looks up linked records by identity using an additive index, with flat SQLite VM work for fixed links as unrelated records grow."
+ },
+ "AP5-3": {
+  "checks": [
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP5_3_mixed_evidence_answers_and_link_order_match_former_scan",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP5_3_public_admission_duplicates_and_history_order_match",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP3_reopen_recreates_digest_index_and_preserves_lookup_answers",
+   "codex:tests.test_candidate_evidence_lookup.CandidateEvidenceLookupTests.test_AP5_3_missing_digest_index_gives_plain_ledger_error"
+  ],
+  "source": "tests/requirements/ap5-lookup.json#AP5-3",
+  "statement": "Preserve candidate evidence results, linked-evidence and history order, and admission checks exactly as before the indexed replacement."
+ },
  "API-1": {
   "checks": [],
   "source": "PLAN-0.4.0-terminal.md section 9",
@@ -454,6 +482,93 @@
   ],
   "source": "docs/requirements/e1.md#E1-WS",
   "statement": "**E1-WS \u2014 Wizard source safety.** The Python setup wizard keeps the source-level safety properties setup.sh's source tests checked (audited launch builders, literal non-porcelain git with the trusted binary and helpers off, isolated Python, provider clients never run by name, product naming and screen wording). Source: tests/test_setup_wizard_source.py module docstring (S5) and owner decision 112b A (2026-11-24)."
+ },
+ "E1a-T2": {
+  "checks": [
+   "codex:tests.test_e1a_evidence.ClaimContentionTests.test_claim_completion_busy_then_retry",
+   "codex:tests.test_e1a_evidence.ClaimContentionTests.test_real_stale_recapture_busy_then_retry",
+   "codex:tests.test_e1a_evidence.OpenContentionTests.test_initial_open_real_host_authorization_busy_then_retry",
+   "codex:tests.test_e1a_evidence.OpenContentionTests.test_open_completion_busy_then_retry",
+   "codex:tests.test_e1a_evidence.ProvenanceContentionTests.test_open_provenance_real_contention_then_retry",
+   "codex:tests.test_e1a_evidence.ProvenanceContentionTests.test_run_provenance_real_contention_then_retry"
+  ],
+  "source": "tests/requirements/e1a-evidence.json#E1a-T2",
+  "statement": "After earlier phases succeed, a different thread must actually hold the ledger\nlock during claim/open completion, stale-input recapture, initial open\nauthorization and both provenance adapters. The decoded reply must give exactly\n`account_busy` (or `open_account_busy` for open), with the exact plain next step\n\u201cThe account's records were busy: try again in a moment.\u201d Contention must leave\nthe lane unfaulted with no failure note. Releasing the holder must allow a\nsuccessful retry. Enrollment can be synthetic, but the initial-open authorizer\nand the contended ledger operations must be real."
+ },
+ "E1a-T3": {
+  "checks": [
+   "codex:tests.test_e1a_evidence.OpenContentionTests.test_exhausted_deferred_publication_restores_next_request_and_owner_pump",
+   "codex:tests.test_e1a_evidence.RequestDeadlineEvidenceTests.test_real_handle_and_begin_share_successive_waits_and_refresh",
+   "codex:tests.test_e1a_evidence.RequestDeadlineEvidenceTests.test_raising_collector_frame_restores_deadline_and_next_frame_budget",
+   "codex:tests.test_e1a_evidence.RequestDeadlineEvidenceTests.test_slow_collector_receipt_and_next_frame_get_fresh_budgets"
+  ],
+  "source": "tests/requirements/e1a-evidence.json#E1a-T3",
+  "statement": "Real `AccountService.handle` and `begin` entries give successive waits one\nrequest budget. A deferred open publication exhausts its own budget; the next\nrequest and owner pump must observe a fresh budget. A collector frame received\nslowly starts its ledger budget only after receipt, and the next frame gets a\nfresh budget. A frame whose dispatch raises must also restore the request\ndeadline on the same thread, allowing the next frame a fresh budget. A controlled\nclock may advance time without sleeping; actual ledger operations remain wired in."
+ },
+ "E1a-T4": {
+  "checks": [
+   "codex:tests.test_e1a_evidence.ConcurrentRefusalEvidenceTests.test_event_coordinated_exact_counts_for_all_acquisition_paths_during_health"
+  ],
+  "source": "tests/requirements/e1a-evidence.json#E1a-T4",
+  "statement": "Use events/barriers, rather than a timed load loop, to coordinate simultaneous\nrefusals through the held, write-unit, account-transaction, read-call, reader\nentry, slot-health, sweep and project-health acquisition paths. Assert the exact\nwhole per-label count dictionary while ledger-free health reads run concurrently.\nAll workers must acknowledge completion, and release must permit ordinary work."
+ },
+ "E2ELEAK-1": {
+  "checks": [
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_discarded_world_is_still_owned_until_cleanup",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_failure_mid_flow_leaves_no_collector_or_world",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_guardian_wait_failure_preserves_original_error_and_forgets_world",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_last_world_restores_previous_signal_handlers",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_late_boot_without_ownership_helper_never_runs_product_code",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_lifecycle_parent_sigterm_stops_workers_and_their_worlds",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_pass_exit_and_timeout_leave_no_survivor",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_sigterm_and_hard_owner_death_remove_detached_collector"
+  ],
+  "source": "tests/requirements/e2eleak.json#E2ELEAK-1",
+  "statement": "**E2ELEAK-1 \u2014 Every World ends cleanly.** After pass, assertion failure, exception, step timeout, partial construction failure, interpreter exit or SIGTERM, every process started by that World is stopped and its e2e directory is removed. Detached collectors, project services and clients are included. Cleanup is idempotent and bounded."
+ },
+ "E2ELEAK-2": {
+  "checks": [
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_boot_owned_popen_prunes_record_after_wait_and_poll",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_concurrent_world_spawns_and_boot_registration_do_not_serialize",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_confined_helper_spawned_by_tracked_popen_is_recorded_by_parent_and_stopped",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_denied_registration_outside_tracked_popen_fails_closed",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_identity_distinguishes_uninspectable_from_exited_on_permission_error",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_late_boot_without_ownership_helper_never_runs_product_code",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_reaped_popen_and_dead_survivors_prune_records_but_detached_live_remains",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_reaper_and_world_close_refuse_directory_outside_expected_cache",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_reaper_uses_world_marker_and_start_time_across_sessions",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_spawn_racing_close_is_recorded_and_swept_or_refused",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_tracking_does_not_break_privileged_binaries_or_confined_helpers",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_uninspectable_live_recorded_child_is_kept_and_reported_exited_one_pruned",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_verified_exiting_child_is_not_gone_until_waitpid_releases_it"
+  ],
+  "source": "tests/requirements/e2eleak.json#E2ELEAK-2",
+  "statement": "**E2ELEAK-2 \u2014 Safe recorded ownership.** Persist World identity and process pid plus operating-system start time before running product code. Only matching records belonging to that World may be signalled; pid reuse, another World, malformed records and unrecorded lookalikes must never select a process. No process-name scan is permitted."
+ },
+ "E2ELEAK-3": {
+  "checks": [
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_drained_client_discovery_is_cached_and_skipped_without_socket",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_drained_stop_precedes_term_and_kill_and_closed_world_refuses_spawn",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_drained_stop_uses_world_installed_client_without_starting_collector",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_failure_mid_flow_leaves_no_collector_or_world",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_graceful_drain_can_spawn_a_child_and_leaves_no_survivor",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_pass_exit_and_timeout_leave_no_survivor",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_spawn_racing_close_is_recorded_and_swept_or_refused"
+  ],
+  "source": "tests/requirements/e2eleak.json#E2ELEAK-3",
+  "statement": "**E2ELEAK-3 \u2014 Drained stop before escalation.** Teardown first requests the collector's own shutdown_if_drained operation using the World's installed runtime and socket, without starting a collector. Then signal matching recorded survivors with SIGTERM and finally SIGKILL, verifying exit before removing the World directory. Registration closes during teardown so a late child cannot escape."
+ },
+ "E2ELEAK-4": {
+  "checks": [
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_lifecycle_parent_sigterm_stops_workers_and_their_worlds",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_reaper_and_world_close_refuse_directory_outside_expected_cache",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_reaper_uses_world_marker_and_start_time_across_sessions",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_runner_reaps_detached_registered_hosts_on_all_exit_paths",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_sigterm_and_hard_owner_death_remove_detached_collector",
+   "root:test_e2e_process_cleanup.WorldCleanupTests.test_verified_exiting_child_is_not_gone_until_waitpid_releases_it"
+  ],
+  "source": "tests/requirements/e2eleak.json#E2ELEAK-4",
+  "statement": "**E2ELEAK-4 \u2014 Runner recovery owns recorded detached processes.** Each worker records its Worlds in its assigned runner folder. On completion, failure, timeout or runner SIGTERM/interruption, the runner reaps these recorded Worlds as well as its worker group, including detached processes outside TMPDIR. A World guardian also handles abrupt owner death. Discovery never scans other e2e directories or touches pre-existing leaked processes. If both runner and guardian are SIGKILLed, or the machine reboots, no next-run scan recovers them; surviving processes and directories require a manual sweep."
  },
  "E2a-1": {
   "checks": [

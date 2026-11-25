@@ -39,6 +39,7 @@ import time
 import uuid
 
 import test_framework as framework
+import e2e_processes
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITES = {"root": ROOT, "codex": ROOT / "packages" / "codex-agents", "claude": ROOT / "packages" / "claude-agents"}
@@ -73,7 +74,7 @@ WORKER_ENVIRONMENT = frozenset({
     'PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LANGUAGE', 'TZ',
     'LC_ALL', 'LC_CTYPE', 'LC_COLLATE', 'LC_MESSAGES', 'LC_MONETARY', 'LC_NUMERIC', 'LC_TIME',
     'PYTHONIOENCODING', 'PYTHONUTF8', 'PYTHONHASHSEED', 'PYTHONDONTWRITEBYTECODE',
-    'COCOLO_WORKER_TIMEOUT', 'HYPOTHESIS_STORAGE_DIRECTORY',
+    'COCOLO_WORKER_TIMEOUT', 'HYPOTHESIS_STORAGE_DIRECTORY', 'COCOLO_E2E_REGISTRY',
     # Keep coverage.py's subprocess patch active through nested test runners.
     'COVERAGE_PROCESS_CONFIG',
 })
@@ -331,17 +332,26 @@ def _group_gone(process, sig):
     return False
 
 
-def reap_worker_group(process):
-    """Only signal the process group created for this worker; teardown is bounded."""
-    if _group_gone(process, signal.SIGTERM):
-        return
-    deadline = time.monotonic() + .5
-    while time.monotonic() < deadline:
-        process.poll()
-        if _group_gone(process, 0):
+def reap_worker_group(process, registry=None):
+    """Stop the owned worker group and its recorded Worlds, even across sessions/cache roots."""
+    try:
+        if _group_gone(process, signal.SIGTERM):
             return
-        time.sleep(.01)
-    _group_gone(process, signal.SIGKILL)
+        deadline = time.monotonic() + .5
+        while time.monotonic() < deadline:
+            process.poll()
+            if _group_gone(process, 0):
+                return
+            time.sleep(.01)
+        _group_gone(process, signal.SIGKILL)
+    finally:
+        if registry is not None:
+            e2e_processes.reap_worlds(registry)
+
+
+def _runner_terminate(signum, frame):
+    raise SystemExit(128 + signum)
+
 
 def preflight_failure(message, jobs, save, started):
     elapsed = time.monotonic() - started
@@ -433,6 +443,7 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
     worker_timeout = float(os.environ.get('COCOLO_WORKER_TIMEOUT', default_timeout))
     timed_out_workers = set()
     counter, total, reported = 0, len(queue), time.monotonic()
+    previous_term = signal.signal(signal.SIGTERM, _runner_terminate)
     try:
         while queue or running:
             while queue and can_launch(queue[0][1] + ':' + queue[0][2],
@@ -454,7 +465,8 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                          "COCOLO_TEST_MODULE": f'{suite}:{name.split("#")[0]}',
                          "COCOLO_WORKER_TIMEOUT": str(worker_timeout),
                          "COCOLO_TEST_PROFILE": profile, "HYPOTHESIS_STORAGE_DIRECTORY": str(folder / 'hypothesis'),
-                         "COCOLO_TEST_RESULTS": str(folder.with_suffix('.results.json'))},
+                         "COCOLO_TEST_RESULTS": str(folder.with_suffix('.results.json')),
+                         "COCOLO_E2E_REGISTRY": str(folder / 'e2e-worlds')},
                     stdout=handle, stderr=subprocess.STDOUT, start_new_session=True)
                 running[process] = (suite, name, names, log, handle, time.monotonic(), folder)
             time.sleep(0.05)
@@ -468,12 +480,12 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
             for process, entry in running.items():
                 if process.poll() is None and time.monotonic() - entry[5] > worker_timeout + .1:
                     timed_out_workers.add(process.pid)
-                    reap_worker_group(process)  # Includes owned children if the worker could not stop itself.
+                    reap_worker_group(process, entry[6] / 'e2e-worlds')  # Includes detached World hosts.
                     entry[4].write(f"\nTIMED OUT {entry[0]}:{entry[1]} after {worker_timeout:g}s; owned process group reaped\n".encode())
                     entry[4].flush()
             for process in [p for p in running if p.poll() is not None]:
                 suite, name, names, log, handle, began, folder = running.pop(process)
-                reap_worker_group(process)
+                reap_worker_group(process, folder / 'e2e-worlds')
                 handle.close()
                 output = log.read_text(errors="replace")
                 result_file = folder.with_suffix('.results.json')
@@ -517,10 +529,13 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
         persist_record(detail, save)
         raise
     finally:
-        for process, entry in running.items():
-            reap_worker_group(process)
-            process.wait(timeout=2)
-            entry[4].close()
+        try:
+            for process, entry in running.items():
+                reap_worker_group(process, entry[6] / 'e2e-worlds')
+                process.wait(timeout=2)
+                entry[4].close()
+        finally:
+            signal.signal(signal.SIGTERM, previous_term)
     elapsed = time.monotonic() - started
     recording_seconds = None
     if recorder is not None:

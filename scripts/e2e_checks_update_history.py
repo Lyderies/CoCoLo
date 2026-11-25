@@ -448,9 +448,9 @@ def g7_update_from_v0_3_4_keeps_counts_by_kind(phase: Phase) -> None:
 # passes; only the counts by kind (G7) say history was lost.
 FAULTS["update_loses_history"] = [
     {"module": "codex_agents.learning_store",
-     "old": "        from .active_run_capacity import LOST_RUN_REASON\n\n        try:\n            install_run_holds_schema(self._connection)\n",
-     "new": "        from .active_run_capacity import LOST_RUN_REASON\n\n        self._connection.execute('DELETE FROM run_provenance')\n"
-            "        try:\n            install_run_holds_schema(self._connection)\n"},
+     "old": "        from .hold_migration import HoldMigration\n\n        # Complete fixed DDL",
+     "new": "        from .hold_migration import HoldMigration\n\n        self._connection.execute('DELETE FROM run_provenance')\n"
+            "        # Complete fixed DDL"},
 ]
 
 # An update that loses the ADMISSION history (L12.6a): the same migration also deletes the admission records (headroom and
@@ -458,9 +458,9 @@ FAULTS["update_loses_history"] = [
 # readings; only the preserved records (G7, L12.6a) say the earlier history is gone.
 FAULTS["admission_history_dropped"] = [
     {"module": "codex_agents.learning_store",
-     "old": "        from .active_run_capacity import LOST_RUN_REASON\n\n        try:\n            install_run_holds_schema(self._connection)\n",
-     "new": "        from .active_run_capacity import LOST_RUN_REASON\n\n        self._connection.execute(\"DELETE FROM records WHERE record_type IN ('provider_headroom','provider_billing')\")\n"
-            "        try:\n            install_run_holds_schema(self._connection)\n"},
+     "old": "        from .hold_migration import HoldMigration\n\n        # Complete fixed DDL",
+     "new": "        from .hold_migration import HoldMigration\n\n        self._connection.execute(\"DELETE FROM records WHERE record_type IN ('provider_headroom','provider_billing')\")\n"
+            "        # Complete fixed DDL"},
 ]
 
 
