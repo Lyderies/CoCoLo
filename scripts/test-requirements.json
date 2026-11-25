@@ -1561,6 +1561,33 @@
   "source": "docs/requirements/rsd-s3/requirements.md#P4-REPORT",
   "statement": "**P4-REPORT \u2014 Measure the pre-handoff window.**\nA script under scripts/ measures packet return to the directory fsync under load\nand prints p99. It is a report with no numeric acceptance gate."
  },
+ "RECOV-1": {
+  "checks": [
+   "codex:tests.test_recovery_line.RecoveryTests.test_future_and_null_deadlines_and_clean_stop_are_preserved",
+   "codex:tests.test_recovery_line.RecoveryTests.test_initial_validated_writer_open_gives_the_service_its_first_check",
+   "codex:tests.test_recovery_line.RecoveryTests.test_successful_writer_passes_keep_the_live_releasing_reservation_healthy",
+   "codex:tests.test_recovery_line.RecoveryTests.test_unrelated_writes_and_sender_reads_neither_erase_nor_renew_progress"
+  ],
+  "source": "tests/requirements/recov.json#RECOV-1",
+  "statement": "**RECOV-1 \u2014 A healthy serving service does not report unresponsive while evidence is pending.**\nAfter the initial validated history open, and after a successful periodic maintenance pass on the project history\nwriter, publish an exact next check no earlier\nthan that pass's wall time when a hold deadline remains overdue. Repeat this for every successful pass, even if no\nhold changed. Keep future deadlines and null (no outstanding deadline) unchanged. In particular, an expired\nreleasing reservation may legitimately wait for verified account closure while an account binding remains held\nuntil a future `next_eligible`; neither that wait nor evidence-only holds imply an unresponsive project service.\nAcceptance: the real writer pass, publisher, ledger start record and recovery formatter keep returning null across\nmore than START_RECHECK_SECONDS of successful passes with an unchanged overdue releasing reservation; a future\ndeadline is preserved. Subsequent hold transactions retain the last completed check as a floor for live exact\npublications, without renewing it. No hold is released or rescheduled by this status correction."
+ },
+ "RECOV-2": {
+  "checks": [
+   "codex:tests.test_recovery_line.BackoffTests.test_B6_backoff_is_published_and_other_holds_and_release_reset_still_win"
+  ],
+  "source": "tests/requirements/recov.json#RECOV-2",
+  "statement": "**RECOV-2 \u2014 The published orchestration check respects B6 backoff.**\nThe wake query uses max(due_at_ms, next_check_ms) for each held orchestration, then takes the earliest check across\nall outstanding holds and withdrawal retries. A B6 refusal must invalidate the queued publication before changing\nits next check, and publish the updated exact check after commit. Released tombstones do not contribute.\nAcceptance: the real unattended close backs off a blocked orchestration and publishes its future retry; another\nearlier due hold still wins; releasing its execution obligation resets the orchestration check through the existing\nB6 release path."
+ },
+ "RECOV-3": {
+  "checks": [
+   "codex:tests.test_recovery_line.RecoveryTests.test_failed_maintenance_does_not_supply_progress",
+   "codex:tests.test_recovery_line.RecoveryTests.test_future_and_null_deadlines_and_clean_stop_are_preserved",
+   "codex:tests.test_recovery_line.RecoveryTests.test_stopped_progress_returns_the_exact_E2c_9_warning_at_the_threshold",
+   "codex:tests.test_recovery_line.RecoveryTests.test_unrelated_writes_and_sender_reads_neither_erase_nor_renew_progress"
+  ],
+  "source": "tests/requirements/recov.json#RECOV-3",
+  "statement": "**RECOV-3 \u2014 Preserve E2c-9's stuck-service signal and stopped-service recovery.**\nAfter the initial validated history open, only completion of the periodic history-writer maintenance pass supplies\nprogress. Status reads, a serving process,\nthe publisher's sender thread, unrelated writes and failed maintenance do not renew this check. If progress stops\nand a serving project's published due time is at least START_RECHECK_SECONDS past, keep the exact line\n`recovery pending: service unresponsive`, including at the threshold. A clean stop publishes the actual outstanding\ndeadline, including an overdue evidence obligation, so the collector still wakes a stopped project conservatively.\nAcceptance: no completed pass and a failed pass leave the overdue warning; after successful passes stop, the warning\nreturns at the threshold; clean_stop retains the raw overdue deadline. Existing E2c-9 assertions stay unchanged."
+ },
  "RS-B-5": {
   "checks": [
    "codex:tests.test_hold_lifecycle.HoldLifecycleTests.test_B0_1_a_run_refused_before_launch_frees_its_account_binding_by_itself",

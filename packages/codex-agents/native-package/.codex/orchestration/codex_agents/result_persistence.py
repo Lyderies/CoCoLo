@@ -1296,6 +1296,10 @@ class ResultPersistenceLane:
                     service_record.record_pass(history, self._record_authority(), clock=history._result_now,
                                                notes=self.recording_notes)
                 result = history.expire_results(limit=10)
+                # RECOV-1/3: only a completed writer pass proves progress on old evidence obligations. A sender
+                # heartbeat or a serving process alone must not hide stalled maintenance (E2c-9).
+                from .project_holds_schema import wake_checked
+                wake_checked(history.project_id, history._connection, now_ms=_TIME_NS() // 1_000_000)
             elif request.kind == 'arbitrate':
                 result = history.arbitrate_publication(*request.arguments)
                 if result == 'recovered':
@@ -1357,7 +1361,9 @@ class ResultPersistenceLane:
                 # Trusted runtime startup only, never selected by a request.
                 # Validate schema and acquire the existing exclusive writer lock
                 # before the native frontend publishes any endpoint.
-                self._history()
+                history = self._history()
+                from .project_holds_schema import wake_checked
+                wake_checked(history.project_id, history._connection, now_ms=_TIME_NS() // 1_000_000)
             if self._requests is not None:
                 history_auth, result_auth, orchestration_auth = self._service_authorizers
                 service = HistoryService(self._project, self._runtime, self._history,

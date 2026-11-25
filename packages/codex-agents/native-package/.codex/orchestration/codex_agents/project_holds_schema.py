@@ -266,12 +266,36 @@ def wake_settled(project_id: str, connection) -> None:
             pass
 
 
+def wake_checked(project_id: str, connection, *, now_ms: int) -> None:
+    """RECOV-1/3: initial validated history open or a completed writer pass checked obligations at `now_ms`.
+
+    Evidence waits can retain an old deadline indefinitely. Publish the next live check at least at this pass's
+    time, so E2c-9 measures stalled maintenance rather than the age of an obligation. Only the writer calls this
+    after initial validation or a completed pass: sender and status reads cannot manufacture progress. Deadlines stay
+    for conservative clean_stop publication and recovery after a stop.
+    """
+    guard = _WAKE_GUARDS.get(project_id)
+    if guard is not None:
+        try:
+            due = next_hold_due(connection)
+            guard.after_check(due, now_ms=now_ms)
+        except Exception:
+            pass  # As with wake_settled, a failed read leaves the last known deadline in force.
+
+
 def next_hold_due(connection) -> int | None:
-    """The earliest deadline of a held or releasing hold, by index seeks per kind (never the tombstones), or the
-    withdrawal retry (`next_check_ms`) of a releasing open binding, whichever is earlier."""
+    """The earliest outstanding check (never tombstones): hold deadlines, B6's effective orchestration check,
+    or a releasing open binding's withdrawal retry. Evidence obligations retain conservative deadlines here."""
     found = None
     for kind in HOLD_KINDS:
         for state in ("held", "releasing"):
+            if kind == "orchestration" and state == "held":
+                value = connection.execute(
+                    "SELECT MIN(MAX(due_at_ms,next_check_ms)) FROM project_holds "
+                    "WHERE kind='orchestration' AND state='held' AND due_at_ms IS NOT NULL").fetchone()[0]
+                if value is not None and (found is None or value < found):
+                    found = int(value)
+                continue
             value = connection.execute(
                 "SELECT MIN(due_at_ms) FROM project_holds WHERE kind=? AND state=? AND due_at_ms IS NOT NULL",
                 (kind, state)).fetchone()[0]
