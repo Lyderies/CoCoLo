@@ -512,6 +512,41 @@
   "source": "tests/requirements/e1a-evidence.json#E1a-T4",
   "statement": "Use events/barriers, rather than a timed load loop, to coordinate simultaneous\nrefusals through the held, write-unit, account-transaction, read-call, reader\nentry, slot-health, sweep and project-health acquisition paths. Assert the exact\nwhole per-label count dictionary while ledger-free health reads run concurrently.\nAll workers must acknowledge completion, and release must permit ordinary work."
  },
+ "E1b-3": {
+  "checks": [
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_abandoned_queue_entry_is_handled_without_execution",
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_limits_and_handle_owner_validation",
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_overflow_is_named_counted_and_snapshot_is_detached",
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_project_backlog_yields_turns_and_preserves_fifo",
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_running_abandonment_keeps_global_and_project_custody",
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_running_project_keeps_project_count_slot",
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_running_timeout_keeps_custody_until_whole_completion"
+  ],
+  "source": "tests/requirements/e1b-queue.json#E1b-3",
+  "statement": "The standalone ledger owner queue bounds queued and running custody through completion, including abandonment and expiry, schedules projects fairly, and immediately returns named, counted existing busy refusals on overflow. Queue size and project share are configurable provisional limits pending E0b-v2."
+ },
+ "E1b-4": {
+  "checks": [
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_expired_queued_work_is_skipped_and_acknowledged",
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_late_execution_commits_whole_and_answers_busy",
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_reply_collected_after_deadline_answers_busy",
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_running_timeout_keeps_custody_until_whole_completion",
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_wait_uses_remaining_deadline_and_counts_once"
+  ],
+  "source": "tests/requirements/e1b-queue.json#E1b-4",
+  "statement": "A caller waits only until the earlier of its absolute deadline and the configured maximum of 800 ms. Expired queued work is skipped; running work completes whole, retains custody until handled, and answers busy after its deadline."
+ },
+ "E1b-7": {
+  "checks": [
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_abandoned_queue_entry_is_handled_without_execution",
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_expired_queued_work_is_skipped_and_acknowledged",
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_late_execution_commits_whole_and_answers_busy",
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_running_abandonment_keeps_global_and_project_custody",
+   "codex:tests.test_ledger_owner_queue.LedgerOwnerQueueTests.test_running_timeout_keeps_custody_until_whole_completion"
+  ],
+  "source": "tests/requirements/e1b-queue.json#E1b-7",
+  "statement": "Accepted requests provide a handled acknowledgement after owner execution or skipping, outcome publication and custody release. Unit tests coordinate on events and controlled clocks without sleeps or timed polling."
+ },
  "E2ELEAK-1": {
   "checks": [
    "root:test_e2e_process_cleanup.WorldCleanupTests.test_discarded_world_is_still_owned_until_cleanup",

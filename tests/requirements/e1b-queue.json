@@ -1,0 +1,20 @@
+{
+ "authority": "docs/requirements/e1b-queue.md",
+ "requirements": [
+  {
+   "id": "E1b-3",
+   "statement": "The standalone ledger owner queue bounds queued and running custody through completion, including abandonment and expiry, schedules projects fairly, and immediately returns named, counted existing busy refusals on overflow. Queue size and project share are configurable provisional limits pending E0b-v2.",
+   "source": "tests/requirements/e1b-queue.json#E1b-3"
+  },
+  {
+   "id": "E1b-4",
+   "statement": "A caller waits only until the earlier of its absolute deadline and the configured maximum of 800 ms. Expired queued work is skipped; running work completes whole, retains custody until handled, and answers busy after its deadline.",
+   "source": "tests/requirements/e1b-queue.json#E1b-4"
+  },
+  {
+   "id": "E1b-7",
+   "statement": "Accepted requests provide a handled acknowledgement after owner execution or skipping, outcome publication and custody release. Unit tests coordinate on events and controlled clocks without sleeps or timed polling.",
+   "source": "tests/requirements/e1b-queue.json#E1b-7"
+  }
+ ]
+}
