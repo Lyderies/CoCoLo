@@ -2351,10 +2351,11 @@ class ProjectHistory:
         return actual
 
     @_operation
-    def record_registered_run(self, orchestration_handle, run_handle, run_id, attempt, *, instance, now_ms, memory=False):
+    def record_registered_run(self, orchestration_handle, run_handle, run_id, attempt, *, instance, now_ms, memory=None):
         """S1-R6: the driver registered this run (before its preparation), under its supervisor
         instance. A replay is a no-op; another run under the same (run handle, attempt) is refused, and
-        so is a new one past the orchestration's limit (R6-12). Reporting only."""
+        so is a new one past the orchestration's limit (R6-12). Reporting only, unless `memory` names the
+        registering instance's launch-journal directory: its RS-B-4 driver-entry hold then commits here too."""
         if (not matches(orchestration_handle, _ID) or not matches(run_handle, _RUN) or not matches(run_id, _ID)
                 or not valid_integer(attempt, minimum=1) or not matches(instance, _ID) or not valid_integer(now_ms)):
             raise HistoryError("history_invalid_input")
@@ -2382,7 +2383,7 @@ class ProjectHistory:
                 (self.project_id, run_handle, attempt, orchestration_handle, run_id, instance, now_ms))
             if memory:
                 from .memory_holds import registration_hold
-                registration_hold(self, orchestration_handle, run_handle, attempt, instance, now_ms)
+                registration_hold(self, orchestration_handle, run_handle, attempt, instance, now_ms, memory)
 
     @_operation
     def record_run_failed_before_open(self, run_handle, attempt, reason, *, now_ms):

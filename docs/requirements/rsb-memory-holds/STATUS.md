@@ -126,3 +126,51 @@ transition and its honest measurement scope. Each old → new replacement is in
 [assertions.md](assertions.md). Existing custody, numerical budget and B3 view
 assertions remain intact. Independent owner review and release bookkeeping are
 left to the primary.
+
+## Repair round (builder repair, after the S6 merge)
+
+**Regression found unsandboxed.** The build's "baseline failures" were not baseline:
+at the build commit and at the S6 merge, `tests.test_project_driver` failed in all 11
+fragments (dispatch answered `run_failed`; undispatched runs classified
+`already_closed` instead of `abandoned`), and `tests.test_project_hold_register` and
+`tests.test_open_withdrawal` failed too. All three pass at base 0.8.62.
+
+**Root cause.** `memory_holds.registration_hold` located the registering instance's
+journal lock at `<history directory>.parent / launches`. In a real service the
+history directory *is* the project directory (`project_service.history_directory`:
+`<state>/projects/<id>`) and the driver's journal is `<state>/projects/<id>/launches`,
+so the lock was looked for in `<state>/projects/launches`, never found, and every
+registration transaction rolled back with `history_service_unavailable`. The new
+memory tests passed only because their fixtures put the history in a sibling
+`history`/`memory-store` directory, where the guess happens to be right.
+A second, smaller defect: `_unheld_reply` read `self._retired` unconditionally,
+which a driver without memory custody (the warm-up gate tests) never sets.
+
+**Fix (code only; no existing test edited).**
+- `result_persistence.py`: the lane's `register` request passes the attached
+  journal's own directory (`self._memory_journal.directory`), or `None` without memory.
+- `project_history.record_registered_run(memory=...)` now takes that directory
+  (`None` = reporting only) and hands it to `registration_hold`.
+- `memory_holds.registration_hold(..., launches)` uses the given directory and no
+  longer infers it. The store-level `register` operation takes an optional
+  `launches`; its default (sibling `launches`) serves only store tests that open a
+  history directly.
+- `project_driver._unheld_reply`: the retired-run lookup runs only with memory custody.
+
+**Evidence.** Red before the fix: one `HostVerificationTests` dispatch reproduced
+`run_failed`; an instrumented writer showed `registration_hold` raising on the missing
+lock path above. Green after: the named gate of 25 modules (38 units, 770 tests,
+121.8 s wall, `metadata_errors: []`, `budget_failures: []`, `failed_units: []`),
+including `test_project_driver` (11 fragments), `test_project_hold_register`,
+`test_open_withdrawal` and the three memory-holds modules. `test_runtime_release`
+is expected to fail until VERSION and digests are bumped (not done here).
+
+**Assertion review (no revert).** The holds-report and S6 `tracked` changes follow
+decision 129.1 A (memory kinds report `not_tracked` only until this slice). Two items
+for the primary: (1) `UNTRACKED_KINDS` also drops `orchestration` and adds its
+`past_due`/`next_eligible` computation; that switch is listed in `b6.md` as B7b's,
+not 129.1's. (2) `test_b7b_budgets`'s old tripwire asked for full B1/B6 measurements
+once tracking changed; the replacement keeps B1/B6 `unmeasured` with reasons and adds
+memory-only numbers, so whether full B1/B6 budgets are now owed is a primary decision.
+The `lifetime_caps.json` entry registers the new bounded tombstone map (a registry
+addition, not a changed assertion).

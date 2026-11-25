@@ -9,6 +9,7 @@ import json
 import os
 import re
 import stat
+from pathlib import Path
 
 from .history_contracts import HistoryError
 from .project_history import _operation
@@ -61,13 +62,16 @@ def _stopped(directory, instance, facts):
         os.close(descriptor)
 
 
-def registration_hold(history, handle, run_handle, attempt, instance, now):
-    """Inside record_registered_run's transaction, after its source insert."""
+def registration_hold(history, handle, run_handle, attempt, instance, now, launches):
+    """Inside record_registered_run's transaction, after its source insert.
+
+    `launches` is the registering instance's own launch-journal directory, where its lock lives
+    (`<state>/projects/<id>/launches` for a service; never inferred from the history directory)."""
     from . import project_holds_schema
     active(history, handle)
     if re.fullmatch(r'[0-9a-f]{32}', instance) is None:
         raise HistoryError('history_invalid_input')
-    path = history._directory.parent / 'launches' / (instance + '.lock')
+    path = Path(launches) / (instance + '.lock')
     try:
         info = path.lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
@@ -80,9 +84,11 @@ def registration_hold(history, handle, run_handle, attempt, instance, now):
 
 
 @_operation
-def register(history, handle, run_handle, attempt, run_id, instance):
+def register(history, handle, run_handle, attempt, run_id, instance, launches=None):
+    """Store-level registration. `launches` defaults to a store test's sibling journal directory."""
     history.record_registered_run(handle, run_handle, run_id, attempt, instance=instance,
-                                  now_ms=history._hold_now(), memory=True)
+                                  now_ms=history._hold_now(),
+                                  memory=history._directory.parent / 'launches' if launches is None else launches)
 
 
 @_operation

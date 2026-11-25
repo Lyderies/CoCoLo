@@ -1825,7 +1825,8 @@ class RunDriver:
             if lost[0] != host_client:
                 return {'state': 'refused', 'reason_code': 'history_not_authorized'}
             return {'state': 'failed', 'reason_code': 'run_lost' if lost[1] == 'released' else 'run_lost_held'}
-        retired = next((owner for key, owner in self._retired.items() if key[0] == run_handle), None)
+        retired = None if self._memory is None else next(
+            (owner for key, owner in self._retired.items() if key[0] == run_handle), None)
         if retired is not None:
             return ({'state': 'failed', 'reason_code': 'run_closed'} if retired[0] == host_client
                     else {'state': 'refused', 'reason_code': 'history_not_authorized'})

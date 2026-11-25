@@ -1389,7 +1389,8 @@ class ResultPersistenceLane:
                 handle, run_handle, run_id, attempt, instance = request.arguments
                 result = history.record_registered_run(handle, run_handle, run_id, attempt, instance=instance,
                                                        now_ms=history._result_now(),
-                                                       memory=getattr(self, '_memory_journal', None) is not None)
+                                                       memory=None if getattr(self, '_memory_journal', None) is None
+                                                       else self._memory_journal.directory)
             elif request.kind == 'failed_before_open':
                 result = history.record_run_failed_before_open(*request.arguments, now_ms=history._result_now())
             elif request.kind == 'list':

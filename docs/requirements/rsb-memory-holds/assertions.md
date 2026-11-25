@@ -20,3 +20,11 @@ states and quiescent equality. The executable lease fixture supplies its require
 assignment. L7's checkpoints use the actual writer handoff and actual lane detach,
 then the real successor fences each lease once. The discard checkpoint gates the
 actual cleanup worker before it can mark the slot cleaned.
+
+## Repair round review
+
+No existing assertion was changed or reverted in the repair. The four rows above
+were reviewed against decision 129.1 A: the memory-kind `tracked` rows follow it.
+Flagged for the primary (not reverted, since reverting would require removing
+behaviour, not test edits): the `orchestration` tracking switch (b6.md lists it as
+B7b's) and the `test_b7b_budgets` tripwire replacement (B1/B6 stay unmeasured).
