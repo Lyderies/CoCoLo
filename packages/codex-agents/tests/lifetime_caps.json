@@ -2038,6 +2038,21 @@
    "checks": 1,
    "ends": "Published health is a working set of eight snapshots. The oldest publication is evicted when a new project enters; durable registrations and admission are never capped.",
    "test": "test_published_health_evicts_past_project_limit"
+  },
+  "learning_store.py::_health_refresh_for": {
+   "checks": 1,
+   "ends": "Outstanding health refreshes: one per project root, at most MAX_PUBLISHED_PROJECT_HEALTH; each entry is pruned once its refresh is handled, which the owner always acknowledges (refused or run). Past the bound a cold read answers the existing ledger_busy.",
+   "test": "test_review_outstanding_health_refreshes_are_bounded_and_end_when_handled"
+  },
+  "learning_store.py::_published_project": {
+   "checks": 1,
+   "ends": "an age comparison (a publication older than PUBLISHED_HEALTH_MAX_AGE_MS is refreshed first); counts nothing; BOUNDED",
+   "test": "test_review_published_health_counts_a_run_slot_that_passed_its_deadline_since_publication"
+  },
+  "learning_store.py::ingestion_freshness": {
+   "checks": 1,
+   "ends": "moved from ingestion_snapshot (review 040-e1bw-r1): the hook freshness age comparison; counts nothing; BOUNDED",
+   "test": "test_review_published_health_ages_an_idle_project_at_read_time"
   }
  }
 }

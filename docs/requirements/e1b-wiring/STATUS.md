@@ -102,3 +102,28 @@ this path; they are covered by the unchanged `test_learning_cli` modules, which 
 Run: `parallel_tests.py --jobs 8` over test_learning_cli, test_ledger_owner_wiring, test_ledger_owner_queue,
 test_ledger_owner_queue_lifecycle, test_collector_exit, test_account_ingress, test_ledger_busy_answers, test_e1a_evidence:
 failed_units [], metadata_errors [], 155 codex tests. VERSION and digests untouched.
+
+## Review fix round (040-e1bw-r1, NOT-READY)
+
+One fixed-scope round on `34caee73`. Tests first: the twelve new checks below ran red on `34caee73` (11 failures,
+4 errors across them, one with four sub-cases) and green after. All are event/acknowledgement coordinated; the
+late-request checks move a controlled queue clock from inside the running request, the health checks patch the
+wall/monotonic clocks the ledger reads. The owner, ledger, account service, signature workers and collector host are
+real. New classes in `tests.test_ledger_owner_wiring`: `LedgerOwnerReviewFixTests` (reuses the module's owner
+fixture) and `LedgerOwnerHostProcessTests` (the real `collector_host.py` process, run by a probe wrapper).
+
+| Item | Change | Check (red on 34caee73 -> green) |
+| --- | --- | --- |
+| HIGH-1 (E1b-4/5) | `LedgerOwner.call` on the owner thread keeps its own request's outcome. The deadline refuses it only before it starts (nothing consumed or registered: the ingress keeps custody, a begin answers its existing busy reply and holds no ticket); once it has run, its answer is delivered. Chosen because it is the pre-wiring behaviour (a direct call that finished late returned its answer) and E1b-4's busy answer is for a caller that stopped waiting, while the owner thread executes its own request and never stops waiting; a busy reply after consuming would lose a completion the client cannot replay for every lane (billing/observation). Other threads keep E1b-4 unchanged. | `test_review_owner_thread_request_that_runs_late_keeps_its_answer` (red: `sql_read_busy` after commit), `test_review_late_deferred_claim_publication_is_delivered_not_lost` (red: busy after the completion was taken), `test_review_late_deferred_begin_keeps_its_ticket` (red: busy bytes, ticket still registered) |
+| HIGH-2 (E1b-6) | Hook freshness is recomputed at every read from the published last-accepted time (`ingestion_freshness`, the same rule `ingestion_snapshot` uses). A publication carries its monotonic time; one older than `PUBLISHED_HEALTH_MAX_AGE_MS` (1 s) or marked by a write is refreshed first with the old 250 ms wait (late: existing `ledger_busy`), so slot deadlines, live holds and bindings are as of the read. A current publication is still answered with no owner wait (paused-owner check unchanged). | `test_review_published_health_ages_an_idle_project_at_read_time` (red: `fresh`, age 8 ms), `test_review_published_health_counts_a_run_slot_that_passed_its_deadline_since_publication` (red: 0 past deadline) |
+| MED-1 (E1b-1) | `collector_host.py` opens `LearningLedger(state, sole_owner=True)` (`check_same_thread=True`); `SQLReadConnection.interrupt` refuses another thread on a sole-owner connection (SQLite allows any thread to interrupt). | `test_review_production_connection_refuses_every_use_from_another_thread` (red: execute, raw cursor, create_function, backup, interrupt and close all allowed from another thread; green: all refused, owner still works) |
+| MED-2 (E1b-4/6) | `_publish_changes(project_id, before)` runs no SQL: it only marks the publications the request may have changed (its project; all for unlabelled requests or changes made between requests). Refreshes run on demand as their own contained requests (`contain_errors=True`), so a display read can neither delay nor fail a write; the epilogue also catches every `Exception`. Startup warm-up catches every display failure. | `test_review_a_write_is_acknowledged_without_rereading_published_health` (red: two projects' slot reads inside the write), `test_review_a_display_read_failure_never_fails_a_committed_write` (red: `RuntimeError: ledger owner failed`, owner stopped) |
+| MED-3 (E1b-3/4) | The host loop waits on `queue.wait_for_work(0.002)` (wakes on an offer) and calls `LedgerOwner.pump_ready(12)` (the queue's whole capacity) each pass before the account step. | `test_review_host_loop_drains_ready_requests_each_pass` (red: 3 loop passes for 9 ready requests, stable over 3 runs; green: <= 1) |
+| LOW-1 | One outstanding refresh per project root (bounded at 8), not one for all. | `test_review_cold_project_answers_while_another_refresh_is_outstanding` (red: `ledger_busy` shape for an unregistered project) |
+| LOW-2 | `recorded_owner_key` maps a busy owner to its existing fail-closed `StateError`, so `owner_key_report` answers `mismatch` as an unreadable ledger did. | `test_review_owner_key_report_fails_closed_when_the_owner_is_busy` (red: `SQLReadError` escaped) |
+| LOW-3 | Handed-back errors carry their plain args and plain attributes and are rebuilt with `__new__` (no constructor re-run): `CollectorError.code`, `OSError.errno/strerror`, `HistoryError.reason_code` and two-argument `ResultContractError` survive. Still no traceback or object crosses. | `test_review_handed_back_errors_keep_their_attributes` (red: code/errno/reason lost, `TypeError` for ResultContractError) |
+
+Assertion changes: none. No existing assertion was changed or removed; the twelve checks are new and registered in
+`scripts/test-requirements.json` (`metadata_errors: []`). The queue's post-run deadline count still records an
+owner-thread request that ran late (it did exceed its deadline) although its answer is now delivered.
+VERSION and the runtime digest are unchanged.

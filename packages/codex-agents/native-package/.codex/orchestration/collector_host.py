@@ -32,7 +32,7 @@ from codex_agents.ledger_owner_queue import DEFAULT_LEDGER_QUEUE_LIMITS  # noqa:
 
 # At most the queue's whole retained capacity per loop pass, so the account step still runs every pass.
 OWNER_REQUESTS_PER_PASS = DEFAULT_LEDGER_QUEUE_LIMITS.requests
-from codex_agents.learning_store import CollectorServer, LearningLedger, LearningState  # noqa: E402
+from codex_agents.learning_store import CollectorServer, LearningLedger, LearningState, sole_owner_open  # noqa: E402
 from codex_agents.shutdown_watchdog import ShutdownWatchdog  # noqa: E402
 
 
@@ -70,7 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         # E1b-1 (review 040-e1bw-r1 MED-1): check_same_thread, so SQLite itself refuses every other thread's
         # cursor, statement, close or backup on this connection, not only the Python-level guard.
-        ledger = LearningLedger(state, sole_owner=True)
+        with sole_owner_open():
+            ledger = LearningLedger(state)
         owner = LedgerOwner(state, ledger=ledger)
     except BaseException:
         watchdog.done()  # Nothing to shut down; nothing may fire later (SD3-3).

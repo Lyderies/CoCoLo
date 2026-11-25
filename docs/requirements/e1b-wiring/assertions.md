@@ -21,3 +21,10 @@ during `CollectorServer.stop`, asserting `['handled', 'exit']`, acknowledgement,
 zero retained work and the C10 `requested` record. The new preparation test now
 pauses the real protected-copy inspection boundary rather than a synthetic
 preparation callback, retaining its authority-revocation assertion.
+
+## Review fix round (040-e1bw-r1)
+
+No existing assertion was changed or removed. Twelve new checks were added (listed in `STATUS.md`,
+"Review fix round"); each ran red on `34caee73` before the fix. The existing
+`test_paused_owner_leaves_project_health_responsive`, cold/unregistered health and eviction checks
+pass unchanged against the reworked published health.

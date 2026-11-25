@@ -595,7 +595,8 @@
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_published_health_counts_a_run_slot_that_passed_its_deadline_since_publication",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_a_write_is_acknowledged_without_rereading_published_health",
    "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_a_display_read_failure_never_fails_a_committed_write",
-   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_cold_project_answers_while_another_refresh_is_outstanding"
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_cold_project_answers_while_another_refresh_is_outstanding",
+   "codex:tests.test_ledger_owner_wiring.LedgerOwnerReviewFixTests.test_review_outstanding_health_refreshes_are_bounded_and_end_when_handled"
   ]
  },
  "E1b-7": {

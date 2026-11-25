@@ -657,6 +657,31 @@ class LedgerOwnerReviewFixTests(unittest.TestCase):
         self.assertTrue(pause.handled.wait(2))
         self.assertEqual([{'ok': False, 'code': 'project_unregistered'}], replies)
 
+    @requirements('E1b-6')
+    def test_review_outstanding_health_refreshes_are_bounded_and_end_when_handled(self):
+        from codex_agents.learning_store import MAX_PUBLISHED_PROJECT_HEALTH
+        self.start_owner()
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        pause = self.owner.offer(lambda: (entered.set(), release.wait(2)))
+        self.assertTrue(entered.wait(2))
+        def label(index):  # Spread over four projects so the queue's own per-project share is not the limit.
+            return 'prj_%032x' % (index % 4 + 1)
+        offered = [self.server._health_refresh_for(str(self.root.parent / str(index)), label(index), None)
+                   for index in range(MAX_PUBLISHED_PROJECT_HEALTH + 1)]
+        self.assertTrue(all(handle is not None and own for handle, own in offered[:MAX_PUBLISHED_PROJECT_HEALTH]))
+        self.assertEqual((None, False), offered[-1])  # Past the bound: nothing more is retained.
+        # One per project root: a second read of the same root shares the outstanding refresh.
+        self.assertEqual((offered[0][0], False),
+                         self.server._health_refresh_for(str(self.root.parent / '0'), label(0), None))
+        release.set()
+        self.assertTrue(pause.handled.wait(2))
+        self.assertTrue(all(handle.handled.wait(2) for handle, _ in offered[:MAX_PUBLISHED_PROJECT_HEALTH]))
+        handle, own = self.server._health_refresh_for(str(self.root.parent / 'after'), label(0), None)
+        self.assertTrue(own)  # Handled refreshes ended: room again.
+        self.assertTrue(handle.handled.wait(2))
+        self.assertLessEqual(len(self.server._health_refresh), 1)
+
     # LOW-2: a busy owner leaves the owner-key report's fail-closed answer, never an unexpected error.
     @requirements('E1b-4', 'E1b-5')
     def test_review_owner_key_report_fails_closed_when_the_owner_is_busy(self):

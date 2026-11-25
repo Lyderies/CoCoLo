@@ -17,7 +17,15 @@ The trusted adapter submits whole operations to the existing fair queue. Offline
 LearningLedger callers retain their current API. Account services are built and
 pumped by the opening thread. Queue defaults are 12 retained requests, 8 projects,
 6 retained requests per project and an 800 ms maximum caller wait. Running late
-work finishes whole. No new wire operation, refusal code or schema is introduced.
+work finishes whole. A caller on another thread that stops waiting at its deadline
+hears the existing busy answer (E1b-4). The opening thread runs its own requests: its
+deadline refuses a request only before it starts (nothing consumed or registered), and
+once a request has run its answer is delivered, as a direct call's was before the
+wiring, so a deferred completion or begin ticket is never answered busy and lost. The
+production collector opens its connection with `check_same_thread` (plus a guarded
+`interrupt`), so SQLite itself refuses every other thread. The host loop wakes on the
+queue's work signal and handles up to the queue's whole capacity (12) of ready requests
+per pass. No new wire operation, refusal code or schema is introduced.
 
 Tests use events and handled acknowledgements. Two existing default-value assertions and one explicit-cap fixture are updated
 for decision 304; exact replacements are in `e1b-wiring/assertions.md`.
@@ -46,6 +54,11 @@ Published project health is an eight-entry replaceable working set, not a
 registration or admission limit. New projects evict the oldest publication;
 a cold project (nothing published yet) waits at most the old 250 ms health wait for its one
 refresh, so registered projects answer in full and unregistered ones keep `project_unregistered`;
-only a late or refused refresh returns the existing `ledger_busy` shape. Ledger changes replace cached snapshots, and frontend file
-counters are merged without SQL. Queue refusals join the existing `ledger_waits`
+only a late or refused refresh returns the existing `ledger_busy` shape. Each project has at most one
+outstanding refresh. A write never runs display reads: its request only marks the publications it may
+have changed (its project, or all for unlabelled requests and changes made outside a request), so
+display reads cannot delay or fail a committed operation. Values that depend on the time stay as of the
+read: hook freshness is recomputed from the published last-accepted time at every read, and a
+publication that is marked or older than 1 s (slot deadlines, live holds and bindings) is refreshed first
+with the same 250 ms wait. Frontend file counters are merged without SQL. Queue refusals join the existing `ledger_waits`
 counters without a new wire code or field.

@@ -2274,6 +2274,22 @@ class _ClaimRequest:
 # S1-H1a: SQLite VM steps allowed for one slot-health read.
 SLOT_HEALTH_STEPS = 200_000
 MAX_PUBLISHED_PROJECT_HEALTH = 8
+from threading import local as _thread_local  # noqa: E402
+_OPENING = _thread_local()
+
+
+@contextlib.contextmanager
+def sole_owner_open():
+    """The calling thread declares that a ledger it opens here is used by it alone (E1b-1): the connection is
+    then opened with check_same_thread, so SQLite refuses every other thread (review 040-e1bw-r1 MED-1)."""
+    previous = getattr(_OPENING, "sole_owner", False)
+    _OPENING.sole_owner = True
+    try:
+        yield
+    finally:
+        _OPENING.sole_owner = previous
+
+
 # Review 040-e1bw-r1 HIGH-2: published account sections (slot deadlines, live holds and bindings) depend on the
 # time; older than this, a health read refreshes them first (with the old 250 ms ledger wait) instead.
 PUBLISHED_HEALTH_MAX_AGE_MS = 1000
@@ -2312,7 +2328,7 @@ class LearningLedger:
         if type(allow_schema_upgrade) is not bool or type(backup_before_upgrade) is not bool or (
                 backup_before_upgrade and not allow_schema_upgrade):
             raise LedgerError('ledger schema upgrade option is invalid')
-        self._sole_owner = sole_owner
+        self._sole_owner = sole_owner or getattr(_OPENING, "sole_owner", False) is True
         self._allow_schema_upgrade = allow_schema_upgrade
         # The owner's approved upgrade (setup's registration): each active project's
         # records are first kept as they are, then the migration checks those copies.
