@@ -341,6 +341,7 @@
  "root:test_e2e_requirements": "e2e",
  "root:test_e2e_run_control": "integration",
  "root:test_e2e_strictness": "unit",
+ "root:test_e2e_update_safety": "unit",
  "root:test_entrypoint_inventory": "integration",
  "root:test_identifiers_parity": "integration",
  "root:test_install": "e2e",
