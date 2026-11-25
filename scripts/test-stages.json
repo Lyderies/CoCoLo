@@ -344,6 +344,7 @@
  "root:test_attest": "integration",
  "root:test_check_identifiers": "unit",
  "root:test_ci_stages": "unit",
+ "root:test_e2e_core_api": "integration",
  "root:test_e2e_learning_guard": "integration",
  "root:test_e2e_recovery": "unit",
  "root:test_e2e_requirements": "e2e",

@@ -2587,12 +2587,12 @@
  "TERM-6": {
   "checks": [],
   "source": "PLAN-0.4.0-terminal.md section 4",
-  "statement": "Run counts through the API match learning-orchestration-status."
+  "statement": "Run counts through the API match learning-orchestration-report (its `runs`)."
  },
  "TERM-7": {
   "checks": [],
   "source": "PLAN-0.4.0-terminal.md section 4",
-  "statement": "Usage through the API matches usage-report --json and is 'unknown' when unreadable."
+  "statement": "Usage through the API matches `learning-usage-report --since --until` and is 'unknown' when unreadable."
  },
  "TF-1": {
   "checks": [

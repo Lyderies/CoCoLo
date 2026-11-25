@@ -458,224 +458,288 @@
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Headless core. Check: the core starts with no screen; the runner keeps running and `orch` commands fall back to the files when the core dies.",
-   "checks": []
+   "checks": [],
+   "deferred": true,
+   "reason": "Needs runner (A5/A6) and the `orch` command, neither of which exists in 0.8.60: runner survival and the orch fall-back to the files cannot be shown on the real path. Decision 259."
   },
   {
    "id": "API-2",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Socket. Check: socket mode 0600 in a 0700 directory, path under 104 bytes, a stale socket is replaced, no TCP listener.",
-   "checks": []
+   "checks": [
+    "api2_socket_private_short_stale_replaced_no_tcp"
+   ]
   },
   {
    "id": "API-3",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Peer identity. Check: a connection from another uid is refused before any method runs.",
-   "checks": []
+   "checks": [],
+   "deferred": true,
+   "reason": "Needs a second Unix user, which the harness does not have (owner-gated)."
   },
   {
    "id": "API-4",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Framing. Check: JSON-RPC 2.0 as newline-delimited JSON; a malformed line gets a parse error and the connection lives; an oversize line is refused.",
-   "checks": []
+   "checks": [
+    "api4_framing_json_rpc_lines_parse_error_and_oversize"
+   ]
   },
   {
    "id": "API-5",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Handshake and versioning. Check: `initialize` returns protocol version and features; a major mismatch is refused; any other method before it is refused.",
-   "checks": []
+   "checks": [
+    "api5_handshake_version_and_gate"
+   ]
   },
   {
    "id": "API-6",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "One contract. Check: `schema.get` lists methods, event kinds and error codes; every response carries `seq_at`; the in-process adapter and the socket give identical results.",
-   "checks": []
+   "checks": [
+    "api6_schema_lists_the_contract_seq_at_everywhere_and_adapters_agree"
+   ]
   },
   {
    "id": "API-7",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "State, units and runs. Check: state.get, units.list/get/history and runs.list equal the record files field for field.",
-   "checks": []
+   "checks": [
+    "api7_state_units_and_runs_equal_the_record_files"
+   ]
   },
   {
    "id": "API-8",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Usage, history, CI, versions. Check: values equal the records; unreadable or missing data is \"unknown\", never a guessed number.",
-   "checks": []
+   "checks": [
+    "api8_usage_history_ci_versions_equal_records_and_unknown_is_never_a_number"
+   ]
   },
   {
    "id": "API-9",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Health. Check: health.get gives each finding with a plain reason code and text.",
-   "checks": []
+   "checks": [
+    "api9_health_findings_have_a_code_and_a_plain_text"
+   ]
   },
   {
    "id": "API-10",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Files stay canonical. Check: deleting the core's cache and restarting gives identical answers; records survive a restart.",
-   "checks": []
+   "checks": [
+    "api10_files_stay_canonical_a_restart_answers_the_same"
+   ]
   },
   {
    "id": "API-11",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Ordered events. Check: events have a gap-free increasing seq and the envelope {seq, ts, kind, data, v}.",
-   "checks": []
+   "checks": [
+    "api11_events_are_ordered_gap_free_and_have_the_envelope"
+   ]
   },
   {
    "id": "API-12",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Resume. Check: `events.subscribe from_seq` replays exactly the missed events; an expired cursor returns cursor_expired with a snapshot.",
-   "checks": []
+   "checks": [
+    "api12_resume_replays_exactly_the_missed_events_an_old_cursor_is_expired"
+   ]
   },
   {
    "id": "API-13",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Filtering and bounds. Check: a kind filter works; a slow subscriber is dropped without delaying others or the writer.",
-   "checks": []
+   "checks": [
+    "api13_kind_filter_and_a_slow_subscriber_is_dropped_without_delaying_others"
+   ]
   },
   {
    "id": "API-14",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Events carry no secrets. Check: events hold ids and summaries only; a planted secret and transcript text never appear.",
-   "checks": []
+   "checks": [
+    "api14_events_carry_ids_and_summaries_never_secrets_or_transcripts"
+   ]
   },
   {
    "id": "API-15",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Records-first answers. Check: canned questions (status, usage, CI, versions, history, why stopped) are answered from records with sources, as_of and tokens_used 0, and nothing is written to the inbox.",
-   "checks": []
+   "checks": [
+    "api15_canned_questions_are_answered_from_records_and_nothing_is_queued"
+   ]
   },
   {
    "id": "API-16",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Forwarding at safe points. Check: a judgment question is queued only in the inbox, delivered at a safe point as at most 300 tokens with a TTL; query.reply produces query.answered for the asker.",
-   "checks": []
+   "checks": [],
+   "deferred": true,
+   "reason": "Needs runner (A5/A6): nothing in 0.8.60 calls the core's safe-point delivery, so delivery at real safe points cannot be shown on the real path. Decision 259."
   },
   {
    "id": "API-17",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Talk is labelled and capped. Check: context.push is labelled by source, capped (2 KB, 10 per minute), delivered as quoted untrusted data, and never counted as an owner decision.",
-   "checks": []
+   "checks": [],
+   "deferred": true,
+   "reason": "needs runner (A5/A6): no production safe-point delivery. Delivery of a push as quoted untrusted data cannot be shown on the real path in 0.8.60 (decision 259); the label, size and rate limits are covered by packages/codex-agents/tests/test_core_api_*.py."
   },
   {
    "id": "API-18",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Tokens. Check: 256-bit, stored hashed, revocable, minted only at the owner's terminal (refused over the API); an agent token defaults to read plus context.push.",
-   "checks": []
+   "checks": [
+    "api18_tokens_are_256_bit_hashed_revocable_and_minted_only_at_the_owners_terminal"
+   ]
   },
   {
    "id": "API-19",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Scope matrix. Check: read, confirm and owner scopes each allow exactly their methods; others return forbidden.",
-   "checks": []
+   "checks": [
+    "api19_each_scope_may_call_exactly_its_methods_and_the_rest_is_forbidden"
+   ]
   },
   {
    "id": "API-20",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Decisions. Check: decision.answer works for the owner role only.",
-   "checks": []
+   "checks": [
+    "api20_only_the_owner_role_answers_a_decision"
+   ]
   },
   {
    "id": "API-21",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Two-step confirm. Check: a control call first returns confirm_required with an id; the second call within 60 s executes once; reuse, expiry and a different token or params are refused.",
-   "checks": []
+   "checks": [
+    "api21_a_control_needs_two_steps_executes_once_and_the_id_is_bound"
+   ]
   },
   {
    "id": "API-22",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Owner-only wall. Check: install, update, setup, reviewed install, live-record writes, billing attestation, client-range widening and token minting are refused over the API even with an owner token.",
-   "checks": []
+   "checks": [
+    "api22_walled_actions_are_refused_even_with_an_owner_token"
+   ]
   },
   {
    "id": "API-23",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Audit. Check: every change and confirm is a commands.jsonl line; every refusal is an audit.jsonl line (rotated separately, so refusals cannot push changes out); each line has caller, method, outcome; no token or secret appears.",
-   "checks": []
+   "checks": [
+    "api23_every_change_is_a_command_line_every_refusal_an_audit_line_and_no_secret_in_either"
+   ]
   },
   {
    "id": "API-24",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Limits. Check: request size, string length, method time, connection count and subscription count are capped with fixed error codes.",
-   "checks": []
+   "checks": [
+    "api24_request_string_method_time_connection_and_subscription_caps"
+   ]
   },
   {
    "id": "API-25",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "Provider neutrality. Check: no provider name in method, event or field names; provider detail only under `extra`.",
-   "checks": []
+   "checks": [
+    "api25_no_provider_names_in_contract_provider_detail_only_under_extra"
+   ]
   },
   {
    "id": "API-26",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "(later adapter) HTTP+SSE bridge on 127.0.0.1 with Host/Origin/token checks, SSE id = seq. Tested with the dashboard milestone.",
-   "checks": []
+   "checks": [],
+   "deferred": true,
+   "reason": "Later adapter (dashboard milestone); no product code yet."
   },
   {
    "id": "API-27",
    "flow": "API",
    "source": "PLAN-0.4.0-terminal.md section 9",
    "statement": "(later adapter) stdio MCP adapter on a pinned spec exposing the same operations. Tested last.",
-   "checks": []
+   "checks": [],
+   "deferred": true,
+   "reason": "Later adapter (tested last); no product code yet."
   },
   {
    "id": "TERM-5",
    "flow": "TERM",
    "source": "PLAN-0.4.0-terminal.md section 4",
    "statement": "The terminal and the core are separate processes; the core runs headless.",
-   "checks": []
+   "checks": [],
+   "deferred": true,
+   "reason": "Needs terminal: no terminal client exists in 0.8.60 (owner console, DESIGN-0.4.0-orchestrator-console.md, is unbuilt). Decision 259."
   },
   {
    "id": "TERM-6",
    "flow": "TERM",
    "source": "PLAN-0.4.0-terminal.md section 4",
-   "statement": "Run counts through the API match learning-orchestration-status.",
-   "checks": []
+   "statement": "Run counts through the API match learning-orchestration-report (its `runs`).",
+   "checks": [],
+   "deferred": true,
+   "reason": "Needs runner (A5/A6): nothing in 0.8.60 turns runs into the core's unit records, so run counts cannot flow from a real run to the API. Decision 259."
   },
   {
    "id": "TERM-7",
    "flow": "TERM",
    "source": "PLAN-0.4.0-terminal.md section 4",
-   "statement": "Usage through the API matches usage-report --json and is 'unknown' when unreadable.",
-   "checks": []
+   "statement": "Usage through the API matches `learning-usage-report --since --until` and is 'unknown' when unreadable.",
+   "checks": [],
+   "deferred": true,
+   "reason": "Needs runner (A5/A6): nothing in 0.8.60 writes run usage into the core's records, so usage cannot flow from a real run to the API. Decision 259."
   },
   {
    "id": "TERM-13",
    "flow": "TERM",
    "source": "PLAN-0.4.0-terminal.md section 4",
    "statement": "Authority tiers are enforced in the core, not the client.",
-   "checks": []
+   "checks": [
+    "term13_authority_is_decided_by_the_core_not_by_what_the_client_says"
+   ]
   },
   {
    "id": "TERM-17",
    "flow": "TERM",
    "source": "PLAN-0.4.0-terminal.md section 4",
    "statement": "Every terminal read goes through the API only.",
-   "checks": []
+   "checks": [],
+   "deferred": true,
+   "reason": "Needs terminal: no terminal client exists in 0.8.60 to drive, so it cannot be shown to read through the API only. Decision 259."
   }
  ]
 }
