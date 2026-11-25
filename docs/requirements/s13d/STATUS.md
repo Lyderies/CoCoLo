@@ -238,3 +238,19 @@ Final checks (unsandboxed, TMPDIR under /tmp/claude-501/):
   (a test_project_start starter wrapper and a collector_host); left for the
   primary.
 
+## Fix round (review r1: 2 MED)
+
+1. **git pin staleness (MED).** `git_executable` now rechecks, on every use, each pinned candidate's identity: resolved
+   real path plus stat (dev, ino, mtime, mode, uid) of the file and (mode, uid) of its directory. Any change drops the
+   one-entry cache and re-resolves with the full trust checks (fallback selection included); a removed binary, a replaced
+   binary, a retargeted symlink or a permission change no longer keeps the old path. The pin still holds the candidate
+   list, so `git_candidates()` and `temp_roots()` run once per pin (the original work-count regression is unchanged and
+   green). New `GitPinRevalidationTests` were red on `59e5bd64` (7 of 8; the unchanged-pin one passes there). Speed:
+   36 resolutions took about 1.2 ms with the recheck and a mock spy (3.5 ms in the earlier measurement, 128 ms uncached).
+2. **E2c-4 early-retry check (MED).** See assertions.md (fix round): claim pass at deadline minus one tick, no claim, no
+   attempt; then the deadline. Mutation (`now_ms=_now_ms() + 1` into `claim_due_starts`) is red; unmutated runs green (2/2).
+3. **S7 on the final tree.** `test_collector_first_response` and `test_s7_owner_load` (S7 tree read-only, on PYTHONPATH,
+   not copied or committed): 7 tests OK, 4.3 s, unsandboxed.
+
+No VERSION or digest catalogue change; runtime digest pin in `test_runtime_release` stays stale by design.
+

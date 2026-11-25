@@ -31,3 +31,19 @@
   ProcessLookupError is suppressed for a PID that exited after enumeration.
 - E2c-3's two 50 ms maxima, indexed query plan, 1,000 claimed rows, batch size
   and flatness comparison are unchanged.
+
+## Fix round (review r1, 2 MED)
+
+- `test_E2c_4_a_crash_loop_parks_and_only_the_owner_unparks` (strengthened, nothing removed): old -> new. Old (this
+  branch): after each acknowledged failure, jump the policy clock straight to the stored `next_start_at_ms`. New: before
+  that jump, advance the policy clock to `next_start_at_ms - 1`, await a claim pass whose `now_ms >= deadline - 1`, then
+  assert (a) no claim with `claimed > 0` since the advance, (b) no new `begin` attempt, (c) the failure count is
+  unchanged; only then advance to the deadline and wait for the next failure. Reason: the review showed a starter that
+  retried early, or passed a future timestamp to `claim_due_starts`, still passed. All earlier assertions (>= 3 failures,
+  exact `[300, 600, 600, 600]` waits, parked line, no attempt after a wake publication, owner-only unpark, fresh streak)
+  are unchanged. This is at least as strong as the original wall-clock version, which could only observe growth of the
+  begin-to-begin gap. Mutation: `claim_due_starts(now_ms=_now_ms() + 1, ...)` in `project_start.py` turns it red
+  ("a project was claimed before its retry deadline", `claimed: 1`); restored afterwards.
+- No other existing assertion changed. New tests: `GitPinRevalidationTests` (8) in `test_s13d_regressions.py`
+  (removed, replaced untrusted, replaced trusted, symlink retargeted trusted/untrusted, permission change, all gone,
+  unchanged pin: 2 trust checks over 36 calls).

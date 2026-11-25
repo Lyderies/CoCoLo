@@ -52,6 +52,121 @@ class GitPinTests(unittest.TestCase):
                 self.assertEqual('/usr/bin/git', git_plumbing.git_executable())
 
 
+class GitPinRevalidationTests(unittest.TestCase):
+    """S13d fix round: the per-process pin is rechecked on use and re-resolved when its identity changes."""
+    __why_not_scenario__ = 'Real stand-in binaries on disk; only trust roots are patched. No subprocess or transport.'
+
+    def setUp(self):
+        git_plumbing._trusted_git_candidates.cache_clear()
+        self.addCleanup(git_plumbing._trusted_git_candidates.cache_clear)
+        self.temporary = tempfile.TemporaryDirectory(dir=support.TEMP_ROOT)
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(os.path.realpath(self.temporary.name))
+        from codex_agents import host_paths
+        roots = mock.patch.object(host_paths, 'TRUSTED_INSTALL_ROOTS',
+                                  (*host_paths.TRUSTED_INSTALL_ROOTS, str(self.base)))
+        roots.start()
+        self.addCleanup(roots.stop)
+        self.first, self.second = self.fake('first'), self.fake('second')
+        patches = [mock.patch.object(git_plumbing, 'git_candidates', return_value=(self.link(), self.second)),
+                   mock.patch.object(git_plumbing, 'temp_roots', return_value=set())]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def fake(self, name):
+        path = self.base / name / 'git'
+        path.parent.mkdir()
+        path.write_text('#!/bin/sh\nexit 0\n')
+        path.chmod(0o755)
+        return str(path)
+
+    def link(self):
+        # The preferred candidate is a symlink, as Homebrew's bin/git is.
+        link = self.base / 'bin-git'
+        if not link.is_symlink():
+            link.symlink_to(self.first)
+        return str(link)
+
+    @requirements('S13d-2')
+    def test_a_removed_binary_is_dropped_and_the_fallback_selected(self):
+        self.assertEqual(self.first, git_plumbing.git_executable())
+        os.unlink(self.first)
+        self.assertEqual(self.second, git_plumbing.git_executable())
+
+    @requirements('S13d-2')
+    def test_a_replaced_binary_is_trust_checked_again(self):
+        self.assertEqual(self.first, git_plumbing.git_executable())
+        replacement = Path(self.first).with_name('git.new')
+        replacement.write_text('#!/bin/sh\nexit 0\n')
+        replacement.chmod(0o777)  # writable by others: no longer trusted
+        os.replace(replacement, self.first)
+        self.assertEqual(self.second, git_plumbing.git_executable())
+
+    @requirements('S13d-2')
+    def test_a_trusted_replacement_is_revalidated_once_then_cached_again(self):
+        self.assertEqual(self.first, git_plumbing.git_executable())
+        replacement = Path(self.first).with_name('git.new')
+        replacement.write_text('#!/bin/sh\nexit 0\n')
+        replacement.chmod(0o755)
+        os.replace(replacement, self.first)
+        with mock.patch.object(git_plumbing, 'executable_location_problem',
+                               wraps=git_plumbing.executable_location_problem) as validate:
+            self.assertEqual([self.first] * 5, [git_plumbing.git_executable() for _ in range(5)])
+        self.assertGreaterEqual(validate.call_count, 1, 'a replaced binary skipped trust revalidation')
+        with mock.patch.object(git_plumbing, 'executable_location_problem',
+                               wraps=git_plumbing.executable_location_problem) as again:
+            git_plumbing.git_executable()
+        self.assertEqual(0, again.call_count)
+
+    @requirements('S13d-2')
+    def test_a_retargeted_symlink_selects_its_new_trusted_target(self):
+        self.assertEqual(self.first, git_plumbing.git_executable())
+        third = self.fake('third')
+        link = self.base / 'bin-git'
+        link.unlink()
+        link.symlink_to(third)
+        self.assertEqual(third, git_plumbing.git_executable())
+
+    @requirements('S13d-2')
+    def test_a_retargeted_symlink_to_an_untrusted_target_falls_back(self):
+        self.assertEqual(self.first, git_plumbing.git_executable())
+        third = self.fake('third')
+        os.chmod(third, 0o777)
+        link = self.base / 'bin-git'
+        link.unlink()
+        link.symlink_to(third)
+        self.assertEqual(self.second, git_plumbing.git_executable())
+
+    @requirements('S13d-2')
+    def test_a_permission_change_is_revalidated(self):
+        self.assertEqual(self.first, git_plumbing.git_executable())
+        os.chmod(self.first, 0o777)
+        self.assertEqual(self.second, git_plumbing.git_executable())
+        os.chmod(self.first, 0o755)  # trusted again: pinned once more
+        self.assertEqual(self.first, git_plumbing.git_executable())
+        os.chmod(self.first, 0o644)  # no longer executable
+        self.assertEqual(self.second, git_plumbing.git_executable())
+
+    @requirements('S13d-2')
+    def test_every_candidate_gone_fails_closed(self):
+        self.assertEqual(self.first, git_plumbing.git_executable())
+        os.unlink(self.first)
+        os.unlink(self.second)
+        self.assertIsNone(git_plumbing.git_executable())
+
+    @requirements('S13d-2')
+    def test_an_unchanged_pin_is_trust_checked_once_and_stays_fast(self):
+        import time
+        with mock.patch.object(git_plumbing, 'executable_location_problem',
+                               wraps=git_plumbing.executable_location_problem) as validate:
+            began = time.perf_counter()
+            self.assertEqual([self.first] * 36, [git_plumbing.git_executable() for _ in range(36)])
+            elapsed = time.perf_counter() - began
+        self.assertEqual(2, validate.call_count)  # each of the two candidates, once
+        print(f'S13d git: 36 resolutions with per-use identity recheck {elapsed * 1000:.3f} ms', file=sys.stderr)
+
+
 class HostCloseTests(unittest.TestCase):
     __why_not_scenario__ = 'Real kernel lock with event-free controlled writer drain and final settlement.'
     def host(self, directory):

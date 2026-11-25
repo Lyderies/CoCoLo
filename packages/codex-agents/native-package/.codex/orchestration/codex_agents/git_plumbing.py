@@ -162,9 +162,31 @@ def git_candidates() -> tuple[str, ...]:
     )
 
 
+def _identity(real: str) -> tuple | None:
+    """What a pinned binary looks like on disk now, or None when it is gone or unreadable."""
+
+    try:
+        info = os.stat(real)
+        parent = os.stat(os.path.dirname(real))
+    except OSError:
+        return None
+    return (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_mode, info.st_uid,
+            parent.st_mode, parent.st_uid)
+
+
+def _observe(candidate: str) -> tuple[str, tuple | None]:
+    real = os.path.realpath(candidate)
+    return real, _identity(real)
+
+
 @lru_cache(maxsize=1)
-def _trusted_git_candidates(pid: int, temporary: tuple[str, str]) -> tuple[str, ...]:
+def _trusted_git_candidates(pid: int, temporary: tuple[str, str]) -> tuple[tuple[str, ...], tuple]:
     """Pin trusted installation paths lazily, once per process/temp environment.
+
+    Returns the trusted real paths and a snapshot of every candidate's identity
+    (its resolved path and file/parent stat), so a later use can cheaply tell
+    that an installation changed (removed, replaced, retargeted symlink, new
+    permissions) and re-resolve with the full trust checks.
 
     The PID prevents a fork from inheriting its parent's pin. These locations
     cannot be changed by a sandboxed caller; caller-controlled roots are checked
@@ -172,9 +194,13 @@ def _trusted_git_candidates(pid: int, temporary: tuple[str, str]) -> tuple[str, 
     """
     untrusted = list(temp_roots())
     trusted = []
+    snapshot = []
     for candidate in git_candidates():
-        real = os.path.realpath(candidate)
+        real, identity = _observe(candidate)
+        snapshot.append((candidate, real, identity))
         if sys.platform == "darwin" and os.path.dirname(real) == "/usr/bin":
+            continue
+        if identity is None:
             continue
         try:
             info = os.stat(real)
@@ -185,18 +211,30 @@ def _trusted_git_candidates(pid: int, temporary: tuple[str, str]) -> tuple[str, 
         if executable_location_problem(Path(real), untrusted) is None:
             if real not in trusted:
                 trusted.append(real)
-    return tuple(trusted)
+    return tuple(trusted), tuple(snapshot)
+
+
+def _pin_is_current(snapshot: tuple) -> bool:
+    return all(_observe(candidate) == (real, identity) for candidate, real, identity in snapshot)
 
 
 def git_executable(untrusted: Iterable[Path] = ()) -> str | None:
     """The first pinned real git outside this call's untrusted roots, or None.
 
-    Installation trust checks are cached per process. Repository exclusions are
-    never cached: a root (including a symlink) supplied by this call still makes
-    an otherwise trusted binary ineligible. No PATH lookup or import-time I/O.
+    Installation trust checks are cached per process, and each use cheaply
+    rechecks the pinned candidates' identity: any change drops the pin and
+    re-resolves with the full trust checks, fallback selection included.
+    Repository exclusions are never cached: a root (including a symlink)
+    supplied by this call still makes an otherwise trusted binary ineligible.
+    No PATH lookup or import-time I/O.
     """
     roots = tuple(Path(os.path.realpath(root)) for root in untrusted)
-    for candidate in _trusted_git_candidates(os.getpid(), (tempfile.gettempdir(), os.environ.get('TMPDIR', ''))):
+    key = (os.getpid(), (tempfile.gettempdir(), os.environ.get('TMPDIR', '')))
+    pinned, snapshot = _trusted_git_candidates(*key)
+    if not _pin_is_current(snapshot):
+        _trusted_git_candidates.cache_clear()
+        pinned, _snapshot = _trusted_git_candidates(*key)
+    for candidate in pinned:
         if not any(within(Path(candidate), root) for root in roots):
             return candidate
     return None

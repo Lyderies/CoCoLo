@@ -604,6 +604,17 @@ class BackoffTests(StarterBase):
             self.assertEqual(previous + 1, row['failures'])
             rows.append(row)
             if row['next_start_at_ms'] is not None:
+                # S13d fix: one tick before the retry deadline the starter must NOT claim or attempt (a starter
+                # that retries early, or hands the ledger a future timestamp, is caught here); at the deadline it does.
+                early = row['next_start_at_ms'] - 1
+                seen, began = len(self.events('claim')), len(self.events('begin', 'broken'))
+                advance(early)
+                wait_for(self, lambda: any(event['now_ms'] >= early for event in self.events('claim')[seen:]), 30,
+                         'no claim pass one tick before the retry deadline')
+                self.assertEqual([], [event for event in self.events('claim')[seen:] if event['claimed']],
+                                 'a project was claimed before its retry deadline')
+                self.assertEqual(began, len(self.events('begin', 'broken')), 'a start began before its retry deadline')
+                self.assertEqual(previous + 1, self.starts('broken')['failures'])
                 advance(row['next_start_at_ms'])
         line = wait_for(self, lambda: (self.status('broken') or '').startswith('recovery failed: ')
                         and self.status('broken'), 30, f'never parked: {self.status("broken")}')

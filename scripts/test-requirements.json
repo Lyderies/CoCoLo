@@ -3948,7 +3948,15 @@
  "S13d-2": {
   "checks": [
    "codex:tests.test_s13d_regressions.GitPinTests.test_repeated_git_resolution_validates_candidates_once",
-   "codex:tests.test_s13d_regressions.GitPinTests.test_cached_git_still_excludes_each_callers_root_and_its_symlink"
+   "codex:tests.test_s13d_regressions.GitPinTests.test_cached_git_still_excludes_each_callers_root_and_its_symlink",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_a_removed_binary_is_dropped_and_the_fallback_selected",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_a_replaced_binary_is_trust_checked_again",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_a_trusted_replacement_is_revalidated_once_then_cached_again",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_a_retargeted_symlink_selects_its_new_trusted_target",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_a_retargeted_symlink_to_an_untrusted_target_falls_back",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_a_permission_change_is_revalidated",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_every_candidate_gone_fails_closed",
+   "codex:tests.test_s13d_regressions.GitPinRevalidationTests.test_an_unchanged_pin_is_trust_checked_once_and_stays_fast"
   ],
   "source": "tests/requirements/s13d.json#S13d-2",
   "statement": "Cache trusted git resolution per process without caching caller repository exclusions or doing import-time I/O."
