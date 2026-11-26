@@ -447,5 +447,6 @@
  "codex:tests.test_s15_contract_caps": "component",
  "codex:tests.test_s15_probe_caps": "scenario",
  "codex:tests.test_s15_owner_caps": "scenario",
- "codex:tests.test_s15_failure_matrix": "scenario"
+ "codex:tests.test_s15_failure_matrix": "scenario",
+ "codex:tests.test_s14f_owner_bounds": "scenario"
 }

@@ -1,0 +1,336 @@
+{
+ "target_mib": 256,
+ "real_run_seconds": 0.287,
+ "build_seconds": 9.5,
+ "db_bytes": 271683584,
+ "file_bytes": 271946058,
+ "runs": 12204,
+ "bytes_per_run": 22097,
+ "rows": {
+  "launch_inputs": 12206,
+  "host_run_bindings": 12206,
+  "active_run_capacity": 12205,
+  "run_holds": 24411,
+  "records": 61037
+ },
+ "clone_valid": {
+  "unique_handles": 12206
+ },
+ "custody": {
+  "Q1_active_run_capacity": {
+   "seconds": 0.0039,
+   "rows": 12205,
+   "vm_steps_100k": 0,
+   "finished": true,
+   "plan": [
+    "SCAN active_run_capacity"
+   ]
+  },
+  "Q2_launch_inputs_bindings_holds": {
+   "seconds": 2.6966,
+   "rows": 12206,
+   "vm_steps_100k": 4471,
+   "finished": true,
+   "plan": [
+    "SCAN i",
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=?)"
+   ]
+  },
+  "Q2_with_kind_candidate": {
+   "seconds": 0.0213,
+   "rows": 12206,
+   "vm_steps_100k": 3,
+   "finished": true,
+   "plan": [
+    "SCAN i",
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  "live_ledger_custody": {
+   "seconds": 0.027,
+   "finished": true,
+   "digests": 1,
+   "profile_top": [
+    {
+     "where": "measure_s14c.py:302:<lambda>",
+     "calls": 2,
+     "own_seconds": 0.0048,
+     "cumulative_seconds": 0.0223
+    },
+    {
+     "where": "runtime_lineage.py:149:<genexpr>",
+     "calls": 12207,
+     "own_seconds": 0.0222,
+     "cumulative_seconds": 0.0222
+    },
+    {
+     "where": "queue.py:177:get",
+     "calls": 3,
+     "own_seconds": 0.0002,
+     "cumulative_seconds": 0.0175
+    },
+    {
+     "where": "threading.py:337:wait",
+     "calls": 3,
+     "own_seconds": 0.0004,
+     "cumulative_seconds": 0.0113
+    },
+    {
+     "where": "runtime_lineage.py:136:live_ledger_custody",
+     "calls": 1,
+     "own_seconds": 0.0,
+     "cumulative_seconds": 0.0047
+    },
+    {
+     "where": "~:0:<method 'update' of 'set' objects>",
+     "calls": 1,
+     "own_seconds": 0.0002,
+     "cumulative_seconds": 0.0047
+    },
+    {
+     "where": "sql_read_budget.py:246:execute",
+     "calls": 2,
+     "own_seconds": 0.0,
+     "cumulative_seconds": 0.0002
+    },
+    {
+     "where": "store_fence.py:266:execute",
+     "calls": 2,
+     "own_seconds": 0.0,
+     "cumulative_seconds": 0.0001
+    }
+   ],
+   "best_of_3_seconds": 0.02487
+  }
+ },
+ "paged_custody": {
+  "passes": 96,
+  "worst_pass_seconds": 0.00066,
+  "total_seconds": 0.0284,
+  "rows_per_pass": 256,
+  "edges_removed": 0
+ },
+ "lookups": {
+  "lost_run_lookup_kind_in": {
+   "median_seconds": 0.0001,
+   "max_seconds": 0.0001,
+   "vm_steps_100k_max": 0,
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  "withdrawal_control_kind_eq": {
+   "median_seconds": 0.0,
+   "max_seconds": 0.0,
+   "vm_steps_100k_max": 0,
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  "denied_opens_maintenance": {
+   "seconds": 0.0077,
+   "rows": 0,
+   "vm_steps_100k": 2,
+   "finished": true,
+   "plan": [
+    "SEARCH q USING INDEX account_open_requests_committed_expiry (observation_deadline_at_ms<?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH r USING COVERING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SEARCH h USING COVERING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+    "SEARCH c EXISTS USING INDEX sqlite_autoindex_account_open_receipts_3 (project_id=? AND request_key=?)"
+   ]
+  }
+ },
+ "status_read_seconds": 0.0591,
+ "lineage_status_seconds": 0.0001,
+ "idle_run_retention": {
+  "seconds": 0.0,
+  "finished": true,
+  "result": 0
+ },
+ "idle_account_retention": {
+  "seconds": 0.021,
+  "finished": true,
+  "result": 0,
+  "profile_top": [
+   {
+    "where": "measure_s14c.py:357:<lambda>",
+    "calls": 2,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.0207
+   },
+   {
+    "where": "learning_store.py:2694:sweep_account_retention",
+    "calls": 1,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.0207
+   },
+   {
+    "where": "sql_read_budget.py:246:execute",
+    "calls": 28,
+    "own_seconds": 0.0081,
+    "cumulative_seconds": 0.0205
+   },
+   {
+    "where": "account_original_open.py:403:purge_finished_opens",
+    "calls": 1,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.019
+   },
+   {
+    "where": "store_fence.py:266:execute",
+    "calls": 28,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.0124
+   },
+   {
+    "where": "store_fence.py:179:_fenced",
+    "calls": 29,
+    "own_seconds": 0.0001,
+    "cumulative_seconds": 0.0124
+   },
+   {
+    "where": "store_fence.py:271:<lambda>",
+    "calls": 28,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.0112
+   },
+   {
+    "where": "~:0:<function FencedCursor.execute at 0x10b0f5220>",
+    "calls": 28,
+    "own_seconds": 0.0112,
+    "cumulative_seconds": 0.0112
+   }
+  ]
+ },
+ "product_open": {
+  "seconds": 0.258,
+  "finished": true,
+  "result": "opened",
+  "profile_top": [
+   {
+    "where": "learning_store.py:2327:__init__",
+    "calls": 1,
+    "own_seconds": 0.0001,
+    "cumulative_seconds": 0.2583
+   },
+   {
+    "where": "learning_store.py:3526:_migrate",
+    "calls": 1,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.2511
+   },
+   {
+    "where": "sql_read_budget.py:246:execute",
+    "calls": 194,
+    "own_seconds": 0.0001,
+    "cumulative_seconds": 0.2279
+   },
+   {
+    "where": "store_fence.py:266:execute",
+    "calls": 194,
+    "own_seconds": 0.0097,
+    "cumulative_seconds": 0.2277
+   },
+   {
+    "where": "learning_store.py:3592:_validate_current_ledger",
+    "calls": 1,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.2184
+   },
+   {
+    "where": "queue.py:177:get",
+    "calls": 39,
+    "own_seconds": 0.0039,
+    "cumulative_seconds": 0.2019
+   },
+   {
+    "where": "threading.py:337:wait",
+    "calls": 39,
+    "own_seconds": 0.0008,
+    "cumulative_seconds": 0.1977
+   },
+   {
+    "where": "admission_evidence_schema.py:100:check_admission_evidence_coverage",
+    "calls": 1,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.1796
+   }
+  ]
+ },
+ "upgrade_17_18": {
+  "seconds": 1.278,
+  "finished": true,
+  "result": 18,
+  "profile_top": [
+   {
+    "where": "queue.py:177:get",
+    "calls": 205,
+    "own_seconds": 0.0014,
+    "cumulative_seconds": 2.1652
+   },
+   {
+    "where": "measure_s14c.py:428:run",
+    "calls": 2,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 1.2762
+   },
+   {
+    "where": "learning_store.py:2327:__init__",
+    "calls": 1,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 1.2762
+   },
+   {
+    "where": "sql_read_budget.py:246:execute",
+    "calls": 1950,
+    "own_seconds": 0.002,
+    "cumulative_seconds": 1.1412
+   },
+   {
+    "where": "store_fence.py:266:execute",
+    "calls": 1950,
+    "own_seconds": 0.0013,
+    "cumulative_seconds": 1.1385
+   },
+   {
+    "where": "threading.py:337:wait",
+    "calls": 205,
+    "own_seconds": 0.0063,
+    "cumulative_seconds": 0.9122
+   },
+   {
+    "where": "learning_store.py:3335:_initialize_run_holds_locked",
+    "calls": 1,
+    "own_seconds": 0.0001,
+    "cumulative_seconds": 0.7509
+   },
+   {
+    "where": "admission_evidence_schema.py:100:check_admission_evidence_coverage",
+    "calls": 3,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.5523
+   }
+  ]
+ },
+ "custody_released_holds": {
+  "Q2_launch_inputs_bindings_holds": {
+   "seconds": 14.9942,
+   "rows": 3,
+   "vm_steps_100k": 17875,
+   "finished": true
+  },
+  "Q2_with_kind_candidate": {
+   "seconds": 0.0186,
+   "rows": 3,
+   "vm_steps_100k": 2,
+   "finished": true
+  }
+ },
+ "total_seconds": 30.7
+}

@@ -5499,5 +5499,82 @@
   ],
   "source": "tests/requirements/s15.json#S15-O0C-REPEAT-EXPIRY",
   "statement": "O0c / decision 382 / RS-A F6: real repeat probe generations fill both pending quotas, refuse an extra generation, and after both clocks pass their deadline an unprepared expired generation releases its owner custody so the same committed request can start a fresh judgment."
+ },
+ "S14F-1": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.PagedCustodyTests.test_S14F_1_each_pass_visits_at_most_the_bound_and_converges_to_the_exact_custody",
+   "codex:tests.test_s14f_owner_bounds.PagedCustodyTests.test_S14F_1_a_live_run_is_never_missed_at_any_position_or_bound",
+   "codex:tests.test_s14f_owner_bounds.PagedCustodyTests.test_S14F_1_an_edge_set_change_or_a_fallen_rowid_never_releases_a_stale_answer"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-1",
+  "statement": "The sole-owner account retention sweep computes lineage custody in bounded passes (at most CUSTODY_PASS_ROWS history rows per pass, rowid windows), releases an answer only when one cycle has seen every row, and that answer equals the exact custody restricted to lineage edge keys; a live run is never missed at any position or bound; a cycle the change watch invalidates is discarded (S14F-6)."
+ },
+ "S14F-2": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.PagedCustodyTests.test_S14F_2_a_pass_on_a_large_history_stays_within_the_owner_request_bound"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-2",
+  "statement": "A custody pass on a large (60k-run) history stays well inside the S7 owner request bound (LEDGER_REQUEST_WAIT_MS/8)."
+ },
+ "S14F-3": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.PagedCustodyTests.test_S14F_3_the_sweep_uses_the_paged_scan_and_open_still_computes_custody_whole"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-3",
+  "statement": "sweep_account_retention uses the paged scan and never the whole-history custody; open and the upgrade still compute custody whole (S14E-1/2 pin that query)."
+ },
+ "S9-WAIT": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.MaintenanceReaderWaitTests.test_S9_WAIT_a_stalled_reader_fails_the_attempt_plainly_and_a_later_attempt_succeeds"
+  ],
+  "source": "tests/requirements/s14f.json#S9-WAIT",
+  "statement": "Exclusive maintenance waits at most MAINTENANCE_READER_WAIT_S for health-copy readers; a stalled worker fails the attempt with a plain LedgerError, leaves the store unchanged and the reader registered, and a later attempt succeeds once the worker ends."
+ },
+ "S14F-4": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.CustodyClockTests.test_S14F_4_a_clock_rollback_mid_cycle_never_completes_short_of_the_whole_custody",
+   "codex:tests.test_s14f_owner_bounds.CustodyClockTests.test_S14F_4_a_forward_jump_keeps_the_cycle_start_cutoff_and_still_converges"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-4",
+  "statement": "One cutoff per custody cycle, fixed at its start: a later clock judges against the earlier (more protective) cutoff, and a pass whose clock is before the cycle start restarts the cycle, so neither a clock rollback nor a forward jump lets a completed or pruning cycle hold less than the whole custody at that time."
+ },
+ "S14F-5": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.CustodyWorkTests.test_S14F_5_every_pass_bounds_its_total_work_on_a_long_overlapping_chain",
+   "codex:tests.test_s14f_owner_bounds.CustodyWorkTests.test_S14F_5_the_whole_prune_walks_each_edge_once_on_overlapping_chains"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-5",
+  "statement": "Every owner pass bounds its total work (lineage edges read by key page, history rows, protected-path walk steps with one visited set, deletions) to CUSTODY_PASS_ROWS units; a long overlapping chain completes over many passes each within the bound and equals the whole-scan prune; the whole prune walks each edge once."
+ },
+ "S14F-6": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.CustodyInvalidationTests.test_S14F_6_a_delete_and_reinsert_behind_the_cursor_restoring_the_max_rowid_is_still_found",
+   "codex:tests.test_s14f_owner_bounds.CustodyInvalidationTests.test_S14F_6_a_vacuum_or_another_connection_commit_mid_cycle_discards_the_cycle",
+   "codex:tests.test_s14f_owner_bounds.CustodyInvalidationTests.test_S14F_6_ledger_maintenance_vacuum_resets_the_owner_scan"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-6",
+  "statement": "A cycle continues only while a per-connection TEMP change watch (any change that could add custody for an edge key, or any lineage insert/update), PRAGMA data_version and main.schema_version are unchanged on the same connection: a delete+reinsert behind the cursor restoring the max rowid is still found, a VACUUM or another connection's commit mid-cycle discards the cycle, and ledger maintenance VACUUM resets the owner scan."
+ },
+ "S14F-7": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.CustodyPropertyTests.test_S14F_7_random_interleavings_never_let_the_paged_answer_fall_short_of_the_whole"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-7",
+  "statement": "Under fixed-seed random interleavings of inserts, releases, deletes, delete+reinsert, binding/hold changes, new edges, clock moves, VACUUM, other-connection commits and the commit-before-write-lock race between passes, every completed paged answer covers the whole answer and no pruning pass deletes an edge the whole computation protects at that moment; once quiet, the paged prune equals the whole prune."
+ },
+ "S14F-8": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.CustodyRaceAndResetTests.test_S14F_8_another_connection_committing_custody_before_the_write_lock_keeps_the_edge"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-8",
+  "statement": "A pruning pass rechecks the change watch, PRAGMA data_version and main.schema_version inside its write transaction (write lock held) before any delete; custody another connection commits after the pass-start checks abandons that prune and restarts the cycle (two real connections on one file, WAL and rollback journal)."
+ },
+ "S14F-9": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.CustodyRaceAndResetTests.test_S14F_9_the_completion_walk_never_copies_the_custody_keys",
+   "codex:tests.test_s14f_owner_bounds.CustodyRaceAndResetTests.test_S14F_9_a_reset_never_discards_cycle_sized_containers_in_one_pass"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-9",
+  "statement": "The completion walk consumes the custody set a budget at a time (no copy of it) and a reset is O(1): the old cycle's containers are handed to a drop list emptied within later passes' budgets, so no pass exceeds CUSTODY_PASS_ROWS units at completion or reset with 2,000 keys."
  }
 }

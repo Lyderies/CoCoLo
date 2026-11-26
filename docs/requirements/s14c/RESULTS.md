@@ -67,3 +67,22 @@ query text verbatim (kept as the baseline probe), so they stay slow; the product
 | 514 | 24,353 | 12.747 | 0.056 | 13.777 | 0.485 | 12.84 -> 0.098 | not run | 78.1 s |
 Custody and open now grow about linearly (259 -> 514 MiB: custody x2.3, open x2.1); the remaining open cost is not the custody query. Extrapolated to 4 GiB
 (x8 from 514 MiB): custody about 0.5 s, open about 4 s (before: 867 s and 599 s). The remaining quadratic suspects (`account_holds_status`, Q1) are S14g/S14h.
+
+## After S14f (decision 388; the owner-thread sweep computes custody in bounded passes, `CustodyScan`, 256 rows per pass)
+Same script and runner defaults (raw: `after-s14f-256.json`, `after-s14f-514.json`; the script now also times every pass of one paged cycle with one lineage edge on a used runtime).
+Before = whole-history `live_ledger_custody` on the owner thread (the S14e figure, best of 3); after = the worst single pass the owner is held for.
+| MiB | runs | whole custody per sweep before (s) | paged: passes | worst pass after (s) | whole cycle after (s) | run wall |
+|---|---|---|---|---|---|---|
+| 259 | 12,356 | 0.024 | 96 | 0.0005 | 0.026 | 28.6 s |
+| 514 | 24,353 | 0.053 | 190 | 0.0006 | 0.059 | 78.6 s |
+The per-pass owner time is constant (about 0.5 ms; bounded by the row budget, not history size) and the cycle total is linear, as before. Open and the 17->18 upgrade keep the whole computation (S14e).
+
+### After S14f fix round (r1 NOT-READY: clock, total work, invalidation; the sweep now runs the whole prune cycle in bounded passes, `CustodyScan.advance`)
+Same script and runner defaults (raw: `after-s14f-256.json`, `after-s14f-512.json`, overwritten). Each pass now does at most 256 units of ALL its work
+(lineage edges read by key page, history rows, protected-path walk steps, deletions); the timed cycle is the full owner cycle including walk and deletes.
+| MiB | runs | whole custody per sweep (s) | paged: passes | worst pass (s) | whole cycle (s) | run wall |
+|---|---|---|---|---|---|---|
+| 259 | 12,204 | 0.025 | 96 | 0.0007 | 0.028 | 30.9 s |
+| 515 | 24,260 | 0.095 | 190 | 0.0012 | 0.101 | 85.6 s |
+The worst pass stays about 1 ms (bounded by the unit budget, not history size); the cycle total is linear. The change watch (TEMP triggers) adds no
+measurable pass cost. 17->18 upgrade at 512 MiB not run (disk cap, as before).
