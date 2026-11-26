@@ -1,0 +1,284 @@
+{
+ "target_mib": 256,
+ "real_run_seconds": 0.262,
+ "build_seconds": 9.6,
+ "db_bytes": 271908864,
+ "file_bytes": 272171338,
+ "runs": 12209,
+ "bytes_per_run": 22106,
+ "rows": {
+  "launch_inputs": 12211,
+  "host_run_bindings": 12211,
+  "active_run_capacity": 12210,
+  "run_holds": 24421,
+  "records": 61062
+ },
+ "clone_valid": {
+  "unique_handles": 12211
+ },
+ "custody": {
+  "Q1_active_run_capacity": {
+   "seconds": 0.0035,
+   "rows": 12210,
+   "vm_steps_100k": 0,
+   "finished": true,
+   "plan": [
+    "SCAN active_run_capacity"
+   ]
+  },
+  "Q2_launch_inputs_bindings_holds": {
+   "seconds": 2.4917,
+   "rows": 12211,
+   "vm_steps_100k": 4475,
+   "finished": true,
+   "plan": [
+    "SCAN i",
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=?)"
+   ]
+  },
+  "Q2_with_kind_candidate": {
+   "seconds": 0.0202,
+   "rows": 12211,
+   "vm_steps_100k": 3,
+   "finished": true,
+   "plan": [
+    "SCAN i",
+    "SEARCH h USING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+    "CORRELATED SCALAR SUBQUERY 1",
+    "SEARCH r USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  "live_ledger_custody": {
+   "seconds": 0.025,
+   "finished": true,
+   "digests": 1,
+   "profile_top": [
+    {
+     "where": "runtime_lineage.py:141:<genexpr>",
+     "calls": 12212,
+     "own_seconds": 0.0205,
+     "cumulative_seconds": 0.0205
+    },
+    {
+     "where": "measure_s14c.py:302:<lambda>",
+     "calls": 2,
+     "own_seconds": 0.0124,
+     "cumulative_seconds": 0.0128
+    },
+    {
+     "where": "queue.py:177:get",
+     "calls": 2,
+     "own_seconds": 0.0,
+     "cumulative_seconds": 0.012
+    },
+    {
+     "where": "threading.py:337:wait",
+     "calls": 2,
+     "own_seconds": 0.0004,
+     "cumulative_seconds": 0.0119
+    },
+    {
+     "where": "runtime_lineage.py:128:live_ledger_custody",
+     "calls": 1,
+     "own_seconds": 0.0,
+     "cumulative_seconds": 0.0008
+    },
+    {
+     "where": "~:0:<method 'update' of 'set' objects>",
+     "calls": 1,
+     "own_seconds": 0.0,
+     "cumulative_seconds": 0.0008
+    },
+    {
+     "where": "sql_read_budget.py:246:execute",
+     "calls": 2,
+     "own_seconds": 0.0,
+     "cumulative_seconds": 0.0001
+    },
+    {
+     "where": "store_fence.py:266:execute",
+     "calls": 2,
+     "own_seconds": 0.0,
+     "cumulative_seconds": 0.0001
+    }
+   ],
+   "best_of_3_seconds": 0.02382
+  }
+ },
+ "paged_custody": {
+  "passes": 96,
+  "worst_pass_seconds": 0.0005,
+  "total_seconds": 0.0264,
+  "rows_per_pass": 256,
+  "digests": 1
+ },
+ "lookups": {
+  "lost_run_lookup_kind_in": {
+   "median_seconds": 0.0001,
+   "max_seconds": 0.0001,
+   "vm_steps_100k_max": 0,
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  "withdrawal_control_kind_eq": {
+   "median_seconds": 0.0,
+   "max_seconds": 0.0,
+   "vm_steps_100k_max": 0,
+   "plan": [
+    "SEARCH run_holds USING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)"
+   ]
+  },
+  "denied_opens_maintenance": {
+   "seconds": 0.0076,
+   "rows": 0,
+   "vm_steps_100k": 2,
+   "finished": true,
+   "plan": [
+    "SEARCH q USING INDEX account_open_requests_committed_expiry (observation_deadline_at_ms<?)",
+    "CORRELATED SCALAR SUBQUERY 2",
+    "SEARCH r USING COVERING INDEX sqlite_autoindex_run_holds_1 (project_id=? AND kind=? AND identity=?)",
+    "CORRELATED SCALAR SUBQUERY 3",
+    "SEARCH h USING COVERING INDEX sqlite_autoindex_host_run_bindings_1 (project_id=? AND handle_digest=?)",
+    "SEARCH c EXISTS USING INDEX sqlite_autoindex_account_open_receipts_3 (project_id=? AND request_key=?)"
+   ]
+  }
+ },
+ "status_read_seconds": 0.0553,
+ "lineage_status_seconds": 0.0,
+ "idle_run_retention": {
+  "seconds": 0.0,
+  "finished": true,
+  "result": 0
+ },
+ "idle_account_retention": {
+  "seconds": 0.018,
+  "finished": true,
+  "result": 0,
+  "profile_top": [
+   {
+    "where": "measure_s14c.py:356:<lambda>",
+    "calls": 2,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.0177
+   },
+   {
+    "where": "learning_store.py:2694:sweep_account_retention",
+    "calls": 1,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.0177
+   },
+   {
+    "where": "sql_read_budget.py:246:execute",
+    "calls": 14,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.0175
+   },
+   {
+    "where": "store_fence.py:266:execute",
+    "calls": 14,
+    "own_seconds": 0.0081,
+    "cumulative_seconds": 0.0175
+   },
+   {
+    "where": "account_original_open.py:403:purge_finished_opens",
+    "calls": 1,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.0076
+   },
+   {
+    "where": "store_fence.py:179:_fenced",
+    "calls": 15,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.0061
+   },
+   {
+    "where": "store_fence.py:271:<lambda>",
+    "calls": 14,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.0059
+   },
+   {
+    "where": "~:0:<function FencedCursor.execute at 0x106c412d0>",
+    "calls": 14,
+    "own_seconds": 0.0059,
+    "cumulative_seconds": 0.0059
+   }
+  ]
+ },
+ "product_open": {
+  "seconds": 0.244,
+  "finished": true,
+  "result": "opened",
+  "profile_top": [
+   {
+    "where": "queue.py:177:get",
+    "calls": 41,
+    "own_seconds": 0.0025,
+    "cumulative_seconds": 0.4027
+   },
+   {
+    "where": "learning_store.py:2327:__init__",
+    "calls": 1,
+    "own_seconds": 0.0001,
+    "cumulative_seconds": 0.2436
+   },
+   {
+    "where": "sql_read_budget.py:246:execute",
+    "calls": 194,
+    "own_seconds": 0.0001,
+    "cumulative_seconds": 0.2138
+   },
+   {
+    "where": "store_fence.py:266:execute",
+    "calls": 194,
+    "own_seconds": 0.0023,
+    "cumulative_seconds": 0.2136
+   },
+   {
+    "where": "learning_store.py:3595:_validate_current_ledger",
+    "calls": 1,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.2046
+   },
+   {
+    "where": "threading.py:337:wait",
+    "calls": 41,
+    "own_seconds": 0.0008,
+    "cumulative_seconds": 0.1901
+   },
+   {
+    "where": "admission_evidence_schema.py:100:check_admission_evidence_coverage",
+    "calls": 1,
+    "own_seconds": 0.0,
+    "cumulative_seconds": 0.1673
+   },
+   {
+    "where": "store_fence.py:179:_fenced",
+    "calls": 199,
+    "own_seconds": 0.0003,
+    "cumulative_seconds": 0.0443
+   }
+  ]
+ },
+ "upgrade_17_18": {
+  "skipped": "open did not finish or a copy would pass the 1 GiB disk cap"
+ },
+ "custody_released_holds": {
+  "Q2_launch_inputs_bindings_holds": {
+   "seconds": 14.1199,
+   "rows": 3,
+   "vm_steps_100k": 17890,
+   "finished": true
+  },
+  "Q2_with_kind_candidate": {
+   "seconds": 0.0176,
+   "rows": 3,
+   "vm_steps_100k": 2,
+   "finished": true
+  }
+ },
+ "total_seconds": 28.3
+}

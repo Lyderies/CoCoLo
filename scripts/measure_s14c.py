@@ -310,6 +310,25 @@ def main():
             best.append(time.perf_counter() - started)
         custody['live_ledger_custody']['best_of_3_seconds'] = round(min(best), 5)
     report['custody'] = custody
+    # ---- S14f: the owner-thread sweep's paged custody. One lineage edge on a runtime the history uses is added
+    # inside a transaction and rolled back; every pass of one cycle is timed (the owner is held for one pass).
+    digest = db.execute('SELECT runtime_digest FROM active_run_capacity WHERE runtime_digest IS NOT NULL LIMIT 1').fetchone()
+    if digest is not None and not db.in_transaction:
+        db.execute('BEGIN')
+        try:
+            db.execute('INSERT INTO runtime_lineage VALUES(?,?,?,?,1,?,1)', (digest[0], '0.0.1', '0' * 64, '0.0.2', '1' * 32))
+            scan, passes, worst, started = runtime_lineage.CustodyScan(), [], 0.0, time.perf_counter()
+            while True:
+                tick = time.perf_counter()
+                answer = scan.step(db, now)
+                passes.append(time.perf_counter() - tick)
+                if answer is not None or len(passes) > 100000:
+                    break
+            report['paged_custody'] = {'passes': len(passes), 'worst_pass_seconds': round(max(passes), 5),
+                                       'total_seconds': round(time.perf_counter() - started, 4), 'rows_per_pass': runtime_lineage.CUSTODY_PASS_ROWS,
+                                       'digests': len(answer or ())}
+        finally:
+            db.execute('ROLLBACK')
     # ---- per-run lookups (sampled handles), plans
     handles = [r[0] for r in db.execute('SELECT handle_digest FROM launch_inputs ORDER BY rowid LIMIT 1 OFFSET ?', (runs // 2,))]
     handles += [r[0] for r in db.execute('SELECT handle_digest FROM launch_inputs ORDER BY rowid DESC LIMIT 5')]

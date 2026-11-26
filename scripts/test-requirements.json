@@ -5499,5 +5499,35 @@
   ],
   "source": "tests/requirements/s15.json#S15-O0C-REPEAT-EXPIRY",
   "statement": "O0c / decision 382 / RS-A F6: real repeat probe generations fill both pending quotas, refuse an extra generation, and after both clocks pass their deadline an unprepared expired generation releases its owner custody so the same committed request can start a fresh judgment."
+ },
+ "S14F-1": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.PagedCustodyTests.test_S14F_1_each_pass_visits_at_most_the_bound_and_converges_to_the_exact_custody",
+   "codex:tests.test_s14f_owner_bounds.PagedCustodyTests.test_S14F_1_a_live_run_is_never_missed_at_any_position_or_bound",
+   "codex:tests.test_s14f_owner_bounds.PagedCustodyTests.test_S14F_1_an_edge_set_change_or_a_fallen_rowid_never_releases_a_stale_answer"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-1",
+  "statement": "The sole-owner account retention sweep computes lineage custody in bounded passes (at most CUSTODY_PASS_ROWS history rows per pass, rowid windows), releases an answer only when one cycle has seen every row, and that answer equals the exact custody restricted to lineage edge keys; a live run is never missed at any position or bound; a changed edge set or fallen rowid discards the cycle."
+ },
+ "S14F-2": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.PagedCustodyTests.test_S14F_2_a_pass_on_a_large_history_stays_within_the_owner_request_bound"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-2",
+  "statement": "A custody pass on a large (60k-run) history stays well inside the S7 owner request bound (LEDGER_REQUEST_WAIT_MS/8)."
+ },
+ "S14F-3": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.PagedCustodyTests.test_S14F_3_the_sweep_uses_the_paged_scan_and_open_still_computes_custody_whole"
+  ],
+  "source": "tests/requirements/s14f.json#S14F-3",
+  "statement": "sweep_account_retention uses the paged scan and never the whole-history custody; open and the upgrade still compute custody whole (S14E-1/2 pin that query)."
+ },
+ "S9-WAIT": {
+  "checks": [
+   "codex:tests.test_s14f_owner_bounds.MaintenanceReaderWaitTests.test_S9_WAIT_a_stalled_reader_fails_the_attempt_plainly_and_a_later_attempt_succeeds"
+  ],
+  "source": "tests/requirements/s14f.json#S9-WAIT",
+  "statement": "Exclusive maintenance waits at most MAINTENANCE_READER_WAIT_S for health-copy readers; a stalled worker fails the attempt with a plain LedgerError, leaves the store unchanged and the reader registered, and a later attempt succeeds once the worker ends."
  }
 }

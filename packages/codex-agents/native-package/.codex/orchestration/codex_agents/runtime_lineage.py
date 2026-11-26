@@ -147,6 +147,86 @@ def live_ledger_custody(db, now):
     return digests
 
 
+CUSTODY_PASS_ROWS = 256  # S14F-1: rows of history one owner-thread maintenance pass may visit
+
+
+class CustodyScan:
+    """S14F-1: live_ledger_custody in bounded passes, for the sole owner thread.
+
+    The retained history grows with released runs, so the sweep may not recompute it in one owner turn.
+    Each `step` visits at most `bound` rows (rowid windows of active_run_capacity, then launch_inputs) and
+    keeps only the digests that name a lineage edge: a custody digest that is no edge's predecessor protects
+    nothing in `prune_lineage`, so this is exactly the same answer. The answer is released only when one
+    cycle has seen every row. A cycle is thrown away (never used to prune) when the edge set changed or a
+    source table's highest rowid fell (a deleted last row may let a new row reuse a visited rowid), so a
+    cycle can only miss a run that appeared behind its cursor, and runs of a predecessor runtime cannot
+    appear once that runtime has a lineage edge (takeover fences it). Each pass uses its own clock; an
+    earlier pass saw an earlier cutoff, which can only keep more custody, never less.
+    """
+
+    TABLES = ('active_run_capacity', 'launch_inputs')
+
+    def __init__(self):
+        self.visited = 0
+        self.reset()
+
+    def reset(self):
+        self.keys = None
+        self.phase = 0
+        self.cursor = 0
+        self.found = set()
+        self.maxes = None
+
+    def _maxes(self, db):
+        return tuple(db.execute('SELECT MAX(rowid) FROM ' + table).fetchone()[0] or 0 for table in self.TABLES)
+
+    def step(self, db, now, bound=CUSTODY_PASS_ROWS):
+        """Return the custody digests (limited to lineage edge keys) when a cycle completes, else None."""
+        from .learning_store import OPEN_REQUEST_RETENTION_MS
+        cutoff = now - OPEN_REQUEST_RETENTION_MS
+        keys = frozenset(row[0] for row in db.execute('SELECT predecessor_digest FROM runtime_lineage'))
+        if self.keys is None or self.keys != keys:
+            self.reset()
+            self.keys = keys
+            self.maxes = self._maxes(db)
+        if not keys:
+            self.reset()
+            return set()
+        budget = bound
+        while budget > 0 and self.phase < len(self.TABLES):
+            table = self.TABLES[self.phase]
+            first = db.execute('SELECT MIN(rowid) FROM ' + table + ' WHERE rowid>?', (self.cursor,)).fetchone()[0]
+            if first is None:
+                self.phase, self.cursor = self.phase + 1, 0
+                continue
+            last = first + budget - 1
+            if self.phase == 0:
+                rows = db.execute('SELECT runtime_digest FROM active_run_capacity WHERE rowid>=? AND rowid<=? '
+                    'AND runtime_digest IS NOT NULL AND (released_at_ms IS NULL OR released_at_ms>=?)',
+                    (first, last, cutoff)).fetchall()
+                visited = db.execute('SELECT COUNT(*) FROM active_run_capacity WHERE rowid>=? AND rowid<=?',
+                                     (first, last)).fetchone()[0]
+            else:
+                rows = db.execute('SELECT i.runtime_digest FROM launch_inputs i LEFT JOIN host_run_bindings h '
+                    'ON h.project_id=i.project_id AND h.handle_digest=i.handle_digest WHERE i.rowid>=? AND i.rowid<=? '
+                    'AND (h.expires_at_ms>=? OR EXISTS(SELECT 1 FROM run_holds r '
+                    "WHERE r.project_id=i.project_id AND r.kind IN ('run_slot','binding') "
+                    "AND r.identity=i.handle_digest AND r.state<>'released'))",
+                    (first, last, cutoff)).fetchall()
+                visited = db.execute('SELECT COUNT(*) FROM launch_inputs WHERE rowid>=? AND rowid<=?',
+                                     (first, last)).fetchone()[0]
+            self.found.update(row[0] for row in rows if row[0] in keys)
+            self.cursor = last
+            budget -= max(1, visited)
+            self.visited += max(1, visited)
+        if self.phase < len(self.TABLES):
+            return None
+        done, maxes = self.found, self._maxes(db)
+        stale = any(now_max < start_max for now_max, start_max in zip(maxes, self.maxes))
+        self.reset()
+        return None if stale else done
+
+
 def lineage_status(db):
     count = db.execute('SELECT COUNT(*) FROM runtime_lineage').fetchone()[0]
     if count <= 64:

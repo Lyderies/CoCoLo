@@ -1,0 +1,25 @@
+{
+ "authority": "docs/requirements/s14f.md",
+ "requirements": [
+  {
+   "id": "S14F-1",
+   "statement": "The sole-owner account retention sweep computes lineage custody in bounded passes (at most CUSTODY_PASS_ROWS history rows per pass, rowid windows), releases an answer only when one cycle has seen every row, and that answer equals the exact custody restricted to lineage edge keys; a live run is never missed at any position or bound; a changed edge set or fallen rowid discards the cycle.",
+   "source": "tests/requirements/s14f.json#S14F-1"
+  },
+  {
+   "id": "S14F-2",
+   "statement": "A custody pass on a large (60k-run) history stays well inside the S7 owner request bound (LEDGER_REQUEST_WAIT_MS/8).",
+   "source": "tests/requirements/s14f.json#S14F-2"
+  },
+  {
+   "id": "S14F-3",
+   "statement": "sweep_account_retention uses the paged scan and never the whole-history custody; open and the upgrade still compute custody whole (S14E-1/2 pin that query).",
+   "source": "tests/requirements/s14f.json#S14F-3"
+  },
+  {
+   "id": "S9-WAIT",
+   "statement": "Exclusive maintenance waits at most MAINTENANCE_READER_WAIT_S for health-copy readers; a stalled worker fails the attempt with a plain LedgerError, leaves the store unchanged and the reader registered, and a later attempt succeeds once the worker ends.",
+   "source": "tests/requirements/s14f.json#S9-WAIT"
+  }
+ ]
+}

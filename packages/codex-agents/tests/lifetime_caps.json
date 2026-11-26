@@ -3203,6 +3203,12 @@
    "test": "test_reaudited_service_probe_applies_its_connect_timeout_and_retains_uncertainty",
    "ends": "A single scope-endpoint connect waits at most 0.2 seconds. An unreadable or timed-out endpoint remains live; only ENOENT/ECONNREFUSED proves it no longer answers. The enclosing stop deadline ends the loop.",
    "kind": "time"
+  },
+  "runtime_lineage.py::step": {
+   "checks": 2,
+   "kind": "count",
+   "ends": "S14F-1: a per-pass visit budget (CUSTODY_PASS_ROWS rows of already-retained history), not an admission or lifetime cap. Its scan cycle state is in memory on the store and ends when the cycle completes, the edge set changes, a source rowid falls, or the store closes; the history rows it reads are removed by their own retention. Nothing is refused by it; a pass that cannot finish simply resumes on the next sweep.",
+   "test": "test_S14F_1_each_pass_visits_at_most_the_bound_and_converges_to_the_exact_custody"
   }
  }
 }

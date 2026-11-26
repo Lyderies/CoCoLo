@@ -405,6 +405,7 @@ MAX_EVENT_KEEP_DAYS = 365
 MAX_SUMMARY_KEEP_DAYS = 3650
 # The collector removes at most this many expired raw events per sweep.
 EVENT_SWEEP_BATCH = 500
+MAINTENANCE_READER_WAIT_S = 5.0  # S9-WAIT: bounded wait for health-copy readers before exclusive maintenance
 # One learning-expire call summarises at most this many expired raw events (its work under the exclusive
 # lock is bounded); the rest wait for the next call, which the report's `more` asks for.
 EXPIRE_SUMMARY_BATCH = 500
@@ -2702,7 +2703,7 @@ class LearningLedger:
                 return 0
             now = self._clock_ms() if now_ms is None else now_ms
             removed = purge_old_observations(self, now, batch) + purge_finished_opens(self, now, batch)
-            return removed + self._purge_runtime_lineage(now)
+            return removed + self._purge_runtime_lineage(now, paged=True)
 
     def sweep_learning_retention(self, *, now_ms: int | None = None, batch: int = LEARNING_SWEEP_BATCH) -> int:
         """Remove up to `batch` unpromoted cases and candidates past the learning retention; returns how many.
@@ -3576,11 +3577,20 @@ class LearningLedger:
         except (sqlite3.Error, LedgerError):
             pass  # separately retried by maintenance; adoption already committed
 
-    def _purge_runtime_lineage(self, now):
-        from .runtime_lineage import live_ledger_custody, prune_lineage
+    def _purge_runtime_lineage(self, now, *, paged=False):
+        """Open and the upgrade compute custody whole; the owner-thread sweep (`paged`, S14F-1) goes a
+        bounded page at a time and prunes only when a cycle has seen all history."""
+        from .runtime_lineage import CustodyScan, live_ledger_custody, prune_lineage
         with self._held():
-            return prune_lineage(self._connection, live_ledger_custody(self._connection, now),
-                                 COLLECTOR_RUNTIME_DIGEST, transaction=self._account_transaction)
+            if paged:
+                scan = self.__dict__.setdefault('_custody_scan', CustodyScan())
+                custody = scan.step(self._connection, now)
+                if custody is None:
+                    return 0
+            else:
+                custody = live_ledger_custody(self._connection, now)
+            return prune_lineage(self._connection, custody, COLLECTOR_RUNTIME_DIGEST,
+                                 transaction=self._account_transaction)
 
     def _validate_current_ledger(self):
         """Keep every predecessor coverage refusal on ordinary schema-18 opens."""
@@ -13648,8 +13658,12 @@ class LearningLedger:
         readers = tuple(self._maintenance_readers)
         for reader in readers:
             reader.cancel()
+        deadline = time.monotonic() + MAINTENANCE_READER_WAIT_S
         for reader in readers:
-            reader.done.wait()
+            if not reader.done.wait(max(0.0, deadline - time.monotonic())):
+                # S9-WAIT: a stalled worker never blocks the owner; the store is unchanged and a later
+                # attempt waits again (the reader stays registered and cancelled).
+                raise LedgerError("maintenance is waiting for a health copy to close; try again shortly")
         self._maintenance_readers.difference_update(readers)
         self._connection.execute("PRAGMA busy_timeout = 50")
         try:
