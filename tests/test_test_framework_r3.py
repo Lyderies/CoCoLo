@@ -143,7 +143,7 @@ class RoundThree(unittest.TestCase):
         git('commit','--allow-empty','-m','tip')
         tip=git('rev-parse','HEAD')
         for job in ('unit','integration','full'):
-            shell=textwrap.dedent(jobs(workflow)[job].split('run: |',1)[1].split('      - name:',1)[0])
+            shell=textwrap.dedent(jobs(workflow)[job].split('name: Select trusted review base',1)[1].split('run: |',1)[1].split('      - name:',1)[0])
             for event,ref,pr,push,want in [('pull_request','refs/pull/1/merge',base,'',base),('push','refs/heads/main','',base,base),('schedule','refs/heads/main','','',base),('push','refs/tags/v0.4.0','','0'*40,base),('workflow_dispatch','refs/heads/main','','',None),('push','refs/heads/main','','0'*40,None)]:
                 with self.subTest(job=job,event=event,ref=ref):
                     output=self.root/'environment'

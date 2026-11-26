@@ -532,7 +532,7 @@ class RunnerIntegrationTests(unittest.TestCase):
     def test_B5_missing_base_fails_and_advanced_PR_base_uses_merge_base(self):
         from test_ci_stages import jobs
         section = jobs((ROOT / '.github/workflows/ci.yml').read_text())['unit']
-        shell = textwrap.dedent(section.split('run: |', 1)[1].split('      - name:', 1)[0])
+        shell = textwrap.dedent(section.split('name: Select trusted review base', 1)[1].split('run: |', 1)[1].split('      - name:', 1)[0])
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             def git(*args):
