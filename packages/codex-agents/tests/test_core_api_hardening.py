@@ -317,7 +317,10 @@ class SlowSubscriberTests(CoreCase):
         deadline = time.monotonic() + 10
         while self.service._subs and time.monotonic() < deadline:
             time.sleep(0.1)
-        self.assertEqual([], self.service._subs, self._slow_subscriber_diagnostics(s))
+        remaining = list(self.service._subs)  # snapshot before any diagnostics touch the socket
+        if remaining:
+            self.fail("slow subscriber still registered: %r\n%s" % (
+                remaining, self._slow_subscriber_diagnostics(s)))
 
     def _slow_subscriber_diagnostics(self, client):
         """Failure-only evidence (G9): why the slow subscriber still holds its slot on this machine."""
