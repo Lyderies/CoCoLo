@@ -181,3 +181,136 @@ once even when B and C both list it. Their focused tests were red before the
 corresponding fixes and now pass. The outbox-corruption fixture explicitly
 commits its negative tamper and compares against an intact control, so its
 warning delta is not confused with independently unverifiable contexts.
+
+
+## Fix round — exact pairs against 44f16529 / 146955fc
+
+The earlier base pairs remain historical. These pairs supersede the earlier sole-holder, J6a, journal-refusal and harness descriptions. Assertions not listed in these changed methods are retained. New witnesses are additional obligations, not replacements for base safeguards.
+
+### packages/codex-agents/tests/test_b4t_takeover.py :: JournalTests.test_B4t_2_a_result_committed_during_the_stop_is_judged_on_the_final_store
+
+Replacement: `StoreTests.test_B4t_2_a_result_committed_during_the_stop_is_judged_on_the_final_store`. MED-1/T-4: fake flag replaced by archived consumed run, real publish at stop, actual successor classification and recording authority. Mutation removing classification is red.
+
+| Old assertion(s) | New assertion(s) |
+|---|---|
+| `self.assertTrue(self.ops.kept_result)` | `self.assertEqual(0, made.returncode, made.stderr)`<br>`self.assertEqual(0, done.returncode, done.stderr)`<br>`self.assertIsNotNone(self.store.result_reservation(self.running).committed_at_ms)`<br>`self.assertEqual(0, stopped_children(self.store, self.intent['runs']))`<br>`self.assertIsNotNone(self.store.read_result(self.running))`<br>`self.assertIsNone(db.execute('SELECT committed_at_ms FROM result_reservations WHERE claim_id=?', (self.running.claim_id,)).fetchone()[0])` |
+
+### packages/codex-agents/tests/test_b4t_takeover.py :: JournalTests.test_B4t_4_another_projects_child_keeps_running
+
+Replacement: `AccountLineageTests.test_B4t_4_another_projects_child_keeps_running`. MED-1/T-17: constant replaced by a live subprocess, authentic Q claim, real P account owner adoption, exact Q row equality, diagnostic and Q settlement. Mutating Q custody during P adoption is red.
+
+| Old assertion(s) | New assertion(s) |
+|---|---|
+| `self.assertTrue(self.ops.other_child)`<br>`self.assertNotIn('other_project_stop', self.ops.events)` | `self.assertEqual('ready', child.stdout.readline().strip())`<br>`self.assertTrue(before)`<br>`self.assertEqual(before, after)`<br>`self.assertIsNone(child.poll())`<br>`self.assertEqual((1, 1), (report['other_projects'], report['other_runs']))`<br>`self.assertEqual('0.8.66', report['updates'][0]['version'])`<br>`self.assertEqual(1, report['updates'][0]['children'])`<br>`self.assertIsNotNone(self.ledger._connection.execute('SELECT released_at_ms FROM active_run_capacity WHERE project_id=?', (self.project,)).fetchone()[0])` |
+
+### packages/codex-agents/tests/test_b4t_takeover.py :: JournalTests.test_B4t_security_takeover_has_no_writer_of_its_own
+
+Replacement: `JournalTests.test_B4t_security_takeover_has_no_writer_of_its_own`. LOW-3: the same writer prohibition covers all five coordinator/OS modules. Preflight is the sole SQL exception and each of its two SQLite connections must explicitly be mode=ro and query_only=ON.
+
+| Old assertion(s) | New assertion(s) |
+|---|---|
+| `self.assertFalse(any(('sqlite' in name for name in imports)))` | `self.assertEqual(2, len(sql))`<br>`self.assertEqual(2, source.count('PRAGMA query_only=ON'))`<br>`self.assertFalse(any(('sqlite' in name for name in imports)), module.__name__)`<br>`self.assertIn('?mode=ro', ast.get_source_segment(source, node))` |
+
+### packages/codex-agents/tests/test_b4t_takeover.py :: JournalTests.test_B4t_4_runs_admitted_after_the_intent_are_ended_by_update
+
+Replacement: `JournalTests.test_B4t_4_runs_admitted_after_the_intent_are_ended_by_update`. A1.12 T-35: all three reads select unsettled entries; the same four run identities and restart equality remain. Settled old/late tombstones are separately excluded by the real OwnerOperations reconciliation test.
+
+| Old assertion(s) | New assertion(s) |
+|---|---|
+| `self.assertEqual(2, self.ops.events.count(('snapshot', False)))`<br>`self.assertEqual(1, self.ops.events.count(('snapshot', True)))` | `self.assertEqual(3, self.ops.events.count(('snapshot', False)))`<br>`self.assertEqual(0, self.ops.events.count(('snapshot', True)))` |
+
+### packages/codex-agents/tests/test_b4t_takeover.py :: JournalTests.test_journal_past_the_run_and_byte_limits_changes_nothing
+
+Replacement: `JournalTests.test_journal_past_the_run_and_byte_limits_changes_nothing`. A1.11 supersedes the old refusal at 1,000 runs: the update must finish, list 64, count 936, and stay <=16,384 bytes. The independent oversized-file and 1,025-byte authorization refusals remain unchanged.
+
+| Old assertion(s) | New assertion(s) |
+|---|---|
+| `self.assertEqual([], list(self.root.iterdir()))`<br>`self.assertEqual(self.ops.original, self.ops.authorization)`<br>`self.assertRaises(JournalError)` | `self.assertEqual(64, len(result['runs']))`<br>`self.assertEqual(936, result['runs_unlisted'])`<br>`self.assertLessEqual(self.journal().path.stat().st_size, 16384)`<br>`self.assertEqual('account_done', result['phase'])` |
+
+### packages/codex-agents/tests/test_b4t_takeover.py :: StoreTests.test_the_successor_completes_its_adopted_record_after_recovery_and_reports_only_metadata
+
+Replacement: `StoreTests.test_the_successor_completes_its_adopted_record_after_recovery_and_reports_only_metadata`. A1.11: new operation row shape adds two content-free durable integer counts. Closed key-set comparison remains exact and the actual counts (1,0) are pinned.
+
+| Old assertion(s) | New assertion(s) |
+|---|---|
+| `self.assertEqual({'predecessor_version', 'successor_version', 'state'}, set(report['records'][0]))` | `self.assertEqual({'predecessor_version', 'successor_version', 'state', 'runs_listed', 'runs_unlisted'}, set(report['records'][0]))`<br>`self.assertEqual((1, 0), (report['records'][0]['runs_listed'], report['records'][0]['runs_unlisted']))` |
+
+### packages/codex-agents/tests/test_b4t_takeover.py :: StoreTests.test_B4t_4_missing_journal_lock_evidence_keeps_memory_holds
+
+Replacement: `MemoryTakeoverTests.test_B4t_4_missing_journal_lock_evidence_keeps_memory_holds`. MED-1/T-30: the former double-open fixture had no memory hold. A real SIGKILLed predecessor now leaves two memory holds, its inode is removed, and recovery must retain both. Every pre-existing cell except the diagnostic reason is compared, and two held rows are required. Premature release mutation is red.
+
+| Old assertion(s) | New assertion(s) |
+|---|---|
+| `self.assertEqual(before, self.rows('project_holds'))` | `self.assertEqual(2, len(before))`<br>`self.assertEqual([row[:-1] for row in before], [row[:-1] for row in after])`<br>`self.assertIn('instance_unproven', after[0][-1])`<br>`self.assertEqual(2, history._connection.execute("SELECT COUNT(*) FROM project_holds WHERE kind IN ('driver_entry','preparation') AND state='held'").fetchone()[0])`<br>`self.assertTrue(all((observed.get(name) == value for name, value in facts.items() if name != 'reason')))` |
+
+### packages/codex-agents/tests/test_b4t_takeover.py :: ProcessProofTests.test_process_scan_past_limit_is_unproven_and_never_signals
+
+Replacement: `ProcessProofTests.test_linux_foreign_flock_holder_is_busy_without_descriptor_reads`. A1.4 removes the census and its 4096-process/5-second limits. T-36 statically forbids it, candidate-only native pinning passes, and Linux foreign-flock ownership is checked without reading descriptors. This supersedes, rather than weakens, the retired scan requirement.
+
+| Old assertion(s) | New assertion(s) |
+|---|---|
+| `self.assertRaises(TakeoverError)`<br>`self.assertRaises(TakeoverError)` | `self.assertTrue(process.foreign_lock_holder(42, [path]))`<br>`self.assertFalse(process.foreign_lock_holder(99, [path]))` |
+
+### packages/codex-agents/tests/test_b4t_takeover.py :: ProcessProofTests.test_process_arguments_and_fd_scan_past_byte_limits_are_unproven
+
+Replacement: `ProcessProofTests.test_process_arguments_past_byte_limit_are_unproven`. A1.4 removes every descriptor read. The original oversized-argument OSError remains in the renamed test; T-36 forbids fd APIs and the real native candidate test passes.
+
+| Old assertion(s) | New assertion(s) |
+|---|---|
+| `self.assertFalse(process.Kernel().sole_holder(os.getpid(), path))` | `self.assertRaises(OSError)` |
+
+### packages/codex-agents/tests/test_b4t_takeover.py :: OwnerIntegrationTests.test_J6a_adds_a_late_settled_entry_but_not_an_older_tombstone_after_restart
+
+Replacement: `OwnerIntegrationTests.test_J6a_excludes_both_old_and_late_settled_entries_after_restart`. A1.12 T-35 explicitly excludes settled entries, including first seen at J6a. Both restart and repeated reconciliation now require exactly the one unsettled run.
+
+| Old assertion(s) | New assertion(s) |
+|---|---|
+| `self.assertEqual([run_entry(2), run_entry(3)], document['runs'])`<br>`self.assertEqual([run_entry(2), run_entry(3)], restarted.reconcile_runs(document, late=True)['runs'])` | `self.assertEqual([run_entry(2)], document['runs'])`<br>`self.assertEqual([run_entry(2)], restarted.reconcile_runs(document, late=True)['runs'])` |
+
+### packages/codex-agents/tests/test_b4t_takeover.py :: MemoryTakeoverTests.setUp
+
+Replacement: `JournalTests.setUp`. Equivalent closed comparison under the accepted additive target; existing original-cell checks are retained.
+
+| Old assertion(s) | New assertion(s) |
+|---|---|
+| `self.assertTrue(select.select([child.stdout], [], [], 10)[0])`<br>`self.assertLess(child.returncode, 0)` |  |
+
+### tests/test_e2e_update_safety.py :: RegistryTests.test_the_predecessor_is_an_unmodified_catalogue_listed_archive
+
+Replacement: `RegistryTests.test_the_predecessor_is_an_unmodified_catalogue_listed_archive`. MED-5: vendored unmodified P66 archive, pinned SHA-256, runtime version assertion, no Git invocation in a shallow/offline fixture; corrupted artifact must fail with a digest reason.
+
+| Old assertion(s) | New assertion(s) |
+|---|---|
+| `self.assertIn("'archive', PREDECESSOR_REVISION", SOURCE)` | `self.assertIn('tests/fixtures/b4t/0.8.66.tar.gz', SOURCE)`<br>`self.assertIn('hashlib.sha256(raw).hexdigest() != PREDECESSOR_ARCHIVE_SHA256', SOURCE)` |
+
+### T-12b product-path replacement (no old assertion expression)
+
+The old fake port ran under `os.kill`/`os.killpg` guards but never called product stop code. Its replacement is `CollectorStopTests.test_B4t_3_collector_and_new_services_are_never_signalled`: real `OwnerOperations.stop_collector` and `stop_service`, guards for kill/killpg/pidfd_send_signal, exact shutdown shape and exact `service.stop_for_update` call. Injecting a collector signal turns it red. No existing assertion was removed.
+
+### MED-6: expected-value assignments, base → reviewed tree → final
+
+| Existing test | Old oracle → replacement | Strength |
+|---|---|---|
+| `test_project_start.StartTests.test_E2c_7_another_version_s_live_host_is_not_replaced` | Base: `'recovery: needs update handover: ' + self.command('alpha')`; reviewed: `'recovery: needs update hand-over: ' + compatibility_message(...)`; final: literal `recovery: needs update hand-over: Another CoCoLo version (number unavailable) holds the project service. The local install record is unavailable. In a plain terminal, open your CoCoLo clone, run ./setup.sh with this project's path, then choose Configure, then "Update the install and walk through every step".` | Entire exact string, including punctuation and owner action, independent of the product builder. Live host, process identity, no-spawn and collector identity assertions all remain. |
+| `test_project_start.OtherVersionTests.test_E2c_7_a_real_host_of_an_earlier_runtime_is_not_replaced` | Same three oracle stages and final literal as above. Fixture now creates its empty ledger using the earlier runtime's own owner open, before it starts; no published floor is lowered. | Entire exact literal; every live host and collector assertion is retained. This socket test still needs the primary rerun. |
+
+### Previously omitted fixture/target changes against ce81bd96
+
+| File / stimulus | Old → new | Preserved check / justification |
+|---|---|---|
+| `test_account_launch_claims.drop_admission_evidence_for_legacy_fixture` | Inline S2-epoch drop → `drop_runtime_authority_for_legacy_fixture`: remove floor/lineage/epoch before labelling a fixture pre-17; refuse a nonempty lineage. | No assertion removed. Historical DDL and source bytes remain historical; adopted custody cannot be relabelled. |
+| `test_run_holds.schema_fourteen` | Drop register objects → first drop empty machine-local runtime authority, then the same register objects. | No assertion expression changed; all original-cell, hold and receipt comparisons remain. |
+| `test_learning_source_image.test_schema_version_columns_and_primary_key_are_exact` | Newer unsupported stimulus `user_version=18` → `19`; supported 18 is exercised by existing supported-layout iteration and current source image cases. | The same `history_incompatible` refusal and unexpected-column/PK checks remain. |
+| `test_learning_source_transfer.target_rows` | All project tables except epoch → all original tables except epoch and the four new machine-local authority tables. | Exactly the same tables/cells that existed at base are compared. New authority is not partition data; backup/restore validators separately exclude it. |
+| `test_learning_source_image_legacy` | No direct diff against ce81bd96; shared downgrade helper now retires empty machine-local authority. | Every historical-layout and original-source assertion unchanged. |
+| `test_backup_installed_project.test_*` unsupported-version loop | `(0,4,18)` → `(0,4,19)`. | Same `RuntimeError` at each unsupported boundary; exact supported schema 18 columns and table ordering are checked by the supported iteration. |
+| `test_reply_shape_live.DRIVERS` | Existing producer list → existing list plus `test_b4t_takeover`. | No assertion removed; extra real producer coverage. New native socket tests are a separate module, so this addition does not introduce sockets into the B4t component module. |
+| `test_e2e_update_safety.test_handover_keeps_every_original_row_except_the_explicit_writer_epoch` | Snapshot without schema → literal accepted schema-23 hash in both snapshots. | Same positive and tamper negatives, now additionally checked against a separately pinned schema. |
+
+### HIGH-2 / L11.2 strictness
+
+Base `history_kept(..., exact=True)` → `handover_history_kept(...)` now calls `history_kept(..., exact=True)` after allowing only the existing epoch row's value to differ and new keys in `takeover_record`, `takeover_runs`, `takeover_obligations`, `runtime_floor`. Existing authority rows remain exact; epoch key additions/deletions fail. The before schema must be pinned 22 or 23 and the after schema must be pinned 23. Added `outcome:2`, hold/result/unknown/epoch rows, changed original rows and unexpected DDL all fail the negative unit witness. Thus no business-row or schema comparison is weaker than ce81bd96.
+
+### Renames retaining every assertion
+
+The real kernel candidate-pin test retains its readiness, exit and lock-free comparisons under its A1 name. The formerly standalone SIGKILL/missing-inode memory test becomes T-30 with all its cell, reason and held-count assertions retained. The oversized argument test retains its OSError under its new name. Retired two-opener/census cases map to A1 E's real cross-process flock refusal and T-36's ban on all descriptor/process censuses.

@@ -1,0 +1,19 @@
+E
+======================================================================
+ERROR: test_exit_event_between_identity_and_last_event_read_counts_as_exited (tests.test_b4t_takeover.AmendmentA1Tests.test_exit_event_between_identity_and_last_event_read_counts_as_exited)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2809, in test_exit_event_between_identity_and_last_event_read_counts_as_exited
+    self.assertFalse(PinnedPredecessor(kernel,91,42,kernel.identity.return_value).stop())
+                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_process.py", line 233, in stop
+    if not self._send(signal.SIGTERM):
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_process.py", line 224, in _send
+    raise TakeoverError('predecessor_unproven', phase='service_stopped')
+codex_agents.update_takeover.TakeoverError: The update stopped partway (predecessor_unproven, service_stopped): the hand-over is not finished. Run ./setup.sh --update to finish.
+
+----------------------------------------------------------------------
+Ran 1 test in 0.011s
+
+FAILED (errors=1)

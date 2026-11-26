@@ -266,24 +266,24 @@ PREVIOUS_BUILD_MARK = "\n# the earlier build of the lifecycle end-to-end test (a
 
 PREDECESSOR_VERSION = '0.8.66'
 PREDECESSOR_REVISION = 'afb6f610'
+PREDECESSOR_ARCHIVE_SHA256 = '81b24a3ed530dabd306bbcb69fb794ec16e460ed7078e223a43be8af33a2e7a3'
 
 
 def previous_clone(world) -> Path:
     """An unmodified, catalogue-listed archive, never relabelled current code."""
-    git = subprocess.run(["/bin/bash", str(e2e_support.SETUP), "--print-git"], capture_output=True, text=True,
-                         stdin=subprocess.DEVNULL, env=e2e_support.child_environment(os.environ)).stdout.strip()
-    if not git.startswith("/"):
-        raise e2e_support.HarnessError("no trusted git")
-    packed = subprocess.run([git, '-C', str(ROOT), 'archive', PREDECESSOR_REVISION], capture_output=True,
-                            stdin=subprocess.DEVNULL, env=e2e_support.child_environment(os.environ))
-    if packed.returncode != 0:
-        raise e2e_support.HarnessError('the accepted predecessor archive is unavailable')
+    import io
+    import tarfile
+    artifact = ROOT / 'tests/fixtures/b4t/0.8.66.tar.gz'
+    try:
+        raw = artifact.read_bytes()
+    except OSError:
+        raise e2e_support.HarnessError('vendored 0.8.66 predecessor artifact is missing') from None
+    if hashlib.sha256(raw).hexdigest() != PREDECESSOR_ARCHIVE_SHA256:
+        raise e2e_support.HarnessError('vendored 0.8.66 predecessor artifact digest mismatch')
     clone = world.base / 'previous-build'
     clone.mkdir()
-    unpacked = subprocess.run(['/usr/bin/tar', '-x', '-C', str(clone)], input=packed.stdout, capture_output=True,
-                              env=e2e_support.child_environment(os.environ))
-    if unpacked.returncode != 0:
-        raise e2e_support.HarnessError('the accepted predecessor archive could not be unpacked')
+    with tarfile.open(fileobj=io.BytesIO(raw), mode='r:gz') as archive:
+        archive.extractall(clone, filter='data')
     return clone
 
 
@@ -472,6 +472,12 @@ def history_kept(before: dict, after: dict, *, exact: bool) -> bool:
     return all(rows_after.get(key) == value for key, value in rows_before.items())
 
 
+# Pinned independently from the released 22 layout and accepted unreleased 23
+# DDL. Exact hashes include every table/index/trigger and SQLite autoindex.
+EXPECTED_PROJECT_SCHEMA_22 = 'a4a6bb95c99e1c30520e00649a882f7ec7743346b2450c2fce37b1fe4588069c'
+EXPECTED_PROJECT_SCHEMA_23 = '559e4a289190d4f9462c680d7739330c731c217b3d6cfe2204619321a99c61af'
+
+
 def handover_history_kept(before: dict, after: dict) -> bool:
     """The authorized hand-over changes the writer epoch, never an original row.
 
@@ -481,7 +487,21 @@ def handover_history_kept(before: dict, after: dict) -> bool:
     def original_rows(snapshot):
         return {**snapshot, 'rows': {key: value for key, value in snapshot.get('rows', {}).items()
                                     if not key.startswith('runtime_takeover:')}}
-    return history_kept(original_rows(before), original_rows(after), exact=False)
+    epoch_keys = lambda value: {key for key in value.get('rows', {}) if key.startswith('runtime_takeover:')}
+    if epoch_keys(before) != epoch_keys(after):
+        return False
+    left, right = original_rows(before), original_rows(after)
+    allowed = ('takeover_record:', 'takeover_runs:', 'takeover_obligations:', 'runtime_floor:')
+    right['rows'] = {key: value for key, value in right['rows'].items()
+                     if key in left['rows'] or not key.startswith(allowed)}
+    # Schema23 is pinned independently from a fresh store, never accepted from
+    # the candidate's own dump. An already-current failed update is byte-exact.
+    expected = EXPECTED_PROJECT_SCHEMA_23
+    if (before.get('schema') not in (EXPECTED_PROJECT_SCHEMA_22, EXPECTED_PROJECT_SCHEMA_23)
+            or after.get('schema') != expected):
+        return False
+    left['schema'] = expected
+    return history_kept(left, right, exact=True)
 
 
 def history_differences(before: dict, after: dict, *, earlier_only: bool = False) -> list[str]:

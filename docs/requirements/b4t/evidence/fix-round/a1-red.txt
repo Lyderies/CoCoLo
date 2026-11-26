@@ -1,0 +1,119 @@
+FEEFFFFEE
+======================================================================
+ERROR: test_B4t_A1_idle_predecessor_updates_without_process_proof (tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_idle_predecessor_updates_without_process_proof)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2641, in test_B4t_A1_idle_predecessor_updates_without_process_proof
+    plan = preflight.read_plan(state, project)
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_preflight.py", line 252, in read_plan
+    pinned = pin_predecessor(pid, entry=Path(service['entry']), state_root=state.root,
+        project_root=root, history_lock=state.root / 'projects' / row['project_id'] / 'history.lock')
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1241, in _execute_mock_call
+    raise effect
+codex_agents.update_takeover.TakeoverError: The update stopped (predecessor_unproven): the running service could not be proven to be this project's own; nothing was changed. See docs/troubleshooting.md, 'Update hand-over'.
+
+======================================================================
+ERROR: test_B4t_A1_journal_stays_bounded_on_a_busy_project (tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_journal_stays_bounded_on_a_busy_project)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2718, in test_B4t_A1_journal_stays_bounded_on_a_busy_project
+    document = ops.reconcile_runs(document, late=late)
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_owner.py", line 86, in reconcile_runs
+    return TakeoverJournal(self.state.root).reconcile(document, self._runs(entries, include_settled=late))
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_journal.py", line 193, in reconcile
+    self.write(document)
+    ~~~~~~~~~~^^^^^^^^^^
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_journal.py", line 160, in write
+    raise JournalError('update intent exceeds its byte limit')
+codex_agents.takeover_journal.JournalError: update intent exceeds its byte limit
+
+======================================================================
+ERROR: test_candidate_gone_at_last_read_counts_as_exited (tests.test_b4t_takeover.AmendmentA1Tests.test_candidate_gone_at_last_read_counts_as_exited)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2669, in test_candidate_gone_at_last_read_counts_as_exited
+    self.assertFalse(PinnedPredecessor(kernel, 91, 42, {}).stop())
+                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_process.py", line 274, in stop
+    self._send(signal.SIGTERM)
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_process.py", line 267, in _send
+    current = self.kernel.identity(self.pid)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1241, in _execute_mock_call
+    raise effect
+ProcessLookupError
+
+======================================================================
+ERROR: test_registration_without_owner_consent_never_enables_records_upgrade (tests.test_b4t_takeover.AmendmentA1Tests.test_registration_without_owner_consent_never_enables_records_upgrade)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2686, in test_registration_without_owner_consent_never_enables_records_upgrade
+    cli._register_project(args, None, mock.Mock(), {})
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/native-package/.codex/orchestration/cli.py", line 1141, in _register_project
+    "ledger_copy": str(progress["copy"]) if progress["copy"] is not None else None,
+                                            ~~~~~~~~^^^^^^^^
+KeyError: 'copy'
+
+======================================================================
+FAIL: test_B4t_A1_busy_predecessor_without_identity_refuses_write_free (tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_busy_predecessor_without_identity_refuses_write_free)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2660, in test_B4t_A1_busy_predecessor_without_identity_refuses_write_free
+    self.assertIn('When that run ends', str(caught.exception))
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'When that run ends' not found in "The update stopped (predecessor_unproven): the running service could not be proven to be this project's own; nothing was changed. See docs/troubleshooting.md, 'Update hand-over'."
+
+======================================================================
+FAIL: test_B4t_A1_no_other_process_is_inspected (tests.test_b4t_takeover.AmendmentA1Tests.test_B4t_A1_no_other_process_is_inspected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2590, in test_B4t_A1_no_other_process_is_inspected
+    self.assertNotIn(forbidden, source)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+AssertionError: 'proc_listpids' unexpectedly found in '"""Pin and stop only a proven pre-B4t project service, never a collector or child.\n\nLinux uses a pidfd when available. Older kernels use the last-birth-check rule,\nas does macOS with NOTE_EXIT. The numeric signal\'s remaining PID reuse gap is\nthe residual accepted by decision 323, not a claim of pidfd-equivalent safety.\n"""\nfrom __future__ import annotations\n\nimport ctypes\nimport errno\nimport fcntl\nimport os\nfrom pathlib import Path\nimport select\nimport signal\nimport struct\nimport sys\nimport time\n\nfrom .update_takeover import TakeoverError\n\nMAX_SCAN_PROCESSES = 4096\nSCAN_SECONDS = 5.0\nFD_SCAN_BYTES = 4 * 1024 * 1024\n\n\ndef bounded_processes(processes):\n    started = time.monotonic()\n    for index, pid in enumerate(processes):\n        if index >= MAX_SCAN_PROCESSES or time.monotonic() - started > SCAN_SECONDS:\n            raise TakeoverError(\'predecessor_unproven\')\n        yield pid\n\n\ndef require_free_locks(paths):\n    for path in paths:\n        descriptor = None\n        try:\n            descriptor = os.open(path, os.O_RDWR | os.O_NOFOLLOW)\n            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)\n        except FileNotFoundError:\n            continue\n        except OSError:\n            raise TakeoverError(\'predecessor_lock_inherited\', phase=\'service_stopped\') from None\n        finally:\n            if descriptor is not None:\n                os.close(descriptor)\n\n\ndef _darwin_library():\n    library = ctypes.CDLL(\'/usr/lib/libproc.dylib\', use_errno=True)\n    library.proc_listpids.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p, ctypes.c_int]\n    library.proc_listpids.restype = ctypes.c_int\n    library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]\n    library.proc_pidinfo.restype = ctypes.c_int\n    library.proc_pidfdinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int]\n    library.proc_pidfdinfo.restype = ctypes.c_int\n    return library\n\n\ndef _darwin_argv(pid):\n    from . import process_tree\n    process_tree._darwin_raw(pid)  # bind sysctl lazily, never at import\n    # KERN_PROCARGS2 rejects a buffer larger than this kernel\'s ARG_MAX on\n    # supported macOS releases. Read that bound first, within our own ceiling.\n    maximum, maximum_size = ctypes.c_int(), ctypes.c_size_t(ctypes.sizeof(ctypes.c_int))\n    argument_limit = (ctypes.c_int * 2)(1, 8)  # CTL_KERN, KERN_ARGMAX (SDK)\n    if (process_tree._SYSCTL[0](argument_limit, 2, ctypes.byref(maximum), ctypes.byref(maximum_size), None, 0) != 0\n            or maximum_size.value != ctypes.sizeof(maximum) or not 0 < maximum.value <= FD_SCAN_BYTES):\n        raise OSError(\'process argument limit unavailable\')\n    raw = ctypes.create_string_buffer(maximum.value)\n    size = ctypes.c_size_t(len(raw))\n    mib = (ctypes.c_int * 3)(1, process_tree.DARWIN_KERN_PROCARGS2, pid)\n    if process_tree._SYSCTL[0](mib, 3, raw, ctypes.byref(size), None, 0) != 0:\n        raise OSError(\'process arguments unavailable\')\n    value = raw.raw[:size.value]\n    argc = struct.unpack_from(\'i\', value)[0]\n    end = value.index(b\'\\0\', 4) + 1\n    while end < len(value) and value[end] == 0:\n        end += 1\n    args = value[end:].split(b\'\\0\')[:argc]\n    if len(args) != argc or not args or any(not arg for arg in args):\n        raise OSError(\'process arguments unavailable\')\n    return [os.fsdecode(arg) for arg in args]\n\n\nclass BirthPin:\n    """Older Linux kernel fallback, used only when pidfds are unavailable."""\n    def __init__(self, pid, birth):\n        self.pid, self.birth = pid, birth\n\n    def close(self):\n        pass\n\n\nclass Kernel:\n    def pin(self, pid):\n        if sys.platform.startswith(\'linux\'):\n            if hasattr(os, \'pidfd_open\') and hasattr(signal, \'pidfd_send_signal\'):\n                try:\n                    return os.pidfd_open(pid)\n                except OSError as error:\n                    if error.errno != errno.ENOSYS:\n                        raise\n            return BirthPin(pid, self.identity(pid)[\'birth\'])\n        if sys.platform == \'darwin\':\n            queue = select.kqueue()\n            try:\n                queue.control([select.kevent(pid, filter=select.KQ_FILTER_PROC,\n                    flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE, fflags=select.KQ_NOTE_EXIT)], 0, 0)\n                return queue\n            except BaseException:\n                queue.close()\n                raise\n        raise OSError(\'process pin unavailable\')\n\n    def identity(self, pid):\n        from .process_tree import process_record\n        record = process_record(pid)\n        if record is None or record[3]:\n            raise OSError(\'process identity unavailable\')\n        if sys.platform == \'darwin\':\n            buffer = ctypes.create_string_buffer(136)  # struct proc_bsdinfo, SDK ABI\n            size = _darwin_library().proc_pidinfo(pid, 3, 0, buffer, len(buffer))\n            if size != len(buffer) or struct.unpack_from(\'I\', buffer, 12)[0] != pid:\n                raise OSError(\'process credentials unavailable\')\n            uid = struct.unpack_from(\'I\', buffer, 20)[0]\n            argv = _darwin_argv(pid)\n        else:\n            root = Path(\'/proc\') / str(pid)\n            uid = root.stat().st_uid\n            with (root / \'cmdline\').open(\'rb\') as stream:\n                raw = stream.read(FD_SCAN_BYTES + 1)\n            if len(raw) > FD_SCAN_BYTES:\n                raise OSError(\'process arguments exceed bound\')\n            argv = [os.fsdecode(arg) for arg in raw.rstrip(b\'\\0\').split(b\'\\0\')]\n        return dict(uid=uid, birth=record[2], argv=argv)\n\n    def exited(self, pin):\n        if isinstance(pin, int):\n            return bool(select.select([pin], [], [], 0)[0])\n        if isinstance(pin, BirthPin):\n            try:\n                return self.identity(pin.pid)[\'birth\'] != pin.birth\n            except OSError:\n                from .process_tree import process_gone\n                return process_gone(pin.pid)\n        return bool(pin.control(None, 1, 0))\n\n    def wait(self, pin, seconds):\n        if isinstance(pin, int):\n            return bool(select.select([pin], [], [], seconds)[0])\n        if isinstance(pin, BirthPin):\n            deadline = time.monotonic() + seconds\n            while not self.exited(pin):\n                remaining = deadline - time.monotonic()\n                if remaining <= 0:\n                    return False\n                time.sleep(min(0.02, remaining))\n            return True\n        return bool(pin.control(None, 1, seconds))\n\n    def send(self, pin, pid, number):\n        if isinstance(pin, int):\n            signal.pidfd_send_signal(pin, number)\n        else:\n            os.kill(pid, number)\n\n    def close(self, pin):\n        if isinstance(pin, int):\n            os.close(pin)\n        else:\n            pin.close()\n\n    def sole_holder(self, pid, path):\n        from .process_tree import process_gone\n        probe = os.open(path, os.O_RDWR | os.O_NOFOLLOW)\n        try:\n            info = os.fstat(probe)\n            inode = info.st_dev, info.st_ino\n            try:\n                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)\n            except BlockingIOError:\n                pass\n            else:\n                return False\n        finally:\n            os.close(probe)\n        holders = set()\n        started = time.monotonic()\n        if sys.platform == \'darwin\':\n            library = _darwin_library()\n            candidates = (ctypes.c_int * (MAX_SCAN_PROCESSES + 1))()\n            size = library.proc_listpids(4, os.getuid(), candidates, ctypes.sizeof(candidates))\n            if size <= 0 or size >= ctypes.sizeof(candidates) or size % 4:\n                return False\n            processes = [p for p in candidates[:size // 4] if p > 0]\n        else:\n            processes = (int(p.name) for p in Path(\'/proc\').iterdir() if p.name.isdigit())\n        for candidate in bounded_processes(processes):\n            if time.monotonic() - started > SCAN_SECONDS:\n                raise TakeoverError(\'predecessor_unproven\')\n            try:\n                if sys.platform == \'darwin\':\n                    fds = ctypes.create_string_buffer(FD_SCAN_BYTES)\n                    size = library.proc_pidinfo(candidate, 1, 0, fds, len(fds))\n                    if size <= 0 or size >= len(fds) or size % 8:\n                        if process_gone(candidate):\n                            continue\n                        return False\n                    for fd, kind in struct.iter_unpack(\'iI\', fds.raw[:size]):\n                        if kind != 1:  # PROX_FDTYPE_VNODE\n                            continue\n                        # proc_fileinfo (24) + vnode_info (152) + MAXPATHLEN\n                        vnode = ctypes.create_string_buffer(1200)\n                        got = library.proc_pidfdinfo(candidate, fd, 2, vnode, len(vnode))\n                        if got != len(vnode):\n                            if ctypes.get_errno() == errno.EBADF:\n                                continue  # descriptor was closed during the scan\n                            return False\n                        found = struct.unpack_from(\'I\', vnode, 24)[0], struct.unpack_from(\'Q\', vnode, 32)[0]\n                        if found == inode:\n                            holders.add(candidate)\n                else:\n                    root = Path(\'/proc\') / str(candidate)\n                    if root.stat().st_uid != os.getuid():\n                        continue\n                    for fd in (root / \'fd\').iterdir():\n                        try:\n                            info = fd.stat()\n                        except FileNotFoundError:\n                            continue\n                        if (info.st_dev, info.st_ino) == inode:\n                            holders.add(candidate)\n            except (OSError, ValueError):\n                if not process_gone(candidate):\n                    return False\n            if holders - {pid}:\n                return False\n        return holders == {pid}\n\n\ndef _trusted(identity, entry, state_root, project_root):\n    argv = identity[\'argv\']\n    # Fixed interpreter flags only; arbitrary -c/-m programs are never entries.\n    index = 1\n    while index < len(argv) and argv[index] in (\'-I\', \'-B\', \'-S\', \'-u\'):\n        index += 1\n    if argv[index:index + 2] == [\'-X\', \'pycache_prefix=/dev/null\']:\n        index += 2\n    return (identity[\'uid\'] == os.getuid() and index < len(argv)\n            and Path(argv[index]).resolve() == entry.resolve()\n            and argv[index + 1:] == [\'--state-root\', str(state_root), \'--project-root\', str(project_root)])\n\n\nclass PinnedPredecessor:\n    def __init__(self, kernel, pin, pid, identity):\n        self.kernel, self.pin, self.pid, self.identity = kernel, pin, pid, identity\n\n    def close(self):\n        if self.pin is not None:\n            self.kernel.close(self.pin)\n            self.pin = None\n\n    def _send(self, number):\n        # Recheck before *each* signal, including escalation on macOS.\n        current = self.kernel.identity(self.pid)\n        if current != self.identity or self.kernel.exited(self.pin):\n            raise TakeoverError(\'predecessor_unproven\', phase=\'service_stopped\')\n        self.kernel.send(self.pin, self.pid, number)\n\n    def stop(self):\n        try:\n            self._send(signal.SIGTERM)\n            if self.kernel.wait(self.pin, 30.0):\n                return False\n            self._send(signal.SIGKILL)\n            if not self.kernel.wait(self.pin, 5.0):\n                raise TakeoverError(\'service_stop_failed\', phase=\'service_stopped\')\n            return True\n        finally:\n            self.close()\n\n\ndef pin_predecessor(pid, *, entry, state_root, project_root, history_lock, kernel=None):\n    kernel = Kernel() if kernel is None else kernel\n    pin = None\n    try:\n        if type(pid) is not int or pid <= 0:\n            raise ValueError()\n        pin = kernel.pin(pid)\n        identity = kernel.identity(pid)\n        if (not _trusted(identity, entry, state_root, project_root)\n                or not kernel.sole_holder(pid, history_lock)\n                or kernel.identity(pid) != identity or kernel.exited(pin)):\n            raise ValueError()\n        return PinnedPredecessor(kernel, pin, pid, identity)\n    except (OSError, ValueError, KeyError, TypeError, TakeoverError):\n        if pin is not None:\n            kernel.close(pin)\n        raise TakeoverError(\'predecessor_unproven\') from None\n'
+
+======================================================================
+FAIL: test_account_report_page_offsets_and_page_count_are_bounded (tests.test_b4t_takeover.AmendmentA1Tests.test_account_report_page_offsets_and_page_count_are_bounded) (offsets=[0])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2700, in test_account_report_page_offsets_and_page_count_are_bounded
+    self.assertIsNone(client.account_takeover_report_client('/state', Path('/project'), host_client='owner-cli-v1'))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'updates': [], 'next_offset': None} is not None
+
+======================================================================
+FAIL: test_account_report_page_offsets_and_page_count_are_bounded (tests.test_b4t_takeover.AmendmentA1Tests.test_account_report_page_offsets_and_page_count_are_bounded) (offsets=[-1])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2700, in test_account_report_page_offsets_and_page_count_are_bounded
+    self.assertIsNone(client.account_takeover_report_client('/state', Path('/project'), host_client='owner-cli-v1'))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'updates': [], 'next_offset': None} is not None
+
+======================================================================
+FAIL: test_account_report_page_offsets_and_page_count_are_bounded (tests.test_b4t_takeover.AmendmentA1Tests.test_account_report_page_offsets_and_page_count_are_bounded) (offsets=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "~/Code/temp/cocolo-b4t/packages/codex-agents/tests/test_b4t_takeover.py", line 2700, in test_account_report_page_offsets_and_page_count_are_bounded
+    self.assertIsNone(client.account_takeover_report_client('/state', Path('/project'), host_client='owner-cli-v1'))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'updates': [], 'next_offset': None} is not None
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.254s
+
+FAILED (failures=5, errors=4)

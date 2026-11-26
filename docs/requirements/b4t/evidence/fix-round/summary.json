@@ -1,0 +1,71 @@
+{
+  "copiers": {
+    "elapsed_seconds": 41.6,
+    "tests": {
+      "codex": 215
+    },
+    "metadata_errors": [],
+    "failed_units": [
+      "codex:tests.test_owner_backup_streamed#1"
+    ],
+    "requirement_failures": []
+  },
+  "fourth-named": {
+    "elapsed_seconds": 25.8,
+    "tests": {
+      "codex": 214,
+      "root": 38
+    },
+    "metadata_errors": [],
+    "failed_units": [
+      "codex:tests.test_runtime_release",
+      "codex:tests.test_lifetime_cap_guard"
+    ],
+    "requirement_failures": []
+  },
+  "gate-named": {
+    "elapsed_seconds": 21.5,
+    "tests": {
+      "codex": 142,
+      "root": 38
+    },
+    "metadata_errors": [],
+    "failed_units": [],
+    "requirement_failures": []
+  },
+  "verified-named": {
+    "elapsed_seconds": 23.9,
+    "tests": {
+      "codex": 143,
+      "root": 38
+    },
+    "metadata_errors": [],
+    "failed_units": [],
+    "requirement_failures": []
+  },
+  "handoff-named": {
+    "elapsed_seconds": 21.6,
+    "tests": {
+      "codex": 143,
+      "root": 38
+    },
+    "metadata_errors": [],
+    "failed_units": [],
+    "requirement_failures": []
+  },
+  "native_socket_tests": "8 explicitly skipped; exact names and startup failures are recorded in ../../fix-round-rerun.md",
+  "mutation_witnesses": "T-4, T-12b, T-15, T-17, T-30: each RED under its one product mutation; unmutated named module green",
+  "version_catalogue": "unchanged; test_runtime_release expected current-digest mismatch only",
+  "final-proof-named": {
+    "elapsed_seconds": 22.6,
+    "tests": {
+      "codex": 145,
+      "root": 38
+    },
+    "metadata_errors": [],
+    "failed_units": [],
+    "requirement_failures": []
+  },
+  "offline_migration": "15/15 passed, 4.871 s; two CLI/socket cases excluded and explicitly listed for primary",
+  "final_focused": "7/7 passed, 6.715 s; strengthened native exec exit and post-completion count persistence"
+}

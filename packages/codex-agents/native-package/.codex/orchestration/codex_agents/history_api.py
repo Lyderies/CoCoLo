@@ -364,7 +364,8 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
     elif operation == 'history.takeover_report':
         if (type(result['records']) is not list or any(not valid_integer(result[name]) for name in
                 ('lost', 'lost_held', 'finished_kept', 'refused_unverifiable'))
-                or any(not _closed(row, {'predecessor_version', 'successor_version', 'state'})
+                or any(not _closed(row, {'predecessor_version', 'successor_version', 'state', 'runs_listed', 'runs_unlisted'})
+                       or not valid_integer(row['runs_listed'], maximum=64) or not valid_integer(row['runs_unlisted'])
                        or row['state'] not in {'adopting', 'adopted', 'complete'}
                        or any(type(row[key]) is not str or re.fullmatch(r'\d+\.\d+\.\d+', row[key]) is None
                               for key in ('predecessor_version', 'successor_version')) for row in result['records'])):

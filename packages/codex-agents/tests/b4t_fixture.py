@@ -35,6 +35,27 @@ def build(archive, destination):
     path.write_bytes(canonical_json(data))
 
 
+def stop_result(archive, destination):
+    """A consumed archived run, deliberately not published until service stop."""
+    sys.path.insert(0, str(archive / 'packages/codex-agents'))
+    import tests.support
+    from tests.test_record_context import RecordedContextFixture
+    from tests.test_bridge import result
+    from codex_agents.learning_contracts import canonical_json
+    case = RecordedContextFixture(methodName='runTest')
+    case.setUp()
+    try:
+        case.open_and_consume()
+        data = dict(project=case.fixture.project,key=case.fixture.key.hex(),now=case.fixture.base.stamp,
+                    finished=case.binding.as_data(),running=case.binding.as_data(),
+                    assignment=case.assigned,body=canonical_json(result()).decode())
+        case.store.close()
+        shutil.copytree(case.directory,destination/'history')
+        (destination/'manifest.json').write_bytes(canonical_json(data))
+    finally:
+        case.doCleanups()
+
+
 def account(archive, destination):
     """A real old claim and terminal, with native enrollment supplied by its fixture."""
     sys.path.insert(0, str(archive / 'packages/codex-agents'))
@@ -206,5 +227,5 @@ def rollover(archive, destination):
 
 if __name__ == '__main__':
     mode = sys.argv[3] if len(sys.argv) > 3 else 'build'
-    {'account': account, 'migrations': migrations, 'chain': chain, 'memory': memory, 'rollover': rollover,
+    {'stop-result': stop_result, 'account': account, 'migrations': migrations, 'chain': chain, 'memory': memory, 'rollover': rollover,
      'build': build}[mode](Path(sys.argv[1]), Path(sys.argv[2]))

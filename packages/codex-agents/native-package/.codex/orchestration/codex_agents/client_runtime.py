@@ -1094,8 +1094,9 @@ def account_takeover_report_client(state_root, project_root, *, host_client, pre
         state = CollectorPaths(state_root)
         project_id, endpoint = _account_target(state, project_root, await_start=await_start)
         client = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=2)
+        from .account_takeover import PAGE_SIZE
         offset, result = 0, None
-        while True:
+        for _ in range((64 + PAGE_SIZE - 1) // PAGE_SIZE + 1):
             enroll_clients(state, project_root, None, account=endpoint, host_client=host_client)
             page = client.takeover_report(offset, predecessor_version)
             if result is None:
@@ -1104,7 +1105,10 @@ def account_takeover_report_client(state_root, project_root, *, host_client, pre
             if page['next_offset'] is None:
                 result['next_offset'] = None
                 return result
+            if type(page['next_offset']) is not int or page['next_offset'] <= offset:
+                return None
             offset = page['next_offset']
+        return None
     except (DispatchError, StateError, OSError, AccountError):
         return None
 

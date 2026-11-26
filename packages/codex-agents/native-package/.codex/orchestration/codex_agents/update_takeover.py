@@ -9,6 +9,14 @@ START_REFUSALS = frozenset({'runtime_authorization_quiesced', 'runtime_unauthori
 MAX_STRAGGLER_STOPS = 3
 
 
+A1_WRITE_FREE = {
+    'predecessor_unproven': "The update stopped (predecessor_unproven): this project's old service is running {n} {runs}, and it could not be confirmed to be this project's own service, so it was not stopped. Nothing was changed. When that run ends, the old service stops by itself. Then run ./setup.sh --update. See docs/troubleshooting.md, 'Update hand-over'.",
+    'project_store_busy': "The update stopped (project_store_busy): another program is using this project's records right now, for example a backup or a records command. Nothing was changed. Let it finish, then run ./setup.sh --update. If this keeps happening, docs/troubleshooting.md, 'Update hand-over', shows how to see which program it is.",
+    'update_busy': "The update stopped (update_busy): another setup or records command for CoCoLo is running on this computer. Nothing was changed. Let it finish, then run ./setup.sh --update.",
+    'collector_unresponsive': "The update stopped (collector_unresponsive): the collector is running but does not answer. Nothing was changed. Wait a minute and run ./setup.sh --update again. If it still does not answer, docs/troubleshooting.md, 'Update hand-over', shows how to end it safely.",
+}
+
+
 class TakeoverError(RuntimeError):
     def __init__(self, code, *, phase=None, undone=False, lost=0, update_message=None):
         self.code, self.phase, self.undone = code, phase, undone
@@ -40,6 +48,18 @@ class TakeoverError(RuntimeError):
                            'Run ./setup.sh --update to finish.')
             if code == 'predecessor_lock_inherited':
                 message += " Another program still holds this project's records lock; the update goes on when it ends."
+        if phase is None and code in A1_WRITE_FREE:
+            message = A1_WRITE_FREE[code].format(n=lost, runs='child run' if lost == 1 else 'child runs')
+        elif phase is not None and not undone and code == 'service_still_finishing':
+            message = ("The update stopped partway (service_still_finishing): this project's old service was told to stop "
+                       f"and is finishing its work first ({lost} child {'run' if lost == 1 else 'runs'}). "
+                       "It stops by itself when that ends, at most at the run's deadline. Then run ./setup.sh --update "
+                       "to finish. Nothing else needs doing.")
+        elif phase is not None and not undone and code == 'predecessor_lock_inherited':
+            message = ("The update stopped partway (predecessor_lock_inherited): this project's old service has stopped, "
+                       "but another program still holds this project's records lock, so nothing was taken over yet. "
+                       "The update goes on when that program ends: run ./setup.sh --update again. "
+                       "docs/troubleshooting.md, 'Update hand-over', shows how to see which program it is.")
         super().__init__(message)
 
 
@@ -102,7 +122,7 @@ class UpdateTakeover:
                         document = self.operations.reconcile_runs(document, late=phase == 'late_runs_reconciled')
                     else:
                         document = self.journal.reconcile(document, self.operations.snapshot_runs(
-                            include_settled=phase == 'late_runs_reconciled'))
+                            include_settled=False))
                     document = self._phase(document, phase)
                 else:
                     document = self._phase(document, phase)
@@ -127,7 +147,7 @@ class UpdateTakeover:
                     undone = True
                 except (OSError, ValueError, TakeoverError):
                     pass
-            raise TakeoverError(code, phase=document['phase'], undone=undone, lost=len(document['runs'])) from None
+            raise TakeoverError(code, phase=document['phase'], undone=undone, lost=len(document['runs']) + document.get('runs_unlisted', 0)) from None
         return document
 
     def installed(self):

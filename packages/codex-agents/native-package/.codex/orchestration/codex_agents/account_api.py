@@ -255,7 +255,8 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
     if not reply_fields_match(request.operation, result):
         raise AccountError("account_invalid_response")
     if request.operation == 'account.takeover_report':
-        if (not integer(result['other_projects']) or not integer(result['other_runs'])
+        if (('lineage_message' in result and type(result['lineage_message']) is not str)
+                or not integer(result['other_projects']) or not integer(result['other_runs'])
                 or (result['recorded_at_ms'] is not None and not integer(result['recorded_at_ms']))
                 or (result['next_offset'] is not None and (not integer(result['next_offset'])
                     or result['next_offset'] <= request.payload.get('offset', 0)))

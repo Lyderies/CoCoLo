@@ -6,7 +6,7 @@ The previous-release catalogue in tests is independent of this runtime table.
 """
 
 REPLY_FIELDS = {'history.takeover_report': {'optional': [], 'required': ['records', 'lost', 'lost_held', 'finished_kept', 'refused_unverifiable']},
- 'account.takeover_report': {'optional': [], 'required': ['recorded_at_ms', 'other_projects', 'other_runs', 'updates', 'next_offset']},
+ 'account.takeover_report': {'optional': ['lineage_message'], 'required': ['recorded_at_ms', 'other_projects', 'other_runs', 'updates', 'next_offset']},
  'service.stop_for_update': {'optional': [], 'required': ['stopping']},
  'account.billing_probe': {'optional': ['billing_waivers', 'client_version', 'retry_at'],
                            'required': ['known', 'observed_at_ms', 'probe', 'reason_code', 'records']},

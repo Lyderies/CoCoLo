@@ -64,9 +64,12 @@ def adopt_project(history, intent, *, migration=None):
     known = db.execute('SELECT * FROM takeover_record WHERE takeover_id=?', (intent['takeover_id'],)).fetchone()
     identity = (intent['takeover_id'], old['digest'], old['version'], COLLECTOR_RUNTIME_DIGEST, PACKAGE_VERSION)
     if known is None:
-        db.execute('INSERT INTO takeover_record VALUES(?,?,?,?,?,\'adopting\')', identity)
+        db.execute("INSERT INTO takeover_record VALUES(?,?,?,?,?,'adopting',?,?,?)",
+                   (*identity, intent['recorded_at_ms'], len(intent['runs']), intent.get('runs_unlisted', 0)))
     elif tuple(known)[:5] != identity:
         raise HistoryError('history_conflict')
+    if len(intent['runs']) > 64:
+        raise HistoryError('history_not_authorized')
     for run in intent['runs']:
         prior = db.execute('SELECT run_handle,attempt FROM takeover_runs WHERE takeover_id=? AND bridge_run_id=?',
                            (intent['takeover_id'], run['bridge_run_id'])).fetchone()
@@ -159,7 +162,7 @@ def takeover_report(history, *, run_handle=None):
     where = '' if run_handle is None else (' WHERE EXISTS(SELECT 1 FROM takeover_runs t '
         'WHERE t.takeover_id=r.takeover_id AND t.run_handle=?)')
     arguments = () if run_handle is None else (run_handle,)
-    records = [{name: row[name] for name in ('predecessor_version', 'successor_version', 'state')}
+    records = [{name: row[name] for name in ('predecessor_version', 'successor_version', 'state', 'runs_listed', 'runs_unlisted')}
         for row in history._connection.execute('SELECT * FROM takeover_record r' + where
         + ' ORDER BY r.rowid DESC LIMIT 1', arguments) if _record_on_chain(history, row)]
     report = dict(records=records, lost=0, lost_held=0, finished_kept=0, refused_unverifiable=0)
@@ -244,9 +247,10 @@ def takeover_lines(report, *, account=None):
         row = report['records'][-1]
         date = '' if account is None or account['recorded_at_ms'] is None else time.strftime(
             '%Y-%m-%d %H:%M UTC, ', time.gmtime(account['recorded_at_ms'] / 1000))
-        ended = report['lost'] + report['lost_held']
+        ended = row.get('runs_listed', report['lost'] + report['lost_held']) + row.get('runs_unlisted', 0)
+        overflow = (f" ({row['runs_unlisted']} of them not listed one by one)" if row.get('runs_unlisted') else '')
         lines.append(f"Update hand-over: {date}CoCoLo {row['predecessor_version']} to {row['successor_version']}. "
-                     f"{ended} {'run' if ended == 1 else 'runs'} ended by the update. "
+                     f"{ended} {'run' if ended == 1 else 'runs'} ended by the update{overflow}. "
                      f"{report['finished_kept']} finished results kept.")
     if report['lost']:
         lines.append(f"Runs ended by the update: {report['lost']}, slot freed.")
@@ -262,6 +266,8 @@ def takeover_lines(report, *, account=None):
                      f"{'Its' if projects == 1 else 'Their'} {runs} {'run keeps its' if runs == 1 else 'runs keep their'} "
                      'slot until that project is updated.')
         lines.extend(row['update_message'] for row in account['updates'])
+    if account is not None and account.get('lineage_message'):
+        lines.append(account['lineage_message'])
     return lines
 
 
@@ -283,3 +289,46 @@ def journal_notice(state_root, project_root):
         return ['Update hand-over not finished (intent unreadable). Run: ./setup.sh --update.']
     except (OSError, ValueError, RuntimeError):
         return []
+
+
+def purge_takeover(db, now, *, transaction=None, checkpoint=None):
+    """A1.10: one atomic, complete pass; protected records never count toward 16.
+
+    Called after stage B commits and in the ordinary purge cycle. A failed
+    retention pass rolls back independently and never fails an update.
+    """
+    import json
+    from .project_history import SETTLEMENT_REPLAY_WINDOW_MS
+    context = db if transaction is None else transaction()
+    with context:
+        # Unknown attempts have no lease that can keep them inside its window.
+        db.execute('DELETE FROM takeover_runs WHERE NOT EXISTS(SELECT 1 FROM result_leases l '
+                   'WHERE l.run_handle=takeover_runs.run_handle AND l.attempt=takeover_runs.attempt) '
+                   'AND takeover_id IN (SELECT takeover_id FROM takeover_record WHERE recorded_at_ms<?)',
+                   (now - SETTLEMENT_REPLAY_WINDOW_MS,))
+        db.execute('DELETE FROM takeover_obligations WHERE NOT EXISTS(SELECT 1 FROM project_holds h '
+                   'WHERE h.kind=takeover_obligations.kind AND h.identity=takeover_obligations.identity '
+                   "AND (h.state<>'released' OR h.evidence IS NOT NULL))")
+        records = db.execute('SELECT takeover_id,predecessor_digest,successor_digest,state '
+                             'FROM takeover_record ORDER BY rowid DESC').fetchall()
+        newest = records[0][0] if records else None
+        protected = {r[0] for r in db.execute('SELECT takeover_id FROM takeover_runs UNION '
+                                             'SELECT takeover_id FROM takeover_obligations')}
+        edges = {r[1]: (r[0], r[2]) for r in records}
+        # Every retained obligation keeps its own parent, even when refused.
+        for row in db.execute('SELECT o.original_runtime_digest FROM takeover_obligations o '
+                              'JOIN project_holds h ON h.kind=o.kind AND h.identity=o.identity '
+                              "WHERE h.state<>'released'"):
+            digest, seen = row[0], set()
+            path = []
+            while digest in edges and digest not in seen and len(path) <= 16:
+                seen.add(digest)
+                identity, digest = edges[digest]
+                path.append(identity)
+            if len(path) <= 16:
+                protected.update(path)
+        removable = [r[0] for r in records if r[0] != newest and r[0] not in protected and r[3] == 'complete']
+        for identity in removable[16:]:
+            db.execute('DELETE FROM takeover_record WHERE takeover_id=?', (identity,))
+        if checkpoint is not None:
+            checkpoint()

@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import stat
 import sqlite3
 import time
 
@@ -145,6 +146,7 @@ def _project_owner(state, project_id):
             return None
         _check_owner_mode(path, directory=False)
         with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=3)) as db:
+            db.execute('PRAGMA query_only=ON')
             check_floor(db, PACKAGE_VERSION, lambda: TakeoverError('predecessor_unverified'))
             if db.execute('PRAGMA user_version').fetchone()[0] > 23:
                 raise TakeoverError('predecessor_unverified')
@@ -160,11 +162,17 @@ def _project_owner(state, project_id):
         raise TakeoverError('predecessor_unverified') from None
 
 
-def read_plan(state, project_root):
+def read_plan(state, project_root, *, runtime_locked=False):
     """Return the trusted intent and a redacted plan. Every refusal precedes J1."""
     from .collector_runtime import _collector_runtime_authorization
     from .project_host_client import _hinted_host
     from .takeover_process import pin_predecessor
+    if not runtime_locked:
+        deadline = time.monotonic() + 20.0
+        while _lock_held(state.runtime_lock):
+            if time.monotonic() >= deadline:
+                raise TakeoverError('update_busy')
+            time.sleep(0.02)
     root = _canonical_project_root(Path(project_root))
     root_digest = keyed_digest(state.digest_key(), str(root))
     try:
@@ -214,7 +222,19 @@ def read_plan(state, project_root):
                 raise TakeoverError('predecessor_unverified')
     else:
         collector = checked_collector_identity(health, authorization, releases=releases)
+    from .client_runtime import runtime_directory
+    directory = runtime_directory(state, root)
     hinted = _hinted_host(state, root, any_runtime=True)
+    if row is not None and not (hinted is not None and hinted[2] is True):
+        deadline = time.monotonic() + 5.0
+        while (_lock_held(state.root / 'projects' / row['project_id'] / 'history.lock')
+               or _lock_held(directory / 'host.lock')):
+            hinted = _hinted_host(state, root, any_runtime=True)
+            if hinted is not None and hinted[2] is True:
+                break
+            if time.monotonic() >= deadline:
+                raise TakeoverError('project_store_busy')
+            time.sleep(0.02)
     live = hinted is not None and hinted[2] is True
     service = None
     if row is not None:
@@ -235,45 +255,70 @@ def read_plan(state, project_root):
                 continue
             if candidate != root and row.get('launch_digest') != identity['digest']:
                 continue
-            service = dict(identity, entry=str(candidate / '.codex/orchestration/project_host.py'))
+            entry = candidate / '.codex/orchestration/project_host.py'
+            if len(os.fsencode(entry)) > 4095:
+                raise TakeoverError('predecessor_unverified')
+            api = candidate / '.codex/orchestration/codex_agents/history_api.py'
+            stop_op = api.is_file() and any(isinstance(node, ast.Constant) and node.value == 'service.stop_for_update'
+                                           for node in ast.walk(ast.parse(api.read_bytes())))
+            service = dict(identity, entry=str(entry), directory=str(directory),
+                           project_endpoint=str(directory / 'p.sock'), stop_op=stop_op,
+                           service_stop='stop_op' if stop_op else 'none')
             if live and identity['digest'] != COLLECTOR_RUNTIME_DIGEST:
                 scope, endpoints, _ = hinted
                 endpoint = endpoints[1]  # history/result endpoint; dispatch uses a different protocol
-                pid = _peer(endpoint)
+                info = directory.lstat()
+                if (endpoint.parent != directory or info.st_uid != os.getuid()
+                        or not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700):
+                    raise TakeoverError('predecessor_unproven')
                 api = candidate / '.codex/orchestration/codex_agents/history_api.py'
                 stop_op = api.is_file() and any(isinstance(node, ast.Constant) and node.value == 'service.stop_for_update'
                                                for node in ast.walk(ast.parse(api.read_bytes())))
-                if stop_op:
-                    from .takeover_process import Kernel, _trusted
-                    process = Kernel().identity(pid)
-                    if not _trusted(process, Path(service['entry']), state.root, root):
-                        raise TakeoverError('predecessor_unproven')
-                else:
-                    pinned = pin_predecessor(pid, entry=Path(service['entry']), state_root=state.root,
-                        project_root=root, history_lock=state.root / 'projects' / row['project_id'] / 'history.lock')
-                    try:
-                        process = pinned.identity
-                    finally:
-                        pinned.close()
-                from .control_api import scope_data
-                service.update(pid=pid, birth=process['birth'], stop_op=stop_op, directory=str(endpoint.parent),
-                               project_endpoint=str(endpoint), scope=scope_data(scope))
+                process, pid, stop = None, None, 'stop_op' if stop_op else 'signal'
+                try:
+                    pid = _peer(endpoint)
+                    from .takeover_process import foreign_lock_holder
+                    if foreign_lock_holder(pid, (state.root / 'projects' / row['project_id'] / 'history.lock',
+                                                 directory / 'host.lock')):
+                        raise TakeoverError('project_store_busy')
+                    if stop_op:
+                        from .takeover_process import Kernel, _trusted
+                        process = Kernel().identity(pid)
+                        if not _trusted(process, Path(service['entry']), state.root, root):
+                            raise TakeoverError('predecessor_unproven')
+                    else:
+                        pinned = pin_predecessor(pid, entry=Path(service['entry']), state_root=state.root,
+                                                 project_root=root)
+                        try:
+                            process = pinned.identity
+                        finally:
+                            pinned.close()
+                except (OSError, TakeoverError) as error:
+                    if isinstance(error, TakeoverError) and error.code == 'project_store_busy':
+                        raise
+                    if stop_op or children.get(row['project_id'], 0):
+                        raise TakeoverError('predecessor_unproven', lost=children.get(row['project_id'], 0)) from None
+                    stop = 'hint'
+                service.update(stop_op=stop_op, service_stop=stop, directory=str(directory),
+                               project_endpoint=str(endpoint), service_generation=scope.supervisor_generation)
+                if process is not None:
+                    service.update(pid=pid, birth=process['birth'])
             break
         if live and service is None:
             raise TakeoverError('predecessor_unverified')
         if owner_digest is not None and owner_digest != COLLECTOR_RUNTIME_DIGEST and service is None:
             raise TakeoverError('predecessor_unverified')
         if not live and _lock_held(state.root / 'projects' / row['project_id'] / 'history.lock'):
-            raise TakeoverError('predecessor_unproven')
+            raise TakeoverError('project_store_busy')
     needed = row is not None and ((collector is not None and collector['digest'] != COLLECTOR_RUNTIME_DIGEST)
                                     or (service is not None and service['digest'] != COLLECTOR_RUNTIME_DIGEST))
-    if needed and unresponsive_writer:
-        raise TakeoverError('predecessor_unverified')
+    if unresponsive_writer:
+        raise TakeoverError('collector_unresponsive')
     report = dict(takeover='planned' if needed else 'none', collector='replace' if collector is not None
                   and collector['digest'] != COLLECTOR_RUNTIME_DIGEST else 'keep',
                   service='busy' if live and children.get(row['project_id'], 0) else 'idle' if live else 'none',
                   lineage='ok', service_stop='none' if not live or service is None else
-                  'stop_op' if service.get('stop_op') else 'signal',
+                  service.get('service_stop', 'stop_op' if service.get('stop_op') else 'signal'),
                   children=0 if row is None else children.get(row['project_id'], 0),
                   other_children=sum(n for project, n in children.items() if row is None or project != row['project_id']),
                   records_upgrade=5 <= schema < 16,

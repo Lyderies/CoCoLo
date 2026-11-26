@@ -12,6 +12,8 @@ import time
 
 MAX_JOURNAL_BYTES = 16 * 1024
 MAX_AUTHORIZATION_BYTES = 1024
+MAX_TAKEOVER_RUNS = 64
+MAX_INTEGER = 2**63 - 1
 PHASES = ('intent', 'quiesced', 'collector_stopping', 'collector_stopped', 'runs_reconciled',
           'hint_withdrawn', 'service_stopped', 'late_runs_reconciled', 'store_adopting',
           'store_adopted', 'ledger_migrating', 'ledger_migrated', 'authorized', 'account_done',
@@ -44,39 +46,59 @@ def _owned(info, *, directory=False):
 
 def validate(document):
     try:
-        if (type(document) is not dict or document['schema_version'] != 1
+        if (type(document) is not dict or set(document) - {
+                'schema_version', 'phase', 'takeover_id', 'project_id', 'root_digest', 'recorded_at_ms', 'updated_at_ms',
+                'predecessor_collector', 'predecessor_service', 'successor', 'prior_authorization', 'runs',
+                'runs_unlisted', 'stopped_children', 'outcomes'} or document['schema_version'] != 1
                 or document['phase'] not in PHASES or not _hex(document['takeover_id'], 32)
                 or not re.fullmatch(r'prj_[0-9a-f]{32}', document['project_id'])
                 or not _hex(document['root_digest'], 64)
                 or type(document['recorded_at_ms']) is not int or document['recorded_at_ms'] < 0
                 or type(document['updated_at_ms']) is not int
-                or document['updated_at_ms'] < document['recorded_at_ms']):
+                or not 0 <= document['recorded_at_ms'] <= document['updated_at_ms'] <= MAX_INTEGER):
             raise ValueError()
         for name in ('predecessor_collector', 'predecessor_service', 'successor'):
             identity = document[name]
             if identity is None and name != 'successor':
                 continue
-            if (type(identity) is not dict or not _hex(identity['digest'], 64)
-                    or not re.fullmatch(r'\d+\.\d+\.\d+', identity['version'])):
+            allowed = {'digest', 'version'} | ({'entry_b64', 'directory_digest', 'service_generation',
+                       'service_stop', 'pid', 'birth'} if name == 'predecessor_service' else set())
+            if (type(identity) is not dict or set(identity) - allowed or not _hex(identity['digest'], 64)
+                    or not re.fullmatch(r'[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}', identity['version'])):
                 raise ValueError()
         prior = base64.b64decode(document['prior_authorization'], validate=True)
         if 'collector_children' in document and type(document['collector_children']) is not bool:
             raise ValueError()
         if 'stopped_children' in document and (type(document['stopped_children']) is not int
-                or not 0 <= document['stopped_children'] <= len(document['runs'])):
+                or not 0 <= document['stopped_children'] <= min(MAX_INTEGER, len(document['runs']) + document.get('runs_unlisted', 0))):
             raise ValueError()
         if 'outcomes' in document and (type(document['outcomes']) is not dict
                 or set(document['outcomes']) != {'lost', 'lost_held', 'finished_kept', 'refused_unverifiable'}
-                or any(type(n) is not int or n < 0 for n in document['outcomes'].values())):
+                or any(type(n) is not int or not 0 <= n <= MAX_INTEGER for n in document['outcomes'].values())):
             raise ValueError()
-        if 'reconciled_entries' in document:
-            names = document['reconciled_entries']
-            from .launch_journal import _entry_name
-            if (type(names) is not list or any(type(name) is not str or not _entry_name(name) for name in names)
-                    or len(names) != len(set(names))):
+        if ('reconciled_entries' in document or len(prior) > MAX_AUTHORIZATION_BYTES
+                or type(document['runs']) is not list or len(document['runs']) > MAX_TAKEOVER_RUNS
+                or type(document.get('runs_unlisted')) is not int or not 0 <= document['runs_unlisted'] <= MAX_INTEGER):
+            raise ValueError()
+        service = document['predecessor_service']
+        if service is not None:
+            if any(key in service for key in ('entry', 'directory', 'project_endpoint')):
                 raise ValueError()
-        if len(prior) > MAX_AUTHORIZATION_BYTES or type(document['runs']) is not list:
-            raise ValueError()
+            entry = base64.b64decode(service['entry_b64'], validate=True)
+            if len(entry) > 4095 or not entry or b'\0' in entry:
+                raise ValueError()
+            if 'directory_digest' in service and not _hex(service['directory_digest'], 64):
+                raise ValueError()
+            for key in ('pid', 'service_generation'):
+                if key in service and (type(service[key]) is not int or not 1 <= service[key] <= MAX_INTEGER):
+                    raise ValueError()
+            if 'birth' in service:
+                birth = service['birth']
+                if not ((type(birth) is str and re.fullmatch(r'[0-9]{1,19}(?:\.[0-9]{6})?',birth) is not None)
+                        or (type(birth) is int and 0 <= birth <= MAX_INTEGER)):
+                    raise ValueError()
+            if 'service_stop' in service and service['service_stop'] not in ('none','hint','signal','stop_op'):
+                raise ValueError()
         seen = set()
         for run in document['runs']:
             if (type(run) is not dict or set(run) != {'run_handle', 'attempt', 'bridge_run_id'}
@@ -165,11 +187,26 @@ class TakeoverJournal:
         if type(prior) is not bytes or len(prior) > MAX_AUTHORIZATION_BYTES:
             raise JournalError('prior runtime authorization is invalid')
         now = time.time_ns() // 1_000_000
-        document = dict(intent, schema_version=1, takeover_id=secrets.token_hex(16), phase='intent', runs=runs,
+        import hashlib
+        intent = dict(intent)
+        intent.pop('collector_children', None)  # a drained-stop refusal is retried through authenticated shutdown
+        if intent.get('predecessor_service') is not None:
+            service = dict(intent['predecessor_service'])
+            if 'entry' in service:
+                service['entry_b64'] = base64.b64encode(os.fsencode(service.pop('entry'))).decode('ascii')
+            if 'directory' in service:
+                service['directory_digest'] = hashlib.sha256(os.fsencode(service.pop('directory'))).hexdigest()
+            service.pop('project_endpoint', None)
+            if service.pop('stop_op', False):
+                service['service_stop'] = 'stop_op'
+            if 'scope' in service:
+                service['service_generation'] = service.pop('scope')['supervisor_generation']
+            intent['predecessor_service'] = service
+        document = dict(intent, schema_version=1, takeover_id=secrets.token_hex(16), phase='intent', runs=[],
+                        runs_unlisted=0,
                         recorded_at_ms=now, updated_at_ms=now,
                         prior_authorization=base64.b64encode(prior).decode('ascii'))
-        self.write(document)
-        return document
+        return self.reconcile(document, runs)
 
     def remove(self):
         self.read()  # refuses an unsafe replacement
@@ -182,13 +219,47 @@ class TakeoverJournal:
         self.write(document)
         return document
 
+    @staticmethod
+    def serialized(document):
+        return json.dumps(document, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('ascii') + b'\n'
+
+    @classmethod
+    def widest(cls, document):
+        """Reserve all growth through J14 before adding even the first run."""
+        import copy
+        value = copy.deepcopy(document)
+        value.update(phase=max(PHASES, key=len), updated_at_ms=MAX_INTEGER,
+                     recorded_at_ms=MAX_INTEGER, runs_unlisted=MAX_INTEGER, stopped_children=MAX_INTEGER,
+                     outcomes={key: MAX_INTEGER for key in ('lost', 'lost_held', 'finished_kept', 'refused_unverifiable')})
+        for identity in ('predecessor_collector', 'predecessor_service', 'successor'):
+            if value.get(identity) is not None:
+                value[identity]['version'] = '99999.99999.99999'
+        service = value.get('predecessor_service')
+        if service is not None:
+            stop_op = service.get('service_stop') == 'stop_op'
+            service.update(pid=MAX_INTEGER, birth='9' * 32, service_stop='stop_op')
+            if stop_op:
+                service['service_generation'] = MAX_INTEGER
+        # Each run has the same fixed-width identifiers; reserve the widest attempt.
+        value['runs'] = [dict(run, attempt=MAX_INTEGER) for run in value['runs']]
+        return cls.serialized(value)
+
     def reconcile(self, document, runs):
         combined = {run['bridge_run_id']: run for run in document['runs']}
+        observed = {}
         for run in runs:
-            known = combined.get(run['bridge_run_id'])
+            known = combined.get(run['bridge_run_id']) or observed.get(run['bridge_run_id'])
             if known is not None and known != run:
                 raise JournalError('a launch identity changed during the hand-over')
-            combined[run['bridge_run_id']] = run
-        document = dict(document, runs=list(combined.values()))
+            observed[run['bridge_run_id']] = run
+        for identity, run in observed.items():
+            if identity in combined:
+                continue
+            proposed = dict(document, runs=[*combined.values(), run])
+            if len(combined) >= MAX_TAKEOVER_RUNS or len(self.widest(proposed)) > MAX_JOURNAL_BYTES:
+                continue
+            combined[identity] = run
+        document = dict(document, runs=list(combined.values()),
+                        runs_unlisted=max(document['runs_unlisted'], len(set(observed) - set(combined))))
         self.write(document)
         return document

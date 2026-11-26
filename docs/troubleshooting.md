@@ -154,10 +154,33 @@ enrolled host. Other projects keep running, and their slots remain held until
 their own update or the ordinary account recovery rule. Status lists their
 locally verified update commands.
 
-`predecessor_unverified` or `predecessor_unproven` means the update could not
-verify the installed runtime or prove the service's process and lock ownership.
-These pre-check refusals change nothing. Use the project's recorded CoCoLo
-clone and keep the installed files and service intact while investigating.
+`predecessor_unverified` means the installed runtime's lineage could not be
+verified. Nothing was changed. Use the project's recorded CoCoLo clone and keep
+the installed files intact while investigating.
+
+`predecessor_unproven` means a busy old service could not be confirmed as this
+project's own service. Nothing was changed and its child keeps running. When
+that run ends, the old service stops by itself; then run `./setup.sh --update`.
+An idle service needs no signal proof: withdrawal of its hint lets it stop.
+
+`project_store_busy` means another program, such as a backup or records command,
+is using this project's records. Nothing was changed. Let it finish, then run
+`./setup.sh --update`. To inspect the holder yourself, run `lsof` on
+`<state-root>/projects/<project-id>/history.lock` and the project's
+`<state-root>/rt/<runtime-directory>/host.lock`. Keep lock files intact.
+
+`update_busy` means another setup or records command holds
+`<state-root>/collector-runtime.lock`. Nothing was changed. Let it finish, then
+run `./setup.sh --update`.
+
+`collector_unresponsive` means the collector holds its records lock but does
+not answer. Nothing was changed. Wait a minute and retry `./setup.sh --update`.
+If it still does not answer, inspect `lsof <state-root>/collector.lock` and the
+collector's exit/status report. Verify its command and state root before ending
+that one process with the operating system's process viewer. Never stop a
+process by a guessed PID or a process-name pattern; the updater never signals
+the collector.
+
 An already-installed older client can still show its original compatibility
 refusal; run the update from the clone named in its local install record.
 
@@ -174,8 +197,15 @@ the update resumes. An unresponsive collector is never signalled by the update.
 one identity-checked SIGTERM, with bounded escalation against that same process;
 a newer service uses its authenticated stop operation. If escalation was needed,
 the old child may still run and its slot stays held until it is proven gone.
-`predecessor_lock_inherited` means another process still holds a records lock;
-the update resumes when that holder exits. Do not signal a guessed PID.
+`service_still_finishing` means the old service was told to stop by hint
+withdrawal and is finishing its work first. Its child runs to its end, at most
+at its deadline. Then run `./setup.sh --update` to finish; nothing else needs
+doing. This is a resumable failure, so it never says nothing was changed.
+
+`predecessor_lock_inherited` means this project's old service stopped, but
+another program still holds its records lock. Nothing was taken over yet.
+Inspect the lock with `lsof` as above, let that program finish, then run
+`./setup.sh --update` again. Do not signal a guessed PID.
 
 An installer failure after hand-over rolls managed files back where possible;
 the records already belong to the successor, and its journal names the next
@@ -184,10 +214,23 @@ verified" stays in custody: the update never frees it by guessing. Missing
 memory-lock evidence also keeps the hold. A recorded pending preparation-folder
 removal continues to be retried by the successor.
 
-On macOS the final birth/exit re-check precedes the signal; it cannot eliminate
-the remaining numeric-PID reuse interval. Linux uses a pidfd where supported;
-older kernels use the same birth re-check rule. Failure to inspect an opener or
-prove sole ownership refuses the signal.
+Before any signal, the updater rechecks only the candidate's uid, birth time
+and exact project launch line. macOS also checks pending exit/exec events; its
+numeric-PID reuse interval remains (decision 323). Linux uses a pidfd where
+supported; older kernels use the same birth recheck rule. No process descriptor
+table or user-wide process list is read. Adoption requires the successor to
+acquire the lifetime flocks; a held lock is never explained away.
+
+The owner-only state root has the existing trust level: a same-user program
+that presents the exact service arguments can receive a signal itself. The
+entry hash attests the file on disk, not the running code. Exec after the last
+check can replace the program in the same process before the signal arrives.
+These are the accepted A1.7/TL residuals, separate from macOS PID reuse. A real
+predecessor service starts children as separate processes rather than execing
+itself. Later services use the stop operation without signals.
+
+State roots on network file systems without real cross-process flocks are not
+supported. Use a local file system for the protected state root.
 
 ## `ledger_upgrade_required`, or "these records were written by an earlier version"
 

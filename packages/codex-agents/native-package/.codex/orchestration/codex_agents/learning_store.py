@@ -209,7 +209,6 @@ LOCAL_PROJECT_COLUMNS = frozenset({"launch_copy", "launch_digest"})
 # a check that refuses unknown tables accepts exactly these, and only with exactly these columns.
 LOCAL_TABLE_COLUMNS = {
     # B4t runtime_floor and runtime_lineage are local writer authority, never partition data.
-    **takeover_schema.FLOOR_COLUMNS, **takeover_schema.LINEAGE_COLUMNS,
     "project_wake": ("project_id", "allocated_epoch", "epoch", "seq", "state", "next_due_at_ms", "body_digest",
                      "due_at_ms", "refused", "updated_at_ms"),
     "project_wake_instances": ("project_id", "instance", "epoch"),
@@ -237,8 +236,8 @@ def _other_table_columns() -> dict[str, tuple[str, ...]]:
     try:
         for statement in (_OWNER_KEY_HISTORY_SCHEMA, _ADDITIVE_MIGRATIONS_SCHEMA, ADMISSION_EVIDENCE_SCHEMA, EPOCH_SCHEMA):
             reference.execute(statement)
-        return {table: tuple(row[1] for row in reference.execute(f"PRAGMA table_xinfo({table})"))
-                for table in ("additive_migrations", "owner_key_history", "admission_evidence", "runtime_takeover")}
+        return {**takeover_schema.FLOOR_COLUMNS, **takeover_schema.LINEAGE_COLUMNS, **{table: tuple(row[1] for row in reference.execute(f"PRAGMA table_xinfo({table})"))
+                for table in ("additive_migrations", "owner_key_history", "admission_evidence", "runtime_takeover")}}
     finally:
         reference.close()
 
@@ -2680,7 +2679,8 @@ class LearningLedger:
             if self._readers() or self._connection.in_transaction:
                 return 0
             now = self._clock_ms() if now_ms is None else now_ms
-            return purge_old_observations(self, now, batch) + purge_finished_opens(self, now, batch)
+            removed = purge_old_observations(self, now, batch) + purge_finished_opens(self, now, batch)
+            return removed + self._purge_runtime_lineage(now)
 
     def sweep_learning_retention(self, *, now_ms: int | None = None, batch: int = LEARNING_SWEEP_BATCH) -> int:
         """Remove up to `batch` unpromoted cases and candidates past the learning retention; returns how many.
@@ -3532,6 +3532,16 @@ class LearningLedger:
                 self._adopt_runtime_lineage_locked()
         else:
             raise LedgerError('ledger schema is incompatible')
+        try:
+            self._purge_runtime_lineage(self._clock_ms())
+        except (sqlite3.Error, LedgerError):
+            pass  # separately retried by maintenance; adoption already committed
+
+    def _purge_runtime_lineage(self, now):
+        from .runtime_lineage import live_ledger_custody, prune_lineage
+        with self._held():
+            return prune_lineage(self._connection, live_ledger_custody(self._connection, now),
+                                 COLLECTOR_RUNTIME_DIGEST, transaction=self._account_transaction)
 
     def _validate_current_ledger(self):
         """Keep every predecessor coverage refusal on ordinary schema-18 opens."""

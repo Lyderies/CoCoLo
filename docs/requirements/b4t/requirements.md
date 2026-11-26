@@ -1,6 +1,6 @@
 # B4t accepted requirements
 
-The source is accepted design Draft 2 (decision 326), its fix round and final fix, and plan S5/SW-3.
+The source is accepted design Draft 2 (decision 326), its fix round and final fix, and plan S5/SW-3. The fix round additionally implements accepted Amendment A1 (decision 337), including A1.15; its proof supersedes the predecessor process census.
 
 | ID | Observable criterion |
 |---|---|

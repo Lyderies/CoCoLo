@@ -6,9 +6,12 @@ authorized offline project open and the existing ledger owner-registration open.
 from __future__ import annotations
 
 import base64
+import errno
+import socket
 from contextlib import closing
 import fcntl
 import json
+import hashlib
 import os
 from pathlib import Path
 import time
@@ -74,16 +77,21 @@ class OwnerOperations:
         return list(runs.values())
 
     def reconcile_runs(self, document, *, late):
-        # One directory listing supplies both the J4a run set and the exact
-        # names seen. Persisting those names prevents an old settled tombstone
-        # from being described as ended by this update after a CLI restart.
-        entries = self._launch_snapshot()
-        if late:
-            seen = set(document['reconciled_entries'])
-            entries = [(name, value) for name, value in entries if name not in seen]
-        else:
-            document = dict(document, reconciled_entries=[name for name, _ in entries])
-        return TakeoverJournal(self.state.root).reconcile(document, self._runs(entries, include_settled=late))
+        return TakeoverJournal(self.state.root).reconcile(document, self._runs(self._launch_snapshot()))
+
+    def _old(self, journal):
+        old = journal.get('predecessor_service')
+        if old is None or 'entry_b64' not in old:
+            return old
+        from .client_runtime import runtime_directory
+        directory = runtime_directory(self.state, self.project_root)
+        old = dict(old, entry=os.fsdecode(base64.b64decode(old['entry_b64'], validate=True)),
+                   stop_op=old.get('service_stop') == 'stop_op')
+        if 'directory_digest' in old:
+            if hashlib.sha256(os.fsencode(directory)).hexdigest() != old['directory_digest']:
+                raise TakeoverError('predecessor_unverified')
+            old.update(directory=str(directory), project_endpoint=str(directory / 'p.sock'))
+        return old
 
     def quiesce(self, journal):
         identity = journal['successor']
@@ -129,7 +137,7 @@ class OwnerOperations:
     def withdraw_hint(self, journal):
         from .client_runtime import runtime_hint_path
         from .project_host_client import HINT_LOCK, _hinted_host
-        old = journal.get('predecessor_service')
+        old = self._old(journal)
         if old is None or old['digest'] == COLLECTOR_RUNTIME_DIGEST or not old.get('directory'):
             return
         descriptor = os.open(Path(old['directory']) / HINT_LOCK, os.O_RDWR | os.O_NOFOLLOW)
@@ -152,7 +160,7 @@ class OwnerOperations:
             os.close(descriptor)
 
     def _service_locks(self, journal):
-        old = journal['predecessor_service']
+        old = self._old(journal)
         directory = self.state.root / 'projects' / journal['project_id']
         locks = [directory / 'history.lock']
         if old.get('directory'):
@@ -160,34 +168,60 @@ class OwnerOperations:
         locks.extend((directory / 'launches').glob('*.lock'))
         return locks
 
+    @staticmethod
+    def _service_answers(old):
+        # Probe the recorded scope's endpoint, not its withdrawn hint. Only a
+        # missing/refused endpoint proves that it no longer answers.
+        try:
+            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:
+                connection.settimeout(0.2)
+                connection.connect(old['project_endpoint'])
+            return True
+        except OSError as error:
+            return error.errno not in (errno.ENOENT,errno.ECONNREFUSED)
+
     def stop_service(self, journal):
-        old = journal.get('predecessor_service')
+        old = self._old(journal)
         if old is None or old['digest'] == COLLECTOR_RUNTIME_DIGEST or not old.get('directory'):
             return
+        if 'pid' not in old and old.get('service_stop') != 'hint':
+            require_free_locks(self._service_locks(journal))
+            return
+        idle_proven = False
+        if (old.get('service_stop') == 'signal' and 'root_digest' in journal):
+            # J4 has proven collector exit. Re-read final admission state: an
+            # idle service exits on hint withdrawal without any signal, while
+            # a claim admitted before T2 still takes the proven signal path.
+            from .takeover_preflight import _registry
+            _, _, children = _registry(self.state, journal['root_digest'])
+            if not children.get(journal['project_id'], 0):
+                old = dict(old, service_stop='hint')
+                idle_proven = True
         if old.get('stop_op'):
             from .client_runtime import enroll_clients
             from .history_api import HistoryClient
             from .hosts import OWNER_CLIENT
-            from .orchestration_api import OrchestrationScope
+            from types import SimpleNamespace
             from .history_contracts import HistoryError
-            scope = OrchestrationScope(**old['scope'])
+            scope = SimpleNamespace(supervisor_generation=old.get('service_generation',
+                (old.get('scope') or {}).get('supervisor_generation')))
+            project_id = journal.get('project_id', (old.get('scope') or {}).get('project_id'))
             endpoint = Path(old['project_endpoint'])
             enroll_clients(self.state, self.project_root, scope, (endpoint,), host_client=OWNER_CLIENT)
             acknowledged = False
             try:
-                HistoryClient(endpoint, scope.project_id, scope.runtime_digest, timeout=2)._call(
+                HistoryClient(endpoint, project_id, old['digest'], timeout=2)._call(
                     'service.stop_for_update', 'update-stop', {})
                 acknowledged = True
             except HistoryError:
                 # A normal close can race its acknowledgement; only the lock
                 # proof below can then establish successful exclusion.
                 pass
-        else:
+        elif old.get('service_stop') != 'hint':
             from .process_tree import process_gone
             if not process_gone(old['pid']):
                 self.pinned = pin_predecessor(old['pid'], entry=Path(old['entry']), state_root=self.state.root,
-                    project_root=self.project_root,
-                    history_lock=self.state.root / 'projects' / journal['project_id'] / 'history.lock')
+                    project_root=self.project_root)
                 if self.pinned.identity['birth'] != old['birth']:
                     raise TakeoverError('predecessor_unproven')
                 self.killed = self.pinned.stop()
@@ -201,7 +235,25 @@ class OwnerOperations:
         while True:
             try:
                 require_free_locks(self._service_locks(journal))
+                if old.get('service_stop') == 'hint':
+                    if self._service_answers(old):
+                        raise TakeoverError('service_still_finishing')
                 if old.get('stop_op') and not acknowledged:
+                    if old.get('service_stop') == 'hint':
+                        if idle_proven:
+                            from .process_tree import process_gone
+                            if process_gone(old['pid']):
+                                raise TakeoverError('predecessor_lock_inherited') from None
+                            self.pinned = pin_predecessor(old['pid'],entry=Path(old['entry']),
+                                state_root=self.state.root,project_root=self.project_root)
+                            if self.pinned.identity['birth'] != old['birth']:
+                                raise TakeoverError('predecessor_unproven')
+                            self.killed=self.pinned.stop()
+                            self.pinned=None
+                            require_free_locks(self._service_locks(journal))
+                            return
+                        raise TakeoverError('service_still_finishing' if self._service_answers(old)
+                                            else 'predecessor_lock_inherited') from None
                     from .process_tree import process_gone, process_record
                     record = process_record(old['pid'])
                     if not (process_gone(old['pid']) or (record is not None and record[2] != old['birth'])):
@@ -209,6 +261,21 @@ class OwnerOperations:
                 return
             except TakeoverError:
                 if time.monotonic() >= deadline:
+                    if old.get('service_stop') == 'hint':
+                        if idle_proven:
+                            from .process_tree import process_gone
+                            if process_gone(old['pid']):
+                                raise TakeoverError('predecessor_lock_inherited') from None
+                            self.pinned = pin_predecessor(old['pid'],entry=Path(old['entry']),
+                                state_root=self.state.root,project_root=self.project_root)
+                            if self.pinned.identity['birth'] != old['birth']:
+                                raise TakeoverError('predecessor_unproven')
+                            self.killed=self.pinned.stop()
+                            self.pinned=None
+                            require_free_locks(self._service_locks(journal))
+                            return
+                        raise TakeoverError('service_still_finishing' if self._service_answers(old)
+                                            else 'predecessor_lock_inherited') from None
                     from .process_tree import process_gone, process_record
                     record = process_record(old['pid'])
                     if not (process_gone(old['pid']) or (record is not None and record[2] != old['birth'])):
@@ -222,7 +289,7 @@ class OwnerOperations:
         lock = self.state.root / 'projects' / journal['project_id'] / 'history.lock'
         if not _lock_held(lock):
             return
-        old = journal['predecessor_service']
+        old = self._old(journal)
         if not old.get('project_endpoint'):
             raise TakeoverError('predecessor_lock_inherited')
         try:
@@ -235,21 +302,28 @@ class OwnerOperations:
                 raise TakeoverError('predecessor_unproven')
         else:
             pinned = pin_predecessor(pid, entry=Path(old['entry']), state_root=self.state.root,
-                                     project_root=self.project_root, history_lock=lock)
+                                     project_root=self.project_root)
             try:
                 identity = pinned.identity
             finally:
                 pinned.close()
         # A start paused before J2 has a new birth identity. Save the freshly
         # proven peer before the stop; no signal uses the previous pid's proof.
-        journal['predecessor_service'] = dict(old, pid=pid, birth=identity['birth'])
+        journal['predecessor_service'] = dict(journal['predecessor_service'], pid=pid, birth=identity['birth'],
+            service_stop='signal' if not old.get('stop_op') else 'stop_op')
+        if old.get('stop_op'):
+            from .project_host_client import _hinted_host
+            hinted = _hinted_host(self.state, self.project_root, any_runtime=True)
+            if hinted is None or hinted[0].runtime_digest != old['digest'] or not hinted[2]:
+                raise TakeoverError('predecessor_lock_inherited')
+            journal['predecessor_service']['service_generation'] = hinted[0].supervisor_generation
         TakeoverJournal(self.state.root).write(journal)
         self.stop_service(journal)
 
     def adopt_project(self, journal):
         from .project_service import open_offline_history
         from .history_contracts import HistoryError
-        old = journal.get('predecessor_service')
+        old = self._old(journal)
         if old is None or old['digest'] == COLLECTOR_RUNTIME_DIGEST:
             return
         def try_owner():
@@ -260,7 +334,7 @@ class OwnerOperations:
                     report = takeover_report(history)
                     journal['outcomes'] = {name: report[name] for name in
                                           ('lost', 'lost_held', 'finished_kept', 'refused_unverifiable')}
-                    journal['stopped_children'] = stopped_children(history, journal['runs'])
+                    journal['stopped_children'] = stopped_children(history, journal['runs']) + journal.get('runs_unlisted', 0)
                     TakeoverJournal(self.state.root).write(journal)
             except TakeoverError as error:
                 if error.code == 'predecessor_lock_inherited':
@@ -328,7 +402,15 @@ def run_owner_takeover(operations, *, action='run'):
     descriptor = os.open(operations.state.runtime_lock, os.O_RDWR | os.O_NOFOLLOW)
     operations.descriptor = descriptor
     try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        deadline = time.monotonic() + 20.0
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TakeoverError('update_busy') from None
+                time.sleep(0.02)
         command = UpdateTakeover(operations.state.root, operations)
         return getattr(command, action)()
     finally:

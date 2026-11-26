@@ -593,7 +593,8 @@ class Wizard:
             return None
         if reply.get("unreadable") is True or reply.get("reason") == "ledger_unreadable":
             return "update_check_unavailable", UPDATE_CHECK_UNKNOWN
-        if reply.get('reason') in {'predecessor_unverified', 'predecessor_unproven', 'takeover_unfinished'}:
+        if reply.get('reason') in {'predecessor_unverified', 'predecessor_unproven', 'takeover_unfinished',
+                                     'project_store_busy', 'update_busy', 'collector_unresponsive'}:
             return reply['reason'], steps.plain(reply.get('message') or 'The update pre-check did not pass; nothing was changed')
         return "update_check_unavailable", UPDATE_CHECK_UNKNOWN
 
@@ -1294,7 +1295,7 @@ class Wizard:
         t.list_sub("Setup can upgrade them now. It first keeps a checked copy of everything as it is, in the same "
                    "protected folder.")
         t.list_sub("Every project on this machine shares these records. The update hands over this project's service. "
-                   "Other projects keep running. To record their results, run this setup for each of them.")
+                   "Other projects keep running. Their results cannot be recorded until you run this setup for each of them.")
         t.body("Upgrade the records now? [Y/n]")
         choice = self.choice_needed("upgrade_records", "records_need_owner_choice: the earlier records can be "
                                     "upgraded only when you choose to", ["Yes, upgrade them", "No, leave them as they are"])

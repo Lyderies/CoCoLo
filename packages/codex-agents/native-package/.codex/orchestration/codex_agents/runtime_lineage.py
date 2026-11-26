@@ -100,3 +100,55 @@ def successor_custody(ledger, custody_digest, current_digest, *, releases=None, 
     except (sqlite3.Error, TypeError, ValueError):
         return False
     return False
+
+
+def prune_lineage(db, custody_digests, current_digest, *, transaction=None):
+    """Keep every path named by live custody, even beyond the verification limit.
+
+    No per-digest cap applies to protected rows. Unreferenced edges cannot be
+    used by any of the six successor-custody operations and are removed.
+    """
+    rows = db.execute('SELECT predecessor_digest,successor_digest FROM runtime_lineage').fetchall()
+    edges = dict(rows)
+    protected = set()
+    for digest in custody_digests:
+        seen = set()
+        while digest in edges and digest not in seen and digest != current_digest:
+            seen.add(digest)
+            protected.add(digest)
+            digest = edges[digest]
+    removed = 0
+    context = db if transaction is None else transaction()
+    with context:
+        for digest in edges.keys() - protected:
+            removed += db.execute('DELETE FROM runtime_lineage WHERE predecessor_digest=?', (digest,)).rowcount
+    return removed
+
+
+def live_ledger_custody(db, now):
+    """Stored custody used by H3b: claimed runs, observed/unlaunched bindings.
+
+    active_run_capacity carries a claimed runtime through terminal, cleanup,
+    lost settlement and replay. launch_inputs carries the original runtime
+    before a claim (including a denial or unlaunched closure). Their binding
+    and run-hold rows keep them live; the existing open replay window keeps
+    released inputs replayable. Never infer a runtime from a new sender.
+    """
+    from .learning_store import OPEN_REQUEST_RETENTION_MS
+    cutoff = now - OPEN_REQUEST_RETENTION_MS
+    digests = {row[0] for row in db.execute('SELECT runtime_digest FROM active_run_capacity '
+        'WHERE runtime_digest IS NOT NULL AND (released_at_ms IS NULL OR released_at_ms>=?)', (cutoff,))}
+    digests.update(row[0] for row in db.execute(
+        'SELECT i.runtime_digest FROM launch_inputs i JOIN host_run_bindings h '
+        'ON h.project_id=i.project_id AND h.handle_digest=i.handle_digest '
+        'WHERE h.expires_at_ms>=? OR EXISTS(SELECT 1 FROM run_holds r '
+        "WHERE r.project_id=i.project_id AND r.identity=i.handle_digest AND r.state<>'released')", (cutoff,)))
+    return digests
+
+
+def lineage_status(db):
+    count = db.execute('SELECT COUNT(*) FROM runtime_lineage').fetchone()[0]
+    if count <= 64:
+        return None
+    return (f'Update records: {count} links to earlier CoCoLo versions are kept because unfinished runs still need them. '
+            'They clear by themselves as those runs settle. Nothing needs doing.')

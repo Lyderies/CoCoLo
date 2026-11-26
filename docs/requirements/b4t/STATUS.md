@@ -1,4 +1,96 @@
-# S5 B4t build status
+# S5 B4t build status — Fix round
+
+Branch `feat/b4t-takeover`, review head `44f16529` / product `146955fc`, base
+`ce81bd96` (0.8.67). Accepted Amendment A1, including A1.15 (decision 337), is
+the authority for this one fix round. Changes are left in the worktree: no
+commit, install, live-service mutation, VERSION bump or catalogue edit.
+
+**Native acceptance remains open; do not install this worktree.** The focused
+product/archive/kernel tests are green, including the real candidate-only Mac
+pin and pipe-only exec residual. The new socket acceptance module is explicitly
+skipped here. The exact reruns and the two failed native fixture attempts are
+listed in [fix-round-rerun.md](fix-round-rerun.md). A skipped native check is not
+a passing requirement or evidence that its fixture is correct.
+
+## Fix round: finding → test → evidence
+
+| Finding / requirement | Product witness and result | Evidence / remaining limit |
+|---|---|---|
+| HIGH-1 / A1.4–A1.9 / B4t-0,3,9 | `AmendmentA1Tests.test_B4t_A1_no_other_process_is_inspected`; idle EPERM T-37, busy T-38, held-lock T-39, hint T-40; `NativeProcessProofTests.test_B4t_A1_native_candidate_pin_reads_no_other_process_and_stops_only_it` | Untouched 146955fc behavior refuses the idle EPERM fixture (`a1-red.txt`); candidate-only native kernel pin now passes. Genuine P66 socket T-36/37 remains for primary. No process census or descriptor read remains. |
+| HIGH-2 / L11.2 | `RegistryTests.test_failed_handover_rejects_added_business_rows_and_changed_schema` | `high2-red.txt`: invented `outcome:2` passed old helper. Green now: exact business rows, epoch key set, only four new authority-table key prefixes allowed, separately pinned 22→23/23 schema. Full L11 native flow unrun. |
+| MED-1 / T-4,12b,15,17,30 / B4t-2,3,4 | Real archived publication/current authority; real owner stop calls; bound/unbound/pending open paths; real P adoption/Q claim/child; actual killed predecessor with missing inode | Five named mutations all red, unmutated witnesses green (`mutations.txt`, replay script alongside it). No fake result/other-child constants remain. Full native lifecycle matrix remains owed. |
+| MED-2 / registration consent | `test_registration_without_owner_consent_never_enables_records_upgrade` | Original `allow_schema_upgrade=True` behavior red in `consent-red.txt`; final call enables it only when a whole-ledger copy/consented `behind` exists. Additive 16/17 owner behavior retained. |
+| MED-3 / A1.10 / T-41 | `RetentionA1Tests.test_B4t_A1_takeover_tables_have_retention_and_caps`; refused-obligation rollback; 65-branch/18-link protection | `retention-red.txt` before new owner purges; green 50-row atomic backlog drain to 17, protected rows kept, obligations and orphan run annotations drain. Owner-open/periodic paths use the persistence owners and independent post-adoption transactions. Cap guard green. Native 17/50-update and all-settlement campaigns remain acceptance work. |
+| MED-4 / A1.11 / T-42,44 | `test_B4t_A1_journal_stays_bounded_on_a_busy_project`; maximum path/fields test; `StoreTests.test_B4t_A1_overflow_count_survives_the_journal` | Old J4a oversized failure red (`a1-red.txt`). Green: 1,000 tombstones + 70 unsettled → 64/6; all path encodings ≤4095 bytes round-trip; maximum inputs retain at least 54 runs; final counts survive actual adoption, J14 journal removal and annotation purge. Widest tested fixed form is 8,014 bytes; the complete serialized byte rule is authoritative. Full native crash cuts still owed. |
+| MED-5 / shallow CI | `RegistryTests.test_predecessor_archive_needs_no_git_history_and_checks_its_digest` | `vendor-red.txt` → green with all Git/subprocess calls forbidden; vendored unmodified P66 archive and digest checked before extraction. |
+| MED-6 / audit | Literal expected strings in both E2c-7 cases; complete round pairs and omitted fixture/target changes | [assertion-audit.md](assertion-audit.md) and [assertions.md](assertions.md). Neither expected string calls `compatibility_message`. Existing base business-row/schema checks remain exact. |
+| HIGH-P1 / owner 129.3 | `test_released_0859_owner_upgrade_preserves_project_local_enumeration`; copier/backup regressions | Released 0.8.59 source creates a real ledger; current owner upgrades to 18. Project-local table enumeration stays exactly project-scoped; authority shapes move to the separately checked extra-table set. Standalone owner backup shape equality caught the remaining script copy and is green after its product fix. Full E2a_1 socket case unrun. |
+| MED-P2 | `OwnerIntegrationTests.test_records_upgrade_approval_keeps_the_other_projects_warning_literal` | Green real-Wizard body includes “until you run this setup for each of them”. Full root PTY case unrun. |
+| MED-P3 | Earlier runtime's own owner now originates E2c-7 fixture ledger before its collector starts | All host/no-spawn/collector assertions retained, literal oracle restored. No published floor is lowered. Exact socket case must be rerun; no green native result claimed. |
+| LOW-1..4 / I4 / T-19 | R10 docstring corrected; exit-at-I4 races count as exited; all five modules guarded; Linux census removed | `exit-race-red.txt` → green. Native exec test caught NOTE_EXEC incorrectly ending the exit wait: corrected and green. Unknown custody remains held by design. |
+| A1.7 item 7 / T-43 | `NativeExecA1Tests` real exec-before/after-I4 and archived process-boundary static checks | Both green. P66 uses `create_child`; the actual V34 archive uses `subprocess.Popen` for the separate signature worker. Both exec sites are explicitly bounded by their process entries; this is not an import-closure claim. Per-service-pid dynamic audit tests are written in `test_b4t_native` and unrun. |
+
+## Fix round: per-requirement evidence
+
+All names below are in `tests.test_b4t_takeover`; full native acceptance is
+separate. Initial red evidence and the previous build's unchanged cases remain
+in the historical section below.
+
+| ID | Passing named witness in this round |
+|---|---|
+| RS-B-B4t-0 | `AmendmentA1Tests.test_B4t_A1_idle_predecessor_updates_without_process_proof`; busy refusal snapshot; exact registration consent; released 0.8.59 offline upgrade |
+| RS-B-B4t-1 | `JournalTests.test_B4t_0_update_with_a_running_child_goes_ahead`; real owner collector-stop protocol witnesses |
+| RS-B-B4t-2 | `StoreTests.test_B4t_2_a_result_committed_during_the_stop_is_judged_on_the_final_store`; retained committed-result/revocation tests |
+| RS-B-B4t-3 | Candidate-only native pin, real inherited flock holders, I4 exit races, real exec-before/after-last-check; stop-op and collector guards |
+| RS-B-B4t-4 | `StoreTests.test_B4t_4_open_bindings_end_by_their_own_rules`; `AccountLineageTests.test_B4t_4_another_projects_child_keeps_running`; `MemoryTakeoverTests.test_B4t_4_missing_journal_lock_evidence_keeps_memory_holds` |
+| RS-B-B4t-5 | Existing real archived original-custody settlement/chained outbox replay tests; lineage retention past 64/16 verification bounds |
+| RS-B-B4t-6 | `StoreTests.test_B4t_6_primary_recheck_idempotent_across_takeover` |
+| RS-B-B4t-7 | Existing B4m recovery/other-project command witnesses; literal existing E2c socket oracles await primary |
+| RS-B-B4t-8 | T-42/T-44 durable counts, real account/history producers, over-cap line, increasing/bounded page loop |
+| RS-B-B4t-9 | Candidate proof negatives; busy write-free snapshot; strict row/schema negatives; original custody/corruption and current-authority cases |
+| RS-B-B4t-10 | Retention rollback, widest journal fields, final-store overflow persistence, existing phase/archive migration cuts and U1/chained replay |
+
+## Fix round: named runs and remaining gate
+
+- Red-first focused outputs: `a1-red.txt`, `high2-red.txt`, `vendor-red.txt`,
+  `retention-red.txt`, `idle-proven-red.txt`, `width-red.txt`,
+  `later-width-red.txt`, `ascii-width-red.txt`, `endpoint-red.txt`, `exit-race-red.txt`.
+  `consent-red.txt` explicitly replays the original registration behavior after
+  correcting an initial test harness setup error; it is not presented as the
+  first harness attempt succeeding at its assertion.
+- Copier batch: 215 tests in 41.6 s, metadata clean; one standalone-script
+  authority-definition mismatch. The existing equality assertion was retained;
+  after the product script fix, its full named module passed in the 25.8 s
+  owner/orchestration/release batch. The only other failures in that batch were
+  the expected release digest and a subsequently corrected cap registry count.
+- Green registered B4t/kernel/cap/harness checkpoint: 181 reported tests in
+  23.9 s, `metadata_errors: []`, no failed units or requirement failures; eight
+  native socket tests explicitly skipped. The final delivery run is recorded
+  in `evidence/fix-round/final-proof-named.txt`: 183 reported tests, eight explicit native skips, no failures, 22.6 s; real nonempty history/count and optional account-lineage reply producers are included. The final strengthened exec-exit/record-completion checks plus cap guard pass 7/7 in 6.715 s (`final-focused.txt`).
+- Offline learning-migration classes: 15/15 pass in 4.871 s; the two CLI/socket cases are explicitly listed for primary.
+- Five MED-1 product mutations all detected; native exec and sole-candidate
+  kernel checks run with pipes only. No full suite or `--affected` run used.
+- Every new table, count, byte limit, page loop and stop/lock/probe wait is in
+  `lifetime_caps.json`, with a past-limit witness. Protected lineage has no
+  fixed/per-digest cap; its lifetime is the oldest live/replayable custody.
+- All changed existing assertions and expected-value/fixture changes are paired
+  in both audit documents. VERSION/catalogue are unchanged; the release-digest
+  mismatch remains expected until primary release bookkeeping.
+- [Exact socket/PTY/native reruns](fix-round-rerun.md); no acceptance credit
+  for skipped checks. Native owner-command SIGKILL/start-path and loaded-service
+  gates remain as described there. No user approval is requested.
+
+[Changed files](files.md). All builder-launched test sessions are reaped before
+handoff; no account/project service was touched outside disposable fixtures.
+
+---
+
+## Historical S5 build evidence before the fix round
+
+The text below records the reviewed build's results, including the obsolete
+sole-holder failure. Current implementation/evidence is above; the old census
+is intentionally removed by accepted A1.
+
 
 Base `ce81bd96` (0.8.67), branch `feat/b4t-takeover`. Scope: accepted Draft 2,
 its fix round and final fix (decision 326), S5/SW-3 and decisions 129.2 A, 261,

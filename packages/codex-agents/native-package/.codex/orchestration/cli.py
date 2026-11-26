@@ -717,7 +717,7 @@ def _run_update_takeover(args):
         if plan['report']['records_upgrade'] and not args.upgrade_ledger:
             raise TakeoverError('records_upgrade_declined')
         def checked():
-            fresh = read_plan(state, args.project_root)
+            fresh = read_plan(state, args.project_root, runtime_locked=operations.descriptor is not None)
             if fresh['report']['records_upgrade'] and not args.upgrade_ledger:
                 raise TakeoverError('records_upgrade_declined')
             if not fresh['needed']:
@@ -1101,7 +1101,7 @@ def _register_project(args, moved_aside, upgrade_required, progress):
         behind = progress["behind"] = ledger_schema_behind(state) if args.upgrade_ledger else None
         if behind is not None:
             progress["copy"] = copy_ledger_before_upgrade(state, behind)
-        ledger = LearningLedger(state, allow_schema_upgrade=True,
+        ledger = LearningLedger(state, allow_schema_upgrade=behind is not None,
                                 backup_before_upgrade=behind is not None)
         try:
             project_id = ledger.register_project(args.project_root)

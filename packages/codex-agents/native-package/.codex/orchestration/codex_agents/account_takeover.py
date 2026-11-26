@@ -30,6 +30,11 @@ def takeover_report(views, project_id, payload):
         recorded = ledger._connection.execute('SELECT MIN(recorded_at_ms) FROM runtime_lineage '
             'WHERE predecessor_version=? AND successor_digest=?', (predecessor, COLLECTOR_RUNTIME_DIGEST)).fetchone()[0]
     result = dict(recorded_at_ms=recorded, other_projects=projects, other_runs=runs, updates=[], next_offset=None)
+    from .runtime_lineage import lineage_status
+    with ledger._held():
+        message = lineage_status(ledger._connection)
+    if message is not None:
+        result['lineage_message'] = message
     versions = release_versions()
     for root, digest, children in rows[:PAGE_SIZE]:
         version = versions.get(digest)

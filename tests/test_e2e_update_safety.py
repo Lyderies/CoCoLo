@@ -445,12 +445,23 @@ class RegistryTests(unittest.TestCase):
 
     def test_handover_keeps_every_original_row_except_the_explicit_writer_epoch(self):
         before = dict(rows={'outcome:1': 'a', 'project_holds:1': 'b', 'runtime_takeover:1': 'old'},
-                      integrity='ok', floors={'result_identity:1:last_observed_at_ms': 5})
+                      schema='559e4a289190d4f9462c680d7739330c731c217b3d6cfe2204619321a99c61af', integrity='ok', floors={'result_identity:1:last_observed_at_ms': 5})
         after = dict(rows={**before['rows'], 'runtime_takeover:1': 'new', 'takeover_record:1': 'intent'},
-                     integrity='ok', floors={'result_identity:1:last_observed_at_ms': 6})
+                     schema='559e4a289190d4f9462c680d7739330c731c217b3d6cfe2204619321a99c61af', integrity='ok', floors={'result_identity:1:last_observed_at_ms': 6})
         self.assertTrue(us.handover_history_kept(before, after))
         for key in ('outcome:1', 'project_holds:1'):
             self.assertFalse(us.handover_history_kept(before, {**after, 'rows': {**after['rows'], key: 'changed'}}))
+
+    def test_failed_handover_rejects_added_business_rows_and_changed_schema(self):
+        before = dict(rows={'outcome:1': 'original', 'runtime_takeover:1': 'old'},
+                      schema='559e4a289190d4f9462c680d7739330c731c217b3d6cfe2204619321a99c61af', integrity='ok')
+        after = dict(rows={**before['rows'], 'runtime_takeover:1': 'new',
+                           'takeover_record:1': 'authority'}, schema='559e4a289190d4f9462c680d7739330c731c217b3d6cfe2204619321a99c61af', integrity='ok')
+        self.assertTrue(us.handover_history_kept(before, after))
+        for key in ('outcome:2', 'project_holds:2', 'dispatch_result:2', 'unknown:1', 'runtime_takeover:2'):
+            self.assertFalse(us.handover_history_kept(before, {**after, 'rows': {**after['rows'], key: 'invented'}}), key)
+        self.assertFalse(us.handover_history_kept(before, {**after, 'schema': 'unexpected DDL'}))
+        self.assertFalse(us.handover_history_kept(before, {**after, 'rows': {**after['rows'], 'outcome:1': 'edited'}}))
 
     def test_the_module_declares_only_s5_ids(self):
         for name in us.CHECK_NAMES:
@@ -462,10 +473,23 @@ class RegistryTests(unittest.TestCase):
             self.assertIn(lifecycle.CHECK_GROUPS[name], lifecycle.GROUP_SECONDS, name)
 
     def test_the_predecessor_is_an_unmodified_catalogue_listed_archive(self):
-        self.assertIn("'archive', PREDECESSOR_REVISION", SOURCE)
+        self.assertIn("tests/fixtures/b4t/0.8.66.tar.gz", SOURCE)
+        self.assertIn('hashlib.sha256(raw).hexdigest() != PREDECESSOR_ARCHIVE_SHA256', SOURCE)
         self.assertIn("PREDECESSOR_REVISION = 'afb6f610'", SOURCE)
         self.assertNotIn('write_text(previous_version', SOURCE)
         self.assertNotIn('handle.write(PREVIOUS_BUILD_MARK)', SOURCE)
+
+    def test_predecessor_archive_needs_no_git_history_and_checks_its_digest(self):
+        import unittest.mock as mock
+        with tempfile.TemporaryDirectory() as folder:
+            world = SimpleNamespace(base=Path(folder))
+            with mock.patch.object(us.subprocess, 'run', side_effect=AssertionError('git history dependency')):
+                clone = us.previous_clone(world)
+            self.assertEqual('0.8.66', (clone/'packages/codex-agents/native-package/VERSION').read_text().strip())
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch.object(Path, 'read_bytes', return_value=b'bad artifact'):
+                with self.assertRaisesRegex(us.e2e_support.HarnessError, 'digest'):
+                    us.previous_clone(SimpleNamespace(base=Path(folder)))
 
     def test_the_module_reads_no_value_from_the_command_that_made_it(self):
         """The refusal text is judged for plainness, but what changed is read from the snapshots, the process table and

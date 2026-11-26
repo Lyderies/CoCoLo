@@ -1,7 +1,7 @@
 """Pin and stop only a proven pre-B4t project service, never a collector or child.
 
 Linux uses a pidfd when available. Older kernels use the last-birth-check rule,
-as does macOS with NOTE_EXIT. The numeric signal's remaining PID reuse gap is
+as does macOS with NOTE_EXIT and NOTE_EXEC. The numeric signal's remaining PID reuse gap is
 the residual accepted by decision 323, not a claim of pidfd-equivalent safety.
 """
 from __future__ import annotations
@@ -19,17 +19,7 @@ import time
 
 from .update_takeover import TakeoverError
 
-MAX_SCAN_PROCESSES = 4096
-SCAN_SECONDS = 5.0
 FD_SCAN_BYTES = 4 * 1024 * 1024
-
-
-def bounded_processes(processes):
-    started = time.monotonic()
-    for index, pid in enumerate(processes):
-        if index >= MAX_SCAN_PROCESSES or time.monotonic() - started > SCAN_SECONDS:
-            raise TakeoverError('predecessor_unproven')
-        yield pid
 
 
 def require_free_locks(paths):
@@ -49,12 +39,8 @@ def require_free_locks(paths):
 
 def _darwin_library():
     library = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
-    library.proc_listpids.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p, ctypes.c_int]
-    library.proc_listpids.restype = ctypes.c_int
     library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
     library.proc_pidinfo.restype = ctypes.c_int
-    library.proc_pidfdinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
-    library.proc_pidfdinfo.restype = ctypes.c_int
     return library
 
 
@@ -93,6 +79,20 @@ class BirthPin:
         pass
 
 
+class DarwinPin:
+    def __init__(self, queue):
+        self.queue, self.events = queue, 0
+
+    def control(self, changes, count, timeout):
+        events = self.queue.control(changes, count, timeout)
+        for event in events:
+            self.events |= event.fflags
+        return events
+
+    def close(self):
+        self.queue.close()
+
+
 class Kernel:
     def pin(self, pid):
         if sys.platform.startswith('linux'):
@@ -107,8 +107,8 @@ class Kernel:
             queue = select.kqueue()
             try:
                 queue.control([select.kevent(pid, filter=select.KQ_FILTER_PROC,
-                    flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE, fflags=select.KQ_NOTE_EXIT)], 0, 0)
-                return queue
+                    flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE, fflags=select.KQ_NOTE_EXIT | select.KQ_NOTE_EXEC)], 0, 0)
+                return DarwinPin(queue)
             except BaseException:
                 queue.close()
                 raise
@@ -145,7 +145,14 @@ class Kernel:
             except OSError:
                 from .process_tree import process_gone
                 return process_gone(pin.pid)
-        return bool(pin.control(None, 1, 0))
+        events = pin.control(None, 1, 0)
+        return bool(pin.events & select.KQ_NOTE_EXIT)
+
+    def changed(self, pin):
+        if isinstance(pin, (int, BirthPin)):
+            return self.exited(pin)
+        pin.control(None, 1, 0)
+        return bool(pin.events & (select.KQ_NOTE_EXEC | select.KQ_NOTE_EXIT))
 
     def wait(self, pin, seconds):
         if isinstance(pin, int):
@@ -158,7 +165,15 @@ class Kernel:
                     return False
                 time.sleep(min(0.02, remaining))
             return True
-        return bool(pin.control(None, 1, seconds))
+        deadline = time.monotonic() + seconds
+        while not pin.events & select.KQ_NOTE_EXIT:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            # NOTE_EXEC is not exit. Keep it latched for I4, but wait out the
+            # existing stop budget rather than treating the event as timeout.
+            pin.control(None, 1, remaining)
+        return True
 
     def send(self, pin, pid, number):
         if isinstance(pin, int):
@@ -171,73 +186,6 @@ class Kernel:
             os.close(pin)
         else:
             pin.close()
-
-    def sole_holder(self, pid, path):
-        from .process_tree import process_gone
-        probe = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
-        try:
-            info = os.fstat(probe)
-            inode = info.st_dev, info.st_ino
-            try:
-                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                pass
-            else:
-                return False
-        finally:
-            os.close(probe)
-        holders = set()
-        started = time.monotonic()
-        if sys.platform == 'darwin':
-            library = _darwin_library()
-            candidates = (ctypes.c_int * (MAX_SCAN_PROCESSES + 1))()
-            size = library.proc_listpids(4, os.getuid(), candidates, ctypes.sizeof(candidates))
-            if size <= 0 or size >= ctypes.sizeof(candidates) or size % 4:
-                return False
-            processes = [p for p in candidates[:size // 4] if p > 0]
-        else:
-            processes = (int(p.name) for p in Path('/proc').iterdir() if p.name.isdigit())
-        for candidate in bounded_processes(processes):
-            if time.monotonic() - started > SCAN_SECONDS:
-                raise TakeoverError('predecessor_unproven')
-            try:
-                if sys.platform == 'darwin':
-                    fds = ctypes.create_string_buffer(FD_SCAN_BYTES)
-                    size = library.proc_pidinfo(candidate, 1, 0, fds, len(fds))
-                    if size <= 0 or size >= len(fds) or size % 8:
-                        if process_gone(candidate):
-                            continue
-                        return False
-                    for fd, kind in struct.iter_unpack('iI', fds.raw[:size]):
-                        if kind != 1:  # PROX_FDTYPE_VNODE
-                            continue
-                        # proc_fileinfo (24) + vnode_info (152) + MAXPATHLEN
-                        vnode = ctypes.create_string_buffer(1200)
-                        got = library.proc_pidfdinfo(candidate, fd, 2, vnode, len(vnode))
-                        if got != len(vnode):
-                            if ctypes.get_errno() == errno.EBADF:
-                                continue  # descriptor was closed during the scan
-                            return False
-                        found = struct.unpack_from('I', vnode, 24)[0], struct.unpack_from('Q', vnode, 32)[0]
-                        if found == inode:
-                            holders.add(candidate)
-                else:
-                    root = Path('/proc') / str(candidate)
-                    if root.stat().st_uid != os.getuid():
-                        continue
-                    for fd in (root / 'fd').iterdir():
-                        try:
-                            info = fd.stat()
-                        except FileNotFoundError:
-                            continue
-                        if (info.st_dev, info.st_ino) == inode:
-                            holders.add(candidate)
-            except (OSError, ValueError):
-                if not process_gone(candidate):
-                    return False
-            if holders - {pid}:
-                return False
-        return holders == {pid}
 
 
 def _trusted(identity, entry, state_root, project_root):
@@ -264,17 +212,34 @@ class PinnedPredecessor:
 
     def _send(self, number):
         # Recheck before *each* signal, including escalation on macOS.
-        current = self.kernel.identity(self.pid)
-        if current != self.identity or self.kernel.exited(self.pin):
+        if self.kernel.exited(self.pin):
+            return False
+        try:
+            current = self.kernel.identity(self.pid)
+        except OSError:
+            if self.kernel.exited(self.pin):
+                return False
+            raise TakeoverError('predecessor_unproven', phase='service_stopped') from None
+        if current != self.identity:
             raise TakeoverError('predecessor_unproven', phase='service_stopped')
-        self.kernel.send(self.pin, self.pid, number)
+        if self.kernel.changed(self.pin):
+            if self.kernel.exited(self.pin):
+                return False
+            raise TakeoverError('predecessor_unproven', phase='service_stopped')
+        try:
+            self.kernel.send(self.pin, self.pid, number)
+        except ProcessLookupError:
+            return False
+        return True
 
     def stop(self):
         try:
-            self._send(signal.SIGTERM)
+            if not self._send(signal.SIGTERM):
+                return False
             if self.kernel.wait(self.pin, 30.0):
                 return False
-            self._send(signal.SIGKILL)
+            if not self._send(signal.SIGKILL):
+                return False
             if not self.kernel.wait(self.pin, 5.0):
                 raise TakeoverError('service_stop_failed', phase='service_stopped')
             return True
@@ -282,7 +247,7 @@ class PinnedPredecessor:
             self.close()
 
 
-def pin_predecessor(pid, *, entry, state_root, project_root, history_lock, kernel=None):
+def pin_predecessor(pid, *, entry, state_root, project_root, kernel=None):
     kernel = Kernel() if kernel is None else kernel
     pin = None
     try:
@@ -291,11 +256,40 @@ def pin_predecessor(pid, *, entry, state_root, project_root, history_lock, kerne
         pin = kernel.pin(pid)
         identity = kernel.identity(pid)
         if (not _trusted(identity, entry, state_root, project_root)
-                or not kernel.sole_holder(pid, history_lock)
-                or kernel.identity(pid) != identity or kernel.exited(pin)):
+                or kernel.identity(pid) != identity or kernel.changed(pin)):
             raise ValueError()
         return PinnedPredecessor(kernel, pin, pid, identity)
     except (OSError, ValueError, KeyError, TypeError, TakeoverError):
         if pin is not None:
             kernel.close(pin)
         raise TakeoverError('predecessor_unproven') from None
+
+
+def foreign_lock_holder(pid, paths):
+    """Linux I5: one system flock table; no process descriptors are inspected.
+
+    An unreadable table uses the macOS exclusion rule. The owner still must
+    acquire every lifetime flock before adopting either store.
+    """
+    if not sys.platform.startswith('linux'):
+        return False
+    inodes = set()
+    for path in paths:
+        try:
+            info = Path(path).stat()
+        except FileNotFoundError:
+            continue
+        inodes.add((os.major(info.st_dev), os.minor(info.st_dev), info.st_ino))
+    try:
+        with Path('/proc/locks').open(encoding='ascii') as stream:
+            for line in stream:
+                fields = line.split()
+                if len(fields) < 6 or fields[1] != 'FLOCK':
+                    continue
+                major, minor, inode = fields[5].split(':')
+                if ((int(major, 16), int(minor, 16), int(inode)) in inodes
+                        and int(fields[4]) != pid):
+                    return True
+    except (OSError, ValueError):
+        return False
+    return False

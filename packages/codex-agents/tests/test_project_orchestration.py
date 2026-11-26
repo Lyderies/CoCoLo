@@ -325,8 +325,8 @@ class ProjectOrchestrationTests(unittest.TestCase):
         self.assertEqual((1, 0), (kept(handles[0]), kept(handles[1])))
 
     def test_B4t_an_update_keeps_earlier_open_and_paused_orchestrations(self):
-        """R10 (live 2026-11-19): after an update, nothing could close an orchestration opened under the
-        earlier runtime, and it counted as open for good."""
+        """B4t/D2.11: an update keeps sealed open/paused custody, including unknown runtime scopes.
+        Only its ordinary close/rollover or the idle rule can end it."""
         from dataclasses import replace
         first = self.opened()
         paused = self.call('open', identity='second')['current']['snapshot']

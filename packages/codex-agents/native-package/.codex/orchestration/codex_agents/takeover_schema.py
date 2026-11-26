@@ -13,14 +13,16 @@ successor_version TEXT NOT NULL,epoch INTEGER NOT NULL,takeover_id TEXT NOT NULL
 '''
 PROJECT_COLUMNS = {**FLOOR_COLUMNS,
     'takeover_record': ('takeover_id', 'predecessor_digest', 'predecessor_version', 'successor_digest',
-                        'successor_version', 'state'),
+                        'successor_version', 'state', 'recorded_at_ms', 'runs_listed', 'runs_unlisted'),
     'takeover_runs': ('takeover_id', 'bridge_run_id', 'run_handle', 'attempt'),
     'takeover_obligations': ('kind', 'identity', 'takeover_id', 'original_request_id', 'original_request_digest',
                              'original_runtime_digest')}
 PROJECT_SCHEMA = FLOOR_SCHEMA + '''CREATE TABLE takeover_record(
 takeover_id TEXT PRIMARY KEY,predecessor_digest TEXT NOT NULL UNIQUE,predecessor_version TEXT NOT NULL,
 successor_digest TEXT NOT NULL,successor_version TEXT NOT NULL,
-state TEXT NOT NULL CHECK(state IN ('adopting','adopted','complete')));
+state TEXT NOT NULL CHECK(state IN ('adopting','adopted','complete')),
+recorded_at_ms INTEGER NOT NULL,runs_listed INTEGER NOT NULL CHECK(runs_listed BETWEEN 0 AND 64),
+runs_unlisted INTEGER NOT NULL CHECK(runs_unlisted>=0));
 CREATE TABLE takeover_runs(
 takeover_id TEXT NOT NULL,bridge_run_id TEXT NOT NULL,run_handle TEXT NOT NULL,attempt INTEGER NOT NULL,
 PRIMARY KEY(takeover_id,bridge_run_id),FOREIGN KEY(takeover_id) REFERENCES takeover_record(takeover_id));

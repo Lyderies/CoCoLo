@@ -673,6 +673,7 @@ class ProjectHistory:
         else:
             self._check_schema_identity(_COLUMNS)
             self._check_project_holds()  # SH-7: at every open, so also of a restored copy
+        self._purge_takeover(self._hold_now(), 0)
         self._recover_interrupted_upgrade(remove_copy=False)  # upgraded: its copy is the kept one
 
     def _check_project_holds(self) -> None:
@@ -3615,7 +3616,7 @@ class ProjectHistory:
         from .project_qa_checks import purge_old_qa
         # Each removal has its turn whatever another one meets (0.3.4 R1g).
         for purge in (lambda now, limit: project_result_contexts.sweep(self, limit),  # D3: context-only custody
-                      self._purge_finished_results, self._purge_settlement_evidence,
+                      self._purge_finished_results, self._purge_settlement_evidence, self._purge_takeover,
                       self._orchestration_owner().purge_closed,
                       lambda now, limit: purge_old_qa(self, now, limit),
                       # Cases and candidates past the learning retention, in batches of their own (O0c P7).
@@ -3633,6 +3634,16 @@ class ProjectHistory:
             # details, after other selected rows have had their cleanup turn.
             raise HistoryError(failure)
         return retired
+
+    def _purge_takeover(self, now, limit):
+        from .project_takeover import purge_takeover
+        # Retention follows the separately committed stage-B transaction. A
+        # failed pass is retried by periodic purge and cannot fail an update.
+        try:
+            purge_takeover(self._connection, now, transaction=self._transaction)
+        except (sqlite3.Error, HistoryError):
+            pass
+        return 0
 
     def _purge_settlement_evidence(self, now: int, limit: int) -> int:
         """RSF-S7: clear expired closures, keeping holds, with the ordinary purge scan/removal bounds."""
@@ -3665,6 +3676,8 @@ class ProjectHistory:
                 if (not valid_integer(row["released_at_ms"])
                         or now <= row["released_at_ms"] + SETTLEMENT_REPLAY_WINDOW_MS):
                     continue
+                self._connection.execute('DELETE FROM takeover_obligations WHERE (kind,identity) IN '
+                    '(SELECT kind,identity FROM project_holds WHERE rowid=?)', (row['rowid'],))
                 cleared += self._connection.execute(
                     "UPDATE project_holds SET evidence=NULL WHERE project_id=? AND rowid=?",
                     (self.project_id, row["rowid"])).rowcount
@@ -3783,6 +3796,7 @@ class ProjectHistory:
 
     def _delete_attempt_rows(self, run_handle: str, attempt: int, claim_id: str | None) -> None:
         """One finished attempt's rows, children first (foreign keys are on)."""
+        self._connection.execute('DELETE FROM takeover_runs WHERE run_handle=? AND attempt=?', (run_handle, attempt))
         attempt_key = (self.project_id, run_handle, attempt)
         # RS-13: older writers kept the authenticated reply only in the settlement
         # row. Backfill a missing/adopted hold before pruning that row, without

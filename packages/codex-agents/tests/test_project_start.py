@@ -541,9 +541,10 @@ class StartTests(StarterBase):
             'result_endpoint': str(directory / 'result.sock')}))
         hint.chmod(0o600)
         started = self.launch()['started_at_ms']
-        from codex_agents.compatibility_message import compatibility_message
-        expected = 'recovery: needs update hand-over: ' + compatibility_message(
-            None, project_root=root, state_name='project service')
+        expected = ('recovery: needs update hand-over: Another CoCoLo version (number unavailable) holds the '
+                    'project service. The local install record is unavailable. In a plain terminal, open your '
+                    'CoCoLo clone, run ./setup.sh with this project\'s path, then choose Configure, then '
+                    '"Update the install and walk through every step".')
         wait_for(self, lambda: self.status('alpha') == expected, 20, f'status: {self.status("alpha")}')
         time.sleep(1.5)  # rechecked, still not replaced
         self.assertEqual([], self.events('spawned'))
@@ -974,6 +975,19 @@ class OtherVersionTests(StarterBase):
         from codex_agents.project_host_client import other_version_host
         root, _project_id, copy = self.add('alpha', record=False)
         older = self.older_runtime()
+        # The earlier-runtime fixture predates this build's published floor.
+        # Recreate its empty, registered account with that runtime's own owner
+        # open; lowering a published floor in SQL would invalidate this witness.
+        for path in (self.state.database, Path(str(self.state.database)+'-wal'), Path(str(self.state.database)+'-shm')):
+            path.unlink(missing_ok=True)
+        made = subprocess.run([sys.executable, '-I', '-B', '-c',
+            'import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); '
+            'from codex_agents.learning_store import LearningLedger,LearningState; '
+            'owner=LearningLedger(LearningState(Path(sys.argv[2]),create=False)); '
+            'owner.register_project(Path(sys.argv[3])); owner.close()',
+            str(older), str(self.state.root), str(root)], env={'PATH':os.defpath,'TMPDIR':SHORT_TMP},
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(0, made.returncode, made.stderr)
         # The earlier runtime was the authorized one when its service started (as before an update).
         self.state.collector_authorization.unlink()
         done = subprocess.run(  # authorized by that runtime's own code, as its registration did
@@ -996,9 +1010,10 @@ class OtherVersionTests(StarterBase):
         authorize_collector_runtime(self.state, ORCHESTRATION_ROOT / 'cli.py')
         started = self.launch()['started_at_ms']
         CollectorClient(self.state.socket, timeout=30).record_launch(root, str(copy), copy.name)
-        from codex_agents.compatibility_message import compatibility_message
-        expected = 'recovery: needs update hand-over: ' + compatibility_message(
-            None, project_root=root, state_name='project service')
+        expected = ('recovery: needs update hand-over: Another CoCoLo version (number unavailable) holds the '
+                    'project service. The local install record is unavailable. In a plain terminal, open your '
+                    'CoCoLo clone, run ./setup.sh with this project\'s path, then choose Configure, then '
+                    '"Update the install and walk through every step".')
         wait_for(self, lambda: self.status('alpha') == expected, 20, lambda: f'status: {self.status("alpha")}')
         time.sleep(1.5)  # rechecked, still not replaced
         self.assertIsNone(host.poll())  # the earlier runtime's host still serves

@@ -1,3 +1,82 @@
+# Fix round changed-file manifest
+
+Relative to `44f16529` (same reviewed product as `146955fc`). VERSION and the runtime release catalogue are unchanged; no commit was attempted.
+
+- `docs/requirements/b4t/STATUS.md`
+- `docs/requirements/b4t/assertion-audit.md`
+- `docs/requirements/b4t/assertions.md`
+- `docs/requirements/b4t/evidence/fix-round/a1-red.txt`
+- `docs/requirements/b4t/evidence/fix-round/ascii-width-red.txt`
+- `docs/requirements/b4t/evidence/fix-round/b4t-first.txt`
+- `docs/requirements/b4t/evidence/fix-round/complete-named.txt`
+- `docs/requirements/b4t/evidence/fix-round/consent-red.txt`
+- `docs/requirements/b4t/evidence/fix-round/copiers.txt`
+- `docs/requirements/b4t/evidence/fix-round/delivery-named.txt`
+- `docs/requirements/b4t/evidence/fix-round/e2e-unit-green.txt`
+- `docs/requirements/b4t/evidence/fix-round/endpoint-red.txt`
+- `docs/requirements/b4t/evidence/fix-round/exit-race-red.txt`
+- `docs/requirements/b4t/evidence/fix-round/final-focused.txt`
+- `docs/requirements/b4t/evidence/fix-round/final-handoff-named.txt`
+- `docs/requirements/b4t/evidence/fix-round/final-named.txt`
+- `docs/requirements/b4t/evidence/fix-round/final-proof-named.txt`
+- `docs/requirements/b4t/evidence/fix-round/first-named.txt`
+- `docs/requirements/b4t/evidence/fix-round/fourth-named.txt`
+- `docs/requirements/b4t/evidence/fix-round/gate-named.txt`
+- `docs/requirements/b4t/evidence/fix-round/handoff-named.txt`
+- `docs/requirements/b4t/evidence/fix-round/high2-red.txt`
+- `docs/requirements/b4t/evidence/fix-round/idle-proven-red.txt`
+- `docs/requirements/b4t/evidence/fix-round/later-width-red.txt`
+- `docs/requirements/b4t/evidence/fix-round/migration-offline.txt`
+- `docs/requirements/b4t/evidence/fix-round/mutation_witnesses.py`
+- `docs/requirements/b4t/evidence/fix-round/mutations.txt`
+- `docs/requirements/b4t/evidence/fix-round/retention-red.txt`
+- `docs/requirements/b4t/evidence/fix-round/second-named.txt`
+- `docs/requirements/b4t/evidence/fix-round/summary.json`
+- `docs/requirements/b4t/evidence/fix-round/third-named.txt`
+- `docs/requirements/b4t/evidence/fix-round/vendor-red.txt`
+- `docs/requirements/b4t/evidence/fix-round/verified-named.txt`
+- `docs/requirements/b4t/evidence/fix-round/width-red.txt`
+- `docs/requirements/b4t/files.md`
+- `docs/requirements/b4t/fix-round-rerun.md`
+- `docs/requirements/b4t/requirements.md`
+- `docs/troubleshooting.md`
+- `packages/codex-agents/native-package/.codex/orchestration/cli.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/account_api.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/account_takeover.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/client_runtime.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/history_api.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/learning_store.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/project_history.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/project_takeover.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/reply_shapes.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/runtime_lineage.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_journal.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_owner.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_preflight.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_process.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/takeover_schema.py`
+- `packages/codex-agents/native-package/.codex/orchestration/codex_agents/update_takeover.py`
+- `packages/codex-agents/scripts/backup_installed_project.py`
+- `packages/codex-agents/tests/b4t_fixture.py`
+- `packages/codex-agents/tests/lifetime_caps.json`
+- `packages/codex-agents/tests/test_b4t_native.py`
+- `packages/codex-agents/tests/test_b4t_takeover.py`
+- `packages/codex-agents/tests/test_project_orchestration.py`
+- `packages/codex-agents/tests/test_project_start.py`
+- `scripts/e2e_checks_update_safety.py`
+- `scripts/setup_wizard/flow.py`
+- `scripts/test-layers.json`
+- `scripts/test-requirements.json`
+- `scripts/test-stages.json`
+- `scripts/test-timings.json`
+- `tests/fixtures/b4t/0.8.66.tar.gz`
+- `tests/fixtures/b4t/README.md`
+- `tests/test_e2e_update_safety.py`
+
+---
+
+## Historical S5 build manifest
+
 # Changed files
 
 Relative to unit base `ce81bd96`. No VERSION or runtime catalogue change.
